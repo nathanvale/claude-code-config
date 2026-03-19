@@ -35,7 +35,8 @@
 - **NEVER use destructive git commands** → No `reset --hard`, `clean -f`, `push --force`
 - **NEVER write exported function without JSDoc** → Document the "why"
 - **NEVER create nested biome.json** → Monorepos use single root config only
-- **NEVER use em dashes (—)** → Use regular dashes (-) or double hyphens (--) instead
+
+- **NEVER create `commands/*.md` slash commands** → Always use `skills/name/SKILL.md` instead. All skills are user-invocable with `/name` by default -- no special flags needed. Add `disable-model-invocation: true` only if you want to save context budget by hiding it from Claude's auto-discovery. Skills are a strict superset of commands (references, scripts, templates, frontmatter options). One pattern, zero decisions.
 
 ### Obsidian Vault
 
@@ -57,13 +58,18 @@
   - `kit_semantic({ response_format: "json" })`
   - `kit_index_find({ response_format: "json" })`
   - `kit_callers({ response_format: "json" })`
-- **Tests/Lint/Type Check** → Use runner MCPs with JSON format
-  - `bun_runTests({ response_format: "json" })`
-  - `bun_lintCheck({ response_format: "json" })`
-  - `bun_lintFix({ response_format: "json" })`
-  - `tsc_check({ response_format: "json" })`
-  - `biome_lintCheck({ response_format: "json" })`
-  - `biome_lintFix({ response_format: "json" })`
+- **Tests/Lint/Type Check** → **NEVER use Bash for these -- always use runner MCP tools**
+
+  | Need | MCP Tool (preferred) | Fallback (Bash) |
+  |------|---------------------|-----------------|
+  | Run tests | `bun_runTests()` | `bun run test` |
+  | Run single test file | `bun_testFile()` | `bun test path/to/file` |
+  | Test coverage | `bun_testCoverage()` | `bun run test --coverage` |
+  | Lint + format check | `biome_lintCheck()` | `bun run check` |
+  | Lint with auto-fix | `biome_lintFix()` | `bun run lint:fix` |
+  | Type check | `tsc_check()` | `bun run typecheck` |
+
+  Always pass `response_format: "json"` to all runner MCP tools.
 - **History** → Use Atuin MCP with JSON format
   - `atuin_search_history({ response_format: "json" })`
   - `atuin_history_insights({ response_format: "json" })`
@@ -74,7 +80,7 @@
 
 ## Proactive Skill Matching
 
-When Nathan asks about recent community discussions, trends, opinions, or "what people are saying" about a topic, invoke `/research:last-30-days` via the Skill tool immediately. No need to ask permission -- just launch it. Nathan can always cancel/interrupt if he didn't want research.
+When Nathan asks about recent community discussions, trends, opinions, or "what people are saying" about a topic, invoke `/newsroom:investigate` via the Skill tool immediately. No need to ask permission -- just launch it. Nathan can always cancel/interrupt if he didn't want research.
 
 **Trigger phrases:**
 - "What are people saying about X?"
@@ -83,7 +89,7 @@ When Nathan asks about recent community discussions, trends, opinions, or "what 
 - "Has anyone been talking about X?"
 - "X vs Y" comparisons (use multi-topic: `"X" AND "Y" --quick`)
 
-**Do NOT** just run WebSearch yourself -- the `/research:last-30-days` skill searches Reddit, X, and the web with engagement metrics.
+**Do NOT** just run WebSearch yourself -- the `/newsroom:investigate` skill searches Reddit, X, and the web with engagement metrics.
 
 ---
 
@@ -108,36 +114,6 @@ When Nathan asks about recent community discussions, trends, opinions, or "what 
 - **Levi** → Son (age 9), sole parent
 - **Mum** → Lives in Sydney
 
-### GMS Team (Bunnings)
-
-**Team:** POS Yellow | **Comms:** Microsoft Teams | **Jira:** `POS-*`
-
-**Repos**
-- `Bunnings-Technology-Delivery/gms.app` → Frontend (React)
-- `Bunnings-Technology-Delivery/gms.api` → Backend API (internal repo)
-- `Bunnings-Technology-Delivery/voucher` → Voucher API
-
-**Teams Channels**
-- **POS Yellow and Payments Resellers** → PR reviews, announcements, technical discussions
-- **POS Yellow Chat** → Daily updates (WFH/WFO, appointments, casual)
-- **Resellers POD - Daily Standup** → Standup meeting chat
-
-| Name | Role | Email |
-|------|------|-------|
-| Suzy Hall | Product Owner (PO) | Suzy.Hall@bunnings.com.au |
-| Jackie Leslie | Delivery Manager (DM) | JLeslie@bunnings.com.au |
-| Joshua Green | Tech Lead | JGreen@bunnings.com.au |
-| Nathan Vale | Expert Frontend Engineer (you) | nathan.vale1@bunnings.com.au |
-| June Xu | Developer (pairing partner) | JXu3@bunnings.com.au |
-| Mustafa Jalil (MJ) | API/Backend Engineer | MJalil@bunnings.com.au |
-| Prasanth Vannalath | API/Backend Engineer | PVannalath@bunnings.com.au |
-| Marc Marais | Platform Engineer/Architect | MMarais@bunnings.com.au |
-| Tanya Hopmans | Senior BA | Tanya.Hopmans@bunnings.com.au |
-| Sonny Hartley | BA | sonny.hartley@bunnings.com.au |
-| Cheryl Sim | Senior QA (POS expert) | CSim@bunnings.com.au |
-| Angela Tuason | QA Tester | angela.tuason@bunnings.com.au |
-| Aarti Gagneja | QA/Tester | AGagneja@bunnings.com.au |
-
 ### Context Files (invoke with @path when needed)
 
 - `~/.claude/context/git-workflow.md` → Git safety, conventional commits
@@ -147,18 +123,6 @@ When Nathan asks about recent community discussions, trends, opinions, or "what 
 - `~/.claude/context/atuin.md` → Shell history search
 - `~/.claude/context/personal.md` → Birthdays, hobbies, details
 - `~/.claude/context/obsidian-setup.md` → PARA method, vault commands
-
-### Bunnings Proxy Toggle
-
-When working with Bunnings repos, proxy settings can interfere with external tools like `gh`:
-
-```bash
-proxy-on      # Enable proxy (for VPN)
-proxy-off     # Disable proxy (off VPN)
-proxy-status  # Check current state
-```
-
-If `gh pr create` fails with "error connecting to vzen01.internal.bunnings.com.au", run `proxy-off` first.
 
 ---
 
@@ -180,6 +144,24 @@ rm -rf /private/var/folders/_b/*/T/bunx-501-@side-quest/
 
 Then restart the AI tool (Codex, Claude Code, etc.) to re-download packages.
 
+### Git-Safety Hook Blocks Inline Python
+
+**Symptom:** `python3 -c "..."` and heredoc (`python3 << 'PYEOF'`) patterns get rejected by the git-safety hook with "Inline interpreter execution cannot be safety-analyzed reliably."
+
+**Workaround:** Write standalone scripts in `scripts/` and call them directly. Never use inline Python (`-c`, `-e`, `--eval`, heredoc) in Bash tool calls.
+
 ### VS Code - Minimal Extensions
 
 VS Code runs with only 2 extensions (Night Owl theme + vscode-icons). Previous 68 extensions were backed up to `~/code/dotfiles/vscode-extensions-backup.txt` on 2026-02-21 if Nathan ever needs to find old ones to reinstall.
+
+---
+
+## Memory OS
+
+- Shared user-scope memory contract lives at `~/.config/memory/AGENTS.md`
+- Canonical docs live under `~/.config/memory/docs/`
+- Canonical source lives in this repo at `~/code/claude-code-config/memory/`
+- `~/.config/memory` is the stable runtime path and should resolve to this repo via `./install.sh`
+- Repos own operational truth; `my-second-brain` owns synthesis and promoted durable knowledge
+- Prefer QMD for broad federated recall and NotebookLM for curated synthesis packs
+- User-invocable memory skills live under `~/.claude/skills/`

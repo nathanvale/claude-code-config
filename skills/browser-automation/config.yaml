@@ -1,0 +1,53 @@
+schema_version: 1
+
+# Browser Agent Configuration
+# Contains no secrets -- only vault item names, URLs, and flags.
+
+# Credential provider
+credentials:
+  provider: op                     # 1Password CLI
+  default_vault: "Mac Mini Server"
+
+# Canonical identity for SSO
+identity:
+  email: hi@nathanvale.com
+  provider: google
+
+# Chrome launch settings
+chrome:
+  binary_path: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+  user_data_dir: ~/.cache/chrome-agent
+  debug_port: 9222
+  # Additional non-safety flags (optional)
+  # Safety flags (--no-first-run, --disable-sync, --disable-features) are always applied.
+  # flags:
+  #   - --proxy-server=http://localhost:8080
+  #   - --window-size=1920,1080
+
+# Registered services (agent can visit ANY URL -- these just provide auth hints)
+# Unregistered URLs still work, the agent just won't have auth hints.
+services:
+  tailscale:
+    url: https://login.tailscale.com/admin
+    auth: sso                      # cookie-based Google SSO
+    op_item: "accounts.google.com (hi@nathanvale.com)"
+  cloudflare:
+    url: https://dash.cloudflare.com
+    auth: password_totp            # email/password + TOTP
+    op_item: Cloudflare
+  router:
+    url: http://192.168.0.1
+    auth: password
+    op_item: "192.168.0.1"
+  openwebui:
+    url: http://192.168.0.44:3000
+    auth: password
+    op_item: "Open WebUI"
+  homeassistant:
+    url: http://192.168.0.44:8123
+    auth: password
+    op_item: "Home Assistant"
+  gcloud:
+    url: https://console.cloud.google.com
+    auth: sso
+    op_item: "accounts.google.com (hi@nathanvale.com)"

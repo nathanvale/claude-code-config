@@ -1,0 +1,49 @@
+schema_version: 1
+
+# Browser Session Registry
+# Central port registry -- one port per identity, no collisions.
+# Browser agents reference a session name. This file owns the port mapping.
+#
+# INVARIANT: Two sessions may share a port ONLY if they share the same user_data_dir.
+# Violating this causes Chrome to silently fail on the second session.
+#
+# To add a new session:
+#   1. Pick an unused port (next available after highest)
+#   2. Verify no port collision with a different user_data_dir (see INVARIANT above)
+#   3. Add entry below
+#   4. Create a config file if auth is needed
+
+sessions:
+  personal:
+    port: 9222
+    config: ~/.claude/skills/browser-automation/config.yaml
+    user_data_dir: ~/.cache/chrome-agent
+
+  monash:
+    port: 9223
+    config: .claude/browser-configs/config.monash.yaml
+    user_data_dir: ~/.cache/chrome-agent-monash
+
+  ellucian:
+    port: 9224
+    config: .claude/browser-configs/config.ellucian.yaml
+    user_data_dir: ~/.cache/chrome-agent-ellucian
+
+  monash-qa:
+    port: 9225
+    config: .claude/browser-configs/config.monash-qa.yaml
+    user_data_dir: ~/.cache/chrome-agent-monash-qa
+
+  timesheet:
+    port: 9222
+    config: .claude/browser-configs/config.fasttrack360.yaml
+    user_data_dir: ~/.cache/chrome-agent  # same profile as personal (shared cookies)
+
+  classic-cinema:
+    port: 9226
+    config: .claude/browser-configs/config.classic-cinema.yaml
+    user_data_dir: ~/.cache/chrome-agent-classic-cinema
+
+defaults:
+  session: personal
+  port: 9222

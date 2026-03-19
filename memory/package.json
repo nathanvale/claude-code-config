@@ -1,0 +1,11 @@
+{
+  "name": "memory-os-config",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "qmd:federation": "bun run scripts/qmd-roster-sync.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  }
+}

@@ -1,0 +1,1099 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
+
+const APPLE_EPOCH_OFFSET = 978_307_200;
+const NANOSECOND_FACTOR = 1_000_000_000;
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DEFAULT_ATTACHMENT_ROOTS = [
+	join(homedir(), "Library/Messages/Attachments"),
+];
+const LINK_SEARCH_WINDOW_MS = 5 * 60 * 1000;
+
+function isStructuredControlCode(code: number): boolean {
+	return (
+		(code >= 0x00 && code <= 0x08) ||
+		code === 0x0b ||
+		code === 0x0c ||
+		(code >= 0x0e && code <= 0x1f)
+	);
+}
+
+function containsStructuredControlChars(value: string): boolean {
+	for (const char of value) {
+		if (isStructuredControlCode(char.codePointAt(0) ?? 0)) return true;
+	}
+	return false;
+}
+
+function trimTrailingStructuredControlChars(value: string): string {
+	let end = value.length;
+	while (end > 0) {
+		const code = value.charCodeAt(end - 1);
+		if (!isStructuredControlCode(code)) break;
+		end -= 1;
+	}
+	return value.slice(0, end);
+}
+
+function splitControlRuns(value: string): string[] {
+	const runs: string[] = [];
+	let current = "";
+
+	for (const char of value) {
+		const code = char.codePointAt(0) ?? 0;
+		if (code <= 0x1f) {
+			if (current.length > 0) runs.push(current);
+			current = "";
+			continue;
+		}
+
+		current += char;
+	}
+
+	if (current.length > 0) runs.push(current);
+	return runs;
+}
+
+/**
+ * Normalized attachment path metadata used in JSON output and markdown frontmatter.
+ */
+export type ResolvedAttachmentPath = {
+	path: string | null;
+	original_path: string | null;
+	exists: boolean;
+	absolute: boolean;
+	missing: boolean;
+};
+
+/**
+ * Raw message row shape returned from chat.db.
+ */
+export type MessageRow = {
+	rowid: number;
+	guid: string;
+	text: string | null;
+	attributedBody: Buffer | Uint8Array | null;
+	is_from_me: number;
+	apple_date: number;
+	date_read: number | null;
+	date_edited: number | null;
+	service: string | null;
+	subject: string | null;
+	thread_originator_guid: string | null;
+	reply_to_guid: string | null;
+	associated_message_guid: string | null;
+	associated_message_type: number | null;
+	handle_id: string | null;
+	chat_display_name: string | null;
+	chat_identifier: string | null;
+	chat_style: number | null;
+};
+
+/**
+ * Raw attachment row shape returned from chat.db joins.
+ */
+export type AttachmentRow = {
+	message_id: number;
+	filename: string | null;
+	mime_type: string | null;
+	uti: string | null;
+	total_bytes: number | null;
+	transfer_name: string | null;
+};
+
+/**
+ * Attachment payload shape emitted by the reader.
+ */
+export type ParsedAttachment = {
+	filename: string | null;
+	path: string | null;
+	original_path: string | null;
+	mime_type: string | null;
+	uti: string | null;
+	size: number | null;
+	name: string | null;
+	exists: boolean;
+	absolute: boolean;
+	missing: boolean;
+};
+
+/**
+ * Message part categories emitted by the reader.
+ */
+export type MessageKind = "text" | "media" | "tapback";
+
+/**
+ * Stable parsed message shape emitted by the CLI.
+ */
+export type ParsedMessage = {
+	guid: string;
+	source_guid: string;
+	group_guid: string | null;
+	part_index: number | null;
+	message_kind: MessageKind;
+	text: string | null;
+	is_from_me: boolean;
+	date: string | null;
+	date_local: string | null;
+	date_read: string | null;
+	date_read_local: string | null;
+	edited: true | null;
+	date_edited: string | null;
+	date_edited_local: string | null;
+	service: string | null;
+	handle: string | null;
+	contact_name: string | null;
+	chat_name: string | null;
+	chat_id: string | null;
+	is_group: boolean;
+	thread_originator: string | null;
+	reply_to_raw: string | null;
+	reply_to: string | null;
+	reaction_to_raw: string | null;
+	reaction_to: string | null;
+	reaction_type: number | null;
+	subject: string | null;
+	attachment?: ParsedAttachment | null;
+};
+
+/**
+ * Internal parsed message shape that keeps the DB rowid for attachment joins.
+ */
+export type ParsedMessageInternal = ParsedMessage & { _rowid: number };
+
+/**
+ * Attachment path resolver function signature used for dependency injection.
+ */
+export type AttachmentResolver = (
+	filename: string | null,
+	transferName: string | null,
+) => ResolvedAttachmentPath;
+
+/**
+ * Dependency bag for path normalization so tests can avoid touching the real filesystem.
+ */
+export type ResolveAttachmentPathOptions = {
+	roots?: string[];
+	checkExists?: (path: string | null | undefined) => boolean;
+};
+
+/**
+ * Dependency bag for `parseRow()` so tests can inject contact lookup and attachment resolution.
+ */
+export type ParseRowOptions = {
+	contactMap: Map<string, string>;
+	resolveAttachment: AttachmentResolver;
+};
+
+/**
+ * Replace the user's home directory prefix with `~` for safer, shorter output.
+ */
+export function formatOutputPath(path: string): string {
+	const home = homedir();
+	if (path === home) return "~";
+	if (path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
+	return path;
+}
+
+/**
+ * Escape special characters for use in double-quoted YAML scalar values.
+ */
+export function escapeYaml(s: string): string {
+	return s
+		.replace(/\\/g, "\\\\")
+		.replace(/"/g, '\\"')
+		.replace(/\n/g, "\\n")
+		.replace(/\r/g, "\\r");
+}
+
+/**
+ * Remove null and undefined values from an object while preserving falsy values.
+ */
+export function pruneNulls<T extends Record<string, unknown>>(
+	obj: T,
+): Partial<T> {
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(obj)) {
+		if (value != null) result[key] = value;
+	}
+	return result as Partial<T>;
+}
+
+/**
+ * Strip the object-replacement marker Apple prefixes onto attachment-backed captions.
+ */
+export function normalizeMessageText(text: string | null): string | null {
+	if (text == null) return null;
+	const normalized = text.replace(/^\uFFFC(?:\r?\n|\s)*/u, "");
+	return normalized.length > 0 ? normalized : text;
+}
+
+/**
+ * Treat Apple object-replacement-only text as attachment placeholder, not real content.
+ */
+export function hasMeaningfulText(text: string | null): text is string {
+	if (text == null) return false;
+	const trimmed = text.trim();
+	return trimmed.length > 0 && !/^(?:\uFFFC)+$/u.test(trimmed);
+}
+
+/**
+ * Generate a stable split-part GUID compatible with Messages association refs.
+ */
+export function generatePartGuid(originalGuid: string, index: number): string {
+	return `p:${index}/${originalGuid}`;
+}
+
+/**
+ * Return true when a path is absolute on macOS.
+ */
+export function isAbsolutePath(path: string | null | undefined): boolean {
+	return typeof path === "string" && path.startsWith("/");
+}
+
+/**
+ * Expand a leading tilde to the current user home directory.
+ */
+export function expandTildeInPath(path: string): string {
+	return path.startsWith("~") ? join(homedir(), path.slice(2)) : path;
+}
+
+/**
+ * Safe file existence check for attachment path normalization.
+ */
+export function fileExists(path: string | null | undefined): boolean {
+	if (!path) return false;
+	try {
+		return existsSync(path);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Normalize Messages attachment paths to absolute local filesystem paths when possible.
+ *
+ * Tests can inject synthetic roots and a fake existence check. Production falls back
+ * to the user's Messages attachment directory and real filesystem checks.
+ */
+export function resolveAttachmentPath(
+	filename: string | null,
+	transferName: string | null,
+	options: ResolveAttachmentPathOptions = {},
+): ResolvedAttachmentPath {
+	const rawPath = filename?.trim() || null;
+	const roots = (options.roots ?? DEFAULT_ATTACHMENT_ROOTS).map(
+		expandTildeInPath,
+	);
+	const checkExists = options.checkExists ?? fileExists;
+	const candidates: string[] = [];
+
+	if (rawPath) {
+		const expanded = expandTildeInPath(rawPath);
+		candidates.push(expanded);
+		const marker = `${join("Library", "Messages", "Attachments")}/`;
+		const markerIndex = expanded.indexOf(marker);
+		if (markerIndex >= 0) {
+			const relative = expanded.slice(markerIndex + marker.length);
+			for (const root of roots) candidates.push(join(root, relative));
+		}
+		const rawBase = basename(expanded);
+		if (rawBase.length > 0) {
+			for (const root of roots) candidates.push(join(root, rawBase));
+		}
+	}
+
+	if (transferName?.trim()) {
+		for (const root of roots) candidates.push(join(root, transferName.trim()));
+	}
+
+	const seen = new Set<string>();
+	for (const candidate of candidates) {
+		if (!candidate || seen.has(candidate)) continue;
+		seen.add(candidate);
+		if (isAbsolutePath(candidate) && checkExists(candidate)) {
+			return {
+				path: candidate,
+				original_path: rawPath ? expandTildeInPath(rawPath) : null,
+				exists: true,
+				absolute: true,
+				missing: false,
+			};
+		}
+	}
+
+	const expandedRaw = rawPath ? expandTildeInPath(rawPath) : null;
+	return {
+		path: expandedRaw && isAbsolutePath(expandedRaw) ? expandedRaw : null,
+		original_path: expandedRaw,
+		exists: false,
+		absolute: isAbsolutePath(expandedRaw),
+		missing: rawPath != null || transferName != null,
+	};
+}
+
+/**
+ * Convert Apple epoch timestamps to Unix milliseconds.
+ *
+ * Messages stores a mix of second, millisecond, and nanosecond precision values
+ * across macOS versions. Sentinel zero and negative values are treated as unset.
+ */
+export function appleDateToUnixMs(appleDate: number | null): number | null {
+	if (appleDate == null || appleDate <= 0) return null;
+
+	let seconds: number;
+	if (appleDate > 1_000_000_000_000_000) {
+		seconds = Math.floor(appleDate / NANOSECOND_FACTOR);
+	} else if (appleDate > 100_000_000_000) {
+		seconds = Math.floor(appleDate / 1000);
+	} else {
+		seconds = appleDate;
+	}
+
+	const unixMs = (seconds + APPLE_EPOCH_OFFSET) * 1000;
+	return Number.isFinite(unixMs) ? unixMs : null;
+}
+
+/**
+ * Format a Date using local wall time with an explicit UTC offset.
+ */
+export function formatLocalISO(date: Date): string {
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, "0");
+	const day = String(date.getDate()).padStart(2, "0");
+	const hours = String(date.getHours()).padStart(2, "0");
+	const minutes = String(date.getMinutes()).padStart(2, "0");
+	const seconds = String(date.getSeconds()).padStart(2, "0");
+	const offsetMinutes = -date.getTimezoneOffset();
+	const sign = offsetMinutes >= 0 ? "+" : "-";
+	const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(
+		2,
+		"0",
+	);
+	const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
+	return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainder}`;
+}
+
+/**
+ * Convert an Apple epoch timestamp to ISO 8601 UTC.
+ */
+export function appleEpochToISO(appleDate: number | null): string | null {
+	const unixMs = appleDateToUnixMs(appleDate);
+	if (unixMs == null) return null;
+	try {
+		return new Date(unixMs).toISOString();
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Convert an Apple epoch timestamp to local wall time with explicit UTC offset.
+ */
+export function appleEpochToLocalISO(appleDate: number | null): string | null {
+	const unixMs = appleDateToUnixMs(appleDate);
+	if (unixMs == null) return null;
+	try {
+		return formatLocalISO(new Date(unixMs));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Convert a YYYY-MM-DD or ISO 8601 date string to Apple epoch nanoseconds.
+ */
+export function dateToAppleNs(dateStr: string): number {
+	const dateOnly = dateStr.match(DATE_ONLY_RE);
+	let d: Date;
+
+	if (dateOnly) {
+		const [, yearText, monthText, dayText] = dateOnly;
+		const year = Number(yearText);
+		const month = Number(monthText);
+		const day = Number(dayText);
+		d = new Date(year, month - 1, day, 0, 0, 0, 0);
+	} else {
+		d = new Date(dateStr);
+	}
+
+	const unixSeconds = d.getTime() / 1000;
+	const appleSeconds = unixSeconds - APPLE_EPOCH_OFFSET;
+	return Math.floor(appleSeconds * NANOSECOND_FACTOR);
+}
+
+/**
+ * Convert a local calendar day to an inclusive end-of-day Apple epoch timestamp.
+ */
+export function dateToAppleNsEndOfDay(dateStr: string): number {
+	const match = dateStr.match(DATE_ONLY_RE);
+	if (!match) return dateToAppleNs(dateStr);
+
+	const [, yearText, monthText, dayText] = match;
+	const year = Number(yearText);
+	const month = Number(monthText);
+	const day = Number(dayText);
+	const d = new Date(year, month - 1, day, 23, 59, 59, 999);
+	const unixSeconds = d.getTime() / 1000;
+	const appleSeconds = unixSeconds - APPLE_EPOCH_OFFSET;
+	return Math.floor(appleSeconds * NANOSECOND_FACTOR);
+}
+
+/**
+ * Normalize Australian phone numbers for contact matching while leaving email-like
+ * or short-code handles intact.
+ */
+export function normalizePhone(raw: string): string {
+	let digits = raw.replace(/[^\d+]/g, "");
+
+	if (digits.startsWith("04") && digits.length === 10) {
+		digits = `+61${digits.slice(1)}`;
+	} else if (/^0[2378]\d{8}$/.test(digits)) {
+		digits = `+61${digits.slice(1)}`;
+	} else if (/^61[234578]\d{8}$/.test(digits)) {
+		digits = `+${digits}`;
+	}
+
+	return digits;
+}
+
+/**
+ * Format a display name from first, last, and organization fields.
+ */
+export function formatContactName(
+	first: string | null,
+	last: string | null,
+	org: string | null,
+): string | null {
+	const parts: string[] = [];
+	if (first?.trim()) parts.push(first.trim());
+	if (last?.trim()) parts.push(last.trim());
+	if (parts.length > 0) return parts.join(" ");
+	if (org?.trim()) return org.trim();
+	return null;
+}
+
+/**
+ * Resolve a phone number or email handle to a contact name.
+ */
+export function resolveContact(
+	handle: string,
+	contactMap: Map<string, string>,
+): string | null {
+	if (!handle) return null;
+
+	const emailMatch = contactMap.get(handle.toLowerCase().trim());
+	if (emailMatch) return emailMatch;
+
+	const phoneMatch = contactMap.get(normalizePhone(handle));
+	if (phoneMatch) return phoneMatch;
+
+	return null;
+}
+
+/**
+ * Decode Ventura+ `attributedBody` binary plists into plain text.
+ */
+export function decodeAttributedBody(
+	blob: Buffer | Uint8Array | null,
+): string | null {
+	if (!blob || blob.length === 0) return null;
+
+	const buf = Buffer.isBuffer(blob) ? blob : Buffer.from(blob);
+	const nsStringMarker = Buffer.from("NSString");
+	const streamtypedMarker = Buffer.from("streamtyped");
+
+	const isStructuredTextCandidate = (value: string): boolean => {
+		const trimmed = value.trim();
+		if (trimmed.length === 0 || trimmed.includes("\uFFFD")) return false;
+		if (/^\$/.test(trimmed) || /^NS[A-Z]/.test(trimmed)) return false;
+		if (/^(com\.apple|public\.)/.test(trimmed)) return false;
+		return !containsStructuredControlChars(trimmed);
+	};
+
+	const isLikelyMessageText = (value: string): boolean => {
+		const trimmed = value.trim();
+		if (!isStructuredTextCandidate(trimmed)) return false;
+
+		const looksLikePathOrUrl = /^(https?:\/\/|file:\/\/|\/)/.test(trimmed);
+		const hasSentenceSignals = /[\s!?.,:;()[\]'"-]/.test(trimmed);
+		const hasLettersOrEmoji = /[A-Za-z\u00A0-\uFFFF]/.test(trimmed);
+
+		if (!hasLettersOrEmoji) return false;
+		if (looksLikePathOrUrl && !hasSentenceSignals) return false;
+
+		return true;
+	};
+
+	const scoreCandidate = (value: string): number => {
+		const trimmed = value.trim();
+		if (!isLikelyMessageText(trimmed)) return Number.NEGATIVE_INFINITY;
+
+		let score = Math.min(trimmed.length, 200);
+		if (/\s/.test(trimmed)) score += 40;
+		if (/[a-z]/.test(trimmed)) score += 10;
+		if (/[\u0080-\uFFFF]/.test(trimmed)) score += 10;
+		if (/^(https?:\/\/|file:\/\/|\/)/.test(trimmed)) score -= 35;
+		if (/(attachments?|Library|Messages)\//i.test(trimmed)) score -= 50;
+		if (/^[A-Za-z0-9._-]+$/.test(trimmed) && !/\s/.test(trimmed)) score -= 30;
+
+		return score;
+	};
+
+	const decodeStructuredSlice = (
+		start: number,
+		lengthHint?: number,
+	): string | null => {
+		if (start < 0 || start >= buf.length) return null;
+
+		const end =
+			lengthHint == null
+				? buf.length
+				: Math.min(start + lengthHint, buf.length);
+		const decoded = buf.subarray(start, end).toString("utf-8");
+		const cutPoints = [decoded.indexOf("\uFFFD"), decoded.indexOf("bplist00")]
+			.filter((position) => position >= 0)
+			.sort((a, b) => a - b);
+		const candidate = trimTrailingStructuredControlChars(
+			cutPoints.length > 0 ? decoded.slice(0, cutPoints[0]) : decoded,
+		);
+		return isStructuredTextCandidate(candidate)
+			? candidate.trim() || null
+			: null;
+	};
+
+	const skipStructuredControlBytes = (start: number): number => {
+		let cursor = start;
+		while (cursor < buf.length) {
+			const currentByte = buf[cursor];
+			if (currentByte == null || currentByte > 0x1f) break;
+			cursor += 1;
+		}
+		return cursor;
+	};
+
+	try {
+		let idx = buf.indexOf(nsStringMarker);
+		if (idx !== -1) {
+			idx += nsStringMarker.length;
+			for (let i = idx; i < Math.min(idx + 50, buf.length - 1); i += 1) {
+				if (buf[i] !== 0x2b) continue;
+
+				const nextByte = buf[i + 1];
+				if (nextByte == null) continue;
+				if (nextByte > 1 && nextByte < 0x80) {
+					const lengthHint = nextByte;
+					const start = skipStructuredControlBytes(i + 2);
+					const text = decodeStructuredSlice(start, lengthHint);
+					if (text != null) return text;
+					continue;
+				}
+
+				if (nextByte >= 0x80 && i + 2 < buf.length) {
+					const lowByte = buf[i + 2];
+					if (lowByte == null) continue;
+					const lengthHint = ((nextByte & 0x7f) << 8) | lowByte;
+					const start = skipStructuredControlBytes(i + 3);
+					const text = decodeStructuredSlice(start, lengthHint);
+					if (text != null) return text;
+				}
+			}
+		}
+
+		const markerPositions = [
+			buf.indexOf(streamtypedMarker),
+			buf.indexOf(nsStringMarker),
+		].filter((position) => position >= 0);
+		const searchStart =
+			markerPositions.length > 0 ? Math.min(...markerPositions) : 0;
+		const fullText = buf.subarray(searchStart).toString("utf-8");
+		const runs = splitControlRuns(fullText).filter((s) => s.length > 1);
+		const noise = new Set([
+			"NSString",
+			"NSDictionary",
+			"NSArray",
+			"NSNumber",
+			"NSObject",
+			"NSAttributedString",
+			"NSMutableAttributedString",
+			"NSAttributes",
+			"NSParagraphStyle",
+			"NSFont",
+			"NSColor",
+			"streamtyped",
+			"$archiver",
+			"$objects",
+			"$top",
+			"$version",
+			"NSKeyedArchiver",
+			"NS.keys",
+			"NS.objects",
+			"NS.string",
+			"NS.data",
+		]);
+		const candidates = runs
+			.map((value) => value.trim())
+			.filter((value) => value.length > 1 && !noise.has(value))
+			.map((value) => ({ value, score: scoreCandidate(value) }))
+			.filter((candidate) => candidate.score >= 60)
+			.sort((a, b) => b.score - a.score || b.value.length - a.value.length);
+		return candidates[0]?.value ?? null;
+	} catch {}
+
+	return null;
+}
+
+function buildParsedAttachment(
+	row: AttachmentRow,
+	resolveAttachment: AttachmentResolver,
+): ParsedAttachment {
+	const resolved = resolveAttachment(row.filename, row.transfer_name);
+	return {
+		filename: row.filename,
+		path: resolved.path,
+		original_path: resolved.original_path,
+		mime_type: row.mime_type,
+		uti: row.uti,
+		size: row.total_bytes,
+		name: row.transfer_name,
+		exists: resolved.exists,
+		absolute: resolved.absolute,
+		missing: resolved.missing,
+	};
+}
+
+/**
+ * Split one DB row into stable text/media/tapback parts.
+ */
+export function parseRow(
+	row: MessageRow,
+	attachmentRows: AttachmentRow[],
+	options: ParseRowOptions,
+): ParsedMessageInternal[] {
+	const assocType = row.associated_message_type;
+
+	let text = row.text;
+	if (text == null && row.attributedBody != null) {
+		const decoded = decodeAttributedBody(row.attributedBody);
+		text = decoded ?? "[attributedBody: unable to decode]";
+	}
+	text = normalizeMessageText(text);
+
+	const handle = row.handle_id;
+	const date = appleEpochToISO(row.apple_date);
+	const dateLocal = appleEpochToLocalISO(row.apple_date);
+	const dateRead = appleEpochToISO(row.date_read);
+	const dateReadLocal = appleEpochToLocalISO(row.date_read);
+	const dateEdited = appleEpochToISO(row.date_edited);
+	const dateEditedLocal = appleEpochToLocalISO(row.date_edited);
+	const normalizedAttachments = attachmentRows.map((row) =>
+		buildParsedAttachment(row, options.resolveAttachment),
+	);
+	const replyToRaw = row.thread_originator_guid;
+
+	const base: Omit<
+		ParsedMessageInternal,
+		| "guid"
+		| "part_index"
+		| "message_kind"
+		| "text"
+		| "reply_to"
+		| "reaction_to"
+		| "attachment"
+	> = {
+		_rowid: row.rowid,
+		source_guid: row.guid,
+		group_guid: row.guid,
+		is_from_me: row.is_from_me === 1,
+		date,
+		date_local: dateLocal,
+		date_read: dateRead,
+		date_read_local: dateReadLocal,
+		edited: dateEdited != null ? true : null,
+		date_edited: dateEdited,
+		date_edited_local: dateEditedLocal,
+		service: row.service,
+		handle,
+		contact_name: handle ? resolveContact(handle, options.contactMap) : null,
+		chat_name: row.chat_display_name,
+		chat_id: row.chat_identifier,
+		is_group: row.chat_style === 43,
+		thread_originator: row.thread_originator_guid,
+		reply_to_raw: replyToRaw,
+		reaction_to_raw:
+			assocType && assocType >= 2000 ? row.associated_message_guid : null,
+		reaction_type: assocType && assocType >= 2000 ? assocType : null,
+		subject: row.subject,
+	};
+
+	if (assocType && assocType >= 2000) {
+		return [
+			{
+				...base,
+				guid: row.guid,
+				part_index: null,
+				message_kind: "tapback",
+				text,
+				reply_to: null,
+				reaction_to: null,
+				attachment: null,
+			},
+		];
+	}
+
+	const messages: ParsedMessageInternal[] = [];
+	let partIndex = 0;
+
+	for (const attachment of normalizedAttachments) {
+		messages.push({
+			...base,
+			guid: generatePartGuid(row.guid, partIndex),
+			part_index: partIndex,
+			message_kind: "media",
+			text: null,
+			reply_to: null,
+			reaction_to: null,
+			attachment,
+		});
+		partIndex += 1;
+	}
+
+	if (hasMeaningfulText(text)) {
+		messages.push({
+			...base,
+			guid: generatePartGuid(row.guid, partIndex),
+			part_index: partIndex,
+			message_kind: "text",
+			text,
+			reply_to: null,
+			reaction_to: null,
+			attachment: null,
+		});
+		partIndex += 1;
+	}
+
+	if (messages.length === 0) {
+		messages.push({
+			...base,
+			guid: generatePartGuid(row.guid, 0),
+			part_index: 0,
+			message_kind: "text",
+			text,
+			reply_to: null,
+			reaction_to: null,
+			attachment: null,
+		});
+	}
+
+	return messages;
+}
+
+/**
+ * Parse a split-part reference like `p:2/<source-guid>`.
+ */
+export function parsePartReference(
+	value: string | null,
+): { index: number; sourceGuid: string } | null {
+	if (!value) return null;
+	const match = value.match(/^p:(\d+)\/(.+)$/);
+	if (!match) return null;
+	const indexText = match[1];
+	const sourceGuid = match[2];
+	if (indexText == null || sourceGuid == null) return null;
+	return {
+		index: Number(indexText),
+		sourceGuid,
+	};
+}
+
+/**
+ * Determine whether two messages belong to the same conversation.
+ */
+export function sameConversation(
+	a: ParsedMessageInternal,
+	b: ParsedMessageInternal,
+): boolean {
+	if (a.chat_id && b.chat_id) return a.chat_id === b.chat_id;
+	if (a.handle && b.handle) return a.handle === b.handle;
+	return false;
+}
+
+/**
+ * Choose the most useful target part for a reply or tapback when multiple parts exist.
+ */
+export function choosePreferredPart(
+	parts: ParsedMessageInternal[],
+	current: ParsedMessageInternal,
+	kind: "reply" | "reaction",
+): ParsedMessageInternal | null {
+	const textPart = parts.find((part) => part.message_kind === "text") ?? null;
+	const mediaPart = parts.find((part) => part.message_kind === "media") ?? null;
+
+	if (kind === "reaction") {
+		const reactionText = current.text ?? "";
+		const quotedText = /[“"].+[”"]/.test(reactionText);
+		const mediaCue =
+			/\b(an image|a photo|a video|an audio message|audio message|sticker|attachment)\b/i.test(
+				reactionText,
+			);
+		if (quotedText && textPart) return textPart;
+		if (mediaCue && mediaPart) return mediaPart;
+	}
+
+	return textPart ?? mediaPart ?? parts[0] ?? null;
+}
+
+/**
+ * Heuristically link a reply or tapback to a nearby earlier message in the same conversation.
+ */
+export function findHeuristicTarget(
+	messages: ParsedMessageInternal[],
+	index: number,
+	kind: "reply" | "reaction",
+): ParsedMessageInternal | null {
+	const current = messages[index];
+	if (!current?.date) return null;
+
+	const currentMs = Date.parse(current.date);
+	if (Number.isNaN(currentMs)) return null;
+
+	let best: { candidate: ParsedMessageInternal; score: number } | null = null;
+
+	for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+		const candidate = messages[cursor];
+		if (!candidate?.date) continue;
+		if (candidate.message_kind === "tapback") continue;
+		if (!sameConversation(current, candidate)) continue;
+
+		const candidateMs = Date.parse(candidate.date);
+		if (Number.isNaN(candidateMs)) continue;
+		const delta = currentMs - candidateMs;
+		if (delta < 0) continue;
+		if (delta > LINK_SEARCH_WINDOW_MS) break;
+
+		let score = 1000 - delta / 1000;
+		if (kind === "reaction") {
+			const reactionText = current.text ?? "";
+			const quotedText = /[“"].+[”"]/.test(reactionText);
+			const mediaCue =
+				/\b(an image|a photo|a video|an audio message|audio message|sticker|attachment)\b/i.test(
+					reactionText,
+				);
+			if (mediaCue && candidate.message_kind === "media") score += 120;
+			if (quotedText && candidate.message_kind === "text") score += 120;
+			if (!quotedText && !mediaCue && candidate.message_kind === "text")
+				score += 20;
+		} else if (candidate.message_kind === "text") {
+			score += 20;
+		}
+
+		if (best == null || score > best.score) {
+			best = { candidate, score };
+		}
+	}
+
+	return best?.candidate ?? null;
+}
+
+/**
+ * Resolve reply and tapback targets against split-part message GUIDs.
+ */
+export function linkMessageTargets(
+	messages: ParsedMessageInternal[],
+): ParsedMessageInternal[] {
+	const byGuid = new Map<string, ParsedMessageInternal>();
+	const partsBySourceGuid = new Map<string, ParsedMessageInternal[]>();
+
+	for (const message of messages) {
+		byGuid.set(message.guid, message);
+		if (message.message_kind !== "tapback") {
+			const bucket = partsBySourceGuid.get(message.source_guid) ?? [];
+			bucket.push(message);
+			partsBySourceGuid.set(message.source_guid, bucket);
+		}
+	}
+
+	for (const parts of partsBySourceGuid.values()) {
+		parts.sort((a, b) => (a.part_index ?? 0) - (b.part_index ?? 0));
+	}
+
+	const resolveTarget = (
+		current: ParsedMessageInternal,
+		rawGuid: string | null,
+		kind: "reply" | "reaction",
+		index: number,
+	): string | null => {
+		if (rawGuid) {
+			if (byGuid.has(rawGuid)) return rawGuid;
+
+			const partRef = parsePartReference(rawGuid);
+			if (partRef) {
+				const parts = partsBySourceGuid.get(partRef.sourceGuid);
+				if (parts?.length) {
+					const exact = parts.find((part) => part.part_index === partRef.index);
+					if (exact) return exact.guid;
+					if (parts.length === 1) return parts[0]?.guid ?? rawGuid;
+					return choosePreferredPart(parts, current, kind)?.guid ?? rawGuid;
+				}
+			}
+
+			const parts = partsBySourceGuid.get(rawGuid);
+			if (parts?.length) {
+				if (parts.length === 1) return parts[0]?.guid ?? rawGuid;
+				return choosePreferredPart(parts, current, kind)?.guid ?? rawGuid;
+			}
+		}
+
+		return findHeuristicTarget(messages, index, kind)?.guid ?? null;
+	};
+
+	return messages.map((message, index) => {
+		if (message.message_kind === "tapback") {
+			return {
+				...message,
+				reaction_to: resolveTarget(
+					message,
+					message.reaction_to_raw,
+					"reaction",
+					index,
+				),
+			};
+		}
+
+		if (message.reply_to_raw) {
+			return {
+				...message,
+				reply_to: resolveTarget(message, message.reply_to_raw, "reply", index),
+			};
+		}
+
+		return message;
+	});
+}
+
+/**
+ * Testable search matcher for post-decode text filtering.
+ */
+export function matchesSearch(
+	message: ParsedMessage,
+	needle: string | null,
+): boolean {
+	if (needle == null) return true;
+	return message.text?.toLowerCase().includes(needle.toLowerCase()) ?? false;
+}
+
+/**
+ * Save a message as a markdown file with YAML frontmatter.
+ */
+export function saveMessageAsMarkdown(
+	msg: ParsedMessage,
+	saveDir: string,
+): string | null {
+	if (!msg.date || (!msg.text && !msg.attachment)) return null;
+
+	const dt = new Date(msg.date);
+	const year = dt.getFullYear();
+	const month = String(dt.getMonth() + 1).padStart(2, "0");
+	const day = String(dt.getDate()).padStart(2, "0");
+
+	const dateFolder = `${year}/${year}-${month}-${day}`;
+	const safeGuid = msg.guid.replace(/\//g, "_").replace(/:/g, "-");
+	const filePath = join(saveDir, dateFolder, `${safeGuid}.md`);
+
+	const handle = msg.handle ?? "unknown";
+	const sender = msg.is_from_me ? "me" : (msg.contact_name ?? handle);
+	const chatName = msg.chat_name ?? msg.chat_id ?? "direct";
+
+	const fm: string[] = [
+		"---",
+		`guid: "${escapeYaml(msg.guid)}"`,
+		`source_guid: "${escapeYaml(msg.source_guid)}"`,
+		`message_kind: "${msg.message_kind}"`,
+		`from: "${escapeYaml(sender)}"`,
+		`handle: "${escapeYaml(handle)}"`,
+		`date: ${msg.date}`,
+		...(msg.date_local ? [`date_local: ${msg.date_local}`] : []),
+		`is_from_me: ${msg.is_from_me}`,
+		`service: ${msg.service ?? "unknown"}`,
+		`thread: "${escapeYaml(chatName)}"`,
+		`is_group: ${msg.is_group}`,
+	];
+	if (msg.group_guid) {
+		fm.push(`group_guid: "${escapeYaml(msg.group_guid)}"`);
+	}
+	if (msg.part_index != null) {
+		fm.push(`part_index: ${msg.part_index}`);
+	}
+	if (msg.contact_name) {
+		fm.push(`contact_name: "${escapeYaml(msg.contact_name)}"`);
+	}
+	if (msg.thread_originator) {
+		fm.push(`thread_originator: "${escapeYaml(msg.thread_originator)}"`);
+	}
+	if (msg.reply_to_raw) {
+		fm.push(`reply_to_raw: "${escapeYaml(msg.reply_to_raw)}"`);
+	}
+	if (msg.reply_to) {
+		fm.push(`reply_to: "${escapeYaml(msg.reply_to)}"`);
+	}
+	if (msg.reaction_to_raw) {
+		fm.push(`reaction_to_raw: "${escapeYaml(msg.reaction_to_raw)}"`);
+	}
+	if (msg.reaction_to) {
+		fm.push(`reaction_to: "${escapeYaml(msg.reaction_to)}"`);
+		fm.push(`reaction_type: ${msg.reaction_type}`);
+	}
+	if (msg.subject) {
+		fm.push(`subject: "${escapeYaml(msg.subject)}"`);
+	}
+	if (msg.edited) {
+		fm.push("edited: true");
+		if (msg.date_edited) fm.push(`date_edited: ${msg.date_edited}`);
+		if (msg.date_edited_local)
+			fm.push(`date_edited_local: ${msg.date_edited_local}`);
+	}
+	if (msg.attachment) {
+		fm.push("has_attachment: true");
+		if (msg.attachment.filename) {
+			fm.push(`attachment_filename: "${escapeYaml(msg.attachment.filename)}"`);
+		}
+		if (msg.attachment.path) {
+			fm.push(`attachment_path: "${escapeYaml(msg.attachment.path)}"`);
+		}
+		if (msg.attachment.original_path) {
+			fm.push(
+				`attachment_original_path: "${escapeYaml(msg.attachment.original_path)}"`,
+			);
+		}
+		if (msg.attachment.name) {
+			fm.push(`attachment_name: "${escapeYaml(msg.attachment.name)}"`);
+		}
+		if (msg.attachment.mime_type) {
+			fm.push(
+				`attachment_mime_type: "${escapeYaml(msg.attachment.mime_type)}"`,
+			);
+		}
+		if (msg.attachment.uti) {
+			fm.push(`attachment_uti: "${escapeYaml(msg.attachment.uti)}"`);
+		}
+		if (msg.attachment.size != null) {
+			fm.push(`attachment_size: ${msg.attachment.size}`);
+		}
+		fm.push(`attachment_exists: ${msg.attachment.exists}`);
+	}
+	fm.push("---");
+
+	const body =
+		msg.text ?? msg.attachment?.path ?? msg.attachment?.filename ?? "";
+	const content = `${fm.join("\n")}\n\n${body}\n`;
+
+	try {
+		mkdirSync(dirname(filePath), { recursive: true });
+		writeFileSync(filePath, content, "utf-8");
+		return filePath;
+	} catch (err) {
+		console.error(`[imessage-reader] Failed to save ${filePath}: ${err}`);
+		return null;
+	}
+}

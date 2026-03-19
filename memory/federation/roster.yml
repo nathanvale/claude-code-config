@@ -1,0 +1,74 @@
+version: 1
+hub: my-second-brain
+
+repos:
+  - name: my-second-brain
+    profile: life-hub
+    location: /Users/nathanvale/code/my-second-brain-v2
+    collection: vault
+    update_command: git -C /Users/nathanvale/code/my-second-brain-v2 fetch --all --prune --quiet || true
+    primary_paths:
+      - 00 Inbox
+      - 01 Projects
+      - 02 Areas
+      - 03 Resources
+      - docs
+      - memory
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: monash-smst
+    profile: work-repo
+    location: /Users/nathanvale/code/monash-smst
+    collection: repo-monash-smst
+    update_command: git -C /Users/nathanvale/code/monash-smst fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - memory
+      - TASKS.md
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: mac-mini-home-server
+    profile: infra-repo
+    location: /Users/nathanvale/code/mac-mini-home-server
+    collection: repo-mac-mini-home-server
+    update_command: git -C /Users/nathanvale/code/mac-mini-home-server fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - memory
+      - TASKS.md
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: bun-typescript-starter
+    profile: infra-repo
+    location: /Users/nathanvale/code/bun-typescript-starter
+    collection: repo-bun-typescript-starter
+    update_command: git -C /Users/nathanvale/code/bun-typescript-starter fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - memory
+      - todos
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: ellucian-api-catalog
+    profile: reference-corpus
+    location: /Users/nathanvale/code/ellucian-api-catalog
+    collection: repo-ellucian-api-catalog
+    update_command: bun run /Users/nathanvale/code/ellucian-api-catalog/scripts/sync.ts
+    primary_paths:
+      - apis
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: ellucian-developer
+    profile: reference-corpus
+    location: /Users/nathanvale/code/ellucian-developer
+    collection: repo-ellucian-developer
+    update_command: bun run /Users/nathanvale/code/ellucian-developer/scripts/sync.ts
+    primary_paths:
+      - repos
+      - CLAUDE.md
+      - AGENTS.md
