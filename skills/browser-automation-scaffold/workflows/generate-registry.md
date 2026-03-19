@@ -64,6 +64,27 @@ candidates:
     policy: "Promote only after successful revalidation on a matching fingerprint."
 ```
 
-## Step 3: Show the user
+## Step 3: Create gotcha file stub
 
-Display the generated registry and confirm.
+Write to the appropriate gotcha path:
+
+- **Project scope:** `.claude/browser-configs/gotchas.{domain-key}.md`
+- **User scope:** `~/.claude/browser-configs/gotchas.{domain-key}.md`
+
+```markdown
+# {Domain Name} -- Browser Agent Gotchas
+
+_Updated by Discovery Mode. Do not remove entries without verification._
+
+<!-- Add gotchas as Discovery Mode encounters them. Format:
+
+## [gotcha-name]
+**Discovered:** YYYY-MM-DD
+**Summary:** One sentence.
+**Detail:** What happens and how to handle it.
+-->
+```
+
+## Step 4: Show the user
+
+Display the generated registry and gotcha file, and confirm.

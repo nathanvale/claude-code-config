@@ -78,10 +78,12 @@ BROWSER_FLAGS="--headed --profile {chrome_profile_path}"
 1. **Set BROWSER_FLAGS** from Browser Session section above
 2. **Load config** from `{config-path}`
 3. **Load selector registry** from `{registry-path}`
-4. **Navigate** to target URL and authenticate if needed (see browser-automation skill)
-5. **Check page fingerprint** and choose Discovery, Fast, or Recovery Mode (see Mode Selection below)
-6. **Execute task** using the selected mode
-7. **Return Browser Report** (see browser-automation skill for format)
+4. **Read gotchas** from `{gotcha-path}` (skip if file doesn't exist yet)
+5. **Navigate** to target URL and authenticate if needed (see browser-automation skill)
+6. **Check page fingerprint** and choose Discovery, Fast, or Recovery Mode (see Mode Selection below)
+7. **Execute task** using the selected mode
+8. **Write back discoveries** -- update selector registry, page fingerprints, gotchas, and playbook scripts with what you learned (see Discovery Mode)
+9. **Return Browser Report** (see browser-automation skill for format)
 
 ## Mode Selection
 
@@ -96,8 +98,12 @@ Use when:
 Behavior:
 
 - use the normal OBSERVE -> REASON -> ACT -> VERIFY loop
-- capture selector evidence for future validation
-- write candidate repairs as staged evidence, not immediate promotion
+- **Write back everything you learn:**
+  1. **Selectors** -- for every selector that worked, add it to the selector registry under `pages.{page-name}.regions.{region}.fields` with `status: candidate` and today's date
+  2. **Page fingerprints** -- add `title_contains`, `required_text`, and/or `url_pattern` under `page_fingerprints.{page-name}`
+  3. **Gotchas** -- if you encountered unexpected behavior (popups, lazy loading, cookie banners, dynamic content), write it to the gotcha file
+  4. **Playbook scripts** -- if a playbook exists for this task, update the fill and verify scripts with working extraction logic
+- NEVER promote a selector directly to `validated` -- always write as `candidate` first
 
 ### Fast Mode
 

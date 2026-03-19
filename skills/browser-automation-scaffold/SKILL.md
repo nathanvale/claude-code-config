@@ -16,7 +16,7 @@ Interactive wizard that generates a complete browser agent stack from a domain n
 | Config YAML (or service entry) | Auth hints, credentials, identity |
 | Selector registry | Empty declarative schema ready for Discovery Mode |
 | Session registration | Port/profile assignment in registry.yaml |
-| Gotcha file stub (optional) | Domain-specific gotcha starter |
+| Gotcha file stub | Domain-specific gotcha starter |
 | First playbook (optional) | Task-specific playbook skeleton |
 
 <intake>
