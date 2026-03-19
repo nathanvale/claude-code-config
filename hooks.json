@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"# currentDate\\nToday's date is $(date '+%A, %d %B %Y') and the current time is $(date '+%I:%M %p %Z').\""
+            "command": "echo '{\"hookSpecificOutput\":{\"additionalContext\":\"Current datetime: '$(date '+%A, %d %B %Y %I:%M %p %Z')'\"}}'"
           }
         ]
       }
