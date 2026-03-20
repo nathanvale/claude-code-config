@@ -10,6 +10,16 @@ Domain knowledge for extracting transcripts from Zoom recording pages. No browse
 
 Works with any Zoom instance (e.g. `*.zoom.us`, `us02web.zoom.us`, org-specific subdomains).
 
+## Registry Cross-References
+
+This skill provides workflow logic. Selectors and fingerprints live in the registry:
+
+- **Selector registry:** `~/.claude/browser-configs/selectors.zoom-recording.yaml`
+- **Playbooks:** `~/.claude/browser-configs/playbooks/zoom-recording/`
+- **Gotchas:** `~/.claude/browser-configs/gotchas.zoom-recording.md`
+
+When a specific selector is needed, consult the registry first. This skill covers the *workflow* (URL resolution strategy, page state detection table, extraction strategy ordering), not the selector values.
+
 ## Share URL Resolution
 
 Share URLs (`/rec/share/...`) redirect through Zoom's SPA which sets `continueMode=true`, causing the page to load a *different* recording from the session playlist.
@@ -26,17 +36,19 @@ Share URLs (`/rec/share/...`) redirect through Zoom's SPA which sets `continueMo
 
 Some share URLs from Zoom Hub represent a shared folder/collection, not a single recording. These rotate through recently-viewed recordings and cannot be resolved via direct navigation. If a share URL consistently loads the wrong recording after 2 attempts, report `FAILED: Hub share URL cannot be resolved`.
 
+See `~/.claude/browser-configs/gotchas.zoom-recording.md` for detailed Hub resolution patterns.
+
 ## Page State Detection
 
-After navigating to a recording URL and waiting 5s, classify the page:
+After navigating to a recording URL and waiting 5s, classify the page using the fingerprints in the selector registry:
 
 | State | Detection | Result |
 |-------|-----------|--------|
-| **Recording loaded** | URL contains `/rec/play` or `/rec/share/` AND snapshot shows video player | Proceed to extraction |
-| **No transcript** | Recording loaded but NO `tab "Audio Transcript"` in snapshot | Check API `hasTranscript` before skipping |
-| **Auth redirect** | URL contains `zoom.us/signin` or an SSO/Okta domain | Authenticate, then retry |
-| **Passcode gate** | Snapshot shows `textbox "Passcode"` or text "Enter the passcode" | SKIPPED: Passcode-gated |
-| **Expired/invalid** | Page shows "This recording has expired" or "Recording does not exist" | SKIPPED: Expired/invalid link |
+| **Recording loaded** | `recording_play` fingerprint matches | Proceed to extraction |
+| **Passcode gate** | `recording_passcode_gate` fingerprint matches | Fill passcode (if provided) or SKIPPED |
+| **No transcript** | Recording loaded but API confirms `hasTranscript: false` | SKIPPED: No transcript |
+| **Auth redirect** | `zoom_signin` fingerprint matches or SSO/Okta domain | Authenticate, then retry |
+| **Expired/invalid** | `recording_expired` fingerprint matches | SKIPPED: Expired/invalid link |
 | **Error page** | HTTP error or blank page after 10s | SKIPPED: Page load error |
 
 ## Extraction Strategy (ordered by preference)
@@ -44,6 +56,9 @@ After navigating to a recording URL and waiting 5s, classify the page:
 ### 1. API Extraction (primary -- fastest, most reliable)
 
 The Zoom play/info API returns the full transcript as structured JSON. No DOM interaction needed.
+
+**Playbook:** `~/.claude/browser-configs/playbooks/zoom-recording/extract-transcript.yaml` (step: `api_extraction`)
+**Script:** `~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-api.js`
 
 **How to get the API URL:**
 1. After the recording page loads, check browser performance entries for a URL matching `/nws/recording/1.0/play/info/`
@@ -63,7 +78,7 @@ If `hasTranscript` is `false`, skip immediately -- no transcript exists.
 **Extract from API response:**
 The `transcriptList` array contains objects with:
 - `username` -- speaker name
-- `ts` -- start timestamp (milliseconds or `HH:MM:SS.mmm` string depending on Zoom version)
+- `ts` -- start timestamp (string `HH:MM:SS.mmm` -- see gotchas for format)
 - `end_ts` -- end timestamp
 - `text` -- dialogue text
 
@@ -78,9 +93,11 @@ HH:MM:SS
 More dialogue.
 ```
 
-Convert `ts` to HH:MM:SS (if numeric, divide by 1000; if string, substring to 8 chars). Write directly to temp file.
+Convert `ts` to HH:MM:SS using `e.ts.split('.')[0]`. Write directly to temp file.
 
 ### 2. DOM Extraction (fallback -- if API unavailable)
+
+**Script:** `~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-dom.js`
 
 Use only if the play/info API is unreachable or returns no `transcriptList`.
 
@@ -95,13 +112,9 @@ The transcript lives behind a tab that may not be selected by default:
 
 #### DOM Selectors
 
-| Selector | What it targets |
-|----------|----------------|
-| `.transcript-container` | Outer scroll container (vue-recycle-scroller) |
-| `.transcript-list` | Inner list with all transcript entries |
-| `[class*=transcript]` | Broader fallback -- catches variant class names |
+See the `transcript_panel` region in `selectors.zoom-recording.yaml` for current validated selectors.
 
-**Important:** Do NOT use `[role=tabpanel]` -- Zoom uses class-based selectors, not ARIA roles, for the transcript panel.
+**Important:** Do NOT use `[role=tabpanel]` -- Zoom uses class-based selectors, not ARIA roles, for the transcript panel (see gotchas).
 
 #### Attempt 1: Scroll-Trigger
 
@@ -120,17 +133,7 @@ Zoom uses `vue-recycle-scroller` -- it only renders visible items. A tiny scroll
 
 1. Full page reload, wait 8s
 2. Snapshot to verify page state, re-click Audio Transcript tab if needed, wait 3s
-3. Aggressive scroll sequence:
-   ```javascript
-   var el = document.querySelector('.transcript-container');
-   if(el) {
-     el.scrollTop = el.scrollHeight;
-     setTimeout(() => {
-       el.scrollTop = 0;
-       setTimeout(() => { el.scrollTop = 1; }, 500);
-     }, 1000);
-   }
-   ```
+3. Aggressive scroll sequence (see DOM extraction script)
 4. Wait 5s
 5. Check length again
 6. If still < 200, try broader selector: `document.querySelector('[class*=transcript]')?.innerText`
@@ -155,8 +158,12 @@ Each block is: speaker name, timestamp, then one or more lines of dialogue, sepa
 
 ## Validation
 
+**Script:** `~/.claude/browser-configs/playbooks/zoom-recording/scripts/verify-extract-transcript.js`
+
+Checks:
 - Transcript must be > 200 characters of actual content
-- If shorter, it's likely a rendering failure or a recording with no speech
+- At least 1 unique speaker detected
+- Valid HH:MM:SS timestamp format present
 
 ## URL Patterns
 

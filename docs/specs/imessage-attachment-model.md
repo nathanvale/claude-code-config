@@ -8,6 +8,7 @@ related:
   - /Users/nathanvale/.claude/plans/serene-wishing-sun.md
   - docs/specs/imessage-note-contract.md
   - docs/specs/imessage-corpus-repo.md
+  - docs/specs/imessage-privacy-and-retention.md
   - skills/imessage-reader/scripts/lib.ts
 ---
 
@@ -31,15 +32,19 @@ Define how binary attachments are stored, referenced in Markdown frontmatter, an
 
 | Segment | Source | Purpose |
 |---------|--------|---------|
-| `YYYY/MM/` | Message `date_local` | Year/month sharding |
-| `{source-id-slug}` | Message `guid` slugified | Groups attachments by parent message |
+| `YYYY/MM/` | Immutable parent message `sent_at` | Year/month sharding |
+| `{source-id-slug}` | Canonical GUID slugifier v2 | Groups attachments by parent message |
 
 ### Rules
 
 - Binary files live in `runtime/`, never in `docs/`
 - The Markdown note in `docs/messages/` references attachments by relative path
 - Attachments are copied from `~/Library/Messages/Attachments/` on first sync
-- Subsequent syncs skip files that already exist at the target path (by filename match)
+- Subsequent syncs skip files only when the target path exists and the existing file matches expected metadata
+- Filename match alone is not sufficient for idempotency
+- In v1, use `size_bytes` as the minimum integrity check before skipping
+- When a size mismatch is detected, recopy the file and log the repair in the sync report
+- When `sha256` becomes available, it should become the preferred integrity check
 
 ## Frontmatter Schema
 
@@ -67,6 +72,7 @@ attachments:
     sha256: null
     extracted_text: "Invoice total $128.00 due Friday"
     ai_caption: null
+    ai_keywords: []
 ```
 
 ### Field Descriptions
@@ -82,6 +88,7 @@ attachments:
 | `sha256` | string or null | Hash for integrity (future -- null in v1) |
 | `extracted_text` | string or null | Text extracted via OCR or native parsing |
 | `ai_caption` | string or null | Gemini Vision caption (future enrichment) |
+| `ai_keywords` | array | Optional Gemini-derived keywords for retrieval |
 
 ### Kind Mapping
 
@@ -97,9 +104,15 @@ function attachmentKind(mimeType: string | null): string {
 }
 ```
 
-### Backwards Compatibility
+### Backwards Compatibility and Migration
 
-The flat `has_attachment`, `attachment_filename`, `attachment_path`, `attachment_original_path`, `attachment_name`, `attachment_mime_type`, `attachment_uti`, `attachment_size`, `attachment_exists` fields are removed in favor of the structured `attachments:` list. This is a breaking change to the note schema -- existing saved notes will be overwritten on next sync.
+The flat `has_attachment`, `attachment_filename`, `attachment_path`, `attachment_original_path`, `attachment_name`, `attachment_mime_type`, `attachment_uti`, `attachment_size`, `attachment_exists` fields are removed in favor of the structured `attachments:` list.
+
+Migration rules:
+- legacy notes may still contain flat attachment fields until they are migrated
+- new v2 writes must emit only the structured `attachments:` list
+- `query-imessage.ts migrate-notes` is responsible for normalizing old notes into the new schema before v2 sync is considered complete
+- readers may accept both schemas during the migration window, but writers must not keep reintroducing flat fields
 
 ## Body Shape Extension
 
@@ -138,6 +151,8 @@ Run automatically during sync when cheap:
 - **PDFs**: Native text extraction via `pdf-parse` or similar
 - **Text files**: Direct read
 - **Images**: Skip (no OCR in v1)
+
+Text extraction should be written back into the parent Markdown note so QMD and `rg` can search it without indexing binaries.
 
 ### Future: Gemini Vision Enrichment
 
@@ -182,6 +197,9 @@ New functions:
 - `attachmentKind()` -- map MIME type to kind
 - `copyAttachmentBinary()` -- copy from Messages to corpus repo (future)
 
+Optional follow-up primitive:
+- `query-imessage.ts enrich --attachments --source-id <id>` patches extracted text, captions, and keywords onto existing notes without re-running a broad sync window
+
 ## Verification
 
 1. Saved markdown has structured `attachments:` list, not flat fields
@@ -191,3 +209,5 @@ New functions:
 5. `## Attachment Text` section contains extracted text when available
 6. Binary files land in `runtime/imessage/attachments/YYYY/MM/{slug}/`
 7. Re-sync does not duplicate binary files
+8. Existing files are not skipped solely by filename match when `size_bytes` disagrees
+9. Vision-derived `ai_caption` or `ai_keywords` are added only during explicit enrichment, not during base sync

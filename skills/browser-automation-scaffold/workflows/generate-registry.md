@@ -66,10 +66,11 @@ candidates:
 
 ## Step 3: Create gotcha file stub
 
-Write to the appropriate gotcha path:
+Write to the gotcha path that matches the shared browser-automation skill's Gotcha Protocol:
 
-- **Project scope:** `.claude/browser-configs/gotchas.{domain-key}.md`
-- **User scope:** `~/.claude/browser-configs/gotchas.{domain-key}.md`
+- **Path:** `docs/gotchas/browser-agent/{domain-key}.md`
+
+Create parent directories if needed. This path is resolved by the shared skill via `$(git rev-parse --show-toplevel)/docs/gotchas/browser-agent/`.
 
 ```markdown
 # {Domain Name} -- Browser Agent Gotchas

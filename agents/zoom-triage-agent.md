@@ -20,10 +20,29 @@ color: green
 
 Fast, lightweight scan of a Zoom recording. No full transcript extraction -- just check metadata via the play/info API and return a triage result. Used for bulk filtering before committing to full extraction.
 
+## Browser Session
+
+```bash
+BROWSER_FLAGS="--headed --profile ~/.cache/chrome-agent"
+```
+
+- **Selector registry:** `~/.claude/browser-configs/selectors.zoom-recording.yaml`
+- **Gotchas (generic Zoom):** `~/.claude/browser-configs/gotchas.zoom-recording.md`
+
+## Config Resolution
+
+The calling project provides auth config. Look for it in this order:
+
+1. Config path specified in the prompt (e.g. `.claude/browser-configs/config.monash.yaml`)
+2. Project-root `.claude/browser-configs/config.*.yaml` (glob for available configs)
+3. If no config found, auth will need manual intervention -- report NEEDS_HUMAN
+
 ## Constraints
 
 - NEVER extract full transcripts -- this is metadata only
 - NEVER write to docs/meetings/ or docs/gotchas/ -- triage is read-only
+- ALWAYS use `$BROWSER_FLAGS` for all agent-browser commands
+- ALWAYS read gotchas before starting: `~/.claude/browser-configs/gotchas.zoom-recording.md`
 - Maximum 15 agent-browser commands per recording
 - ALWAYS return a single-line result (see Output Format)
 
@@ -35,20 +54,21 @@ If no `session_id` is provided, default to `triage-default`.
 
 ## Workflow
 
-1. **Cheap name pre-filter** -- if the provided meeting name matches a SKIP keyword, return immediately with score `-1` and do NOT open the browser
-2. **Load config** -- read `.browser-agent.yaml` from project root
-3. **Load gotchas** -- follow browser-automation Gotcha Protocol for domain-relevant files
-4. **Navigate** -- `agent-browser --session {session_id} open "{url}"` then wait 5s
-5. **Handle auth** -- if redirected to SSO/login, authenticate and return to URL
-6. **Resolve URL** -- if continueMode redirect, capture play URL (see zoom-transcript skill)
-7. **Get play/info API** -- check performance entries for `/nws/recording/1.0/play/info/` URL, fetch it
-8. **Extract metadata:**
+1. **Set BROWSER_FLAGS** from Browser Session section above
+2. **Cheap name pre-filter** -- if the provided meeting name matches a SKIP keyword, return immediately with score `-1` and do NOT open the browser
+3. **Load config** -- resolve config per Config Resolution above
+4. **Load gotchas** -- read `~/.claude/browser-configs/gotchas.zoom-recording.md` and project-scoped auth gotchas
+5. **Navigate** -- `agent-browser $BROWSER_FLAGS --session {session_id} open "{url}"` then wait 5s
+6. **Handle auth** -- if redirected to SSO/login, authenticate and return to URL
+7. **Resolve URL** -- if continueMode redirect, capture play URL (see gotchas)
+8. **Get play/info API** -- check performance entries for `/nws/recording/1.0/play/info/` URL, fetch it
+9. **Extract metadata:**
    - `hasTranscript` (boolean)
    - `duration` (seconds)
    - `topic` / meeting name
    - If `hasTranscript: true`, peek at first 10 entries of `transcriptList` for topic keywords
-9. **Score relevance** against interest keywords (see below)
-10. **Return result**
+10. **Score relevance** against interest keywords (see below)
+11. **Return result**
 
 ## Interest Keywords
 
@@ -69,7 +89,6 @@ TRIAGE_JSON: {"score":3,"hasTranscript":true,"durationMins":58,"date":"2025-12-1
 Examples:
 - `TRIAGE_JSON: {"score":3,"hasTranscript":true,"durationMins":58,"date":"2025-12-16","name":"Student Liability Working Group #8","matchedKeywords":["student liability","fees","refund"],"status":"ok"}`
 - `TRIAGE_JSON: {"score":0,"hasTranscript":false,"durationMins":4,"date":"2025-12-18","name":"Pre-showcase session (with Josh)","matchedKeywords":["no-transcript"],"status":"ok"}`
-- `TRIAGE_JSON: {"score":1,"hasTranscript":true,"durationMins":45,"date":"2025-12-09","name":"SMST Program Update","matchedKeywords":["program update"],"status":"ok"}`
 - `TRIAGE_JSON: {"score":-1,"hasTranscript":null,"durationMins":null,"date":"2026-02-06","name":"Placeholder | UVT Dress Rehearsal","matchedKeywords":["placeholder"],"status":"skip-name"}`
 
 Score `-1` means skip by name without opening the browser.
@@ -81,8 +100,14 @@ If auth fails and requires manual intervention, return:
 
 After triage, close the session:
 ```bash
-agent-browser --session {session_id} close
+agent-browser $BROWSER_FLAGS --session {session_id} close
 ```
+
+## Domain Routing
+
+This agent handles URLs matching:
+- `*.zoom.us/rec/share/*`
+- `*.zoom.us/rec/play/*`
 
 ## Memory Strategy
 

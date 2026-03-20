@@ -9,6 +9,7 @@ related:
   - docs/specs/imessage-note-contract.md
   - docs/specs/imessage-attachment-model.md
   - docs/specs/imessage-productivity-integration.md
+  - docs/specs/imessage-privacy-and-retention.md
 ---
 
 # iMessage Corpus Repo Shape
@@ -27,6 +28,7 @@ Closest match from repo-profiles.md but with one distinction: this corpus is per
 
 ```text
 personal-messages/
+├── .gitignore
 ├── AGENTS.md
 ├── CLAUDE.md
 ├── docs/
@@ -40,7 +42,10 @@ personal-messages/
 └── runtime/
     └── imessage/
         ├── cursors/
+        │   └── default-sync.json
         ├── manifests/
+        │   ├── message-paths.jsonl
+        │   └── runs/
         └── attachments/
             └── YYYY/
                 └── MM/
@@ -62,6 +67,7 @@ personal-messages/
 - `runtime/` holds sync cursors, manifests, attachment bookkeeping, and binary files
 - Durable people context lives in `my-second-brain-v2/memory/people/` or the owning work repo, not here
 - Binary attachments live in `runtime/`, never in `docs/`
+- `runtime/` state is local operational state and should be gitignored by default
 
 ## Ownership Boundary
 
@@ -85,6 +91,70 @@ Use the corpus repo for **raw evidence**. Use `my-second-brain-v2` for **promote
 
 Never copy the full raw message body into `my-second-brain-v2`.
 
+## Runtime Contracts
+
+### Cursor files
+
+`runtime/imessage/cursors/default-sync.json` is the canonical incremental sync checkpoint for default-mode productivity sync.
+
+Rules:
+- local-only runtime state
+- updated only after successful writes
+- may intentionally overlap a small lookback window for safety
+- deep sync may use a separate cursor or ignore cursors entirely
+
+### Manifests
+
+`runtime/imessage/manifests/message-paths.jsonl` is a local helper index for maintenance operations such as migration and targeted enrichment.
+
+Suggested row shape:
+
+```json
+{
+  "schema_version": 1,
+  "source_id": "p:0/ABC123",
+  "relative_path": "docs/messages/imessage/2026/03/2026-03-20-200011-imessage-p-0-abc123.md",
+  "slug_version": 2,
+  "updated_at": "2026-03-20T20:05:00+11:00"
+}
+```
+
+Rules:
+- local-only helper index, not a second source of truth
+- may be rebuilt from the Markdown corpus if lost
+- should make migrations and enrich-target resolution faster and more reliable
+
+## Migration and Slug Canonicalization
+
+The repo must support a clean transition from legacy paths and slug rules.
+
+Legacy problems to handle:
+- old paths under `YYYY/YYYY-MM-DD/`
+- mixed GUID slug behavior such as `/ -> _` versus `/ -> -`
+
+Required primitive:
+
+```sh
+bun run query-imessage.ts migrate-notes \
+  --save-dir ~/code/personal-messages/docs/messages/imessage
+```
+
+Migration rules:
+- rewrite legacy paths into the canonical v2 layout
+- normalize legacy GUID slug variants into canonical slugifier v2
+- patch notes in place rather than leaving stale duplicates behind
+- be idempotent and safe to re-run
+
+## Git Hygiene
+
+The repo should include a `.gitignore` that at minimum ignores:
+
+```gitignore
+runtime/
+```
+
+If a future workflow needs selected runtime files committed, that should be an explicit exception rather than the default.
+
 ## AGENTS.md Shape
 
 ```yaml
@@ -101,7 +171,7 @@ Raw iMessage corpus for the Memory OS federation.
 
 Profile: reference-corpus
 Collection: repo-personal-messages
-Primary paths: docs/messages
+Primary paths: docs/messages, docs/specs
 
 Rules:
 - This repo stores raw message evidence, not synthesized meaning.
@@ -140,4 +210,6 @@ Raw iMessage corpus indexed as `repo-personal-messages` in QMD.
 2. `docs/messages/imessage/` directory exists
 3. `runtime/imessage/{cursors,manifests,attachments}/` directories exist
 4. `AGENTS.md` declares the repo as a reference-corpus profile
-5. `CLAUDE.md` is under 40 lines
+5. `.gitignore` excludes `runtime/` by default
+6. `CLAUDE.md` is under 40 lines
+7. `query-imessage.ts migrate-notes` is defined for path and slug migration

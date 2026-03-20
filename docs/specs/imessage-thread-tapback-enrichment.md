@@ -7,6 +7,7 @@ summary: "Defines thread depth/root tracking and tapback aggregation for enriche
 related:
   - /Users/nathanvale/.claude/plans/serene-wishing-sun.md
   - docs/specs/imessage-note-contract.md
+  - docs/specs/imessage-productivity-integration.md
   - skills/imessage-reader/scripts/lib.ts
 ---
 
@@ -47,8 +48,16 @@ function computeThreadDepthAndRoot(
 
   const cache = new Map<string, { depth: number; root: string }>();
 
-  function walk(guid: string): { depth: number; root: string } {
+  function walk(
+    guid: string,
+    visiting = new Set<string>(),
+  ): { depth: number; root: string } {
     if (cache.has(guid)) return cache.get(guid)!;
+    if (visiting.has(guid)) {
+      const result = { depth: 0, root: guid };
+      cache.set(guid, result);
+      return result;
+    }
 
     const msg = byGuid.get(guid);
     if (!msg?.reply_to || !byGuid.has(msg.reply_to)) {
@@ -57,7 +66,9 @@ function computeThreadDepthAndRoot(
       return result;
     }
 
-    const parent = walk(msg.reply_to);
+    visiting.add(guid);
+    const parent = walk(msg.reply_to, visiting);
+    visiting.delete(guid);
     const result = { depth: parent.depth + 1, root: parent.root };
     cache.set(guid, result);
     return result;
@@ -118,7 +129,7 @@ tapbacks:
 | 3004 | Remove Emphasis |
 | 3005 | Remove Question |
 
-Remove tapbacks (3000+) should cancel the corresponding add. If a remove is found for a previously seen add from the same sender, omit both from the final `tapbacks[]` list.
+Remove tapbacks (3000+) should cancel the corresponding add. If a remove is found for a previously seen add from the same sender and target message, omit both from the final `tapbacks[]` list.
 
 ### Computation
 
@@ -135,6 +146,8 @@ type TapbackInfo = {
   type: string;
   from: string;
   guid: string;
+  actorKey: string;
+  timestamp: string;
 };
 
 function aggregateTapbacks(
@@ -142,6 +155,7 @@ function aggregateTapbacks(
   contactMap: Map<string, string>,
 ): Map<string, TapbackInfo[]> {
   const tapbackMap = new Map<string, TapbackInfo[]>();
+  const activeByTarget = new Map<string, Map<string, TapbackInfo>>();
 
   for (const msg of messages) {
     if (msg.message_kind !== "tapback" || !msg.reaction_to) continue;
@@ -152,10 +166,32 @@ function aggregateTapbacks(
     const from = msg.is_from_me
       ? "me"
       : (msg.contact_name ?? msg.handle ?? "unknown");
+    const actorKey = msg.is_from_me ? "me" : (msg.handle ?? from);
+    const targetKey = msg.reaction_to;
+    const bucket = activeByTarget.get(targetKey) ?? new Map<string, TapbackInfo>();
+    const pairKey = `${actorKey}:${typeName.replace("Remove ", "")}`;
 
-    const bucket = tapbackMap.get(msg.reaction_to) ?? [];
-    bucket.push({ type: typeName, from, guid: msg.guid });
-    tapbackMap.set(msg.reaction_to, bucket);
+    if (typeName.startsWith("Remove ")) {
+      bucket.delete(pairKey);
+      activeByTarget.set(targetKey, bucket);
+      continue;
+    }
+
+    bucket.set(pairKey, {
+      type: typeName,
+      from,
+      guid: msg.guid,
+      actorKey,
+      timestamp: msg.date_local ?? msg.date ?? "",
+    });
+    activeByTarget.set(targetKey, bucket);
+  }
+
+  for (const [targetKey, bucket] of activeByTarget.entries()) {
+    tapbackMap.set(
+      targetKey,
+      Array.from(bucket.values()).sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
+    );
   }
 
   return tapbackMap;
@@ -182,6 +218,39 @@ function saveMessageAsMarkdown(
 ): string | null;
 ```
 
+## Tapback Persistence Policy
+
+Default sync behavior:
+- aggregate tapback reactions onto the target message
+- do not save pure tapback events as standalone Markdown notes
+- keep tapback-only persistence out of the default QMD-visible message surface to avoid duplicate recall hits
+
+Optional debug mode:
+- a future `--include-tapback-notes` flag may export raw tapback events for forensic or migration use
+- if implemented, those notes should live outside the default `docs/messages/` surface
+
+## Enrichment CLI Primitive
+
+Agents need a way to enrich already-saved notes without re-running a broad historical query.
+
+Add a dedicated command:
+
+```sh
+bun run query-imessage.ts enrich \
+  --save-dir ~/code/personal-messages/docs/messages/imessage \
+  --source-id p:0/ABC123 \
+  --threads \
+  --tapbacks
+```
+
+Contract:
+- targets existing notes by `source_id`, path glob, or time window
+- loads only the minimum raw message data needed to compute the requested enrichment
+- patches notes in place
+- can be re-run safely and idempotently
+
+This primitive also gives agents a stable path for future attachment OCR and Vision enrichment.
+
 ## Implementation Target
 
 **File:** `skills/imessage-reader/scripts/lib.ts`
@@ -207,3 +276,6 @@ Modified: call enrichment functions after `linkMessageTargets()`, pass results t
 5. Tapback types map to correct display names
 6. Remove tapbacks (3000+) cancel corresponding adds from the same sender
 7. `tapbacks[].from` shows contact name, not raw handle
+8. Circular `reply_to` chains do not recurse forever
+9. Default sync does not emit standalone Markdown notes for pure tapback events
+10. `query-imessage.ts enrich --threads --tapbacks` can patch existing notes without a full-window requery

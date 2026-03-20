@@ -17,6 +17,7 @@ Interactive wizard that generates a complete browser agent stack from a domain n
 | Selector registry | Empty declarative schema ready for Discovery Mode |
 | Session registration | Port/profile assignment in registry.yaml |
 | Gotcha file stub | Domain-specific gotcha starter |
+| Orchestrator skill | Conversation layer with routing table, defaults, human-in-the-loop |
 | First playbook (optional) | Task-specific playbook skeleton |
 
 <intake>
@@ -44,9 +45,10 @@ After gathering inputs, execute these workflows in order:
 1. Read `workflows/generate-config.md` and follow it
 2. Read `workflows/generate-registry.md` and follow it
 3. Read `workflows/generate-agent.md` and follow it
-4. Read `workflows/register-session.md` and follow it
-5. If user wants a first playbook, read `workflows/generate-playbook.md` and follow it
-6. Read `workflows/summary.md` and follow it
+4. Read `workflows/generate-skill.md` and follow it
+5. Read `workflows/register-session.md` and follow it
+6. If user wants a first playbook, read `workflows/generate-playbook.md` and follow it
+7. Read `workflows/summary.md` and follow it
 </routing>
 
 ## Model Promotion Lifecycle
