@@ -56,6 +56,9 @@ Let's configure which external sources to connect for this project:
 
 5. Chat:
    (1) Slack  (2) None
+
+6. Messages:
+   (1) iMessage  (2) None
 ```
 
 Write `.productivity.yml` with the selected values. Reference the **productivity-connectors** skill for the connector value names.

@@ -60,6 +60,22 @@ Read `.productivity.yml` and sync each declared connector. Reference the **produ
 - Extract action items and commitments received
 - Note senders for people cross-referencing
 
+**Messages** (if configured -- `messages: imessage` in `.productivity.yml`):
+- Incremental sync via cursor: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage`
+- Messages auto-persist as Markdown with v2 frontmatter via read-through cache
+- Cross-reference senders against `memory/people/` in the owning repo
+- AI commitment extraction: read synced message text and identify outbound/inbound commitments
+- Render `CommitmentCandidate[]` as structured JSON, then present as "Possible Missing Tasks (from Messages)" for user triage
+- If `owner_status` is `ambiguous` or `unknown`, ask before writing to any repo task surface
+- Write tasks and memory updates to the owning repo, not back into the raw corpus repo
+- Never copy raw message bodies into `my-second-brain-v2`
+
+**Messages (deep)** (if `--deep` and messages configured):
+- Expand to 7-day window: `sync --since <7-days-ago>`
+- Include separate `--from-me` pass to find outbound commitments
+- Surface new contacts not in `memory/people/`
+- Full AI analysis of message threads for missed action items
+
 **Meeting notes** (if calendar + knowledge base configured):
 
 Create structured meeting notes from knowledge base transcriptions matched to calendar events.

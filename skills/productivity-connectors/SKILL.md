@@ -88,6 +88,19 @@ connectors:
 
 **Note:** Chat scanning is `--deep` mode only. Not included in default sync due to volume.
 
+## Messages
+
+| Connector | Tools |
+|-----------|-------|
+| `imessage` | Local CLI: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts` |
+
+**Common patterns:**
+- Default sync: `sync --save-dir ~/code/personal-messages/docs/messages/imessage/`
+- Deep sync: `sync --since <7-days-ago> --save-dir ~/code/personal-messages/docs/messages/imessage/`
+- Read-through query: `messages --since <date> --search <term>`
+- Commitment extraction runs after sync, renders `CommitmentCandidate[]` for triage
+- Privacy-sensitive: see `~/code/personal-messages/docs/specs/privacy-and-retention.md`
+
 ## Availability Check Pattern
 
 Before calling any tool above, verify it exists:

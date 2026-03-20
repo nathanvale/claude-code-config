@@ -37,7 +37,9 @@ import {
 	linkMessageTargets,
 	aggregateTapbacks,
 	attachmentKind,
+	type CommitmentCandidate,
 	computeThreadDepthAndRoot,
+	extractCommitmentCandidates,
 	type ManifestEntry,
 	type MessageEnrichment,
 	type MessageRow,
@@ -1294,5 +1296,98 @@ describe("saveMessageAsMarkdownV2 with enrichment", () => {
 		);
 		const content = readFileSync(filePath as string, "utf-8");
 		expect(content).toContain("tapbacks: []");
+	});
+});
+
+// ── Phase 4: Commitment Extraction ─────────────────────────────────────
+
+describe("extractCommitmentCandidates", () => {
+	test("detects outbound promise from fx-10 fixture", () => {
+		const msg = makeParsedMessage({
+			guid: "p:0/22223333-4444-5555-6666-777788889999",
+			text: "I'll ask Marilyn now",
+			is_from_me: true,
+			date_local: "2026-03-20T20:00:11+11:00",
+			handle: "+61412345678",
+			contact_name: "Melanie",
+			chat_id: "chat000001",
+			is_group: false,
+		});
+
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(1);
+		expect(candidates[0]?.candidate_type).toBe("promise");
+		expect(candidates[0]?.direction).toBe("outbound");
+		expect(candidates[0]?.conversation_with).toBe("Melanie");
+		expect(candidates[0]?.quote).toBe("I'll ask Marilyn now");
+		expect(candidates[0]?.owner_status).toBe("ambiguous");
+		expect(candidates[0]?.source_system).toBe("imessage");
+		expect(candidates[0]?.schema_version).toBe(1);
+	});
+
+	test("detects inbound request", () => {
+		const msg = makeParsedMessage({
+			text: "Can you pick up milk on the way home?",
+			is_from_me: false,
+			contact_name: "Melanie",
+		});
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(1);
+		expect(candidates[0]?.candidate_type).toBe("request");
+		expect(candidates[0]?.direction).toBe("inbound");
+	});
+
+	test("detects outbound offer", () => {
+		const msg = makeParsedMessage({
+			text: "I can pick up Levi from school",
+			is_from_me: true,
+			contact_name: "Melanie",
+		});
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(1);
+		expect(candidates[0]?.candidate_type).toBe("offer");
+	});
+
+	test("skips non-commitment messages", () => {
+		const msg = makeParsedMessage({
+			text: "Sounds good!",
+			is_from_me: true,
+		});
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(0);
+	});
+
+	test("skips tapback messages", () => {
+		const msg = makeParsedMessage({
+			text: "Loved an image",
+			message_kind: "tapback",
+			is_from_me: false,
+		});
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(0);
+	});
+
+	test("marks group chat candidates as owner_status unknown", () => {
+		const msg = makeParsedMessage({
+			text: "I'll bring the dessert",
+			is_from_me: true,
+			is_group: true,
+			contact_name: "Dave",
+		});
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(1);
+		expect(candidates[0]?.owner_status).toBe("unknown");
+	});
+
+	test("boosts confidence for messages with deadline cues", () => {
+		const msg = makeParsedMessage({
+			text: "I'll send the report by Friday",
+			is_from_me: true,
+			contact_name: "Melanie",
+		});
+		const candidates = extractCommitmentCandidates([msg]);
+		expect(candidates).toHaveLength(1);
+		const confidence = candidates[0]?.confidence ?? 0;
+		expect(confidence).toBeGreaterThan(0.85);
 	});
 });

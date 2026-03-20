@@ -72,3 +72,12 @@ repos:
       - repos
       - CLAUDE.md
       - AGENTS.md
+
+  - name: personal-messages
+    profile: reference-corpus
+    location: /Users/nathanvale/code/personal-messages
+    collection: repo-personal-messages
+    update_command: git -C /Users/nathanvale/code/personal-messages fetch --all --prune --quiet || true
+    primary_paths:
+      - docs/messages
+      - docs/specs

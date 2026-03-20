@@ -1233,6 +1233,100 @@ function conversationWithFromMessage(msg: ParsedMessage): string {
 	return `group:${msg.chat_id ?? "unknown"}`;
 }
 
+// ── Commitment Extraction ───────────────────────────────────────────────
+
+/**
+ * Structured commitment candidate emitted before any task write.
+ */
+export type CommitmentCandidate = {
+	schema_version: 1;
+	source_system: "imessage";
+	source_id: string;
+	source_thread_id: string;
+	sent_at: string;
+	direction: "inbound" | "outbound";
+	conversation_with: string;
+	candidate_type: "promise" | "request" | "offer" | "follow_up";
+	quote: string;
+	summary: string;
+	confidence: number;
+	owner_hint?: string;
+	owner_status: "resolved" | "ambiguous" | "unknown";
+};
+
+const OUTBOUND_PROMISE_RE =
+	/\b(i('|')ll|i will|i('|')m going to|let me|i('|')m gonna)\b/i;
+const OUTBOUND_OFFER_RE = /\b(i can|i could|want me to|shall i)\b/i;
+const INBOUND_REQUEST_RE =
+	/\b(can you|could you|please|would you|do you mind|don('|')t forget)\b/i;
+const FOLLOW_UP_RE =
+	/\b(by (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|end of day|eod|friday))\b/i;
+
+/**
+ * Extract commitment candidates from a batch of parsed messages.
+ * Returns structured candidates -- never auto-writes to any repo.
+ */
+export function extractCommitmentCandidates(
+	messages: ParsedMessage[],
+): CommitmentCandidate[] {
+	const candidates: CommitmentCandidate[] = [];
+
+	for (const msg of messages) {
+		if (!msg.text || msg.message_kind === "tapback") continue;
+
+		const text = msg.text.trim();
+		if (text.length < 5) continue;
+
+		const direction: "inbound" | "outbound" = msg.is_from_me
+			? "outbound"
+			: "inbound";
+		const handle = msg.handle ?? "unknown";
+		const contactName = msg.contact_name ?? handle;
+		const conversationWith = msg.is_from_me ? contactName : contactName;
+
+		let candidateType: CommitmentCandidate["candidate_type"] | null = null;
+		let confidence = 0;
+
+		if (direction === "outbound") {
+			if (OUTBOUND_PROMISE_RE.test(text)) {
+				candidateType = "promise";
+				confidence = 0.85;
+			} else if (OUTBOUND_OFFER_RE.test(text)) {
+				candidateType = "offer";
+				confidence = 0.7;
+			}
+		} else {
+			if (INBOUND_REQUEST_RE.test(text)) {
+				candidateType = "request";
+				confidence = 0.75;
+			}
+		}
+
+		if (!candidateType) continue;
+
+		if (FOLLOW_UP_RE.test(text)) {
+			confidence = Math.min(confidence + 0.1, 0.99);
+		}
+
+		candidates.push({
+			schema_version: 1,
+			source_system: "imessage",
+			source_id: msg.guid,
+			source_thread_id: msg.chat_id ?? "",
+			sent_at: msg.date_local ?? msg.date ?? "",
+			direction,
+			conversation_with: conversationWith,
+			candidate_type: candidateType,
+			quote: text,
+			summary: text,
+			confidence: Math.round(confidence * 100) / 100,
+			owner_status: msg.is_group ? "unknown" : "ambiguous",
+		});
+	}
+
+	return candidates;
+}
+
 // ── Attachment Kind ─────────────────────────────────────────────────────
 
 /**
