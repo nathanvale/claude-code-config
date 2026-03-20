@@ -1,7 +1,13 @@
 process.env.TZ = "Australia/Melbourne";
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,7 +19,6 @@ import {
 } from "./fixtures";
 import {
 	type AttachmentRow,
-	type V2NoteInput,
 	appleDateToUnixMs,
 	appleEpochToISO,
 	appleEpochToLocalISO,
@@ -30,23 +35,26 @@ import {
 	guidSlugV2,
 	hasMeaningfulText,
 	linkMessageTargets,
+	type ManifestEntry,
 	type MessageRow,
 	matchesSearch,
 	migrateLegacyNote,
 	normalizeMessageText,
 	normalizePhone,
-	parseFrontmatter,
 	type ParsedMessage,
 	type ParsedMessageInternal,
+	parseFrontmatter,
 	parsePartReference,
 	parseRow,
 	pruneNulls,
-	readCursor,
 	type ResolvedAttachmentPath,
+	readCursor,
 	resolveAttachmentPath,
 	resolveContact,
 	saveMessageAsMarkdown,
 	saveMessageAsMarkdownV2,
+	upsertManifestEntry,
+	type V2NoteInput,
 	writeCursor,
 } from "./lib";
 
@@ -783,14 +791,18 @@ describe("saveMessageAsMarkdownV2", () => {
 		expect(filePath).toBeTruthy();
 		const content = readFileSync(filePath as string, "utf-8");
 		expect(content).toContain("schema_version: 2");
-		expect(content).toContain('source_id: "p:0/FF2A8C91-3B47-4D6E-A812-9E5C7F0B1234"');
+		expect(content).toContain(
+			'source_id: "p:0/FF2A8C91-3B47-4D6E-A812-9E5C7F0B1234"',
+		);
 		expect(content).toContain("direction: inbound");
 		expect(content).toContain('conversation_with: "Melanie"');
 		expect(content).toContain("conversation_type: direct");
 		expect(content).toContain('day_of_week: "Friday"');
 		expect(content).toContain('time_of_day: "morning"');
 		expect(content).toContain("## Message");
-		expect(content).toContain("Hey, are you picking Levi up from school today?");
+		expect(content).toContain(
+			"Hey, are you picking Levi up from school today?",
+		);
 	});
 
 	test("writes outbound note correctly (fx-02)", () => {
@@ -812,6 +824,30 @@ describe("saveMessageAsMarkdownV2", () => {
 		expect(content).toContain("direction: outbound");
 		expect(content).toContain('from: "me"');
 		expect(content).toContain("is_from_me: true");
+	});
+
+	test("sorts comma-separated unnamed group chat names deterministically (fx-09)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-"));
+		tmpDirs.add(dir);
+		const filePath = saveMessageAsMarkdownV2(
+			makeV2Input({
+				source_id: "p:0/11112222-3333-4444-5555-666677778888",
+				sent_at: "2026-03-20T12:45:00+11:00",
+				message_kind: "text",
+				from: "Dave",
+				handle: "+61498765432",
+				thread: "Dave, Melanie, Sarah",
+				is_group: true,
+				conversation_with: "Dave, Melanie, Sarah",
+				conversation_type: "group",
+				group_guid: "iMessage;+;chat000099",
+				text: "Are we still on for the BBQ this weekend?",
+			}),
+			dir,
+		);
+		const content = readFileSync(filePath as string, "utf-8");
+		expect(content).toContain('conversation_with: "Dave, Melanie, Sarah"');
+		expect(content).toContain("conversation_type: group");
 	});
 
 	test("idempotent re-sync overwrites same path (fx-12)", () => {
@@ -836,7 +872,9 @@ describe("saveMessageAsMarkdownV2", () => {
 	test("skips messages with no text", () => {
 		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-"));
 		tmpDirs.add(dir);
-		expect(saveMessageAsMarkdownV2(makeV2Input({ text: null }), dir)).toBeNull();
+		expect(
+			saveMessageAsMarkdownV2(makeV2Input({ text: null }), dir),
+		).toBeNull();
 	});
 });
 
@@ -859,7 +897,38 @@ describe("cursor read/write", () => {
 		writeCursor(cursorPath, cursor);
 		const read = readCursor(cursorPath);
 		expect(read).toBeTruthy();
-		expect(read?.last_successful_source_id).toBe("p:0/FF2A8C91-3B47-4D6E-A812-9E5C7F0B1234");
+		expect(read?.last_successful_source_id).toBe(
+			"p:0/FF2A8C91-3B47-4D6E-A812-9E5C7F0B1234",
+		);
+	});
+});
+
+describe("upsertManifestEntry", () => {
+	test("deduplicates by source_id while preserving the latest path", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-manifest-"));
+		tmpDirs.add(dir);
+		const manifestPath = join(dir, "message-paths.jsonl");
+		const first: ManifestEntry = {
+			schema_version: 1,
+			source_id: "p:0/ABC123",
+			relative_path: "docs/messages/imessage/2026/03/old.md",
+			slug_version: 2,
+			updated_at: "2026-03-20T09:00:00+11:00",
+		};
+		const second: ManifestEntry = {
+			schema_version: 1,
+			source_id: "p:0/ABC123",
+			relative_path: "docs/messages/imessage/2026/03/new.md",
+			slug_version: 2,
+			updated_at: "2026-03-20T09:10:00+11:00",
+		};
+		upsertManifestEntry(manifestPath, first);
+		upsertManifestEntry(manifestPath, second);
+		const lines = readFileSync(manifestPath, "utf-8").trim().split("\n");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain(
+			'"relative_path":"docs/messages/imessage/2026/03/new.md"',
+		);
 	});
 });
 
@@ -910,10 +979,61 @@ Just a test message for migration.
 
 		const newPath = migrateLegacyNote(legacyPath, dir);
 		expect(newPath).toBeTruthy();
-		expect(newPath).toContain("2026/03/2026-03-20-200011-imessage-p-0-abc123.md");
+		expect(newPath).toContain(
+			"2026/03/2026-03-20-200011-imessage-p-0-abc123.md",
+		);
 
 		const content = readFileSync(newPath as string, "utf-8");
 		expect(content).toContain("schema_version: 2");
 		expect(content).toContain("source_id:");
+	});
+
+	test("does not overwrite an existing canonical file when migrating duplicate slug variants", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-migrate-"));
+		tmpDirs.add(dir);
+
+		const canonicalPath = join(
+			dir,
+			"2026",
+			"03",
+			"2026-03-18-164211-imessage-p-0-def456.md",
+		);
+		mkdirSync(join(dir, "2026", "03"), { recursive: true });
+		writeFileSync(
+			canonicalPath,
+			`---
+schema_version: 2
+source_id: "p:0/DEF456"
+sent_at: "2026-03-18T16:42:11"
+---
+
+## Message
+
+Canonical content.
+`,
+			"utf-8",
+		);
+
+		const legacyDir = join(dir, "2026", "2026-03-18");
+		mkdirSync(legacyDir, { recursive: true });
+		const legacyPath = join(legacyDir, "p_0_DEF456.md");
+		writeFileSync(
+			legacyPath,
+			`---
+guid: "p:0/DEF456"
+date_local: "2026-03-18T16:42:11"
+---
+
+## Message
+
+Legacy duplicate content.
+`,
+			"utf-8",
+		);
+
+		const migrated = migrateLegacyNote(legacyPath, dir);
+		expect(migrated).toBe(canonicalPath);
+		const canonicalContent = readFileSync(canonicalPath, "utf-8");
+		expect(canonicalContent).toContain("Canonical content.");
 	});
 });

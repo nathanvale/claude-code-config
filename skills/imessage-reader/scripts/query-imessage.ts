@@ -22,13 +22,10 @@
 import Database from "bun:sqlite";
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
 	type AttachmentRow,
-	type ManifestEntry,
-	type SyncCursor,
-	appendManifestEntry,
 	appleEpochToISO,
 	canonicalSavePath,
 	dateToAppleNsEndOfDay as dateToAppleNsEndOfDayFromLib,
@@ -37,6 +34,7 @@ import {
 	formatLocalISO,
 	formatOutputPath as formatOutputPathFromLib,
 	linkMessageTargets as linkMessageTargetsFromLib,
+	type ManifestEntry,
 	type MessageRow,
 	matchesSearch,
 	migrateAllNotes,
@@ -48,8 +46,10 @@ import {
 	readCursor,
 	resolveAttachmentPath as resolveAttachmentPathFromLib,
 	resolveContact,
+	type SyncCursor,
 	saveMessageAsMarkdown as saveMessageAsMarkdownFromLib,
 	saveMessageAsMarkdownV2,
+	upsertManifestEntry,
 	writeCursor,
 } from "./lib";
 
@@ -419,12 +419,11 @@ function queryMessages(args: {
 		}
 
 		const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-		const fetchLimit =
+		const sql =
 			searchNeedle == null
-				? args.limit
-				: Math.min(Math.max(args.limit * 50, args.limit), MAX_LIMIT);
-		const sql = `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order} LIMIT ?`;
-		params.push(fetchLimit);
+				? `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order} LIMIT ?`
+				: `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order}`;
+		if (searchNeedle == null) params.push(args.limit);
 
 		const rows = db.prepare(sql).all(...params) as MessageRow[];
 		if (rows.length === 0) return [];
@@ -464,8 +463,11 @@ function queryMessages(args: {
 				: linkedMessages.filter((message) =>
 						matchesSearch(message, searchNeedle),
 					);
+		const visibleMessages = args["include-attachments"]
+			? filteredMessages
+			: filteredMessages.filter((message) => message.message_kind !== "media");
 
-		return filteredMessages.slice(0, args.limit);
+		return visibleMessages.slice(0, args.limit);
 	});
 
 	// Strip internal _rowid once, reuse for both saving and output
@@ -653,7 +655,10 @@ const DEFAULT_CORPUS_SAVE_DIR = join(
 	homedir(),
 	"code/personal-messages/docs/messages/imessage",
 );
-const DEFAULT_CORPUS_ROOT = join(homedir(), "code/personal-messages");
+
+function inferCorpusRootFromSaveDir(saveDir: string): string {
+	return dirname(dirname(dirname(saveDir)));
+}
 
 function syncMessages(args: {
 	since?: string;
@@ -663,11 +668,12 @@ function syncMessages(args: {
 	pretty: boolean;
 }) {
 	const saveDir = args["save-dir"] ?? DEFAULT_CORPUS_SAVE_DIR;
+	const corpusRoot = inferCorpusRootFromSaveDir(saveDir);
 	const cursorFile =
 		args["cursor-file"] ??
-		join(DEFAULT_CORPUS_ROOT, "runtime/imessage/cursors/default-sync.json");
+		join(corpusRoot, "runtime/imessage/cursors/default-sync.json");
 	const manifestFile = join(
-		DEFAULT_CORPUS_ROOT,
+		corpusRoot,
 		"runtime/imessage/manifests/message-paths.jsonl",
 	);
 
@@ -734,13 +740,17 @@ function syncMessages(args: {
 	const saveable = messages.filter((m) => m.message_kind !== "tapback");
 
 	let saved = 0;
+	let unsaved = 0;
 	let errors = 0;
 	let lastSentAt: string | null = null;
 	let lastSourceId: string | null = null;
 
 	for (const msg of saveable) {
 		const input = parsedMessageToV2Input(msg);
-		if (!input.text || !input.sent_at) continue;
+		if (!input.text || !input.sent_at) {
+			unsaved++;
+			continue;
+		}
 
 		const filePath = saveMessageAsMarkdownV2(input, saveDir);
 		if (filePath) {
@@ -757,14 +767,20 @@ function syncMessages(args: {
 				slug_version: 2,
 				updated_at: input.sent_at,
 			};
-			appendManifestEntry(manifestFile, entry);
+			upsertManifestEntry(manifestFile, entry);
 		} else {
 			errors++;
 		}
 	}
 
-	// Advance cursor only after successful writes
-	if (saved > 0 && lastSentAt && lastSourceId) {
+	// Advance cursor only after the entire window saved successfully.
+	if (
+		saved > 0 &&
+		errors === 0 &&
+		unsaved === 0 &&
+		lastSentAt &&
+		lastSourceId
+	) {
 		const cursor: SyncCursor = {
 			schema_version: 1,
 			source_system: "imessage",
@@ -784,6 +800,7 @@ function syncMessages(args: {
 				since: sinceDate,
 				queried: messages.length,
 				saved,
+				unsaved: unsaved > 0 ? unsaved : undefined,
 				errors: errors > 0 ? errors : undefined,
 				save_dir: formatOutputPathFromLib(saveDir),
 				cursor_file: formatOutputPathFromLib(cursorFile),
@@ -795,10 +812,7 @@ function syncMessages(args: {
 
 // ── Migrate-Notes Command ──────────────────────────────────────────────
 
-function migrateNotesCommand(args: {
-	"save-dir"?: string;
-	pretty: boolean;
-}) {
+function migrateNotesCommand(args: { "save-dir"?: string; pretty: boolean }) {
 	const saveDir = args["save-dir"] ?? DEFAULT_CORPUS_SAVE_DIR;
 	const result = migrateAllNotes(saveDir);
 

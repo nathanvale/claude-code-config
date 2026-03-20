@@ -1,15 +1,13 @@
 import {
-	appendFileSync,
 	existsSync,
 	mkdirSync,
-	readFileSync,
 	readdirSync,
-	renameSync,
+	readFileSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const APPLE_EPOCH_OFFSET = 978_307_200;
 const NANOSECOND_FACTOR = 1_000_000_000;
@@ -1165,6 +1163,41 @@ export type V2NoteInput = {
 	date_edited_local?: string | null;
 };
 
+function sortedDisplayList(values: Array<string | null | undefined>): string[] {
+	return values
+		.filter((value): value is string => Boolean(value && value.trim()))
+		.map((value) => value.trim())
+		.sort((a, b) => a.localeCompare(b, "en-AU"));
+}
+
+function conversationWithFromMessage(msg: ParsedMessage): string {
+	const handle = msg.handle ?? "unknown";
+	const contactName = msg.contact_name ?? handle;
+
+	if (!msg.is_group) {
+		return contactName;
+	}
+
+	if (msg.chat_name?.trim()) {
+		const explicitName = msg.chat_name.trim();
+		if (!explicitName.includes(",")) {
+			return explicitName;
+		}
+
+		const sortedNames = sortedDisplayList(explicitName.split(","));
+		if (sortedNames.length > 0) {
+			return sortedNames.slice(0, 3).join(", ");
+		}
+	}
+
+	const fallbackNames = sortedDisplayList([msg.contact_name, msg.handle]);
+	if (fallbackNames.length > 0) {
+		return fallbackNames.slice(0, 3).join(", ");
+	}
+
+	return `group:${msg.chat_id ?? "unknown"}`;
+}
+
 // ── V2 Slug & Path ─────────────────────────────────────────────────────
 
 /**
@@ -1294,8 +1327,10 @@ export function saveMessageAsMarkdownV2(
 	}
 	if (input.edited) {
 		fm.push("edited: true");
-		if (input.date_edited) fm.push(`date_edited: "${escapeYaml(input.date_edited)}"`);
-		if (input.date_edited_local) fm.push(`date_edited_local: "${escapeYaml(input.date_edited_local)}"`);
+		if (input.date_edited)
+			fm.push(`date_edited: "${escapeYaml(input.date_edited)}"`);
+		if (input.date_edited_local)
+			fm.push(`date_edited_local: "${escapeYaml(input.date_edited_local)}"`);
 	}
 
 	fm.push("---");
@@ -1322,7 +1357,7 @@ export function parsedMessageToV2Input(msg: ParsedMessage): V2NoteInput {
 	const handle = msg.handle ?? "unknown";
 	const contactName = msg.contact_name ?? handle;
 	const sender = msg.is_from_me ? "me" : contactName;
-	const conversationWith = msg.is_from_me ? contactName : contactName;
+	const conversationWith = conversationWithFromMessage(msg);
 	const sentAt = msg.date_local ?? msg.date ?? "";
 
 	return {
@@ -1373,15 +1408,37 @@ export function writeCursor(cursorPath: string, cursor: SyncCursor): void {
 
 // ── Manifest Append ────────────────────────────────────────────────────
 
+function readManifestEntries(manifestPath: string): ManifestEntry[] {
+	try {
+		const raw = readFileSync(manifestPath, "utf-8").trim();
+		if (!raw) return [];
+		return raw
+			.split("\n")
+			.map((line) => JSON.parse(line) as ManifestEntry)
+			.filter((entry) => Boolean(entry.source_id));
+	} catch {
+		return [];
+	}
+}
+
 /**
- * Append a manifest entry to the JSONL file.
+ * Upsert a manifest entry by source_id so overlap windows do not create duplicates.
  */
-export function appendManifestEntry(
+export function upsertManifestEntry(
 	manifestPath: string,
 	entry: ManifestEntry,
 ): void {
 	mkdirSync(dirname(manifestPath), { recursive: true });
-	appendFileSync(manifestPath, `${JSON.stringify(entry)}\n`, "utf-8");
+	const entries = readManifestEntries(manifestPath).filter(
+		(existing) => existing.source_id !== entry.source_id,
+	);
+	entries.push(entry);
+	entries.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+	writeFileSync(
+		manifestPath,
+		entries.map((item) => JSON.stringify(item)).join("\n") + "\n",
+		"utf-8",
+	);
 }
 
 // ── Migration ──────────────────────────────────────────────────────────
@@ -1454,10 +1511,7 @@ export function migrateLegacyNote(
 
 	// Add source_id if only guid exists
 	if (fm.guid && !fm.source_id) {
-		patched = patched.replace(
-			`guid: "${fm.guid}"`,
-			`source_id: "${fm.guid}"`,
-		);
+		patched = patched.replace(`guid: "${fm.guid}"`, `source_id: "${fm.guid}"`);
 	}
 
 	// Remove deprecated flat attachment fields
@@ -1478,7 +1532,9 @@ export function migrateLegacyNote(
 
 	try {
 		mkdirSync(dirname(newAbsPath), { recursive: true });
-		writeFileSync(newAbsPath, patched, "utf-8");
+		if (!existsSync(newAbsPath)) {
+			writeFileSync(newAbsPath, patched, "utf-8");
+		}
 		// Remove the legacy file if it's different from the new path
 		if (legacyPath !== newAbsPath) {
 			unlinkSync(legacyPath);
@@ -1494,12 +1550,14 @@ export function migrateLegacyNote(
  * Walk a save directory and migrate all legacy notes to canonical v2 paths.
  * Returns a summary of migrated and skipped files.
  */
-export function migrateAllNotes(
-	saveDir: string,
-): { migrated: number; skipped: number; errors: number } {
+export function migrateAllNotes(saveDir: string): {
+	migrated: number;
+	skipped: number;
+	errors: number;
+} {
 	let migrated = 0;
 	let skipped = 0;
-	let errors = 0;
+	const errors = 0;
 
 	function walkDir(dir: string): void {
 		let entries: string[];
