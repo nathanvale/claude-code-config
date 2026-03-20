@@ -10,15 +10,15 @@ Domain knowledge for extracting transcripts from Zoom recording pages. No browse
 
 Works with any Zoom instance (e.g. `*.zoom.us`, `us02web.zoom.us`, org-specific subdomains).
 
-## Registry Cross-References
+## Co-Located Domain Knowledge
 
-This skill provides workflow logic. Selectors and fingerprints live in the registry:
+All domain knowledge for Zoom recordings is co-located in this skill directory:
 
-- **Selector registry:** `~/.claude/browser-configs/selectors.zoom-recording.yaml`
-- **Playbooks:** `~/.claude/browser-configs/playbooks/zoom-recording/`
-- **Gotchas:** `~/.claude/browser-configs/gotchas.zoom-recording.md`
+- **Selector registry:** `~/.claude/skills/zoom-transcript/selectors.yaml`
+- **Playbooks:** `~/.claude/skills/zoom-transcript/playbooks/`
+- **Gotchas:** `~/.claude/skills/zoom-transcript/gotchas.md`
 
-When a specific selector is needed, consult the registry first. This skill covers the *workflow* (URL resolution strategy, page state detection table, extraction strategy ordering), not the selector values.
+This skill covers the *workflow* (URL resolution strategy, page state detection table, extraction strategy ordering). The selector registry covers fingerprints and locators. The playbooks cover executable scripts.
 
 ## Share URL Resolution
 
@@ -36,7 +36,7 @@ Share URLs (`/rec/share/...`) redirect through Zoom's SPA which sets `continueMo
 
 Some share URLs from Zoom Hub represent a shared folder/collection, not a single recording. These rotate through recently-viewed recordings and cannot be resolved via direct navigation. If a share URL consistently loads the wrong recording after 2 attempts, report `FAILED: Hub share URL cannot be resolved`.
 
-See `~/.claude/browser-configs/gotchas.zoom-recording.md` for detailed Hub resolution patterns.
+See `~/.claude/skills/zoom-transcript/gotchas.md` for detailed Hub resolution patterns.
 
 ## Page State Detection
 
@@ -57,8 +57,8 @@ After navigating to a recording URL and waiting 5s, classify the page using the 
 
 The Zoom play/info API returns the full transcript as structured JSON. No DOM interaction needed.
 
-**Playbook:** `~/.claude/browser-configs/playbooks/zoom-recording/extract-transcript.yaml` (step: `api_extraction`)
-**Script:** `~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-api.js`
+**Playbook:** `~/.claude/skills/zoom-transcript/playbooks/extract-transcript.yaml` (step: `api_extraction`)
+**Script:** `~/.claude/skills/zoom-transcript/playbooks/scripts/extract-transcript-api.js`
 
 **How to get the API URL:**
 1. After the recording page loads, check browser performance entries for a URL matching `/nws/recording/1.0/play/info/`
@@ -97,7 +97,7 @@ Convert `ts` to HH:MM:SS using `e.ts.split('.')[0]`. Write directly to temp file
 
 ### 2. DOM Extraction (fallback -- if API unavailable)
 
-**Script:** `~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-dom.js`
+**Script:** `~/.claude/skills/zoom-transcript/playbooks/scripts/extract-transcript-dom.js`
 
 Use only if the play/info API is unreachable or returns no `transcriptList`.
 
@@ -158,7 +158,7 @@ Each block is: speaker name, timestamp, then one or more lines of dialogue, sepa
 
 ## Validation
 
-**Script:** `~/.claude/browser-configs/playbooks/zoom-recording/scripts/verify-extract-transcript.js`
+**Script:** `~/.claude/skills/zoom-transcript/playbooks/scripts/verify-extract-transcript.js`
 
 Checks:
 - Transcript must be > 200 characters of actual content

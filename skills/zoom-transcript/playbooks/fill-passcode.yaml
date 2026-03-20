@@ -2,7 +2,7 @@ name: "fill_passcode"
 version: 1
 status: "candidate"
 registry:
-  path: "~/.claude/browser-configs/selectors.zoom-recording.yaml"
+  path: "~/.claude/skills/zoom-transcript/selectors.yaml"
   schema_version: 2
 page:
   fingerprint: "recording_passcode_gate"
@@ -17,7 +17,7 @@ inputs:
     notes: "agent-browser --session value for isolation"
 execution:
   mode: "eval_js"
-  script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/fill-passcode.js"
+  script_path: "~/.claude/skills/zoom-transcript/playbooks/scripts/fill-passcode.js"
   notes: >
     Fills the passcode field and clicks "Access Recording".
     After submission, waits for redirect to /rec/play/ page.

@@ -23,11 +23,13 @@ Fast, lightweight scan of a Zoom recording. No full transcript extraction -- jus
 ## Browser Session
 
 ```bash
-BROWSER_FLAGS="--headed --profile ~/.cache/chrome-agent"
+BROWSER_FLAGS="--headed"
+# After loading config: append --profile {config.chrome.user_data_dir} --port {config.chrome.debug_port}
 ```
 
-- **Selector registry:** `~/.claude/browser-configs/selectors.zoom-recording.yaml`
-- **Gotchas (generic Zoom):** `~/.claude/browser-configs/gotchas.zoom-recording.md`
+- **Selector registry:** `~/.claude/skills/zoom-transcript/selectors.yaml`
+- **Gotchas (generic Zoom):** `~/.claude/skills/zoom-transcript/gotchas.md`
+- **Config:** resolved at runtime (see Config Resolution below)
 
 ## Config Resolution
 
@@ -37,12 +39,17 @@ The calling project provides auth config. Look for it in this order:
 2. Project-root `.claude/browser-configs/config.*.yaml` (glob for available configs)
 3. If no config found, auth will need manual intervention -- report NEEDS_HUMAN
 
+After loading the config, append Chrome settings to BROWSER_FLAGS:
+```bash
+BROWSER_FLAGS="$BROWSER_FLAGS --profile {config.chrome.user_data_dir} --port {config.chrome.debug_port}"
+```
+
 ## Constraints
 
 - NEVER extract full transcripts -- this is metadata only
 - NEVER write to docs/meetings/ or docs/gotchas/ -- triage is read-only
 - ALWAYS use `$BROWSER_FLAGS` for all agent-browser commands
-- ALWAYS read gotchas before starting: `~/.claude/browser-configs/gotchas.zoom-recording.md`
+- ALWAYS read gotchas before starting: `~/.claude/skills/zoom-transcript/gotchas.md`
 - Maximum 15 agent-browser commands per recording
 - ALWAYS return a single-line result (see Output Format)
 

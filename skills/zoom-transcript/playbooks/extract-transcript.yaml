@@ -2,7 +2,7 @@ name: "extract_transcript"
 version: 1
 status: "candidate"
 registry:
-  path: "~/.claude/browser-configs/selectors.zoom-recording.yaml"
+  path: "~/.claude/skills/zoom-transcript/selectors.yaml"
   schema_version: 2
 page:
   fingerprint: "recording_play"
@@ -24,20 +24,20 @@ execution:
   strategy: "api_first"
   steps:
     - name: "api_extraction"
-      script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-api.js"
+      script_path: "~/.claude/skills/zoom-transcript/playbooks/scripts/extract-transcript-api.js"
       notes: >
         Primary extraction method. Finds the play/info API URL from performance entries,
         fetches the response, and formats transcriptList into speaker/timestamp/text blocks.
         Returns the formatted transcript as a raw string (not JSON.stringify) to avoid
         double-encoding via agent-browser eval.
     - name: "dom_extraction"
-      script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-dom.js"
+      script_path: "~/.claude/skills/zoom-transcript/playbooks/scripts/extract-transcript-dom.js"
       fallback_for: "api_extraction"
       notes: >
         DOM fallback. Clicks Audio Transcript tab if needed, triggers virtual scroll,
         extracts .transcript-list innerText. Only used when API extraction fails.
 verification:
-  script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/verify-extract-transcript.js"
+  script_path: "~/.claude/skills/zoom-transcript/playbooks/scripts/verify-extract-transcript.js"
   requires:
     - "length_gt_200"
     - "speakers_gte_1"

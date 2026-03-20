@@ -25,12 +25,14 @@ Extract a single Zoom recording transcript via browser automation. Each agent in
 ## Browser Session
 
 ```bash
-BROWSER_FLAGS="--headed --profile ~/.cache/chrome-agent"
+BROWSER_FLAGS="--headed"
+# After loading config: append --profile {config.chrome.user_data_dir} --port {config.chrome.debug_port}
 ```
 
-- **Selector registry:** `~/.claude/browser-configs/selectors.zoom-recording.yaml`
-- **Playbooks:** `~/.claude/browser-configs/playbooks/zoom-recording/`
-- **Gotchas (generic Zoom):** `~/.claude/browser-configs/gotchas.zoom-recording.md`
+- **Selector registry:** `~/.claude/skills/zoom-transcript/selectors.yaml`
+- **Playbooks:** `~/.claude/skills/zoom-transcript/playbooks/`
+- **Gotchas (generic Zoom):** `~/.claude/skills/zoom-transcript/gotchas.md`
+- **Config:** resolved at runtime (see Config Resolution below)
 
 ## Config Resolution
 
@@ -39,6 +41,11 @@ The calling project provides auth config. Look for it in this order:
 1. Config path specified in the prompt (e.g. `.claude/browser-configs/config.monash.yaml`)
 2. Project-root `.claude/browser-configs/config.*.yaml` (glob for available configs)
 3. If no config found, auth will need manual intervention -- report NEEDS_HUMAN
+
+After loading the config, append Chrome settings to BROWSER_FLAGS:
+```bash
+BROWSER_FLAGS="$BROWSER_FLAGS --profile {config.chrome.user_data_dir} --port {config.chrome.debug_port}"
+```
 
 Read the config for `credentials`, `identity`, and `services.zoom` entries.
 
@@ -49,7 +56,7 @@ Read the config for `credentials`, `identity`, and `services.zoom` entries.
 - ONLY write to `/tmp/zoom-transcript-*.txt` temp files
 - ALWAYS return a single-line result (see Output Format)
 - ALWAYS use `$BROWSER_FLAGS` for all agent-browser commands (set in Browser Session above)
-- ALWAYS read gotchas before starting: `~/.claude/browser-configs/gotchas.zoom-recording.md`
+- ALWAYS read gotchas before starting: `~/.claude/skills/zoom-transcript/gotchas.md`
 - Also read project-scoped gotchas if auth-related files exist (e.g. `docs/gotchas/browser-agent/monashuni-okta.md`)
 - NEVER promote a healed selector directly to validated without revalidation evidence
 - Be budget-conscious with agent-browser commands -- typical extraction is 15-25 commands. URL resolution or auth may require more.
@@ -71,9 +78,9 @@ If no `session_id` is provided, default to `zoom-default`.
 ## Workflow
 
 1. **Set BROWSER_FLAGS** from Browser Session section above
-2. **Load config** -- resolve config per Config Resolution above
-3. **Load selector registry** from `~/.claude/browser-configs/selectors.zoom-recording.yaml`
-4. **Load gotchas** -- read `~/.claude/browser-configs/gotchas.zoom-recording.md` and any project-scoped auth gotchas
+2. **Load config** -- resolve config per Config Resolution above, then append `--profile` and `--port` to BROWSER_FLAGS
+3. **Load selector registry** from `~/.claude/skills/zoom-transcript/selectors.yaml`
+4. **Load gotchas** -- read `~/.claude/skills/zoom-transcript/gotchas.md` and any project-scoped auth gotchas
 5. **Navigate** -- `agent-browser $BROWSER_FLAGS --session {session_id} open "{url}"` then wait 5s
 6. **Detect page state** -- snapshot and classify (see Mode Selection below)
 7. **Handle passcode gate** -- if `recording_passcode_gate` fingerprint matches AND passcode was provided in prompt, run fill-passcode playbook. If no passcode provided, report `SKIPPED: Passcode-gated`
@@ -163,6 +170,15 @@ Return EXACTLY one of these lines (no other output):
 - `SKIPPED: <reason> -- <meeting name>` -- no transcript available (passcode-gated, expired, no transcript tab, etc.)
 - `FAILED: <reason> -- <meeting name>` -- extraction failed after 2 attempts
 - `NEEDS_HUMAN: <reason> -- <url>` -- auth requires manual intervention (CAPTCHA, hardware key)
+
+## Model Promotion
+
+Track playbook maturity for model recommendations:
+
+- After 2+ consecutive successes with no Recovery Mode: recommend PROMOTE to Haiku
+- If Haiku fails Fast Mode or hits Recovery Mode 2+ times in 3 runs: recommend DEMOTE to Sonnet
+
+Include promotion status in every result output as a comment after the main status line.
 
 ## Domain Routing
 

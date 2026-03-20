@@ -22,9 +22,14 @@ Based on auth type:
 
 If the user describes a custom SSO flow (e.g. SAML, custom IdP), note that a custom auth skill may be needed later.
 
-## Step 3: Determine Chrome profile
+## Step 3: Determine Chrome profile and config strategy
 
 Check registry.yaml for existing sessions. If this domain shares an identity with an existing session, reuse that profile. Otherwise suggest a new one.
+
+**Config strategy depends on scope:**
+
+- **Project-scope agent** (fixed config): The config path and Chrome profile/port are known at scaffold time. Hardcode `--profile` and `--port` in BROWSER_FLAGS.
+- **User-scope agent** (runtime config): The config comes from the calling project at dispatch time. BROWSER_FLAGS starts with just `--headed` and the agent derives `--profile` and `--port` from the config after loading it in step 2.
 
 ## Step 4: Generate the agent markdown
 
@@ -55,14 +60,40 @@ Browse {service name} with {auth description}. {One sentence about what this age
 
 ## Browser Session
 
+{IF project-scope (fixed config):}
 ```bash
-BROWSER_FLAGS="--headed --profile {chrome_profile_path}"
+BROWSER_FLAGS="--headed --profile {chrome_profile_path} --port {chrome_debug_port}"
 ```
+{ELSE IF user-scope (runtime config):}
+```bash
+BROWSER_FLAGS="--headed"
+# After loading config: append --profile {config.chrome.user_data_dir} --port {config.chrome.debug_port}
+```
+{END IF}
 
-- **Registry session:** {session-name}
-- **Config:** `{skill-dir}/config.yaml`
 - **Selector registry:** `{skill-dir}/selectors.yaml`
 - **Playbooks:** `{skill-dir}/playbooks`
+- **Gotchas:** `{skill-dir}/gotchas.md`
+{IF project-scope:}
+- **Config:** `{skill-dir}/config.yaml`
+{ELSE IF user-scope:}
+- **Config:** resolved at runtime (see Config Resolution below)
+{END IF}
+
+{IF user-scope -- include Config Resolution section:}
+## Config Resolution
+
+The calling project provides auth config. Look for it in this order:
+
+1. Config path specified in the prompt (e.g. `.claude/browser-configs/config.monash.yaml`)
+2. Project-root `.claude/browser-configs/config.*.yaml` (glob for available configs)
+3. If no config found, auth will need manual intervention -- report NEEDS_HUMAN
+
+After loading the config, append Chrome settings to BROWSER_FLAGS:
+```bash
+BROWSER_FLAGS="$BROWSER_FLAGS --profile {config.chrome.user_data_dir} --port {config.chrome.debug_port}"
+```
+{END IF}
 
 ## Constraints
 
@@ -76,7 +107,7 @@ BROWSER_FLAGS="--headed --profile {chrome_profile_path}"
 ## Workflow
 
 1. **Set BROWSER_FLAGS** from Browser Session section above
-2. **Load config** from `{skill-dir}/config.yaml`
+2. **Load config** {IF project-scope:}from `{skill-dir}/config.yaml`{ELSE:}-- resolve config per Config Resolution above, then append `--profile` and `--port` to BROWSER_FLAGS{END IF}
 3. **Load selector registry** from `{skill-dir}/selectors.yaml`
 4. **Read gotchas** from `{skill-dir}/gotchas.md` (skip if file doesn't exist yet)
 5. **Navigate** to target URL and authenticate if needed (see browser-automation skill)
