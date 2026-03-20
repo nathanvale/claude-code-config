@@ -128,6 +128,8 @@ Distinguish these nearby families like this:
 - `pet` for animals with durable relationship, care, health, or household context
 - `plan` for evolving proposed paths, itineraries, rollout sequences, and option-heavy future work
 - `spec` for more settled documents that describe the shape to execute against
+- `decision` for durable choices about policy, workflow, structure, naming, ownership, or operating rules where the why should be recoverable later
+- `adr` for heavier architectural or system-design choices with notable tradeoffs, alternatives, or long-lived technical consequences
 - `project` for the container or initiative itself
 
 For feature work, a brainstorm usually belongs in the existing `plan` family, while a lightweight PRD usually belongs in `spec`.

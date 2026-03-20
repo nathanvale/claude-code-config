@@ -84,6 +84,34 @@ Use for concrete action items and commitments after the plan exists.
 Default to a small repo-local `TASKS.md` as the active execution surface.
 If work becomes numerous, dependency-heavy, or parallelized, promote detailed items into a `todos/` directory and let `TASKS.md` become the summary view.
 
+### `decision` and `adr`
+
+Use a standalone `decision` or `adr` note when the choice is worth recovering later, not just applying once now.
+
+Create one when all of these are true:
+- the choice changes future behavior, structure, naming, ownership, or authoring
+- the choice is likely to be revisited, questioned, or forgotten later
+- the why matters as much as the final outcome
+
+Prefer `decision` for:
+- documentation policy
+- workflow rules
+- naming or note-family conventions
+- source-of-truth boundaries
+- durable operating preferences
+
+Prefer `adr` for:
+- architecture choices
+- system boundaries
+- storage or indexing strategy
+- tool or protocol choices with meaningful alternatives
+
+Do not create a separate `decision` or `adr` note for:
+- obvious one-off cleanup
+- temporary sequencing that belongs in a `plan`
+- settled feature behavior already captured cleanly in a `spec`
+- tiny local edits with no likely future retrieval value
+
 ## Shortcut Rules
 
 - Tiny change: skip straight to `plan` or `task`
