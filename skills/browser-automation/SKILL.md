@@ -10,41 +10,23 @@ Operational knowledge for driving a browser via `agent-browser` CLI. This skill 
 
 ## Chrome Connection
 
-The calling agent declares its connection flags in a `## Browser Session` section. This skill uses those flags for all commands. There are two modes:
-
-### Mode 1: Profile (agent-browser manages Chrome)
-
-agent-browser launches and manages its own Chrome daemon with persistent cookies.
-
-```
-agent-browser --headed --profile <path> <command>
-```
-
-- `--profile <path>` persists cookies, localStorage, and auth state across restarts
-- `--headed` shows the browser window (required -- never run headless)
-- agent-browser handles Chrome lifecycle -- no manual launch needed
-- If Chrome is already running with this profile, agent-browser reuses it
-
-### Mode 2: CDP (connect to existing Chrome)
-
-Connect to a Chrome already running with `--remote-debugging-port`.
-
-```
-agent-browser --headed --cdp <port> <command>
-```
-
-- Use when Chrome is already running (e.g. launched by another agent or manually)
-- If nothing is listening on the port, the command will fail
+All agents share one Chrome daemon via `--profile`. Auth isolation comes from `--session`, which gives each agent its own cookies, localStorage, and auth state within the same Chrome instance.
 
 ### How agents declare their flags
 
-Each agent has a `## Browser Session` section that sets `BROWSER_FLAGS`. All agent-browser commands in that agent use these flags:
+Each agent has a `## Browser Session` section that sets `BROWSER_FLAGS`:
 
 ```bash
-# Example from an agent:
-BROWSER_FLAGS="--headed --profile ~/.cache/chrome-agent"
+BROWSER_FLAGS="--headed --profile ~/.cache/chrome-agent --session <name>"
+```
 
-# All commands then use:
+- `--headed` -- shows the browser window (required -- never run headless)
+- `--profile ~/.cache/chrome-agent` -- shared Chrome daemon with persistent state
+- `--session <name>` -- isolated auth context (cookies, localStorage per session name)
+
+All agent-browser commands use these flags:
+
+```bash
 agent-browser $BROWSER_FLAGS open <url>
 agent-browser $BROWSER_FLAGS snapshot
 agent-browser $BROWSER_FLAGS click @eN
@@ -52,7 +34,9 @@ agent-browser $BROWSER_FLAGS click @eN
 
 ### Session Registry
 
-Port and profile assignments are tracked in `~/.claude/skills/browser-automation/registry.yaml` to prevent collisions.
+Session names are tracked in `~/.claude/skills/browser-automation/registry.yaml` to prevent naming collisions. The registry owns the canonical profile path and the list of registered session names.
+
+For parallel dispatch of the same agent, callers suffix the session name at runtime (e.g. `--session zoom-1`, `--session zoom-2`). These ephemeral sessions don't need registry entries.
 
 ### Config Resolution Order
 
