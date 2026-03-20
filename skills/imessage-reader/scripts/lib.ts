@@ -1131,6 +1131,39 @@ export type ManifestEntry = {
 };
 
 /**
+ * Structured attachment entry for v2 notes.
+ */
+export type V2Attachment = {
+	id: string;
+	kind: string;
+	filename: string;
+	mime_type: string | null;
+	local_path: string;
+	size_bytes: number | null;
+	sha256: string | null;
+	extracted_text: string | null;
+	ai_caption: string | null;
+};
+
+/**
+ * Tapback reaction entry for enriched v2 notes.
+ */
+export type TapbackInfo = {
+	type: string;
+	from: string;
+	guid: string;
+};
+
+/**
+ * Optional enrichment data passed to the v2 note writer.
+ */
+export type MessageEnrichment = {
+	threadDepth?: number;
+	threadRoot?: string;
+	tapbacks?: TapbackInfo[];
+};
+
+/**
  * Input shape for v2 note writing -- a parsed message plus conversation context.
  */
 export type V2NoteInput = {
@@ -1161,6 +1194,8 @@ export type V2NoteInput = {
 	edited?: true | null;
 	date_edited?: string | null;
 	date_edited_local?: string | null;
+	attachments?: V2Attachment[];
+	enrichment?: MessageEnrichment;
 };
 
 function sortedDisplayList(values: Array<string | null | undefined>): string[] {
@@ -1196,6 +1231,141 @@ function conversationWithFromMessage(msg: ParsedMessage): string {
 	}
 
 	return `group:${msg.chat_id ?? "unknown"}`;
+}
+
+// ── Attachment Kind ─────────────────────────────────────────────────────
+
+/**
+ * Map a MIME type to an attachment kind per the attachment model spec.
+ */
+export function attachmentKind(mimeType: string | null): string {
+	if (!mimeType) return "other";
+	if (mimeType.startsWith("image/")) return "image";
+	if (mimeType.startsWith("video/")) return "video";
+	if (mimeType.startsWith("audio/")) return "audio";
+	if (mimeType === "application/pdf") return "document";
+	if (mimeType.startsWith("text/")) return "document";
+	return "other";
+}
+
+// ── Tapback Type Mapping ───────────────────────────────────────────────
+
+const TAPBACK_TYPE_MAP: Record<number, string> = {
+	2000: "Love",
+	2001: "Like",
+	2002: "Dislike",
+	2003: "Laugh",
+	2004: "Emphasis",
+	2005: "Question",
+	3000: "Remove Love",
+	3001: "Remove Like",
+	3002: "Remove Dislike",
+	3003: "Remove Laugh",
+	3004: "Remove Emphasis",
+	3005: "Remove Question",
+};
+
+/**
+ * Map an associated_message_type to a human-readable tapback name.
+ */
+export function tapbackTypeToName(typeCode: number | null): string | null {
+	if (typeCode == null) return null;
+	return TAPBACK_TYPE_MAP[typeCode] ?? null;
+}
+
+// ── Thread Depth & Root ────────────────────────────────────────────────
+
+/**
+ * Compute thread depth and root for a batch of messages.
+ * Walk reply_to chains to find the root; cache results.
+ */
+export function computeThreadDepthAndRoot(
+	messages: ParsedMessageInternal[],
+): Map<string, { depth: number; root: string }> {
+	const byGuid = new Map<string, ParsedMessageInternal>();
+	for (const msg of messages) byGuid.set(msg.guid, msg);
+
+	const cache = new Map<string, { depth: number; root: string }>();
+
+	function walk(
+		guid: string,
+		visiting = new Set<string>(),
+	): { depth: number; root: string } {
+		if (cache.has(guid)) return cache.get(guid) as { depth: number; root: string };
+		if (visiting.has(guid)) {
+			const result = { depth: 0, root: guid };
+			cache.set(guid, result);
+			return result;
+		}
+
+		const msg = byGuid.get(guid);
+		if (!msg?.reply_to || !byGuid.has(msg.reply_to)) {
+			const result = { depth: 0, root: guid };
+			cache.set(guid, result);
+			return result;
+		}
+
+		visiting.add(guid);
+		const parent = walk(msg.reply_to, visiting);
+		visiting.delete(guid);
+		const result = { depth: parent.depth + 1, root: parent.root };
+		cache.set(guid, result);
+		return result;
+	}
+
+	for (const msg of messages) walk(msg.guid);
+	return cache;
+}
+
+// ── Tapback Aggregation ────────────────────────────────────────────────
+
+/**
+ * Aggregate tapback reactions onto target messages.
+ * Remove tapbacks (3000+) cancel corresponding adds from the same sender.
+ */
+export function aggregateTapbacks(
+	messages: ParsedMessageInternal[],
+): Map<string, TapbackInfo[]> {
+	const activeByTarget = new Map<string, Map<string, TapbackInfo & { actorKey: string; timestamp: string }>>();
+
+	for (const msg of messages) {
+		if (msg.message_kind !== "tapback" || !msg.reaction_to) continue;
+
+		const typeName = tapbackTypeToName(msg.reaction_type);
+		if (!typeName) continue;
+
+		const from = msg.is_from_me
+			? "me"
+			: (msg.contact_name ?? msg.handle ?? "unknown");
+		const actorKey = msg.is_from_me ? "me" : (msg.handle ?? from);
+		const targetKey = msg.reaction_to;
+		const bucket = activeByTarget.get(targetKey) ?? new Map();
+		const pairKey = `${actorKey}:${typeName.replace("Remove ", "")}`;
+
+		if (typeName.startsWith("Remove ")) {
+			bucket.delete(pairKey);
+			activeByTarget.set(targetKey, bucket);
+			continue;
+		}
+
+		bucket.set(pairKey, {
+			type: typeName,
+			from,
+			guid: msg.guid,
+			actorKey,
+			timestamp: msg.date_local ?? msg.date ?? "",
+		});
+		activeByTarget.set(targetKey, bucket);
+	}
+
+	const result = new Map<string, TapbackInfo[]>();
+	for (const [targetKey, bucket] of activeByTarget.entries()) {
+		const tapbacks = Array.from(bucket.values())
+			.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+			.map(({ type, from, guid }) => ({ type, from, guid }));
+		result.set(targetKey, tapbacks);
+	}
+	return result;
 }
 
 // ── V2 Slug & Path ─────────────────────────────────────────────────────
@@ -1283,7 +1453,8 @@ export function saveMessageAsMarkdownV2(
 	input: V2NoteInput,
 	saveDir: string,
 ): string | null {
-	if (!input.sent_at || !input.text) return null;
+	const hasAttachments = input.attachments && input.attachments.length > 0;
+	if (!input.sent_at || (!input.text && !hasAttachments)) return null;
 
 	const relPath = canonicalSavePath(input.sent_at, input.source_id);
 	const filePath = join(saveDir, relPath);
@@ -1325,6 +1496,46 @@ export function saveMessageAsMarkdownV2(
 	if (input.reply_to) {
 		fm.push(`reply_to: "${escapeYaml(input.reply_to)}"`);
 	}
+
+	// Thread enrichment
+	const enrichment = input.enrichment;
+	if (enrichment?.threadDepth != null) {
+		fm.push(`thread_depth: ${enrichment.threadDepth}`);
+	}
+	if (enrichment?.threadRoot) {
+		fm.push(`thread_root: "${escapeYaml(enrichment.threadRoot)}"`);
+	}
+
+	// Tapback enrichment
+	if (enrichment?.tapbacks) {
+		if (enrichment.tapbacks.length === 0) {
+			fm.push("tapbacks: []");
+		} else {
+			fm.push("tapbacks:");
+			for (const tb of enrichment.tapbacks) {
+				fm.push(`  - type: "${escapeYaml(tb.type)}"`);
+				fm.push(`    from: "${escapeYaml(tb.from)}"`);
+				fm.push(`    guid: "${escapeYaml(tb.guid)}"`);
+			}
+		}
+	}
+
+	// Structured attachments
+	if (hasAttachments && input.attachments) {
+		fm.push("attachments:");
+		for (const att of input.attachments) {
+			fm.push(`  - id: "${escapeYaml(att.id)}"`);
+			fm.push(`    kind: ${att.kind}`);
+			fm.push(`    filename: "${escapeYaml(att.filename)}"`);
+			fm.push(`    mime_type: "${att.mime_type ?? ""}"`);
+			fm.push(`    local_path: "${escapeYaml(att.local_path)}"`);
+			fm.push(`    size_bytes: ${att.size_bytes ?? "null"}`);
+			fm.push(`    sha256: ${att.sha256 ? `"${att.sha256}"` : "null"}`);
+			fm.push(`    extracted_text: ${att.extracted_text ? `"${escapeYaml(att.extracted_text)}"` : "null"}`);
+			fm.push(`    ai_caption: ${att.ai_caption ? `"${escapeYaml(att.ai_caption)}"` : "null"}`);
+		}
+	}
+
 	if (input.edited) {
 		fm.push("edited: true");
 		if (input.date_edited)
@@ -1335,7 +1546,29 @@ export function saveMessageAsMarkdownV2(
 
 	fm.push("---");
 
-	const content = `${fm.join("\n")}\n\n## Message\n\n${input.text}\n`;
+	// Build body sections
+	const bodySections: string[] = [];
+
+	if (input.text) {
+		bodySections.push(`## Message\n\n${input.text}`);
+	}
+
+	if (hasAttachments && input.attachments) {
+		const attList = input.attachments
+			.map((a) => `- \`${a.filename}\` - ${a.kind}`)
+			.join("\n");
+		bodySections.push(`## Attachments\n\n${attList}`);
+
+		const withText = input.attachments.filter((a) => a.extracted_text);
+		if (withText.length > 0) {
+			const textSections = withText
+				.map((a) => `### ${a.filename}\n\n${a.extracted_text}`)
+				.join("\n\n");
+			bodySections.push(`## Attachment Text\n\n${textSections}`);
+		}
+	}
+
+	const content = `${fm.join("\n")}\n\n${bodySections.join("\n\n")}\n`;
 
 	try {
 		mkdirSync(dirname(filePath), { recursive: true });

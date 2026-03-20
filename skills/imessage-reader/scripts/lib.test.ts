@@ -35,7 +35,11 @@ import {
 	guidSlugV2,
 	hasMeaningfulText,
 	linkMessageTargets,
+	aggregateTapbacks,
+	attachmentKind,
+	computeThreadDepthAndRoot,
 	type ManifestEntry,
+	type MessageEnrichment,
 	type MessageRow,
 	matchesSearch,
 	migrateLegacyNote,
@@ -53,7 +57,10 @@ import {
 	resolveContact,
 	saveMessageAsMarkdown,
 	saveMessageAsMarkdownV2,
+	tapbackTypeToName,
+	type TapbackInfo,
 	upsertManifestEntry,
+	type V2Attachment,
 	type V2NoteInput,
 	writeCursor,
 } from "./lib";
@@ -1035,5 +1042,257 @@ Legacy duplicate content.
 		expect(migrated).toBe(canonicalPath);
 		const canonicalContent = readFileSync(canonicalPath, "utf-8");
 		expect(canonicalContent).toContain("Canonical content.");
+	});
+});
+
+// ── Phase 3: Attachments, Thread/Tapback Enrichment ────────────────────
+
+describe("attachmentKind", () => {
+	test("maps MIME types to kinds per spec", () => {
+		expect(attachmentKind("image/heic")).toBe("image");
+		expect(attachmentKind("video/mp4")).toBe("video");
+		expect(attachmentKind("audio/mpeg")).toBe("audio");
+		expect(attachmentKind("application/pdf")).toBe("document");
+		expect(attachmentKind("text/plain")).toBe("document");
+		expect(attachmentKind("application/zip")).toBe("other");
+		expect(attachmentKind(null)).toBe("other");
+	});
+});
+
+describe("tapbackTypeToName", () => {
+	test("maps add codes to display names", () => {
+		expect(tapbackTypeToName(2000)).toBe("Love");
+		expect(tapbackTypeToName(2003)).toBe("Laugh");
+	});
+
+	test("maps remove codes", () => {
+		expect(tapbackTypeToName(3000)).toBe("Remove Love");
+	});
+
+	test("returns null for unknown codes", () => {
+		expect(tapbackTypeToName(9999)).toBeNull();
+		expect(tapbackTypeToName(null)).toBeNull();
+	});
+});
+
+describe("saveMessageAsMarkdownV2 with attachments (fx-04)", () => {
+	test("writes structured attachments and body sections", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-att-"));
+		tmpDirs.add(dir);
+
+		const att: V2Attachment = {
+			id: "att-001",
+			kind: "document",
+			filename: "plumber-invoice.pdf",
+			mime_type: "application/pdf",
+			local_path: "runtime/imessage/attachments/2026/03/p-0-c3d4e5f6-a7b8-9012-cdef-123456789012/plumber-invoice.pdf",
+			size_bytes: 94521,
+			sha256: null,
+			extracted_text: "Invoice #1042 — Plumbing repair $385.00 inc GST. Due: 2026-03-25.",
+			ai_caption: null,
+		};
+
+		const filePath = saveMessageAsMarkdownV2(
+			makeV2Input({
+				source_id: "p:0/C3D4E5F6-A7B8-9012-CDEF-123456789012",
+				sent_at: "2026-03-18T16:42:11+11:00",
+				text: "Here's the invoice from the plumber",
+				attachments: [att],
+			}),
+			dir,
+		);
+
+		expect(filePath).toBeTruthy();
+		const content = readFileSync(filePath as string, "utf-8");
+		expect(content).toContain("attachments:");
+		expect(content).toContain('id: "att-001"');
+		expect(content).toContain("kind: document");
+		expect(content).toContain('filename: "plumber-invoice.pdf"');
+		expect(content).toContain("## Attachments");
+		expect(content).toContain("`plumber-invoice.pdf` - document");
+		expect(content).toContain("## Attachment Text");
+		expect(content).toContain("### plumber-invoice.pdf");
+		expect(content).toContain("Invoice #1042");
+	});
+});
+
+describe("saveMessageAsMarkdownV2 with image, no extracted text (fx-05)", () => {
+	test("writes attachment section but no Attachment Text section", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-img-"));
+		tmpDirs.add(dir);
+
+		const att: V2Attachment = {
+			id: "att-001",
+			kind: "image",
+			filename: "IMG_4521.HEIC",
+			mime_type: "image/heic",
+			local_path: "runtime/imessage/attachments/2026/03/p-0-d4e5f6a7-b8c9-0123-defa-234567890123/IMG_4521.HEIC",
+			size_bytes: 3281044,
+			sha256: null,
+			extracted_text: null,
+			ai_caption: null,
+		};
+
+		const filePath = saveMessageAsMarkdownV2(
+			makeV2Input({
+				source_id: "p:0/D4E5F6A7-B8C9-0123-DEFA-234567890123",
+				sent_at: "2026-03-17T15:22:33+11:00",
+				text: "Look what Levi drew at school today!",
+				attachments: [att],
+			}),
+			dir,
+		);
+
+		const content = readFileSync(filePath as string, "utf-8");
+		expect(content).toContain("## Attachments");
+		expect(content).toContain("`IMG_4521.HEIC` - image");
+		expect(content).toContain("ai_caption: null");
+		// No Attachment Text section when no extracted_text
+		const lines = content.split("\n");
+		const hasAttachmentText = lines.some((l: string) => l.startsWith("## Attachment Text"));
+		expect(hasAttachmentText).toBe(false);
+	});
+});
+
+describe("computeThreadDepthAndRoot (fx-06, fx-07)", () => {
+	test("computes depth 0 for root, depth 1 for direct reply (fx-06)", () => {
+		const messages: ParsedMessageInternal[] = [
+			{
+				...makeParsedMessage({
+					guid: "p:0/E5F6A7B8-ROOT",
+					source_guid: "E5F6A7B8-ROOT",
+					date: "2026-03-20T00:00:00.000Z",
+				}),
+				_rowid: 1,
+			},
+			{
+				...makeParsedMessage({
+					guid: "p:0/F6A7B8C9-REPLY",
+					source_guid: "F6A7B8C9-REPLY",
+					reply_to: "p:0/E5F6A7B8-ROOT",
+					date: "2026-03-20T00:02:30.000Z",
+				}),
+				_rowid: 2,
+			},
+		];
+
+		const result = computeThreadDepthAndRoot(messages);
+		expect(result.get("p:0/E5F6A7B8-ROOT")?.depth).toBe(0);
+		expect(result.get("p:0/E5F6A7B8-ROOT")?.root).toBe("p:0/E5F6A7B8-ROOT");
+		expect(result.get("p:0/F6A7B8C9-REPLY")?.depth).toBe(1);
+		expect(result.get("p:0/F6A7B8C9-REPLY")?.root).toBe("p:0/E5F6A7B8-ROOT");
+	});
+
+	test("computes depth 2 for nested reply chain (fx-07)", () => {
+		const messages: ParsedMessageInternal[] = [
+			{
+				...makeParsedMessage({ guid: "ROOT", source_guid: "ROOT" }),
+				_rowid: 1,
+			},
+			{
+				...makeParsedMessage({ guid: "D1", source_guid: "D1", reply_to: "ROOT" }),
+				_rowid: 2,
+			},
+			{
+				...makeParsedMessage({ guid: "D2", source_guid: "D2", reply_to: "D1" }),
+				_rowid: 3,
+			},
+		];
+
+		const result = computeThreadDepthAndRoot(messages);
+		expect(result.get("ROOT")?.depth).toBe(0);
+		expect(result.get("D1")?.depth).toBe(1);
+		expect(result.get("D2")?.depth).toBe(2);
+		expect(result.get("D2")?.root).toBe("ROOT");
+	});
+});
+
+describe("aggregateTapbacks (fx-08)", () => {
+	test("cancels a Love add with a subsequent Remove Love from same sender", () => {
+		const messages: ParsedMessageInternal[] = [
+			{
+				...makeParsedMessage({
+					guid: "p:0/TARGET",
+					source_guid: "TARGET",
+					text: "I booked the restaurant",
+				}),
+				_rowid: 1,
+			},
+			{
+				...makeParsedMessage({
+					guid: "p:0/TAPBACK-ADD",
+					source_guid: "TAPBACK-ADD",
+					message_kind: "tapback",
+					reaction_to: "p:0/TARGET",
+					reaction_type: 2000,
+					is_from_me: false,
+					contact_name: "Melanie",
+					handle: "+61412345678",
+					date: "2026-03-19T19:30:15.000Z",
+					date_local: "2026-03-19T19:30:15+11:00",
+				}),
+				_rowid: 2,
+			},
+			{
+				...makeParsedMessage({
+					guid: "p:0/TAPBACK-REMOVE",
+					source_guid: "TAPBACK-REMOVE",
+					message_kind: "tapback",
+					reaction_to: "p:0/TARGET",
+					reaction_type: 3000,
+					is_from_me: false,
+					contact_name: "Melanie",
+					handle: "+61412345678",
+					date: "2026-03-19T19:31:02.000Z",
+					date_local: "2026-03-19T19:31:02+11:00",
+				}),
+				_rowid: 3,
+			},
+		];
+
+		const result = aggregateTapbacks(messages);
+		const tapbacks = result.get("p:0/TARGET") ?? [];
+		expect(tapbacks).toHaveLength(0);
+	});
+});
+
+describe("saveMessageAsMarkdownV2 with enrichment", () => {
+	test("writes thread_depth and thread_root (fx-06a)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-enrich-"));
+		tmpDirs.add(dir);
+		const filePath = saveMessageAsMarkdownV2(
+			makeV2Input({
+				source_id: "p:0/E5F6A7B8-C9D0-1234-EFAB-345678901234",
+				sent_at: "2026-03-20T11:00:00+11:00",
+				text: "Did you see the email from the school about camp?",
+				enrichment: {
+					threadDepth: 0,
+					threadRoot: "p:0/E5F6A7B8-C9D0-1234-EFAB-345678901234",
+				},
+			}),
+			dir,
+		);
+		const content = readFileSync(filePath as string, "utf-8");
+		expect(content).toContain("thread_depth: 0");
+		expect(content).toContain('thread_root: "p:0/E5F6A7B8-C9D0-1234-EFAB-345678901234"');
+	});
+
+	test("writes tapbacks: [] for cancelled tapbacks (fx-08)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-tapback-"));
+		tmpDirs.add(dir);
+		const filePath = saveMessageAsMarkdownV2(
+			makeV2Input({
+				source_id: "p:0/DDDD1111-2222-3333-4444-555566667777",
+				sent_at: "2026-03-19T19:30:00+11:00",
+				direction: "outbound",
+				from: "me",
+				is_from_me: true,
+				text: "I booked the restaurant for Saturday night",
+				enrichment: { tapbacks: [] },
+			}),
+			dir,
+		);
+		const content = readFileSync(filePath as string, "utf-8");
+		expect(content).toContain("tapbacks: []");
 	});
 });
