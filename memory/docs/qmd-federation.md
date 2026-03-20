@@ -82,7 +82,7 @@ Examples:
 - Prefer conservative `update_command` values. On git-backed repos, `git fetch --all --prune --quiet || true` is safer than auto-stashing and pulling.
 - For reference-corpus repos, index converted Markdown surfaces such as `apis/` or `repos/`, not raw upstream downloads.
 - Run QMD CLI maintenance and inspection commands sequentially against a given index; concurrent calls can hit SQLite lock errors.
-- Prefer `~/.config/memory/scripts/qmd-node.sh` for embedding and other vector-heavy operations on this machine; the Bun-installed `qmd` binary can fail to load `sqlite-vec` under Bun.
+- Prefer `~/.config/memory/scripts/qmd-node.sh` for embedding and other vector-heavy operations on this machine; the Bun-installed `qmd` binary can fail to load `sqlite-vec` under Bun. The wrapper auto-detects Homebrew and exports `BREW_PREFIX` so QMD can find the loadable SQLite extension path on macOS.
 - Keep source-of-truth ownership with the repo.
 - Add a new repo to the roster before relying on it in shared recall workflows.
 - Treat the roster as canonical and regenerate commands from it rather than hand-maintaining setup snippets.
