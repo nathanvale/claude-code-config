@@ -1,49 +1,45 @@
-schema_version: 1
+schema_version: 2
 
 # Browser Session Registry
-# Central port registry -- one port per identity, no collisions.
-# Browser agents reference a session name. This file owns the port mapping.
-#
-# INVARIANT: Two sessions may share a port ONLY if they share the same user_data_dir.
-# Violating this causes Chrome to silently fail on the second session.
+# Central session name registry -- prevents naming collisions.
+# All agents share one Chrome daemon via --profile ~/.cache/chrome-agent.
+# Auth isolation comes from --session <name> (separate cookies per session).
 #
 # To add a new session:
-#   1. Pick an unused port (next available after highest)
-#   2. Verify no port collision with a different user_data_dir (see INVARIANT above)
-#   3. Add entry below
+#   1. Pick a unique session name (usually matches the domain key)
+#   2. Verify no name collision below
+#   3. Add entry
 #   4. Create a config file if auth is needed
+#
+# For parallel dispatch, callers suffix the session name at runtime:
+#   --session zoom-1, --session zoom-2 (ephemeral, no registry entry needed)
+
+profile: ~/.cache/chrome-agent
 
 sessions:
   personal:
-    port: 9222
     config: ~/.claude/skills/browser-automation/config.yaml
-    user_data_dir: ~/.cache/chrome-agent
 
   monash:
-    port: 9223
     config: .claude/browser-configs/config.monash.yaml
-    user_data_dir: ~/.cache/chrome-agent-monash
 
   ellucian:
-    port: 9224
     config: .claude/browser-configs/config.ellucian.yaml
-    user_data_dir: ~/.cache/chrome-agent-ellucian
 
   monash-qa:
-    port: 9225
     config: .claude/browser-configs/config.monash-qa.yaml
-    user_data_dir: ~/.cache/chrome-agent-monash-qa
 
   timesheet:
-    port: 9222
     config: .claude/browser-configs/config.fasttrack360.yaml
-    user_data_dir: ~/.cache/chrome-agent  # same profile as personal (shared cookies)
+
+  zoom:
+    config: ~/.claude/skills/browser-automation/config.yaml
+
+  confluence:
+    config: ~/.claude/skills/browser-automation/config.yaml
 
   classic-cinema:
-    port: 9226
     config: .claude/skills/classic-cinema/config.yaml
-    user_data_dir: ~/.cache/chrome-agent-classic-cinema
 
 defaults:
   session: personal
-  port: 9222
