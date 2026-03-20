@@ -26,15 +26,18 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import {
 	type AttachmentRow,
+	aggregateTapbacks,
 	appleEpochToISO,
+	type CommitmentCandidate,
 	canonicalSavePath,
+	computeThreadDepthAndRoot,
 	dateToAppleNsEndOfDay as dateToAppleNsEndOfDayFromLib,
 	dateToAppleNs as dateToAppleNsFromLib,
+	extractCommitmentCandidates,
 	formatContactName as formatContactNameFromLib,
 	formatLocalISO,
 	formatOutputPath as formatOutputPathFromLib,
 	linkMessageTargets as linkMessageTargetsFromLib,
-	type ManifestEntry,
 	type MessageRow,
 	matchesSearch,
 	migrateAllNotes,
@@ -47,7 +50,6 @@ import {
 	resolveAttachmentPath as resolveAttachmentPathFromLib,
 	resolveContact,
 	type SyncCursor,
-	saveMessageAsMarkdown as saveMessageAsMarkdownFromLib,
 	saveMessageAsMarkdownV2,
 	upsertManifestEntry,
 	writeCursor,
@@ -65,7 +67,10 @@ const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})T/;
  * Default save directory for markdown persistence.
  * Overridable via --save-dir flag.
  */
-const DEFAULT_SAVE_DIR = join(homedir(), "Documents/messages");
+const DEFAULT_SAVE_DIR = join(
+	homedir(),
+	"code/personal-messages/docs/messages/imessage",
+);
 
 // ── Error Handling ────────────────────────────────────────────────────
 
@@ -324,26 +329,81 @@ function getContactMap(): Map<string, string> {
 }
 
 /**
- * Save all messages and return counts of files written and errors.
+ * Save parsed messages using the canonical v2 note contract.
+ * Shared by `messages`, `sync`, and `enrich` so behavior stays aligned.
  */
 function persistMessages(
 	messages: ParsedMessage[],
 	saveDir: string,
-): { saved: number; save_errors: number } {
+	manifestFile?: string,
+): {
+	saved: number;
+	unsaved: number;
+	save_errors: number;
+	lastSentAt: string | null;
+	lastSourceId: string | null;
+	commitmentCandidates: CommitmentCandidate[];
+} {
+	const saveable = messages.filter(
+		(message) => message.message_kind !== "tapback",
+	);
+	const threadByGuid = computeThreadDepthAndRoot(saveable);
+	const tapbacksByTarget = aggregateTapbacks(messages);
+	const commitmentCandidates = extractCommitmentCandidates(saveable);
+
 	let saved = 0;
+	let unsaved = 0;
 	let save_errors = 0;
-	for (const msg of messages) {
-		if (!msg.date || (!msg.text && !msg.attachment)) continue;
-		const result = saveMessageAsMarkdownFromLib(msg, saveDir);
-		if (result) {
+	let lastSentAt: string | null = null;
+	let lastSourceId: string | null = null;
+
+	for (const msg of saveable) {
+		const input = parsedMessageToV2Input(msg);
+		const thread = threadByGuid.get(msg.guid);
+		const tapbacks = tapbacksByTarget.get(msg.guid);
+		if (thread || tapbacks) {
+			input.enrichment = {
+				threadDepth: thread?.depth,
+				threadRoot: thread?.root,
+				tapbacks,
+			};
+		}
+
+		const hasAttachments = (input.attachments?.length ?? 0) > 0;
+		if (!input.sent_at || (!input.text && !hasAttachments)) {
+			unsaved++;
+			continue;
+		}
+
+		const result = saveMessageAsMarkdownV2(input, saveDir);
+		if (result != null) {
 			saved++;
+			lastSentAt = input.sent_at;
+			lastSourceId = input.source_id;
+
+			if (manifestFile) {
+				const relPath = canonicalSavePath(input.sent_at, input.source_id);
+				upsertManifestEntry(manifestFile, {
+					schema_version: 1,
+					source_id: input.source_id,
+					relative_path: `docs/messages/imessage/${relPath}`,
+					slug_version: 2,
+					updated_at: input.sent_at,
+				});
+			}
 		} else {
-			// saveMessageAsMarkdown returns null for both skips and errors.
-			// Only count as error if the message had text+date (wasn't a skip).
 			save_errors++;
 		}
 	}
-	return { saved, save_errors };
+
+	return {
+		saved,
+		unsaved,
+		save_errors,
+		lastSentAt,
+		lastSourceId,
+		commitmentCandidates,
+	};
 }
 
 // ── Core Query ─────────────────────────────────────────────────────────
@@ -376,6 +436,11 @@ const MESSAGE_SQL = `
 
 // ── Commands ───────────────────────────────────────────────────────────
 
+type MessageQueryResult = {
+	persistableMessages: Array<ParsedMessage & { _rowid: number }>;
+	visibleMessages: Array<ParsedMessage & { _rowid: number }>;
+};
+
 function queryMessages(args: {
 	since?: string;
 	until?: string;
@@ -391,7 +456,7 @@ function queryMessages(args: {
 	"no-save"?: boolean;
 	pretty: boolean;
 }) {
-	const result = withDB((db) => {
+	const result = withDB<MessageQueryResult>((db) => {
 		const conditions: string[] = [];
 		const params: (string | number)[] = [];
 		const searchNeedle = args.search?.toLowerCase().trim() || null;
@@ -426,7 +491,9 @@ function queryMessages(args: {
 		if (searchNeedle == null) params.push(args.limit);
 
 		const rows = db.prepare(sql).all(...params) as MessageRow[];
-		if (rows.length === 0) return [];
+		if (rows.length === 0) {
+			return { persistableMessages: [], visibleMessages: [] };
+		}
 
 		const rowids = rows.map((row) => row.rowid);
 		const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
@@ -463,24 +530,48 @@ function queryMessages(args: {
 				: linkedMessages.filter((message) =>
 						matchesSearch(message, searchNeedle),
 					);
-		const visibleMessages = args["include-attachments"]
-			? filteredMessages
-			: filteredMessages.filter((message) => message.message_kind !== "media");
+		const persistableMessages: typeof filteredMessages = [];
+		const visibleMessages: typeof filteredMessages = [];
 
-		return visibleMessages.slice(0, args.limit);
+		for (const message of filteredMessages) {
+			const isVisible =
+				args["include-attachments"] || message.message_kind !== "media";
+			if (isVisible && visibleMessages.length >= args.limit) break;
+			persistableMessages.push(message);
+			if (isVisible) {
+				visibleMessages.push(message);
+			}
+		}
+
+		return { persistableMessages, visibleMessages };
 	});
 
 	// Strip internal _rowid once, reuse for both saving and output
-	const messages = result.map(({ _rowid, ...msg }) => msg);
+	const messages = result.visibleMessages.map(({ _rowid, ...msg }) => msg);
+	const persistableMessages = result.persistableMessages.map(
+		({ _rowid, ...msg }) => msg,
+	);
 
 	// Read-through save: persist every message we just read
 	const saveDir = args["save-dir"] ?? DEFAULT_SAVE_DIR;
 	let saved = 0;
 	let save_errors = 0;
+	let unsaved = 0;
+	let commitmentCandidates: CommitmentCandidate[] = [];
 	if (!args["no-save"]) {
-		const saveResult = persistMessages(messages, saveDir);
+		const manifestFile = join(
+			inferCorpusRootFromSaveDir(saveDir),
+			"runtime/imessage/manifests/message-paths.jsonl",
+		);
+		const saveResult = persistMessages(
+			persistableMessages,
+			saveDir,
+			manifestFile,
+		);
 		saved = saveResult.saved;
+		unsaved = saveResult.unsaved;
 		save_errors = saveResult.save_errors;
+		commitmentCandidates = saveResult.commitmentCandidates;
 	}
 
 	const outputMessages = messages.map((msg) => pruneNullsFromLib(msg));
@@ -494,10 +585,14 @@ function queryMessages(args: {
 
 	const envelope: Record<string, unknown> = {
 		schema_version: SCHEMA_VERSION,
-		count: result.length,
+		command: "messages",
+		count: messages.length,
 		saved: args["no-save"] ? undefined : saved,
+		unsaved: args["no-save"] || unsaved === 0 ? undefined : unsaved,
 		save_dir: args["no-save"] ? undefined : formatOutputPathFromLib(saveDir),
 		filters: Object.keys(filters).length > 0 ? filters : undefined,
+		commitment_candidates:
+			commitmentCandidates.length > 0 ? commitmentCandidates : undefined,
 		messages: outputMessages,
 	};
 	if (save_errors > 0) envelope.save_errors = save_errors;
@@ -660,6 +755,49 @@ function inferCorpusRootFromSaveDir(saveDir: string): string {
 	return dirname(dirname(dirname(saveDir)));
 }
 
+function loadMessagesSince(sinceDate: string, limit: number): ParsedMessage[] {
+	const result = withDB((db) => {
+		const conditions: string[] = ["m.date >= ?"];
+		const params: (string | number)[] = [dateToAppleNsFromLib(sinceDate)];
+
+		const sql = `${MESSAGE_SQL} WHERE ${conditions.join(" AND ")} ORDER BY m.date ASC LIMIT ?`;
+		params.push(limit);
+
+		const rows = db.prepare(sql).all(...params) as MessageRow[];
+		if (rows.length === 0) return [];
+
+		const rowids = rows.map((r) => r.rowid);
+		const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
+		if (rowids.length > 0) {
+			const placeholders = rowids.map(() => "?").join(",");
+			const attRows = db
+				.prepare(
+					`SELECT maj.message_id, a.filename, a.mime_type, a.uti,
+					        a.total_bytes, a.transfer_name
+					 FROM message_attachment_join maj
+					 JOIN attachment a ON maj.attachment_id = a.rowid
+					 WHERE maj.message_id IN (${placeholders})`,
+				)
+				.all(...rowids) as AttachmentRow[];
+			for (const att of attRows) {
+				const bucket = attachmentRowsByMessageId.get(att.message_id) ?? [];
+				bucket.push(att);
+				attachmentRowsByMessageId.set(att.message_id, bucket);
+			}
+		}
+
+		const messages = rows.flatMap((row) =>
+			parseRowFromLib(row, attachmentRowsByMessageId.get(row.rowid) ?? [], {
+				contactMap: getContactMap(),
+				resolveAttachment: resolveAttachmentPathFromLib,
+			}),
+		);
+		return linkMessageTargetsFromLib(messages);
+	});
+
+	return result.map(({ _rowid, ...msg }) => msg);
+}
+
 function syncMessages(args: {
 	since?: string;
 	"cursor-file"?: string;
@@ -694,84 +832,13 @@ function syncMessages(args: {
 		}
 	}
 
-	const result = withDB((db) => {
-		const conditions: string[] = ["m.date >= ?"];
-		const params: (string | number)[] = [dateToAppleNsFromLib(sinceDate)];
-
-		const sql = `${MESSAGE_SQL} WHERE ${conditions.join(" AND ")} ORDER BY m.date ASC LIMIT ?`;
-		params.push(args.limit);
-
-		const rows = db.prepare(sql).all(...params) as MessageRow[];
-		if (rows.length === 0) return [];
-
-		const rowids = rows.map((r) => r.rowid);
-		const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
-		if (rowids.length > 0) {
-			const placeholders = rowids.map(() => "?").join(",");
-			const attRows = db
-				.prepare(
-					`SELECT maj.message_id, a.filename, a.mime_type, a.uti,
-					        a.total_bytes, a.transfer_name
-					 FROM message_attachment_join maj
-					 JOIN attachment a ON maj.attachment_id = a.rowid
-					 WHERE maj.message_id IN (${placeholders})`,
-				)
-				.all(...rowids) as AttachmentRow[];
-			for (const att of attRows) {
-				const bucket = attachmentRowsByMessageId.get(att.message_id) ?? [];
-				bucket.push(att);
-				attachmentRowsByMessageId.set(att.message_id, bucket);
-			}
-		}
-
-		const messages = rows.flatMap((row) =>
-			parseRowFromLib(row, attachmentRowsByMessageId.get(row.rowid) ?? [], {
-				contactMap: getContactMap(),
-				resolveAttachment: resolveAttachmentPathFromLib,
-			}),
-		);
-		return linkMessageTargetsFromLib(messages);
-	});
-
-	// Strip _rowid and convert to v2
-	const messages = result.map(({ _rowid, ...msg }) => msg);
-
-	// Filter out tapback-only messages (don't save as standalone notes)
-	const saveable = messages.filter((m) => m.message_kind !== "tapback");
-
-	let saved = 0;
-	let unsaved = 0;
-	let errors = 0;
-	let lastSentAt: string | null = null;
-	let lastSourceId: string | null = null;
-
-	for (const msg of saveable) {
-		const input = parsedMessageToV2Input(msg);
-		if (!input.text || !input.sent_at) {
-			unsaved++;
-			continue;
-		}
-
-		const filePath = saveMessageAsMarkdownV2(input, saveDir);
-		if (filePath) {
-			saved++;
-			lastSentAt = input.sent_at;
-			lastSourceId = input.source_id;
-
-			// Append to manifest
-			const relPath = canonicalSavePath(input.sent_at, input.source_id);
-			const entry: ManifestEntry = {
-				schema_version: 1,
-				source_id: input.source_id,
-				relative_path: `docs/messages/imessage/${relPath}`,
-				slug_version: 2,
-				updated_at: input.sent_at,
-			};
-			upsertManifestEntry(manifestFile, entry);
-		} else {
-			errors++;
-		}
-	}
+	const messages = loadMessagesSince(sinceDate, args.limit);
+	const persistResult = persistMessages(messages, saveDir, manifestFile);
+	const saved = persistResult.saved;
+	const unsaved = persistResult.unsaved;
+	const errors = persistResult.save_errors;
+	const lastSentAt = persistResult.lastSentAt;
+	const lastSourceId = persistResult.lastSourceId;
 
 	// Advance cursor only after the entire window saved successfully.
 	if (
@@ -802,8 +869,54 @@ function syncMessages(args: {
 				saved,
 				unsaved: unsaved > 0 ? unsaved : undefined,
 				errors: errors > 0 ? errors : undefined,
+				commitment_candidates:
+					persistResult.commitmentCandidates.length > 0
+						? persistResult.commitmentCandidates
+						: undefined,
 				save_dir: formatOutputPathFromLib(saveDir),
 				cursor_file: formatOutputPathFromLib(cursorFile),
+			},
+			args.pretty,
+		),
+	);
+}
+
+function enrichMessages(args: {
+	since?: string;
+	"save-dir"?: string;
+	limit: number;
+	pretty: boolean;
+}) {
+	const saveDir = args["save-dir"] ?? DEFAULT_CORPUS_SAVE_DIR;
+	const sinceDate =
+		args.since ??
+		new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+			.toISOString()
+			.split("T")[0] ??
+		"1970-01-01";
+	const manifestFile = join(
+		inferCorpusRootFromSaveDir(saveDir),
+		"runtime/imessage/manifests/message-paths.jsonl",
+	);
+	const messages = loadMessagesSince(sinceDate, args.limit);
+	const persistResult = persistMessages(messages, saveDir, manifestFile);
+
+	console.log(
+		formatJSON(
+			{
+				schema_version: SCHEMA_VERSION,
+				command: "enrich",
+				since: sinceDate,
+				queried: messages.length,
+				saved: persistResult.saved,
+				unsaved: persistResult.unsaved > 0 ? persistResult.unsaved : undefined,
+				errors:
+					persistResult.save_errors > 0 ? persistResult.save_errors : undefined,
+				commitment_candidates:
+					persistResult.commitmentCandidates.length > 0
+						? persistResult.commitmentCandidates
+						: undefined,
+				save_dir: formatOutputPathFromLib(saveDir),
 			},
 			args.pretty,
 		),
@@ -837,6 +950,7 @@ function showHelp(pretty: boolean) {
 				commands: [
 					"messages",
 					"sync",
+					"enrich",
 					"migrate-notes",
 					"contacts",
 					"threads",
@@ -1054,6 +1168,40 @@ try {
 			syncMessages({
 				since: values.since as string | undefined,
 				"cursor-file": values["cursor-file"] as string | undefined,
+				"save-dir": values["save-dir"] as string | undefined,
+				limit,
+				pretty: values.pretty as boolean,
+			});
+			break;
+		}
+		case "enrich": {
+			let values: Record<string, unknown>;
+			try {
+				const parsed = parseArgs({
+					args: rest,
+					strict: true,
+					options: {
+						since: { type: "string" },
+						"save-dir": { type: "string" },
+						limit: { type: "string" },
+						pretty: { type: "boolean", default: false },
+					},
+				});
+				values = parsed.values as Record<string, unknown>;
+			} catch (err) {
+				throw new SkillError(
+					"UNKNOWN_FLAG",
+					String(err instanceof Error ? err.message : err),
+					'Run "help" command to see available options',
+					EXIT.INVALID_ARGS,
+				);
+			}
+
+			if (values.since) validateDate(values.since as string);
+			const limit = values.limit ? validateLimit(values.limit as string) : 500;
+
+			enrichMessages({
+				since: values.since as string | undefined,
 				"save-dir": values["save-dir"] as string | undefined,
 				limit,
 				pretty: values.pretty as boolean,

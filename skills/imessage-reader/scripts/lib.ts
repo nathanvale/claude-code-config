@@ -1374,9 +1374,9 @@ export function tapbackTypeToName(typeCode: number | null): string | null {
  * Walk reply_to chains to find the root; cache results.
  */
 export function computeThreadDepthAndRoot(
-	messages: ParsedMessageInternal[],
+	messages: ParsedMessage[],
 ): Map<string, { depth: number; root: string }> {
-	const byGuid = new Map<string, ParsedMessageInternal>();
+	const byGuid = new Map<string, ParsedMessage>();
 	for (const msg of messages) byGuid.set(msg.guid, msg);
 
 	const cache = new Map<string, { depth: number; root: string }>();
@@ -1385,7 +1385,8 @@ export function computeThreadDepthAndRoot(
 		guid: string,
 		visiting = new Set<string>(),
 	): { depth: number; root: string } {
-		if (cache.has(guid)) return cache.get(guid) as { depth: number; root: string };
+		if (cache.has(guid))
+			return cache.get(guid) as { depth: number; root: string };
 		if (visiting.has(guid)) {
 			const result = { depth: 0, root: guid };
 			cache.set(guid, result);
@@ -1418,9 +1419,12 @@ export function computeThreadDepthAndRoot(
  * Remove tapbacks (3000+) cancel corresponding adds from the same sender.
  */
 export function aggregateTapbacks(
-	messages: ParsedMessageInternal[],
+	messages: ParsedMessage[],
 ): Map<string, TapbackInfo[]> {
-	const activeByTarget = new Map<string, Map<string, TapbackInfo & { actorKey: string; timestamp: string }>>();
+	const activeByTarget = new Map<
+		string,
+		Map<string, TapbackInfo & { actorKey: string; timestamp: string }>
+	>();
 
 	for (const msg of messages) {
 		if (msg.message_kind !== "tapback" || !msg.reaction_to) continue;
@@ -1511,6 +1515,28 @@ export function canonicalSavePath(sentAt: string, sourceId: string): string {
 	const slug = guidSlugV2(sourceId);
 	const filename = `${year}-${month}-${day}-${hours}${minutes}${seconds}-imessage-${slug}.md`;
 	return join(year, month, filename);
+}
+
+/**
+ * Build the stable runtime-relative path for an attachment binary.
+ * Binary copy can lag behind note persistence, but the target path
+ * should still be deterministic.
+ */
+export function canonicalAttachmentLocalPath(
+	sentAt: string,
+	sourceId: string,
+	filename: string,
+): string {
+	const d = new Date(sentAt);
+	const year = String(d.getFullYear());
+	const month = String(d.getMonth() + 1).padStart(2, "0");
+	return join(
+		"runtime/imessage/attachments",
+		year,
+		month,
+		guidSlugV2(sourceId),
+		filename,
+	);
 }
 
 // ── V2 Frontmatter ─────────────────────────────────────────────────────
@@ -1621,12 +1647,18 @@ export function saveMessageAsMarkdownV2(
 			fm.push(`  - id: "${escapeYaml(att.id)}"`);
 			fm.push(`    kind: ${att.kind}`);
 			fm.push(`    filename: "${escapeYaml(att.filename)}"`);
-			fm.push(`    mime_type: "${att.mime_type ?? ""}"`);
+			fm.push(
+				`    mime_type: ${att.mime_type ? `"${escapeYaml(att.mime_type)}"` : "null"}`,
+			);
 			fm.push(`    local_path: "${escapeYaml(att.local_path)}"`);
 			fm.push(`    size_bytes: ${att.size_bytes ?? "null"}`);
 			fm.push(`    sha256: ${att.sha256 ? `"${att.sha256}"` : "null"}`);
-			fm.push(`    extracted_text: ${att.extracted_text ? `"${escapeYaml(att.extracted_text)}"` : "null"}`);
-			fm.push(`    ai_caption: ${att.ai_caption ? `"${escapeYaml(att.ai_caption)}"` : "null"}`);
+			fm.push(
+				`    extracted_text: ${att.extracted_text ? `"${escapeYaml(att.extracted_text)}"` : "null"}`,
+			);
+			fm.push(
+				`    ai_caption: ${att.ai_caption ? `"${escapeYaml(att.ai_caption)}"` : "null"}`,
+			);
 		}
 	}
 
@@ -1686,6 +1718,31 @@ export function parsedMessageToV2Input(msg: ParsedMessage): V2NoteInput {
 	const sender = msg.is_from_me ? "me" : contactName;
 	const conversationWith = conversationWithFromMessage(msg);
 	const sentAt = msg.date_local ?? msg.date ?? "";
+	const attachmentFilename =
+		msg.attachment?.filename ??
+		msg.attachment?.name ??
+		(msg.attachment?.path ? basename(msg.attachment.path) : null) ??
+		"attachment";
+	const attachments =
+		msg.attachment == null
+			? undefined
+			: [
+					{
+						id: `att-${msg.part_index ?? 0}`,
+						kind: attachmentKind(msg.attachment.mime_type),
+						filename: attachmentFilename,
+						mime_type: msg.attachment.mime_type,
+						local_path: canonicalAttachmentLocalPath(
+							sentAt,
+							msg.guid,
+							attachmentFilename,
+						),
+						size_bytes: msg.attachment.size,
+						sha256: null,
+						extracted_text: null,
+						ai_caption: null,
+					},
+				];
 
 	return {
 		source_id: msg.guid,
@@ -1708,6 +1765,7 @@ export function parsedMessageToV2Input(msg: ParsedMessage): V2NoteInput {
 		edited: msg.edited,
 		date_edited: msg.date_edited,
 		date_edited_local: msg.date_edited_local,
+		attachments,
 	};
 }
 

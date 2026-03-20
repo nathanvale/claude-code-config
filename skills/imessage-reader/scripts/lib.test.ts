@@ -19,15 +19,20 @@ import {
 } from "./fixtures";
 import {
 	type AttachmentRow,
+	aggregateTapbacks,
 	appleDateToUnixMs,
 	appleEpochToISO,
 	appleEpochToLocalISO,
+	attachmentKind,
+	canonicalAttachmentLocalPath,
 	canonicalSavePath,
 	choosePreferredPart,
+	computeThreadDepthAndRoot,
 	dateToAppleNs,
 	dateToAppleNsEndOfDay,
 	decodeAttributedBody,
 	escapeYaml,
+	extractCommitmentCandidates,
 	findHeuristicTarget,
 	formatContactName,
 	formatLocalISO,
@@ -35,13 +40,7 @@ import {
 	guidSlugV2,
 	hasMeaningfulText,
 	linkMessageTargets,
-	aggregateTapbacks,
-	attachmentKind,
-	type CommitmentCandidate,
-	computeThreadDepthAndRoot,
-	extractCommitmentCandidates,
 	type ManifestEntry,
-	type MessageEnrichment,
 	type MessageRow,
 	matchesSearch,
 	migrateLegacyNote,
@@ -49,6 +48,7 @@ import {
 	normalizePhone,
 	type ParsedMessage,
 	type ParsedMessageInternal,
+	parsedMessageToV2Input,
 	parseFrontmatter,
 	parsePartReference,
 	parseRow,
@@ -60,7 +60,6 @@ import {
 	saveMessageAsMarkdown,
 	saveMessageAsMarkdownV2,
 	tapbackTypeToName,
-	type TapbackInfo,
 	upsertManifestEntry,
 	type V2Attachment,
 	type V2NoteInput,
@@ -1087,10 +1086,12 @@ describe("saveMessageAsMarkdownV2 with attachments (fx-04)", () => {
 			kind: "document",
 			filename: "plumber-invoice.pdf",
 			mime_type: "application/pdf",
-			local_path: "runtime/imessage/attachments/2026/03/p-0-c3d4e5f6-a7b8-9012-cdef-123456789012/plumber-invoice.pdf",
+			local_path:
+				"runtime/imessage/attachments/2026/03/p-0-c3d4e5f6-a7b8-9012-cdef-123456789012/plumber-invoice.pdf",
 			size_bytes: 94521,
 			sha256: null,
-			extracted_text: "Invoice #1042 — Plumbing repair $385.00 inc GST. Due: 2026-03-25.",
+			extracted_text:
+				"Invoice #1042 — Plumbing repair $385.00 inc GST. Due: 2026-03-25.",
 			ai_caption: null,
 		};
 
@@ -1128,7 +1129,8 @@ describe("saveMessageAsMarkdownV2 with image, no extracted text (fx-05)", () => 
 			kind: "image",
 			filename: "IMG_4521.HEIC",
 			mime_type: "image/heic",
-			local_path: "runtime/imessage/attachments/2026/03/p-0-d4e5f6a7-b8c9-0123-defa-234567890123/IMG_4521.HEIC",
+			local_path:
+				"runtime/imessage/attachments/2026/03/p-0-d4e5f6a7-b8c9-0123-defa-234567890123/IMG_4521.HEIC",
 			size_bytes: 3281044,
 			sha256: null,
 			extracted_text: null,
@@ -1151,8 +1153,85 @@ describe("saveMessageAsMarkdownV2 with image, no extracted text (fx-05)", () => 
 		expect(content).toContain("ai_caption: null");
 		// No Attachment Text section when no extracted_text
 		const lines = content.split("\n");
-		const hasAttachmentText = lines.some((l: string) => l.startsWith("## Attachment Text"));
+		const hasAttachmentText = lines.some((l: string) =>
+			l.startsWith("## Attachment Text"),
+		);
 		expect(hasAttachmentText).toBe(false);
+	});
+});
+
+describe("parsedMessageToV2Input with attachment payloads", () => {
+	test("maps a media part into structured v2 attachments", () => {
+		const input = parsedMessageToV2Input(
+			makeParsedMessage({
+				guid: "p:0/D4E5F6A7-B8C9-0123-DEFA-234567890123",
+				part_index: 0,
+				message_kind: "media",
+				text: null,
+				date_local: "2026-03-17T15:22:33+11:00",
+				attachment: {
+					filename: "IMG_4521.HEIC",
+					path: "/Users/nathanvale/Library/Messages/Attachments/IMG_4521.HEIC",
+					original_path: null,
+					mime_type: "image/heic",
+					uti: null,
+					size: 3281044,
+					name: "IMG_4521.HEIC",
+					exists: true,
+					absolute: true,
+					missing: false,
+				},
+			}),
+		);
+
+		expect(input.attachments).toEqual([
+			{
+				id: "att-0",
+				kind: "image",
+				filename: "IMG_4521.HEIC",
+				mime_type: "image/heic",
+				local_path: canonicalAttachmentLocalPath(
+					"2026-03-17T15:22:33+11:00",
+					"p:0/D4E5F6A7-B8C9-0123-DEFA-234567890123",
+					"IMG_4521.HEIC",
+				),
+				size_bytes: 3281044,
+				sha256: null,
+				extracted_text: null,
+				ai_caption: null,
+			},
+		]);
+	});
+
+	test("writes null MIME types instead of empty strings", () => {
+		const dir = mkdtempSync(join(tmpdir(), "imessage-v2-null-mime-"));
+		tmpDirs.add(dir);
+		const filePath = saveMessageAsMarkdownV2(
+			makeV2Input({
+				source_id: "p:0/NULL-MIME-ATTACHMENT",
+				sent_at: "2026-03-21T09:15:00+11:00",
+				text: "No MIME type on this one",
+				attachments: [
+					{
+						id: "att-0",
+						kind: "other",
+						filename: "mystery.bin",
+						mime_type: null,
+						local_path:
+							"runtime/imessage/attachments/2026/03/null-mime/mystery.bin",
+						size_bytes: 42,
+						sha256: null,
+						extracted_text: null,
+						ai_caption: null,
+					},
+				],
+			}),
+			dir,
+		);
+
+		const content = readFileSync(filePath as string, "utf-8");
+		expect(content).toContain("mime_type: null");
+		expect(content.includes('mime_type: ""')).toBe(false);
 	});
 });
 
@@ -1192,7 +1271,11 @@ describe("computeThreadDepthAndRoot (fx-06, fx-07)", () => {
 				_rowid: 1,
 			},
 			{
-				...makeParsedMessage({ guid: "D1", source_guid: "D1", reply_to: "ROOT" }),
+				...makeParsedMessage({
+					guid: "D1",
+					source_guid: "D1",
+					reply_to: "ROOT",
+				}),
 				_rowid: 2,
 			},
 			{
@@ -1276,7 +1359,9 @@ describe("saveMessageAsMarkdownV2 with enrichment", () => {
 		);
 		const content = readFileSync(filePath as string, "utf-8");
 		expect(content).toContain("thread_depth: 0");
-		expect(content).toContain('thread_root: "p:0/E5F6A7B8-C9D0-1234-EFAB-345678901234"');
+		expect(content).toContain(
+			'thread_root: "p:0/E5F6A7B8-C9D0-1234-EFAB-345678901234"',
+		);
 	});
 
 	test("writes tapbacks: [] for cancelled tapbacks (fx-08)", () => {
