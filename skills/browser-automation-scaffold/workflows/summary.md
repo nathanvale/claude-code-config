@@ -6,12 +6,14 @@ Show a table of every file created, with its path and purpose:
 
 | File | Purpose |
 |------|---------|
-| `{config-path}` | Auth hints, credentials, service entry |
-| `{registry-path}` | Selector registry (empty, ready for Discovery) |
-| `{agent-path}` | Agent markdown with self-healing modes |
-| `{registry.yaml update}` | Session port/profile registration |
-| `{playbook-path}` (if created) | Task playbook skeleton |
-| `{scripts}` (if created) | Fill + verify script stubs |
+| `{skill-dir}/SKILL.md` | Orchestrator skill with routing table |
+| `{skill-dir}/config.yaml` | Auth hints, credentials, service entry |
+| `{skill-dir}/selectors.yaml` | Selector registry (empty, ready for Discovery) |
+| `{skill-dir}/gotchas.md` | Domain gotcha file stub |
+| `{skill-dir}/playbooks/{task}.yaml` (if created) | Task playbook skeleton |
+| `{skill-dir}/playbooks/scripts/` (if created) | Fill + verify script stubs |
+| `{scope}/agents/{domain-key}-browser-agent.md` | Agent markdown with self-healing modes |
+| `~/.claude/skills/browser-automation/registry.yaml` | Session port/profile registration |
 
 ## Step 2: Explain the lifecycle
 
@@ -54,6 +56,6 @@ Show a table of every file created, with its path and purpose:
 Tell the user:
 
 1. **Try it:** Dispatch the new agent with a task. It will run in Discovery Mode and start learning the page.
-2. **Check gotchas:** After the first run, review `docs/gotchas/browser-agent/{domain-key}.md` for anything surprising.
+2. **Check gotchas:** After the first run, review `{skill-dir}/gotchas.md` for anything surprising.
 3. **Promote playbooks:** After a successful fill + save + persistence check, change `status: candidate` to `status: validated` in the playbook YAML.
 4. **Watch for model promotion:** The agent will tell you when it's ready for Haiku.

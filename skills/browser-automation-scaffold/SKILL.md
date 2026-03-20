@@ -12,13 +12,14 @@ Interactive wizard that generates a complete browser agent stack from a domain n
 
 | File | Purpose |
 |------|---------|
-| Agent markdown | Persona, constraints, workflow, mode selection |
-| Config YAML (or service entry) | Auth hints, credentials, identity |
-| Selector registry | Empty declarative schema ready for Discovery Mode |
-| Session registration | Port/profile assignment in registry.yaml |
-| Gotcha file stub | Domain-specific gotcha starter |
-| Orchestrator skill | Conversation layer with routing table, defaults, human-in-the-loop |
-| First playbook (optional) | Task-specific playbook skeleton |
+| `{skill-dir}/SKILL.md` | Orchestrator -- routing table, defaults, human-in-the-loop |
+| `{skill-dir}/config.yaml` | Auth hints, credentials, service entry |
+| `{skill-dir}/selectors.yaml` | Declarative selector registry ready for Discovery Mode |
+| `{skill-dir}/gotchas.md` | Domain-specific gotcha starter |
+| `{skill-dir}/playbooks/{task}.yaml` | Task-specific playbook skeleton (optional) |
+| `{skill-dir}/playbooks/scripts/` | Fill + verify script stubs (optional) |
+| `{scope}/agents/{domain-key}-browser-agent.md` | Agent persona, constraints, workflow, mode selection |
+| `~/.claude/skills/browser-automation/registry.yaml` | Session port/profile registration |
 
 <intake>
 Parse the argument for a domain name. If none provided, ask:
@@ -42,10 +43,10 @@ Then gather:
 <routing>
 After gathering inputs, execute these workflows in order:
 
-1. Read `workflows/generate-config.md` and follow it
-2. Read `workflows/generate-registry.md` and follow it
-3. Read `workflows/generate-agent.md` and follow it
-4. Read `workflows/generate-skill.md` and follow it
+1. Read `workflows/generate-skill.md` and follow it (creates the skill dir that holds everything)
+2. Read `workflows/generate-config.md` and follow it
+3. Read `workflows/generate-registry.md` and follow it
+4. Read `workflows/generate-agent.md` and follow it
 5. Read `workflows/register-session.md` and follow it
 6. If user wants a first playbook, read `workflows/generate-playbook.md` and follow it
 7. Read `workflows/summary.md` and follow it

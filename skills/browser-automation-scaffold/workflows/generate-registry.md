@@ -2,8 +2,8 @@
 
 ## Step 1: Determine path
 
-- **Project scope:** `.claude/browser-configs/selectors.{domain-key}.yaml`
-- **User scope:** `~/.claude/browser-configs/selectors.{domain-key}.yaml`
+- **Project scope:** `.claude/skills/{domain-key}/selectors.yaml`
+- **User scope:** `~/.claude/skills/{domain-key}/selectors.yaml`
 
 Create parent directories if needed.
 
@@ -66,11 +66,12 @@ candidates:
 
 ## Step 3: Create gotcha file stub
 
-Write to the gotcha path that matches the shared browser-automation skill's Gotcha Protocol:
+Write to the gotcha path co-located with the skill:
 
-- **Path:** `docs/gotchas/browser-agent/{domain-key}.md`
+- **Project scope:** `.claude/skills/{domain-key}/gotchas.md`
+- **User scope:** `~/.claude/skills/{domain-key}/gotchas.md`
 
-Create parent directories if needed. This path is resolved by the shared skill via `$(git rev-parse --show-toplevel)/docs/gotchas/browser-agent/`.
+Create parent directories if needed.
 
 ```markdown
 # {Domain Name} -- Browser Agent Gotchas

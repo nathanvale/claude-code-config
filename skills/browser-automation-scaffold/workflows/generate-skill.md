@@ -31,7 +31,7 @@ Map each action to:
 - **Project scope:** `.claude/skills/{skill-name}/SKILL.md`
 - **User scope:** `~/.claude/skills/{skill-name}/SKILL.md`
 
-Create parent directories if needed.
+Create parent directories if needed. This skill directory will also hold `config.yaml`, `selectors.yaml`, `gotchas.md`, and a `playbooks/` subdirectory -- all domain knowledge is co-located here alongside the orchestrator skill.
 
 ## Step 4: Generate the skill
 

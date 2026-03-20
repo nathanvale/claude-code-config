@@ -41,7 +41,7 @@ sessions:
 
   classic-cinema:
     port: 9226
-    config: .claude/browser-configs/config.classic-cinema.yaml
+    config: .claude/skills/classic-cinema/config.yaml
     user_data_dir: ~/.cache/chrome-agent-classic-cinema
 
 defaults:

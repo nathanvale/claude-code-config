@@ -2,8 +2,8 @@
 
 ## Step 1: Check for existing config
 
-If scope is **project**, check for `.claude/browser-configs/config.{domain-key}.yaml`.
-If scope is **user**, check for `~/.claude/skills/browser-automation/config.yaml`.
+If scope is **project**, check for `.claude/skills/{domain-key}/config.yaml`.
+If scope is **user**, check for `~/.claude/skills/{domain-key}/config.yaml`.
 
 If a config already exists at the target path, ask whether to add a service entry to the existing config or create a new one.
 
@@ -18,8 +18,8 @@ Append under the `services:` section:
     url: {url}
     auth: {auth_type}
     op_item: "{op_item}"
-    selector_registry: {registry_path}
-    playbook_dir: {playbook_dir}
+    selector_registry: {skill-dir}/selectors.yaml
+    playbook_dir: {skill-dir}/playbooks
 ```
 
 **If creating a new config:**

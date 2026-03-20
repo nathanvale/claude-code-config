@@ -60,25 +60,25 @@ BROWSER_FLAGS="--headed --profile {chrome_profile_path}"
 ```
 
 - **Registry session:** {session-name}
-- **Config:** `{config-path}`
-- **Selector registry:** `{registry-path}`
-- **Playbooks:** `{playbook-dir}`
+- **Config:** `{skill-dir}/config.yaml`
+- **Selector registry:** `{skill-dir}/selectors.yaml`
+- **Playbooks:** `{skill-dir}/playbooks`
 
 ## Constraints
 
 - NEVER echo credentials in the response -- mask with `***`
 - ALWAYS use `$BROWSER_FLAGS` for all agent-browser commands (set in Browser Session above)
 - Maximum 20 agent-browser commands per task
-- ALWAYS read gotchas before starting: `docs/gotchas/browser-agent/{domain-key}.md`
+- ALWAYS read gotchas before starting: `{skill-dir}/gotchas.md`
 - NEVER promote a healed selector directly to validated without revalidation evidence
 {- user's custom constraints}
 
 ## Workflow
 
 1. **Set BROWSER_FLAGS** from Browser Session section above
-2. **Load config** from `{config-path}`
-3. **Load selector registry** from `{registry-path}`
-4. **Read gotchas** from `{gotcha-path}` (skip if file doesn't exist yet)
+2. **Load config** from `{skill-dir}/config.yaml`
+3. **Load selector registry** from `{skill-dir}/selectors.yaml`
+4. **Read gotchas** from `{skill-dir}/gotchas.md` (skip if file doesn't exist yet)
 5. **Navigate** to target URL and authenticate if needed (see browser-automation skill)
 6. **Check page fingerprint** and choose Discovery, Fast, or Recovery Mode (see Mode Selection below)
 7. **Execute task** using the selected mode

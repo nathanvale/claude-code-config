@@ -11,10 +11,10 @@ Ask the user:
 
 ## Step 2: Determine paths
 
-- **Playbook YAML:** `{playbook-dir}/{task-name}.yaml`
-- **Script dir:** `{playbook-dir}/scripts/`
-- **Fill script:** `{playbook-dir}/scripts/{task-name}.js`
-- **Verify script:** `{playbook-dir}/scripts/verify-{task-name}.js`
+- **Playbook YAML:** `{skill-dir}/playbooks/{task-name}.yaml`
+- **Script dir:** `{skill-dir}/playbooks/scripts/`
+- **Fill script:** `{skill-dir}/playbooks/scripts/{task-name}.js`
+- **Verify script:** `{skill-dir}/playbooks/scripts/verify-{task-name}.js`
 
 Create directories if needed.
 
@@ -25,7 +25,7 @@ name: "{task_name}"
 version: 1
 status: "candidate"
 registry:
-  path: "{registry-path}"
+  path: "{skill-dir}/selectors.yaml"
   schema_version: 2
 page:
   fingerprint: "{page-name-from-registry}"
