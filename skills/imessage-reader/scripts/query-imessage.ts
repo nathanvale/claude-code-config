@@ -26,21 +26,31 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
 	type AttachmentRow,
+	type ManifestEntry,
+	type SyncCursor,
+	appendManifestEntry,
 	appleEpochToISO,
+	canonicalSavePath,
 	dateToAppleNsEndOfDay as dateToAppleNsEndOfDayFromLib,
 	dateToAppleNs as dateToAppleNsFromLib,
 	formatContactName as formatContactNameFromLib,
+	formatLocalISO,
 	formatOutputPath as formatOutputPathFromLib,
 	linkMessageTargets as linkMessageTargetsFromLib,
 	type MessageRow,
 	matchesSearch,
+	migrateAllNotes,
 	normalizePhone as normalizePhoneFromLib,
 	type ParsedMessage,
+	parsedMessageToV2Input,
 	parseRow as parseRowFromLib,
 	pruneNulls as pruneNullsFromLib,
+	readCursor,
 	resolveAttachmentPath as resolveAttachmentPathFromLib,
 	resolveContact,
 	saveMessageAsMarkdown as saveMessageAsMarkdownFromLib,
+	saveMessageAsMarkdownV2,
+	writeCursor,
 } from "./lib";
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -634,12 +644,191 @@ function showSchema(pretty: boolean) {
 	);
 }
 
+// ── Sync Command ───────────────────────────────────────────────────────
+
+/**
+ * Default corpus repo save dir for v2 sync.
+ */
+const DEFAULT_CORPUS_SAVE_DIR = join(
+	homedir(),
+	"code/personal-messages/docs/messages/imessage",
+);
+const DEFAULT_CORPUS_ROOT = join(homedir(), "code/personal-messages");
+
+function syncMessages(args: {
+	since?: string;
+	"cursor-file"?: string;
+	"save-dir"?: string;
+	limit: number;
+	pretty: boolean;
+}) {
+	const saveDir = args["save-dir"] ?? DEFAULT_CORPUS_SAVE_DIR;
+	const cursorFile =
+		args["cursor-file"] ??
+		join(DEFAULT_CORPUS_ROOT, "runtime/imessage/cursors/default-sync.json");
+	const manifestFile = join(
+		DEFAULT_CORPUS_ROOT,
+		"runtime/imessage/manifests/message-paths.jsonl",
+	);
+
+	// Determine since date: explicit flag > cursor > 2 days ago
+	let sinceDate: string;
+	if (args.since) {
+		sinceDate = args.since;
+	} else {
+		const cursor = readCursor(cursorFile);
+		if (cursor?.last_successful_sent_at) {
+			// Use cursor time minus 1 hour overlap for safety
+			const cursorMs = new Date(cursor.last_successful_sent_at).getTime();
+			const overlapMs = cursorMs - 60 * 60 * 1000;
+			sinceDate = new Date(overlapMs).toISOString();
+		} else {
+			const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+			sinceDate = twoDaysAgo.toISOString().split("T")[0] as string;
+		}
+	}
+
+	const result = withDB((db) => {
+		const conditions: string[] = ["m.date >= ?"];
+		const params: (string | number)[] = [dateToAppleNsFromLib(sinceDate)];
+
+		const sql = `${MESSAGE_SQL} WHERE ${conditions.join(" AND ")} ORDER BY m.date ASC LIMIT ?`;
+		params.push(args.limit);
+
+		const rows = db.prepare(sql).all(...params) as MessageRow[];
+		if (rows.length === 0) return [];
+
+		const rowids = rows.map((r) => r.rowid);
+		const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
+		if (rowids.length > 0) {
+			const placeholders = rowids.map(() => "?").join(",");
+			const attRows = db
+				.prepare(
+					`SELECT maj.message_id, a.filename, a.mime_type, a.uti,
+					        a.total_bytes, a.transfer_name
+					 FROM message_attachment_join maj
+					 JOIN attachment a ON maj.attachment_id = a.rowid
+					 WHERE maj.message_id IN (${placeholders})`,
+				)
+				.all(...rowids) as AttachmentRow[];
+			for (const att of attRows) {
+				const bucket = attachmentRowsByMessageId.get(att.message_id) ?? [];
+				bucket.push(att);
+				attachmentRowsByMessageId.set(att.message_id, bucket);
+			}
+		}
+
+		const messages = rows.flatMap((row) =>
+			parseRowFromLib(row, attachmentRowsByMessageId.get(row.rowid) ?? [], {
+				contactMap: getContactMap(),
+				resolveAttachment: resolveAttachmentPathFromLib,
+			}),
+		);
+		return linkMessageTargetsFromLib(messages);
+	});
+
+	// Strip _rowid and convert to v2
+	const messages = result.map(({ _rowid, ...msg }) => msg);
+
+	// Filter out tapback-only messages (don't save as standalone notes)
+	const saveable = messages.filter((m) => m.message_kind !== "tapback");
+
+	let saved = 0;
+	let errors = 0;
+	let lastSentAt: string | null = null;
+	let lastSourceId: string | null = null;
+
+	for (const msg of saveable) {
+		const input = parsedMessageToV2Input(msg);
+		if (!input.text || !input.sent_at) continue;
+
+		const filePath = saveMessageAsMarkdownV2(input, saveDir);
+		if (filePath) {
+			saved++;
+			lastSentAt = input.sent_at;
+			lastSourceId = input.source_id;
+
+			// Append to manifest
+			const relPath = canonicalSavePath(input.sent_at, input.source_id);
+			const entry: ManifestEntry = {
+				schema_version: 1,
+				source_id: input.source_id,
+				relative_path: `docs/messages/imessage/${relPath}`,
+				slug_version: 2,
+				updated_at: input.sent_at,
+			};
+			appendManifestEntry(manifestFile, entry);
+		} else {
+			errors++;
+		}
+	}
+
+	// Advance cursor only after successful writes
+	if (saved > 0 && lastSentAt && lastSourceId) {
+		const cursor: SyncCursor = {
+			schema_version: 1,
+			source_system: "imessage",
+			mode: "default",
+			last_successful_sent_at: lastSentAt,
+			last_successful_source_id: lastSourceId,
+			updated_at: formatLocalISO(new Date()),
+		};
+		writeCursor(cursorFile, cursor);
+	}
+
+	console.log(
+		formatJSON(
+			{
+				schema_version: SCHEMA_VERSION,
+				command: "sync",
+				since: sinceDate,
+				queried: messages.length,
+				saved,
+				errors: errors > 0 ? errors : undefined,
+				save_dir: formatOutputPathFromLib(saveDir),
+				cursor_file: formatOutputPathFromLib(cursorFile),
+			},
+			args.pretty,
+		),
+	);
+}
+
+// ── Migrate-Notes Command ──────────────────────────────────────────────
+
+function migrateNotesCommand(args: {
+	"save-dir"?: string;
+	pretty: boolean;
+}) {
+	const saveDir = args["save-dir"] ?? DEFAULT_CORPUS_SAVE_DIR;
+	const result = migrateAllNotes(saveDir);
+
+	console.log(
+		formatJSON(
+			{
+				schema_version: SCHEMA_VERSION,
+				command: "migrate-notes",
+				save_dir: formatOutputPathFromLib(saveDir),
+				...result,
+			},
+			args.pretty,
+		),
+	);
+}
+
 function showHelp(pretty: boolean) {
 	console.log(
 		formatJSON(
 			{
 				schema_version: SCHEMA_VERSION,
-				commands: ["messages", "contacts", "threads", "schema", "help"],
+				commands: [
+					"messages",
+					"sync",
+					"migrate-notes",
+					"contacts",
+					"threads",
+					"schema",
+					"help",
+				],
 			},
 			pretty,
 		),
@@ -821,11 +1010,74 @@ try {
 			showHelp(pretty);
 			break;
 		}
+		case "sync": {
+			let values: Record<string, unknown>;
+			try {
+				const parsed = parseArgs({
+					args: rest,
+					strict: true,
+					options: {
+						since: { type: "string" },
+						"cursor-file": { type: "string" },
+						"save-dir": { type: "string" },
+						limit: { type: "string" },
+						pretty: { type: "boolean", default: false },
+					},
+				});
+				values = parsed.values as Record<string, unknown>;
+			} catch (err) {
+				throw new SkillError(
+					"UNKNOWN_FLAG",
+					String(err instanceof Error ? err.message : err),
+					'Run "help" command to see available options',
+					EXIT.INVALID_ARGS,
+				);
+			}
+
+			if (values.since) validateDate(values.since as string);
+			const limit = values.limit ? validateLimit(values.limit as string) : 500;
+
+			syncMessages({
+				since: values.since as string | undefined,
+				"cursor-file": values["cursor-file"] as string | undefined,
+				"save-dir": values["save-dir"] as string | undefined,
+				limit,
+				pretty: values.pretty as boolean,
+			});
+			break;
+		}
+		case "migrate-notes": {
+			let values: Record<string, unknown>;
+			try {
+				const parsed = parseArgs({
+					args: rest,
+					strict: true,
+					options: {
+						"save-dir": { type: "string" },
+						pretty: { type: "boolean", default: false },
+					},
+				});
+				values = parsed.values as Record<string, unknown>;
+			} catch (err) {
+				throw new SkillError(
+					"UNKNOWN_FLAG",
+					String(err instanceof Error ? err.message : err),
+					'Run "help" command to see available options',
+					EXIT.INVALID_ARGS,
+				);
+			}
+
+			migrateNotesCommand({
+				"save-dir": values["save-dir"] as string | undefined,
+				pretty: values.pretty as boolean,
+			});
+			break;
+		}
 		default:
 			throw new SkillError(
 				"UNKNOWN_COMMAND",
 				`Unknown command: ${command}`,
-				"Available commands: messages, contacts, threads, schema, help",
+				"Available commands: messages, sync, migrate-notes, contacts, threads, schema, help",
 				EXIT.INVALID_ARGS,
 			);
 	}
