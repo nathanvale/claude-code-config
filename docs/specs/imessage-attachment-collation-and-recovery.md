@@ -46,6 +46,7 @@ Also:
 - `~/Library/Messages/Attachments/` remains the preferred live attachment source
 - the Google Drive backup becomes the canonical managed recovery source for historical assets
 - `~/code/personal-messages/runtime/imessage/attachments/` becomes a manifest and optional cache surface, not the canonical long-term backup store
+- the Google Drive design should support both a read-only legacy archive and a canonical archive with stable naming
 
 ## Goals
 
@@ -88,6 +89,28 @@ Rules:
 - a higher-priority source wins
 - once a file is cached locally, future enrich steps may reuse that local cache
 - unresolved attachments must remain queryable as metadata-only records
+
+## Google Drive Archive Model
+
+Use two Google Drive roots over time:
+
+1. `legacy`
+   - existing iMazing-style export
+   - read-only migration input
+   - filenames may be inconsistent or overly human-oriented
+
+2. `canonical`
+   - future managed archive for attachments copied out of Apple Messages
+   - deterministic folder layout
+   - immutable identity baked into the path and filename
+   - descriptive suffix may improve over time
+
+Rules:
+
+- do not mass-rename the legacy archive in place
+- all new copied attachments should land in the canonical archive
+- the resolver should prefer `live`, then `canonical`, then `legacy`
+- future Gemini Vision enrichment may improve descriptive naming, but must not change immutable attachment identity
 
 ## Runtime Layout
 
@@ -245,10 +268,14 @@ attachments:
   live_roots:
     - "~/Library/Messages/Attachments"
   backup_roots:
-    - name: "gdrive-text-message-history"
+    - name: "gdrive-legacy"
       provider: "gdrive"
       path: "~/Library/CloudStorage/GoogleDrive-hi@nathanvale.com/My Drive/04 Archives/Text Message History/Attachments"
-      mode: "sidecar"
+      mode: "legacy"
+    - name: "gdrive-canonical"
+      provider: "gdrive"
+      path: "~/Library/CloudStorage/GoogleDrive-hi@nathanvale.com/My Drive/04 Archives/Text Message History/Attachments Canonical"
+      mode: "canonical"
   cache_root: "runtime/imessage/attachments/cache"
   prefer_local_cache: true
 ```
@@ -257,12 +284,46 @@ Rules:
 
 - this file lives in `personal-messages`, not in `claude-code-config`
 - `backup_roots` may contain one or more Google Drive locations
+- canonical and legacy Drive roots should be distinguishable by `mode`
 - future machines can override the paths without changing code
 - if the file is missing, the reader should default to live Apple roots only
 
+## Canonical Google Drive Naming
+
+### Identity Rule
+
+Every canonical Google Drive attachment filename must include an immutable attachment identity prefix.
+
+Recommended identity components:
+
+- `source-id-slug`
+- `attachment-id`
+
+The human-readable suffix may change later, but the immutable identity prefix must not.
+
+### Canonical Pattern
+
+```text
+YYYY/MM/{source-id-slug}/{source-id-slug}__{attachment-id}__{descriptive-slug}.{ext}
+```
+
+Example:
+
+```text
+2025/03/p-0-86bc817b-a399-48b1-b1fb-ba0b711ac356/p-0-86bc817b-a399-48b1-b1fb-ba0b711ac356__att-0__lara-photo-at-playground.heic
+```
+
+### Rules
+
+- the immutable prefix is mandatory
+- the descriptive suffix is optional at first and may start as the original basename
+- later renames may improve only the descriptive suffix
+- future Gemini Vision enrichment may propose better suffixes, but must not change the immutable prefix
+- sidecars should preserve both the current canonical path and the original basename
+
 ## Backup Archive Input
 
-Initial backup source:
+Initial legacy backup source:
 
 ```text
 /Users/nathanvale/Library/CloudStorage/GoogleDrive-hi@nathanvale.com/My Drive/04 Archives/Text Message History/Attachments
@@ -282,6 +343,11 @@ Example:
 ```
 
 This archive is not structurally compatible with Apple's live sharded tree, so it must be treated as a separate sidecar source.
+
+Future canonical source:
+
+- a dedicated Google Drive folder for deterministic attachment storage
+- new attachments copied from Apple Messages should land there with canonical filenames
 
 ## Backup Ingest Workflow
 
@@ -308,7 +374,7 @@ bun run query-imessage.ts attachments index-backup \
 {
   "schema_version": 1,
   "indexed_at": "2026-03-20T18:00:00+11:00",
-  "backup_root_name": "gdrive-text-message-history",
+  "backup_root_name": "gdrive-legacy",
   "provider": "gdrive",
   "backup_root": "/Users/nathanvale/Library/CloudStorage/GoogleDrive-hi@nathanvale.com/My Drive/04 Archives/Text Message History/Attachments",
   "original_name": "2024-12-07 12 55 49 - Melanie - IMG_0340.HEIC",
@@ -343,11 +409,16 @@ For each attachment-bearing note:
    - optionally hydrate local cache
    - set `resolved_from: live`
 5. If live source is missing:
+   - search the canonical Drive index for a likely match
+   - if matched, set `backup_path`
+   - optionally hydrate local cache
+   - set `resolved_from: gdrive`
+6. If no canonical match exists:
    - search the backup index for a likely match
    - if matched, set `backup_path`
    - optionally hydrate local cache
    - set `resolved_from: gdrive`
-6. If neither exists:
+7. If neither exists:
    - keep metadata intact
    - set `resolved_from: missing`
    - leave `local_path` null unless a cache file exists
@@ -397,6 +468,38 @@ Rules:
   "updated_at": "2026-03-20T18:05:00+11:00"
 }
 ```
+
+## Canonical Drive Copy Workflow
+
+### Primitive
+
+Add an explicit command for moving newly discovered attachments into the canonical Google Drive archive:
+
+```sh
+bun run query-imessage.ts attachments copy-to-drive \
+  --since 2026-03-01 \
+  --drive-root gdrive-canonical
+```
+
+### Behavior
+
+- use the live Apple file when available
+- compute the canonical Drive destination path from message identity and attachment identity
+- preserve immutable identity prefix in the final Drive filename
+- initially use a safe descriptive suffix derived from the original basename
+- record the resulting canonical Drive path in note sidecars and manifests
+- do not rename legacy archive files in place
+
+### Future Rename Workflow
+
+Gemini Vision may later enrich or improve the descriptive suffix for canonical Drive files.
+
+Rules:
+
+- do not change the immutable identity prefix
+- record rename history in sidecar metadata or manifests
+- update `backup_path` to the current canonical Drive path after a successful rename
+- preserve the original basename separately for traceability
 
 ## Cache Hydration Workflow
 
@@ -480,6 +583,7 @@ Likely additions:
 - repo config reader for `.imessage.yml`
 - backup index writer/reader
 - attachment resolver scoring helper
+- canonical Drive destination builder
 - repo-local cache hydration helper
 
 ## Suggested Phases
@@ -498,6 +602,12 @@ Likely additions:
 - create backup sidecar index
 - no note patching yet
 
+### Phase B2: Canonical Drive model
+
+- add canonical Drive root support to config
+- implement canonical destination naming with immutable identity prefix
+- add `attachments copy-to-drive` contract
+
 ### Phase C: Resolution
 
 - implement `attachments resolve`
@@ -514,6 +624,7 @@ Likely additions:
 
 - local text extraction for PDFs, `.url`, or text files
 - later optional OCR/Vision if explicitly requested
+- later optional descriptive-suffix renaming for canonical Drive files, preserving immutable identity prefix
 
 ## Verification
 
@@ -527,6 +638,7 @@ Likely additions:
 8. `.url` backup files preserve link text for QMD recall.
 9. Monthly index/resolve can be rerun safely without duplicating cache files or corrupting notes.
 10. Notes remain searchable and valid even when an attachment remains unresolved.
+11. Canonical Drive filenames always retain the immutable identity prefix even after descriptive renames.
 
 ## Definition of Done
 
