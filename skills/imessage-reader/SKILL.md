@@ -66,7 +66,7 @@ bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-01 --unt
 # Only sent messages
 bun run <skill-path>/scripts/query-imessage.ts messages --from-me --since 2026-03-01
 
-# Include attachment metadata
+# Include attachment-backed media parts
 bun run <skill-path>/scripts/query-imessage.ts messages --contact "Sarah" --include-attachments
 
 # Oldest first (default is newest first)
@@ -85,12 +85,12 @@ bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-01 --lim
 Options:
 - `--since` / `--until` — Date range (YYYY-MM-DD for local calendar days, or ISO 8601 for exact timestamps)
 - `--contact` — Filter by handle (phone/email, partial match)
-- `--search` — Full-text search on message body
+- `--search` — Case-insensitive substring search on decoded message text
 - `--from-me` / `--to-me` — Direction filter (mutually exclusive)
 - `--service` — `iMessage` or `SMS`
 - `--limit` — Max results (default 100, max 50000)
 - `--oldest-first` — Chronological order (default: newest first)
-- `--include-attachments` — Include attachment metadata
+- `--include-attachments` — Include standalone media parts and attachment metadata
 - `--save-dir` — Override markdown save location
 - `--no-save` — Skip markdown persistence
 - `--pretty` — Pretty-print JSON output (default: compact for token efficiency)
@@ -113,6 +113,24 @@ bun run <skill-path>/scripts/query-imessage.ts threads --contact "Sarah"
 ```
 
 Shows group vs 1:1, participant lists, and message counts per thread.
+
+### sync — Incremental corpus sync
+
+```bash
+bun run <skill-path>/scripts/query-imessage.ts sync
+bun run <skill-path>/scripts/query-imessage.ts sync --since 2026-03-01
+```
+
+Reads messages incrementally and writes v2 corpus notes plus a sync cursor and
+manifest under the personal-messages corpus root.
+
+### migrate-notes — Rewrite legacy notes to v2 paths
+
+```bash
+bun run <skill-path>/scripts/query-imessage.ts migrate-notes
+```
+
+Migrates legacy saved markdown notes into the canonical v2 note layout.
 
 ### schema — Inspect database structure
 
@@ -140,19 +158,20 @@ message objects to minimize token usage.
 The `messages` command returns:
 
 ```json
-{"schema_version":1,"count":42,"saved":38,"save_dir":"~/Documents/messages","filters":{"since":"2026-03-01","contact":"Sarah"},"messages":[{"guid":"abc123","text":"Are you picking up Levi today?","is_from_me":false,"date":"2026-03-18T09:32:00.000Z","handle":"+61412345678","contact_name":"Sarah Vale","chat_name":"Sarah Vale","is_group":false}]}
+{"schema_version":3,"count":42,"saved":38,"save_dir":"~/Documents/messages","filters":{"since":"2026-03-01","contact":"Sarah"},"messages":[{"source_guid":"abc123","group_guid":"abc123","guid":"p:0/abc123","part_index":0,"message_kind":"text","text":"Are you picking up Levi today?","is_from_me":false,"date":"2026-03-18T09:32:00.000Z","date_local":"2026-03-18T20:32:00+11:00","handle":"+61412345678","contact_name":"Sarah Vale","chat_name":"Sarah Vale","chat_id":"+61412345678","is_group":false}]}
 ```
 
-`saved` count may be lower than `count` because messages without text
-(empty or media-only) don't produce markdown files. If file I/O errors occur,
-a `save_errors` count is included in the success envelope.
+Messages are emitted as stable parts: text parts, media parts, and tapbacks.
+When `--include-attachments` is omitted, standalone media parts are excluded
+from JSON output and markdown persistence to keep output smaller. If file I/O
+errors occur, a `save_errors` count is included in the success envelope.
 
 ## Error Handling
 
 All errors are output as structured JSON to stdout for agent consumption:
 
 ```json
-{"schema_version":1,"error":true,"code":"INVALID_DATE","message":"Invalid date: \"garbage\"","hint":"Use YYYY-MM-DD or ISO 8601 format"}
+{"schema_version":3,"error":true,"code":"INVALID_DATE","message":"Invalid date: \"garbage\"","hint":"Use YYYY-MM-DD or ISO 8601 format"}
 ```
 
 Exit codes:
@@ -222,16 +241,21 @@ Each file has frontmatter with full metadata (special characters are escaped):
 
 ```yaml
 ---
-guid: "abc123"
-from: "+61412345678"
+guid: "p:0/abc123"
+source_guid: "abc123"
+message_kind: "text"
+from: "Sarah Vale"
 handle: "+61412345678"
 date: 2026-03-18T09:32:00.000Z
+date_local: 2026-03-18T20:32:00+11:00
 is_from_me: false
 service: iMessage
 thread: "Sarah Vale"
 is_group: false
+group_guid: "abc123"
+part_index: 0
+contact_name: "Sarah Vale"
 reply_to: "parent-guid"
-has_attachments: true
 ---
 
 Are you picking up Levi today?
@@ -279,7 +303,6 @@ run multiple date-range queries to keep memory usage reasonable.
   point to `~/Library/Messages/Attachments/`
 - **Full Disk Access**: Required, or the database won't open
 - **macOS only**: Queries the local Messages.app database
-- **Search vs attributedBody**: `--search` filters at the SQL level on the `text`
-  column, so it won't find messages whose text was decoded from `attributedBody`
-  (Ventura+ binary plist). Those messages appear in date-range and contact queries
-  but are invisible to `--search`
+- **Search behavior**: `--search` performs case-insensitive substring matching on
+  decoded message text after retrieval, so it can match `attributedBody` text on
+  Ventura+. Broad searches may be slower than narrow date or contact filters
