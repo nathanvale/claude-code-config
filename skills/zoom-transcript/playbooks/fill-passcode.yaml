@@ -1,0 +1,34 @@
+name: "fill_passcode"
+version: 1
+status: "candidate"
+registry:
+  path: "~/.claude/browser-configs/selectors.zoom-recording.yaml"
+  schema_version: 2
+page:
+  fingerprint: "recording_passcode_gate"
+inputs:
+  passcode:
+    required: true
+    type: "string"
+    notes: "Recording passcode provided by the caller"
+  session_id:
+    required: true
+    type: "string"
+    notes: "agent-browser --session value for isolation"
+execution:
+  mode: "eval_js"
+  script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/fill-passcode.js"
+  notes: >
+    Fills the passcode field and clicks "Access Recording".
+    After submission, waits for redirect to /rec/play/ page.
+    Sets window.__ZOOM_PASSCODE__ before evaluation.
+verification:
+  method: "url_check"
+  expected_url_contains: "/rec/play"
+  timeout_seconds: 10
+  notes: "After passcode submission, page should redirect to /rec/play/. Verify via URL check."
+guardrails:
+  - "Only fill the passcode field — never modify any other form elements."
+  - "If passcode is rejected (error message appears), report FAILED: Invalid passcode."
+promotion:
+  notes: "Promote to validated after 2 successful passcode fills leading to recording_play page."

@@ -1,0 +1,51 @@
+name: "extract_transcript"
+version: 1
+status: "candidate"
+registry:
+  path: "~/.claude/browser-configs/selectors.zoom-recording.yaml"
+  schema_version: 2
+page:
+  fingerprint: "recording_play"
+inputs:
+  url:
+    required: true
+    type: "string"
+    notes: "Zoom recording URL (/rec/play/ or /rec/share/)"
+  session_id:
+    required: true
+    type: "string"
+    notes: "agent-browser --session value for isolation"
+  output_path:
+    required: false
+    type: "string"
+    default: "/tmp/zoom-transcript-{N}.txt"
+execution:
+  mode: "eval_js"
+  strategy: "api_first"
+  steps:
+    - name: "api_extraction"
+      script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-api.js"
+      notes: >
+        Primary extraction method. Finds the play/info API URL from performance entries,
+        fetches the response, and formats transcriptList into speaker/timestamp/text blocks.
+        Returns the formatted transcript as a raw string (not JSON.stringify) to avoid
+        double-encoding via agent-browser eval.
+    - name: "dom_extraction"
+      script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/extract-transcript-dom.js"
+      fallback_for: "api_extraction"
+      notes: >
+        DOM fallback. Clicks Audio Transcript tab if needed, triggers virtual scroll,
+        extracts .transcript-list innerText. Only used when API extraction fails.
+verification:
+  script_path: "~/.claude/browser-configs/playbooks/zoom-recording/scripts/verify-extract-transcript.js"
+  requires:
+    - "length_gt_200"
+    - "speakers_gte_1"
+    - "timestamp_format_valid"
+guardrails:
+  - "Never modify the recording page (no Delete, Edit, etc.)."
+  - "Return raw string from eval, not JSON.stringify, to avoid double-encoding."
+  - "Check result.hasTranscript before attempting extraction."
+  - "Allow 10s after page load for performance entries to populate."
+promotion:
+  notes: "Promote to validated after 2 successful API extractions with matching fingerprint."
