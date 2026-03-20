@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 const APPLE_EPOCH_OFFSET = 978_307_200;
 const NANOSECOND_FACTOR = 1_000_000_000;
@@ -1096,4 +1105,425 @@ export function saveMessageAsMarkdown(
 		console.error(`[imessage-reader] Failed to save ${filePath}: ${err}`);
 		return null;
 	}
+}
+
+// ── V2 Corpus Types ────────────────────────────────────────────────────
+
+/**
+ * Sync cursor state persisted at runtime/imessage/cursors/default-sync.json.
+ */
+export type SyncCursor = {
+	schema_version: 1;
+	source_system: "imessage";
+	mode: string;
+	last_successful_sent_at: string;
+	last_successful_source_id: string;
+	updated_at: string;
+};
+
+/**
+ * One row in the manifest JSONL file.
+ */
+export type ManifestEntry = {
+	schema_version: 1;
+	source_id: string;
+	relative_path: string;
+	slug_version: 2;
+	updated_at: string;
+};
+
+/**
+ * Input shape for v2 note writing -- a parsed message plus conversation context.
+ */
+export type V2NoteInput = {
+	source_id: string;
+	source_thread_id: string;
+	sent_at: string;
+	direction: "inbound" | "outbound";
+	message_kind: string;
+	from: string;
+	handle: string;
+	is_from_me: boolean;
+	service: string;
+	thread: string;
+	is_group: boolean;
+	conversation_with: string;
+	conversation_type: "direct" | "group";
+	text: string | null;
+	group_guid?: string | null;
+	part_index?: number | null;
+	contact_name?: string | null;
+	thread_originator?: string | null;
+	reply_to_raw?: string | null;
+	reply_to?: string | null;
+	reaction_to_raw?: string | null;
+	reaction_to?: string | null;
+	reaction_type?: number | null;
+	subject?: string | null;
+	edited?: true | null;
+	date_edited?: string | null;
+	date_edited_local?: string | null;
+};
+
+// ── V2 Slug & Path ─────────────────────────────────────────────────────
+
+/**
+ * Canonical GUID slugifier v2: lowercase, replace non-alphanumeric with `-`,
+ * collapse repeated `-`, trim leading/trailing `-`.
+ */
+export function guidSlugV2(guid: string): string {
+	return guid
+		.toLowerCase()
+		.replace(/[^a-z0-9]/g, "-")
+		.replace(/-{2,}/g, "-")
+		.replace(/^-|-$/g, "");
+}
+
+/**
+ * Compute time-of-day bucket from a local ISO timestamp.
+ */
+export function timeOfDay(localIso: string): string {
+	const match = localIso.match(/T(\d{2}):/);
+	const hour = match ? Number(match[1]) : 0;
+	if (hour >= 5 && hour < 12) return "morning";
+	if (hour >= 12 && hour < 17) return "afternoon";
+	if (hour >= 17 && hour < 21) return "evening";
+	return "night";
+}
+
+/**
+ * Compute day-of-week from a local ISO timestamp.
+ */
+export function dayOfWeek(localIso: string): string {
+	const d = new Date(localIso);
+	return d.toLocaleDateString("en-AU", { weekday: "long" });
+}
+
+/**
+ * Build the canonical v2 save path relative to the save dir.
+ * Pattern: YYYY/MM/YYYY-MM-DD-HHmmss-imessage-{guid-slug-v2}.md
+ */
+export function canonicalSavePath(sentAt: string, sourceId: string): string {
+	const d = new Date(sentAt);
+	const year = String(d.getFullYear());
+	const month = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	const hours = String(d.getHours()).padStart(2, "0");
+	const minutes = String(d.getMinutes()).padStart(2, "0");
+	const seconds = String(d.getSeconds()).padStart(2, "0");
+	const slug = guidSlugV2(sourceId);
+	const filename = `${year}-${month}-${day}-${hours}${minutes}${seconds}-imessage-${slug}.md`;
+	return join(year, month, filename);
+}
+
+// ── V2 Frontmatter ─────────────────────────────────────────────────────
+
+/**
+ * Build the title for a v2 note: "iMessage with {contact} at {date} {HH:MM}"
+ */
+function v2Title(conversationWith: string, sentAt: string): string {
+	const d = new Date(sentAt);
+	const year = d.getFullYear();
+	const month = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	const hours = String(d.getHours()).padStart(2, "0");
+	const minutes = String(d.getMinutes()).padStart(2, "0");
+	return `iMessage with ${conversationWith} at ${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+/**
+ * Build the date-only updated field from sent_at.
+ */
+function v2Updated(sentAt: string): string {
+	const d = new Date(sentAt);
+	const year = d.getFullYear();
+	const month = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	return `${year}-${month}-${day}`;
+}
+
+/**
+ * Save a v2 corpus note with canonical frontmatter and path.
+ * Returns the absolute file path on success, null on failure.
+ */
+export function saveMessageAsMarkdownV2(
+	input: V2NoteInput,
+	saveDir: string,
+): string | null {
+	if (!input.sent_at || !input.text) return null;
+
+	const relPath = canonicalSavePath(input.sent_at, input.source_id);
+	const filePath = join(saveDir, relPath);
+	const title = v2Title(input.conversation_with, input.sent_at);
+	const updated = v2Updated(input.sent_at);
+
+	const fm: string[] = [
+		"---",
+		"schema_version: 2",
+		`title: "${escapeYaml(title)}"`,
+		"type: artifact-sidecar",
+		"status: active",
+		`updated: ${updated}`,
+		"source_system: imessage",
+		`source_id: "${escapeYaml(input.source_id)}"`,
+		`source_thread_id: "${escapeYaml(input.source_thread_id)}"`,
+		`sent_at: "${escapeYaml(input.sent_at)}"`,
+		`direction: ${input.direction}`,
+		`message_kind: ${input.message_kind}`,
+		`from: "${escapeYaml(input.from)}"`,
+		`handle: "${escapeYaml(input.handle)}"`,
+		`is_from_me: ${input.is_from_me}`,
+		`service: ${input.service}`,
+		`thread: "${escapeYaml(input.thread)}"`,
+		`is_group: ${input.is_group}`,
+	];
+
+	if (input.group_guid) {
+		fm.push(`group_guid: "${escapeYaml(input.group_guid)}"`);
+	}
+
+	fm.push(
+		`conversation_with: "${escapeYaml(input.conversation_with)}"`,
+		`conversation_type: ${input.conversation_type}`,
+		`day_of_week: "${dayOfWeek(input.sent_at)}"`,
+		`time_of_day: "${timeOfDay(input.sent_at)}"`,
+	);
+
+	if (input.reply_to) {
+		fm.push(`reply_to: "${escapeYaml(input.reply_to)}"`);
+	}
+	if (input.edited) {
+		fm.push("edited: true");
+		if (input.date_edited) fm.push(`date_edited: "${escapeYaml(input.date_edited)}"`);
+		if (input.date_edited_local) fm.push(`date_edited_local: "${escapeYaml(input.date_edited_local)}"`);
+	}
+
+	fm.push("---");
+
+	const content = `${fm.join("\n")}\n\n## Message\n\n${input.text}\n`;
+
+	try {
+		mkdirSync(dirname(filePath), { recursive: true });
+		writeFileSync(filePath, content, "utf-8");
+		return filePath;
+	} catch (err) {
+		console.error(`[imessage-reader] Failed to save v2 ${filePath}: ${err}`);
+		return null;
+	}
+}
+
+// ── V2 Note Input Builder ──────────────────────────────────────────────
+
+/**
+ * Convert a ParsedMessage (from parseRow/linkMessageTargets) into a V2NoteInput.
+ * This bridges the existing parse pipeline with the v2 corpus write path.
+ */
+export function parsedMessageToV2Input(msg: ParsedMessage): V2NoteInput {
+	const handle = msg.handle ?? "unknown";
+	const contactName = msg.contact_name ?? handle;
+	const sender = msg.is_from_me ? "me" : contactName;
+	const conversationWith = msg.is_from_me ? contactName : contactName;
+	const sentAt = msg.date_local ?? msg.date ?? "";
+
+	return {
+		source_id: msg.guid,
+		source_thread_id: msg.chat_id ?? "",
+		sent_at: sentAt,
+		direction: msg.is_from_me ? "outbound" : "inbound",
+		message_kind: msg.message_kind,
+		from: sender,
+		handle,
+		is_from_me: msg.is_from_me,
+		service: msg.service ?? "iMessage",
+		thread: msg.chat_name ?? contactName,
+		is_group: msg.is_group,
+		conversation_with: conversationWith,
+		conversation_type: msg.is_group ? "group" : "direct",
+		text: msg.text,
+		group_guid: msg.group_guid,
+		contact_name: msg.contact_name,
+		reply_to: msg.reply_to,
+		edited: msg.edited,
+		date_edited: msg.date_edited,
+		date_edited_local: msg.date_edited_local,
+	};
+}
+
+// ── Cursor Read/Write ──────────────────────────────────────────────────
+
+/**
+ * Read a sync cursor from disk. Returns null if the file doesn't exist.
+ */
+export function readCursor(cursorPath: string): SyncCursor | null {
+	try {
+		const raw = readFileSync(cursorPath, "utf-8");
+		return JSON.parse(raw) as SyncCursor;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Write a sync cursor to disk. Only call after successful writes.
+ */
+export function writeCursor(cursorPath: string, cursor: SyncCursor): void {
+	mkdirSync(dirname(cursorPath), { recursive: true });
+	writeFileSync(cursorPath, JSON.stringify(cursor, null, 2), "utf-8");
+}
+
+// ── Manifest Append ────────────────────────────────────────────────────
+
+/**
+ * Append a manifest entry to the JSONL file.
+ */
+export function appendManifestEntry(
+	manifestPath: string,
+	entry: ManifestEntry,
+): void {
+	mkdirSync(dirname(manifestPath), { recursive: true });
+	appendFileSync(manifestPath, `${JSON.stringify(entry)}\n`, "utf-8");
+}
+
+// ── Migration ──────────────────────────────────────────────────────────
+
+const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
+
+/**
+ * Extract frontmatter key-value pairs from a markdown file's content.
+ * Simple line-based parser -- not a full YAML parser.
+ */
+export function parseFrontmatter(
+	content: string,
+): Record<string, string> | null {
+	const match = content.match(FRONTMATTER_RE);
+	if (!match?.[1]) return null;
+
+	const result: Record<string, string> = {};
+	for (const line of match[1].split("\n")) {
+		const colonIndex = line.indexOf(":");
+		if (colonIndex < 1) continue;
+		const key = line.slice(0, colonIndex).trim();
+		let value = line.slice(colonIndex + 1).trim();
+		// Strip surrounding quotes
+		if (
+			(value.startsWith('"') && value.endsWith('"')) ||
+			(value.startsWith("'") && value.endsWith("'"))
+		) {
+			value = value.slice(1, -1);
+		}
+		result[key] = value;
+	}
+	return result;
+}
+
+/**
+ * Migrate a single legacy note file to canonical v2 path.
+ * Returns the new path on success, null if skipped or failed.
+ */
+export function migrateLegacyNote(
+	legacyPath: string,
+	saveDir: string,
+): string | null {
+	let content: string;
+	try {
+		content = readFileSync(legacyPath, "utf-8");
+	} catch {
+		return null;
+	}
+
+	const fm = parseFrontmatter(content);
+	if (!fm) return null;
+
+	const sourceId = fm.guid ?? fm.source_id;
+	const sentAt = fm.date_local ?? fm.sent_at;
+	if (!sourceId || !sentAt) return null;
+
+	const newRelPath = canonicalSavePath(sentAt, sourceId);
+	const newAbsPath = join(saveDir, newRelPath);
+
+	// Already at canonical path?
+	if (legacyPath === newAbsPath) return null;
+
+	// Patch schema_version in content
+	let patched = content;
+	if (!patched.includes("schema_version:")) {
+		patched = patched.replace("---\n", "---\nschema_version: 2\n");
+	} else {
+		patched = patched.replace(/schema_version:\s*\d+/, "schema_version: 2");
+	}
+
+	// Add source_id if only guid exists
+	if (fm.guid && !fm.source_id) {
+		patched = patched.replace(
+			`guid: "${fm.guid}"`,
+			`source_id: "${fm.guid}"`,
+		);
+	}
+
+	// Remove deprecated flat attachment fields
+	const deprecatedFields = [
+		"has_attachment",
+		"attachment_filename",
+		"attachment_path",
+		"attachment_original_path",
+		"attachment_name",
+		"attachment_mime_type",
+		"attachment_uti",
+		"attachment_size",
+		"attachment_exists",
+	];
+	for (const field of deprecatedFields) {
+		patched = patched.replace(new RegExp(`^${field}:.*\n`, "m"), "");
+	}
+
+	try {
+		mkdirSync(dirname(newAbsPath), { recursive: true });
+		writeFileSync(newAbsPath, patched, "utf-8");
+		// Remove the legacy file if it's different from the new path
+		if (legacyPath !== newAbsPath) {
+			unlinkSync(legacyPath);
+		}
+		return newAbsPath;
+	} catch (err) {
+		console.error(`[migrate-notes] Failed to migrate ${legacyPath}: ${err}`);
+		return null;
+	}
+}
+
+/**
+ * Walk a save directory and migrate all legacy notes to canonical v2 paths.
+ * Returns a summary of migrated and skipped files.
+ */
+export function migrateAllNotes(
+	saveDir: string,
+): { migrated: number; skipped: number; errors: number } {
+	let migrated = 0;
+	let skipped = 0;
+	let errors = 0;
+
+	function walkDir(dir: string): void {
+		let entries: string[];
+		try {
+			entries = readdirSync(dir);
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const fullPath = join(dir, entry);
+			if (entry.endsWith(".md")) {
+				const result = migrateLegacyNote(fullPath, saveDir);
+				if (result) {
+					migrated++;
+				} else {
+					skipped++;
+				}
+			} else if (!entry.includes(".")) {
+				// Likely a directory
+				walkDir(fullPath);
+			}
+		}
+	}
+
+	walkDir(saveDir);
+	return { migrated, skipped, errors };
 }

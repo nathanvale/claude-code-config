@@ -56,6 +56,13 @@ declare module "node:fs" {
 		data: string,
 		encoding?: string,
 	): void;
+	export function appendFileSync(
+		path: string,
+		data: string,
+		encoding?: string,
+	): void;
+	export function renameSync(oldPath: string, newPath: string): void;
+	export function unlinkSync(path: string): void;
 	export function mkdtempSync(prefix: string): string;
 	export function readFileSync(path: string, encoding: string): string;
 	export function rmSync(
@@ -68,6 +75,7 @@ declare module "node:path" {
 	export function join(...parts: string[]): string;
 	export function dirname(path: string): string;
 	export function basename(path: string): string;
+	export function relative(from: string, to: string): string;
 }
 
 declare module "node:os" {
