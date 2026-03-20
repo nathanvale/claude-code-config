@@ -840,11 +840,11 @@ function syncMessages(args: {
 	const lastSentAt = persistResult.lastSentAt;
 	const lastSourceId = persistResult.lastSourceId;
 
-	// Advance cursor only after the entire window saved successfully.
+	// Advance cursor after a clean write pass. Deterministic skips should
+	// not trap long-running backfills on the same window forever.
 	if (
 		saved > 0 &&
 		errors === 0 &&
-		unsaved === 0 &&
 		lastSentAt &&
 		lastSourceId
 	) {
