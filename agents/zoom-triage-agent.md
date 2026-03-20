@@ -63,8 +63,8 @@ If no `session_id` is provided, default to `triage-default`.
 
 1. **Set BROWSER_FLAGS** from Browser Session section above
 2. **Cheap name pre-filter** -- if the provided meeting name matches a SKIP keyword, return immediately with score `-1` and do NOT open the browser
-3. **Load config** -- resolve config per Config Resolution above
-4. **Load gotchas** -- read `~/.claude/browser-configs/gotchas.zoom-recording.md` and project-scoped auth gotchas
+3. **Load config** -- resolve config per Config Resolution above, then append `--profile` and `--port` to BROWSER_FLAGS
+4. **Load gotchas** -- read `~/.claude/skills/zoom-transcript/gotchas.md` and project-scoped auth gotchas
 5. **Navigate** -- `agent-browser $BROWSER_FLAGS --session {session_id} open "{url}"` then wait 5s
 6. **Handle auth** -- if redirected to SSO/login, authenticate and return to URL
 7. **Resolve URL** -- if continueMode redirect, capture play URL (see gotchas)
