@@ -7,7 +7,7 @@ description: >
   Use when enriching a person profile, running people enrichment, or
   analyzing communication patterns with a contact.
 argument-hint: "<name> | --tier1 | --discover"
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bun run *)
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bun run *), Agent
 disable-model-invocation: true
 ---
 
@@ -58,33 +58,69 @@ Follow this precedence strictly:
 2. If not in roster, default to tier 3
 3. For the first slice: do not auto-promote or bulk-discover
 
-### Step 5 — Run contact-stats
+### Step 5 — Launch Research Sub-Agent
 
-Run the mechanical stats extractor:
+Delegate all heavy corpus work to a sub-agent to keep the main conversation lean. Launch a single `general-purpose` Agent with this prompt structure:
 
-```bash
-bun run ~/.claude/skills/people-enrich/scripts/contact-stats.ts --contact "<name>"
+```
+You are researching {name} for the People Enrichment Engine.
+
+## Inputs
+- Person: {name} (slug: {slug}, tier: {tier})
+- Handles: {handles from roster.json}
+- Stats JSON path: ~/code/my-second-brain-v2/runtime/people-enrichment/{slug}.json
+- Existing profile content: {paste current note body}
+
+## Task 1 — Contact Stats
+Check if stats JSON already exists at the path above and is recent (generated_at within 7 days).
+- If YES: read it and use it.
+- If NO or stale: run `bun run ~/.claude/skills/people-enrich/scripts/contact-stats.ts --contact "{name}"`, then read the output JSON.
+
+## Task 2 — QMD Dimension Queries
+Run ONLY the dimension set for tier {tier} from the query table below.
+Use `mcp__qmd__query` with `collections: ["repo-personal-messages"]`.
+
+**Critical QMD rules:**
+1. Combine lex + vec for best recall: use lex `"{name}"` as first sub-query, vec as second
+2. Run queries in PARALLEL batches of 6
+3. QMD snippets often show frontmatter, not message content. For the top 3-5 highest-scoring results per dimension, ALWAYS follow up with `mcp__qmd__get` to read the actual message body
+4. Use `minScore: 0.3` to filter noise
+5. Skip results that are clearly from other people's conversations (check conversation_with field)
+
+{paste the dimension query table for the resolved tier here}
+
+## Task 3 — Synthesize
+Produce a structured report with these exact sections:
+
+### Stats Summary
+Key numbers from contact-stats JSON.
+
+### Enriched Profile
+Synthesized narrative covering: relationship type, communication pattern, career arc, shared interests, family context, relationship dynamic, birthday/milestones.
+
+### Evidence
+Signal-level bullets only (e.g., "Feb 2022: discussed job interviews for tech lead roles"). NEVER include raw message text or verbatim quotes.
+
+### Open Questions
+Uncertainties, sensitive topics to avoid probing, data gaps.
+
+## Output Rules
+- No raw message bodies in the output
+- Prefer short derived summaries
+- Surface uncertainty explicitly
+- Return the full structured report as your final message
 ```
 
-Read the output JSON from `~/code/my-second-brain-v2/runtime/people-enrichment/<slug>.json`.
+The sub-agent returns a structured report. Read it and proceed to Step 6.
 
-### Step 6 — QMD Queries
+### Step 6 — AI Analysis
 
-Run only the dimension set for the resolved tier. Use the QMD MCP tool with `collection: "repo-personal-messages"`.
+Review the sub-agent's report. Refine if needed:
+- Verify evidence bullets don't contain verbatim quotes
+- Check that Open Questions are genuinely uncertain (not just missing data)
+- Ensure the Enriched Profile narrative is coherent and non-repetitive
 
-See [QMD Dimension Query Templates](#qmd-dimension-query-templates) below for the full lookup table.
-
-### Step 7 — AI Analysis
-
-Synthesize QMD results and stats into profile sections.
-
-**Rules:**
-- No raw message bodies copied into durable memory
-- Prefer short derived summaries and redacted evidence bullets
-- Surface uncertainty explicitly in `## Open Questions`
-- Keep `## Evidence` to signal-level bullets (e.g., "Discussed X in Jan 2024"), never verbatim quotes
-
-### Step 8 — Merge Proposal
+### Step 7 — Merge Proposal
 
 Present the full proposed file as a diff for confirmation.
 
@@ -112,7 +148,7 @@ Present the full proposed file as a diff for confirmation.
 - Never rename the file without confirmation
 - If machine sections already exist, update them in place
 
-### Step 9 — Write
+### Step 8 — Write
 
 Apply approved changes ONLY after Nathan confirms the diff.
 
@@ -168,7 +204,15 @@ enrichment:
 
 ## QMD Dimension Query Templates
 
-Each template specifies a QMD query parameterized with `{name}`. Use `collection: "repo-personal-messages"` for all queries.
+Each template specifies a QMD query parameterized with `{name}`. Use `collections: ["repo-personal-messages"]` for all queries.
+
+### Query Execution Rules
+
+1. **Always combine lex + vec** for best recall. Use `lex` with `"{name}"` as the first sub-query (exact name match, gets 2x weight), and `vec` as the second sub-query (semantic meaning).
+2. **Run queries in parallel batches of 6** to avoid sequential slowness.
+3. **QMD snippets often show frontmatter metadata, not message content.** For the top 3-5 highest-scoring results per dimension, ALWAYS follow up with `mcp__qmd__get` to read the actual message body.
+4. **Use `minScore: 0.3`** to filter low-confidence noise.
+5. **Skip cross-contamination** — check `conversation_with` field matches the target before using a result as evidence.
 
 ### Tier 1 Dimensions (30 queries — core relationships)
 
