@@ -44,7 +44,7 @@ Without memory, that request is meaningless. With memory, Claude knows:
 CLAUDE.md          <- Hot memory (current focus, must-know rules, key paths)
 memory/
   glossary.md      <- Full decoder ring
-  people/          <- Complete profiles
+  people/          <- Canonical person notes under one shared contract
   projects/        <- Project details
   context/         <- Durable repo or workplace context
 ```
@@ -65,6 +65,23 @@ memory/
 **memory/people/, projects/, context/:**
 - Rich detail when needed for execution
 - Full profiles, history, context
+
+## People Note Contract
+
+Person memory is a shared note contract, not a freeform side system.
+
+Use one canonical note per person in `memory/people/*.md` with:
+- `## Relationship Profile`
+- `## Signals`
+- `## Open Questions`
+
+When a decoder-style workflow needs to update a person:
+- do not freehand rewrite the note shape
+- point producer-style writes at `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
+- keep durable observations in `## Signals`
+- put ambiguity and conflicts in `## Open Questions`
+- keep relationship-profile edits conservative and H3-scoped
+- preserve the Memory OS ownership boundary: source repos own raw operational truth, `my-second-brain` owns durable synthesis
 
 ## Lookup Flow
 
@@ -168,25 +185,35 @@ Workplace shorthand, acronyms, and internal language.
 
 **memory/people/{name}.md:**
 ```markdown
-# Todd Martinez
+---
+title: "Todd Martinez"
+type: person
+status: active
+updated: 2026-03-22
+summary: "Finance lead and key contact for approvals."
+person_id: "person_todd_martinez"
+slug: "todd-martinez"
+relationship_type: "professional"
+aliases:
+  - Todd
+  - T
+source_handles: {}
+---
 
-**Also known as:** Todd, T
-**Role:** Finance Lead
-**Team:** Finance
-**Reports to:** CFO (Michael Chen)
+## Relationship Profile
 
-## Communication
+### Relationship
+
+Key finance counterpart for approvals and forecasting.
+
+## Signals
+
 - Prefers Slack DM
-- Quick responses, very direct
-- Best time: mornings
+- Usually responds quickly and directly
 
-## Context
-- Handles all PSRs and financial reporting
-- Key contact for deal approvals over $500k
-- Works closely with Sales on forecasting
+## Open Questions
 
-## Notes
-- Cubs fan, likes talking baseball
+- Confirm current approval threshold after the next finance sync
 ```
 
 **memory/projects/{name}.md:**
@@ -257,7 +284,8 @@ When user says "remember this" or "X means Y":
    - Promote only a short pointer into CLAUDE.md if the term becomes session-critical and broadly relevant
 
 2. **People:**
-   - Create/update memory/people/{name}.md
+   - Use the canonical people note contract in `memory/people/{name}.md`
+   - Route structured producer-style writes through `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
    - **Capture nicknames** -- critical for decoding
 
 3. **Projects:**

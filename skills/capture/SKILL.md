@@ -67,6 +67,19 @@ Typical homes:
 
 Promote a short pointer into `CLAUDE.md` only when the information becomes high-frequency and broadly relevant across most sessions in that repo.
 
+### People Note Contract
+
+When a capture updates a person, treat `memory/people/*.md` as one canonical note system shared with `productivity-sync` and `/people-enrich`.
+
+For people-related captures:
+- do not freehand edit `memory/people/*.md`
+- prepare structured JSON and call `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
+- write durable observations to `## Signals`
+- write ambiguity, conflicts, or follow-up review items to `## Open Questions`
+- keep `## Relationship Profile` updates conservative and H3-scoped
+- never paste raw message logs or transcript dumps into durable people notes
+- prefer a short durable signal over a miniature dossier
+
 ### Prefer `docs/`
 
 Use `docs/` when the primary outcome is an authored document the user will want to read, edit, or revisit in full:

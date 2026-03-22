@@ -16,7 +16,7 @@ related:
 
 ## Purpose
 
-Store raw iMessage history in a dedicated repo at `~/code/personal-messages` so that `my-second-brain-v2` stays calm and high-signal. The message corpus belongs inside the Memory OS federation as its own repo and QMD collection, not inside the life hub.
+Store raw iMessage history in a dedicated repo at `~/code/personal-messages` so that `my-second-brain` stays calm and high-signal. The message corpus belongs inside the Memory OS federation as its own repo and QMD collection, not inside the life hub.
 
 ## Repo Profile
 
@@ -65,7 +65,7 @@ personal-messages/
 
 - `docs/messages/` is the QMD-searchable Markdown surface
 - `runtime/` holds sync cursors, manifests, attachment bookkeeping, and binary files
-- Durable people context lives in `my-second-brain-v2/memory/people/` or the owning work repo, not here
+- Durable people context lives in `my-second-brain/memory/people/` or the owning work repo, not here
 - Binary attachments live in `runtime/`, never in `docs/`
 - `runtime/` state is local operational state and should be gitignored by default
 
@@ -75,21 +75,21 @@ personal-messages/
 |----------|------|
 | Raw message notes | `personal-messages/docs/messages/` |
 | Attachment binaries | `personal-messages/runtime/imessage/attachments/` |
-| Person notes | `my-second-brain-v2/memory/people/` or owning work repo |
-| Cross-project synthesis | `my-second-brain-v2` |
-| Durable summaries | `my-second-brain-v2` or owning repo |
+| Person notes | `my-second-brain/memory/people/` or owning work repo |
+| Cross-project synthesis | `my-second-brain` |
+| Durable summaries | `my-second-brain` or owning repo |
 | Interpreted commitments (tasks) | Owning repo's `TASKS.md` |
 
 ### Promotion Rules
 
-Use the corpus repo for **raw evidence**. Use `my-second-brain-v2` for **promoted meaning**:
+Use the corpus repo for **raw evidence**. Use `my-second-brain` for **promoted meaning**:
 
 - Person notes that incorporate message context
 - Cross-project synthesis from conversation threads
 - Durable summaries of important conversations
 - Interpreted commitments once they become tasks or memory updates
 
-Never copy the full raw message body into `my-second-brain-v2`.
+Never copy the full raw message body into `my-second-brain`.
 
 ## Runtime Contracts
 
@@ -200,7 +200,7 @@ Raw iMessage corpus indexed as `repo-personal-messages` in QMD.
 
 ## Boundaries
 - Raw evidence only -- no synthesis here
-- Promote meaning to owning repos or my-second-brain-v2
+- Promote meaning to owning repos or my-second-brain
 - Binary attachments in runtime/, searchable metadata in docs/
 ```
 

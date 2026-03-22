@@ -15,7 +15,9 @@ CONFIG_HOME="${HOME}/.config"
 # Symlinks: "link_path|target_path"
 symlinks=(
 	"${CLAUDE_HOME}/CLAUDE.md|${SCRIPT_DIR}/CLAUDE.md"
+	"${CLAUDE_HOME}/AGENTS.md|${SCRIPT_DIR}/AGENTS.md"
 	"${CLAUDE_HOME}/context|${SCRIPT_DIR}/context"
+	"${CLAUDE_HOME}/rules|${SCRIPT_DIR}/rules"
 	"${CLAUDE_HOME}/commands|${SCRIPT_DIR}/commands"
 	"${CLAUDE_HOME}/skills|${SCRIPT_DIR}/skills"
 	"${CLAUDE_HOME}/agents|${SCRIPT_DIR}/agents"
@@ -53,6 +55,13 @@ create_links() {
 			echo "  CREATED: $link -> $target"
 		fi
 	done
+
+	# Render prompt files from fragments
+	echo ""
+	echo "Rendering user prompt files..."
+	"${SCRIPT_DIR}/scripts/render-user-prompts.sh" --write
+
+	echo ""
 	echo "Done."
 }
 

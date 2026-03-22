@@ -2,7 +2,7 @@
 title: "Memory OS Contract"
 type: contract
 status: active
-updated: 2026-03-17
+updated: 2026-03-22
 summary: "Shared user-scope contract for Nathan's Markdown-first memory system across work repos, personal repos, Claude Code, and Codex."
 ---
 
@@ -133,6 +133,9 @@ Distinguish these nearby families like this:
 - `project` for the container or initiative itself
 
 For feature work, a brainstorm usually belongs in the existing `plan` family, while a lightweight PRD usually belongs in `spec`.
+It is acceptable to combine the settled contract and the implementation path in one draft while the shape is still emerging.
+Once a note is stable enough to execute against, split rollout sequencing and execution detail into a sibling `plan` note and keep the `spec` focused on settled behavior, boundaries, constraints, and acceptance shape.
+Cross-link the `spec` and `plan` so retrieval still feels like one thread.
 
 ## Base Frontmatter
 
@@ -167,7 +170,7 @@ Prefer filenames and folder names that are scannable out of context.
 - Good examples:
   - `memory/projects/holiday-fnq-july-2026.md`
   - `memory/projects/holiday-easter-2026.md`
-  - `docs/specs/holiday-fnq-july-2026/`
+  - `docs/plans/holiday-fnq-july-2026/`
 - Avoid context-thin names when the note will be hard to spot later in a long list.
 
 For detailed file-based todos, prefer sortable names that encode stable ID and status, such as `001-ready-p1-auth-edge-cases.md`.

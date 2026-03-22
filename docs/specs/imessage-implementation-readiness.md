@@ -117,7 +117,7 @@ For task-like fixtures, capture:
     "quote": "I'll ask Marilyn now",
     "summary": "Ask Marilyn and report back",
     "confidence": 0.92,
-    "owner_hint": "my-second-brain-v2",
+    "owner_hint": "my-second-brain",
     "owner_status": "resolved"
   }
 ]

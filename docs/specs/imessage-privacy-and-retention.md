@@ -72,7 +72,7 @@ Promote durable meaning, not raw message dumps:
 - project context
 - extracted tasks and commitments
 
-Never bulk-copy raw message bodies into `my-second-brain-v2`.
+Never bulk-copy raw message bodies into `my-second-brain`.
 
 ## Enforcement Expectations
 

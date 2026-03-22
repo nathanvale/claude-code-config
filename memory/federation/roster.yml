@@ -4,9 +4,9 @@ hub: my-second-brain
 repos:
   - name: my-second-brain
     profile: life-hub
-    location: /Users/nathanvale/code/my-second-brain-v2
+    location: /Users/nathanvale/code/my-second-brain
     collection: vault
-    update_command: git -C /Users/nathanvale/code/my-second-brain-v2 fetch --all --prune --quiet || true
+    update_command: git -C /Users/nathanvale/code/my-second-brain fetch --all --prune --quiet || true
     primary_paths:
       - 00 Inbox
       - 01 Projects

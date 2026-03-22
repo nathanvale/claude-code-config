@@ -33,8 +33,11 @@ Only single-contact enrichment of existing known people notes is supported. The 
 
 1. Read `$ARGUMENTS` as the target name
 2. Look up `roster.json` in this skill directory for handle and tier mappings
-3. Glob `~/code/my-second-brain-v2/memory/people/*.md` for the target
-4. The target MUST match exactly one existing person note. If zero or multiple matches, stop and report.
+3. If no exact match on full name or slug, try first-name fuzzy match against roster entries (e.g., "Ariel" → "Ariel Brott"). Accept only if the first name matches exactly one roster entry.
+4. Glob `~/code/my-second-brain/memory/people/*.md` for the target
+5. The target MUST match exactly one existing person note. If zero or multiple matches, stop and report.
+
+**Important:** The `--contact` flag on `contact-stats.ts` requires the exact `conversation_with` name from the corpus (e.g., "Ariel Brott", not "Ariel"). Always resolve to the full name before running scripts.
 
 ### Step 2 — Resolve Canonical Identity
 
@@ -50,7 +53,7 @@ Follow this precedence strictly:
 1. Read the full person note
 2. Parse frontmatter and body separately
 3. Identify existing sections by `## Heading` boundaries
-4. All existing body content is human-authored unless it already contains `## Enriched Profile`, `## Evidence`, or `## Open Questions` (machine-owned sections)
+4. Use the shared writer helpers in `scripts/people-note.ts` to preserve unknown H3 blocks and avoid freehand note rewrites
 
 ### Step 4 — Determine Tier
 
@@ -60,7 +63,9 @@ Follow this precedence strictly:
 
 ### Step 5 — Launch Research Sub-Agent
 
-Delegate all heavy corpus work to a sub-agent to keep the main conversation lean. Launch a single `general-purpose` Agent with this prompt structure:
+Delegate all heavy corpus work to a sub-agent to keep the main conversation lean. Launch a single `general-purpose` Agent with `run_in_background: true` so the conversation isn't blocked. You'll be notified when it completes — continue chatting with Nathan in the meantime.
+
+Use this prompt structure:
 
 ```
 You are researching {name} for the People Enrichment Engine.
@@ -68,7 +73,7 @@ You are researching {name} for the People Enrichment Engine.
 ## Inputs
 - Person: {name} (slug: {slug}, tier: {tier})
 - Handles: {handles from roster.json}
-- Stats JSON path: ~/code/my-second-brain-v2/runtime/people-enrichment/{slug}.json
+- Stats JSON path: ~/code/my-second-brain/runtime/people-enrichment/{slug}.json
 - Existing profile content: {paste current note body}
 
 ## Task 1 — Contact Stats
@@ -90,63 +95,107 @@ Use `mcp__qmd__query` with `collections: ["repo-personal-messages"]`.
 {paste the dimension query table for the resolved tier here}
 
 ## Task 3 — Synthesize
-Produce a structured report with these exact sections:
+Produce structured JSON, not prose markdown.
 
-### Stats Summary
-Key numbers from contact-stats JSON.
+Return this exact shape:
 
-### Enriched Profile
-Synthesized narrative covering: relationship type, communication pattern, career arc, shared interests, family context, relationship dynamic, birthday/milestones.
+```json
+{
+  "summary": "Compact retrieval summary",
+  "relationship_profile": [
+    {
+      "heading": "Relationship",
+      "content": "Short synthesis for this H3 block."
+    }
+  ],
+  "signals": [
+    "Short durable signal bullet"
+  ],
+  "signal_mode": "append",
+  "open_questions": [
+    "Concrete uncertainty or review item"
+  ],
+  "open_questions_mode": "append",
+  "conflicts": [
+    "Conflict between old manual content and fresh machine evidence"
+  ],
+  "enrichment": {
+    "source": "imessage",
+    "tier": 1,
+    "last_run_at": "2026-03-22T09:00:00+11:00"
+  }
+}
+```
 
-### Evidence
-Signal-level bullets only (e.g., "Feb 2022: discussed job interviews for tech lead roles"). NEVER include raw message text or verbatim quotes.
+Field rules:
+- `relationship_profile` must be an array of H3 blocks chosen intentionally for the person's `relationship_type`
+- `signals` must be concise durable bullets only
+- `open_questions` must be concrete and decision-oriented
+- `conflicts` is optional, but use it whenever machine evidence conflicts with prior note content
+- Never include raw message text or verbatim quotes
+- Default `signal_mode` and `open_questions_mode` to `"append"` for this first slice
 
-### Open Questions
-Uncertainties, sensitive topics to avoid probing, data gaps.
+## Logging
+Write a log file at `~/code/my-second-brain/runtime/people-enrichment/{slug}.enrichment.log` as you work.
+Log format — one line per entry: `[ISO timestamp] [LEVEL] message`
+Levels: INFO, WARN, ERROR
+
+Log these events:
+- INFO: task started, stats JSON found/generated, each QMD dimension query completed (with result count), synthesis started, synthesis complete
+- WARN: QMD query returned 0 results, stats JSON stale, dimension skipped, cross-contamination detected (wrong conversation_with)
+- ERROR: contact-stats script failed, QMD query failed, any unrecoverable issue
+
+This log is read by `/heal` to diagnose issues from background runs.
 
 ## Output Rules
 - No raw message bodies in the output
 - Prefer short derived summaries
 - Surface uncertainty explicitly
-- Return the full structured report as your final message
+- Return valid JSON only
 ```
 
-The sub-agent returns a structured report. Read it and proceed to Step 6.
+The sub-agent returns structured JSON. Read it and proceed to Step 6.
 
 ### Step 6 — AI Analysis
 
 Review the sub-agent's report. Refine if needed:
-- Verify evidence bullets don't contain verbatim quotes
+- Verify signal bullets don't contain verbatim quotes
 - Check that Open Questions are genuinely uncertain (not just missing data)
-- Ensure the Enriched Profile narrative is coherent and non-repetitive
+- Ensure the chosen H3 blocks are coherent, non-repetitive, and suitable for the person's `relationship_type`
 
 ### Step 7 — Merge Proposal
 
 Present the full proposed file as a diff for confirmation.
 
-**First enrichment of an existing note:**
+**Use the shared writer path:**
 
-1. Read entire file
-2. Split frontmatter from body
-3. If the body begins with a top-level `# Name` heading, remove that single H1 before restructuring
-4. Wrap remaining existing body content under `## Human Notes`
-5. Append machine-owned sections: `## Enriched Profile`, `## Evidence`, `## Open Questions`
-6. Add machine-managed frontmatter fields:
+1. Read the entire note
+2. Parse it with `scripts/people-note.ts`
+3. Resolve identity through `resolvePerson()`
+4. Save the sub-agent JSON to a temporary file
+5. Run `bun run ~/.claude/skills/people-enrich/scripts/apply-enrichment.ts --note "<person note path>" --report "<temp report path>" --output "<temp proposed path>"`
+6. Read the proposed markdown from the temp output path
+6. Preserve:
+   - unknown manual frontmatter
+   - intro text inside `## Relationship Profile`
+   - unknown human-authored H3 blocks
+   - any extra top-level sections outside the locked contract
+7. The shared writer will add or refresh machine-managed frontmatter fields:
    - `person_id` (format: `person_<slug_underscored>`)
    - `slug`
    - `aliases`
    - `source_handles` (nested by source, e.g., `imessage:`)
    - `enrichment` (with `source`, `tier`, `last_run_at`)
-7. Preserve all existing frontmatter: `title`, `type`, `status`, `summary`, and any manual fields
-8. Update only: `updated`, `summary` (if synthesis improves it), `enrichment`
+8. Update only targeted H3 blocks inside `## Relationship Profile`
+9. Append or refresh `## Signals` and `## Open Questions` according to the patch mode in the JSON report
 
-**Re-enrichment (subsequent runs):**
+**Important:**
 
-- Replace only machine-owned sections by `## Heading` match
-- Never rewrite or delete `## Human Notes`
-- Never remove unmatched manual sections
+- Never merge on name alone
 - Never rename the file without confirmation
-- If machine sections already exist, update them in place
+- Never replace the whole `## Relationship Profile` wholesale
+- Never delete unmatched human-authored H3 blocks
+- Never hand-merge machine output into the note when the shared writer can do it deterministically
 
 ### Step 8 — Write
 
@@ -176,17 +225,20 @@ enrichment:
   last_run_at: "2026-03-21T..."
 ---
 
-## Human Notes
-...existing authored content preserved verbatim...
+## Relationship Profile
+...existing intro content preserved plus targeted H3 updates...
 
-## Enriched Profile
+### Relationship
 ...derived synthesis...
 
-## Evidence
+### Communication Pattern
+...derived synthesis...
+
+## Signals
 ...short signal bullets, not raw logs...
 
 ## Open Questions
-...uncertainties for manual review...
+...uncertainties and review items...
 ```
 
 ## Section Ownership
@@ -196,10 +248,10 @@ enrichment:
 | Frontmatter (title, type, status) | Human | Preserve |
 | Frontmatter (person_id, slug, source_handles, enrichment) | Machine | Update |
 | Frontmatter (summary) | Shared | Update if synthesis improves it |
-| `## Human Notes` | Human | Never touch |
-| `## Enriched Profile` | Machine | Replace |
-| `## Evidence` | Machine | Replace |
-| `## Open Questions` | Machine | Replace |
+| `## Relationship Profile` intro | Human | Preserve |
+| `## Relationship Profile` H3 blocks | Shared | Upsert targeted blocks only |
+| `## Signals` | Shared | Append or replace via patch mode |
+| `## Open Questions` | Shared | Append or replace via patch mode |
 | Any other `## Section` | Human | Preserve |
 
 ## QMD Dimension Query Templates

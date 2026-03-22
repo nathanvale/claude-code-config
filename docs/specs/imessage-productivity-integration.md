@@ -106,7 +106,7 @@ Add after Email sync, before Meeting notes in `productivity-sync/SKILL.md`:
 **Messages** (if configured):
 - Incremental sync via cursor: `bun run <skill-path>/scripts/query-imessage.ts sync --cursor-file ~/code/personal-messages/runtime/imessage/cursors/default-sync.json --save-dir ~/code/personal-messages/docs/messages/imessage`
 - Messages auto-persist as markdown with frontmatter via read-through cache
-- Cross-reference senders against `my-second-brain-v2/memory/people/` or the owning repo's people memory
+- Cross-reference senders against `my-second-brain/memory/people/` or the owning repo's people memory
 - AI commitment extraction: read message text and identify outbound/inbound commitments
 - Present extracted commitments as "Possible Missing Tasks (from Messages)" for user triage
 - Write tasks and memory updates to the owning repo, not back into the raw corpus repo
@@ -203,12 +203,12 @@ The sync workflow should:
 - Read raw recent messages from `~/code/personal-messages`
 - Propose tasks in the owning repo's `TASKS.md`
 - Update durable memory only when the result is worth promoting
-- Never copy the full raw message body into `my-second-brain-v2`
+- Never copy the full raw message body into `my-second-brain`
 
 ### Owning Repo Resolution
 
 Before writing a task candidate, resolve where it belongs:
-- personal or life-admin threads default to `my-second-brain-v2`
+- personal or life-admin threads default to `my-second-brain`
 - clearly work-scoped threads may write to the owning work repo
 - mixed-context or ambiguous group chats must not auto-write to any repo
 - unresolved ownership should surface as a triage question, not an automatic task write

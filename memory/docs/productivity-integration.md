@@ -139,7 +139,7 @@ When `/productivity-sync` runs:
 ## Practical Default
 
 For Nathan's setup today:
-- `my-second-brain-v2` is the life-hub
+- `my-second-brain` is the life-hub
 - work repos own their own task and memory surfaces
 - QMD handles federated recall across all of them
 - productivity workflows help maintain the local working surfaces

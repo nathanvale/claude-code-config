@@ -54,7 +54,7 @@ type ContactAccumulator = {
 const DEFAULT_CORPUS_DIR =
   "/Users/nathanvale/code/personal-messages/docs/messages/imessage/";
 const DEFAULT_OUTPUT_DIR =
-  "/Users/nathanvale/code/my-second-brain-v2/runtime/people-enrichment/";
+  "/Users/nathanvale/code/my-second-brain/runtime/people-enrichment/";
 
 const GAP_THRESHOLD_DAYS = 14;
 

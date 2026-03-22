@@ -81,7 +81,18 @@
       "name": "Simone Shwartz",
       "slug": "simone-shwartz",
       "handles": ["+61416209243"]
+    },
+    {
+      "name": "Camilla Brott",
+      "slug": "camilla-brott",
+      "handles": ["+61475047000"]
     }
   ],
-  "tier3": []
+  "tier3": [
+    {
+      "name": "Ariel Brott",
+      "slug": "ariel-brott",
+      "handles": ["+61405231312"]
+    }
+  ]
 }

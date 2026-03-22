@@ -1,6 +1,3 @@
-<!-- GENERATED — do not edit directly. Edit prompt-fragments/ and run: scripts/render-user-prompts.sh --write -->
-@AGENTS.md
-
 ## Claude-Specific Notes
 
 - **Skills** → Always use `skills/name/SKILL.md` instead of `commands/*.md`. All skills are user-invocable with `/name` by default. Add `disable-model-invocation: true` only to save context budget.
@@ -9,4 +6,3 @@
 - **Claude Code docs** → Use `/claude-code-docs:help` (never `claude-code-guide` sub-agent)
 - **Memory skills** → User-invocable memory skills live under `~/.claude/skills/`
 - **Rules** → Auto-applied rules in `~/.claude/rules/` handle context7, tool-routing, and newsroom triggers
-

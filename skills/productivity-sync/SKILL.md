@@ -64,11 +64,12 @@ Read `.productivity.yml` and sync each declared connector. Reference the **produ
 - Incremental sync via cursor: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage`
 - Messages auto-persist as Markdown with v2 frontmatter via read-through cache
 - Cross-reference senders against `memory/people/` in the owning repo
+- For durable people updates, prepare structured JSON and call `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
 - AI commitment extraction: read synced message text and identify outbound/inbound commitments
 - Render `CommitmentCandidate[]` as structured JSON, then present as "Possible Missing Tasks (from Messages)" for user triage
 - If `owner_status` is `ambiguous` or `unknown`, ask before writing to any repo task surface
 - Write tasks and memory updates to the owning repo, not back into the raw corpus repo
-- Never copy raw message bodies into `my-second-brain-v2`
+- Never copy raw message bodies into `my-second-brain`
 
 **Messages (deep)** (if `--deep` and messages configured):
 - Expand to 7-day window: `sync --since <7-days-ago>`
@@ -112,6 +113,20 @@ If no sources are configured or available, note "No external sources connected -
 If calendar data was fetched, cross-reference attendees against memory:
 - Known people: note recent meetings in their context
 - Unknown people: flag for memory gap filling in Step 6
+
+### People Note Writes
+
+Treat people memory as one shared contract, not a separate sync-owned note system.
+
+When `productivity-sync` updates a person note:
+- do not freehand edit `memory/people/*.md`
+- prepare structured JSON and call `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
+- append short durable observations to `## Signals`
+- place conflicts, ambiguity, and unresolved identity issues in `## Open Questions`
+- keep relationship-profile edits conservative and scoped to explicit H3 blocks
+- use `--create-if-missing` only for safe minimal stubs when identity is unambiguous enough to justify creation
+- prefer creating a minimal stub plus an enqueue for `/people-enrich` over writing rich profile prose directly
+- never copy raw email or message bodies into durable people notes
 
 ### 4. Triage Stale Items
 

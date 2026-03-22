@@ -163,7 +163,7 @@ These fields are readable during migration but should not be written by new v2 s
 
 ```yaml
 related:
-  - /Users/nathanvale/code/my-second-brain-v2/memory/people/melanie.md
+  - /Users/nathanvale/code/my-second-brain/memory/people/melanie.md
 attachments:
   - id: "att-001"
     kind: image

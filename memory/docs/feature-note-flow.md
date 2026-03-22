@@ -2,7 +2,7 @@
 title: "Feature Note Flow"
 type: reference
 status: active
-updated: 2026-03-19
+updated: 2026-03-22
 summary: "How product and feature notes move from rough idea to settled spec to executable plan inside the Memory OS."
 ---
 
@@ -67,6 +67,8 @@ Use for the settled what:
 - how success will be judged
 
 A lightweight PRD belongs here. Do not add a separate `prd` note type unless there is a strong retrieval reason to do so.
+It is fine for an early draft to include implementation thinking while the shape is still emerging.
+Once the contract is stable enough to execute against, move phase-based rollout, checklists, and evolving implementation tradeoffs into a separate `plan` note.
 
 ### `plan`
 
@@ -76,6 +78,8 @@ Use for the executable how:
 - rollout
 - testing
 - recovery
+
+After the split, cross-link the `plan` and `spec` so they remain one navigable thread.
 
 ### `task`
 

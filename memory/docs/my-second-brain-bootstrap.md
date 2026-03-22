@@ -38,7 +38,7 @@ Use:
 
 ```sh
 ~/.config/memory/scripts/bootstrap-life-hub.sh \
-  --repo /Users/nathanvale/code/my-second-brain-v2 \
+  --repo /Users/nathanvale/code/my-second-brain \
   --name "my-second-brain"
 ```
 
