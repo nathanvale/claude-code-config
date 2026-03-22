@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { parse } from "yaml";
 
 type RepoProfile = "life-hub" | "work-repo" | "infra-repo" | string;
 
@@ -25,8 +24,14 @@ type Roster = {
 const rosterPath = resolve(import.meta.dir, "../federation/roster.yml");
 
 const loadRoster = (): Roster => {
-	const raw = readFileSync(rosterPath, "utf8");
-	return parse(raw) as Roster;
+	const result = spawnSync("yq", ["-o=json", rosterPath], {
+		encoding: "utf8",
+	});
+	if (result.status !== 0) {
+		console.error(`yq failed: ${result.stderr}`);
+		process.exit(1);
+	}
+	return JSON.parse(result.stdout) as Roster;
 };
 
 const qmdInstalled = (): boolean => {
