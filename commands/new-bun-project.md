@@ -1,28 +1,49 @@
 ---
-description: Create a new Bun TypeScript project from template in ~/code
-argument-hint: <project-name> [description]
-allowed-tools: Bash(gh:*), Bash(cd:*), Bash(bun:*)
-model: claude-3-5-haiku-20241022
+name: new-bun-project
+description: Create a new Bun TypeScript project from template (fully automated)
+argument-hint: "<project-name> [description]"
 ---
 
-Create a new project using my Bun TypeScript template (fully automated, no prompts):
+# New Bun TypeScript Project
 
-1. Create repo from template and clone to ~/code:
-   ```bash
-   gh repo create nathanvale/$1 --template nathanvale/bun-typescript-starter --public --clone -- ~/code/$1
-   ```
+Create a new project from the `nathanvale/bun-typescript-starter` template, fully automated with no interactive prompts.
 
-2. Run setup with all CLI params (--yes skips all confirmations):
-   ```bash
-   cd ~/code/$1 && bun run setup -- --name "@nathanvale/$1" --description "${2:-A TypeScript library}" --author "Nathan Vale" --yes
-   ```
+**Arguments:**
+- `$1` - Project name (required)
+- `$2` - Description (optional, defaults to "A TypeScript library")
 
-3. Remind user to set NPM_TOKEN secret if they want to publish:
-   ```bash
-   gh secret set NPM_TOKEN --repo nathanvale/$1
-   ```
+## Steps
 
-Project name: $1
-Description: $2 (defaults to "A TypeScript library" if not provided)
+### Step 1: Create repo from template and clone
 
-IMPORTANT: Run all commands without asking questions. The --yes flag handles all confirmations.
+```bash
+gh repo create nathanvale/$1 --template nathanvale/bun-typescript-starter --public --clone -- ~/code/$1
+```
+
+Wait for the command to complete before proceeding. If it fails because the repo already exists, stop and inform the user.
+
+### Step 2: Run project setup
+
+```bash
+cd ~/code/$1 && bun run setup -- --name "@nathanvale/$1" --description "${2:-A TypeScript library}" --author "Nathan Vale" --yes
+```
+
+The `--yes` flag skips all confirmations. Do NOT prompt the user for any input during setup.
+
+### Step 3: Remind about NPM_TOKEN
+
+After setup completes, tell the user:
+
+> Project created at `~/code/$1`. If you want to publish to npm, set your NPM_TOKEN secret:
+> ```bash
+> gh secret set NPM_TOKEN --repo nathanvale/$1
+> ```
+
+Do NOT run the `gh secret set` command automatically -- it requires interactive input from the user.
+
+## Important
+
+- Run all commands without asking questions
+- Do NOT add any extra steps beyond what is listed above
+- Do NOT modify any files after setup completes
+- If any step fails, stop and report the error
