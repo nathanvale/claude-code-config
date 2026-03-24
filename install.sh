@@ -10,23 +10,35 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_HOME="${HOME}/.claude"
+CODEX_HOME="${HOME}/.codex"
+CONFIG_HOME="${HOME}/.config"
 
 # Symlinks: "link_path|target_path"
 symlinks=(
 	"${CLAUDE_HOME}/CLAUDE.md|${SCRIPT_DIR}/CLAUDE.md"
+	"${CLAUDE_HOME}/AGENTS.md|${SCRIPT_DIR}/AGENTS.md"
 	"${CLAUDE_HOME}/context|${SCRIPT_DIR}/context"
+	"${CLAUDE_HOME}/rules|${SCRIPT_DIR}/rules"
 	"${CLAUDE_HOME}/commands|${SCRIPT_DIR}/commands"
 	"${CLAUDE_HOME}/skills|${SCRIPT_DIR}/skills"
+	"${CLAUDE_HOME}/agents|${SCRIPT_DIR}/agents"
+	"${CLAUDE_HOME}/hooks|${SCRIPT_DIR}/hooks"
+	"${CLAUDE_HOME}/hooks.json|${SCRIPT_DIR}/hooks.json"
+	"${CLAUDE_HOME}/settings.json|${SCRIPT_DIR}/settings.json"
 	"${CLAUDE_HOME}/.mcp.json|${SCRIPT_DIR}/.mcp.json"
+	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
 
 create_links() {
 	echo "Creating symlinks..."
-	mkdir -p "$CLAUDE_HOME"
-
+	mkdir -p "$CODEX_HOME"
 	for entry in "${symlinks[@]}"; do
 		local link="${entry%%|*}"
 		local target="${entry##*|}"
+		local parent
+		parent="$(dirname "$link")"
+
+		mkdir -p "$parent"
 
 		if [[ ! -e "$target" ]]; then
 			echo "  SKIP (target missing): $target"
@@ -48,6 +60,13 @@ create_links() {
 			echo "  CREATED: $link -> $target"
 		fi
 	done
+
+	# Render prompt files from fragments
+	echo ""
+	echo "Rendering user prompt files..."
+	"${SCRIPT_DIR}/scripts/render-user-prompts.sh" --write
+
+	echo ""
 	echo "Done."
 }
 
