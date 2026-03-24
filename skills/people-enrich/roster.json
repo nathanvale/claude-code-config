@@ -1,0 +1,98 @@
+{
+  "tier1": [
+    {
+      "name": "Melanie",
+      "slug": "melanie",
+      "handles": ["+61412667520"]
+    },
+    {
+      "name": "Richard Johnson",
+      "slug": "richard-johnson",
+      "handles": ["+61497848278", "richard.johnson159@gmail.com"]
+    },
+    {
+      "name": "Levi Vale",
+      "slug": "levi",
+      "handles": ["levielijahvale@gmail.com"]
+    },
+    {
+      "name": "Marion Livingstone Vale",
+      "slug": "marion-vale",
+      "handles": ["+61432239800", "marionvale@optusnet.com.au"]
+    },
+    {
+      "name": "Pepper Vale",
+      "slug": "pepper-vale",
+      "handles": ["pepperlouvale@icloud.com", "+61490354997"]
+    },
+    {
+      "name": "Maya Rose Vale",
+      "slug": "maya-vale",
+      "handles": ["+61484621778", "mayarosevale@icloud.com", "mayarosevale@gmail.com"]
+    },
+    {
+      "name": "Kate Berry",
+      "slug": "kate-berry",
+      "handles": ["+61418376996"]
+    },
+    {
+      "name": "Marilyn Saxone",
+      "slug": "marilyn-saxone",
+      "handles": ["+61412263852"]
+    }
+  ],
+  "tier2": [
+    {
+      "name": "Andrew Lazar",
+      "slug": "andrew-lazar",
+      "handles": ["+61426431828"]
+    },
+    {
+      "name": "Tyson Wodak",
+      "slug": "tyson-wodak",
+      "handles": ["+61411706409"]
+    },
+    {
+      "name": "Paul Foulkes",
+      "slug": "paul-foulkes",
+      "handles": ["+61411429684"]
+    },
+    {
+      "name": "Freda Erlich",
+      "slug": "freda-erlich",
+      "handles": ["+61407876991"]
+    },
+    {
+      "name": "Jan Faulkenberg",
+      "slug": "jan-faulkenberg",
+      "handles": ["+61413414627"]
+    },
+    {
+      "name": "Marcel Saxone",
+      "slug": "marcel-saxone",
+      "handles": ["+61438354929"]
+    },
+    {
+      "name": "Romy Saxone",
+      "slug": "romy-saxone",
+      "handles": ["romysaxone@icloud.com", "+61413734206"]
+    },
+    {
+      "name": "Simone Shwartz",
+      "slug": "simone-shwartz",
+      "handles": ["+61416209243"]
+    },
+    {
+      "name": "Camilla Brott",
+      "slug": "camilla-brott",
+      "handles": ["+61475047000"]
+    }
+  ],
+  "tier3": [
+    {
+      "name": "Ariel Brott",
+      "slug": "ariel-brott",
+      "handles": ["+61405231312"]
+    }
+  ]
+}
