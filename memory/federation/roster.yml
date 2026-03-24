@@ -1,0 +1,290 @@
+version: 1
+hub: my-second-brain
+
+repos:
+  - name: my-second-brain
+    profile: life-hub
+    location: /Users/nathanvale/code/my-second-brain
+    collection: vault
+    update_command: git -C /Users/nathanvale/code/my-second-brain fetch --all --prune --quiet || true
+    primary_paths:
+      - 00 Inbox
+      - 01 Projects
+      - 02 Areas
+      - 03 Resources
+      - docs
+      - memory
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: monash-smst
+    profile: work-repo
+    location: /Users/nathanvale/code/monash-smst
+    collection: repo-monash-smst
+    update_command: git -C /Users/nathanvale/code/monash-smst fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - memory
+      - TASKS.md
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: mac-mini-home-server
+    profile: infra-repo
+    location: /Users/nathanvale/code/mac-mini-home-server
+    collection: repo-mac-mini-home-server
+    update_command: git -C /Users/nathanvale/code/mac-mini-home-server fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - memory
+      - TASKS.md
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: bun-typescript-starter
+    profile: infra-repo
+    location: /Users/nathanvale/code/bun-typescript-starter
+    collection: repo-bun-typescript-starter
+    update_command: git -C /Users/nathanvale/code/bun-typescript-starter fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - memory
+      - todos
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: ellucian-api-catalog
+    profile: reference-corpus
+    location: /Users/nathanvale/code/ellucian-api-catalog
+    collection: repo-ellucian-api-catalog
+    update_command: bun run /Users/nathanvale/code/ellucian-api-catalog/scripts/sync.ts
+    primary_paths:
+      - apis
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: ellucian-developer
+    profile: reference-corpus
+    location: /Users/nathanvale/code/ellucian-developer
+    collection: repo-ellucian-developer
+    update_command: bun run /Users/nathanvale/code/ellucian-developer/scripts/sync.ts
+    primary_paths:
+      - repos
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: personal-messages
+    profile: reference-corpus
+    location: /Users/nathanvale/code/personal-messages
+    collection: repo-personal-messages
+    update_command: git -C /Users/nathanvale/code/personal-messages fetch --all --prune --quiet || true
+    primary_paths:
+      - docs/messages
+      - docs/specs
+
+  # --- Already indexed in QMD but missing from roster ---
+
+  - name: claude-code-config
+    profile: infra-repo
+    location: /Users/nathanvale/code/claude-code-config
+    collection: repo-claude-code-config
+    primary_paths:
+      - docs
+      - memory
+      - rules
+      - prompt-fragments
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: side-quest-marketplace
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-marketplace
+    collection: repo-side-quest-marketplace
+    update_command: git -C /Users/nathanvale/code/side-quest-marketplace fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: capture-bridge
+    profile: infra-repo
+    location: /Users/nathanvale/code/capture-bridge
+    collection: repo-capture-bridge
+    update_command: git -C /Users/nathanvale/code/capture-bridge fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: everything-claude-code
+    profile: reference-corpus
+    location: /Users/nathanvale/code/everything-claude-code
+    collection: repo-everything-claude-code
+    update_command: git -C /Users/nathanvale/code/everything-claude-code fetch --all --prune --quiet || true
+    primary_paths:
+      - "**/*.md"
+
+  # --- New collections ---
+
+  - name: side-quest-runners
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-runners
+    collection: repo-side-quest-runners
+    update_command: git -C /Users/nathanvale/code/side-quest-runners fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+
+  - name: side-quest-xero-cli
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-xero-cli
+    collection: repo-side-quest-xero-cli
+    update_command: git -C /Users/nathanvale/code/side-quest-xero-cli fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+
+  - name: imessage-timeline
+    profile: infra-repo
+    location: /Users/nathanvale/code/imessage-timeline
+    collection: repo-imessage-timeline
+    update_command: git -C /Users/nathanvale/code/imessage-timeline fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - website/docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: side-quest-black-box
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-black-box
+    collection: repo-side-quest-black-box
+    update_command: git -C /Users/nathanvale/code/side-quest-black-box fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: side-quest-marketplace-old
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-marketplace-old
+    collection: repo-side-quest-marketplace-old
+    update_command: git -C /Users/nathanvale/code/side-quest-marketplace-old fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: vtm-cli
+    profile: infra-repo
+    location: /Users/nathanvale/code/vtm-cli
+    collection: repo-vtm-cli
+    update_command: git -C /Users/nathanvale/code/vtm-cli fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+
+  - name: real-time-chat
+    profile: infra-repo
+    location: /Users/nathanvale/code/real-time-chat
+    collection: repo-real-time-chat
+    update_command: git -C /Users/nathanvale/code/real-time-chat fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+
+  - name: orchestr8
+    profile: infra-repo
+    location: /Users/nathanvale/code/@orchestr8
+    collection: repo-orchestr8
+    update_command: git -C "/Users/nathanvale/code/@orchestr8" fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+
+  - name: dotfiles
+    profile: infra-repo
+    location: /Users/nathanvale/code/dotfiles
+    collection: repo-dotfiles
+    update_command: git -C /Users/nathanvale/code/dotfiles fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+
+  - name: experience-sdk
+    profile: work-repo
+    location: /Users/nathanvale/code/experience-sdk
+    collection: repo-experience-sdk
+    update_command: git -C /Users/nathanvale/code/experience-sdk fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+
+  - name: claude-flow
+    profile: infra-repo
+    location: /Users/nathanvale/code/claude-flow
+    collection: repo-claude-flow
+    update_command: git -C /Users/nathanvale/code/claude-flow fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - v2/docs
+      - v2/benchmark/docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: side-quest-plugins
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-plugins
+    collection: repo-side-quest-plugins
+    update_command: git -C /Users/nathanvale/code/side-quest-plugins fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - specs
+
+  - name: side-quest-word-on-the-street
+    profile: infra-repo
+    location: /Users/nathanvale/code/side-quest-word-on-the-street
+    collection: repo-side-quest-wots
+    update_command: git -C /Users/nathanvale/code/side-quest-word-on-the-street fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+
+  - name: claude-starter
+    profile: infra-repo
+    location: /Users/nathanvale/code/claude-starter
+    collection: repo-claude-starter
+    update_command: git -C /Users/nathanvale/code/claude-starter fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+
+  - name: my-agent-dojo
+    profile: infra-repo
+    location: /Users/nathanvale/code/my-agent-dojo
+    collection: repo-my-agent-dojo
+    update_command: git -C /Users/nathanvale/code/my-agent-dojo fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+
+  - name: my-second-cortex
+    profile: infra-repo
+    location: /Users/nathanvale/code/my-second-cortex
+    collection: repo-my-second-cortex
+    update_command: git -C /Users/nathanvale/code/my-second-cortex fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+
+  - name: memory-context
+    profile: infra-repo
+    location: /Users/nathanvale/code/memory-context
+    collection: repo-memory-context
+    update_command: git -C /Users/nathanvale/code/memory-context fetch --all --prune --quiet || true
+    primary_paths:
+      - docs
+      - CLAUDE.md
+      - AGENTS.md
+
+  - name: orchestrator-prototype-backup
+    profile: infra-repo
+    location: /Users/nathanvale/code/orchestrator-prototype-backup
+    collection: repo-orchestrator-prototype-backup
+    update_command: git -C /Users/nathanvale/code/orchestrator-prototype-backup fetch --all --prune --quiet || true
+    primary_paths:
+      - docs

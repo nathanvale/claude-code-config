@@ -1,0 +1,133 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash"
+    ],
+    "deny": [],
+    "ask": [
+      "Bash(git rebase:*)",
+      "Bash(git stash drop:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git reset HEAD~:*)",
+      "Bash(git clean -f:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git clean -fx:*)",
+      "Bash(git checkout -- :*)",
+      "Bash(git checkout .:*)",
+      "Bash(git restore --staged:*)",
+      "Bash(git restore .:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(git checkout * -- :*)",
+      "Bash(git restore --source:*)",
+      "Bash(git restore --worktree:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "disabledMcpjsonServers": [],
+  "enabledPlugins": {
+    "example-skills@anthropic-agent-skills": false,
+    "document-skills@anthropic-agent-skills": true,
+    "compound-engineering@every-marketplace": true
+  },
+  "alwaysThinkingEnabled": false,
+  "skipDangerousModePermissionPrompt": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/git-context-loader.ts",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date '+Current datetime: %A, %d %B %Y %I:%M %p %Z'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/git-safety.ts",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/git-safety.ts",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/git-safety.ts",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/command-logger.ts",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/session-summary.ts",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/auto-commit-on-stop.ts",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
