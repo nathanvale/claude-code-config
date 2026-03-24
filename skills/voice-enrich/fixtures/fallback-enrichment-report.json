@@ -1,0 +1,23 @@
+{
+  "summary": "A newer friendship with warm intent but thin documented context.",
+  "relationship_profile": [
+    {
+      "heading": "Relationship",
+      "content": "A promising friendship that feels warm, grounded, and still lightly sketched. Nathan experiences Jordan as dependable and easy to be around, but the available context is too thin to overstate what the relationship already is."
+    },
+    {
+      "heading": "Support Pattern",
+      "content": "Jordan seems to communicate care through practical steadiness rather than emotional verbosity. Nathan is still learning how much directness Jordan wants when conversations move from logistics into feeling."
+    }
+  ],
+  "open_questions": [
+    "What kind of emotional directness feels supportive rather than intrusive for Jordan?"
+  ],
+  "open_questions_mode": "append",
+  "relationship_type": "friend",
+  "enrichment": {
+    "source": "fallback-proof",
+    "tier": 1,
+    "last_run_at": "2026-03-23"
+  }
+}
