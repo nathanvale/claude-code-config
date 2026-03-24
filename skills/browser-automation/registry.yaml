@@ -1,0 +1,45 @@
+schema_version: 2
+
+# Browser Session Registry
+# Central session name registry -- prevents naming collisions.
+# All agents share one Chrome daemon via --profile ~/.cache/chrome-agent.
+# Auth isolation comes from --session <name> (separate cookies per session).
+#
+# To add a new session:
+#   1. Pick a unique session name (usually matches the domain key)
+#   2. Verify no name collision below
+#   3. Add entry
+#   4. Create a config file if auth is needed
+#
+# For parallel dispatch, callers suffix the session name at runtime:
+#   --session zoom-1, --session zoom-2 (ephemeral, no registry entry needed)
+
+profile: ~/.cache/chrome-agent
+
+sessions:
+  personal:
+    config: ~/.claude/skills/browser-automation/config.yaml
+
+  monash:
+    config: .claude/browser-configs/config.monash.yaml
+
+  ellucian:
+    config: .claude/browser-configs/config.ellucian.yaml
+
+  monash-qa:
+    config: .claude/browser-configs/config.monash-qa.yaml
+
+  timesheet:
+    config: .claude/browser-configs/config.fasttrack360.yaml
+
+  zoom:
+    config: ~/.claude/skills/browser-automation/config.yaml
+
+  confluence:
+    config: ~/.claude/skills/browser-automation/config.yaml
+
+  classic-cinema:
+    config: .claude/skills/classic-cinema/config.yaml
+
+defaults:
+  session: personal
