@@ -73,6 +73,12 @@ Quick WIP save -- no ceremony.
    ```
 8. **Return the PR URL** to the user
 
+## Merge PR
+
+1. **Merge**: `gh pr merge <number> --merge --delete-branch`
+   - Always use `--merge` (regular merge commit), not `--squash`, unless explicitly asked
+   - `--delete-branch` cleans up remote and local branch after merge
+
 ## Session Log
 
 Show what happened during this session.
