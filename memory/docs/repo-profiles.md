@@ -2,7 +2,7 @@
 title: "Repo Profiles"
 type: reference
 status: active
-updated: 2026-03-17
+updated: 2026-03-24
 summary: "Shared repo-role profiles so new repos can join the Memory OS without inventing a new memory model."
 ---
 
@@ -23,6 +23,7 @@ Owns:
 - stakeholders and people context
 - imported docs and sidecars
 - work research
+- solutions
 - project tasks
 - local delivery context
 
@@ -45,7 +46,7 @@ Owns:
 - specs
 - runbooks
 - verification
-- gotchas
+- solutions
 - implementation logs
 - ADRs
 

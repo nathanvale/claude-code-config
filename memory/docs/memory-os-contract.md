@@ -2,7 +2,7 @@
 title: "Memory OS Contract"
 type: contract
 status: active
-updated: 2026-03-22
+updated: 2026-03-24
 summary: "Shared user-scope contract for Nathan's Markdown-first memory system across work repos, personal repos, Claude Code, and Codex."
 ---
 
@@ -32,6 +32,7 @@ Durable knowledge that should still matter later:
 - project context
 - stable people context
 - decisions and ADRs
+- solutions
 - durable research
 - glossary terms
 - operational rules
@@ -84,7 +85,7 @@ Repos own operational truth for the work they contain.
 
 Examples:
 - `monash-smst` owns work meetings, people, Confluence imports, project context, and work tasks.
-- `mac-mini-home-server` owns specs, runbooks, ADRs, gotchas, verification, and implementation history.
+- `mac-mini-home-server` owns specs, runbooks, ADRs, solutions, verification, and implementation history.
 - a future product repo should own roadmap, plans, specs, research, decisions, and implementation history for that product.
 
 ### `my-second-brain`
@@ -118,6 +119,7 @@ Use this universal note taxonomy wherever possible:
 - `adr`
 - `plan`
 - `spec`
+- `solution`
 - `runbook`
 - `log`
 - `artifact-sidecar`
@@ -133,12 +135,14 @@ Distinguish these nearby families like this:
 - `spec` for more settled documents that describe the shape to execute against
 - `decision` for durable choices about policy, workflow, structure, naming, ownership, or operating rules where the why should be recoverable later
 - `adr` for heavier architectural or system-design choices with notable tradeoffs, alternatives, or long-lived technical consequences
+- `solution` for discrete problem/fix pairs discovered during development — the gotcha and its resolution in one document
 - `project` for the container or initiative itself
 
 Use the nearby operational note families like this:
 - `research` asks "what do we know?"
 - `review` asks "how good is this against the chosen bar?"
 - `decision` asks "what did we choose and why?"
+- `solution` asks "what tripped us up and how do we avoid it next time?"
 - `log` asks "what happened?"
 
 For feature work, a brainstorm usually belongs in the existing `plan` family, while a lightweight PRD usually belongs in `spec`.
@@ -147,6 +151,72 @@ Once a note is stable enough to execute against, split rollout sequencing and ex
 Cross-link the `spec` and `plan` so retrieval still feels like one thread.
 
 Reviews usually belong in `docs/reviews/`. Create a standalone review note when the evaluation itself has lasting retrieval value, multiple findings, a clear verdict, or follow-up actions that should be recoverable later.
+
+Solutions belong in `docs/solutions/` with optional subdirectories by concern area (e.g., `devextreme/`, `css/`, `api/`, `env/`, `testing/`). One file per discrete problem/solution pair. Name after the problem domain, not a ticket number.
+
+### Solution Frontmatter
+
+```yaml
+---
+title: "Human-readable problem description"
+type: solution
+date: 2026-03-24
+severity: low | medium | high | critical
+category: css | api | framework | env | testing | tooling | data
+tags: [specific, searchable, terms]
+component: affected-component-or-file
+source: session | meeting | pr-review | incident
+---
+```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `title` | yes | Problem description, not ticket number |
+| `type` | yes | Always `solution` |
+| `date` | yes | When discovered — point-in-time, not evolving |
+| `severity` | yes | `critical` / `high` / `medium` / `low` |
+| `category` | yes | Domain bucket for grouping and subdirectory |
+| `tags` | yes | 2–6 terms for retrieval |
+| `component` | recommended | Specific file or module involved |
+| `source` | recommended | How the solution was discovered |
+| `related` | optional | Paths to related solution or decision notes |
+
+No `status` field — a solution is always active. If no longer relevant, delete it.
+
+Severity guide:
+
+| Level | When to use |
+|-------|------------|
+| `critical` | Data loss, silent corruption, security, or hours of debugging |
+| `high` | Blocks progress until discovered, affects multiple features |
+| `medium` | Causes confusion or rework, scoped to one area |
+| `low` | Minor nuisance, good to know |
+
+### Solution Body Structure
+
+```markdown
+## Problem
+What went wrong or what was surprising. Include the symptom as experienced.
+
+## Root Cause
+Why it happened. The non-obvious technical explanation.
+
+## Solution
+What fixed it. Include code snippets or selectors when helpful.
+
+## Key Learnings
+Durable rules to prevent recurrence. Numbered list, imperative voice.
+
+## Related
+Links to related solutions, decisions, or external docs. Optional — omit if none.
+```
+
+- `## Problem` and `## Solution` are required.
+- `## Root Cause` is required when the cause differs from the symptom.
+- `## Key Learnings` is required — at least one takeaway.
+- `## Related` is optional.
+- No H1 in body — the `title` frontmatter serves as the document title.
+- Keep each section concise — a solution file should be scannable in 30 seconds.
 
 ## Base Frontmatter
 

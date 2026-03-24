@@ -116,6 +116,7 @@ Use `docs/` when the primary outcome is an authored document the user will want 
 
 - research notes
 - review notes
+- solutions (gotchas, foot-guns, problem/fix pairs)
 - plans and itineraries
 - specs
 - decisions
@@ -125,6 +126,7 @@ Use `docs/` when the primary outcome is an authored document the user will want 
 Typical homes:
 - `docs/research/`
 - `docs/reviews/`
+- `docs/solutions/`
 - `docs/plans/`
 - `docs/specs/`
 - `docs/decisions/`
@@ -133,6 +135,7 @@ Typical homes:
 
 Use these nearby note families deliberately:
 
+- `solution` for discrete problem/fix pairs discovered during development — one file per problem, scannable in 30 seconds. See the Solution Note Contract in `~/.config/memory/docs/memory-os-contract.md` for frontmatter and body structure. Always write solution files directly following the Memory OS contract — do not delegate to external compound skills which use a different frontmatter schema. Place in `docs/solutions/<category>/` subdirectories to avoid a flat folder of hundreds of files. Use the `category` frontmatter field as the subdirectory name (e.g., `docs/solutions/devextreme/`, `docs/solutions/css/`, `docs/solutions/api/`, `docs/solutions/env/`, `docs/solutions/testing/`). Create the subdirectory if it doesn't exist.
 - `review` for evaluating a change, artifact, system, or workflow against explicit criteria
 - `plan` for evolving options, sequencing, itineraries, and future-facing decision documents
 - `spec` for more settled canonical documents that describe the shape to execute against
@@ -185,6 +188,7 @@ Map captures back to the shared note families whenever possible:
 - `task`
 - `decision`
 - `adr`
+- `solution`
 - `plan`
 - `spec`
 - `runbook`
@@ -258,7 +262,7 @@ Pick one:
 Route by content type:
 
 - people, glossary, project summaries, preferences -> `memory/`
-- research, reviews, plans, specs, decisions, logs, artifacts -> `docs/`
+- research, reviews, solutions, plans, specs, decisions, logs, artifacts -> `docs/`
 - mixed cases -> both
 
 When writing `memory/projects/`, use lowercase hyphenated slugs and prefer domain-prefixed names when they improve findability, such as `holiday-fnq-july-2026.md`, not generated names like `project_fnq_july_2026.md`.
@@ -278,6 +282,7 @@ Use these defaults unless the user says otherwise:
 - photo of a referral, form, receipt, or message -> `memory` or `both`
 - pasted shorthand, acronym, nickname, person context -> `memory`
 - research dump -> `doc`
+- gotcha, foot-gun, or problem/fix pair -> `doc` with `type: solution` in `docs/solutions/`
 - imported markdown plan or itinerary -> `both`
 - meeting artifact that needs a proper writeup -> `doc` or `both`
 - durable project summary update -> `memory`

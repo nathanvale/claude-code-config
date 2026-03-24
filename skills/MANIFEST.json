@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "description": "Skill ecosystem manifest — describes skill composition, transitions, and health rules",
+  "updated": "2026-02-04",
+  "skills": {
+    "kickoff": {
+      "description": "Prepare to work on a Jira ticket",
+      "entry_stage": "kickoff",
+      "advances_to": ["kickoff"],
+      "calls": ["jira", "ticket-state", "codebase-search", "figma", "api-discovery", "deep-dive"],
+      "writes_activity": true,
+      "activity_ops": ["init", "gather_complete"]
+    },
+    "plan": {
+      "description": "Interactive planning session",
+      "requires_stage": ["kickoff"],
+      "advances_to": ["planned"],
+      "calls": ["ticket-state", "para-obsidian"],
+      "writes_activity": true,
+      "activity_ops": ["start", "decision", "complete"]
+    },
+    "qa-test": {
+      "description": "Browser-based QA verification",
+      "requires_stage": ["implementing", "testing"],
+      "advances_to": ["testing", "qa_verified"],
+      "calls": ["ticket-state", "chrome-verify"],
+      "writes_activity": true,
+      "activity_ops": ["start", "ac_pass", "ac_fail", "complete"]
+    },
+    "git": {
+      "description": "Unified git and GitHub operations",
+      "operations": {
+        "commit": {
+          "writes_activity": true,
+          "activity_ops": ["commit"]
+        },
+        "pr-create": {
+          "advances_to": ["pr_created"],
+          "writes_activity": true,
+          "activity_ops": ["pr-create"]
+        },
+        "pr-merge": {
+          "advances_to": ["merged"],
+          "writes_activity": true,
+          "activity_ops": ["pr-merge"]
+        }
+      },
+      "calls": ["ticket-state"]
+    },
+    "review-workflow": {
+      "description": "Orchestrated PR and Jira review workflow",
+      "requires_stage": ["pr_created"],
+      "advances_to": ["in_review"],
+      "calls": ["ticket-state", "git"],
+      "writes_activity": true,
+      "activity_ops": ["start", "complete"]
+    },
+    "where-am-i": {
+      "description": "Show current ticket pipeline status",
+      "calls": ["ticket-state", "jira"],
+      "writes_activity": true,
+      "activity_ops": ["check", "drift_detected", "drift_fixed"]
+    },
+    "ticket-state": {
+      "description": "Persistent per-ticket state management",
+      "writes_activity": true,
+      "activity_ops": ["init", "advance", "update", "phase-add", "phase-switch"]
+    },
+    "babysitter": {
+      "description": "Self-healing ecosystem orchestrator",
+      "calls": ["ticket-state"],
+      "writes_activity": true,
+      "activity_ops": ["scan", "heal", "learn"]
+    },
+    "tech-lead": {
+      "description": "Interactive pipeline advisor",
+      "calls": ["ticket-state", "babysitter", "jira", "git"],
+      "reads_activity": true
+    },
+    "report": {
+      "description": "Generate standup and weekly reports",
+      "calls": ["ticket-state", "jira"],
+      "reads_activity": true
+    }
+  },
+  "pipeline_stages": [
+    { "name": "kickoff", "index": 0, "description": "Initial exploration and context gathering" },
+    { "name": "planned", "index": 1, "description": "Technical plan created and approved" },
+    { "name": "implementing", "index": 2, "description": "Active coding in progress" },
+    { "name": "testing", "index": 3, "description": "QA verification in progress" },
+    { "name": "qa_verified", "index": 4, "description": "All ACs verified, ready for PR" },
+    { "name": "pr_created", "index": 5, "description": "Pull request opened" },
+    { "name": "in_review", "index": 6, "description": "Awaiting code review" },
+    { "name": "changes_requested", "index": 7, "description": "Review feedback to address" },
+    { "name": "approved", "index": 8, "description": "PR approved, ready to merge" },
+    { "name": "merged", "index": 9, "description": "Work complete, PR merged" }
+  ],
+  "auto_transitions": {
+    "planned_to_implementing": {
+      "trigger": "commits_detected",
+      "detector": "where-am-i",
+      "description": "First commit on branch auto-advances from planned to implementing"
+    },
+    "pr_created_to_in_review": {
+      "trigger": "self_review_passed",
+      "detector": "review-workflow",
+      "description": "Self-review completion advances to in_review"
+    },
+    "in_review_to_approved": {
+      "trigger": "pr_approved",
+      "detector": "where-am-i",
+      "description": "GitHub review approval auto-advances to approved"
+    },
+    "approved_to_merged": {
+      "trigger": "pr_merged",
+      "detector": "where-am-i",
+      "description": "PR merge auto-advances to merged"
+    },
+    "implementing_to_testing": {
+      "trigger": "qa_test_started",
+      "detector": "qa-test",
+      "description": "Running /qa-test auto-advances to testing"
+    }
+  },
+  "health_rules": [
+    {
+      "id": "pr_merged_stage_drift",
+      "condition": "pr.state == MERGED AND stage != merged",
+      "severity": "error",
+      "auto_heal": true,
+      "fix": "advance to merged",
+      "description": "PR is merged on GitHub but pipeline state hasn't caught up"
+    },
+    {
+      "id": "pr_exists_stage_drift",
+      "condition": "pr exists on GitHub AND stage < pr_created",
+      "severity": "error",
+      "auto_heal": true,
+      "fix": "advance to pr_created",
+      "description": "PR exists but pipeline state is behind"
+    },
+    {
+      "id": "pr_approved_stage_drift",
+      "condition": "pr.reviewDecision == APPROVED AND stage < approved",
+      "severity": "warning",
+      "auto_heal": true,
+      "fix": "advance to approved",
+      "description": "PR is approved but stage hasn't advanced"
+    },
+    {
+      "id": "changes_requested_drift",
+      "condition": "pr.reviewDecision == CHANGES_REQUESTED AND stage != changes_requested",
+      "severity": "warning",
+      "auto_heal": true,
+      "fix": "update stage to changes_requested",
+      "description": "Changes were requested on PR"
+    },
+    {
+      "id": "jira_done_stage_drift",
+      "condition": "jira.status == Done AND stage != merged",
+      "severity": "warning",
+      "auto_heal": true,
+      "fix": "advance to merged",
+      "description": "Jira shows Done but pipeline isn't complete"
+    },
+    {
+      "id": "stale_ticket",
+      "condition": "stage != merged AND days_since_update > 7",
+      "severity": "warning",
+      "auto_heal": false,
+      "fix": null,
+      "description": "Ticket hasn't been updated in over a week"
+    },
+    {
+      "id": "commits_but_planned",
+      "condition": "stage == planned AND commits_on_branch > 0",
+      "severity": "warning",
+      "auto_heal": true,
+      "fix": "advance to implementing",
+      "description": "Commits exist but stage is still planned"
+    },
+    {
+      "id": "orphaned_state",
+      "condition": "branch does not exist AND stage != merged",
+      "severity": "error",
+      "auto_heal": false,
+      "fix": null,
+      "description": "State file references a branch that no longer exists"
+    }
+  ],
+  "recommended_patterns": {
+    "single_phase": {
+      "description": "Simple tickets: one branch, one PR, one pipeline run",
+      "use_when": "Most tickets — feature work, bug fixes, small tasks",
+      "workflow": "kickoff → plan → implement → qa-test → pr-create → review → merge"
+    },
+    "multi_phase_subtask": {
+      "description": "Complex work split into parent + sub-tasks in Jira",
+      "use_when": "Follow-up work like Cypress tests, additional features, fixes",
+      "workflow": "Parent ticket for main work, sub-task for follow-up with own branch and PR",
+      "note": "Preferred over multi-phase ticket tracking — clearer Jira visibility"
+    },
+    "multi_phase_ticket": {
+      "description": "Single ticket with multiple phases (impl → test → fix)",
+      "use_when": "Edge cases where Jira sub-tasks aren't appropriate",
+      "workflow": "Use phase-add and phase-switch operations",
+      "note": "Added complexity — prefer sub-tasks when possible"
+    }
+  }
+}

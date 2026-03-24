@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "patterns": [
+    {
+      "id": "figma_rate_limit",
+      "skills_affected": ["kickoff", "figma", "figma-compare"],
+      "error_codes": ["figma_rate_limited", "figma_429"],
+      "detection": "message contains '429' or 'rate limit'",
+      "severity": "warn",
+      "fix": "Wait 60s and retry. Figma rate limits reset per-minute.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "state_json_corrupted",
+      "skills_affected": ["ticket-state", "where-am-i", "kickoff"],
+      "error_codes": ["state_corrupted", "json_parse_error"],
+      "detection": "JSON.parse throws on a state file",
+      "severity": "fail",
+      "fix": "Backup corrupted file, re-init from Jira: Skill('ticket-state', args: 'init <KEY>')",
+      "auto_fixable": true,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "mcp_tool_not_loaded",
+      "skills_affected": ["codebase-search", "deep-dive", "api-discovery"],
+      "error_codes": ["mcp_tool_unavailable", "tool_not_found"],
+      "detection": "ToolSearch returns empty or tool call fails with not found",
+      "severity": "warn",
+      "fix": "Re-run ToolSearch to reload the tool. If still fails, restart Claude Code session.",
+      "auto_fixable": true,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "state_dir_missing",
+      "skills_affected": ["ticket-state", "babysitter"],
+      "error_codes": ["state_dir_missing"],
+      "detection": "State directory does not exist",
+      "severity": "fail",
+      "fix": "mkdir -p ~/.claude/state/tickets && mkdir -p ~/.claude/state/babysitter/issues",
+      "auto_fixable": true,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "orphaned_state_file",
+      "skills_affected": ["ticket-state", "where-am-i"],
+      "error_codes": ["orphaned_state"],
+      "detection": "State file exists for a ticket whose branch no longer exists locally",
+      "severity": "warn",
+      "fix": "Ask Nathan if ticket is complete. If yes, advance state to merged.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "qa_run_completed",
+      "skills_affected": ["qa-test"],
+      "error_codes": ["qa_run_passed", "qa_run_passed_with_blocks"],
+      "detection": "message contains 'QA passed'",
+      "severity": "info",
+      "fix": "No action needed — QA verification succeeded.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "qa_run_failed",
+      "skills_affected": ["qa-test"],
+      "error_codes": ["qa_run_failed"],
+      "detection": "message contains 'QA failed'",
+      "severity": "warn",
+      "fix": "User must fix failing ACs and re-run /qa-test.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "dev_server_startup_failure",
+      "skills_affected": ["qa-test"],
+      "error_codes": ["dev_server_failed"],
+      "detection": "message contains 'yarn start:mock failed' or 'port 44389'",
+      "severity": "fail",
+      "fix": "Kill port 44389 (lsof -ti:44389 | xargs kill -9) and retry /qa-test.",
+      "auto_fixable": true,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "chrome_devtools_mcp_connection_lost",
+      "skills_affected": ["qa-test"],
+      "error_codes": ["chrome_devtools_unavailable", "chrome_devtools_disconnected"],
+      "detection": "message contains 'Chrome DevTools' and ('unavailable' or 'disconnected' or 'connection lost')",
+      "severity": "fail",
+      "fix": "Run server-cleanup.sh, ensure Chrome is running with remote debugging, retry /qa-test.",
+      "auto_fixable": true,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "qa_evidence_write_failure",
+      "skills_affected": ["qa-test"],
+      "error_codes": ["evidence_write_failed"],
+      "detection": "message contains 'Failed to write screenshot' or 'evidence directory'",
+      "severity": "warn",
+      "fix": "Check disk space and permissions on ~/.claude/state/qa-test/. Re-run /qa-test.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "chrome_verify_connection_lost",
+      "skills_affected": ["chrome-verify", "qa-test"],
+      "error_codes": ["chrome_verify_connection_lost"],
+      "detection": "message contains 'connection lost' or 'DevTools disconnected'",
+      "severity": "fail",
+      "fix": "Verify Chrome is running with remote debugging. Restart Chrome if needed.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "chrome_verify_script_error",
+      "skills_affected": ["chrome-verify"],
+      "error_codes": ["chrome_verify_script_error"],
+      "detection": "message contains 'evaluate_script' and 'error'",
+      "severity": "warn",
+      "fix": "Check GOTCHAS.md for the component pattern. New gotcha may have been recorded.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "chrome_verify_nav_timeout",
+      "skills_affected": ["chrome-verify"],
+      "error_codes": ["chrome_verify_nav_timeout"],
+      "detection": "message contains 'navigation' and 'timeout'",
+      "severity": "fail",
+      "fix": "Dev server may be down. Check yarn start:mock process.",
+      "auto_fixable": false,
+      "added": "2026-01-30"
+    },
+    {
+      "id": "phase_drift",
+      "skills_affected": ["where-am-i", "ticket-state"],
+      "error_codes": ["phase_drift"],
+      "detection": "Branch prefix doesn't match active phase",
+      "severity": "warn",
+      "fix": "Switch active phase: Skill('ticket-state', args: 'phase-switch <KEY> <detected_phase>')",
+      "auto_fixable": true,
+      "added": "2026-02-04"
+    },
+    {
+      "id": "orphaned_phase",
+      "skills_affected": ["ticket-state", "babysitter"],
+      "error_codes": ["orphaned_phase"],
+      "detection": "Phase has branch recorded but the branch no longer exists locally",
+      "severity": "warn",
+      "fix": "Ask Nathan if phase is complete. If yes, mark as merged.",
+      "auto_fixable": false,
+      "added": "2026-02-04"
+    }
+  ]
+}
