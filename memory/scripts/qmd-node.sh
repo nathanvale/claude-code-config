@@ -2,7 +2,16 @@
 
 set -euo pipefail
 
-QMD_CLI="${QMD_NODE_CLI:-$HOME/.bun/install/global/node_modules/@tobilu/qmd/dist/cli/qmd.js}"
+# Resolve QMD CLI: prefer npm global, fall back to bun global
+QMD_CLI="${QMD_NODE_CLI:-}"
+if [[ -z "$QMD_CLI" ]]; then
+	NPM_GLOBAL="$(npm root -g 2>/dev/null || true)"
+	if [[ -n "$NPM_GLOBAL" && -f "$NPM_GLOBAL/@tobilu/qmd/dist/cli/qmd.js" ]]; then
+		QMD_CLI="$NPM_GLOBAL/@tobilu/qmd/dist/cli/qmd.js"
+	elif [[ -f "$HOME/.bun/install/global/node_modules/@tobilu/qmd/dist/cli/qmd.js" ]]; then
+		QMD_CLI="$HOME/.bun/install/global/node_modules/@tobilu/qmd/dist/cli/qmd.js"
+	fi
+fi
 
 if [[ -z "${BREW_PREFIX:-}" ]]; then
 	if command -v brew >/dev/null 2>&1; then
@@ -23,9 +32,8 @@ if [[ -z "${BREW_PREFIX:-}" ]]; then
 	fi
 fi
 
-if [[ ! -f "$QMD_CLI" ]]; then
-	echo "QMD Node CLI not found at: $QMD_CLI" >&2
-	echo "Install QMD first with: bun install -g @tobilu/qmd" >&2
+if [[ -z "${QMD_CLI:-}" || ! -f "$QMD_CLI" ]]; then
+	echo "QMD CLI not found. Install with: npm install -g @tobilu/qmd" >&2
 	exit 1
 fi
 

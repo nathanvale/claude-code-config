@@ -23,6 +23,9 @@ type Roster = {
 
 const rosterPath = resolve(import.meta.dir, "../federation/roster.yml");
 
+const home = process.env.HOME ?? "";
+const resolvePath = (p: string): string => p.replaceAll("~/", `${home}/`);
+
 const loadRoster = (): Roster => {
 	const result = spawnSync("yq", ["-o=json", rosterPath], {
 		encoding: "utf8",
@@ -72,14 +75,14 @@ const collectionMask = (repo: RosterRepo): string => {
 };
 
 const collectionCommand = (repo: RosterRepo): string =>
-	`qmd collection add ${shellEscape(repo.location)} --name ${shellEscape(repo.collection)} --mask ${shellEscape(collectionMask(repo))}`;
+	`qmd collection add ${shellEscape(resolvePath(repo.location))} --name ${shellEscape(repo.collection)} --mask ${shellEscape(collectionMask(repo))}`;
 
 const removeCollectionCommand = (repo: RosterRepo): string =>
 	`qmd collection remove ${shellEscape(repo.collection)}`;
 
 const updateCommand = (repo: RosterRepo): string | null =>
 	repo.update_command
-		? `qmd collection update-cmd ${shellEscape(repo.collection)} ${shellEscape(repo.update_command)}`
+		? `qmd collection update-cmd ${shellEscape(repo.collection)} ${shellEscape(resolvePath(repo.update_command))}`
 		: null;
 
 const profileLabel = (profile: RepoProfile): string => {
@@ -203,7 +206,16 @@ const applyCommands = (roster: Roster): void => {
 		process.exit(1);
 	}
 
+	const skipped: string[] = [];
+
 	for (const repo of roster.repos) {
+		const resolvedLocation = resolvePath(repo.location);
+		if (!existsSync(resolvedLocation)) {
+			console.log(`SKIP ${repo.collection} (${resolvedLocation} not found)`);
+			skipped.push(repo.name);
+			continue;
+		}
+
 		const updateCmd = updateCommand(repo);
 		const commands = [];
 		const desiredMask = collectionMask(repo);
@@ -212,7 +224,8 @@ const applyCommands = (roster: Roster): void => {
 			const existing = existingCollection(repo.collection);
 			if (
 				existing &&
-				(existing.path !== repo.location || existing.pattern !== desiredMask)
+				(existing.path !== resolvedLocation ||
+					existing.pattern !== desiredMask)
 			) {
 				console.log(
 					`collection ${repo.collection} differs from roster; recreating`,
@@ -239,6 +252,12 @@ const applyCommands = (roster: Roster): void => {
 			}
 		}
 		console.log(`configured ${repo.collection}`);
+	}
+
+	if (skipped.length > 0) {
+		console.log(
+			`\nSkipped ${skipped.length} repos (not on this machine): ${skipped.join(", ")}`,
+		);
 	}
 };
 

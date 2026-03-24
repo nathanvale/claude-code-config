@@ -27,41 +27,63 @@ The sync script should do two things from the roster:
 
 ## Installation
 
-QMD is not currently managed through Homebrew.
-
-Install prerequisites and the CLI with:
+### Prerequisites
 
 ```sh
-brew bundle --file=~/code/dotfiles/config/brew/Brewfile
-bun install -g @tobilu/qmd
+brew install sqlite yq
 ```
 
-Then verify:
+You also need **bun** (for roster sync tooling) and **node + npm** (for the QMD runtime). If using fnm:
 
 ```sh
-qmd --help
-bun run memory:qmd-federation status
+fnm install --lts
 ```
 
-For vector-heavy operations on this machine, prefer the Node wrapper:
+### Install QMD
+
+Use **npm**, not bun. The `qmd-node.sh` wrapper runs QMD under Node, so `better-sqlite3` must be compiled against Node's ABI. Installing with `bun install -g` compiles the native addon for Bun's ABI, which causes `ERR_DLOPEN_FAILED` when Node loads it.
 
 ```sh
-~/.config/memory/scripts/qmd-node.sh status
-~/.config/memory/scripts/qmd-node.sh embed
+npm install -g @tobilu/qmd
 ```
 
-For the full maintenance flow, use the refresh helper:
+### Symlinks
+
+From the `claude-code-config` repo root:
+
+```sh
+./install.sh
+```
+
+This creates `~/.config/memory` → `<repo>/memory/`, which all QMD wrapper scripts resolve through.
+
+### Bootstrap federation
 
 ```sh
 ~/.config/memory/scripts/qmd-refresh.sh
-~/.config/memory/scripts/qmd-refresh.sh --skip-embed
 ```
 
-For agent access, expose the QMD MCP server through the stable wrapper:
+This runs three steps sequentially:
+1. **Roster apply** — registers collections from `roster.yml` (repos not cloned on this machine are skipped automatically)
+2. **Index** — indexes markdown in each collection
+3. **Embed** — generates vector embeddings (use `--skip-embed` if you only need lexical search)
+
+### Verify
+
+```sh
+~/.config/memory/scripts/qmd-node.sh status
+~/.config/memory/scripts/qmd-node.sh embed   # should complete without sqlite-vec errors
+```
+
+### MCP server
+
+The `.mcp.json` in this repo is symlinked to `~/.claude/.mcp.json` by `install.sh`. It points to the stable wrapper:
 
 ```sh
 ~/.config/memory/scripts/qmd-mcp.sh
 ```
+
+This delegates through `qmd-node.sh` so the MCP server gets the same brew prefix and Node runtime as all other QMD operations.
 
 ## Collection Naming
 
@@ -82,7 +104,7 @@ Examples:
 - Prefer conservative `update_command` values. On git-backed repos, `git fetch --all --prune --quiet || true` is safer than auto-stashing and pulling.
 - For reference-corpus repos, index converted Markdown surfaces such as `apis/` or `repos/`, not raw upstream downloads.
 - Run QMD CLI maintenance and inspection commands sequentially against a given index; concurrent calls can hit SQLite lock errors.
-- Prefer `~/.config/memory/scripts/qmd-node.sh` for embedding and other vector-heavy operations on this machine; the Bun-installed `qmd` binary can fail to load `sqlite-vec` under Bun. The wrapper auto-detects Homebrew and exports `BREW_PREFIX` so QMD can find the loadable SQLite extension path on macOS.
+- Always use `~/.config/memory/scripts/qmd-node.sh` for QMD operations. The wrapper runs QMD under Node (not Bun) to avoid macOS SQLite extension loading issues, auto-detects Homebrew's `BREW_PREFIX`, and probes both npm and bun global paths for the CLI. Install QMD with `npm install -g` so `better-sqlite3` compiles against Node's ABI.
 - Keep source-of-truth ownership with the repo.
 - Add a new repo to the roster before relying on it in shared recall workflows.
 - Treat the roster as canonical and regenerate commands from it rather than hand-maintaining setup snippets.
