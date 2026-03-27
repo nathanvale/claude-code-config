@@ -130,6 +130,14 @@
     "compound-engineering@compound-engineering-plugin": true,
     "frontend-design@claude-code-plugins": true
   },
+  "extraKnownMarketplaces": {
+    "monash-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "nathanvale/monash-plugins"
+      }
+    }
+  },
   "alwaysThinkingEnabled": false,
   "skipDangerousModePermissionPrompt": true
 }

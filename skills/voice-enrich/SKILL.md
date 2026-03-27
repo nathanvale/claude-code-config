@@ -1,10 +1,8 @@
 ---
 name: voice-enrich
 description: >
-  Chain the Perel-Baldwin agent into people-note workflows without bloating
-  /people-enrich. Builds the ContextBundle, selects rewrite/review/create
-  contracts, saves preview artifacts, and only uses the shared writer for
-  JSON-producing modes.
+  Use when enriching a person profile with voice transcript data and
+  Perel-Baldwin relational writing should be integrated into the note update.
 argument-hint: "<name> [--mode rewrite|review|create] [--analyst-report /abs/path.md]"
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bun run *), Agent
 disable-model-invocation: true

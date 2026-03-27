@@ -347,7 +347,7 @@ export function buildPersonPatch(input: BuildPersonPatchInput): PersonPatch {
     type: asString(existingFrontmatter.type) || "person",
     status: asString(existingFrontmatter.status) || "active",
     updated: input.updated,
-    summary: input.summary ?? asString(existingFrontmatter.summary) ?? "",
+    summary: pickBetterSummary(input.summary, asString(existingFrontmatter.summary)),
     person_id:
       asString(existingFrontmatter.person_id) ??
       input.person.person_id ??
@@ -371,6 +371,13 @@ export function buildPersonPatch(input: BuildPersonPatchInput): PersonPatch {
   }
 
   if (input.enrichment) {
+    const existingEnrichment = existingFrontmatter.enrichment as FrontmatterMap | undefined;
+    const existingSource = existingEnrichment ? asString(existingEnrichment.source) : undefined;
+    const incomingSource = asString(input.enrichment.source);
+    // Preserve multi-source provenance (e.g. "imessage+journals") when incoming is a subset
+    if (existingSource && incomingSource && existingSource.includes("+") && !incomingSource.includes("+")) {
+      input.enrichment.source = existingSource;
+    }
     mergedFrontmatter.enrichment = input.enrichment;
   }
 
@@ -883,6 +890,33 @@ function mergeSourceHandles(
     merged[source] = mergeStringArrays(merged[source] ?? [], handles);
   }
   return merged;
+}
+
+/**
+ * Pick the better summary between a new candidate and the existing one.
+ * Prevents delta/enrichment-report summaries from overwriting rich person descriptions.
+ */
+function pickBetterSummary(incoming: string | undefined, existing: string | undefined): string {
+  // No incoming — keep existing
+  if (!incoming) return existing ?? "";
+  // No existing — use incoming
+  if (!existing) return incoming;
+  // Reject machine-report-style summaries that would overwrite rich ones
+  const reportPrefixes = [
+    "Minimal delta",
+    "Delta enrichment",
+    "Re-enrichment",
+    "Refresh enrichment",
+    "Tier 1 enrichment",
+    "Tier 2 enrichment",
+    "Tier 3 enrichment",
+    "Incremental enrichment",
+    "No new messages",
+  ];
+  const looksLikeReport = reportPrefixes.some((p) => incoming.startsWith(p));
+  if (looksLikeReport && existing.length > 40) return existing;
+  // Otherwise use the incoming summary
+  return incoming;
 }
 
 function dedupeTrimmed(items: string[]): string[] {
