@@ -284,6 +284,23 @@ Use these defaults unless the user says otherwise:
 - imported planning documents that remain option-heavy -> `doc` or `both` with `type: plan`
 - imported planning documents that are now the settled canonical operating copy -> `doc` or `both` with `type: spec`
 
+## Shape Heuristics
+
+Use this decision ladder:
+
+1. Inline
+   - Use when the content is short, stable, and best understood inside the parent note.
+   - Good default for simple bookings, one-off references, and compact status detail.
+2. `artifact-sidecar`
+   - Use when the content is mainly an external artifact with provenance.
+   - Good for confirmations, receipts, PDFs, email threads, transcripts, and exported reports.
+   - Strong signal: IDs, dates, terms, links, attachments, or status detail worth preserving.
+3. Standalone note
+   - Use when the subtopic has independent meaning or follow-up.
+   - Strong signal: more than one expected update, more than one artifact, its own tasks or decisions, or likely direct search/linking later.
+
+When uncertain, choose the smaller shape and mention when to split it later.
+
 ## Examples
 
 ### Example: Real-World Artifact
