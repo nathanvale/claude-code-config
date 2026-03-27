@@ -126,7 +126,9 @@
   "enabledPlugins": {
     "example-skills@anthropic-agent-skills": false,
     "document-skills@anthropic-agent-skills": true,
-    "compound-engineering@every-marketplace": true
+    "compound-engineering@every-marketplace": true,
+    "compound-engineering@compound-engineering-plugin": true,
+    "frontend-design@claude-code-plugins": true
   },
   "extraKnownMarketplaces": {
     "monash-plugins": {
