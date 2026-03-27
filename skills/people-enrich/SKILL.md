@@ -131,9 +131,11 @@ Field rules:
 - `relationship_profile` must be an array of H3 blocks chosen intentionally for the person's `relationship_type`
 - `signals` must be concise durable bullets only
 - `open_questions` must be concrete and decision-oriented
-- `conflicts` is optional, but use it whenever machine evidence conflicts with prior note content
+- `conflicts` is optional, but use it whenever machine evidence conflicts with prior note content. Must be `string[]`, not objects
 - Never include raw message text or verbatim quotes
 - Default `signal_mode` and `open_questions_mode` to `"append"` for this first slice
+- **`summary`:** Omit this field entirely on delta/re-enrichment runs. The summary is a retrieval description of the *person*, not a report on the enrichment run. Only include `summary` on first-time enrichments or when you can write a genuinely better person description than the existing one. Delta summaries like "Minimal delta since X" or "Re-enrichment 2 days after..." will destroy rich existing summaries
+- **`enrichment.source`:** Preserve the existing source value if it includes multiple sources (e.g. `imessage+journals`). Only set this field if you are adding a new source, not narrowing an existing one
 
 ## Logging
 Write a log file at `~/code/my-second-brain/runtime/people-enrichment/{slug}.enrichment.log` as you work.
@@ -152,6 +154,9 @@ This log is read by `/heal` to diagnose issues from background runs.
 - Prefer short derived summaries
 - Surface uncertainty explicitly
 - Return valid JSON only
+- **Never include a `summary` field on delta/re-enrichment runs** — it will overwrite the existing person summary. Only include `summary` on first-time enrichments
+- **Never narrow `enrichment.source`** — if the existing note says `imessage+journals`, do not replace it with just `imessage`
+- `conflicts` must be `string[]`, not objects — e.g. `"CONFLICT (address): old value vs new value"`
 ```
 
 The sub-agent returns structured JSON. Read it and proceed to Step 6.
