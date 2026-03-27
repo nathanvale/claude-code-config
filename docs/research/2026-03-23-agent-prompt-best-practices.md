@@ -2,9 +2,9 @@
 title: "Agent Prompt Best Practices — Community Research"
 type: research
 status: active
-updated: 2026-03-23
+updated: 2026-03-27
 method: "Beat reporter research across Reddit, X, YouTube, and web sources + QMD recall of prior research"
-summary: "Comprehensive community research on how power users structure top-level prompts (CLAUDE.md, AGENTS.md, .cursorrules) to drive AI coding agents. Synthesizes new findings with prior research from 2026-03-11 (markdown-knowledge-for-agents) and 2026-03-23 (multi-agent-config-sync)."
+summary: "Comprehensive community research on how power users structure top-level prompts (CLAUDE.md, AGENTS.md, .cursorrules) to drive AI coding agents. Synthesizes four research waves: 2026-03-11, 2026-03-23 (×2), and 2026-03-27. March 27 adds context engineering framing, self-updating rules going mainstream, token optimization levers, and Next.js 16.2 shipping AGENTS.md."
 related:
   - docs/reviews/2026-03-23-prompt-system-review.md
   - docs/specs/prompt-system.md
@@ -46,7 +46,8 @@ This document synthesizes community intelligence on how power users structure to
 
 1. **2026-03-11** — Markdown Knowledge for Agents (monash-smst repo)
 2. **2026-03-23** — Multi-Agent Config Sync (this repo)
-3. **2026-03-23** — This investigation: three-beat research across Reddit, X, and web
+3. **2026-03-23** — Three-beat research across Reddit, X, and web
+4. **2026-03-27** — Three-topic investigation: rules best practices, prompt→context engineering shift, token optimization
 
 The core finding: the community has converged on **modular, scoped, reactive rule systems** over monolithic prompt files. The debate has shifted from "what to put in CLAUDE.md" to "how to architect a prompt system."
 
@@ -368,12 +369,99 @@ Our setup sits at the top of the maturity model. Remaining gaps:
 
 ---
 
+## Part 7: March 27 Update — Context Engineering, Token Optimization, Self-Updating Rules
+
+### "Context Engineering" Replaces "Prompt Engineering" as Framing
+
+The biggest shift since the March 23 investigation. The community has moved decisively from "prompt engineering" to **context engineering** — deciding what context to load before each agent step, not just crafting better prompts.
+
+- **Birgitta Böckeler on martinfowler.com** — "Context Engineering for Coding Agents": progressive distillation from "everything the company knows" → "exactly what the agent needs." Note: commonly misattributed to Martin Fowler; Böckeler is the author.
+- **Reddit consensus** (r/PromptEngineering, r/AI_Agents): "Context engineering is now the thing — decomposition, in-context retrieval, managing what goes into your window"
+- **@BharukaShraddha** (769 likes): "The real power of Claude Code is the system around the prompt"
+- **@Shruti_0810**: "Anthropic engineers build SKILLS not prompts — kills the prompt engineering myth"
+- Community split ~60/40 on "prompt engineering is dead" — consensus: rebranded as context engineering, not dead
+
+### Self-Updating Rules Pattern Goes Mainstream
+
+In March 23 this was flagged as a "promising pattern worth evaluating." By March 27 it has multiple independent high-engagement validations:
+
+- **@m13v_**: "Letting the agent update its own spec is a game changer. By week 2 the CLAUDE.md was way better than anything I could have written manually"
+- **@X4v13r**: "CLAUDE.md is your codebase's immune system. Corrections stick permanently"
+- **@ChanneledCode**: "If your AI agent needs constant correction, the problem isn't the model — it's the CLAUDE.md"
+- **@mikefutia** (816 likes): Self-improving skills via eval loops — test runs scored against evals, prompts rewritten, winner kept
+
+### Boris Cherny's "More Tokens + Separate Context Windows"
+
+The Claude Code creator's philosophy is now the most-cited framing for subagent architecture:
+
+> "Roughly, the more tokens you throw at a coding problem, the better the result. One way to make it even better is separate context windows. This is what makes subagents work." — @bcherny (3,856 likes, verified)
+
+### Token Optimization Levers
+
+| Lever | Source | Impact |
+|-------|--------|--------|
+| Trim tool schemas aggressively | r/LangChain | "Biggest hidden token sink" |
+| Sub-agents for parallel context | @bcherny, r/ClaudeCode (37 pts) | Multiply effective context |
+| Layered context loading | @agentxagi | Global rules → task brief → runtime state = 40% reduction |
+| Semantic search over full-file reads | @slash1sol (979 likes) | Bootstrap memory + search = 70% token reduction |
+| Tree-sitter index as seed | r/ClaudeCode (12 pts, 30 comments) | Compact index (~200 lines) instead of reading entire files |
+| OCTAVE prompt format | r/LangChain | 50–80% smaller prompts |
+
+### Next.js 16.2 Ships AGENTS.md by Default
+
+@rauchg (985 likes): Next.js 16.2 ships `AGENTS.md` in `create-next-app` + bundled docs in the npm package. First major framework to bake agent config into the default scaffold. Technical features confirmed; "agent-native" branding is informal.
+
+### Context Rot as Named Failure Mode
+
+A new term gaining traction for when agent performance degrades during long sessions:
+
+- **factory.ai**: Anchored iterative summarization with structured persistent summaries
+- **mindstudio.ai**: "Lost in the middle" problem — important context buried mid-window gets low recall
+- **r/ClaudeCode**: Sub-agents fix this by resetting context at 90% capacity
+- **65% enterprise failure stat** (zylos.ai): "65% of enterprise AI failures in 2025 attributed to context drift" — **unverified, no methodology cited**, but the pattern is real
+
+### Updated Comparison
+
+| Community Pattern | Our Setup | Assessment (updated) |
+|-------------------|-----------|---------------------|
+| Context engineering framing | Skills + lazy-loaded rules + progressive disclosure | Already doing it, just didn't name it |
+| Self-updating rules | Claude auto-memory saves feedback; not yet in rules/ | **Gap narrowing** — evaluate governed version |
+| Sub-agents for context management | Agent tool with specialized sub-agents | Aligned |
+| Tool schema trimming | Not explicitly optimized | Minor gap — low urgency |
+| Tree-sitter / semantic indexing | QMD for federated recall | Different approach, same goal |
+| Next.js 16.2 AGENTS.md default | AGENTS.md as cross-tool standard | Validated — AGENTS.md is winning |
+| Context rot mitigation | Compaction handled by Claude Code natively | Aligned |
+
+### Updated Recommendations
+
+#### Shipped Since March 23
+
+10. **gms.app rules cleanup** — path-scoped all 13 rules (was 5 unscoped), deleted inferable content, added staleness dates
+11. **DevExtreme rule** — consolidated 64 solved problems into one path-scoped rule
+12. **SonarQube rules** — merged into linting.md from docs/solutions
+13. **Recurring trap patterns** — promoted from 478 solutions into testing, styling, state-management, troubleshooting rules
+
+#### Now Consider
+
+1. **Governed self-updating rules** — the pattern is now mainstream. Evaluate: auto-memory already saves feedback; consider a hook or post-session step that proposes rule additions from feedback memories
+2. **Context engineering as explicit principle** — name it in AGENTS.md; our setup already does it, articulating it helps new team members understand the architecture
+
+#### Validated by March 27 Research
+
+1. **AGENTS.md convergence** confirmed by Next.js 16.2 shipping it by default
+2. **Skills > prompts** confirmed by Anthropic engineer commentary and community consensus
+3. **Fragment architecture with lazy loading** is exactly what the context engineering framing describes
+4. **Sub-agent architecture** validated by Boris Cherny's "separate context windows" philosophy
+
+---
+
 ## Source Links
 
 ### Academic
 
 - [Configuring Agentic AI Coding Tools: An Exploratory Study](https://arxiv.org/html/2602.14690) — arxiv.org
 - [Evaluating AGENTS.md](https://arxiv.org/html/2602.11988v1) — arxiv.org (ETH Zurich)
+- [Codified Context: Infrastructure for AI Agents in a Complex Codebase](https://arxiv.org/abs/2602.20478) — arxiv.org (added Mar 27)
 
 ### Official Documentation
 
@@ -392,6 +480,15 @@ Our setup sits at the top of the maturity model. Remaining gaps:
 - [Agent Engineering 101: A Visual Guide](https://www.adithyan.io/blog/agent-engineering-101) — adithyan.io
 - [Cursor Rules vs Agent Skills: I Tested Both](https://dev.to/nedcodes/cursor-rules-vs-agent-skills-i-tested-both-heres-when-each-one-actually-works-1ld) — dev.to
 - [CLAUDE.md, AGENTS.md, and Every AI Config File Explained](https://www.deployhq.com/blog/ai-coding-config-files-guide) — deployhq.com
+- [Context Engineering for Coding Agents](https://martinfowler.com/articles/exploring-gen-ai/context-engineering-coding-agents.html) — martinfowler.com (by Birgitta Böckeler, added Mar 27)
+- [The Context Window Problem: Scaling Agents Beyond Token Limits](https://factory.ai/news/context-window-problem) — factory.ai (added Mar 27)
+- [AI Agent Context Compression Strategies](https://zylos.ai/research/2026-02-28-ai-agent-context-compression-strategies) — zylos.ai (added Mar 27)
+- [Context Rot in AI Coding Agents](https://www.mindstudio.ai/blog/context-rot-ai-coding-agents-explained) — mindstudio.ai (added Mar 27)
+- [Claude Skills Architecture Decoded](https://medium.com/aimonks/claude-skills-architecture-decoded-from-prompt-engineering-to-context-engineering-a6625ddaf53c) — medium.com/aimonks (added Mar 27)
+- [Anatomy of the .claude/ Folder](https://blog.dailydoseofds.com/p/anatomy-of-the-claude-folder) — blog.dailydoseofds.com (added Mar 27)
+- [Autonomous Context Compression](https://blog.langchain.com/autonomous-context-compression/) — blog.langchain.com (added Mar 27)
+- [Creating the Perfect CLAUDE.md](https://dometrain.com/blog/creating-the-perfect-claudemd-for-claude-code/) — dometrain.com (added Mar 27)
+- [The Complete Guide to AI Agent Memory Files](https://medium.com/data-science-collective/the-complete-guide-to-ai-agent-memory-files-claude-md-agents-md-and-beyond-49ea0df5c5a9) — medium.com (added Mar 27)
 
 ### GitHub Repos
 
@@ -413,6 +510,10 @@ Our setup sits at the top of the maturity model. Remaining gaps:
 - [AGENTS.MD standard](https://www.reddit.com/r/ClaudeCode/comments/1rlc8zi/) — 128 pts, 81 comments
 - [1,188 benchmark runs on CLAUDE.md compression](https://www.reddit.com/r/ClaudeAI/comments/1ridyke/) — 122 pts, 14 comments
 - [Subdirectory loading footgun](https://www.reddit.com/r/LLMDevs/comments/1rwh2yd/) — 73 pts, 24 comments
+- [13-agent Claude team with peer review](https://www.reddit.com/r/ClaudeAI/comments/1rga7f5/) — 454 pts, 99 comments (added Mar 27)
+- [Why AI Coding Agents Waste Half Their Context Window](https://www.reddit.com/r/LocalLLaMA/comments/1rr5fo5/) — 54 pts, 41 comments (added Mar 27)
+- [10X Context Window with Dispatch](https://www.reddit.com/r/ClaudeCode/comments/1re7a6d/) — 37 pts, 60 comments (added Mar 27)
+- [Tree-sitter MCP for context optimization](https://www.reddit.com/r/ClaudeCode/comments/1rota9u/) — 12 pts, 30 comments (added Mar 27)
 
 ### X / Twitter (by engagement)
 
@@ -426,6 +527,13 @@ Our setup sits at the top of the maturity model. Remaining gaps:
 - [@omarsar0 — Codified Context paper](https://x.com/omarsar0/status/2027770787659464812) — 1,486 likes
 - [@dguido — Trail of Bits defaults](https://x.com/dguido/status/2021837449979105648) — 1,121 likes
 - [@garrytan — Codex as review skill](https://x.com/garrytan/status/2034545005797450145) — 1,055 likes
+- [@akshay_pachaar — Claude Code project setup](https://x.com/akshay_pachaar/status/2035706568142893229) — 12,095 likes (added Mar 27)
+- [@bcherny — more tokens + subagents](https://x.com/bcherny/status/2031151689219321886) — 3,856 likes (added Mar 27)
+- [@NirDiamantAI — 61 specialized agents repo](https://x.com/NirDiamantAI/status/2031854318450544814) — 1,303 likes (added Mar 27)
+- [@rauchg — Next.js 16.2 agent-native](https://x.com/rauchg/status/2035076089861857500) — 985 likes (added Mar 27)
+- [@slash1sol — semantic search 70% token reduction](https://x.com/slash1sol/status/2029185241378636218) — 979 likes (added Mar 27)
+- [@mikefutia — self-improving skills](https://x.com/mikefutia/status/2035379469322776911) — 816 likes (added Mar 27)
+- [@BharukaShraddha — system around the prompt](https://x.com/BharukaShraddha/status/2031453500820041783) — 769 likes (added Mar 27)
 
 ### YouTube (by views)
 
@@ -434,3 +542,7 @@ Our setup sits at the top of the maturity model. Remaining gaps:
 - [My top 6 tips for Claude Code — Academind](https://www.youtube.com/watch?v=WwdIYp5fuxY) — 126K views
 - [Create Your First SKILL.md File — Code A Program](https://www.youtube.com/watch?v=Fh-aBKrG5CI) — 71K views
 - [Don't use CLAUDE.md for CLI forcing — Matt Pocock](https://www.youtube.com/watch?v=3CSi8QAoN-s) — 29K views
+- [Every Claude Code Concept Explained — Simon Scrapes](https://www.youtube.com/watch?v=ZlDnsf_DOzg) — 368K views (added Mar 27)
+- [Claude Code Skills Like the 1% — Simon Scrapes](https://www.youtube.com/watch?v=6-D3fg3JUL4) — 97K views (added Mar 27)
+- [Claude Code is Expensive — Context Mode MCP — Better Stack](https://www.youtube.com/watch?v=QUHrntlfPo4) — 90K views (added Mar 27)
+- [Claude Code Tutorial 10x Faster — Programming with Mosh](https://www.youtube.com/watch?v=IuyVVtr1uhY) — 68K views (added Mar 27)

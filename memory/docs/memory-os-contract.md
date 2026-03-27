@@ -166,6 +166,7 @@ source: path/to/source-note.md
 ```
 
 Rules:
+- Use `YYYY-MM-DD` (ISO 8601 date-only) for all date fields (`updated`, `created`, `meeting_date`, `decision_date`, etc.). This ensures lexicographic sort order matches chronological order.
 - Keep `summary` optional.
 - Add fields only when they improve retrieval, ranking, filtering, navigation, or automation.
 - Prefer explicit relationships over large tag taxonomies.
