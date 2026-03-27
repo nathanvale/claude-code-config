@@ -29,13 +29,6 @@
   },
   "enableAllProjectMcpServers": true,
   "disabledMcpjsonServers": [],
-  "enabledPlugins": {
-    "example-skills@anthropic-agent-skills": false,
-    "document-skills@anthropic-agent-skills": true,
-    "compound-engineering@every-marketplace": true
-  },
-  "alwaysThinkingEnabled": false,
-  "skipDangerousModePermissionPrompt": true,
   "hooks": {
     "SessionStart": [
       {
@@ -129,5 +122,20 @@
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {
+    "example-skills@anthropic-agent-skills": false,
+    "document-skills@anthropic-agent-skills": true,
+    "compound-engineering@every-marketplace": true
+  },
+  "extraKnownMarketplaces": {
+    "monash-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "nathanvale/monash-plugins"
+      }
+    }
+  },
+  "alwaysThinkingEnabled": false,
+  "skipDangerousModePermissionPrompt": true
 }
