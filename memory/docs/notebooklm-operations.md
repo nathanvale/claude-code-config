@@ -2,7 +2,7 @@
 title: "NotebookLM Operations"
 type: workflow
 status: active
-updated: 2026-03-16
+updated: 2026-03-28
 summary: "User-scope NotebookLM workflow for curated source packs, repo-local .nlm.yml configs, and generated artifacts."
 ---
 
@@ -41,6 +41,7 @@ NotebookLM is not for:
 
 ## Default Flow
 
+0. **Preflight:** Call `refresh_auth` to reload tokens. If any subsequent NLM call returns a 400/401/403 error, ask the user to run `! nlm login` and retry `refresh_auth` before continuing.
 1. Use QMD first to recall the right notes.
 2. Build or refine a small source-pack note.
 3. Resolve the owning repo and read its `.nlm.yml`.
