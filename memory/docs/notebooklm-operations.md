@@ -92,6 +92,16 @@ Generate an audio artifact using a local preset when available.
 
 Generate a visual artifact using a local preset when available.
 
+When generating architecture or systems infographics, build a structured focus prompt with these sections:
+
+1. **Title** — system name + subtitle
+2. **Style directive** — aesthetic, contrast, design language reference (e.g. "dark mode, Stripe/Linear/Vercel design language")
+3. **Content sections** — high-level overview, architecture diagram (left→right flow), core components (short descriptions), data flow (numbered pipeline), key technologies, scope boundaries
+4. **Constraints** — max 12 words per label, labeled boxes with directional arrows, highlight critical paths, avoid clutter
+5. **Focus** — "Explain how the system actually works, not marketing fluff."
+
+The more structured the focus prompt, the better the output. One-line focus prompts produce generic results. Use `infographic_style: professional` for engineering diagrams.
+
 ### `report`
 
 Generate a written artifact when the result needs to be reviewed or written back into Markdown.
