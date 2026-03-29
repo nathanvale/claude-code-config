@@ -4,6 +4,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
+const QMD_NODE =
+	process.env.QMD_NODE ?? resolve(import.meta.dir, "qmd-node.sh");
+
 type RepoProfile = "life-hub" | "work-repo" | "infra-repo" | string;
 
 type RosterRepo = {
@@ -37,16 +40,12 @@ const loadRoster = (): Roster => {
 	return JSON.parse(result.stdout) as Roster;
 };
 
-const qmdInstalled = (): boolean => {
-	const result = spawnSync("sh", ["-lc", "command -v qmd >/dev/null 2>&1"]);
-	return result.status === 0;
-};
+const qmdInstalled = (): boolean => existsSync(QMD_NODE);
 
 const collectionExists = (name: string): boolean => {
-	const result = spawnSync("sh", [
-		"-lc",
-		`qmd collection show ${shellEscape(name)} >/dev/null 2>&1`,
-	]);
+	const result = spawnSync(QMD_NODE, ["collection", "show", name], {
+		stdio: "pipe",
+	});
 	return result.status === 0;
 };
 
@@ -75,14 +74,14 @@ const collectionMask = (repo: RosterRepo): string => {
 };
 
 const collectionCommand = (repo: RosterRepo): string =>
-	`qmd collection add ${shellEscape(resolvePath(repo.location))} --name ${shellEscape(repo.collection)} --mask ${shellEscape(collectionMask(repo))}`;
+	`${shellEscape(QMD_NODE)} collection add ${shellEscape(resolvePath(repo.location))} --name ${shellEscape(repo.collection)} --mask ${shellEscape(collectionMask(repo))}`;
 
 const removeCollectionCommand = (repo: RosterRepo): string =>
-	`qmd collection remove ${shellEscape(repo.collection)}`;
+	`${shellEscape(QMD_NODE)} collection remove ${shellEscape(repo.collection)}`;
 
 const updateCommand = (repo: RosterRepo): string | null =>
 	repo.update_command
-		? `qmd collection update-cmd ${shellEscape(repo.collection)} ${shellEscape(resolvePath(repo.update_command))}`
+		? `${shellEscape(QMD_NODE)} collection update-cmd ${shellEscape(repo.collection)} ${shellEscape(resolvePath(repo.update_command))}`
 		: null;
 
 const profileLabel = (profile: RepoProfile): string => {
@@ -136,20 +135,19 @@ const pathTarget = (repo: RosterRepo, relativePath: string): string =>
 	`${collectionTarget(repo)}/${relativePath}`;
 
 const contextCommand = (repo: RosterRepo): string =>
-	`qmd context add ${shellEscape(collectionTarget(repo))} ${shellEscape(profileLabel(repo.profile))}`;
+	`${shellEscape(QMD_NODE)} context add ${shellEscape(collectionTarget(repo))} ${shellEscape(profileLabel(repo.profile))}`;
 
 const pathContextCommands = (repo: RosterRepo): string[] =>
 	repo.primary_paths.map(
 		(relativePath) =>
-			`qmd context add ${shellEscape(pathTarget(repo, relativePath))} ${shellEscape(pathLabel(relativePath))}`,
+			`${shellEscape(QMD_NODE)} context add ${shellEscape(pathTarget(repo, relativePath))} ${shellEscape(pathLabel(relativePath))}`,
 	);
 
 const existingCollection = (name: string): ExistingCollection | null => {
-	const result = spawnSync(
-		"sh",
-		["-lc", `qmd collection show ${shellEscape(name)}`],
-		{ encoding: "utf8" },
-	);
+	const result = spawnSync(QMD_NODE, ["collection", "show", name], {
+		encoding: "utf8",
+		stdio: ["pipe", "pipe", "pipe"],
+	});
 
 	if (result.status !== 0 || !result.stdout) {
 		return null;

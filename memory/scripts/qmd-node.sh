@@ -37,4 +37,17 @@ if [[ -z "${QMD_CLI:-}" || ! -f "$QMD_CLI" ]]; then
 	exit 1
 fi
 
-exec node "$QMD_CLI" "$@"
+# Derive the node binary from the same prefix that owns QMD_CLI.
+# If QMD_CLI is inside an npm prefix (fnm, nvm, system), use that
+# tree's node to guarantee ABI compatibility with better-sqlite3.
+NODE_BIN="node"
+case "$QMD_CLI" in
+	*/lib/node_modules/*)
+		NODE_PREFIX="${QMD_CLI%%/lib/node_modules/*}"
+		if [[ -x "$NODE_PREFIX/bin/node" ]]; then
+			NODE_BIN="$NODE_PREFIX/bin/node"
+		fi
+		;;
+esac
+
+exec "$NODE_BIN" "$QMD_CLI" "$@"

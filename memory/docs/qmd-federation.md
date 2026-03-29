@@ -109,6 +109,22 @@ Examples:
 - Add a new repo to the roster before relying on it in shared recall workflows.
 - Treat the roster as canonical and regenerate commands from it rather than hand-maintaining setup snippets.
 
+## Multi-Machine Notes
+
+### Node ABI compatibility
+
+`qmd-node.sh` derives the correct `node` binary from the same npm prefix where QMD is installed. This guarantees `better-sqlite3` loads against the ABI it was compiled for, regardless of what other Node versions exist on `$PATH`.
+
+If you see `ERR_DLOPEN_FAILED` or `NODE_MODULE_VERSION` mismatch errors:
+
+1. Check which node QMD is installed under: `npm root -g`
+2. Trace the wrapper: `bash -x ~/.config/memory/scripts/qmd-node.sh status`
+3. If needed, reinstall: `fnm use default && npm install -g @tobilu/qmd`
+
+### Roster sync and subprocesses
+
+`qmd-roster-sync.ts` invokes QMD via the `qmd-node.sh` wrapper (resolved from `QMD_NODE` env var or co-located script path). This ensures subprocess calls also use the correct Node binary in non-interactive shells (MCP, SSH, cron).
+
 ## Default Read Targets
 
 For each repo, prefer the narrowest useful docs surface rather than the entire working tree.
