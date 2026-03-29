@@ -44,5 +44,9 @@ sessions:
   classic-cinema:
     config: .claude/skills/classic-cinema/config.yaml
 
+  # /go browser planner — uses ephemeral suffixes: go-{epoch}-{pid}
+  go:
+    config: ~/.claude/skills/browser-automation/config.yaml
+
 defaults:
   session: personal
