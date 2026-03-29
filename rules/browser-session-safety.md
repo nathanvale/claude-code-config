@@ -18,6 +18,7 @@ The agent-browser daemon is **persistent across all Claude conversations**. The 
 - **ALWAYS use `connect 9223`** to attach to the shared agent Chrome — do not use `--profile` or `--auto-connect`
 - **Session names must come from `~/.claude/skills/browser-automation/registry.yaml`** — check the registry before inventing a name
 - **For parallel dispatch**, suffix the session name: `--session zoom-1`, `--session zoom-2`
+- **ALWAYS use `--headed`** — never run headless
 - **Agents must not run concurrently on the same domain** — sessions share cookies (no BrowserContext isolation). Two agents on the same domain will see each other's auth state. Tracked upstream: vercel-labs/agent-browser#1068
 
 ### Connection Sequence
@@ -38,11 +39,11 @@ agent-browser --session <name> tab new <url>
 
 Agents that skip tab cleanup leave orphaned tabs that accumulate indefinitely.
 
-### Standard Flags
+### Standard Sequence
 
 ```bash
-BROWSER_FLAGS="--headed --session <name>"
-# Then: agent-browser $BROWSER_FLAGS connect 9223
+agent-browser --session <name> connect 9223
+agent-browser --session <name> tab new <url>
 ```
 
 ### What NOT To Do

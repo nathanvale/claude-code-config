@@ -2,8 +2,8 @@ schema_version: 2
 
 # Browser Session Registry
 # Central session name registry -- prevents naming collisions.
-# All agents share one Chrome daemon via --profile ~/.cache/chrome-agent.
-# Auth isolation comes from --session <name> (separate cookies per session).
+# All agents share one real Chrome instance via connect 9223.
+# Sessions are tab namespaces (shared cookies). Domain partitioning is the safety model.
 #
 # To add a new session:
 #   1. Pick a unique session name (usually matches the domain key)
@@ -14,7 +14,10 @@ schema_version: 2
 # For parallel dispatch, callers suffix the session name at runtime:
 #   --session zoom-1, --session zoom-2 (ephemeral, no registry entry needed)
 
-profile: ~/.cache/chrome-agent
+connection:
+  mode: connect
+  port: 9223
+  chrome_profile: ~/.cache/chrome-agent  # used by Chrome launch flags, not agent-browser
 
 sessions:
   personal:

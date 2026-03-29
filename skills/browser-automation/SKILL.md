@@ -10,31 +10,32 @@ Operational knowledge for driving a browser via `agent-browser` CLI. This skill 
 
 ## Chrome Connection
 
-All agents share one Chrome daemon via `--profile`. Auth isolation comes from `--session`, which gives each agent its own cookies, localStorage, and auth state within the same Chrome instance.
+All agents share one real Chrome instance via `connect 9223`. Sessions are **tab namespaces** -- each session tracks its own active tab, but all sessions share one BrowserContext (cookies, localStorage, sessionStorage are shared). Domain partitioning is the safety model: concurrent agents are safe only when they target different domains. For full empirical evidence, see the [executor adapter spec Runtime Binding section](/Users/nathanvale/code/my-second-brain/docs/specs/2026-03-28-browser-executor-adapter.md).
 
-### How agents declare their flags
+### How agents connect
 
-Each agent has a `## Browser Session` section that sets `BROWSER_FLAGS`:
-
-```bash
-BROWSER_FLAGS="--headed --profile ~/.cache/chrome-agent --session <name>"
-```
-
-- `--headed` -- shows the browser window (required -- never run headless)
-- `--profile ~/.cache/chrome-agent` -- shared Chrome daemon with persistent state
-- `--session <name>` -- isolated auth context (cookies, localStorage per session name)
-
-All agent-browser commands use these flags:
+Each agent connects a named session to the shared Chrome, cleans up stale tabs, then uses `--session` for all subsequent commands:
 
 ```bash
-agent-browser $BROWSER_FLAGS open <url>
-agent-browser $BROWSER_FLAGS snapshot
-agent-browser $BROWSER_FLAGS click @eN
+# Step 1: Connect named session to shared Chrome
+agent-browser --session <name> connect 9223
+
+# Step 2: Clean up stale tabs from previous sessions
+agent-browser --session <name> tab list  # close any stale chrome://newtab/ tabs
+
+# Step 3: All subsequent commands use --session only
+agent-browser --session <name> tab new <url>
+agent-browser --session <name> snapshot
+agent-browser --session <name> click @eN
 ```
+
+- `--session <name>` -- tab namespace (required -- never use the default session)
+- `connect 9223` -- attaches to the shared agent Chrome on port 9223
+- Use `tab new <url>` -- not `open <url>` -- for parallel safety
 
 ### Session Registry
 
-Session names are tracked in `~/.claude/skills/browser-automation/registry.yaml` to prevent naming collisions. The registry owns the canonical profile path and the list of registered session names.
+Session names are tracked in `~/.claude/skills/browser-automation/registry.yaml` to prevent naming collisions. The registry owns the connection model and the list of registered session names.
 
 For parallel dispatch of the same agent, callers suffix the session name at runtime (e.g. `--session zoom-1`, `--session zoom-2`). These ephemeral sessions don't need registry entries.
 
@@ -51,39 +52,50 @@ Config provides auth hints (credential vault, service URLs, identity) -- not Chr
 
 - **NEVER kill Chrome processes** -- `pkill`, `killall`, `kill -9` are all forbidden
 - **NEVER run headless** -- always use `--headed`
+- **Agents must not run concurrently on the same domain** -- sessions share cookies (no BrowserContext isolation). Tracked upstream: vercel-labs/agent-browser#1068
+
+### Anti-Patterns
+
+| Command | Problem | Use Instead |
+|---------|---------|-------------|
+| `--auto-connect --session <name>` | 403 -- flags are mutually exclusive | `--session <name> connect 9223` |
+| `--session <name> open <url>` (parallel) | `ERR_ABORTED` -- active-tab race | `--session <name> tab new <url>` |
+| `--profile ~/.cache/chrome-agent --session <name>` | Spawns Chrome for Testing, 8 windows | `connect 9223` pattern |
 
 ## Core Commands Reference
 
-All examples use `$BROWSER_FLAGS` (set by the calling agent's Browser Session section). If no flags are set, default to `--headed --profile ~/.cache/chrome-agent`.
+All examples use `--session <name>` (set during connection). If the session is not yet connected, run `agent-browser --session <name> connect 9223` first.
 
 | Command | What it does |
 |---------|-------------|
-| `agent-browser $BROWSER_FLAGS open <url>` | Navigate to URL |
-| `agent-browser $BROWSER_FLAGS snapshot` | Get accessibility tree (primary interface) |
-| `agent-browser $BROWSER_FLAGS click @eN` | Click element by ref |
-| `agent-browser $BROWSER_FLAGS fill @eN "text"` | Fill input field |
-| `agent-browser $BROWSER_FLAGS screenshot /tmp/name.png` | Visual capture |
-| `agent-browser $BROWSER_FLAGS eval "js"` | Run JavaScript |
-| `agent-browser $BROWSER_FLAGS wait N` | Wait N milliseconds |
-| `agent-browser $BROWSER_FLAGS cookies clear --domain "{domain}"` | Clear cookies for domain |
+| `agent-browser --session <name> connect 9223` | Connect session to shared Chrome |
+| `agent-browser --session <name> tab new <url>` | Open URL in a new tab (parallel-safe) |
+| `agent-browser --session <name> snapshot` | Get accessibility tree (primary interface) |
+| `agent-browser --session <name> click @eN` | Click element by ref |
+| `agent-browser --session <name> fill @eN "text"` | Fill input field |
+| `agent-browser --session <name> screenshot /tmp/name.png` | Visual capture |
+| `agent-browser --session <name> eval "js"` | Run JavaScript |
+| `agent-browser --session <name> wait N` | Wait N milliseconds |
+| `agent-browser --session <name> cookies clear --domain "{domain}"` | Clear cookies for domain |
 
-### Session Isolation (for parallel runs)
+### Tab Namespace Isolation (for parallel runs)
 
 ```bash
-agent-browser $BROWSER_FLAGS --session agent1 open <url>
-agent-browser $BROWSER_FLAGS --session agent1 snapshot
+agent-browser --session agent-a connect 9223
+agent-browser --session agent-a tab new <url>
+agent-browser --session agent-a snapshot
 ```
 
-Each `--session` name gets isolated browser state. Use when dispatching multiple browser tasks simultaneously.
+Each `--session` name tracks its own active tab, but **cookies and localStorage are shared** across all sessions (same BrowserContext). Safe for parallel agents only when they target different domains.
 
 ## The OBSERVE → REASON → ACT → VERIFY Loop
 
 Every interaction follows this cycle:
 
-1. **OBSERVE** -- `agent-browser $BROWSER_FLAGS snapshot` to get current page state
+1. **OBSERVE** -- `agent-browser --session <name> snapshot` to get current page state
 2. **REASON** -- Analyse the snapshot: what elements are present? What should happen next?
 3. **ACT** -- Execute ONE action (click, fill, navigate). Never chain multiple actions blindly.
-4. **VERIFY** -- `agent-browser $BROWSER_FLAGS snapshot` again to confirm the action worked
+4. **VERIFY** -- `agent-browser --session <name> snapshot` again to confirm the action worked
 
 **Rules:**
 - Never fill buttons -- click them
@@ -119,7 +131,7 @@ After authentication completes (whether via cookies or a login flow), verify the
 
 ```bash
 # To clear cookies for a specific domain if wrong account detected:
-agent-browser $BROWSER_FLAGS cookies clear --domain "{domain}"
+agent-browser --session <name> cookies clear --domain "{domain}"
 ```
 
 This prevents silent wrong-account auth when cookies persist from a previous session with a different account.
@@ -178,7 +190,7 @@ When automated auth fails (CAPTCHA, hardware key, unexpected flow):
 1. Take a screenshot of the stuck page:
 
 ```bash
-agent-browser $BROWSER_FLAGS screenshot /tmp/browser-agent-needs-human.png
+agent-browser --session <name> screenshot /tmp/browser-agent-needs-human.png
 ```
 
 2. **Immediately return** a Browser Report with `Status: NEEDS_HUMAN` including:
