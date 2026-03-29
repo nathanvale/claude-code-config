@@ -2,13 +2,26 @@
 
 set -euo pipefail
 
-# Resolve QMD CLI: prefer npm global, fall back to bun global
+# Resolve QMD CLI: prefer npm global, fall back to fnm default, then bun global.
+# In non-interactive shells (MCP, SSH), `npm root -g` may resolve a system npm
+# that doesn't have QMD. The fnm default fallback handles this.
 QMD_CLI="${QMD_NODE_CLI:-}"
 if [[ -z "$QMD_CLI" ]]; then
 	NPM_GLOBAL="$(npm root -g 2>/dev/null || true)"
 	if [[ -n "$NPM_GLOBAL" && -f "$NPM_GLOBAL/@tobilu/qmd/dist/cli/qmd.js" ]]; then
 		QMD_CLI="$NPM_GLOBAL/@tobilu/qmd/dist/cli/qmd.js"
-	elif [[ -f "$HOME/.bun/install/global/node_modules/@tobilu/qmd/dist/cli/qmd.js" ]]; then
+	fi
+
+	# Fallback: check fnm default node's global modules
+	if [[ -z "$QMD_CLI" ]]; then
+		FNM_DEFAULT="$HOME/.local/share/fnm/aliases/default"
+		if [[ -f "$FNM_DEFAULT/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js" ]]; then
+			QMD_CLI="$FNM_DEFAULT/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js"
+		fi
+	fi
+
+	# Fallback: bun global
+	if [[ -z "$QMD_CLI" && -f "$HOME/.bun/install/global/node_modules/@tobilu/qmd/dist/cli/qmd.js" ]]; then
 		QMD_CLI="$HOME/.bun/install/global/node_modules/@tobilu/qmd/dist/cli/qmd.js"
 	fi
 fi
