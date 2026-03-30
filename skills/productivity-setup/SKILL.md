@@ -43,10 +43,10 @@ Check the working directory for:
 Let's configure which external sources to connect for this project:
 
 1. Calendar:
-   (1) Google Calendar  (2) Microsoft 365  (3) None
+   (1) Google Calendar  (2) Microsoft 365  (3) gogcli (multi-account)  (4) None
 
 2. Email:
-   (1) Gmail  (2) Microsoft 365  (3) None
+   (1) Gmail  (2) Microsoft 365  (3) gogcli (multi-account)  (4) None
 
 3. Project Tracker:
    (1) Jira  (2) Asana  (3) Linear  (4) GitHub Issues  (5) Monday  (6) ClickUp  (7) None
@@ -59,7 +59,16 @@ Let's configure which external sources to connect for this project:
 
 6. Messages:
    (1) iMessage  (2) None
+
+7. Contacts:
+   (1) gogcli  (2) None
 ```
+
+**When `gog` is selected for any connector:**
+- Prompt: "Which Google account? (e.g., nathan.vale@monash.edu)"
+- Write the connector value as `gog` (not `gogcli`)
+- Write the account as `<connector>-account: <email>` (e.g., `calendar-account: nathan.vale@monash.edu`)
+- Different connectors can use different Google accounts
 
 Write `.productivity.yml` with the selected values. Reference the **productivity-connectors** skill for the connector value names.
 

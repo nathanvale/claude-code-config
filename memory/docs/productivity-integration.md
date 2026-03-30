@@ -34,11 +34,14 @@ Each project declares active connectors in `.productivity.yml` (created by `/pro
 
 ```yaml
 connectors:
-  calendar: google-calendar    # google-calendar | microsoft-365 | none
-  email: gmail                 # gmail | microsoft-365 | none
+  calendar: google-calendar    # google-calendar | gog | microsoft-365 | none
+  calendar-account:            # required when calendar is gog
+  email: gmail                 # gmail | gog | microsoft-365 | none
+  email-account:               # required when email is gog
   project-tracker: jira        # jira | asana | linear | github-issues | monday | clickup | none
   knowledge-base: confluence   # notion | confluence | none
   chat: none                   # slack | none
+  messages: imessage           # imessage | none
 ```
 
 ## Core Rule
@@ -109,6 +112,8 @@ The productivity layer supports category-based external sources:
 - chat
 
 These connectors remain tool-agnostic. Gmail, Microsoft 365, Jira, Linear, Asana, Notion, Confluence, Slack, and similar tools work through the connector mapping defined in the `productivity-connectors` skill.
+
+Some connectors dispatch via Bash CLI rather than MCP tools (e.g., `gog` for multi-account Google Workspace, `github-issues` for GitHub). See the `productivity-connectors` skill for dispatch details and per-connector account fields.
 
 ## Claude And Codex
 
