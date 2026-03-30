@@ -116,7 +116,7 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 
 | Connector | Tools |
 |-----------|-------|
-| `gog` | `gog contacts search "<query>" --account <email> --json` (via Bash — see references/gogcli-commands.md) |
+| `gog` | `gog contacts list --account <email> --json` or `gog contacts search "<query>" --account <email> --json` (via Bash — see references/gogcli-commands.md) |
 
 **Common patterns:**
 - Search by name for people cross-referencing

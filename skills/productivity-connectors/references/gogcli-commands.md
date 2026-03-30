@@ -59,11 +59,17 @@ gog gmail search "in:sent" --account <email> --json --max 20
 ## Contacts
 
 ```bash
+# List all contacts
+gog contacts list --account <email> --json
+
 # Search by name
 gog contacts search "Jane Smith" --account <email> --json
 
 # Search by email domain
 gog contacts search "@monash.edu" --account <email> --json
+
+# Get a specific contact
+gog contacts get <resourceName> --account <email> --json
 ```
 
 ## Sheets
