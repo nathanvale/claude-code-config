@@ -51,6 +51,7 @@ Follow Plan → Confirm → Execute → Test:
 - Use the repo's dedicated test, lint, and type-checking tools instead of Bash fallbacks when available
 - Prefer machine-readable output for tool-to-tool interfaces
 - Prefer `bunx` over `npx` when package execution is needed
+- Prefer bun ecosystem and typesript over python or other langauges
 
 ## Library Docs
 
@@ -60,6 +61,17 @@ When working with libraries, frameworks, or APIs:
 2. Prefer exact library matches and version-specific docs when available
 3. Prefer primary docs over third-party summaries
 4. Cite the relevant version when it matters
+
+## Connector Dispatch
+
+When Nathan asks about calendar events, email, or contacts, use the productivity connector system — not built-in MCP tools.
+
+1. Read `.productivity.yml` in the current project root for the declared connector and account
+2. Read `productivity-connectors` skill for the routing table and dispatch protocol
+3. Dispatch via Bash CLI (e.g., `gog` with `--account <email> --json`) or MCP tool as the routing table specifies
+4. If `.productivity.yml` doesn't exist, ask which account to use
+
+Do not call `gcal_list_events`, `gcal_get_event`, `gmail_search_messages`, or other Google MCP tools directly.
 
 ## Governance
 

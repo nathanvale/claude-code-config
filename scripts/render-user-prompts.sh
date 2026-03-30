@@ -16,6 +16,7 @@ SHARED_FRAGMENTS=(
   "shared/intro.md"
   "shared/boundaries.md"
   "shared/workflow.md"
+  "shared/connector-dispatch.md"
   "shared/governance.md"
   "shared/communication-style.md"
   "shared/key-people.md"
