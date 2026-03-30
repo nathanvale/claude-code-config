@@ -12,6 +12,7 @@
  * timed-out safety check must deny (exit 2), not silently allow (exit 1).
  */
 
+import { resolve } from 'node:path'
 import { postEvent } from './event-bus-client'
 import { PROTECTED_BRANCHES } from './git-policy'
 import { getCurrentBranch } from './git-utils'
@@ -23,6 +24,7 @@ import {
 	normalizeExecutableName,
 	parseGitInvocation,
 	splitShellSegments,
+	splitShellWords,
 } from './shell-tokenizer'
 
 interface PreToolUseHookInput {
@@ -73,6 +75,107 @@ export function getGitSafetyMode(
 	if (raw === 'commit-guard') return 'commit-guard'
 	if (raw === 'advisory') return 'advisory'
 	return 'strict'
+}
+
+/**
+ * Resolves the effective git working directory from a shell command.
+ *
+ * When Claude runs `cd /other/repo && git commit` or `git -C /other/repo commit`,
+ * the target repo differs from `input.cwd`. This function extracts the target
+ * directory so protected-branch checks resolve against the correct repo.
+ *
+ * Priority: `git -C <path>` (closest to the git command) > `cd <path>` prefix > fallback cwd.
+ * Multiple `-C` flags are resolved left-to-right per git semantics.
+ */
+export function resolveEffectiveGitCwd(
+	command: string,
+	fallbackCwd: string,
+): string {
+	const { segments } = splitShellSegments(command)
+
+	// 1. Check for `git -C <path>` in the segment containing a commit-like invocation.
+	for (const segment of segments) {
+		const invocation = parseGitInvocation(segment)
+		if (!invocation) continue
+
+		const words = splitShellWords(segment)
+		// Find the `git` word
+		let gitIdx = -1
+		for (let i = 0; i < words.length; i++) {
+			if (normalizeExecutableName(words[i] || null) === 'git') {
+				gitIdx = i
+				break
+			}
+		}
+		if (gitIdx === -1) continue
+
+		// Walk from git to the subcommand, collecting -C values.
+		// Multiple -C flags are resolved left-to-right (each relative to the last).
+		let resolvedCwd: string | null = null
+		let i = gitIdx + 1
+		while (i < words.length) {
+			const word = words[i] || ''
+			if (!word.startsWith('-')) break // reached subcommand
+			if (word === '--') {
+				i++
+				break
+			}
+
+			if (word === '-C' && i + 1 < words.length) {
+				const target = words[i + 1] || ''
+				resolvedCwd = resolve(resolvedCwd ?? fallbackCwd, target)
+				i += 2
+				continue
+			}
+
+			// Skip other options-with-value (e.g. -c, --git-dir)
+			if (
+				['-c', '--git-dir', '--work-tree', '--namespace'].includes(word)
+			) {
+				i += 2
+				continue
+			}
+			// Skip --key=value style options
+			if (
+				word.startsWith('--git-dir=') ||
+				word.startsWith('--work-tree=') ||
+				word.startsWith('--namespace=') ||
+				word.startsWith('--super-prefix=') ||
+				word.startsWith('--config-env=')
+			) {
+				i++
+				continue
+			}
+
+			i++
+		}
+
+		if (resolvedCwd) return resolvedCwd
+	}
+
+	// 2. Check for `cd <path>` in a preceding segment.
+	for (let s = 0; s < segments.length; s++) {
+		const segment = segments[s] || ''
+		const words = splitShellWords(segment)
+		if (words.length < 2) continue
+
+		const head = words[0] || ''
+		if (head !== 'cd') continue
+
+		// The cd target is the last non-flag argument
+		const target = words[words.length - 1] || ''
+		if (target.startsWith('-')) continue
+
+		// Only use this if a later segment has a git invocation
+		const hasLaterGit = segments
+			.slice(s + 1)
+			.some((seg) => parseGitInvocation(seg) !== null)
+		if (hasLaterGit) {
+			return resolve(fallbackCwd, target)
+		}
+	}
+
+	return fallbackCwd
 }
 
 /**
@@ -1007,7 +1110,8 @@ if (import.meta.main) {
 			safetyMode !== 'advisory' &&
 			(hasCommitAction || hasImplicitForceLeasePush)
 		) {
-			const branch = await getCurrentBranch(input.cwd)
+			const effectiveCwd = resolveEffectiveGitCwd(command, input.cwd ?? process.cwd())
+			const branch = await getCurrentBranch(effectiveCwd)
 			if (branch && PROTECTED_BRANCHES.includes(branch)) {
 				if (hasCommitAction) {
 					await denyAndExit(
