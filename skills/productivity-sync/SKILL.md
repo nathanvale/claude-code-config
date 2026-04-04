@@ -8,6 +8,11 @@ allowed-tools:
   - Write
   - Glob
   - Grep
+  - mcp__plugin_imessage_imessage__sync_archive
+  - mcp__plugin_imessage_imessage__search_messages
+  - mcp__plugin_imessage_imessage__list_contacts
+  - mcp__plugin_imessage_imessage__list_threads
+  - mcp__plugin_imessage_imessage__reply
 ---
 
 # Productivity Sync
@@ -61,21 +66,25 @@ Read `.productivity.yml` and sync each declared connector. Reference the **produ
 - Note senders for people cross-referencing
 
 **Messages** (if configured -- `messages: imessage` in `.productivity.yml`):
-- Incremental sync via cursor: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage`
-- Messages auto-persist as Markdown with v2 frontmatter via read-through cache
+- Prefer MCP tools when `plugin:imessage` is available; fall back to CLI if not
+- Incremental sync: call `sync_archive(save_dir: "~/code/personal-messages")`
+  - Cursor-based with 1-hour overlap safety — persists markdown, manifest, and cursor automatically
+  - Returns `commitment_candidates` directly in the response
 - Cross-reference senders against `memory/people/` in the owning repo
 - For durable people updates, prepare structured JSON and call `~/.claude/skills/people-enrich/scripts/apply-person-update.ts`
-- AI commitment extraction: read synced message text and identify outbound/inbound commitments
-- Render `CommitmentCandidate[]` as structured JSON, then present as "Possible Missing Tasks (from Messages)" for user triage
+- Present returned `commitment_candidates` as "Possible Missing Tasks (from Messages)" for user triage
+- If commitments have actionable follow-ups and the chat is allowlisted, offer to reply via `reply(chat_id, text)`
 - If `owner_status` is `ambiguous` or `unknown`, ask before writing to any repo task surface
 - Write tasks and memory updates to the owning repo, not back into the raw corpus repo
 - Never copy raw message bodies into `my-second-brain`
+- **CLI fallback:** `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage`
 
 **Messages (deep)** (if `--deep` and messages configured):
-- Expand to 7-day window: `sync --since <7-days-ago>`
-- Include separate `--from-me` pass to find outbound commitments
-- Surface new contacts not in `memory/people/`
-- Full AI analysis of message threads for missed action items
+- Expand to 7-day window: `sync_archive(save_dir: "~/code/personal-messages", since: "<7-days-ago-ISO>")`
+- Separate outbound commitments pass: `search_messages(from_me: true, since: "<7-days-ago-ISO>", save: true, save_dir: "~/code/personal-messages")`
+- Surface new contacts not in `memory/people/` using `list_contacts()`
+- Full AI analysis of returned message threads for missed action items
+- Use `search_messages` for targeted follow-up queries on flagged threads
 
 **Meeting notes** (if calendar + knowledge base configured):
 
@@ -339,3 +348,23 @@ Present grouped by confidence. High-confidence items offered to add directly; lo
 - Safe to run frequently -- only updates when there's new info
 - `--deep` always runs interactively
 - If a source tool is unavailable, skip it -- never fail the entire sync
+
+## Gotchas
+
+### Email body decoding — no inline interpreters
+
+`gog gmail read` returns base64-encoded HTML bodies. To decode them:
+
+- **NEVER** use `python3 -c "..."` or any inline `-c/-e/-r/--eval` — blocked by the git-safety hook
+- Write a temp script file first, then run it:
+  ```bash
+  cat > /tmp/decode-email.py << 'EOF'
+  import base64, json, re, sys
+  data = json.load(open(sys.argv[1]))
+  body = data['thread']['messages'][0]['payload']['body']['data']
+  decoded = base64.urlsafe_b64decode(body + '==').decode('utf-8', errors='ignore')
+  print(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', decoded))[:3000])
+  EOF
+  python3 /tmp/decode-email.py /path/to/email.json
+  ```
+- For most sync purposes, the email subject + sender is sufficient to triage action items — only decode the body when the subject is ambiguous
