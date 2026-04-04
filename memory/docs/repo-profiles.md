@@ -37,6 +37,58 @@ Keep local:
 - team-specific task noise
 - bulky imported corpora
 
+## Work Hub
+
+Use when a Work Repo grows large enough to own spoke repos that depend on it for people, tasks, glossary, or domain context. A Work Hub is a Work Repo that also acts as the coordination point for one or more spokes.
+
+The hub-spoke relationship is opt-in. Most work repos are independent and should stay as plain Work Repos.
+
+Owns (in addition to Work Repo scope):
+- people routing table used by spokes
+- shared glossary entries
+- task surface for the project cluster
+- reusable patterns and domain context consumed by spokes
+- delivery roadmap across the spoke cluster
+
+Promote upward (same as Work Repo):
+- durable domain learnings
+- reusable workflows
+- personal career insights
+
+Keep local:
+- routine meeting churn
+- team-specific task noise
+- bulky imported corpora
+
+Spoke roster:
+- declare spokes in `roster.yml` via `parent: <hub-name>` on each spoke entry
+
+## Spoke
+
+Use for a repo that implements part of a larger project owned by a Work Hub. A spoke delegates cross-cutting context (people, tasks, glossary, domain patterns) to its parent hub and keeps only local implementation detail.
+
+Owns:
+- implementation details and coding conventions
+- local gotchas and solved problems
+- build, deploy, and environment setup
+- local ADRs and decisions scoped to this codebase
+- local glossary entries for code-level terms
+
+Delegates to parent hub:
+- people and stakeholder context
+- active task surface
+- shared glossary (program/org acronyms)
+- reusable cross-repo patterns
+
+Promote upward:
+- solved problems with cross-repo value promote to the parent hub
+- durable patterns promote to the parent hub, then optionally to my-second-brain
+
+Keep local:
+- implementation-specific churn
+- build artifacts and environment quirks
+- narrow coding conventions
+
 ## Infra Repo
 
 Use for systems work such as `mac-mini-home-server`.
@@ -124,7 +176,8 @@ Keep local:
 Every new repo should answer:
 
 1. Which profile is this closest to?
-2. What does this repo own as canonical truth?
+2. If Work Hub or Spoke: which repo is the parent or which repos are the spokes?
+3. What does this repo own as canonical truth?
 3. What should be promoted to `my-second-brain`?
 4. What should never be duplicated?
 5. Which note families will be common here?

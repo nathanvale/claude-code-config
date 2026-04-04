@@ -38,6 +38,18 @@ QMD is the default answer to:
 - "Where has this topic shown up before?"
 - "Which repo likely owns this context?"
 
+### Hub + Spoke Scoping
+
+When a project spans a hub and its spokes, scope QMD queries to the cluster by listing collections together:
+
+```
+collection: repo-monash-smst, repo-experience-sdk
+```
+
+Use this when asking questions that span implementation detail (spoke) and domain context (hub). For pure domain questions, query the hub collection alone. For pure implementation questions, query the spoke collection alone.
+
+The roster's `parent:` field is the source of truth for which collections form a cluster.
+
 ## NotebookLM Role
 
 Use NotebookLM when the goal is a generated artifact, not everyday recall.
