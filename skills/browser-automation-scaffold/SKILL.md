@@ -6,6 +6,8 @@ argument-hint: "[domain-name]"
 
 # Browser Agent Scaffold
 
+For generic marketplace plugin setup surfaces, use `plugin-scaffold`. This skill stays focused on browser-agent-specific scaffolding.
+
 Interactive wizard that generates a complete browser agent stack from a domain name and a few questions.
 
 ## What Gets Generated
