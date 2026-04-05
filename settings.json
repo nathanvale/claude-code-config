@@ -143,6 +143,5 @@
     }
   },
   "alwaysThinkingEnabled": false,
-  "skipDangerousModePermissionPrompt": true,
-  "model": "sonnet"
+  "skipDangerousModePermissionPrompt": true
 }
