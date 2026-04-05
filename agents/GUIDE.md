@@ -128,7 +128,7 @@ services:
 | "Click @eN to interact" | `browser-automation` skill | Recipe = shared knowledge |
 | "Zoom shows transcripts at /recording/detail" | `zoom-transcript` skill | Domain knowledge |
 | Vault item names, URLs | `config.yaml` | Environment-specific |
-| "Login failed on cloudflare.com" | `docs/gotchas/browser-agent/` | Self-healing memory |
+| "Login failed on cloudflare.com" | `docs/solutions/browser-agent/` | Self-healing memory |
 
 ## Tools Allowlist
 
