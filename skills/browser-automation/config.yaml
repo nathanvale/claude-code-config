@@ -51,3 +51,9 @@ services:
     url: https://console.cloud.google.com
     auth: sso
     op_item: "accounts.google.com (hi@nathanvale.com)"
+  udr7:
+    url: https://192.168.1.1
+    auth: password                  # password-only (no username field)
+    op_item: "192.168.1.1"
+    op_vault: "API Credentials"     # override — not in default vault
+    notes: "Self-signed cert (auto-proceeds via tab new). UniFi Dream Router 7."
