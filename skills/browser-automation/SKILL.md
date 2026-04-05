@@ -227,20 +227,20 @@ agent-browser --session <name> screenshot /tmp/browser-agent-needs-human.png
 Resolve the gotcha directory relative to the git root (or CWD if not in a git repo):
 
 ```bash
-GOTCHA_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/docs/gotchas/browser-agent"
+GOTCHA_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/docs/solutions/browser-agent"
 ```
 
-Look for `${GOTCHA_DIR}/{domain-key}.md`. If found, read the last 60 lines:
+Look for `${GOTCHA_DIR}/{domain-key}/{domain-key}.md`. If found, read the last 60 lines:
 
 ```bash
-tail -60 "${GOTCHA_DIR}/{domain-key}.md" 2>/dev/null
+tail -60 "${GOTCHA_DIR}/{domain-key}/${domain-key}.md" 2>/dev/null
 ```
 
 Domain key = simplified domain name (e.g., `tailscale`, `village-cinemas`, `google-flights`, `192-168-0-1`). If no gotcha directory exists in the current project, skip this step.
 
 ### When Unexpected Behaviour Occurs
 
-Append an entry to `docs/gotchas/browser-agent/{domain-key}.md`:
+Append an entry to `docs/solutions/browser-agent/{domain-key}/{domain-key}.md`:
 
 ```markdown
 ### {timestamp} - {short description}

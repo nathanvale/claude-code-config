@@ -101,15 +101,34 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 
 ## Messages
 
-| Connector | Tools |
-|-----------|-------|
-| `imessage` | Local CLI: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts` |
+| Connector | Primary (MCP) | Fallback (CLI) |
+|-----------|---------------|----------------|
+| `imessage` | `sync_archive`, `search_messages`, `list_contacts`, `list_threads`, `reply` | `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts` |
 
-**Common patterns:**
-- Default sync: `sync --save-dir ~/code/personal-messages/docs/messages/imessage/`
+**MCP tool routing (preferred — use when `plugin:imessage` tools are available):**
+
+- **Default sync:** `sync_archive(save_dir: "~/code/personal-messages")`
+  - Cursor-based incremental sync with 1-hour overlap safety
+  - Persists markdown + manifest + cursor automatically to `{save_dir}/docs/messages/imessage/`
+  - Returns `commitment_candidates` directly in the response
+- **Deep sync (7-day):** `sync_archive(save_dir: "~/code/personal-messages", since: "<7-days-ago-ISO>")`
+- **Outbound commitments:** `search_messages(from_me: true, since: "<date>", save: true, save_dir: "~/code/personal-messages")`
+  - Returns `commitment_candidates` for outbound promises
+- **Ad-hoc search:** `search_messages(search: "<query>", since: "<date>")`
+  - Optionally persist with `save: true, save_dir: "~/code/personal-messages"`
+- **Reply:** `reply(chat_id: "<chat_id>", text: "<message>")`
+  - Allowlisted chats only — use to act on commitments surfaced during sync
+- **Contacts:** `list_contacts()` / **Threads:** `list_threads()`
+
+**CLI fallback (use when MCP tools are unavailable):**
+- Default sync: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage/`
 - Deep sync: `sync --since <7-days-ago> --save-dir ~/code/personal-messages/docs/messages/imessage/`
 - Read-through query: `messages --since <date> --search <term>`
-- Commitment extraction runs after sync, renders `CommitmentCandidate[]` for triage
+- `enrich` and `migrate-notes` commands are CLI-only (no MCP equivalent)
+
+**Notes:**
+- Commitment extraction runs inline — no post-processing needed
+- Cursor file is shared between MCP and CLI — no drift when alternating
 - Privacy-sensitive: see `~/code/personal-messages/docs/specs/privacy-and-retention.md`
 
 ## Contacts

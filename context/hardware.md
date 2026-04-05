@@ -7,8 +7,8 @@
 | Machine | Chip | RAM | Role | SSH |
 |---------|------|-----|------|-----|
 | Mac 1 (MacBook Pro 14", Space Black) | M4 Pro (12C CPU, 16C GPU) | 24 GB | Personal laptop | local |
-| Mac 2 (Mac Mini) | M4 Pro (14C CPU, 20C GPU) | 64 GB | Home server | `ssh -i ~/.ssh/id_rsa_github server@192.168.0.44` |
-| Mac 3 (MacBook Pro 16", Bunnings-issued) | M3 Pro (12C, 6P+6E) | 36 GB | Work laptop | `ssh -i ~/.ssh/id_rsa_github s1010081@192.168.0.86` |
+| Mac 2 (Mac Mini) | M4 Pro (14C CPU, 20C GPU) | 64 GB | Home server | `ssh -i ~/.ssh/id_rsa_github server@192.168.1.100` |
+| Mac 3 (MacBook Pro 16", Bunnings-issued) | M3 Pro (12C, 6P+6E) | 36 GB | Work laptop | `ssh -i ~/.ssh/id_rsa_github s1010081@192.168.1.18` |
 
 ## SSH Usage
 
@@ -18,7 +18,7 @@ SSH with key auth works directly from Claude Code — no interactive login neede
 ssh -i ~/.ssh/id_rsa_github <user>@<ip> "<command>"
 ```
 
-Example: `ssh -i ~/.ssh/id_rsa_github s1010081@192.168.0.86 "hostname && whoami"`
+Example: `ssh -i ~/.ssh/id_rsa_github s1010081@192.168.1.18 "hostname && whoami"`
 
 Multi-command sessions work fine by chaining with `&&` or `;`.
 

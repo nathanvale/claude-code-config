@@ -11,6 +11,7 @@ summary: "Minimal checklist for bringing a new repo into the shared Memory OS."
 ## For Any New Repo
 
 - Pick the closest repo profile.
+- If this repo is a spoke, declare `parent:` in `roster.yml`. If it is a hub, list its spokes.
 - Declare what the repo owns as source of truth.
 - Reuse the shared note taxonomy where possible.
 - Reuse the shared frontmatter philosophy.

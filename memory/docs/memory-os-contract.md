@@ -87,6 +87,19 @@ Examples:
 - `mac-mini-home-server` owns specs, runbooks, ADRs, gotchas, verification, and implementation history.
 - a future product repo should own roadmap, plans, specs, research, decisions, and implementation history for that product.
 
+### Multi-Repo Projects
+
+When a project spans multiple repos, one repo may act as a **Work Hub** that owns cross-cutting context (people, tasks, glossary, reusable patterns) for the cluster. Other repos in the cluster are **Spokes** that delegate those concerns to the hub and keep only local implementation detail.
+
+Rules:
+- The hub-spoke relationship is opt-in. Declare it in `roster.yml` with `parent:` on spoke entries.
+- A spoke's CLAUDE.md should include a "Critical Context (hub: <name>)" section with explicit backlinks for people, tasks, and glossary.
+- Promotion flows upward: spoke insights promote to the parent hub, then selectively to `my-second-brain`. Spokes do not promote directly to `my-second-brain`.
+- QMD queries can scope to a hub and its spokes by listing their collections together.
+- Most repos are independent participants and do not need hub-spoke declarations.
+
+See `repo-profiles.md` for the Work Hub and Spoke profiles.
+
 ### `my-second-brain`
 
 `my-second-brain` owns:

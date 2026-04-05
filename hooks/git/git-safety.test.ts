@@ -7,6 +7,7 @@ import {
 	hasImplicitProtectedBranchForceLeasePush,
 	hasProtectedBranchCommitAction,
 	isCommitCommand,
+	resolveEffectiveGitCwd,
 } from './git-safety.ts'
 import { extractCommandHead, splitShellSegments, tokenizeShell } from './shell-tokenizer.ts'
 
@@ -1074,5 +1075,75 @@ describe('runtime mode behavior', () => {
 		const result = simulateModeDecision('git clean -fd', 'advisory', 'main')
 		expect(result.denied).toBe(false)
 		expect(result.warned).toBe(true)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// resolveEffectiveGitCwd — cross-repo branch resolution
+// ---------------------------------------------------------------------------
+
+describe('resolveEffectiveGitCwd', () => {
+	const FALLBACK = '/session/cwd'
+
+	test('returns fallback when no cd or -C is present', () => {
+		expect(resolveEffectiveGitCwd('git commit -m "test"', FALLBACK)).toBe(FALLBACK)
+	})
+
+	test('extracts -C path from git invocation', () => {
+		expect(
+			resolveEffectiveGitCwd('git -C /other/repo commit -m "test"', FALLBACK),
+		).toBe('/other/repo')
+	})
+
+	test('resolves relative -C path against fallback cwd', () => {
+		expect(
+			resolveEffectiveGitCwd('git -C ../sibling commit -m "test"', FALLBACK),
+		).toBe('/session/sibling')
+	})
+
+	test('chains multiple -C flags left-to-right', () => {
+		expect(
+			resolveEffectiveGitCwd('git -C /base -C sub commit -m "test"', FALLBACK),
+		).toBe('/base/sub')
+	})
+
+	test('extracts cd path from preceding segment', () => {
+		expect(
+			resolveEffectiveGitCwd('cd /other/repo && git commit -m "test"', FALLBACK),
+		).toBe('/other/repo')
+	})
+
+	test('resolves relative cd path against fallback cwd', () => {
+		expect(
+			resolveEffectiveGitCwd('cd ../sibling && git commit -m "test"', FALLBACK),
+		).toBe('/session/sibling')
+	})
+
+	test('-C takes priority over cd', () => {
+		expect(
+			resolveEffectiveGitCwd(
+				'cd /wrong/repo && git -C /right/repo commit -m "test"',
+				FALLBACK,
+			),
+		).toBe('/right/repo')
+	})
+
+	test('ignores cd that is not followed by a git segment', () => {
+		expect(
+			resolveEffectiveGitCwd('cd /tmp && echo hello', FALLBACK),
+		).toBe(FALLBACK)
+	})
+
+	test('handles env -C prefix with git -C', () => {
+		// env -C is a separate concern (execution prefix), git -C is what matters
+		expect(
+			resolveEffectiveGitCwd('git -C /target commit -m "test"', FALLBACK),
+		).toBe('/target')
+	})
+
+	test('handles quoted paths in -C', () => {
+		expect(
+			resolveEffectiveGitCwd('git -C "/path with spaces" commit -m "test"', FALLBACK),
+		).toBe('/path with spaces')
 	})
 })

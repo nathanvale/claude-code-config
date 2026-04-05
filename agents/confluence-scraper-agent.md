@@ -27,7 +27,7 @@ Extract one Confluence page into a temp markdown file with enough provenance and
 - NEVER edit, comment on, like, watch, share, move, or delete Confluence content
 - NEVER submit forms other than auth flows needed to view the page
 - ONLY write to `/tmp/confluence-page-*.md` temp files
-- ONLY append to `docs/gotchas/browser-agent/` files when a reusable gotcha is discovered
+- ONLY append to `docs/solutions/browser-agent/` files when a reusable gotcha is discovered
 - ALWAYS return a single-line result
 - Be budget-conscious with agent-browser commands
 
@@ -40,7 +40,7 @@ If no `session_id` is provided, default to `confluence-default`.
 ## Workflow
 
 1. Load `.browser-agent.yaml` from the project root if present
-2. Load relevant gotchas from `docs/gotchas/browser-agent/`
+2. Load relevant gotchas from `docs/solutions/browser-agent/`
 3. Navigate to the target URL and wait for the page shell to settle
 4. Classify the state using the `confluence-pages` skill
 5. If redirected to auth, use browser-automation auth flows and return to the target URL

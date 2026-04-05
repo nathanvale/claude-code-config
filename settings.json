@@ -128,7 +128,11 @@
     "document-skills@anthropic-agent-skills": true,
     "compound-engineering@every-marketplace": true,
     "compound-engineering@compound-engineering-plugin": true,
-    "frontend-design@claude-code-plugins": true
+    "frontend-design@claude-code-plugins": true,
+    "go-browser-planner@side-quest-engineering": true,
+    "imessage@side-quest-engineering": true,
+    "contacts-hygiene@side-quest-engineering": true,
+    "unifi-admin@side-quest-engineering": true
   },
   "extraKnownMarketplaces": {
     "monash-plugins": {

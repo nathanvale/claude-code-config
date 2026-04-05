@@ -55,7 +55,7 @@ Read the config for `credentials`, `identity`, and `services.zoom` entries only.
 - ALWAYS return a single-line result (see Output Format)
 - ALWAYS use `$BROWSER_FLAGS` for all agent-browser commands (set in Browser Session above)
 - ALWAYS read gotchas before starting: `~/.claude/skills/zoom-transcript/gotchas.md`
-- Also read project-scoped gotchas if auth-related files exist (e.g. `docs/gotchas/browser-agent/monashuni-okta.md`)
+- Also read project-scoped gotchas if auth-related files exist (e.g. `docs/solutions/browser-agent/monashuni-okta/monashuni-okta.md`)
 - NEVER promote a healed selector directly to validated without revalidation evidence
 - Be budget-conscious with agent-browser commands -- typical extraction is 15-25 commands. URL resolution or auth may require more.
 

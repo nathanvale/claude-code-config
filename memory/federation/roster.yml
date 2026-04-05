@@ -1,5 +1,8 @@
 version: 1
 hub: my-second-brain
+# Optional per-repo fields:
+#   parent: <repo-name>   — declares this repo is a spoke of the named hub
+#   spokes: [<repo-names>] — informational, lists spoke repos (canonical is parent: on each spoke)
 
 repos:
   - name: my-second-brain
@@ -18,7 +21,8 @@ repos:
       - AGENTS.md
 
   - name: monash-smst
-    profile: work-repo
+    profile: work-hub
+    spokes: [experience-sdk]
     location: ~/code/monash-smst
     collection: repo-monash-smst
     update_command: git -C ~/code/monash-smst fetch --all --prune --quiet || true
@@ -210,12 +214,16 @@ repos:
       - CLAUDE.md
 
   - name: experience-sdk
-    profile: work-repo
+    profile: spoke
+    parent: monash-smst
     location: ~/code/experience-sdk
     collection: repo-experience-sdk
     update_command: git -C ~/code/experience-sdk fetch --all --prune --quiet || true
     primary_paths:
       - docs
+      - memory
+      - CLAUDE.md
+      - AGENTS.md
 
   - name: claude-flow
     profile: infra-repo

@@ -204,3 +204,54 @@ describe('git-safety runtime mode behavior', () => {
 		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
 	})
 })
+
+describe('cross-repo branch resolution', () => {
+	test('git -C targets the correct repo, not session cwd', () => {
+		// Session cwd is on main (protected), target repo is on a feature branch
+		const sessionRepo = createTempRepo() // on main
+		const targetRepo = createTempRepo()
+		runGit(targetRepo.cwd, ['checkout', '-b', 'feat/test'])
+
+		const result = runSafetyHook({
+			command: `git -C ${targetRepo.cwd} commit -m "feat: cross-repo"`,
+			cwd: sessionRepo.cwd,
+			mode: 'commit-guard',
+			protectedBranches: 'main',
+		})
+		// Should allow — target repo is on feat/test, not main
+		expect(result.exitCode).toBe(0)
+		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+	})
+
+	test('cd targets the correct repo, not session cwd', () => {
+		const sessionRepo = createTempRepo() // on main
+		const targetRepo = createTempRepo()
+		runGit(targetRepo.cwd, ['checkout', '-b', 'feat/test'])
+
+		const result = runSafetyHook({
+			command: `cd ${targetRepo.cwd} && git commit -m "feat: cross-repo"`,
+			cwd: sessionRepo.cwd,
+			mode: 'commit-guard',
+			protectedBranches: 'main',
+		})
+		expect(result.exitCode).toBe(0)
+		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+	})
+
+	test('git -C to protected branch is still blocked', () => {
+		const sessionRepo = createTempRepo()
+		runGit(sessionRepo.cwd, ['checkout', '-b', 'feat/safe'])
+		const targetRepo = createTempRepo() // on main
+
+		const result = runSafetyHook({
+			command: `git -C ${targetRepo.cwd} commit -m "feat: bad"`,
+			cwd: sessionRepo.cwd,
+			mode: 'commit-guard',
+			protectedBranches: 'main',
+		})
+		// Should block — target repo IS on main
+		expect(result.exitCode).toBe(2)
+		expect(result.stdout).toContain('"permissionDecision":"deny"')
+		expect(result.stdout).toContain('Cannot commit directly')
+	})
+})

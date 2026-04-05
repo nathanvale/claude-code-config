@@ -129,6 +129,7 @@ Return this exact shape:
 
 Field rules:
 - `relationship_profile` must be an array of H3 blocks chosen intentionally for the person's `relationship_type`
+- **WARNING:** Each H3 block FULLY REPLACES the existing block with the same heading — it does NOT merge. If the existing block contains structured data (bullet lists, medical IDs, addresses), do NOT include it unless your content is strictly richer. For delta enrichments on mature profiles, prefer emitting zero relationship_profile blocks and routing findings to signals/open_questions instead.
 - `signals` must be concise durable bullets only
 - `open_questions` must be concrete and decision-oriented
 - `conflicts` is optional, but use it whenever machine evidence conflicts with prior note content. Must be `string[]`, not objects
@@ -334,6 +335,30 @@ Reference fixtures for merge verification:
 | `scripts/contact-stats.test.ts` | Test coverage |
 | `scripts/tsconfig.json` | Bun TypeScript config |
 | `fixtures/*.md` | Merge verification fixtures |
+
+## Gotchas
+
+### H3 blocks are full replacements, not merges
+
+`mergeRelationshipBlocks()` in `people-note.ts` replaces the entire content of a
+matched H3 block. This means if the existing block has structured detail (GP info,
+Medicare numbers, bullet lists) and the enrichment report provides a prose paragraph,
+the structured detail is **destroyed**.
+
+**Rules for the sub-agent:**
+- Only include an H3 block in `relationship_profile` when the new content is
+  genuinely richer than what already exists
+- If the existing block contains structured data (medical details, bullet lists,
+  addresses, IDs), do NOT replace it with a prose summary
+- Prefer appending a new H3 block (e.g., `### Medical History`) rather than
+  overwriting an existing structured block (e.g., `### Medical`)
+- When in doubt, omit the block from `relationship_profile` — signals and
+  open_questions are the safer surfaces for new information
+
+**Safe pattern:** For delta enrichments on mature profiles, emit zero
+`relationship_profile` blocks and route all new findings to `signals` and
+`open_questions` instead. Only emit H3 blocks on first-time enrichments or
+when the existing block is clearly a stub.
 
 ## Success Criteria
 

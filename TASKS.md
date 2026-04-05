@@ -22,6 +22,7 @@
 
 ## Done
 
+- [x] ~~**Fix git-safety hook cross-repo cwd bug**~~ (2026-03-30) - `resolveEffectiveGitCwd()` extracts target repo from `git -C` and `cd` prefixes instead of using session cwd
 - [x] ~~**Create code-quality rule for runner plugins**~~ (2026-03-23) - `rules/code-quality.md` with alwaysApply for bun-runner, biome-runner, tsc-runner MCP tool routing
 - [x] ~~**Add runner details to shared fragment for Codex**~~ (2026-03-23) - Updated `prompt-fragments/shared/tool-routing.md` with full tool table, re-rendered
 - [x] ~~**Symlink settings.json to repo**~~ (2026-03-23) - Moved `~/.claude/settings.json` into repo, added to `install.sh` symlinks array alongside `hooks.json`
