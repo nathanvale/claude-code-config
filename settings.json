@@ -129,7 +129,7 @@
     "compound-engineering@every-marketplace": true,
     "compound-engineering@compound-engineering-plugin": true,
     "frontend-design@claude-code-plugins": true,
-    "go-browser-planner@side-quest-engineering": true,
+    "browser@side-quest-engineering": true,
     "imessage@side-quest-engineering": true,
     "contacts-hygiene@side-quest-engineering": true,
     "unifi-admin@side-quest-engineering": true
