@@ -19,6 +19,12 @@ connectors:
   calendar-account:            # required when calendar is gog (e.g., nathan.vale@monash.edu)
   email: gmail                 # gmail | gog | microsoft-365 | none
   email-account:               # required when email is gog (e.g., hi@nathanvale.com)
+  contacts: gog                # gog | none
+  contacts-account:            # required when contacts is gog
+  sheets: gog                  # gog | none
+  sheets-account:              # required when sheets is gog
+  drive: gog                   # gog | none
+  drive-account:               # required when drive is gog
   project-tracker: jira        # jira | asana | linear | github-issues | monday | clickup | none
   knowledge-base: confluence   # notion | confluence | none
   chat: none                   # slack | none
@@ -141,6 +147,30 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 - Search by name for people cross-referencing
 - Retrieve contact details for meeting attendees
 
+## Sheets
+
+| Connector | Tools |
+|-----------|-------|
+| `gog` | `gog sheets get <spreadsheetId> <range> --account <email> --json` (read) • `gog sheets update <spreadsheetId> <range> <values> --account <email>` (write) • `gog sheets append <spreadsheetId> <range> <values> --account <email>` (append) (via Bash — see references/gogcli-commands.md) |
+
+**Common patterns:**
+- Read a range for review loops (e.g., reconciliation CSVs round-tripped via Sheets)
+- Append rows for batch logging
+- Use `--json` for structured reads, plain text for simple writes
+- Always pass the spreadsheet ID and A1 range explicitly — no implicit "active sheet"
+
+## Drive
+
+| Connector | Tools |
+|-----------|-------|
+| `gog` | `gog drive ls --account <email> --json` (list) • `gog drive search "<query>" --account <email> --json` (search) • `gog drive download <fileId> --account <email>` (download) • `gog drive upload <localPath> --account <email>` (upload) (via Bash — see references/gogcli-commands.md) |
+
+**Common patterns:**
+- Search by name/content to resolve a file before acting on it (never guess file IDs)
+- Download Google Docs/Sheets with export format flags
+- Upload local artifacts (CSVs, reports) into a known folder
+- Use `gog drive get <fileId>` for metadata before destructive ops
+
 ## Availability Check Pattern
 
 Before calling any tool above, verify it exists:
@@ -158,7 +188,7 @@ Never fail the entire sync because one source is unavailable.
 ## Gotchas
 
 ### Wrong account (silent failure)
-Omitting `--account` from a `gog` command returns exit 0 with data from the **wrong account** (whichever account gogcli defaults to). This is the hardest failure mode — it looks like success. **Always** pass `--account <email>` explicitly. The dispatch protocol above enforces a pre-dispatch assertion: if `<connector>-account` is missing from `.productivity.yml`, stop before running any `gog` command.
+Omitting `--account` from a `gog` command (gmail, calendar, contacts, **sheets**, **drive**, etc.) returns exit 0 with data from the **wrong account** (whichever account gogcli defaults to). This is the hardest failure mode — it looks like success. **Always** pass `--account <email>` explicitly. The dispatch protocol above enforces a pre-dispatch assertion: if `<connector>-account` is missing from `.productivity.yml`, stop before running any `gog` command.
 
 ### Keyring access on headless/SSH
 On Mac Mini via SSH, gogcli cannot access the macOS keychain. Set `GOG_KEYRING_BACKEND=file` before running gog commands. See gogcli Issue #206.
