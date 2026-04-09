@@ -86,11 +86,15 @@ def main():
                 "screenNumber": s.get("screenNumber", 0),
                 "date": s["date"],
             })
+        trailer = m.get("trailer", "")
         entries.append({
             "name": m["name"],
             "vistaId": mid,
             "rating": rating,
             "runtime": runtime,
+            "trailer": f"https://www.youtube.com/watch?v={trailer}" if trailer else None,
+            "summary": m.get("summary", ""),
+            "posterImage": m.get("posterImage", ""),
             "sessions": sess_list,
         })
 
