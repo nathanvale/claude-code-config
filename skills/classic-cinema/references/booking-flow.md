@@ -153,6 +153,7 @@ If yes:
      3. The Drama (MA15+) — 1:20pm, 3:40pm, 6:50pm, 9:10pm
      ...
    ```
+   Close with: "Anything catch your eye? If you're not sure about a movie, I can show you a trailer." (The `trailer` field in the movie API contains a YouTube video ID — build the URL as `https://www.youtube.com/watch?v={trailer}`. Only offer trailers for movies where `trailer` is non-empty.)
 
 2. **Pick movie** — Nathan picks a number. Offer "show details" for synopsis/trailer (from `/api/movies` data — local, no fetch needed).
 
