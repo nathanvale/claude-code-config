@@ -4,7 +4,7 @@
 Usage:
     python3 check-availability.py --session-ids 122899,122893,122898
 
-Reads /tmp/cc-seatmap-{sid}.json for each session ID (fetched earlier via curl).
+Auto-fetches seatmap from the API if /tmp/cc-seatmap-{sid}.json doesn't exist.
 Prints one JSON object per line with availability stats.
 
 Output format (one JSON object per line):
@@ -17,7 +17,9 @@ Exit codes:
 
 import argparse
 import json
+import os
 import sys
+import urllib.request
 
 
 def calc_availability(seatmap):
@@ -60,6 +62,20 @@ def main():
     processed = 0
     for sid in sids:
         path = f"/tmp/cc-seatmap-{sid}.json"
+
+        # Auto-fetch seatmap from API if file doesn't exist
+        if not os.path.exists(path):
+            url = f"https://www.classiccinemas.com.au/api/sessions/0000000002/{sid}/seating-map"
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = resp.read()
+                with open(path, "wb") as wf:
+                    wf.write(data)
+            except Exception as e:
+                print(f"Failed to fetch seatmap for session {sid}: {e}", file=sys.stderr)
+                continue
+
         try:
             with open(path) as f:
                 seatmap = json.load(f)

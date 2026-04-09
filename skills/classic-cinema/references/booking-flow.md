@@ -50,20 +50,12 @@ Then classify intent per SKILL.md and route to Express or Browse.
 
 If movie was parsed from args, fuzzy-match (case-insensitive substring) against today's movie list.
 
-For the matched movie, fetch seating maps for its sessions (parallel curl):
-```bash
-for sid in 122897 122870 122871; do
-  curl -s "https://www.classiccinemas.com.au/api/sessions/0000000002/$sid/seating-map" > /tmp/cc-seatmap-$sid.json &
-done
-wait
-```
-
-Calculate availability using the dedicated script:
+For the matched movie, calculate availability using the dedicated script (it auto-fetches seatmaps from the API if not already cached):
 ```bash
 python3 scripts/check-availability.py --session-ids 122897,122870,122871
 ```
 
-**IMPORTANT:** Always use `check-availability.py` — never use inline Python or shell processing. The git-safety hook blocks inline interpreter execution.
+**IMPORTANT:** Always use `check-availability.py` — never use inline Python or shell processing. The git-safety hook blocks inline interpreter execution. No separate `curl` step is needed — the script fetches missing seatmaps automatically.
 
 Output is one JSON line per session: `{"sid": 122897, "screen": "Screen 3", "available": 141, "total": 150, "pct": 94}`
 
@@ -82,15 +74,21 @@ If time was in args, auto-select the nearest non-SOLD-OUT session. Otherwise ask
 
 ### Q2 — Tickets
 
-Fetch tickets API for the selected session:
+Use the `parse-tickets.py` script to fetch ticket types, parse the spec, and build the selection file in one step:
 ```bash
-curl -s "https://www.classiccinemas.com.au/api/sessions/0000000002/$SESSION_ID/tickets" > /tmp/cc-tickets.json
+python3 scripts/parse-tickets.py --session-id $SESSION_ID --spec "1+1"
 ```
 
-The response is an object with `ticketTypes[]`, `areas[]`, and `categories[]`. Parse `ticketTypes[]` where `categoryId == 2` (Additional Tickets = standard public types). Each ticket type has `name`, `priceInCents`, `bookingFeeInCents`. Present pricing:
+The script auto-fetches `/tmp/cc-tickets.json` from the API if not already cached, filters to `categoryId == 2` (public ticket types), and outputs a JSON summary:
+```json
+{"tickets": [...], "bookingFeeCents": 390, "totalCents": 4790, "summary": "1x Adult ($27.00) + 1x Child ($17.00) + fees ($3.90) = $47.90", "selectedFile": "/tmp/cc-tickets-selected.json"}
 ```
-1× Adult ($27.00) + 1× Child ($17.00) + fees ($3.90) = $47.90
-```
+
+It also writes `/tmp/cc-tickets-selected.json` — the file that `fill-ticket.py --tickets-file` expects.
+
+**IMPORTANT:** Always use `parse-tickets.py` — never use inline Python to parse ticket data. The git-safety hook blocks inline interpreter execution.
+
+**Spec format:** positional slots map to Adult, Child, Concession, Senior, Student, Pension. E.g. `"1+1"` = 1 Adult + 1 Child, `"2"` = 2 Adult.
 
 If tickets were in args, auto-calculate. Otherwise ask: "How many? (e.g. 1+1 for 1 adult + 1 child)"
 
