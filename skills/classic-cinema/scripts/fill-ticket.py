@@ -22,6 +22,7 @@ import html
 import json
 import os
 import time
+from datetime import datetime
 
 
 BARCODE_URL = (
@@ -120,8 +121,20 @@ def main():
     result = tpl
     result = result.replace("{{CUSTOMER_NAME}}", html.escape(args.customer_name))
     result = result.replace("{{MOVIE_TITLE}}", html.escape(args.movie_title))
-    result = result.replace("{{MOVIE_IMAGE_URL}}", args.poster_url)
-    result = result.replace("{{SESSION_DATE_TIME}}", html.escape(args.session_datetime))
+    # Prepend CDN base URL if poster path is relative (API returns relative paths)
+    poster_url = args.poster_url
+    if not poster_url.startswith("http"):
+        poster_url = f"https://movingstory-prod.imgix.net/{poster_url}"
+    result = result.replace("{{MOVIE_IMAGE_URL}}", poster_url)
+
+    # Format ISO datetime to human-friendly "Fri 10 Apr, 11:00AM"
+    session_dt = args.session_datetime
+    try:
+        dt = datetime.fromisoformat(session_dt)
+        session_dt = dt.strftime("%a %-d %b, %-I:%M%p")
+    except ValueError:
+        pass  # Already human-formatted, use as-is
+    result = result.replace("{{SESSION_DATE_TIME}}", html.escape(session_dt))
     result = result.replace("{{SCREEN_NUMBER}}", html.escape(args.screen))
     result = result.replace("{{SEATS}}", html.escape(args.seats))
     result = result.replace("{{BARCODE_URL}}", BARCODE_URL)
