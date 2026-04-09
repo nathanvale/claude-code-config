@@ -58,7 +58,16 @@ done
 wait
 ```
 
-Calculate availability for each session and present:
+Calculate availability using the dedicated script:
+```bash
+python3 scripts/check-availability.py --session-ids 122897,122870,122871
+```
+
+**IMPORTANT:** Always use `check-availability.py` — never use inline Python or shell processing. The git-safety hook blocks inline interpreter execution.
+
+Output is one JSON line per session: `{"sid": 122897, "screen": "Screen 3", "available": 141, "total": 150, "pct": 94}`
+
+Present to Nathan:
 ```
 The Magic Faraway Tree (G)
   1. 10:00 AM Screen 3  🟢 94% available (141/150)
@@ -176,13 +185,11 @@ If yes:
 
 **Always show raw numbers:** `🟢 94% available (141/150 seats)`
 
-**Calculation:**
+**Calculation** is handled by `check-availability.py` (never inline):
+```bash
+python3 scripts/check-availability.py --session-ids 122897,122870,122871
 ```
-total = count of seats where typeId != "gap"
-unavail = count where sold == true OR unavailable == true
-available = total - unavail
-pct_available = (available / total) * 100
-```
+Logic: `total` = seats where `typeId != "gap"`, `unavail` = seats where `sold == true` OR `unavailable == true`, `available = total - unavail`, `pct = (available / total) * 100`.
 
 ---
 
