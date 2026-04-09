@@ -15,6 +15,10 @@ All data comes from public Classic Cinemas APIs via `curl`. No browser dispatch 
 
 **Image CDN:** prefix `movie.thumbnailImage` with `https://movingstory-prod.imgix.net/` and append `?w=450&h=193&auto=compress,format&fit=crop`.
 
+**Movie object fields:** `name` (title string), `vistaId` (join key), `rating` (object — use `rating.id` for classification string e.g. "PG", "M", "MA15+"), `summary`, `runtime`, `duration`, `thumbnailImage`, `posterImage`, `headerImage`, `trailer`, `cast`, `genres`, `slug`, `link`.
+
+**Session object fields:** `id` (session ID), `movieId` (join key → `movie.vistaId`), `date` (ISO datetime), `screenName`, `screenNumber`, `typeName`, `attributes`, `allocatedSeating`, `link`.
+
 ---
 
 ## Stage 0 — Data Fetch (both modes)
