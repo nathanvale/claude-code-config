@@ -35,8 +35,9 @@ Full choreography in [booking-flow.md](references/booking-flow.md).
 ## Browse Mode
 
 1. Fetch movie listing via API (instant)
-2. Nathan picks a movie → show sessions with availability emoji
-3. Nathan picks a session → converge with Express at Q2 (Tickets)
+2. After showing the listing, prompt: "Anything catch your eye? Pick a movie to see sessions, or I can pull up a YouTube trailer or synopsis first."
+3. Nathan picks a movie → show sessions with availability emoji
+4. Nathan picks a session → converge with Express at Q2 (Tickets)
 
 Full choreography in [booking-flow.md](references/booking-flow.md).
 
