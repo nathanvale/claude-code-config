@@ -24,11 +24,21 @@ All data comes from public Classic Cinemas APIs via `curl`. No browser dispatch 
 ## Stage 0 — Data Fetch (both modes)
 
 ```bash
-curl -s 'https://www.classiccinemas.com.au/api/sessions/0000000002' > /tmp/cc-sessions.json
-curl -s 'https://www.classiccinemas.com.au/api/movies' > /tmp/cc-movies.json
+# Browse mode — full listing:
+python3 scripts/list-movies.py
+
+# Express mode — fuzzy match a movie:
+python3 scripts/list-movies.py --movie "faraway"
 ```
 
-Join: filter sessions where `date` starts with today (YYYY-MM-DD, AEST), join on `session.movieId === movie.vistaId`. Group by movie. **Note:** some movies in the catalog may lack `vistaId` — use `.get()` and skip entries without a join key.
+The script fetches both APIs, filters to today (AEST), joins on `session.movieId === movie.vistaId`, and prints one JSON object per line. It also writes `/tmp/cc-sessions.json` and `/tmp/cc-movies.json` for downstream scripts.
+
+**Output format (one JSON object per line):**
+```json
+{"index": 1, "name": "...", "vistaId": "...", "rating": "PG", "runtime": "...", "sessions": [{"id": "...", "time": "10:00am", "screen": "Screen 3", "screenNumber": 3, "date": "..."}]}
+```
+
+**IMPORTANT:** Always run this script via `python3 scripts/list-movies.py` — never use inline Python or curl+inline-processing. The git-safety hook blocks inline interpreter execution.
 
 Then classify intent per SKILL.md and route to Express or Browse.
 

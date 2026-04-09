@@ -57,6 +57,7 @@ Always show raw numbers: `🟢 94% available (141/150 seats)`
 
 | Script | Purpose | Interface |
 |--------|---------|-----------|
+| `scripts/list-movies.py` | Fetch APIs, join movies+sessions, print today's listing | `[--movie QUERY]` → one JSON object per line to stdout; writes `/tmp/cc-sessions.json` + `/tmp/cc-movies.json` |
 | `scripts/pick-seats.py` | Auto-select best adjacent seats in a zone | `--seatmap-file FILE --zone ZONE --count N` → prints seat codes |
 | `scripts/fill-ticket.py` | Fill ticket email template | `--movie-title --session-datetime --screen --seats --tickets-file FILE --booking-fee CENTS --total CENTS --poster-url URL` → prints HTML path |
 
