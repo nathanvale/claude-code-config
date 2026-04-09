@@ -1,0 +1,230 @@
+# Booking Flow — Conversational Choreography
+
+All data comes from public Classic Cinemas APIs via `curl`. No browser dispatch needed — all 4 APIs are cookie-free (see domain gotcha G18).
+
+## APIs
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /api/movies` | Full movie catalog (join key: `vistaId`) |
+| `GET /api/sessions/0000000002` | All upcoming sessions (filter by today's date) |
+| `GET /api/sessions/0000000002/{sessionId}/tickets` | Ticket types + prices |
+| `GET /api/sessions/0000000002/{sessionId}/seating-map` | Seat grid with availability |
+
+**Cinema ID** is always `0000000002` (Elsternwick).
+
+**Image CDN:** prefix `movie.thumbnailImage` with `https://movingstory-prod.imgix.net/` and append `?w=450&h=193&auto=compress,format&fit=crop`.
+
+---
+
+## Stage 0 — Data Fetch (both modes)
+
+```bash
+curl -s 'https://www.classiccinemas.com.au/api/sessions/0000000002' > /tmp/cc-sessions.json
+curl -s 'https://www.classiccinemas.com.au/api/movies' > /tmp/cc-movies.json
+```
+
+Join: filter sessions where `date` starts with today (YYYY-MM-DD, AEST), join on `session.movieId === movie.vistaId`. Group by movie. **Note:** some movies in the catalog may lack `vistaId` — use `.get()` and skip entries without a join key.
+
+Then classify intent per SKILL.md and route to Express or Browse.
+
+---
+
+## Express Mode
+
+### Q1 — Movie + Session
+
+If movie was parsed from args, fuzzy-match (case-insensitive substring) against today's movie list.
+
+For the matched movie, fetch seating maps for its sessions (parallel curl):
+```bash
+for sid in 122897 122870 122871; do
+  curl -s "https://www.classiccinemas.com.au/api/sessions/0000000002/$sid/seating-map" > /tmp/cc-seatmap-$sid.json &
+done
+wait
+```
+
+Calculate availability for each session and present:
+```
+The Magic Faraway Tree (G)
+  1. 10:00 AM Screen 3  🟢 94% available (141/150)
+  2. 12:30 PM Screen 5  🟡 48% available (58/120)
+  3.  3:00 PM Screen 3  🔴 only 15 seats left! (15/150)
+  4.  5:30 PM Screen 8  🚨 SOLD OUT
+```
+
+If time was in args, auto-select the nearest non-SOLD-OUT session. Otherwise ask.
+
+**Full-args fast path:** when all args are resolved (movie + time + tickets + zone), skip the multi-session availability display entirely — fetch only the selected session's seat map and pricing, then go straight to seat selection and confirm.
+
+### Q2 — Tickets
+
+Fetch tickets API for the selected session:
+```bash
+curl -s "https://www.classiccinemas.com.au/api/sessions/0000000002/$SESSION_ID/tickets" > /tmp/cc-tickets.json
+```
+
+The response is an object with `ticketTypes[]`, `areas[]`, and `categories[]`. Parse `ticketTypes[]` where `categoryId == 2` (Additional Tickets = standard public types). Each ticket type has `name`, `priceInCents`, `bookingFeeInCents`. Present pricing:
+```
+1× Adult ($27.00) + 1× Child ($17.00) + fees ($3.90) = $47.90
+```
+
+If tickets were in args, auto-calculate. Otherwise ask: "How many? (e.g. 1+1 for 1 adult + 1 child)"
+
+### Q3 — Seats
+
+**Decision tree based on availability:**
+
+- **>20% available:** show zone picker
+- **≤20% available (🔴):** auto-show full ASCII seat map, override any zone arg. Tell Nathan: "Only N seats left — showing the full map so you can see what's available"
+- **0% available (🚨):** should have been blocked at Q1. If reached here, stop and suggest alternatives
+
+**Zone picker:**
+```
+Screen 3 — 🟢 94% available (141/150 seats)
+
+  1. 🎬 Front (rows B-D)
+  2. 🪑 Middle (rows E-H) ← recommended
+  3. 🍿 Back (rows J-M)
+  4. 🎲 Surprise me!
+  5. 🗺️  Pick exact seats (show full map)
+```
+
+If zone was in args AND availability >20%, auto-select via `pick-seats.py`:
+```bash
+python3 scripts/pick-seats.py --seatmap-file /tmp/cc-seatmap-$SESSION_ID.json --zone middle --count 2
+```
+
+Present result:
+```
+→ Auto-selected: F7, F8 (center middle)
+Happy with these, or pick different? (yes / show map / re-pick)
+```
+
+If "pick exact seats" or `pick-seats.py` exits non-zero, render the full ASCII seat map (see Seat Map Rendering below).
+
+### Confirm + Send
+
+Show summary:
+```
+Confirm your booking:
+  Movie:   The Magic Faraway Tree
+  Session: Thu 10 Apr, 10:00 AM, Screen 3
+  Tickets: 1× Adult ($27.00) + 1× Child ($17.00)
+  Seats:   F7, F8
+  Total:   $47.90
+
+  This will generate a ticket-style email (reminder only, not an actual cinema booking).
+```
+
+AskUserQuestion: **Yes send** / **No cancel**
+
+If yes:
+1. Write tickets JSON to `/tmp/cc-tickets-selected.json`
+2. Run `fill-ticket.py` (see [template-fill.md](template-fill.md) for substitution spec)
+3. Run `gog gmail send` (see [email-send.md](email-send.md) for invocation)
+4. On success: append to booking log (see [booking-log.md](booking-log.md)), clean up temp files
+5. Confirm: "Sent! Enjoy The Magic Faraway Tree at 10:00 AM. 🍿"
+
+---
+
+## Browse Mode
+
+1. **List** — show numbered movie list from Stage 0 data:
+   ```
+   🎬 Films showing today at Classic Cinemas Elsternwick:
+
+     1. Project Hail Mary (M) — 11am, 12:15pm, 2:20pm, 3:30pm, 7pm, 8:20pm
+     2. The Super Mario Galaxy Movie (PG) — 10am, 11am, 1:20pm, 3:40pm, 6pm
+     3. The Drama (MA15+) — 1:20pm, 3:40pm, 6:50pm, 9:10pm
+     ...
+   ```
+
+2. **Pick movie** — Nathan picks a number. Offer "show details" for synopsis/trailer (from `/api/movies` data — local, no fetch needed).
+
+3. **Show sessions with availability** — fetch seating maps for that movie's sessions (parallel curl). Show emoji + seat counts (same format as Express Q1).
+
+4. **Pick session** — Nathan picks a session number.
+
+5. **Converge** — from here, the flow is identical to Express Q2 (Tickets) onward.
+
+---
+
+## Availability Emoji
+
+| % Available | Emoji | Label |
+|-------------|-------|-------|
+| 51-100% | 🟢 | plenty available |
+| 21-50% | 🟡 | filling up |
+| 1-20% | 🔴 | almost full! |
+| 0% | 🚨 | SOLD OUT |
+
+**Always show raw numbers:** `🟢 94% available (141/150 seats)`
+
+**Calculation:**
+```
+total = count of seats where typeId != "gap"
+unavail = count where sold == true OR unavailable == true
+available = total - unavail
+pct_available = (available / total) * 100
+```
+
+---
+
+## Seat Map Rendering
+
+When rendering the full ASCII seat map (for 🔴 sessions or "pick exact seats"):
+
+```
+                    ╔═══════════╗
+                    ║  SCREEN 3 ║
+                    ╚═══════════╝
+
+B   · · · · · · · · · · · ·
+C   · · · · · · · · · · · ·
+D   · · · · · · · · · · · · · · ·
+E   · · · · · · · · · · · · · · ·
+F   · · · · · · · · · · · · · · ·
+G   · · · · · · X X X X · · · · ·
+H   · · · · · · · · · · · · · · ·
+J   · · · · · · · · · · · · · · ·
+K   · · · ▪ ▪ · · · · · · · · · ·
+L     · · X X X · · · · ·
+M   ♿♿☐☐  · · · · · · · · · ·
+
+· = available   X = sold   ▪ = blocked   ♿ = wheelchair   ☐ = companion
+```
+
+Row letters come from `rows[].name`. Skip gap rows. Use the API data, not hardcoded layouts.
+
+**Seat validation:** before template fill, validate the final seats string against: `^[A-Z]\d{1,2}(, [A-Z]\d{1,2})*$`. If it doesn't match, stop and fix.
+
+---
+
+## Error Recovery
+
+| Error | Recovery |
+|-------|----------|
+| `curl` non-200 on any API | Retry once. If still failing: "Classic Cinemas API is down — try again later" |
+| Sessions API returns no sessions for today | "No sessions showing today at Elsternwick" |
+| Seating-map returns empty `rows[]` | Show warning, ask Nathan to type seat codes manually |
+| `pick-seats.py` exits non-zero | Render full ASCII map, ask Nathan to pick manually |
+| `fill-ticket.py` exits non-zero | Show stderr + temp data paths. Do NOT send email |
+| `gog gmail send` non-zero | Keep temp HTML, show error + path, offer retry command |
+| Fuzzy match returns 0 movies | "No movies matching '{query}' today. Here's what's on:" → Browse mode |
+| Fuzzy match returns 3+ movies | Show disambiguation list, ask Nathan to pick |
+| SOLD OUT session selected | Block, suggest alternative sessions for the same movie |
+
+---
+
+## Temp File Cleanup
+
+On successful email send, clean up:
+- `/tmp/cc-sessions.json`
+- `/tmp/cc-movies.json`
+- `/tmp/cc-seatmap-*.json`
+- `/tmp/cc-tickets.json`
+- `/tmp/cc-tickets-selected.json`
+- `/tmp/classic-cinema-ticket-*.html`
+
+On failure, keep all temp files and surface paths for debugging.
