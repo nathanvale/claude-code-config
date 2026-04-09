@@ -21,9 +21,18 @@ import argparse
 import html
 import json
 import os
+import re
+import sys
 import time
 from datetime import datetime
 
+
+CDN_BASE = "https://movingstory-prod.imgix.net/"
+
+# Matches "Fri 10 Apr, 11:00AM" — day-of-week, day number, month abbrev, time with AM/PM
+SESSION_DT_PATTERN = re.compile(
+    r"^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2}[AP]M$"
+)
 
 BARCODE_URL = (
     "https://ci3.googleusercontent.com/meips/ADKq_NaPR1UO0ABCDdjEmZOs7Nnk"
@@ -31,6 +40,37 @@ BARCODE_URL = (
     "FYlSTfxxbYlc9PY9F8A=s0-d-e1-ft#https://www.classiccinemas.com.au"
     "/api/barcode/WHRT69C.jpg"
 )
+
+
+def resolve_poster_url(raw_url):
+    """Ensure poster URL is absolute. API returns relative paths like 'mx/posters/...'."""
+    if raw_url.startswith("http"):
+        return raw_url
+    resolved = f"{CDN_BASE}{raw_url}"
+    print(f"[fill-ticket] poster URL was relative, resolved to: {resolved}", file=sys.stderr)
+    return resolved
+
+
+def format_session_datetime(raw_dt):
+    """Format session datetime to 'Fri 10 Apr, 11:00AM'.
+
+    Accepts ISO format (2026-04-10T11:00:00) or pre-formatted strings.
+    Raises ValueError if the result doesn't match the expected pattern.
+    """
+    # Try ISO parse first
+    try:
+        dt = datetime.fromisoformat(raw_dt)
+        formatted = dt.strftime("%a %-d %b, %-I:%M%p")
+    except ValueError:
+        # Assume already human-formatted
+        formatted = raw_dt
+
+    if not SESSION_DT_PATTERN.match(formatted):
+        raise ValueError(
+            f"Session datetime '{formatted}' (from input '{raw_dt}') "
+            f"doesn't match expected pattern 'Fri 10 Apr, 11:00AM'"
+        )
+    return formatted
 
 
 def format_price(cents):
@@ -121,19 +161,10 @@ def main():
     result = tpl
     result = result.replace("{{CUSTOMER_NAME}}", html.escape(args.customer_name))
     result = result.replace("{{MOVIE_TITLE}}", html.escape(args.movie_title))
-    # Prepend CDN base URL if poster path is relative (API returns relative paths)
-    poster_url = args.poster_url
-    if not poster_url.startswith("http"):
-        poster_url = f"https://movingstory-prod.imgix.net/{poster_url}"
+    poster_url = resolve_poster_url(args.poster_url)
     result = result.replace("{{MOVIE_IMAGE_URL}}", poster_url)
 
-    # Format ISO datetime to human-friendly "Fri 10 Apr, 11:00AM"
-    session_dt = args.session_datetime
-    try:
-        dt = datetime.fromisoformat(session_dt)
-        session_dt = dt.strftime("%a %-d %b, %-I:%M%p")
-    except ValueError:
-        pass  # Already human-formatted, use as-is
+    session_dt = format_session_datetime(args.session_datetime)
     result = result.replace("{{SESSION_DATE_TIME}}", html.escape(session_dt))
     result = result.replace("{{SCREEN_NUMBER}}", html.escape(args.screen))
     result = result.replace("{{SEATS}}", html.escape(args.seats))
