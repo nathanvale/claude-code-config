@@ -94,6 +94,7 @@ def main():
             "runtime": runtime,
             "trailer": f"https://www.youtube.com/watch?v={trailer}" if trailer else None,
             "summary": m.get("summary", ""),
+            "headerImage": m.get("headerImage", ""),
             "posterImage": m.get("posterImage", ""),
             "sessions": sess_list,
         })

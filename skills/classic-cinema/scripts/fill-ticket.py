@@ -24,14 +24,14 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 CDN_BASE = "https://movingstory-prod.imgix.net/"
 
-# Matches "Fri 10 Apr, 11:00AM" — day-of-week, day number, month abbrev, time with AM/PM
+# Matches "10 Apr 2026, 11:00am-1:37pm" — old plugin format with end time
 SESSION_DT_PATTERN = re.compile(
-    r"^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2}[AP]M$"
+    r"^\d{1,2} [A-Z][a-z]{2} \d{4}, \d{1,2}:\d{2}[ap]m-\d{1,2}:\d{2}[ap]m$"
 )
 
 BARCODE_URL = (
@@ -43,32 +43,48 @@ BARCODE_URL = (
 
 
 def resolve_poster_url(raw_url):
-    """Ensure poster URL is absolute. API returns relative paths like 'mx/posters/...'."""
+    """Ensure poster URL is absolute.
+
+    The API returns relative paths like 'movies/headers/...' — prepend the CDN base.
+    Use headerImage (landscape banner), not posterImage (portrait poster), to match
+    the old Cinema Bandit plugin's scraped thumbnail behavior.
+    """
     if raw_url.startswith("http"):
         return raw_url
     resolved = f"{CDN_BASE}{raw_url}"
-    print(f"[fill-ticket] poster URL was relative, resolved to: {resolved}", file=sys.stderr)
+    print(f"[fill-ticket] image URL was relative, resolved to: {resolved}", file=sys.stderr)
     return resolved
 
 
-def format_session_datetime(raw_dt):
-    """Format session datetime to 'Fri 10 Apr, 11:00AM'.
+def format_session_datetime(raw_dt, runtime_minutes=0):
+    """Format session datetime to '10 Apr 2026, 11:00am-1:37pm'.
 
+    Matches the old Cinema Bandit plugin format: day month year, start-end time.
     Accepts ISO format (2026-04-10T11:00:00) or pre-formatted strings.
-    Raises ValueError if the result doesn't match the expected pattern.
+    If runtime_minutes is provided, calculates end time.
     """
     # Try ISO parse first
     try:
         dt = datetime.fromisoformat(raw_dt)
-        formatted = dt.strftime("%a %-d %b, %-I:%M%p")
+        start_str = dt.strftime("%-d %b %Y, %-I:%M%p").lower().replace("am", "am").replace("pm", "pm")
+        # Fix: strftime %p gives AM/PM uppercase, we need lowercase
+        start_time = dt.strftime("%-I:%M%p").replace("AM", "am").replace("PM", "pm")
+        date_part = dt.strftime("%-d %b %Y")
+
+        if runtime_minutes > 0:
+            end_dt = dt + timedelta(minutes=runtime_minutes)
+            end_time = end_dt.strftime("%-I:%M%p").replace("AM", "am").replace("PM", "pm")
+            formatted = f"{date_part}, {start_time}-{end_time}"
+        else:
+            formatted = f"{date_part}, {start_time}"
     except ValueError:
         # Assume already human-formatted
         formatted = raw_dt
 
-    if not SESSION_DT_PATTERN.match(formatted):
+    if runtime_minutes > 0 and not SESSION_DT_PATTERN.match(formatted):
         raise ValueError(
             f"Session datetime '{formatted}' (from input '{raw_dt}') "
-            f"doesn't match expected pattern 'Fri 10 Apr, 11:00AM'"
+            f"doesn't match expected pattern '10 Apr 2026, 11:00am-1:37pm'"
         )
     return formatted
 
@@ -138,6 +154,7 @@ def main():
     parser.add_argument("--booking-fee", required=True, type=int, help="In cents")
     parser.add_argument("--total", required=True, type=int, help="In cents")
     parser.add_argument("--poster-url", required=True)
+    parser.add_argument("--runtime", type=int, default=0, help="Movie runtime in minutes (for end time calc)")
     parser.add_argument("--customer-name", default="Nathan")
     args = parser.parse_args()
 
@@ -164,7 +181,7 @@ def main():
     poster_url = resolve_poster_url(args.poster_url)
     result = result.replace("{{MOVIE_IMAGE_URL}}", poster_url)
 
-    session_dt = format_session_datetime(args.session_datetime)
+    session_dt = format_session_datetime(args.session_datetime, args.runtime)
     result = result.replace("{{SESSION_DATE_TIME}}", html.escape(session_dt))
     result = result.replace("{{SCREEN_NUMBER}}", html.escape(args.screen))
     result = result.replace("{{SEATS}}", html.escape(args.seats))

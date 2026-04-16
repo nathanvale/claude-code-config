@@ -1,5 +1,8 @@
 {
   "includeCoAuthoredBy": false,
+  "env": {
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1"
+  },
   "permissions": {
     "allow": [
       "Bash"
@@ -126,13 +129,14 @@
   "enabledPlugins": {
     "example-skills@anthropic-agent-skills": false,
     "document-skills@anthropic-agent-skills": true,
-    "compound-engineering@every-marketplace": true,
-    "compound-engineering@compound-engineering-plugin": true,
     "frontend-design@claude-code-plugins": true,
-    "browser@side-quest-engineering": true,
     "imessage@side-quest-engineering": true,
+    "unifi-admin@side-quest-engineering": true,
     "contacts-hygiene@side-quest-engineering": true,
-    "unifi-admin@side-quest-engineering": true
+    "browser-automation@side-quest-engineering": true,
+    "compound-engineering@every-marketplace": true,
+    "bitbucket-pr@side-quest-engineering": true,
+    "memory-os@side-quest-engineering": true
   },
   "extraKnownMarketplaces": {
     "monash-plugins": {
@@ -143,5 +147,6 @@
     }
   },
   "alwaysThinkingEnabled": false,
+  "effortLevel": "high",
   "skipDangerousModePermissionPrompt": true
 }
