@@ -11,10 +11,10 @@ Follow Plan → Confirm → Execute → Test:
 
 ## Working Preferences
 
-- Use the repo's dedicated test, lint, and type-checking tools instead of Bash fallbacks when available
+- For tests, lint, and type checks: **prefer the MCP runners** (bun-runner, biome-runner, tsc-runner) first. Fall back to the repo's dedicated CLI (via package.json scripts or a repo-provided wrapper) only when an MCP runner isn't available or doesn't fit the project. Use raw Bash only as the last resort.
 - Prefer machine-readable output for tool-to-tool interfaces
 - Prefer `bunx` over `npx` when package execution is needed
-- Prefer bun ecosystem and typesript over python or other langauges
+- Prefer the bun ecosystem and TypeScript over Python or other languages
 
 ## Library Docs
 
