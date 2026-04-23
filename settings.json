@@ -1,8 +1,8 @@
 {
-  "includeCoAuthoredBy": false,
   "env": {
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1"
   },
+  "includeCoAuthoredBy": false,
   "permissions": {
     "allow": [
       "Bash"
