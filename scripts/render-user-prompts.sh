@@ -99,7 +99,7 @@ render_agents() {
 
 render_claude() {
   cat <<'HEADER'
-<!-- GENERATED — do not edit directly. Edit prompt-fragments/ and run: scripts/render-user-prompts.sh --write -->
+<!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
 @AGENTS.md
 
 HEADER
