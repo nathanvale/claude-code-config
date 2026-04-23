@@ -122,6 +122,11 @@
             "type": "command",
             "command": "bun run $HOME/.claude/hooks/git/auto-commit-on-stop.ts",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "$HOME/code/claude-code-config/scripts/check-prompt-drift-on-stop.sh",
+            "timeout": 10
           }
         ]
       }
