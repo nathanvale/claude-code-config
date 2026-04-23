@@ -28,7 +28,8 @@
       "Bash(git checkout * -- :*)",
       "Bash(git restore --source:*)",
       "Bash(git restore --worktree:*)"
-    ]
+    ],
+    "defaultMode": "auto"
   },
   "enableAllProjectMcpServers": true,
   "disabledMcpjsonServers": [],
@@ -148,5 +149,6 @@
   },
   "alwaysThinkingEnabled": false,
   "effortLevel": "high",
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "skipAutoPermissionPrompt": true
 }

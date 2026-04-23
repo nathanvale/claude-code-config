@@ -62,6 +62,26 @@ When working with libraries, frameworks, or APIs:
 3. Prefer primary docs over third-party summaries
 4. Cite the relevant version when it matters
 
+## Code Quality Runners
+
+Three MCP runners handle all code-quality checks. Always prefer them over running the underlying CLIs directly — they filter output for token efficiency and return structured results.
+
+**Always pass `response_format: "json"`.**
+
+| Runner | Tool | Use when |
+|--------|------|----------|
+| bun-runner | `bun_runTests` | Suite-level test run (all or filtered by pattern) |
+| bun-runner | `bun_testFile` | Focused debugging — one exact file path |
+| bun-runner | `bun_testCoverage` | Coverage summary (slower than `bun_runTests`) |
+| biome-runner | `biome_lintCheck` | Read-only lint + format diagnostics after edits |
+| biome-runner | `biome_lintFix` | Auto-fix with `--write`, returns remaining issues |
+| biome-runner | `biome_formatCheck` | Format compliance only (CI / pre-commit gates) |
+| tsc-runner | `tsc_check` | `tsc --noEmit` using nearest tsconfig — after edits |
+
+Do not invoke `bun test`, `biome`, or `tsc` directly via shell when these runners are available.
+
+Exit codes: `0` = success, `2` = blocking error (must fix before proceeding).
+
 ## Connector Dispatch
 
 When Nathan asks about calendar events, email, or contacts, use the productivity connector system — not built-in MCP tools.
@@ -163,7 +183,7 @@ Tool mapping:
 - Read: use `rg`, `sed`, `cat`, or repo-aware retrieval tools when appropriate
 - Write: use `apply_patch` for manual edits
 - Edit/MultiEdit: use apply_patch
-- Shell: use `exec_command`
+- Shell: use `exec_command` — but for tests / lint / type-check, prefer the MCP runners (`bun_runTests`, `biome_lintCheck`, `tsc_check`, etc.) over running `bun test`, `biome`, or `tsc` through `exec_command`
 - Grep: use `rg` (fallback: `grep`)
 - Glob: use `rg --files` or `find`
 - LS: use `ls` via `exec_command`

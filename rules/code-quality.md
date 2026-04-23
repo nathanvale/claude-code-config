@@ -2,35 +2,12 @@
 alwaysApply: true
 ---
 
-## Code Quality Tools 
+## Code Quality Tools (Claude enforcement)
 
-Three MCP plugins handle all code quality checks. **NEVER run `bun test`, `biome`, or `tsc` via Bash** — use these MCP tools instead. They filter output for token efficiency.
+The full runner table lives in the shared startup surface (rendered into `AGENTS.md` as "Code Quality Runners"). This rule is the auto-applied enforcement layer for Claude.
 
-**Always pass `response_format: "json"`.**
+**Hard rule:** NEVER run `bun test`, `biome`, or `tsc` via Bash. Use the MCP runner tools (`bun_runTests`, `bun_testFile`, `bun_testCoverage`, `biome_lintCheck`, `biome_lintFix`, `biome_formatCheck`, `tsc_check`).
 
-### Testing (bun-runner)
+**Always pass `response_format: "json"`** — these are machine-to-machine interfaces; markdown wastes tokens.
 
-| Tool | When |
-|------|------|
-| `bun_runTests` | Suite-level regression — all tests or filter by pattern |
-| `bun_testFile` | Focused debugging — one exact file path |
-| `bun_testCoverage` | Coverage summary (slower than `bun_runTests`) |
-
-### Linting & Formatting (biome-runner)
-
-| Tool | When |
-|------|------|
-| `biome_lintCheck` | Read-only lint + format diagnostics after edits |
-| `biome_lintFix` | Auto-fix with `--write`, returns remaining issues |
-| `biome_formatCheck` | Format compliance only (CI/pre-commit gates) |
-
-### Type Checking (tsc-runner)
-
-| Tool | When |
-|------|------|
-| `tsc_check` | `tsc --noEmit` using nearest tsconfig — after edits |
-
-### Exit Codes
-
-- `0` → success
-- `2` → blocking error (must fix before proceeding)
+If a runner returns exit code `2`, treat it as blocking — fix before proceeding. Do not paper over failures by retrying or wrapping in `|| true`.
