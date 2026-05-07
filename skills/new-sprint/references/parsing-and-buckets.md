@@ -141,6 +141,68 @@ Mark comment-derived dependencies in the table as `(from comments, not Jira link
 
 Example: POS-2866 returned 14 issuelinks; after filtering closed + non-blocking, 0 remain. The real "waiting on June for voucher-API filter change" lives in TASKS.md / comments, not issuelinks.
 
+## NotebookLM source pack (Step 12)
+
+Verified-working format from 2026-05-08 FY2624 run.
+
+### Pack location
+
+`~/Desktop/sprint-<NN>-<theme>-pack/` (e.g. `sprint-24-nathan-mission-pack`).
+
+Desktop, not repo — the pack is throwaway scaffolding for NLM consumption, not durable knowledge. Don't pollute git status. The generated infographic can be saved back into the same Desktop folder if the user wants a local copy.
+
+### Pack structure
+
+```
+~/Desktop/sprint-<NN>-<theme>-pack/
+├── INFOGRAPHIC-PROMPT.md   ← user pastes into NLM customize field
+├── README.md               ← upload steps + per-source rationale
+└── sources/                ← user uploads all to NLM
+    ├── 01-sprint-NN-project-doc.md
+    ├── 02-sprint-(NN-1)-shipped.md
+    ├── 03-contract-extension.md
+    ├── 04-tasks-current.md
+    ├── 05-<latest>-directives.md
+    ├── 06-<latest>-standup.md
+    ├── 07-<latest>-planning-prep.md
+    ├── 08-<key-incident-log>.md
+    └── 09-10-<feedback-memories>.md
+```
+
+### Source selection (10 sources, in this order)
+
+1. Sprint NN project doc — authoritative scope
+2. Previous sprint project doc — material for Wins panel
+3. Contract / runway doc — only if it exists
+4. Current TASKS.md — spillover, ask-X, dependencies
+5. Most recent directives log — verbatim stakeholder ordering
+6. Most recent standup — team status snapshot
+7. Most recent sprint-planning prep — backlog candidates considered
+8. Most relevant incident log — material for "wins" or "lessons"
+9-10. Top-2 feedback memories matching the sprint's decisions
+
+### INFOGRAPHIC-PROMPT.md must include
+
+- **Mission framing sentence** (1 line — ladder all panels to this)
+- **Style directives** at the top (background colour, accent colours, typography, iconography, composition, what to avoid). Repeat background colour requirement multiple times — NLM defaults to dark mode otherwise.
+- **Required sections in order**, each with concrete content (not "summarize the sprint" — give explicit copy or data points to render).
+- **"What to leave out"** section — bans things NLM tends to add unprompted (org charts, motivational language, technical architecture diagrams, multi-quarter strategic charts, photographic imagery, neon accents).
+- **Cross-check** at the end — single-pass test the user can apply to confirm the infographic ladders to the mission.
+
+### README.md must include
+
+- Upload steps (5–6 numbered)
+- Source rationale table (`# | Source | Why it's in the pack`)
+- Mission framing repeated (so the user can paste the sentence as a brief for re-rolls)
+- Style note callout (the most-violated style directive — usually background colour)
+
+### Style hard-rules
+
+- If user specifies a background colour (e.g. "white not black"), **repeat it multiple times** — NLM defaults are sticky.
+- Bunnings-style accents: Eden teal `#0D5257`, Bunnings red `#DA291C`, dark grey `#333` body on white.
+- No emoji as primary visual elements — translate `🔥/🎯/⚠️` to text labels or line-style icons.
+- Line-style icons only, dark grey on white. No decorative fonts.
+
 ## Section extraction (awk, not sed)
 
 Verified live failure: `sed -n '/^## ✅ Done.*Sprint NN/,/^## /p'` drags in the *next* H2 heading (e.g. `## 🗓️ Reference`) because sed ranges are inclusive on both ends. Use awk with start-flag + exclusion for reliable "extract between H2 N and H2 N+1, exclusive of N+1":

@@ -384,7 +384,9 @@ After the report, ask the user:
 > "Want me to draft Teams/Slack messages? I can prepare:
 > 1. **Sprint kickoff post** — a 200-word 'what I'm working on this sprint' digest you can paste into the team channel
 > 2. **Per-question DMs** — one-line drafts for each open Ask-X item, addressed to the right person (Sonny, June, Jackie, etc.)
-> Both are drafts — you copy and send."
+> Both are drafts — you copy and send.
+>
+> Also: want a NotebookLM source pack on your Desktop for a sprint infographic? (Step 12)"
 
 Drafts are written to `~/.claude/cache/new-sprint-drafts-<sprint-name>.md` (creating the cache dir if missing) and shown inline. `~/.claude/cache` survives reboots; `/tmp` doesn't. **Never auto-send.** This is a paste-buffer, not an outbound channel.
 
@@ -413,6 +415,10 @@ Example draft:
 > "Hey Sonny — quick sprint-prep ask: are POS-4058/4059 cards groomed yet? Otherwise I'll start with POS-3867 + POS-3795 per your May 7 directive. Also, ready to revisit the 98 Orders prefix on POS-3934 now that SIT is unblocked?"
 
 If the question's answerer is ambiguous, leave it as `**To: ?**` and let the user fill in.
+
+### Step 12 — Offer NotebookLM source pack for an infographic
+
+Ask: *"Want me to assemble a NotebookLM source pack on your Desktop for a Sprint <NN> infographic? Need a 1-line mission framing + style prefs (background colour, accents)."* If yes, build `~/Desktop/sprint-<NN>-<theme>-pack/` with 10 sources + `INFOGRAPHIC-PROMPT.md` + `README.md`. Desktop not repo (keeps git clean). User uploads + generates manually. Full recipe: [`references/parsing-and-buckets.md`](references/parsing-and-buckets.md) § "NotebookLM source pack (Step 12)". Verified 2026-05-08 FY2624.
 
 ## Notes & gotchas
 
