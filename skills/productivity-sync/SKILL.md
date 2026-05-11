@@ -46,6 +46,56 @@ No .productivity.yml found. Run /productivity-setup first to configure connector
 /productivity-sync --full    # ignore cursor, wide-window sync (recovery / first run)
 ```
 
+## Pre-flight (30s connector check)
+
+Before any sync work, probe each declared connector and surface the result in **one terse table** so the user sees coverage upfront — not buried in the final report.
+
+For each connector in `.productivity.yml`:
+
+| Connector value | Probe (cheap, <1s each) |
+|---|---|
+| `microsoft-365` (calendar/email) | Confirm an `mcp__*` Microsoft Graph tool is loaded; if not → ❌ |
+| `google-calendar` / `gmail` | Confirm `gcal_*` / `gmail_*` MCP tool is loaded; if not → ❌ |
+| `gog` | `which gog >/dev/null` AND `<connector>-account` set in `.productivity.yml` → ❌ if either fails |
+| `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
+| `notion` / `confluence` | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
+| `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |
+| `teams` (via notion-search) | Same probe as `notion`; if missing → ❌ |
+| `imessage` | Confirm `mcp__*imessage*sync_archive` OR `~/.claude/skills/imessage-reader/scripts/query-imessage.ts` exists; if neither → ❌ |
+| `github` | `gh auth status` exits 0; if not → ❌ |
+| `none` | Skip silently — not an error |
+
+Do **not** make a real API call here. Tool-presence + auth-presence only. The full availability check still happens per-step (per productivity-connectors skill).
+
+**Output — one compact table before any sync begins:**
+
+```
+Pre-flight (2026-05-11 13:15):
+  ✅ project-tracker (jira)
+  ✅ knowledge-base (notion)
+  ✅ github (gh authed as nathanvale-bunnings)
+  ❌ calendar (microsoft-365) — no Graph MCP tool loaded; skipping
+  ❌ email (microsoft-365) — no Graph MCP tool loaded; skipping
+  ⚠️  chat (teams via notion-search) — usable; deferred unless --deep
+
+Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
+```
+
+**Rules:**
+
+- If **≥1 connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift — the user should consciously accept reduced coverage.
+- If **all declared connectors are ✅**, print the table and continue without prompting.
+- If `--full` was passed, still run pre-flight — the cursor reset doesn't fix a broken connector.
+- Persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing.
+- Keep it **terse**: one line per connector, no recovery suggestions in the table. Recovery advice belongs in the final report, not here.
+
+**Anti-patterns:**
+
+- ❌ Making real API calls to "verify" connectivity (slow, rate-limit risk)
+- ❌ Burying connector status only in the final report (user finds out after 60s of work)
+- ❌ Failing the whole sync because one connector is down (graceful degradation is the point)
+- ❌ Re-probing connectors that were ✅ <5 minutes ago in a same-session re-run (use the cursor)
+
 ## Default Mode
 
 ### 1. Load Current State
