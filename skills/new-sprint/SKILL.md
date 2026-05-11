@@ -1,6 +1,6 @@
 ---
 name: new-sprint
-description: Use when the user says "prepare sprint NN", "new sprint", "sprint planning prep", "set up the next sprint", or "clean up TASKS.md for the new sprint". Do not use for mid-sprint task tweaks (route to productivity-tasks) or single-ticket edits. Writes memory/projects/sprint-NN.md and rewrites TASKS.md with carry-over, queue, watch-list, backlog, and done tables. Pulls active + future sprints from Jira to verify naming, reads recent planning notes from Notion.
+description: Use when the user says "prepare sprint NN", "new sprint", "sprint planning prep", "set up the next sprint", "clean up TASKS.md for the new sprint", or "update the current sprint" / "sync the sprint" (mid-sprint mode — Step 6f surfaces PR drift, Steps 8–10 may no-op). Do not use for single-ticket edits. Writes memory/projects/sprint-NN.md and rewrites TASKS.md with carry-over, queue, watch-list, backlog, and done tables. Pulls active + future sprints from Jira to verify naming, reads recent planning notes from Notion, and detects GitHub PR drift against TASKS.md.
 argument-hint: "[sprint-name | sprint-number] [--bootstrap]"
 disable-model-invocation: true
 model: sonnet
@@ -32,9 +32,10 @@ Trigger on:
 - "clean up TASKS.md for the new sprint"
 - After a sprint-planning ceremony when the user wants the prep doc rewritten
 - When the user has just shipped the last in-flight ticket of the current sprint
+- **Mid-sprint mode** — "update the current sprint", "sync the sprint", "what's drifted since I last looked". The skill detects mid-sprint context (active sprint `start_date` >3d in past AND `end_date` >3d in future) and shifts emphasis to Step 6f (PR drift detector); Steps 8–10 may no-op if no doc rewrite is needed.
 
 Do **not** trigger on:
-- Mid-sprint task tweaks → use `productivity-tasks` instead
+- Mid-sprint task tweaks (single-ticket edits, status changes) → use `productivity-tasks` instead
 - General memory updates → use `productivity-sync` or `memory-capture`
 - Adding a single ticket → just edit TASKS.md directly
 
@@ -250,6 +251,64 @@ For each risk found, present to the user:
 
 Three options: still active (carry forward), no longer relevant (drop), evolved (rewrite). Reduces the "re-discover the same risks every planning ceremony" problem.
 
+#### 6f — PR drift detector — **skip if `gh` failed in Step 0b**
+
+Surface external state that TASKS.md doesn't reflect. Failure mode this catches: a PR sits open for days with broken CI, blocked on review — and TASKS.md still says "file the ticket" because no one re-syncs the doc against GitHub. Verified live (May 11, 2026): PR #521 (POS-4080) was open 3 days unreflected.
+
+**Reuse data, don't re-fetch.** Step 6c already pulled merged PRs across all hub repos for capacity. Extend that pass to also pull `state: open` PRs authored by the user, plus reviewer-status / CI-state metadata.
+
+**Per-repo query (already iterating in 6c):**
+
+```bash
+gh pr list --state all --author "@me" \
+  --json number,title,state,mergedAt,updatedAt,headRefName,reviewDecision,mergeStateStatus,statusCheckRollup \
+  --limit 20
+```
+
+Filter to PRs `updated >= last_sprint_start`. For each, extract the ticket key from the branch name (`feat/POS-NNNN-*` → POS-NNNN) or PR title (`feat(POS-NNNN): ...`). PRs without a parseable ticket key get a separate "unlinked" bucket.
+
+**Drift buckets — surface only items in these buckets, never the full PR list:**
+
+1. **Open PR for a ticket TASKS.md treats as not-started or backlog** — ticket appears under `## ⏸ Watch-list`, `## 📋 Backlog`, or doesn't appear at all, but a PR is open for it
+2. **Merged PR for a ticket TASKS.md still has in `🔥 Now` or `🎯 Ordered queue`** — the ticket is shipped but the doc treats it as in-flight
+3. **PR blocked on `REVIEW_REQUIRED`** — actionable: tag a reviewer
+4. **PR with failed CI checks** — actionable: re-run or fix
+5. **PR with merge conflicts** (`mergeStateStatus: DIRTY`) — actionable: rebase
+6. **Done table claims a PR shipped, but PR is OPEN/CLOSED** — already covered by Step 0d, but include here for completeness
+
+**Mid-sprint re-run support.** This step is the single most valuable thing the skill does on a re-run during the sprint, where the boundary-prep ceremony is overkill but state has drifted. When invoked mid-sprint (active sprint `start_date` is more than 3 days in the past AND more than 3 days from `end_date`), Step 6f's report is the load-bearing output — Steps 8–10 may be no-ops (no doc to write, no TASKS.md restructure needed) and that's fine.
+
+**Output format — terse, actionable, anchored:**
+
+> ⚠️ PR drift detected (mid-sprint sync):
+>
+> **Open PRs for tickets TASKS.md doesn't reflect:**
+> - gms.app #521 [open, CI green, REVIEW_REQUIRED] — POS-4080 — TASKS.md says "file 2-3 cypress tickets" → ticket exists, PR open
+>
+> **Merged since last sync, TASKS.md still in-flight:**
+> - gms.app #522 [merged Fri 15:18] — POS-3934 — TASKS.md `🔥 Now` says "Sonny revisit, parked"
+>
+> **Blocked on review:**
+> - gms.app #521 — POS-4080 — no reviewer tagged, blocked 3 days
+>
+> **CI red:**
+> - (none)
+
+**Surface as Step 7 questions, don't auto-write.** For each drift item, prepare an `AskUserQuestion` for Step 7's batched call:
+
+> "PR #522 (POS-3934) merged Fri but TASKS.md still treats it as in-progress.
+> (a) Move POS-3934 to Done table + transition Jira → In Test
+> (b) Move TASKS.md only, leave Jira alone
+> (c) Skip — already handled"
+
+Match the existing rule: **never auto-transition Jira tickets** (anti-pattern in skill notes). TASKS.md edits go through user confirmation too — preserves the audit trail.
+
+**Edge cases:**
+- **PR exists but no ticket key in branch/title** — surface as "unlinked PR, want to link to a ticket?"
+- **Multiple PRs for one ticket** — list all, group together (e.g. POS-4038 had #518 + #520 + #522)
+- **Merged PR for a ticket not in your assignee query** (someone else's ticket) — skip; out of scope
+- **Reviewing a PR doesn't trigger drift** — only authored PRs count for this detector. Reviews are `productivity-sync`'s concern.
+
 ### Step 7 — Ask the user for additional context
 
 Before writing, present a structured set of questions via `AskUserQuestion`. **All user decisions consolidate here, including roll-candidate decisions staged from Step 6c.** Batch into ≤4 questions per call (the tool's hard cap).
@@ -386,7 +445,8 @@ After the report, ask the user:
 > 2. **Per-question DMs** — one-line drafts for each open Ask-X item, addressed to the right person (Sonny, June, Jackie, etc.)
 > Both are drafts — you copy and send.
 >
-> Also: want a NotebookLM source pack on your Desktop for a sprint infographic? (Step 12)"
+> Also: want a NotebookLM source pack on your Desktop for a sprint infographic? (Step 12)
+> Or an interactive sprint playground HTML file in the repo? (Step 13)"
 
 Drafts are written to `~/.claude/cache/new-sprint-drafts-<sprint-name>.md` (creating the cache dir if missing) and shown inline. `~/.claude/cache` survives reboots; `/tmp` doesn't. **Never auto-send.** This is a paste-buffer, not an outbound channel.
 
@@ -419,6 +479,35 @@ If the question's answerer is ambiguous, leave it as `**To: ?**` and let the use
 ### Step 12 — Offer NotebookLM source pack for an infographic
 
 Ask: *"Want me to assemble a NotebookLM source pack on your Desktop for a Sprint <NN> infographic? Need a 1-line mission framing + style prefs (background colour, accents)."* If yes, build `~/Desktop/sprint-<NN>-<theme>-pack/` with 10 sources + `INFOGRAPHIC-PROMPT.md` + `README.md`. Desktop not repo (keeps git clean). User uploads + generates manually. Full recipe: [`references/parsing-and-buckets.md`](references/parsing-and-buckets.md) § "NotebookLM source pack (Step 12)". Verified 2026-05-08 FY2624.
+
+### Step 13 — Offer an interactive sprint playground (opt-in)
+
+Ask: *"Want an interactive sprint playground? Single-file HTML at `sprint-<NN>-playground.html` in the repo root with filters by status / assignee / priority / labels and a copy-to-clipboard prompt for Claude (standup draft, risk radar, plan-my-day, stakeholder note)."* Default no — only build if the user says yes.
+
+If yes, **delegate to the `playground` skill** (from the `claude-plugins-official` marketplace). Hand it the sprint context the skill already has in memory:
+
+- All sprint tickets pulled in Step 3 + Step 6b (key, summary, status, priority, assignee, labels)
+- Sprint metadata from Step 2 (Jira name, nickname, start_date, end_date)
+- Decisions Locked from Step 5 / Step 7 — fold into preset names where useful (e.g. a "Sonny's priority" preset matching the active directive)
+
+The playground skill builds a **data-explorer** layout: chip filters on the left, ticket list + summary stats in the centre, prompt-with-copy-button at the bottom. Output goes to `<repo-root>/sprint-<NN>-playground.html`. **Add the file to `.gitignore`** if it isn't already covered — it's a personal artifact, not repo content.
+
+Suggested presets the playground skill should set up (reference, not requirements):
+
+- *<User>'s queue* — assignee filter on the user, ASK_TEXT="plan my day"
+- *In flight* — status In Progress / In Review / In Test
+- *<Critical-path label> track* — label filter on whichever label the sprint goal cites (e.g. `GMS_Card_Order_Print`), ASK_TEXT="stakeholder status note"
+- *Risk radar* — Must Have + Urgent, hide Done, ASK_TEXT="surface risks & blockers"
+
+Suggested ASK_TEXT options the playground skill should expose in the prompt-output dropdown:
+
+- Draft a standup update
+- Surface risks & blockers
+- Plan my day
+- Write a stakeholder status note
+- (no instruction)
+
+After the file is written, run `open <path>` to launch in the user's default browser. Verified 2026-05-08 FY2624.
 
 ## Notes & gotchas
 
@@ -480,6 +569,8 @@ Skips the "next future sprint" auto-detect; targets FY2625 explicitly. If FY2625
 - ❌ Folding Cypress / tech-debt into feature ACs (use a dedicated ticket per `feedback_cypress_dedicated_ticket.md`)
 - ❌ Clobbering user's manual TASKS.md / sprint-doc edits on re-run (idempotency at Step 8 and 8.5 prevents this)
 - ❌ Auto-sending the Step 11 Teams / Slack drafts — they're a paste buffer, never outbound
+- ❌ Building the Step 13 playground without asking — it's opt-in; default no
+- ❌ Auto-writing TASKS.md / Jira from Step 6f drift findings — surface only, ask first per existing don't-auto-transition rule
 - ❌ Treating `In Test` / `On Hold` Jira tickets as developer spillover (those are QA / stakeholder-owned)
 - ❌ Hand-typing PR numbers in the Done table — derive from `gh pr list` (Step 9)
 
