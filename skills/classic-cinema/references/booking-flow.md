@@ -229,6 +229,7 @@ Row letters come from `rows[].name`. Skip gap rows. Use the API data, not hardco
 | Sessions API returns no sessions for today | "No sessions showing today at Elsternwick" |
 | Seating-map returns empty `rows[]` | Show warning, ask Nathan to type seat codes manually |
 | `pick-seats.py` exits non-zero | Render full ASCII map, ask Nathan to pick manually |
+| `parse-tickets.py` errors `Ticket type 'X' not available` | The session offers a restricted set (e.g. throwback screenings are often Adult-only). The script's stderr now lists available types — surface them to Nathan with prices, then ask which spec to use. Don't auto-substitute. |
 | `fill-ticket.py` exits non-zero | Show stderr + temp data paths. Do NOT send email |
 | `gog gmail send` non-zero | Keep temp HTML, show error + path, offer retry command |
 | Fuzzy match returns 0 movies | "No movies matching '{query}' today. Here's what's on:" → Browse mode |

@@ -109,7 +109,12 @@ def main():
 
     for type_name, qty in selections:
         if type_name not in type_lookup:
-            print(f"Ticket type '{type_name}' not available for this session", file=sys.stderr)
+            available = sorted(type_lookup.keys())
+            print(
+                f"Ticket type '{type_name}' not available for this session. "
+                f"Available types: {', '.join(available) if available else '(none)'}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         tt = type_lookup[type_name]
         price = tt["priceInCents"]
