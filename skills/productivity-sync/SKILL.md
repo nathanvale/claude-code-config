@@ -121,11 +121,26 @@ Read `.productivity-sync-cursor.json` from the owning repo root. This file persi
     "messages":       { "last_sync": "2026-05-11T09:00:00+10:00", "ok": true },
     "meetings":       { "last_sync": "2026-05-11T09:00:00+10:00", "ok": true },
     "project-tracker":{ "last_sync": "2026-05-08T07:20:00+10:00", "ok": false, "error": "rate-limited" },
-    "github":         { "last_sync": "2026-05-08T07:20:00+10:00", "ok": true },
-    "chat":           { "last_sync": "2026-05-11T09:00:00+10:00", "ok": true }
+    "chat":           { "last_sync": "2026-05-11T09:00:00+10:00", "ok": true },
+    "git_forges": {
+      "_migrated_from_legacy_github": "2026-05-14",
+      "github-bunnings":     { "last_sync": "2026-05-14T10:10:00+10:00", "ok": true },
+      "bitbucket-other":     { "last_sync": "2026-05-14T10:10:00+10:00", "ok": true }
+    }
   }
 }
 ```
+
+**Git forge cursor migration (R5 / R7):**
+
+- **Read path** — if `connectors.github` exists and `connectors.git_forges` is absent, migrate the legacy entry into the new shape in memory only, then write under the new shape; the legacy `connectors.github` key is dropped on first successful write. Choose the migration target forge name as follows:
+  - If `.productivity.yml`'s `git:` map declares **exactly one** `type: github` forge, migrate into that forge's name (preserves `consecutive_failures` history against the user-declared name).
+  - If `.productivity.yml` declares **zero** `type: github` forges but the legacy `github:` block triggers the back-compat shim, migrate into `github-default` (matching the shim's synthesised name).
+  - If `.productivity.yml` declares **multiple** `type: github` forges, migration is ambiguous — write under `github-default` with `ok: false`, `error: "legacy cursor migration ambiguous (multiple github forges)"` and surface a pre-flight error asking the user to manually rename the cursor entry. Do NOT silently pick the first one.
+- **No legacy-key retention.** The atomic write below provides the crash-safety guarantee on its own. A mid-rename crash leaves the original cursor file intact (the rename either fires or it doesn't), so the next run re-reads the legacy shape and re-migrates. No two-write state machine, no retention bookkeeping.
+- **Write atomicity** — cursor writes always serialise to `<cursor>.tmp` first, then atomic `rename()` to the real path. `consecutive_failures` history is preserved across crashes because the original file never enters a partial state.
+- **Deprecation note throttling** — on the first migration cycle, write a mandatory sentinel `connectors.git_forges._migrated_from_legacy_github: <iso-date>`. The deprecation note (recommending the user move `github:` → `git:` in `.productivity.yml`) fires once per cursor cycle, gated on this sentinel being absent before the run. Mandatory, not optional.
+- **Per-forge keying** — each entry under `connectors.git_forges` is keyed by the forge name from `.productivity.yml`'s `git:` map. Allowed fields per forge: `last_sync`, `ok`, `error`, `consecutive_failures`. Same shape as today's per-connector entries, just one level deeper.
 
 **Behaviour:**
 
@@ -412,23 +427,156 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 
 Present diff and let user decide what to add/complete.
 
-**GitHub** (if configured -- `github:` block in `.productivity.yml`):
+**Git forges** (configured via `git:` block in `.productivity.yml`):
+
+Multi-forge support. One `.productivity.yml` can declare one or more git forges (GitHub, Bitbucket Cloud, Bitbucket Server) keyed by forge name. **Explicit `git:` block required** — there is no implicit-mode sweep. A consumer with no `git:` block gets no forge sync (the connector simply skips).
 
 `.productivity.yml` schema for this connector:
 
 ```yaml
-github:
-  user: nathanvale-bunnings        # required — GitHub username for `--author "@me"` queries
-  repos:                           # required — list of repos to scan
-    - Bunnings-Technology-Delivery/gms.app
-    - Bunnings-Technology-Delivery/gms.api
-    - Bunnings-Technology-Delivery/voucher
-  ticket-prefix: POS               # optional — used to extract ticket keys from branch/title (default: derive from project-tracker config)
+git:
+  github-bunnings:
+    type: github
+    user: nathanvale-bunnings        # required — username for `--author "@me"` queries
+    auth: gh                         # gh | env  (keychain reserved, not implemented)
+    ticket-prefix: POS               # optional — used to extract ticket keys from branch/title
+    review-as-me: true               # optional — include `--review-requested @me` query
+    repos:                           # forge-native identifiers (org/repo for GitHub)
+      - Bunnings-Technology-Delivery/gms.app
+      - Bunnings-Technology-Delivery/gms.api
+      - Bunnings-Technology-Delivery/voucher
+
+  bitbucket-other-machine:           # example — not shipping logic, stub-only
+    type: bitbucket-cloud
+    user: nathan.example
+    auth: env                        # reads BITBUCKET_TOKEN, BITBUCKET_USER
+    ticket-prefix: PROJ
+    review-as-me: true
+    repos:                           # workspace/repo_slug for Bitbucket Cloud
+      - example-workspace/some-repo
+
+  bitbucket-internal:                # example — stub-only
+    type: bitbucket-server
+    user: nathan.example
+    auth: env
+    base_url: https://bitbucket.example.com   # required for bitbucket-server; HTTPS-only
+    ticket-prefix: INT
+    review-as-me: true
+    repos:                           # projectKey/repoSlug for Bitbucket Server
+      - PROJ/internal-tooling
 ```
 
-Probe with `gh auth status`. If not authenticated, **soft fail** with: "GitHub configured but `gh` not authenticated — skipping GitHub sync. Run `gh auth login` to enable."
+**Schema rules:**
 
-For each repo, run a single bounded query (do not paginate beyond the limit — keeps token cost flat):
+| Field | Required | Notes |
+|---|---|---|
+| `type` | yes | One of: `github`, `bitbucket-cloud`, `bitbucket-server`. Open for future values; no others ship today. |
+| `user` | yes | Forge-native username. |
+| `auth` | yes | `gh` or `env` (see Auth modes below). `keychain` reserved, not implemented. |
+| `repos` | yes | Forge-native identifiers (see Schema column above per `type`). Not local paths. |
+| `base_url` | only `bitbucket-server` | Validated at config-load per R10 (see Base-URL validation below). |
+| `ticket-prefix` | optional | Used to extract ticket keys from branch/title (default: derive from project-tracker config). |
+| `review-as-me` | optional | Include the `--review-requested @me` query (GitHub) or its forge equivalent. |
+
+**Forge name allowlist:**
+
+Map keys (the forge names) must match `^[a-z][a-z0-9-]{0,62}$`. The allowlist closes a keychain-injection vector (future `auth: keychain` will look up secrets by forge name) and keeps names safe as display labels — forge names render verbatim into cursor JSON and the sync report.
+
+**The allowlist applies only to `git:` map keys (forge names), NOT to repo identifiers in `repos:` lists.** A repo entry like `Bunnings-Technology-Delivery/gms.app` is valid even though it has uppercase characters and dots — `repos:` entries are forge-native identifiers (org/repo, workspace/slug, projectKey/repoSlug) and the forge's own API addressing rules apply, not the allowlist.
+
+If a forge name fails the allowlist, pre-flight emits a specific config-load error naming the offending key:
+```
+❌ git.<name> — forge name must match ^[a-z][a-z0-9-]{0,62}$
+```
+
+**Base-URL validation (R10, `bitbucket-server` only):**
+
+At config-load, the `base_url` value must satisfy BOTH:
+
+1. **Regex** — `^https://[a-z0-9.-]+(\:[0-9]+)?(/.*)?$` (HTTPS-only; `http://` is rejected; no other schemes).
+2. **Address restriction** — the host must NOT resolve to RFC1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) or link-local (`169.254.0.0/16`).
+
+This validation fires at schema-load even though the stub adapter makes no REST calls — the load-bearing validation surface is here so the follow-up real adapter inherits a validated `base_url`. If validation fails, pre-flight emits:
+```
+❌ git.<name> — config error (base_url must be HTTPS, no RFC1918)
+```
+
+**Auth modes:**
+
+| Mode | Applies to | Probe | Notes |
+|---|---|---|---|
+| `gh` | `type: github` only | `gh auth status` exits 0 | Today's GitHub probe; canonical truth source for GitHub auth. |
+| `env` | any `type:` | `<FORGE>_TOKEN` and `<FORGE>_USER` env vars are present and non-empty | Generic. For Bitbucket: `BITBUCKET_TOKEN` + `BITBUCKET_USER`. For GitHub-via-env: `GITHUB_TOKEN` + `GITHUB_USER`. |
+| `keychain` | reserved | — | Not implemented in v1. The forge-name allowlist (above) pre-closes the injection vector so adding `keychain` later is a low-risk extension. |
+
+**Legacy back-compat shim (R5):**
+
+If `.productivity.yml` has a top-level `github:` block and no `git:` block, treat it as:
+```yaml
+git:
+  github-default:
+    type: github
+    ...legacy fields
+```
+…in memory only. The legacy key (`github-default`) is itself allowlist-valid. Emit a one-line deprecation note in the final sync report (NOT in pre-flight) recommending migration to the new `git:` shape. Throttle the note to once per cursor cycle, gated on the cursor sentinel described in Step 1a (`connectors.git_forges._migrated_from_legacy_github`).
+
+**Pre-flight probe table — per-forge rows:**
+
+| `type` | `auth` | Probe |
+|---|---|---|
+| `github` | `gh` | `gh auth status` exits 0 |
+| `github` | `env` | `GITHUB_TOKEN` env var present and non-empty |
+| `bitbucket-cloud` | `env` | `BITBUCKET_TOKEN` AND `BITBUCKET_USER` env vars present and non-empty |
+| `bitbucket-server` | `env` | `BITBUCKET_TOKEN` AND `BITBUCKET_USER` env vars present AND `base_url` validates per R10 |
+
+Forge name renders verbatim in the probe line: `✅ git.github-bunnings (gh authed as nathanvale-bunnings)`. Failures surface per-forge with the specific error.
+
+**Zero-valid-forges escalation:**
+
+If config-load + probe leave zero forges in a sync-able state (all forges failed validation, all auth probes failed), surface a top-level pre-flight error:
+```
+❌ NO FORGES SYNCED — git block configured but no forge is sync-able. Fix the validation errors above.
+```
+Don't silently proceed with no forge sync. **Partial validity** (some valid, some invalid) syncs the valid forges normally; invalid forges surface their specific errors per-forge in pre-flight. Each forge's `consecutive_failures` count tracks independently.
+
+**Stub forge handling (R4, load-bearing):**
+
+After pre-flight passes, before each forge's query loop, branch on `forge.type`:
+
+- `type: github` → run the GitHub query block below (unchanged from today).
+- `type: bitbucket-cloud` or `type: bitbucket-server` → **skip the query loop entirely** and queue the stub-warning line (verbatim, defined once below) for the final report. No REST calls. No cursor write beyond the standard per-forge tracking (`last_sync`, `ok: true`, no `error`).
+
+**Stub-warning text (canonical, single emission point):**
+
+When a sync would have queried a stub forge, emit exactly this line in the final report (once per sync per stub forge, not throttled across syncs):
+
+```
+⚠️ <forge-name> — config valid, sweep skipped (stub adapter v0, see Deferred to Follow-Up Work)
+```
+
+**Forward-compatibility constraint:** the real Bitbucket Cloud / Server adapter, when it ships in a follow-up plan, **MUST NOT** re-emit the canonical warning string under any failure mode. Missing config fields produce a distinct config-load error in pre-flight; auth failures produce sanitised `auth failed (...)` strings; PR data fills the drift buckets normally. The version-sentinel suffix in the canonical string distinguishes "still stubbed" from "real adapter, different problem."
+
+**Sentinel uniqueness contract (grep-test enforcement):**
+
+Running the grep `grep -c` for the canonical warning's version-sentinel suffix against `skills/productivity-sync/SKILL.md` from the claude-code-config repo root MUST return **exactly 1** — the canonical warning-text definition above is the sole emission point in spec. This grep is the load-bearing enforcement mechanism for the "MUST NOT re-emit" constraint: after the follow-up real-adapter plan ships, the same grep against the post-adapter SKILL.md must STILL return exactly 1. Any additional appearance is a regression the follow-up plan's reviewer must catch. A pinned memory entry in the consuming project (POS Yellow) carries this contract forward (with the exact grep command) for `ce-learnings-researcher` to surface during the follow-up plan's grounding pass.
+
+**Token-scrubbing rule (R9):**
+
+Token values (`BITBUCKET_TOKEN`, `GITHUB_TOKEN`, `BITBUCKET_USER`, etc.) are **never** interpolated into report text, warning lines, or cursor `error` strings. Only sanitised messages are recorded. Enumerated error paths:
+
+| Trigger | Sanitised message (cursor `error` and report text) |
+|---|---|
+| `auth: env`, required env var missing | `auth failed (env var <NAME> not set)` |
+| `auth: env`, token rejected by API | `auth failed (HTTP <status>)` |
+| `auth: gh`, `gh auth status` non-zero | `auth failed (gh not authenticated)` |
+| `base_url` regex or RFC1918 check failed | `config error (base_url must be HTTPS, no RFC1918)` |
+| Forge-name allowlist failure | `config error (forge name must match ^[a-z][a-z0-9-]{0,62}$)` |
+
+**Never** include the env-var value, response body, token substring, header, or any user-supplied secret in any of these strings. The rule applies uniformly to cursor `error` field writes, pre-flight error lines, and final-report warnings. A negative canary test (`BITBUCKET_TOKEN=secret-canary-value-do-not-leak` → trigger probe failure → grep cursor + report for canary) verifies the rule end-to-end.
+
+**GitHub query (preserved verbatim — semantic parity per R3):**
+
+For each repo declared on a `type: github` forge, run a single bounded query (do not paginate beyond the limit — keeps token cost flat):
 
 ```bash
 gh pr list --state all --author "@me" \
@@ -436,11 +584,11 @@ gh pr list --state all --author "@me" \
   --limit 30
 ```
 
-Filter to PRs `updatedAt >= cursor.github.last_sync - 1h` (see Step 1a). Fallback if no cursor or `ok: false` from previous run: last 7 days.
+Filter to PRs `updatedAt >= cursor.git_forges.<forge-name>.last_sync - 1h` (see Step 1a). Fallback if no cursor or `ok: false` from previous run: last 7 days.
 
-For each PR, extract the ticket key from branch name (`feat/POS-NNNN-*` → POS-NNNN) or PR title (`feat(POS-NNNN): ...`) using `ticket-prefix` from config. PRs without a parseable key go to the "unlinked" bucket.
+For each PR, extract the ticket key from branch name (`feat/POS-NNNN-*` → POS-NNNN) or PR title (`feat(POS-NNNN): ...`) using `ticket-prefix` from the forge entry. PRs without a parseable key go to the "unlinked" bucket.
 
-Plus one query for review-requests-on-you, scoped to the same repos:
+If `review-as-me: true`, also run one query for review-requests-on-you, scoped to the same repos:
 
 ```bash
 gh search prs --review-requested "@me" --state open \
@@ -460,9 +608,11 @@ gh search prs --review-requested "@me" --state open \
 | **Awaiting your review** | from `--review-requested @me` query | "N PRs need your review" — list briefly with author + age |
 | **Unlinked PRs** | PR with no parseable ticket key | "Want to link this to a ticket?" |
 
-**Output format — terse, one section per non-empty bucket:**
+Drift bucket logic is **unchanged from today** — same buckets, same triggers, same actions. Only the *mapping* from forge-native fields to bucket changes per adapter (and only GitHub's mapping ships today). Bitbucket mapping defers to the follow-up adapter plan where field names can be verified against real API responses.
 
-> ### GitHub drift
+**Output format — terse, one section per non-empty bucket, prefixed by forge name when more than one forge is in scope:**
+
+> ### Git drift — github-bunnings
 > **Open PRs not in TASKS.md (1):**
 > - gms.app #521 [open, CI green, awaiting review] — POS-4080 — TASKS.md treats Cypress backfill as "to file"
 >
@@ -472,6 +622,9 @@ gh search prs --review-requested "@me" --state open \
 > **Awaiting your review (2):**
 > - gms.api #538 by mjalil — Idempotency length error message (3 days old)
 > - voucher #112 by jxu — PART 1 ACTIVATE_CHECK (1 day old)
+>
+> ### Git drift — bitbucket-other-machine
+> ⚠️ <forge-name> — config valid, sweep skipped (see canonical warning above)
 
 **Cross-reference rules:**
 - **PR ticket key matches an existing tracker (Jira) row** — combine signals: "POS-3934 — Jira: In Progress, GitHub PR #522: merged. Out of sync — transition Jira?"
@@ -484,8 +637,12 @@ gh search prs --review-requested "@me" --state open \
 - ❌ Auto-rerunning CI (it's a write — confirm first)
 - ❌ Auto-transitioning Jira from a merged PR (matches `new-sprint`'s same rule)
 - ❌ Counting PRs you only reviewed as your own work
+- ❌ Re-emitting the canonical stub-warning string from a real adapter — that text is the version sentinel for "still stubbed," not a generic Bitbucket failure marker (see "Sentinel uniqueness contract" above)
+- ❌ Interpolating any token / env-var value / response body into cursor `error` or report text — use the sanitised messages enumerated in the token-scrubbing rule above
+- ❌ Path-resolving or `.git/config`-sniffing repos — `repos:` entries are forge-native identifiers, declared explicitly
+- ❌ Auto-detecting forge type from a remote URL — `type:` is declared, never inferred
 
-If no sources are configured or available, note "No external sources connected -- skipping sync" and continue to Step 3.
+If no sources are configured or available (no `git:` block, or all forges failed pre-flight), note "No external sources connected -- skipping sync" and continue to Step 3.
 
 ### 3. Cross-Reference Attendees
 
