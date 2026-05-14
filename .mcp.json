@@ -4,6 +4,18 @@
 			"command": "${HOME}/.config/memory/scripts/qmd-mcp.sh",
 			"args": []
 		},
+		"bun-runner": {
+			"command": "bunx",
+			"args": ["--bun", "@side-quest/bun-runner"]
+		},
+		"biome-runner": {
+			"command": "bunx",
+			"args": ["--bun", "@side-quest/biome-runner"]
+		},
+		"tsc-runner": {
+			"command": "bunx",
+			"args": ["--bun", "@side-quest/tsc-runner"]
+		},
 		"mcp-atlassian": {
 			"command": "${HOME}/code/dotfiles/bin/mcp-atlassian",
 			"args": [],
