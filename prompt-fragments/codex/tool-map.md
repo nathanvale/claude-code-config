@@ -4,7 +4,7 @@ Tool mapping:
 - Read: use `rg`, `sed`, `cat`, or repo-aware retrieval tools when appropriate
 - Write: use `apply_patch` for manual edits
 - Edit/MultiEdit: use apply_patch
-- Shell: use `exec_command`
+- Shell: use `exec_command` — but for tests / lint / type-check, prefer the MCP runners (`bun_runTests`, `biome_lintCheck`, `tsc_check`, etc.) over running `bun test`, `biome`, or `tsc` through `exec_command`
 - Grep: use `rg` (fallback: `grep`)
 - Glob: use `rg --files` or `find`
 - LS: use `ls` via `exec_command`

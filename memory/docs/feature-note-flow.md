@@ -2,7 +2,7 @@
 title: "Feature Note Flow"
 type: reference
 status: active
-updated: 2026-03-22
+updated: 2026-04-20
 summary: "How product and feature notes move from rough idea to settled spec to executable plan inside the Memory OS."
 ---
 
@@ -56,7 +56,7 @@ Use when the idea is still being explored:
 - multiple approaches are plausible
 - tradeoffs or open questions need to be surfaced first
 
-In the shared taxonomy, a brainstorm should usually stay inside the existing `plan` family because it is still an evolving proposed path.
+In the shared taxonomy, `brainstorm` is its own family (sibling to `plan`). A brainstorm captures divergent ideation and option exploration; a `plan` captures the chosen sequenced path. Keep them as sibling documents when both matter, cross-linked. Collapse to a single `plan` note only when the brainstorm phase was trivial or absorbed into the plan during drafting. Canonical home: `docs/brainstorms/`.
 
 ### `spec`
 

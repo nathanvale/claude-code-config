@@ -3,7 +3,24 @@
 Read this file when the active connector is `gog` and you need the exact bash invocation for a calendar, gmail, contacts, or sheets operation.
 
 **Binary:** `gog` (gogcli v0.12.0)
-**Auth:** OAuth tokens managed by gogcli's keyring. Use `gog auth list --json` to check status.
+**Auth:** OAuth tokens managed by gogcli's keyring. Use `gog auth list --json` to check status (note: `--check` in v0.12.0 shows stale data — verify with a real API call instead).
+
+## Multi-client routing
+
+gogcli supports multiple named OAuth clients (one per GCP project). Each client has its own credentials file (`~/.config/gogcli/credentials-<name>.json`). Each `<account, client>` pairing gets its own refresh token.
+
+**For productivity-sync dispatches**, always pass `--client <name>` matching the `<connector>-client` field in `.productivity.yml`. Every example below uses `--client <name>` as a placeholder — substitute the real client name at dispatch time.
+
+**Why this matters:** Refresh tokens are bound to the client_id under which they were issued. Running `gog ... --account nathan.vale@monash.edu --client personal` after the account was auth'd under `--client monash` will fail with `oauth2: "unauthorized_client"`. The dispatch protocol in SKILL.md enforces client consistency per repo.
+
+List registered clients:
+```bash
+gog auth credentials list
+# CLIENT    PATH
+# default   /Users/nathanvale/.config/gogcli/credentials.json
+# monash    /Users/nathanvale/.config/gogcli/credentials-monash.json
+# personal  /Users/nathanvale/.config/gogcli/credentials-personal.json
+```
 
 ## Calendar
 

@@ -66,6 +66,13 @@ create_links() {
 	echo "Rendering user prompt files..."
 	"${SCRIPT_DIR}/scripts/render-user-prompts.sh" --write
 
+	# Install tracked git hooks (pre-commit drift gate, etc.)
+	if [[ -x "${SCRIPT_DIR}/scripts/install-git-hooks.sh" ]]; then
+		echo ""
+		echo "Installing git hooks..."
+		"${SCRIPT_DIR}/scripts/install-git-hooks.sh"
+	fi
+
 	echo ""
 	echo "Done."
 }

@@ -3,7 +3,7 @@ alwaysApply: false
 globs:
   - "**/browser-agent*"
   - "**/browser-automation*"
-  - "**/plugins/browser/**"
+  - "**/plugins/browser-automation/**"
   - "**/.claude/agents/*browser*"
   - "**/playbooks/**"
 description: Enforces connect + --session isolation for agent-browser commands to prevent window proliferation and session stomping.
@@ -17,7 +17,7 @@ The agent-browser daemon is **persistent across all Claude conversations**. The 
 
 - **ALWAYS pass `--session <name>` on every `agent-browser` command** — never use the default session
 - **ALWAYS use `connect 9223`** to attach to the shared agent Chrome — do not use `--profile` or `--auto-connect`
-- **Session names must come from `~/.config/browser-automation/registry.yaml`** — check the registry before inventing a name
+- **Session names must come from `~/.config/side-quest/browser-automation/registry.yaml`** — check the registry before inventing a name
 - **For parallel dispatch**, suffix the session name: `--session zoom-1`, `--session zoom-2`
 - **ALWAYS use `--headed`** — never run headless
 - **Agents must not run concurrently on the same domain** — sessions share cookies (no BrowserContext isolation). Two agents on the same domain will see each other's auth state. Tracked upstream: vercel-labs/agent-browser#1068

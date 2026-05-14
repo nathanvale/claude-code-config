@@ -2,7 +2,7 @@
 title: "Memory OS Contract"
 type: contract
 status: active
-updated: 2026-03-22
+updated: 2026-04-20
 summary: "Shared user-scope contract for Nathan's Markdown-first memory system across work repos, personal repos, Claude Code, and Codex."
 ---
 
@@ -129,10 +129,11 @@ Use this universal note taxonomy wherever possible:
 - `task`
 - `decision`
 - `adr`
+- `brainstorm`
 - `plan`
-- `spec`
 - `runbook`
 - `log`
+- `solution`
 - `artifact-sidecar`
 
 Repo-specific note types are allowed when they clearly improve retrieval, but they should map back to one of these conceptual families.
@@ -142,24 +143,46 @@ Distinguish these nearby families like this:
 - `pet` for animals with durable relationship, care, health, or household context
 - `research` for evidence gathering, source synthesis, and exploratory understanding
 - `review` for evaluative documents that assess a change, artifact, system, or workflow against explicit criteria and produce findings or a verdict
-- `plan` for evolving proposed paths, itineraries, rollout sequences, and option-heavy future work
-- `spec` for more settled documents that describe the shape to execute against
+- `brainstorm` for divergent ideation — options, alternatives, and exploration before a path is chosen
+- `plan` for the chosen path: settled shape (what we're building, for whom, why it matters, acceptance) plus sequencing, rollout, and implementation detail. A plan absorbs what older workflows split into a separate `spec` — keep settled contract and execution path in one document unless the plan grows unreadable
 - `decision` for durable choices about policy, workflow, structure, naming, ownership, or operating rules where the why should be recoverable later
 - `adr` for heavier architectural or system-design choices with notable tradeoffs, alternatives, or long-lived technical consequences
 - `project` for the container or initiative itself
+- `solution` for reusable post-mortems and pattern writeups — a documented fix, workaround, or pattern for a class of problems that future work should discover before starting in the same area
 
 Use the nearby operational note families like this:
 - `research` asks "what do we know?"
 - `review` asks "how good is this against the chosen bar?"
+- `brainstorm` asks "what are the options?"
+- `plan` asks "what's the chosen path?"
 - `decision` asks "what did we choose and why?"
 - `log` asks "what happened?"
+- `solution` asks "how do we handle this class of problem next time?"
 
-For feature work, a brainstorm usually belongs in the existing `plan` family, while a lightweight PRD usually belongs in `spec`.
-It is acceptable to combine the settled contract and the implementation path in one draft while the shape is still emerging.
-Once a note is stable enough to execute against, split rollout sequencing and execution detail into a sibling `plan` note and keep the `spec` focused on settled behavior, boundaries, constraints, and acceptance shape.
-Cross-link the `spec` and `plan` so retrieval still feels like one thread.
+Brainstorms and plans are distinct phases of feature work. A brainstorm captures divergent thinking and option exploration; a plan captures the chosen sequenced path to execute. Keep them as sibling documents when both matter — cross-link them. Collapse to a single `plan` note only when the brainstorm phase was trivial or absorbed into the plan during drafting.
 
-Reviews usually belong in `docs/reviews/`. Create a standalone review note when the evaluation itself has lasting retrieval value, multiple findings, a clear verdict, or follow-up actions that should be recoverable later.
+A `plan` absorbs what older workflows split into a separate `spec`. Keep settled contract (what we're building, for whom, acceptance shape) and implementation path in one document. Only split when the plan grows unreadable or when execution churn would destabilize the settled contract — in that case, keep the settled portion at the top of the plan and cross-link to a sibling execution note. Do not create a new family for it.
+
+### Deprecated: `spec`
+
+`spec` is no longer part of the active taxonomy. New feature work should use `brainstorm` → `plan`. Existing `docs/specs/*.md` content can stay in place and be migrated into `docs/plans/` opportunistically; no forced migration. Do not create new spec files.
+
+### Canonical Homes
+
+Some families have canonical folder homes because tools (Compound Engineering skills, QMD collection masks, retrieval scripts) rely on them:
+
+- `brainstorm` → `docs/brainstorms/`
+- `plan` → `docs/plans/`
+- `review` → `docs/reviews/`
+- `research` → `docs/research/`
+- `decision` → `docs/decisions/`
+- `adr` → `docs/decisions/` with `ADR-NNN-*` filename
+- `runbook` → `docs/runbooks/`
+- `log` → `memory/logs/` (session logs) or `docs/logs/` (other episodic logs)
+- `solution` → `docs/solutions/` organized into category subfolders (e.g. `best-practices/`, `integration-issues/`, `logic-errors/`, `runtime-errors/`, `workflow-issues/`)
+- `artifact-sidecar` → lives next to the parent note, or under `docs/artifacts/` when no parent note exists
+
+Create a standalone note when the subtopic has lasting retrieval value, multiple findings, a clear verdict, or follow-up actions that should be recoverable later. Reviews, brainstorms, and solutions all follow this rule.
 
 ## Base Frontmatter
 

@@ -17,13 +17,26 @@ Each project can declare which connectors are active in `.productivity.yml`:
 connectors:
   calendar: google-calendar    # google-calendar | gog | microsoft-365 | none
   calendar-account:            # required when calendar is gog (e.g., nathan.vale@monash.edu)
+  calendar-client:             # optional when calendar is gog — gogcli client name (e.g., monash, personal). Defaults to "default" if unset.
   email: gmail                 # gmail | gog | microsoft-365 | none
   email-account:               # required when email is gog (e.g., hi@nathanvale.com)
+  email-client:                # optional when email is gog — gogcli client name
+  contacts: gog                # gog | none
+  contacts-account:            # required when contacts is gog
+  contacts-client:             # optional when contacts is gog — gogcli client name
+  sheets: gog                  # gog | none
+  sheets-account:              # required when sheets is gog
+  sheets-client:               # optional when sheets is gog — gogcli client name
+  drive: gog                   # gog | none
+  drive-account:               # required when drive is gog
+  drive-client:                # optional when drive is gog — gogcli client name
   project-tracker: jira        # jira | asana | linear | github-issues | monday | clickup | none
   knowledge-base: confluence   # notion | confluence | none
   chat: none                   # slack | none
   messages: imessage           # imessage | none
 ```
+
+**Client routing:** `<connector>-client` pins each gog call to a named OAuth client registered with `gog auth credentials set <json> --client <name>`. This is how two repos with different Google identities (e.g., `monash-smst` + `my-second-brain`) can run gog commands simultaneously in different terminals without stomping each other's refresh tokens. If `<connector>-client` is omitted, gog uses its built-in `default` client. Always set it when the repo is paired with a specific Google identity that differs from the machine's global default.
 
 **How to use this config:**
 1. Read `.productivity.yml` to determine which connectors are active
@@ -36,6 +49,9 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 1. Read `<connector>-account` from `.productivity.yml` (e.g., `calendar-account`, `email-account`)
 2. If `<connector>-account` is missing, **stop with an error** — do not dispatch without `--account`. Say: "`<connector>-account` not set in `.productivity.yml` — cannot dispatch gog safely"
 3. Pass the account as `--account <email>` on every `gog` command
+4. Read `<connector>-client` from `.productivity.yml` (e.g., `calendar-client`, `email-client`)
+5. If `<connector>-client` is present, pass `--client <name>` on every `gog` command. If absent, do **not** pass `--client` at all (gog will use its built-in default).
+6. Never invent a client name. If the repo's identity mismatches the available gog clients (`gog auth credentials list`), stop with: "`<connector>-client: <name>` not registered — run `gog auth credentials set <json> --client <name>` first"
 
 ## Calendar
 
@@ -43,7 +59,7 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 |-----------|-------|
 | `google-calendar` | `gcal_list_events`, `gcal_get_event`, `gcal_list_calendars`, `gcal_find_my_free_time` |
 | `microsoft-365` | Microsoft Graph calendar tools |
-| `gog` | `gog calendar events --account <email> --from today --days 3 --json` (via Bash — see references/gogcli-commands.md) |
+| `gog` | `gog calendar events --account <email> --client <name> --from today --days 3 --json` (via Bash — see references/gogcli-commands.md) |
 
 **Common patterns:**
 - Past 2 days + next 3 days for default sync
@@ -56,7 +72,7 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 |-----------|-------|
 | `gmail` | `gmail_search_messages`, `gmail_read_message`, `gmail_read_thread`, `gmail_list_labels` |
 | `microsoft-365` | Microsoft Graph mail tools |
-| `gog` | `gog gmail search "is:unread" --account <email> --json --max 20` (via Bash — see references/gogcli-commands.md) |
+| `gog` | `gog gmail search "is:unread" --account <email> --client <name> --json --max 20` (via Bash — see references/gogcli-commands.md) |
 
 **Common patterns:**
 - Unread inbox for default sync
@@ -135,11 +151,35 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 
 | Connector | Tools |
 |-----------|-------|
-| `gog` | `gog contacts list --account <email> --json` or `gog contacts search "<query>" --account <email> --json` (via Bash — see references/gogcli-commands.md) |
+| `gog` | `gog contacts list --account <email> --client <name> --json` or `gog contacts search "<query>" --account <email> --client <name> --json` (via Bash — see references/gogcli-commands.md) |
 
 **Common patterns:**
 - Search by name for people cross-referencing
 - Retrieve contact details for meeting attendees
+
+## Sheets
+
+| Connector | Tools |
+|-----------|-------|
+| `gog` | `gog sheets get <spreadsheetId> <range> --account <email> --client <name> --json` (read) • `gog sheets update <spreadsheetId> <range> <values> --account <email> --client <name>` (write) • `gog sheets append <spreadsheetId> <range> <values> --account <email> --client <name>` (append) (via Bash — see references/gogcli-commands.md) |
+
+**Common patterns:**
+- Read a range for review loops (e.g., reconciliation CSVs round-tripped via Sheets)
+- Append rows for batch logging
+- Use `--json` for structured reads, plain text for simple writes
+- Always pass the spreadsheet ID and A1 range explicitly — no implicit "active sheet"
+
+## Drive
+
+| Connector | Tools |
+|-----------|-------|
+| `gog` | `gog drive ls --account <email> --client <name> --json` (list) • `gog drive search "<query>" --account <email> --client <name> --json` (search) • `gog drive download <fileId> --account <email> --client <name>` (download) • `gog drive upload <localPath> --account <email> --client <name>` (upload) (via Bash — see references/gogcli-commands.md) |
+
+**Common patterns:**
+- Search by name/content to resolve a file before acting on it (never guess file IDs)
+- Download Google Docs/Sheets with export format flags
+- Upload local artifacts (CSVs, reports) into a known folder
+- Use `gog drive get <fileId>` for metadata before destructive ops
 
 ## Availability Check Pattern
 
@@ -158,7 +198,16 @@ Never fail the entire sync because one source is unavailable.
 ## Gotchas
 
 ### Wrong account (silent failure)
-Omitting `--account` from a `gog` command returns exit 0 with data from the **wrong account** (whichever account gogcli defaults to). This is the hardest failure mode — it looks like success. **Always** pass `--account <email>` explicitly. The dispatch protocol above enforces a pre-dispatch assertion: if `<connector>-account` is missing from `.productivity.yml`, stop before running any `gog` command.
+Omitting `--account` from a `gog` command (gmail, calendar, contacts, **sheets**, **drive**, etc.) returns exit 0 with data from the **wrong account** (whichever account gogcli defaults to). This is the hardest failure mode — it looks like success. **Always** pass `--account <email>` explicitly. The dispatch protocol above enforces a pre-dispatch assertion: if `<connector>-account` is missing from `.productivity.yml`, stop before running any `gog` command.
+
+### Wrong OAuth client (unauthorized_client error)
+Each account's refresh token is bound to the OAuth client_id under which it was issued (`gog auth add <email> --client <name>`). If you run a gog command for that account under a different `--client` — or omit `--client` when the account was authed under a named client — the refresh request presents a mismatched client_id and Google returns `oauth2: "unauthorized_client" "Unauthorized"`. Fix: use the same `--client` name that was used for `gog auth add`. The `.productivity.yml` `<connector>-client` field pins each repo to its correct client so `/productivity-sync` never picks the wrong one.
+
+### gog auth list --check shows stale data
+`gog auth list --check` in gogcli v0.12.0 does not honor `--client` and sometimes reports old token state even after a successful `gog auth add`. Do not trust it as ground truth. For real verification, run an actual API call: `gog calendar calendars --account <email> --client <name> -j --results-only | head`. If it returns JSON, the token works. If it returns `unauthorized_client`, the token is stale or bound to a different client.
+
+### Multi-client multi-terminal safety
+Two terminals in two different repos (e.g., `monash-smst` with `calendar-client: monash` and `my-second-brain` with `calendar-client: personal`) can run gog commands concurrently without conflict — each client has a separate credentials file (`~/.config/gogcli/credentials-<name>.json`) and the refresh tokens for different accounts don't collide in Keychain. The only thing you **cannot** do is run two terminals both trying to re-auth the *same* account at the same time (Keychain write race). For normal read operations, parallelism is safe.
 
 ### Keyring access on headless/SSH
 On Mac Mini via SSH, gogcli cannot access the macOS keychain. Set `GOG_KEYRING_BACKEND=file` before running gog commands. See gogcli Issue #206.
@@ -178,11 +227,15 @@ For Bash-backed connectors (`gog`, `github-issues`, `imessage`), verify availabi
 which gog >/dev/null 2>&1 || { echo "gog not found — install gogcli first"; exit 1; }
 ```
 
-### 2. Pre-dispatch account assertion (gog only)
-Before any `gog` command, verify the account is configured:
+### 2. Pre-dispatch account + client assertion (gog only)
+Before any `gog` command, verify the account and client are configured:
 - Read `<connector>-account` from `.productivity.yml` (e.g., `calendar-account`, `email-account`)
 - If missing: stop with "`<connector>-account` not set in `.productivity.yml` — cannot dispatch gog safely"
 - If present: pass as `--account <email>` on the command
+- Read `<connector>-client` from `.productivity.yml` (e.g., `calendar-client`, `email-client`)
+- If present: pass as `--client <name>` on the command
+- If absent: do not pass `--client` (gog uses its built-in default)
+- Never invent a client name. If the value in `.productivity.yml` doesn't appear in `gog auth credentials list`, stop and tell the user: "`<connector>-client: <name>` not registered — run `gog auth credentials set <json> --client <name>` first"
 
 ### 3. Exit code handling
 | Exit Code | Meaning | Action |

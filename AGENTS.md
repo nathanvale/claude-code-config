@@ -1,4 +1,4 @@
-<!-- GENERATED — do not edit directly. Edit prompt-fragments/ and run: scripts/render-user-prompts.sh --write -->
+<!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
 
 # Nathan's Agent Preferences
 
@@ -48,10 +48,10 @@ Follow Plan → Confirm → Execute → Test:
 
 ## Working Preferences
 
-- Use the repo's dedicated test, lint, and type-checking tools instead of Bash fallbacks when available
+- For tests, lint, and type checks: **prefer the MCP runners** (bun-runner, biome-runner, tsc-runner) first. Fall back to the repo's dedicated CLI (via package.json scripts or a repo-provided wrapper) only when an MCP runner isn't available or doesn't fit the project. Use raw Bash only as the last resort.
 - Prefer machine-readable output for tool-to-tool interfaces
 - Prefer `bunx` over `npx` when package execution is needed
-- Prefer bun ecosystem and typescript over python or other languages
+- Prefer the bun ecosystem and TypeScript over Python or other languages
 
 ## Library Docs
 
@@ -61,6 +61,26 @@ When working with libraries, frameworks, or APIs:
 2. Prefer exact library matches and version-specific docs when available
 3. Prefer primary docs over third-party summaries
 4. Cite the relevant version when it matters
+
+## Code Quality Runners
+
+Three MCP runners handle all code-quality checks. Always prefer them over running the underlying CLIs directly — they filter output for token efficiency and return structured results.
+
+**Always pass `response_format: "json"`.**
+
+| Runner | Tool | Use when |
+|--------|------|----------|
+| bun-runner | `bun_runTests` | Suite-level test run (all or filtered by pattern) |
+| bun-runner | `bun_testFile` | Focused debugging — one exact file path |
+| bun-runner | `bun_testCoverage` | Coverage summary (slower than `bun_runTests`) |
+| biome-runner | `biome_lintCheck` | Read-only lint + format diagnostics after edits |
+| biome-runner | `biome_lintFix` | Auto-fix with `--write`, returns remaining issues |
+| biome-runner | `biome_formatCheck` | Format compliance only (CI / pre-commit gates) |
+| tsc-runner | `tsc_check` | `tsc --noEmit` using nearest tsconfig — after edits |
+
+Do not invoke `bun test`, `biome`, or `tsc` directly via shell when these runners are available.
+
+Exit codes: `0` = success, `2` = blocking error (must fix before proceeding).
 
 ## Connector Dispatch
 
@@ -72,6 +92,10 @@ When Nathan asks about calendar events, email, or contacts, use the productivity
 4. If `.productivity.yml` doesn't exist, ask which account to use
 
 Do not call `gcal_list_events`, `gcal_get_event`, `gmail_search_messages`, or other Google MCP tools directly.
+
+## Email Reading
+
+When surfacing emails during sync or triage, always read the full email body and extract details (products, amounts, actions, dates). Never ask the user what's in an email you have access to. Decode base64 HTML bodies and parse the contents before presenting.
 
 ## Governance
 
@@ -133,10 +157,13 @@ Consult additional context docs when the task needs repo-specific guidance.
 - `obsidian-setup.md` → PARA method, vault commands
 - `hardware.md` → Monitor, Mac specs, SSH details
 - `known-issues.md` → Bunx cache, git-safety hook, VS Code
-- `git-workflow.md` → Git safety, conventional commits
-- `contract-perel-baldwin-context.md` → Perel-Baldwin input contract, ContextBundle assembly
+- `git-workflow.md` → tombstone, content moved to docs/git/ and the always-on git-workflow rule
+- `contract-conflict-processing.md` → Conflict reflection output contract
+- `contract-email-interpretation.md` → Email interpretation output contract
 - `contract-people-note.md` → People-note output contract (rewrite mode)
 - `contract-people-note-create.md` → People-note creation contract
 - `contract-people-note-review.md` → People-note review contract
+- `contract-perel-baldwin-context.md` → Perel-Baldwin input contract, ContextBundle assembly
+- `contract-text-message.md` → Text message output contract
 - `template-perel-baldwin-bundle.md` → ContextBundle fill-in template for Perel-Baldwin dispatch
 

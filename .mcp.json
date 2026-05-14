@@ -4,16 +4,24 @@
 			"command": "${HOME}/.config/memory/scripts/qmd-mcp.sh",
 			"args": []
 		},
+		"bun-runner": {
+			"command": "bunx",
+			"args": ["--bun", "@side-quest/bun-runner"]
+		},
+		"biome-runner": {
+			"command": "bunx",
+			"args": ["--bun", "@side-quest/biome-runner"]
+		},
+		"tsc-runner": {
+			"command": "bunx",
+			"args": ["--bun", "@side-quest/tsc-runner"]
+		},
 		"mcp-atlassian": {
-			"command": "uvx",
-			"args": ["mcp-atlassian"],
+			"command": "${HOME}/code/dotfiles/bin/mcp-atlassian",
+			"args": [],
 			"env": {
-				"JIRA_URL": "${JIRA_URL}",
-				"JIRA_USERNAME": "${JIRA_USERNAME}",
-				"JIRA_API_TOKEN": "${JIRA_API_TOKEN}",
-				"CONFLUENCE_URL": "${CONFLUENCE_URL}",
-				"CONFLUENCE_USERNAME": "${CONFLUENCE_USERNAME}",
-				"CONFLUENCE_API_TOKEN": "${CONFLUENCE_API_TOKEN}"
+				"JIRA_PROJECTS_FILTER": "SMSTSF,SMSTPMX",
+				"CONFLUENCE_SPACES_FILTER": "SP2,DE"
 			}
 		}
 	}

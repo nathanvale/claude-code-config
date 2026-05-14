@@ -16,7 +16,9 @@ SHARED_FRAGMENTS=(
   "shared/intro.md"
   "shared/boundaries.md"
   "shared/workflow.md"
+  "shared/code-quality-runners.md"
   "shared/connector-dispatch.md"
+  "shared/email-read-fully.md"
   "shared/governance.md"
   "shared/communication-style.md"
   "shared/key-people.md"
@@ -97,7 +99,7 @@ render_agents() {
 
 render_claude() {
   cat <<'HEADER'
-<!-- GENERATED — do not edit directly. Edit prompt-fragments/ and run: scripts/render-user-prompts.sh --write -->
+<!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
 @AGENTS.md
 
 HEADER
