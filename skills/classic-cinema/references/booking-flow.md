@@ -74,7 +74,21 @@ If time was in args, auto-select the nearest non-SOLD-OUT session. Otherwise ask
 
 ### Q2 — Tickets
 
-Use the `parse-tickets.py` script to fetch ticket types, parse the spec, and build the selection file in one step:
+**Pre-check tier availability when args imply a Child ticket.** Some sessions (arthouse, festival, late-evening, or restricted-rating titles like *DJ Ahmet*) only offer Adult tickets — no Child tier. If Nathan's args imply `1+1` (e.g. "nathan levi"), check available types before parsing the spec:
+
+```bash
+# Probe writes /tmp/cc-tickets.json
+python3 scripts/parse-tickets.py --session-id $SESSION_ID --spec "1"
+jq -r '.ticketTypes[] | select(.categoryId == 2) | .name' /tmp/cc-tickets.json
+```
+
+If `Child` is missing from the list, ask Nathan **before** locking in the spec:
+
+> "No Child tier for this session — proceed as 2 adults (Levi billed as adult), just 1 adult, or cancel?"
+
+PG-rated sessions are still kid-friendly; Levi just gets billed as an adult. Never silently substitute the spec.
+
+Then parse the spec:
 ```bash
 python3 scripts/parse-tickets.py --session-id $SESSION_ID --spec "1+1"
 ```
@@ -90,7 +104,7 @@ It also writes `/tmp/cc-tickets-selected.json` — the file that `fill-ticket.py
 
 **Spec format:** positional slots map to Adult, Child, Concession, Senior, Student, Pension. E.g. `"1+1"` = 1 Adult + 1 Child, `"2"` = 2 Adult.
 
-If tickets were in args, auto-calculate. Otherwise ask: "How many? (e.g. 1+1 for 1 adult + 1 child)"
+If tickets were in args, auto-calculate (with the tier pre-check above). Otherwise ask: "How many? (e.g. 1+1 for 1 adult + 1 child)"
 
 ### Q3 — Seats
 

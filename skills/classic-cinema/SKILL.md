@@ -25,7 +25,7 @@ Classify and proceed. Do NOT show a mode menu unless intent is genuinely ambiguo
 Parse args right-to-left: zone → tickets → time → movie remainder. See [arg-parsing.md](references/arg-parsing.md).
 
 1. **Movie + session** — fuzzy match, show sessions with availability emoji
-2. **Tickets** — "1+1" = 1 adult + 1 child. Default: 1 adult
+2. **Tickets** — "1+1" = 1 adult + 1 child. Default: 1 adult. ⚠️ Some sessions (arthouse, festival, late-evening) have **no Child tier** — fallback to "2 adults" with Nathan's confirmation, never silently. See [booking-flow.md](references/booking-flow.md#q2--tickets).
 3. **Seats** — zone picker or full map (see Availability UX below)
 
 Best case: `/classic-cinema faraway 10am 1+1 middle` → zero questions → confirm → send.
@@ -63,7 +63,7 @@ Always show raw numbers: `🟢 94% available (141/150 seats)`
 | `scripts/check-availability.py` | Calculate seat availability; auto-fetches seatmap from API if not cached | `--session-ids ID,ID,...` → one JSON object per line to stdout |
 | `scripts/parse-tickets.py` | Parse ticket spec and build selection file for fill-ticket.py | `--session-id ID --spec "1+1"` → JSON summary to stdout; writes `/tmp/cc-tickets-selected.json` |
 | `scripts/pick-seats.py` | Auto-select best adjacent seats in a zone | `--seatmap-file FILE --zone ZONE --count N` → prints seat codes |
-| `scripts/fill-ticket.py` | Fill ticket email template | `--movie-title --session-datetime --screen --seats --tickets-file FILE --booking-fee CENTS --total CENTS --poster-url URL` → prints HTML path |
+| `scripts/fill-ticket.py` | Fill ticket email template | `--movie-title --session-datetime --screen --seats --tickets-file FILE --booking-fee CENTS --total CENTS --poster-url URL` → prints HTML path. **`--poster-url` MUST be the API's `headerImage` value verbatim** (e.g. `movies/headers/foo.jpg`) — NOT a guessed `classiccinemas.com.au` URL. The script auto-prepends `https://movingstory-prod.imgix.net/`. Use `headerImage`, never `posterImage`. |
 
 ## Safety Invariants
 
