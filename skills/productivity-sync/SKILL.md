@@ -283,7 +283,25 @@ Chat is now part of default mode when configured. Reasoning: in projects where `
 - `chat: slack` — Slack MCP if available (`mcp__slack__*`). Falls back to skip-with-note if not installed.
 - `chat: none` (or omitted) — skip silently, no warning.
 
-**Per-message extraction (each message in window):**
+**Transcript detection — route to Meetings persistence FIRST (load-bearing):**
+
+Before extracting any signals, classify each chat-path result:
+
+| Result shape | Examples | Route |
+|---|---|---|
+| **Meeting transcript** | Notion page with `<meeting-notes>` block, `### Action Items` H3, attendee list, `<transcript>` reference, or Notion AI summary of a Teams/Zoom recording | Route to Meetings substep (above). **Persist `docs/meetings/YYYY-MM-DD-slug.md` BEFORE extraction.** Then return here for any non-meeting-format signals (rare). |
+| **Chat message / DM / channel post** | One-shot Teams message, Slack message, DM thread reply | Stay in Chat substep. Extract per the signal-class table below. |
+
+**Detection heuristics (any one is sufficient):**
+- Notion result has `<meeting-notes>` XML wrapper
+- Notion result title matches `@Today HH:MM`, `Daily Standup`, `<event-name> - Event instance`, or contains `(GMT...)` timezone tag
+- Notion result has `### Action Items` H3 with `- [ ]` checkboxes
+- Notion result has an attendee list block or `<transcript>` tag
+- Result spans >5 minutes of speech (length signal — chat messages are short)
+
+**The contract is identical to the Meetings substep:** persistence is mandatory; extraction is forbidden until the `docs/meetings/` file exists; "skip extraction" never means "skip the file." A transcript surfaced via the chat path is still a transcript — it carries the same evidentiary value and the same future-sync-invisibility risk if not persisted.
+
+**Per-message extraction (each message in window — chat-message results only):**
 
 For each message, decide if it carries a directive or commitment worth surfacing. Three signal classes:
 
@@ -303,6 +321,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 - **Ticket-key mentions** — for every `POS-NNNN` found, check if the ticket appears in TASKS.md. If yes and the message implies a status change ("done", "merged", "in test"), surface as drift. If no and the directive is "pull in", propose a Watch-list → active move.
 - **Verbatim quote capture** — for high-stakes directives ("X outranks Y", "deadline is Friday"), preserve the exact quote with speaker + timestamp. Match the existing `feedback_verify_quote_speaker_with_nathan.md` rule — surface back to user before writing it into a sprint doc.
 - **Multi-channel duplication** — same directive in DM + channel = single ask, not two.
+- **Transcript misclassification** — if any one of the transcript-detection heuristics above hits, route to Meetings persistence BEFORE extraction. Never extract action items from a meeting transcript via the chat path. Even if the signals look identical to chat directives, the source has different evidentiary weight and must land in `docs/meetings/` first.
 
 **Output format — terse, grouped by signal class:**
 
