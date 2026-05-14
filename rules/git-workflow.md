@@ -12,9 +12,6 @@ This rule reinforces the shared git policy in AGENTS.md with Claude-specific beh
 - NEVER use git add . or git add -A -- stage specific files
 - ALWAYS use conventional commits: type(scope): subject
 
-### Attribution
-Always add `Co-Authored-By: Claude <noreply@anthropic.com>` in commit footers when Claude generates or substantially modifies code.
-
 ### Commit message format
 Use HEREDOC syntax for multi-line commit messages:
 ```bash
@@ -22,8 +19,6 @@ git commit -m "$(cat <<'EOF'
 type(scope): subject
 
 [body]
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
 )"
 ```

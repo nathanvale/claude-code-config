@@ -51,7 +51,7 @@ Follow Plan → Confirm → Execute → Test:
 - Use the repo's dedicated test, lint, and type-checking tools instead of Bash fallbacks when available
 - Prefer machine-readable output for tool-to-tool interfaces
 - Prefer `bunx` over `npx` when package execution is needed
-- Prefer bun ecosystem and typesript over python or other langauges
+- Prefer bun ecosystem and typescript over python or other languages
 
 ## Library Docs
 
