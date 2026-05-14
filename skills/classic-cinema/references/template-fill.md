@@ -10,7 +10,7 @@ The template contains exactly these 13 `{{PLACEHOLDER}}` strings:
 |---|---|---|---|
 | `{{CUSTOMER_NAME}}` | Nathan's first name | HTML-escape | `"Nathan"` |
 | `{{MOVIE_TITLE}}` | from browse stage | HTML-escape | — (required) |
-| `{{MOVIE_IMAGE_URL}}` | **REQUIRED** — from homepage movie thumbnail OR movie detail page. Skill MUST fetch this before email send. | URL — do NOT escape | **NO DEFAULT** — if missing, STOP and fetch it |
+| `{{MOVIE_IMAGE_URL}}` | **REQUIRED** — pass the API's `headerImage` field verbatim (e.g. `"movies/headers/the-super-mario-galaxy-movie.jpg"`) to `--poster-url`. The fill-ticket script's `resolve_poster_url()` prepends the CDN base `https://movingstory-prod.imgix.net/` automatically. **DO NOT** construct the URL by guessing `https://www.classiccinemas.com.au/...` — that domain 404s for poster paths. **DO NOT** use `posterImage` (portrait, breaks the email layout) — always use `headerImage` (landscape banner). | URL — do NOT escape | **NO DEFAULT** — if missing, STOP and fetch it |
 | `{{SESSION_DATE_TIME}}` | from pricing stage | HTML-escape | — (required) |
 | `{{SCREEN_NUMBER}}` | from pricing stage | HTML-escape | — (required) |
 | `{{SEATS}}` | from seat selection — see **Seats Format Contract** below | HTML-escape | — (required) |
