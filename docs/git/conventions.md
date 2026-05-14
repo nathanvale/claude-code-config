@@ -53,10 +53,6 @@ When a commit touches multiple areas, name the affected modules or services in t
 - `Fixes #123` or `Closes #123` for issue references
 - `Co-Authored-By:` for pair programming
 
-### AI Attribution
-
-When using Claude Code, add `Co-Authored-By: Claude <noreply@anthropic.com>`. GitHub renders this as a co-author avatar in the commit list. Other agents should follow their own attribution conventions.
-
 ## Breaking Changes
 
 Indicate breaking changes with:
