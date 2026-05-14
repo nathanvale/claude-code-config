@@ -87,7 +87,8 @@ Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
 - If **all declared connectors are ✅**, print the table and continue without prompting.
 - If `--full` was passed, still run pre-flight — the cursor reset doesn't fix a broken connector.
 - Persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing.
-- Keep it **terse**: one line per connector, no recovery suggestions in the table. Recovery advice belongs in the final report, not here.
+- **Repeat-failure escalation** — when a connector has been ❌ for **3+ consecutive runs**, append a `consecutive_failures: N` count to its cursor entry and surface it in the pre-flight table as `❌ <connector> (Nth consecutive run)`. After 3 runs, also add a one-line recovery hint to the pre-flight prompt (e.g. "M365 has been down 3 runs — consider running `claude mcp list` to confirm the Graph MCP is loaded"). The prompt itself stays terse; the hint is a single line added beneath the table only when the threshold is hit. Don't repeat it every run after that — keep nagging signal-to-noise high.
+- Keep it **terse**: one line per connector, no recovery suggestions in the table. Recovery advice belongs in the final report, not here (exception: the repeat-failure hint above).
 
 **Anti-patterns:**
 
@@ -319,11 +320,13 @@ For each message, decide if it carries a directive or commitment worth surfacing
 - Full AI analysis of returned message threads for missed action items
 - Use `search_messages` for targeted follow-up queries on flagged threads
 
-**Meeting notes** (if calendar + knowledge base configured):
+**Meeting notes** (if knowledge base configured):
 
-Create structured meeting notes from knowledge base transcriptions matched to calendar events.
+**Persistence is mandatory.** Every raw meeting transcript in window must produce a `docs/meetings/YYYY-MM-DD-slug.md` file in the owning repo (or be explicitly skipped to a non-owning repo) *before* any signals from that transcript are extracted into TASKS.md or memory. The transcript is the canonical source — losing it because "I already pulled the action items" is a contract violation, even if the resulting TASKS.md edits look complete.
 
-1. **Get calendar events** -- Query the past 2 days of calendar events (reuse data from Calendar sync above). Filter out declined events and all-day events.
+This substep runs even when calendar is ❌. Calendar enriches matching (attendee names, event titles); without it, fall back to the transcript's own title and the speakers heard in the content. Do not skip meeting-note creation just because calendar is down.
+
+1. **Get calendar events (optional enrichment)** -- If calendar is available, query the past 2 days of events and filter out declined / all-day items. Used for attendee resolution and title matching. If calendar is ❌, skip this step and treat every transcript in window as a candidate.
 
 2. **Check for existing notes** -- Glob `docs/meetings/YYYY-MM-DD-*.md` for each date. Skip any event that already has a notes file (match by date + slug, or by checking the `transcription` frontmatter field for the same knowledge base page ID).
 
@@ -334,6 +337,8 @@ Create structured meeting notes from knowledge base transcriptions matched to ca
 5. **Create meeting notes** -- For each matched event, fetch the full transcription content. Read the project's meeting template (typically `Templates/meeting.md`) and create `docs/meetings/YYYY-MM-DD-slug.md`. Fill frontmatter from calendar event data and content from transcription. Resolve attendee emails to full names using `memory/glossary.md` and `memory/people/`, with CLAUDE.md only as a fallback pointer surface.
 
 6. **Extract action items** -- Collect action items from all newly created meeting notes. These feed into the action item write-back below (substep 7) and the report (Step 9).
+
+   **Ordering rule:** Step 5 (persist meeting note file) must complete before any action-item extraction begins. Never extract signals from a transcript that hasn't been written to disk first — even if the user said "skip Monash meetings" or "release-day mode, defer." In those cases, persist the meeting note to the appropriate repo (or to `~/code/my-second-brain/docs/meetings/` if it's not owned by the current repo) and then skip the extraction. *Skipping a meeting* means deferring signal extraction; it never means losing the transcript.
 
 7. **Action item write-back** — never let action items vanish into the report. For every action item extracted in substep 6, decide its destination, then ask the user to apply.
 
@@ -390,6 +395,8 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ Re-extracting action items from already-processed meeting notes on subsequent runs (use cursor + meeting note's `transcription:` frontmatter ID to skip)
 - ❌ Adding other people's actions to the user's TASKS.md (they go in Dependencies / `🔗 I'm waiting on`)
 - ❌ Filing personal-life items into work repos
+- ❌ **Extracting signals from a transcript without persisting the meeting note first** — even if every signal lands in TASKS.md/memory correctly, the source transcript is now invisible to future syncs (the cursor advances past it). Always write `docs/meetings/YYYY-MM-DD-slug.md` *before* extraction, and never let "the user said skip" mean "skip the file, just keep the signals." Skipping = skip extraction, keep file.
+- ❌ Skipping meeting-note creation because calendar is unavailable — the knowledge base alone is sufficient. Calendar is an enrichment layer (attendee resolution, event title matching), not a prerequisite.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
 - Window: `updated >= cursor.project-tracker.last_sync - 1h` in the JQL (fallback: `updated >= -7d`). This catches transitions you missed (Ready → Done overnight) without re-reading the entire backlog.
