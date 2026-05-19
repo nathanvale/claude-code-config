@@ -134,24 +134,17 @@
     "example-skills@anthropic-agent-skills": false,
     "document-skills@anthropic-agent-skills": false,
     "frontend-design@claude-code-plugins": true,
-    "imessage@side-quest-engineering": true,
-    "unifi-admin@side-quest-engineering": true,
-    "contacts-hygiene@side-quest-engineering": true,
+    "imessage@side-quest-engineering": false,
+    "unifi-admin@side-quest-engineering": false,
+    "contacts-hygiene@side-quest-engineering": false,
     "browser-automation@side-quest-engineering": true,
     "compound-engineering@every-marketplace": true,
     "bitbucket-pr@side-quest-engineering": true,
-    "memory-os@side-quest-engineering": true,
-    "monash-tools@monash-plugins": true,
-    "playground@claude-plugins-official": true,
+    "memory-os@side-quest-engineering": false,
+    "playground@claude-plugins-official": false,
     "explanatory-output-style@claude-code-plugins": false
   },
   "extraKnownMarketplaces": {
-    "monash-plugins": {
-      "source": {
-        "source": "github",
-        "repo": "nathanvale/monash-plugins"
-      }
-    },
     "claude-plugins-official": {
       "source": {
         "source": "github",
@@ -160,7 +153,7 @@
     }
   },
   "alwaysThinkingEnabled": false,
-  "effortLevel": "high",
+  "effortLevel": "xhigh",
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
   "autoCompactEnabled": false,
