@@ -40,9 +40,13 @@ Read the seam ledger. Compute:
 - Total findings count
 - By status: fixed, closed
 - By risk: low, high
-- Adversary findings (signatures with `regression:` prefix) - this is
-  the key regression metric. Higher = the loop caught more leaks; the
-  underlying seam may benefit from tightening
+- Adversary regression catches (signatures with `regression:` prefix) -
+  only meaningful when the seam ran in implement+adversary mode (see the
+  area README's "Risk-mode matrix"). For implement-only seams (e.g.
+  pagination-footer, bundle-externals) this count is always 0 and is not
+  the key metric; the iteration count and close-reason distribution are.
+  Higher catch counts on adversary-mode seams = the loop caught more
+  leaks; the underlying seam may benefit from tightening.
 - Close reasons distribution (ADR-contradicts, fails-graduation,
   out-of-scope, etc)
 - Iterations to converge (if the runbook has an adversary inner loop,
@@ -73,7 +77,9 @@ Files in scope per the runbook (from <seam>.md):
 <list from the runbook's ## Files in scope section>
 
 Adversary regression findings this loop:
-<list of signatures with `regression:` prefix from the ledger>
+<list of signatures with `regression:` prefix from the ledger; for
+implement-only seams this list is empty by design - state "implement-only
+seam, no adversary pass">
 
 Question: walk these files as a seam. Use the language of the
 improve-codebase-architecture skill (Module, Interface, Implementation,
@@ -85,9 +91,10 @@ Depth, Seam, Adapter, Locality, Leverage). Specifically:
    in it concentrate complexity into one or two callers, or scatter it?
    Modules that fail the test are good candidates for inlining back
    into recipes.
-3. Are there findings the adversary caught that suggest a **missing
-   seam boundary** - i.e. complexity that should live in its own seam
-   but currently leaks across this one?
+3. Are there findings (adversary catches on adversary-mode seams, or
+   late-arriving findings on implement-only seams) that suggest a
+   **missing seam boundary** - i.e. complexity that should live in its
+   own seam but currently leaks across this one?
 4. Suggest concrete tightening moves for the next time this seam runs:
    - File-list adjustments (add files that were touched but not listed;
      remove files that were never touched)
@@ -140,11 +147,17 @@ Skeleton:
 
 ## What broke and was caught
 
-For each `regression:`-prefixed adversary finding, one row:
+For seams that ran in implement+adversary mode, one row per
+`regression:`-prefixed adversary finding:
 
 | Signature | What broke | What caught it |
 | --- | --- | --- |
 | regression:<sig> | <one-line> | adversary pass <N> |
+
+For implement-only seams, replace this section with a single line:
+`Implement-only seam (per area README's Risk-mode matrix); no adversary
+pass ran. Regressions, if any, would surface in the next launch's
+turn-1 review.` Do not render an empty table.
 
 ## Tightness assessment
 
@@ -233,3 +246,7 @@ Default: **manual**. Inline mode is an opt-in per area.
 - Do not auto-suggest report runs from `status` more than once per
   session for the same seam - check whether a report file already
   exists with a timestamp newer than the latest commit.
+- Do not infer "no rigour" from a zero adversary-catch count. Check the
+  area README's Risk-mode matrix first; implement-only seams (e.g.
+  pagination-footer, bundle-externals) converge with zero adversary
+  catches by design, not by under-investigation.
