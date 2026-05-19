@@ -21,6 +21,34 @@ assessment dispatched through the `improve-codebase-architecture` skill.
 - `seam` (required) - the seam to report on. Must be `converged` per the
   status classifier; warn-prompt if `awaiting-decision` or `in-progress`
 
+If `seam` is missing, run the eligibility filter (see "Missing seam
+argument" below) and ask the user to pick before continuing.
+
+### Missing seam argument
+
+When the user invokes `report` with no `<seam>`, do not abort. Instead:
+
+1. Use the parsed seam table from pre-flight.
+2. For each seam, classify it as `converged | in-progress | untouched`
+   using the same rules as `status`.
+3. For each `converged` seam, check whether
+   `<area-path>/<seam>-report-<YYYY-MM-DD>.md` exists (any date).
+4. Filter to eligible seams: `converged` AND no existing report file
+   from today.
+5. If 0 eligible seams: report "No seams are eligible for a closing
+   report. Use `/runbook-orchestrator status` to see current state."
+6. If 1 eligible seam: confirm "Run report for `<seam>`? [y/n]" and
+   proceed on `y`.
+7. If 2+ eligible seams: surface them via AskUserQuestion with the
+   options as labels. Include a "both - one report each, sequentially"
+   option when there are exactly 2 eligible seams.
+8. Mid-loop seams (`in-progress`) are excluded from the candidate list
+   but mentioned in the status banner so the user knows why they're
+   missing.
+
+This mirrors `launch.md`'s missing-seam-name handling but with a tighter
+filter (only converged + no-report-today).
+
 ## Pre-flight
 
 Run [shared pre-flight checks](preflight.md) first. Report-specific:
@@ -117,6 +145,20 @@ runbook; suggestions only.
 Write to `<area-path>/<seam>-report-<YYYY-MM-DD>.md`. If a file with the
 same date already exists, append `-2`, `-3`, etc.
 
+**Multiple-report rules:**
+
+| Situation | Behaviour |
+| --- | --- |
+| No report exists for this seam | Write `<seam>-report-<YYYY-MM-DD>.md` |
+| Report exists for an earlier date | Write a fresh dated file. The earlier report stays for institutional memory. |
+| Report exists for today (same date) | Write `<seam>-report-<YYYY-MM-DD>-2.md` (or `-3` etc.). Warn-prompt the user before doing so: "A report already exists for today. Create a second one anyway? [y/n]" |
+| Report exists for today AND ledger has not changed since | Block with a warn-prompt: "Today's report is current. Re-run anyway? [y/n]" - use the latest ledger commit timestamp vs the report file's mtime. |
+
+The eligibility filter in "Missing seam argument" above uses the
+"report exists for today" check; same-day collisions are typically
+intentional (multiple convergence events) but the warn-prompt makes the
+user confirm.
+
 Skeleton:
 
 ````markdown
@@ -202,6 +244,27 @@ After the report file is written:
   the next launch?" before suggesting the next `status` or `launch`
   invocation. Patching the runbook now compounds correctly into the
   next seam's pre-flight; deferring leaves drift.
+- **Cross-seam finding extraction.** If the tightness assessment names
+  a finding that *also* appears in another seam's report (or another
+  seam's ledger), surface it explicitly:
+
+  ```
+  Cross-seam finding detected: <signature or short description>
+  - This seam: <seam-name>
+  - Also in: <other-seam-name> (<reference: report-path or ledger-row>)
+
+  Cross-seam findings are the highest-leverage ADR candidates. Consider:
+    [ ] Create cross-seam-findings.md in the area to index these
+    [ ] Open an ADR proposal that names both seams as evidence
+    [ ] Defer if convergence is in early days (one or two seams done)
+  ```
+
+  Detection heuristic: search the tightness-assessment output for
+  phrases like "same gap as", "cross-seam", "two independent seams",
+  "same class of bug", or any reference by name to another seam in the
+  area. If the assessment author explicitly flagged a cross-seam
+  coincidence, surface it; do not infer cross-seam findings from
+  signature-name overlap alone (false positives are easy).
 - Otherwise suggest `/runbook-orchestrator status <area-path>` to see
   what to launch next.
 
