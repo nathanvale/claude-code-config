@@ -499,12 +499,13 @@ git:
 | Field | Required | Notes |
 |---|---|---|
 | `type` | yes | One of: `github`, `bitbucket-cloud`, `bitbucket-server`. Open for future values; no others ship today. |
-| `user` | yes | Forge-native username. |
-| `auth` | yes | `gh` or `env` (see Auth modes below). `keychain` reserved, not implemented. |
+| `user` | no | Forge-native username. Required for `auth: env`. Not needed for `auth: bb-pr-plugin`. |
+| `auth` | yes | `gh`, `env`, or `bb-pr-plugin` (see Auth modes below). `keychain` reserved, not implemented. |
 | `repos` | yes | Forge-native identifiers (see Schema column above per `type`). Not local paths. |
+| `repo-dir` | only `auth: bb-pr-plugin` | Absolute or `~`-prefixed path to the local clone of the Bitbucket repo. Required so `bb-api.ts` can detect workspace/slug from `.git/config`. |
 | `base_url` | only `bitbucket-server` | Validated at config-load per R10 (see Base-URL validation below). |
 | `ticket-prefix` | optional | Used to extract ticket keys from branch/title (default: derive from project-tracker config). |
-| `review-as-me` | optional | Include the `--review-requested @me` query (GitHub) or its forge equivalent. |
+| `review-as-me` | optional | Include PRs where you are a reviewer (supported for `bb-pr-plugin`). |
 
 **Forge name allowlist:**
 
@@ -535,6 +536,7 @@ This validation fires at schema-load even though the stub adapter makes no REST 
 |---|---|---|---|
 | `gh` | `type: github` only | `gh auth status` exits 0 | Today's GitHub probe; canonical truth source for GitHub auth. |
 | `env` | any `type:` | `<FORGE>_TOKEN` and `<FORGE>_USER` env vars are present and non-empty | Generic. For Bitbucket: `BITBUCKET_TOKEN` + `BITBUCKET_USER`. For GitHub-via-env: `GITHUB_TOKEN` + `GITHUB_USER`. |
+| `bb-pr-plugin` | `type: bitbucket-cloud` only | `~/.config/side-quest/bitbucket-pr/config.yaml` exists AND `forge.repo-dir` resolves to a directory with a Bitbucket remote | Delegates auth entirely to the `bb-pr` plugin (1Password or env var, as configured in the plugin's `config.yaml`). No token handling in productivity-sync. `repo-dir` required — the plugin detects workspace/slug from `.git/config`. |
 | `keychain` | reserved | — | Not implemented in v1. The forge-name allowlist (above) pre-closes the injection vector so adding `keychain` later is a low-risk extension. |
 
 **Legacy back-compat shim (R5):**
@@ -556,6 +558,7 @@ git:
 | `github` | `env` | `GITHUB_TOKEN` env var present and non-empty |
 | `bitbucket-cloud` | `env` | `BITBUCKET_TOKEN` AND `BITBUCKET_USER` env vars present and non-empty |
 | `bitbucket-server` | `env` | `BITBUCKET_TOKEN` AND `BITBUCKET_USER` env vars present AND `base_url` validates per R10 |
+| `bitbucket-cloud` | `bb-pr-plugin` | `~/.config/side-quest/bitbucket-pr/config.yaml` exists AND `repo-dir` resolves to a directory with a Bitbucket remote |
 
 Forge name renders verbatim in the probe line: `✅ git.github-bunnings (gh authed as nathanvale-bunnings)`. Failures surface per-forge with the specific error.
 
@@ -569,10 +572,55 @@ Don't silently proceed with no forge sync. **Partial validity** (some valid, som
 
 **Stub forge handling (R4, load-bearing):**
 
-After pre-flight passes, before each forge's query loop, branch on `forge.type`:
+After pre-flight passes, before each forge's query loop, branch on `forge.type` AND `forge.auth`:
 
 - `type: github` → run the GitHub query block below (unchanged from today).
-- `type: bitbucket-cloud` or `type: bitbucket-server` → **skip the query loop entirely** and queue the stub-warning line (verbatim, defined once below) for the final report. No REST calls. No cursor write beyond the standard per-forge tracking (`last_sync`, `ok: true`, no `error`).
+- `type: bitbucket-cloud` AND `auth: bb-pr-plugin` → run the **Bitbucket Cloud (bb-pr-plugin) adapter** block below.
+- `type: bitbucket-cloud` AND `auth: env` → **skip the query loop entirely** (stub) and queue the stub-warning line for the final report.
+- `type: bitbucket-server` → **skip the query loop entirely** (stub) and queue the stub-warning line for the final report.
+
+**Bitbucket Cloud (bb-pr-plugin) adapter:**
+
+Prerequisites: `~/.config/side-quest/bitbucket-pr/config.yaml` exists; `forge.repo-dir` resolves to a local clone with a Bitbucket remote. Both checked in pre-flight.
+
+The plugin root is auto-detected from the installed plugin cache:
+```bash
+PLUGIN_ROOT=$(ls -d ~/.claude/plugins/cache/side-quest-engineering/bitbucket-pr/*  2>/dev/null | sort -V | tail -1)
+BB_API="$PLUGIN_ROOT/scripts/bb-api.ts"
+REPO_DIR=$(echo "<forge.repo-dir>" | sed "s|^~|$HOME|")
+```
+
+Query open PRs (equivalent to the GitHub `pr-list` query):
+```bash
+cd "$REPO_DIR" && bun run "$BB_API" pr-list OPEN 2>&1
+```
+
+Query recently merged PRs (for "merged, still in-flight" drift bucket):
+```bash
+cd "$REPO_DIR" && bun run "$BB_API" pr-list MERGED 2>&1
+```
+
+For each open PR, check CI status:
+```bash
+cd "$REPO_DIR" && bun run "$BB_API" pr-statuses <id> 2>&1
+```
+
+Filter to PRs `updated >= cursor.git_forges.<forge-name>.last_sync - 1h` using the `updated` field on each PR. Fallback if no cursor or `ok: false`: last 7 days.
+
+Extract ticket key from `source` branch name using `ticket-prefix` (e.g. `feat/SMSTSF-3091-*` → `SMSTSF-3091`). PRs without a parseable key go to the "unlinked" bucket.
+
+**Drift buckets — same as GitHub adapter:**
+
+| Bucket | Trigger | Bitbucket field |
+|---|---|---|
+| Open PR, ticket not in TASKS.md | `state=OPEN`, ticket key not in active section | `state` |
+| Merged PR, ticket still in-flight | `state=MERGED`, ticket in 🔥 Now / 🎯 Queue | `state` |
+| PR with failed CI | Any status `state=FAILED` | `pr-statuses` response |
+| PR with no reviewers after 24h | `reviewers=[]` and PR age > 24h | `reviewers` field |
+| Awaiting your review | `review-as-me: true` — PRs where your display name appears in `participants` with `role=REVIEWER` and `approved=false` | `participants` |
+| Unlinked PRs | No parseable ticket key | branch `source` |
+
+**Output format:** same terse drift-bucket format as GitHub adapter, prefixed by forge name.
 
 **Stub-warning text (canonical, single emission point):**
 
