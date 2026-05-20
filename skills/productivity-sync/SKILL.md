@@ -42,7 +42,7 @@ No .productivity.yml found. Run /productivity-setup first to configure connector
 
 ```
 /productivity-sync           # delta sync (since cursor)
-/productivity-sync --brief   # pre-meeting only (calendar + transcriptions, next 24h)
+/productivity-sync --brief   # pre-meeting only (calendar + local context, next 24h)
 /productivity-sync --deep    # delta sync + chat / sent email / docs scan
 /productivity-sync --full    # ignore cursor, wide-window sync (recovery / first run)
 ```
@@ -88,12 +88,15 @@ Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
 
 **Rules:**
 
-- If `--brief` was passed, probe **only** `calendar` and `transcriptions` connectors. All other connectors are shown as `⏭ skipped (brief mode)` in the pre-flight table — not ❌, not an error, no user prompt for skipped connectors.
-- If **≥1 probed connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift — the user should consciously accept reduced coverage.
+- If `--brief` was passed, probe **calendar** normally and probe `transcriptions` as cheap informational tool/auth presence only. The transcriptions probe must not search, fetch, or inspect transcript metadata. All other connectors are shown as `⏭ skipped (brief mode)` in the pre-flight table. This is not ❌, not an error, and does not prompt for skipped connectors.
+- If `--brief` was passed and `calendar` is ❌, exit clearly with no prompt: `"Calendar unavailable, cannot build Brief Run. Run full sync or fix calendar connector."`
+- If `--brief` was passed and `transcriptions` is ❌, show it as `⚠️ transcriptions (...) - unavailable, ignored in brief mode` and continue without prompting.
+- If `--brief` was passed and calendar is ✅, continue after pre-flight regardless of skipped connectors and transcriptions warning state.
+- For non-brief runs, if **≥1 probed connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift; the user should consciously accept reduced coverage. Brief Run handles calendar and transcriptions failures with the two rules above.
 - If **all declared connectors are ✅**, print the table and continue without prompting.
 - If `--full` was passed, still run pre-flight — the cursor reset doesn't fix a broken connector.
-- Persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing.
-- **Repeat-failure escalation** — when a connector has been ❌ for **3+ consecutive runs**, append a `consecutive_failures: N` count to its cursor entry and surface it in the pre-flight table as `❌ <connector> (Nth consecutive run)`. After 3 runs, also add a one-line recovery hint to the pre-flight prompt (e.g. "M365 has been down 3 runs — consider running `claude mcp list` to confirm the Graph MCP is loaded"). The prompt itself stays terse; the hint is a single line added beneath the table only when the threshold is hit. Don't repeat it every run after that — keep nagging signal-to-noise high.
+- For non-brief runs, persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing. Brief Run does not persist pre-flight results.
+- **Repeat-failure escalation**: for non-brief runs, when a connector has been ❌ for **3+ consecutive runs**, append a `consecutive_failures: N` count to its cursor entry and surface it in the pre-flight table as `❌ <connector> (Nth consecutive run)`. After 3 runs, also add a one-line recovery hint to the pre-flight prompt (e.g. "M365 has been down 3 runs. Consider running `claude mcp list` to confirm the Graph MCP is loaded"). The prompt itself stays terse; the hint is a single line added beneath the table only when the threshold is hit. Don't repeat it every run after that. Keep nagging signal-to-noise high.
 - Keep it **terse**: one line per connector, no recovery suggestions in the table. Recovery advice belongs in the final report, not here (exception: the repeat-failure hint above).
 
 **Anti-patterns:**
@@ -217,7 +220,7 @@ Items auto-expire when `defer_count >= 3` at re-surface time (see U6). Cap: ~10 
 - **No legacy-key retention.** The atomic write below provides the crash-safety guarantee on its own. A mid-rename crash leaves the original cursor file intact (the rename either fires or it doesn't), so the next run re-reads the legacy shape and re-migrates. No two-write state machine, no retention bookkeeping.
 - **Write atomicity** — cursor writes always serialise to `<cursor>.tmp` first, then atomic `rename()` to the real path. `consecutive_failures` history is preserved across crashes because the original file never enters a partial state.
 - **Deprecation note throttling** — on the first migration cycle, write a mandatory sentinel `connectors.git_forges._migrated_from_legacy_github: <iso-date>`. The deprecation note (recommending the user move `github:` → `git:` in `.productivity.yml`) fires once per cursor cycle, gated on this sentinel being absent before the run. Mandatory, not optional.
-- **Per-forge keying** — each entry under `connectors.git_forges` is keyed by the forge name from `.productivity.yml`'s `git:` map. Allowed fields per forge: `last_sync`, `ok`, `error`, `consecutive_failures`. Same shape as today's per-connector entries, just one level deeper.
+- **Per-forge keying** — each entry under `connectors.git_forges` is keyed by the forge name from `.productivity.yml`'s `git:` map. Allowed fields per forge: `last_sync`, `ok`, `error`, `consecutive_failures`, `run_history`. Same shape as today's per-connector entries, just one level deeper.
 
 **Behaviour:**
 
@@ -237,7 +240,7 @@ Items auto-expire when `defer_count >= 3` at re-surface time (see U6). Cap: ~10 
 1. At skill end, for each connector that completed without error, set `connectors.<name>.last_sync = now` and `ok = true`.
 2. For each connector that errored, leave `last_sync` unchanged (so next run retries the same window) and set `ok = false`, `error = "<reason>"`.
 3. If `--deep` was used, also bump `last_full_sync` so deep-mode-specific cursors (chat 7d, sent email) shift forward.
-4. For each connector that ran (success or failure), append `{ run_at: now, ok: <true/false> }` to `connectors.<name>.run_history`. Drop the oldest entry if the array length exceeds 7. **`--brief` mode must not append to `run_history` for any connector** — brief runs are not consumed sync windows.
+4. For each connector that ran or failed pre-flight during a normal sync, append `{ run_at: now, ok: <true/false> }` to `connectors.<name>.run_history`. Drop the oldest entry if the array length exceeds 7. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. Track `knowledge-base` and `transcriptions` separately. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
 5. Write `commitments` and `pending` arrays in the same atomic pass: any new commitment entries appended during this run are flushed here; any `pending` mutations (new deferrals, expiry removals) are flushed here.
 6. Write atomically: serialise to `.productivity-sync-cursor.json.tmp`, then `mv` over the real file. Avoids a half-written cursor if the skill is interrupted.
 7. **Never** write the cursor on user abort (e.g. `--dry-run` or user said "no, don't apply"). Cursor advance = "we successfully consumed this window," not "we ran the skill."
@@ -257,7 +260,7 @@ Items auto-expire when `defer_count >= 3` at re-surface time (see U6). Cap: ~10 
 
 Read `.productivity.yml` and sync each declared connector. Reference the **productivity-connectors** skill for tool name mappings. If a declared connector's MCP tool is unavailable, skip with a note.
 
-**`--brief` mode — connector gating:** When `--brief` is active, run **only** `calendar` and `transcriptions` connectors. All other connectors are skipped silently — no error, no prompt. The pre-meeting brief section is the only output (Step 9 is gated accordingly). `--brief` is read-only: do not advance `last_sync`, append to `run_history`, update `ok`, or mutate `consecutive_failures` for any connector, including the two that ran. Rationale: brief mode reads calendar/transcriptions for preparation but does not consume the sync window. After rendering the pre-meeting briefs, check the stale-cursor trailer (see Step 9 `--brief` report section).
+**`--brief` mode: Brief Run gating:** When `--brief` is active, run **calendar only** after pre-flight and build the pre-meeting brief from calendar plus already persisted local context (`TASKS.md`, `memory/`, and existing `docs/meetings/`). Transcriptions are pre-flight awareness only: do not search, fetch, inspect transcript metadata, create meeting notes, extract transcript actions, or enrich people notes. All other connectors are skipped silently. No error, no prompt. The pre-meeting brief section is the only output (Step 9 is gated accordingly). `--brief` is read-only: do not advance `last_sync`, append to `run_history`, update `ok`, or mutate `consecutive_failures` for any connector, including calendar and transcriptions. Rationale: brief mode prepares from local context but does not consume any external sync window. After rendering the pre-meeting briefs, check the stale-cursor trailer (see Step 9 `--brief` report section).
 
 **Calendar** (if configured):
 - Window: `since = max(cursor.calendar.last_sync - 1h, now - 2d)`, plus next 3 days. Cursor narrows the past side; future is always +3d.
@@ -389,10 +392,10 @@ For each message, decide if it carries a directive or commitment worth surfacing
 | Signal | Pattern | Action |
 |---|---|---|
 | **Ticket-key directive** | Mentions `POS-NNNN` + verb phrase ("pull in X", "park X", "X outranks Y", "let's hold X", "pick X first") | Propose TASKS.md update or sprint-doc Decisions Locked entry |
-| **Commitment to you** | "@Nathan can you ...", "Nathan to ...", "@<user> please ..." | Propose action item via the same write-back flow as meeting notes (Step 2 substep 7 routing table) |
-| **Commitment from you** | First-person "I'll ..." / "I'll send ..." / "Will do X by Y" sent by the user | Propose self-commitment as TASKS.md `🔥 Now` entry |
+| **Dependency** | Someone else promises work Nathan is waiting on | Propose TASKS.md `🔗 I'm waiting on` / dependency update |
+| **Commitment** | "@Nathan can you ...", "Nathan to ...", or first-person "I'll ..." / "I'll send ..." / "Will do X by Y" sent by Nathan, with a concrete verb-object | Propose self-owned action item via the write-back flow |
 
-**Commitment ledger extraction (chat):** For each message where sender metadata confirms Nathan is the speaker, check for first-person patterns (`I'll ...`, `I will ...`, `I have ...`) with a clear verb-object. Only ledger commitments when sender identity is unambiguous — do not ledger based on message content alone when sender is unknown or `ambiguous`. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (chat message timestamp or thread URL). Write to `cursor.commitments` per the schema in Step 1a — deduplicate by id (hash of owner+verb_object+source). Do not require user confirmation for ledger writes; the user reviews ledger entries via "Dropped balls" in the report.
+**Commitment ledger extraction (chat):** For each message where sender metadata confirms Nathan is the speaker, check for first-person patterns (`I'll ...`, `I will ...`, `I have ...`) with a concrete verb-object. Do not ledger vague acknowledgements such as "I'll check", "I'll look", or "will do" unless source context supplies the concrete action object. Only ledger commitments when sender identity is unambiguous. Do not ledger based on message content alone when sender is unknown or `ambiguous`. Other people's promises are dependencies, not commitments, and do not enter `cursor.commitments`. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (chat message timestamp or thread URL). Write to `cursor.commitments` per the schema in Step 1a. Deduplicate by id (hash of owner+verb_object+source). Do not require user confirmation for ledger writes because the ledger is sync state; the user reviews ledger entries via "Dropped balls" in the report before any task or memory write.
 
 **Filter aggressively — chat is high-volume:**
 - Drop reactions / acks / pure social messages
@@ -414,11 +417,11 @@ For each message, decide if it carries a directive or commitment worth surfacing
 > - **Sonny → Nathan, Wed 14:32 (DM):** "POS-4058 / POS-4059 are more important than POS-3867 / POS-3795. As they're not ready, pick the others first."
 >   → Propose: add to `memory/projects/sprint-24.md` Decisions Locked
 >
-> **Commitments to you (1):**
+> **Dependencies (1):**
 > - **Josh → Nathan, Tue 11:08 (POS Yellow channel):** "I'll get the Octopus pipeline change in by EOD"
 >   → Already in TASKS.md `🔗 I'm waiting on` ✓
 >
-> **Commitments from you (1):**
+> **Commitments (1):**
 > - **Nathan → Sonny, Tue 16:45 (DM):** "I'll have the cypress backfill ticket filed tomorrow morning"
 >   → Already done (POS-4080 filed) ✓
 
@@ -473,7 +476,7 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
         "source_handles": { "transcript": ["<notion-page-id>"] }
       }
       ```
-      Keep the signal short and factual. Do not include raw transcript excerpts. Run a dry-run preview:
+      Keep the signal short and factual. Do not include raw transcript excerpts, commitments, or dependencies. Run a dry-run preview:
       ```bash
       bun run ~/.claude/skills/people-enrich/scripts/apply-person-update.ts \
         --source transcript \
@@ -481,7 +484,7 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
         --report /tmp/productivity-sync-enrichment-<stem>.json \
         --output /tmp/productivity-sync-enrichment-<stem>.preview.md
       ```
-   4. If any previews were generated, ask the user before any live write (batch the ask, one `AskUserQuestion`): "Transcript speaker enrichment — preview generated for N people. Apply?" For each approved person, run `apply-person-update.ts --write`. Do **not** pass `--create-if-missing` for transcript speaker matches. If the user skips, keep the meeting note and continue.
+   4. If any previews were generated, ask the user once per meeting before any live write: "Transcript speaker enrichment: preview generated for N people from <meeting title>. Apply?" For each approved person, run `apply-person-update.ts --write`. Do **not** pass `--create-if-missing` for transcript speaker matches. If the user skips, keep the meeting note and continue.
    5. Collect enrichment stats: `proposed`, `applied`, `skipped`, `unmatched` count, `ambiguous` names list.
 
    **Graceful skip (R6):** If `apply-person-update.ts` is not found at the expected path, or any call exits non-zero, log one line: `"transcript enrichment skipped for <person>: <reason>"`. Continue without blocking meeting note creation or action item extraction.
@@ -496,11 +499,11 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
 
    After action item extraction, append the enrichment summary to the per-meeting report line: `"1 speaker update proposed, 1 applied, 2 unmatched."` (or `"transcript enrichment skipped (apply-person-update.ts not found)"` on graceful-skip).
 
-   **Commitment extraction pass (meeting notes):** After action item extraction, scan the meeting note's `<transcript>` block for explicit self-attribution commitment patterns. Match only:
-   - `(Nathan|@Nathan)( to| can you| please)` followed by a verb phrase (e.g. "Nathan to send the onboarding bundle to Kerry by Friday")
+   **Commitment extraction pass (meeting notes):** After action item extraction, scan the meeting note's `<transcript>` block for explicit self-attribution commitment patterns. Match only Nathan-owned obligations with a concrete verb-object:
+   - `(Nathan|@Nathan)( to| can you| please)` followed by a concrete verb-object (e.g. "Nathan to send the onboarding bundle to Kerry by Friday")
    - Patterns attributed to Nathan in the action items section of the note (e.g. `- [ ] Nathan to ...`)
 
-   Do **not** ledger unattributed first-person transcript phrases (e.g. "I'll follow up") — Notion transcripts are plain prose without reliable speaker labels; first-person phrases cannot be attributed to Nathan without explicit speaker metadata. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (meeting note path). Write to `cursor.commitments` — deduplicate by id (hash of owner+verb_object+source).
+   Do **not** ledger unattributed first-person transcript phrases (e.g. "I'll follow up"). Notion transcripts are plain prose without reliable speaker labels; first-person phrases cannot be attributed to Nathan without explicit speaker metadata. Do not ledger vague acknowledgements like "I'll check" unless the concrete action object is present. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (meeting note path). Write to `cursor.commitments`. Deduplicate by id (hash of owner+verb_object+source). This ledger write is automatic because it is cursor state; any write to `TASKS.md`, `memory/`, or people notes remains ask-gated via action item triage.
 
 7. **Action item write-back** — never let action items vanish into the report. For every action item extracted in substep 6, decide its destination, then ask the user to apply.
 
@@ -719,10 +722,12 @@ Prerequisites: `~/.config/side-quest/bitbucket-pr/config.yaml` exists; `forge.re
 
 The plugin root is auto-detected from the installed plugin cache:
 ```bash
-PLUGIN_ROOT=$(ls -d ~/.claude/plugins/cache/side-quest-engineering/bitbucket-pr/*  2>/dev/null | sort -V | tail -1)
+PLUGIN_ROOT=$(find ~/.claude/plugins/cache/side-quest-engineering/bitbucket-pr -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -1)
 BB_API="$PLUGIN_ROOT/scripts/bb-api.ts"
-REPO_DIR=$(echo "<forge.repo-dir>" | sed "s|^~|$HOME|")
+REPO_DIR="${<forge.repo-dir>/#\~/$HOME}"
 ```
+
+> **Important:** Use `find` not `ls -d` for `PLUGIN_ROOT`. On systems where `ls` is aliased to `eza` or colour-enabled, `ls -d` injects ANSI escape codes into the variable, silently corrupting the path and causing `bun run` to fail with "Module not found" even when the file exists.
 
 Query open PRs (equivalent to the GitHub `pr-list` query):
 ```bash
@@ -862,7 +867,7 @@ After all connector steps in Step 2 complete, run a reconciliation pass on `curs
 
 2. **Reconcile against recently-closed Jira tickets:** Use this run's project-tracker results (closed/done tickets in the fetch window). Match open commitments against ticket summaries using the same 3-token fuzzy rule. Require user confirmation before resolving fuzzy Jira matches.
 
-3. **Dropped balls:** After reconciliation, collect open commitments where `now - extracted_at > 5 days` AND (`deferred_until` is absent OR `deferred_until < now`). If any exist, render a `## Dropped balls` section at the **top of the Step 9 report** (before triage pass). Each entry: `"Dropped ball (N days): <text> (from <source>)"`. Offer three options via `AskUserQuestion`:
+3. **Dropped balls:** After reconciliation, collect open commitments where (`deadline` exists AND `now > deadline + 1 day`) OR (`deadline` is absent AND `now - extracted_at > 5 days`), and where `deferred_until` is absent or in the past. Dependencies never appear in this section. If any exist, render a `## Dropped balls` section at the **top of the Step 9 report** (before triage pass). For deadline-based entries, use `"Dropped ball (deadline passed): <text> (from <source>)"`. For age-based entries, use `"Dropped ball (N days): <text> (from <source>)"`. Offer three options via `AskUserQuestion`:
    - **Mark resolved** — sets `status: resolved`, `resolved_at: now`
    - **Defer/snooze** — sets `deferred_until: now + 5 days` (commitment stays `status: open`; will not re-surface until snooze expires)
    - **Dismiss** — sets `status: dismissed`, `dismissed_at: now`; does not remove the entry immediately (preserves ledger history)
@@ -1010,7 +1015,7 @@ Include in the report summary (Step 9).
 
 **`--brief` mode report:** When `--brief` is active, render **only** the pre-meeting brief section (see "Pre-meeting prep brief" in Step 2). Suppress all of the following: triage pass, git drift, email/Jira summaries, CLAUDE.md health check, stats line, and cursor advancement note.
 
-After the brief section, check the stale-cursor trailer: count connectors in `cursor.connectors` where `last_sync` is absent or `now - last_sync > 4 hours`. Only count **non-brief connectors** (i.e. not `calendar` or `transcriptions`). Missing `last_sync` counts as stale. If count > 0, append one line:
+After the brief section, check the stale-cursor trailer: count connectors in `cursor.connectors` where `last_sync` is absent or `now - last_sync > 4 hours`. Only count **non-brief connectors** (i.e. not `calendar` or `transcriptions`). Count `knowledge-base`, email, project-tracker, chat, messages, and each git forge independently. Missing `last_sync` counts as stale. If count > 0, append one line:
 
 - Singular: `"1 connector not checked. Run full sync when you can."`
 - Plural: `"{N} connectors not checked. Run full sync when you can."`
@@ -1031,12 +1036,12 @@ Last interaction with Tanya: 4 days ago (May 7 standup — flagged voucher data 
 
 **Full sync report (default / --deep / --full mode):**
 
-The "Dropped balls" section renders at the **top of the report**, before triage, if any open commitments are older than 5 days (see Step 2b). Example:
+The "Dropped balls" section renders at the **top of the report**, before triage, if any open commitments are past their deadline rule or age threshold (see Step 2b). Example:
 
 ```
 ## Dropped balls
 
-- Dropped ball (6 days): send the onboarding bundle to Kerry (from docs/meetings/2026-05-14-squad-sync.md)
+- Dropped ball (deadline passed): send the onboarding bundle to Kerry (from docs/meetings/2026-05-14-squad-sync.md)
   → [a] Mark resolved  [b] Defer/snooze  [c] Dismiss
 ```
 
@@ -1051,7 +1056,7 @@ Update complete (delta sync, cursor: 2026-05-08T07:20+10:00 → 2026-05-11T10:35
 - Action items: 5 extracted from 2 meetings → 3 written (TASKS.md), 1 to memory/projects/monash.md, 1 skipped
 - Deferred items: 2 re-surfaced (1 applied, 1 re-deferred), 1 expired (deferred 3x, never applied)
 - Commitments: 2 new extracted, 1 resolved (matched TASKS.md done), 1 dropped ball surfaced
-- Chat directives: 1 ticket directive (POS-4058 priority), 1 inbound commitment (Josh), 1 outbound commitment (already done)
+- Chat directives: 1 ticket directive (POS-4058 priority), 1 dependency (Josh), 1 commitment (already done)
 - GitHub drift: 1 unreflected open PR, 1 merged-still-in-flight, 2 awaiting your review
 - Pre-meeting briefs: 3 meetings in the next 24h (Tanya 14:00, standup tomorrow 11:30, Sonny 1:1 16:00)
 - Memory: 2 gaps filled, 1 project enriched
