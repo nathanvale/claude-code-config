@@ -50,6 +50,7 @@ No .productivity.yml found. Run /productivity-setup first to configure connector
 **Flag mutual exclusion:**
 - `--brief` and `--deep` are mutually exclusive: if both are passed, emit `"--brief and --deep cannot be used together"` and exit without running.
 - `--brief` and `--full` are mutually exclusive: if both are passed, emit `"--brief and --full cannot be used together"` and exit without running. (`--full` resets cursor state; `--brief` is read-only preparation.)
+- `--deep` and `--full` are compatible: `--full` resets cursor state (wide-window invalidation), `--deep` expands connector scope to chat / sent email / docs. Both flags can be passed together.
 
 ## Pre-flight (30s connector check)
 
@@ -117,7 +118,7 @@ If `~/.config/memory/AGENTS.md` exists, resolve the owning repo first and treat 
 **Re-surface deferred action items:** After loading the cursor (Step 1a), check `cursor.pending`. If any entries exist, they will be presented at the **start of the triage pass** (before new action items from this run). Each deferred item is labelled `"Deferred from YYYY-MM-DD: <text> (originally suggested: <routing>)"`.
 
 **Auto-expiry on re-surface:** Before presenting a pending item, check its `defer_count`:
-- If `defer_count >= 3`: do **not** present a triage question. Remove the entry from `cursor.pending` immediately. Add an informational line to the Step 9 report: `"Expired (deferred 3x, never applied): <text> (source: <meeting>)"`. No user action required.
+- If `defer_count >= 2`: do **not** present a triage question. Remove the entry from `cursor.pending` immediately. Add an informational line to the Step 9 report: `"Expired (deferred 3x, never applied): <text> (source: <meeting>)"`. No user action required. (Rationale: the item has been deferred twice already; the 3rd re-surface fires expiry without re-presenting.)
 - Expiry fires **only on re-surface at the triage pass**, not at cursor load alone and not on a 4th user deferral mid-triage.
 
 **If the deferred item's source meeting file no longer exists**, re-surface it with a `"(source file no longer exists)"` note appended to the text. Still offer the same triage options.
@@ -176,7 +177,7 @@ Read `.productivity-sync-cursor.json` from the owning repo root. This file persi
 ```
 { run_at: "<ISO-datetime>", ok: boolean }[]
 ```
-Max 7 entries. When appending a new entry, drop the oldest if the array length would exceed 7. Initialise as `[]` when key is missing (first run after schema upgrade). Written in the same atomic cursor pass as `last_sync`.
+Max 7 entries. Drop the oldest entry before appending if the array already contains 7 entries. Initialise as `[]` when key is missing (first run after schema upgrade). Written in the same atomic cursor pass as `last_sync`.
 
 `commitments` (top-level) — cross-connector commitment ledger:
 ```
@@ -207,9 +208,11 @@ Target cap: 50 open entries. Prune `resolved` and `dismissed` entries first when
   deferred_at: string            // ISO datetime of most recent deferral
 }[]
 ```
-Items auto-expire when `defer_count >= 3` at re-surface time (see U6). Cap: ~10 items (they expire within 3 syncs by design).
+Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry rule above in section 1). The 3rd re-surface fires expiry after the item has been deferred twice. Cap: ~10 items (they expire within 3 syncs by design).
 
 **Cursor migration note:** When `commitments` or `pending` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with empty arrays (`[]`). Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
+
+**Parse-error recovery:** If `JSON.parse` of the cursor file throws (truncated bytes, manual edit corruption, OS crash between flush and rename), treat the cursor as missing for this run (wide-window fallback per Step 1a). Emit one line to the report: `cursor file malformed: treating as first run`. Rename the corrupt file to `.productivity-sync-cursor.json.corrupt.<iso-timestamp>` before writing the next clean cursor. The rename preserves the corrupt content for post-mortem without blocking sync continuation.
 
 **Git forge cursor migration (R5 / R7):**
 
@@ -240,7 +243,7 @@ Items auto-expire when `defer_count >= 3` at re-surface time (see U6). Cap: ~10 
 1. At skill end, for each connector that completed without error, set `connectors.<name>.last_sync = now` and `ok = true`.
 2. For each connector that errored, leave `last_sync` unchanged (so next run retries the same window) and set `ok = false`, `error = "<reason>"`.
 3. If `--deep` was used, also bump `last_full_sync` so deep-mode-specific cursors (chat 7d, sent email) shift forward.
-4. For each connector that ran or failed pre-flight during a normal sync, append `{ run_at: now, ok: <true/false> }` to `connectors.<name>.run_history`. Drop the oldest entry if the array length exceeds 7. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. Track `knowledge-base` and `transcriptions` separately. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
+4. For each connector that ran or failed pre-flight during a normal sync, append `{ run_at: now, ok: <true/false> }` to `connectors.<name>.run_history`. Drop the oldest entry before appending if the array already contains 7 entries. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. Track `knowledge-base` and `transcriptions` separately. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
 5. Write `commitments` and `pending` arrays in the same atomic pass: any new commitment entries appended during this run are flushed here; any `pending` mutations (new deferrals, expiry removals) are flushed here.
 6. Write atomically: serialise to `.productivity-sync-cursor.json.tmp`, then `mv` over the real file. Avoids a half-written cursor if the skill is interrupted.
 7. **Never** write the cursor on user abort (e.g. `--dry-run` or user said "no, don't apply"). Cursor advance = "we successfully consumed this window," not "we ran the skill."
@@ -251,10 +254,11 @@ Items auto-expire when `defer_count >= 3` at re-surface time (see U6). Cap: ~10 
 - The file is older than 7 days (treat as stale; user probably skipped a week)
 - Connector's previous run had `ok: false`
 - Connector's MCP tool name changed (cursor pre-dates the rename)
+- Forge `auth` field changed since the last successful run (e.g. `auth: env` upgraded to `auth: bb-pr-plugin`). Detect by comparing the current `.productivity.yml`'s forge `auth` value against the cursor's last recorded value; cache the auth value per forge in `connectors.git_forges.<name>.last_auth` on each successful write. `last_auth` is a new optional field on each git_forges entry, default unset.
 
 **Why a file, not memory:** the skill must survive across sessions. `memory/` is wrong (durable knowledge, not state). `TASKS.md` is wrong (human-edited). A dot-file at repo root is the right surface — `.gitignore` it so the cursor doesn't churn git.
 
-**Add to `.gitignore` automatically** when the cursor file is first written. Append the line `.productivity-sync-cursor.json` if not already present. Avoids the cursor showing up as an untracked file forever.
+**Before** writing the cursor file for the first time, append `.productivity-sync-cursor.json` to `.gitignore` if not already present. Verify the append succeeded before proceeding to the cursor write. The gitignore update must precede the first cursor write so the file never appears as a tracked candidate.
 
 ### 2. Sync from Connected Sources
 
@@ -482,18 +486,18 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
         "source_handles": { "transcript": ["<notion-page-id>"] }
       }
       ```
-      Keep the signal short and factual. Do not include raw transcript excerpts, commitments, or dependencies. Run a dry-run preview:
+      Keep the signal short and factual. Do not include raw transcript excerpts, commitments, or dependencies. Run a dry-run preview (wrapped with `timeout 15s` to defend against script hangs):
       ```bash
-      bun run ~/.claude/skills/people-enrich/scripts/apply-person-update.ts \
+      timeout 15s bun run ~/.claude/skills/people-enrich/scripts/apply-person-update.ts \
         --source transcript \
         --handle <person-file-stem> \
         --report /tmp/productivity-sync-enrichment-<stem>.json \
         --output /tmp/productivity-sync-enrichment-<stem>.preview.md
       ```
-   4. If any previews were generated, ask the user once per meeting before any live write: "Transcript speaker enrichment: preview generated for N people from <meeting title>. Apply?" For each approved person, run `apply-person-update.ts --write`. Do **not** pass `--create-if-missing` for transcript speaker matches. If the user skips, keep the meeting note and continue.
+   4. If any previews were generated, ask the user once per meeting before any live write: "Transcript speaker enrichment: preview generated for N people from <meeting title>. Apply?" For each approved person, run `timeout 15s bun run apply-person-update.ts --write` (timeout wrapper applies to the live `--write` call as well). Do **not** pass `--create-if-missing` for transcript speaker matches. If the user skips, keep the meeting note and continue.
    5. Collect enrichment stats: `proposed`, `applied`, `skipped`, `unmatched` count, `ambiguous` names list.
 
-   **Graceful skip (R6):** If `apply-person-update.ts` is not found at the expected path, or any call exits non-zero, log one line: `"transcript enrichment skipped for <person>: <reason>"`. Continue without blocking meeting note creation or action item extraction.
+   **Graceful skip:** If `apply-person-update.ts` is not found at the expected path, or any call exits non-zero, log one line: `"transcript enrichment skipped for <person>: <reason>"`. Continue without blocking meeting note creation or action item extraction. If a `timeout 15s` wrapper fires before exit, treat it identically to non-zero exit: log `transcript enrichment skipped for <person>: timed out` and continue.
 
    **If the `<transcript>` block is absent or empty**, skip enrichment silently, no error.
 
@@ -667,11 +671,17 @@ If a forge name fails the allowlist, pre-flight emits a specific config-load err
 At config-load, the `base_url` value must satisfy BOTH:
 
 1. **Regex** — `^https://[a-z0-9.-]+(\:[0-9]+)?(/.*)?$` (HTTPS-only; `http://` is rejected; no other schemes).
-2. **Address restriction** — the host must NOT resolve to RFC1918 ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) or link-local (`169.254.0.0/16`).
+2. **Address restriction**: the host must NOT resolve to ANY of these five address categories:
+   - **RFC1918 private ranges**: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+   - **IPv4 link-local**: `169.254.0.0/16`
+   - **Loopback**: `127.0.0.0/8` (IPv4) and `::1` (IPv6)
+   - **All-interfaces**: `0.0.0.0`
+   - **IPv6 link-local**: `fe80::/10`
+   - **IPv6 unique local address (ULA)**: `fc00::/7`
 
 This validation fires at schema-load even though the stub adapter makes no REST calls — the load-bearing validation surface is here so the follow-up real adapter inherits a validated `base_url`. If validation fails, pre-flight emits:
 ```
-❌ git.<name> — config error (base_url must be HTTPS, no RFC1918)
+❌ git.<name>: config error (base_url must be HTTPS, no RFC1918/loopback/link-local/ULA/all-interfaces)
 ```
 
 **Auth modes:**
@@ -727,28 +737,59 @@ After pre-flight passes, before each forge's query loop, branch on `forge.type` 
 
 Prerequisites: `~/.config/side-quest/bitbucket-pr/config.yaml` exists; `forge.repo-dir` resolves to a local clone with a Bitbucket remote. Both checked in pre-flight.
 
-The plugin root is auto-detected from the installed plugin cache:
+The plugin root is auto-detected from the installed plugin cache. `FORGE_REPO_DIR` is read from `.productivity.yml` (the `git.<forge-name>.repo-dir` field) and then `~`-expanded into `REPO_DIR`. Bind to a real bash variable before parameter expansion so the `~` substitution operates on a variable name, not on a literal placeholder string.
+
 ```bash
+# FORGE_NAME is the current forge key from .productivity.yml's git: map (e.g. "bitbucket-monash").
 PLUGIN_ROOT=$(find ~/.claude/plugins/cache/side-quest-engineering/bitbucket-pr -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -1)
 BB_API="$PLUGIN_ROOT/scripts/bb-api.ts"
-REPO_DIR="${<forge.repo-dir>/#\~/$HOME}"
+FORGE_REPO_DIR=$(yq ".git[\"$FORGE_NAME\"][\"repo-dir\"]" .productivity.yml)
+REPO_DIR="${FORGE_REPO_DIR/#\~/$HOME}"
 ```
+
+If `yq` is unavailable, substitute the equivalent extraction (Python `yaml.safe_load`, `bun run` with `js-yaml`, etc.). The constraint is: `FORGE_REPO_DIR` must hold the resolved YAML string before the `${VAR/#\~/$HOME}` line runs. Do not write `FORGE_REPO_DIR="<forge.repo-dir>"`: that assigns a literal placeholder string and breaks the `~` substitution.
 
 > **Important:** Use `find` not `ls -d` for `PLUGIN_ROOT`. On systems where `ls` is aliased to `eza` or colour-enabled, `ls -d` injects ANSI escape codes into the variable, silently corrupting the path and causing `bun run` to fail with "Module not found" even when the file exists.
 
-Query open PRs (equivalent to the GitHub `pr-list` query):
+Each `bun run` invocation is wrapped with `timeout 30s` and a non-zero exit-code check. stderr is captured separately so error text never enters the JSON parsing surface. On non-zero exit or timeout, set the forge's cursor `ok: false`, log the scrubbed stderr to the report (per R9 token-scrubbing rule), and skip this forge for the current run.
+
+`PR_ID` is bound by iterating each entry in the `pr-list OPEN` output before any `pr-statuses` call. The binding step is shown explicitly in the third snippet below. Quote the variable on use to defend against future format changes (PR ids are integers today; quoting closes a defense-in-depth gap).
+
+Consolidated wrapper pattern (used for all three call sites below):
 ```bash
-cd "$REPO_DIR" && bun run "$BB_API" pr-list OPEN 2>&1
+# Generic pattern: invoke bb-api with timeout + separated stderr + exit-code check.
+# Assumes execution inside the per-forge query loop so 'continue' skips remaining work for this forge.
+BB_ERR=$(mktemp)
+BB_OUT=$(cd "$REPO_DIR" && timeout 30s bun run "$BB_API" <subcommand> <args> 2>"$BB_ERR")
+BB_RC=$?
+if [ $BB_RC -ne 0 ]; then
+  # Scrub stderr per R9 token-scrubbing rule before logging
+  SCRUBBED=$(cat "$BB_ERR" | sed -E 's/(BITBUCKET_TOKEN|BITBUCKET_USER|GITHUB_TOKEN)=[^ ]*/\1=<redacted>/g')
+  # Set cursor ok: false, log SCRUBBED to report, skip this forge for the current run
+  rm -f "$BB_ERR"
+  continue  # skip this forge's query loop
+fi
+rm -f "$BB_ERR"
+# Parse "$BB_OUT" as JSON
 ```
 
-Query recently merged PRs (for "merged, still in-flight" drift bucket):
+Query open PRs (equivalent to the GitHub `pr-list` query) - apply the wrapper pattern, then capture the parsed result for downstream iteration:
 ```bash
-cd "$REPO_DIR" && bun run "$BB_API" pr-list MERGED 2>&1
+OPEN_PRS=$(cd "$REPO_DIR" && timeout 30s bun run "$BB_API" pr-list OPEN 2>/tmp/bb-api-err.log)
 ```
 
-For each open PR, check CI status:
+Query recently merged PRs (for "merged, still in-flight" drift bucket) - apply the wrapper pattern:
 ```bash
-cd "$REPO_DIR" && bun run "$BB_API" pr-statuses <id> 2>&1
+MERGED_PRS=$(cd "$REPO_DIR" && timeout 30s bun run "$BB_API" pr-list MERGED 2>/tmp/bb-api-err.log)
+```
+
+For each open PR, check CI status. Bind `PR_ID` from the `pr-list OPEN` payload, then invoke `pr-statuses` once per id:
+```bash
+# Iterate ids from the OPEN PR list (response is a JSON array of PR objects with an integer `id` field).
+for PR_ID in $(echo "$OPEN_PRS" | jq -r '.[].id'); do
+  STATUS=$(cd "$REPO_DIR" && timeout 30s bun run "$BB_API" pr-statuses "$PR_ID" 2>/tmp/bb-api-err.log)
+  # Apply the wrapper pattern's exit-code check around the call above before parsing $STATUS.
+done
 ```
 
 Filter to PRs `updated >= cursor.git_forges.<forge-name>.last_sync - 1h` using the `updated` field on each PR. Fallback if no cursor or `ok: false`: last 7 days.
@@ -870,9 +911,12 @@ If no sources are configured or available (no `git:` block, or all forges failed
 
 After all connector steps in Step 2 complete, run a reconciliation pass on `cursor.commitments`:
 
+0. **Collapse cross-source duplicates:** Before reconciliation, scan `cursor.commitments` for entries with `status: open` that fuzzy-match by `verb_object`. Match rule: at least 3 meaningful keyword tokens overlap between two entries' `verb_object` fields (meaningful tokens exclude stop words: the, a, to, for, in, on, by, with). When a match is found, keep the earliest `extracted_at` entry and merge the others' `source` paths into a `sources: string[]` field on the surviving entry. Mark the duplicates with `status: dismissed`, `dismissed_at: now`, `dismissed_reason: "duplicate of <surviving-id>"`. Surface the collapse in the Step 9 report: `Commitments: N cross-source duplicates collapsed.`
+
 1. **Reconcile against TASKS.md done items:** Scan the `✅ Done` section of TASKS.md for entries that match open commitments. Exact match: the task's text contains the commitment's `verb_object`. If matched exactly, set `status: resolved`, `resolved_at: now` without asking. Fuzzy match: at least 3 meaningful keyword tokens overlap between the commitment's `verb_object` and the done-section entry. Meaningful tokens exclude stop words (the, a, to, for, in, on, by, with). Present fuzzy matches to the user for confirmation before resolving.
 
 2. **Reconcile against recently-closed Jira tickets:** Use this run's project-tracker results (closed/done tickets in the fetch window). Match open commitments against ticket summaries using the same 3-token fuzzy rule. Require user confirmation before resolving fuzzy Jira matches.
+   - If project-tracker did not complete successfully in this run, skip this sub-step and append to the Step 9 report: "Commitment reconciliation: Jira matching skipped (project-tracker failed)."
 
 3. **Dropped balls:** After reconciliation, collect open commitments where (`deadline` exists AND `now > deadline + 1 day`) OR (`deadline` is absent AND `now - extracted_at > 5 days`), and where `deferred_until` is absent or in the past. Dependencies never appear in this section. If any exist, render a `## Dropped balls` section at the **top of the Step 9 report** (before triage pass). For deadline-based entries, use `"Dropped ball (deadline passed): <text> (from <source>)"`. For age-based entries, use `"Dropped ball (N days): <text> (from <source>)"`. Offer three options via `AskUserQuestion`:
    - **Mark resolved** — sets `status: resolved`, `resolved_at: now`

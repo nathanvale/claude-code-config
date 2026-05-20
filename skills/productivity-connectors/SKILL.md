@@ -99,7 +99,7 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 
 | Connector | Tools |
 |-----------|-------|
-| `notion` | `notion-search`, `notion-fetch`, `notion-query-database-view` |
+| `notion` | `mcp__notion__notion-search`, `mcp__notion__notion-fetch`, `mcp__notion__notion-query-database-view` |
 | `confluence` | `mcp__mcp-atlassian__confluence_search`, `mcp__mcp-atlassian__confluence_get_page` |
 
 **Common patterns:**
@@ -134,7 +134,7 @@ transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion c
 |-----------|-------|
 | `slack` | Slack MCP tools |
 
-**Note:** Chat scanning is `--deep` mode only. Not included in default sync due to volume.
+**Note:** Default sync when configured (24h window). Expanded to 7d in `--deep` mode.
 
 ## Messages
 
