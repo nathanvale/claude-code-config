@@ -459,9 +459,15 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
 
 4. **Match transcriptions to events** -- Match by time alignment: extract the time from the transcription title (Notion auto-transcripts use `@Day HH:MM (GMT+TZ)` titles) and match to the calendar event whose start time is closest (within 15 minutes). Confirm by checking that the raw transcript content mentions keywords from the calendar event summary.
 
+   Once matched, extract the **authoritative participant list** from the calendar event's `attendees` array (filter out room resources and declined invitees). This is the ground truth for who was in the meeting. The Notion-generated title and transcript speaker names are unreliable for this — Notion AI names the page from the meeting topic, not the participants, so a 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Calendar attendees do not have this problem.
+
+   If calendar is ❌ (no match found), fall back to transcript speaker names with an explicit warning in the meeting note: `<!-- attendees: unverified — calendar unavailable, derived from transcript speakers -->`.
+
 5. **Create meeting notes** -- For each matched event, fetch the **raw transcript** content:
    - If `transcriptions: notion`: call `mcp__notion__notion-fetch` with `include_transcript: true` on the page ID. **Use only the `<transcript>` block — never the `<summary>` block.** The summary is Notion AI generated and unreliable (name misattributions, missing context). The raw transcript is the authoritative source.
-   - Read the project's meeting template (typically `Templates/meeting.md`) and create `docs/meetings/YYYY-MM-DD-slug.md`. Fill frontmatter from calendar event data and content from raw transcript. Resolve attendee emails to full names using `memory/glossary.md` and `memory/people/`, with CLAUDE.md only as a fallback pointer surface.
+   - Read the project's meeting template (typically `Templates/meeting.md`) and create `docs/meetings/YYYY-MM-DD-slug.md`.
+   - **Frontmatter title:** use the calendar event `summary` field, not the Notion page title. Notion auto-titles pages as `@Day HH:MM` or generates a title from the transcript topic — neither is reliable as a meeting name.
+   - **Frontmatter attendees:** use the calendar attendee list from step 4, resolved to full names via `memory/glossary.md` and `memory/people/`. Never derive the attendees list from the Notion title or transcript speaker names.
    - Store the source Notion page ID in the `transcription:` frontmatter field — used to skip reprocessing on subsequent runs.
 
    **After the meeting note file is confirmed written**, run the transcript enrichment pass before action-item extraction:
@@ -577,6 +583,7 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ Blocking meeting note creation or action item extraction on enrichment failure — graceful skip applies; log the reason and continue.
 - ❌ Creating a people-note stub from transcript speaker matching — transcript enrichment can only propose updates to **existing** unambiguous people notes. Never pass `--create-if-missing` for transcript speaker matches.
 - ❌ Applying first-name matches when more than one people-note has that first name — ambiguous first-name matches are reported, never written.
+- ❌ **Using the Notion page title or transcript speaker names to determine who was in a meeting.** Notion AI generates the page title from the meeting *topic*, not from the *participants*. A 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Always use the calendar event attendees list as the authoritative participant source. If calendar is unavailable, flag the attendees as unverified in the meeting note.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
 - Window: `updated >= cursor.project-tracker.last_sync - 1h` in the JQL (fallback: `updated >= -7d`). This catches transitions you missed (Ready → Done overnight) without re-reading the entire backlog.
