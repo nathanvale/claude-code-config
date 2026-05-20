@@ -100,12 +100,33 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 | Connector | Tools |
 |-----------|-------|
 | `notion` | `notion-search`, `notion-fetch`, `notion-query-database-view` |
-| `confluence` | `searchConfluenceUsingCql`, `getConfluencePage` |
+| `confluence` | `mcp__mcp-atlassian__confluence_search`, `mcp__mcp-atlassian__confluence_get_page` |
 
 **Common patterns:**
-- Meeting transcription search and retrieval for meeting notes sync
 - Recently modified docs for `--deep` mode
-- Project documentation lookup
+- Project documentation and page lookup
+- Do NOT use this connector for meeting transcriptions — see `transcriptions:` below
+
+## Transcriptions
+
+Optional. Declares where meeting transcripts live when it differs from the knowledge base.
+Most projects where Zoom auto-transcribes into Notion need this split.
+
+```yaml
+transcriptions: notion                                           # notion | confluence | none
+transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion collection ID for Meetings DB
+```
+
+| Connector | Tools |
+|-----------|-------|
+| `notion` | `mcp__notion__notion-search` (find) + `mcp__notion__notion-fetch` with `include_transcript: true` (retrieve raw) |
+| `confluence` | `mcp__mcp-atlassian__confluence_search` + `mcp__mcp-atlassian__confluence_get_page` |
+
+**Critical rules:**
+- Always fetch with `include_transcript: true` — this returns the raw Zoom transcript
+- **Never use the Notion AI `<summary>` block** — it is generated and unreliable. The raw `<transcript>` block is the authoritative source
+- If `transcriptions-db:` is set, scope the search to that collection ID — prevents pulling transcripts from other teams in the same Notion workspace
+- Filter by `created_date_range` matching the sync window to avoid reprocessing old transcripts
 
 ## Chat
 

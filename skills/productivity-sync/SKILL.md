@@ -58,7 +58,7 @@ For each connector in `.productivity.yml`:
 | `google-calendar` / `gmail` | Confirm `gcal_*` / `gmail_*` MCP tool is loaded; if not → ❌ |
 | `gog` | `which gog >/dev/null` AND `<connector>-account` set in `.productivity.yml` → ❌ if either fails |
 | `jira` | Confirm `mcp__*jira*search*` tool is loaded; if not → ❌ |
-| `notion` / `confluence` | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
+| `notion` / `confluence` (knowledge-base or transcriptions) | Confirm `mcp__*notion*` / `mcp__*confluence*` tool is loaded; if not → ❌ |
 | `slack` | Confirm `mcp__*slack*` tool is loaded; if not → ❌ |
 | `teams` (via notion-search) | Same probe as `notion`; if missing → ❌ |
 | `imessage` | Confirm `mcp__*imessage*sync_archive` OR `~/.claude/skills/imessage-reader/scripts/query-imessage.ts` exists; if neither → ❌ |
@@ -354,7 +354,9 @@ For each message, decide if it carries a directive or commitment worth surfacing
 - Full AI analysis of returned message threads for missed action items
 - Use `search_messages` for targeted follow-up queries on flagged threads
 
-**Meeting notes** (if knowledge base configured):
+**Meeting notes** (if `transcriptions:` configured — falls back to `knowledge-base:` if not):
+
+**Connector routing:** Read `transcriptions:` from `.productivity.yml` first. If set, use that connector and tool. If absent, fall back to `knowledge-base:`. For most projects where Zoom auto-transcribes into Notion, `transcriptions: notion` + `transcriptions-db: collection://...` is the correct setup — Confluence is for doc lookup, not transcripts.
 
 **Persistence is mandatory.** Every raw meeting transcript in window must produce a `docs/meetings/YYYY-MM-DD-slug.md` file in the owning repo (or be explicitly skipped to a non-owning repo) *before* any signals from that transcript are extracted into TASKS.md or memory. The transcript is the canonical source — losing it because "I already pulled the action items" is a contract violation, even if the resulting TASKS.md edits look complete.
 
@@ -362,13 +364,19 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
 
 1. **Get calendar events (optional enrichment)** -- If calendar is available, query the past 2 days of events and filter out declined / all-day items. Used for attendee resolution and title matching. If calendar is ❌, skip this step and treat every transcript in window as a candidate.
 
-2. **Check for existing notes** -- Glob `docs/meetings/YYYY-MM-DD-*.md` for each date. Skip any event that already has a notes file (match by date + slug, or by checking the `transcription` frontmatter field for the same knowledge base page ID).
+2. **Check for existing notes** -- Glob `docs/meetings/YYYY-MM-DD-*.md` for each date. Skip any event that already has a notes file (match by date + slug, or by checking the `transcription` frontmatter field for the same Notion page ID).
 
-3. **Find transcriptions** -- Search the knowledge base for meeting transcriptions created on the same dates. Reference the **productivity-connectors** skill for knowledge base tool names.
+3. **Find transcriptions** -- Search the transcriptions connector (see routing above) for meeting transcriptions created within the sync window:
+   - If `transcriptions: notion` and `transcriptions-db:` is set: call `mcp__notion__notion-search` scoped to `data_source_url: <transcriptions-db value>` with `created_date_range` matching the window. This prevents pulling transcripts from other teams in the same Notion workspace.
+   - If `transcriptions: notion` and no `transcriptions-db:`: call `mcp__notion__notion-search` with a title/content query + date filter. Less precise — may surface other teams' meetings.
+   - If `transcriptions: confluence`: use `mcp__mcp-atlassian__confluence_search` with CQL date filter.
 
-4. **Match transcriptions to events** -- Match by time alignment: extract the time from the transcription title and match to the calendar event whose start time is closest (within 15 minutes). Confirm by checking that the transcription content mentions keywords from the calendar event summary.
+4. **Match transcriptions to events** -- Match by time alignment: extract the time from the transcription title (Notion auto-transcripts use `@Day HH:MM (GMT+TZ)` titles) and match to the calendar event whose start time is closest (within 15 minutes). Confirm by checking that the raw transcript content mentions keywords from the calendar event summary.
 
-5. **Create meeting notes** -- For each matched event, fetch the full transcription content. Read the project's meeting template (typically `Templates/meeting.md`) and create `docs/meetings/YYYY-MM-DD-slug.md`. Fill frontmatter from calendar event data and content from transcription. Resolve attendee emails to full names using `memory/glossary.md` and `memory/people/`, with CLAUDE.md only as a fallback pointer surface.
+5. **Create meeting notes** -- For each matched event, fetch the **raw transcript** content:
+   - If `transcriptions: notion`: call `mcp__notion__notion-fetch` with `include_transcript: true` on the page ID. **Use only the `<transcript>` block — never the `<summary>` block.** The summary is Notion AI generated and unreliable (name misattributions, missing context). The raw transcript is the authoritative source.
+   - Read the project's meeting template (typically `Templates/meeting.md`) and create `docs/meetings/YYYY-MM-DD-slug.md`. Fill frontmatter from calendar event data and content from raw transcript. Resolve attendee emails to full names using `memory/glossary.md` and `memory/people/`, with CLAUDE.md only as a fallback pointer surface.
+   - Store the source Notion page ID in the `transcription:` frontmatter field — used to skip reprocessing on subsequent runs.
 
 6. **Extract action items** -- Collect action items from all newly created meeting notes. These feed into the action item write-back below (substep 7) and the report (Step 9).
 
@@ -425,12 +433,13 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 **Anti-patterns specific to this substep:**
 
 - ❌ Writing action items directly without user confirmation
-- ❌ Treating Notion AI summary's action-item block as authoritative — verify against raw transcript per `feedback_use_raw_notion_transcripts.md`
+- ❌ **Using the Notion AI `<summary>` block as the transcript source** — always fetch with `include_transcript: true` and use the `<transcript>` block. The AI summary misattributes speakers, omits context, and fabricates action items. This is a hard rule, not a preference.
 - ❌ Re-extracting action items from already-processed meeting notes on subsequent runs (use cursor + meeting note's `transcription:` frontmatter ID to skip)
 - ❌ Adding other people's actions to the user's TASKS.md (they go in Dependencies / `🔗 I'm waiting on`)
 - ❌ Filing personal-life items into work repos
 - ❌ **Extracting signals from a transcript without persisting the meeting note first** — even if every signal lands in TASKS.md/memory correctly, the source transcript is now invisible to future syncs (the cursor advances past it). Always write `docs/meetings/YYYY-MM-DD-slug.md` *before* extraction, and never let "the user said skip" mean "skip the file, just keep the signals." Skipping = skip extraction, keep file.
-- ❌ Skipping meeting-note creation because calendar is unavailable — the knowledge base alone is sufficient. Calendar is an enrichment layer (attendee resolution, event title matching), not a prerequisite.
+- ❌ Skipping meeting-note creation because calendar is unavailable — the transcriptions connector alone is sufficient. Calendar is an enrichment layer (attendee resolution, event title matching), not a prerequisite.
+- ❌ Searching `knowledge-base:` for transcripts — transcripts live in `transcriptions:`. Confluence is for doc/page lookup only. Searching Confluence for meeting transcripts will return nothing useful.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
 - Window: `updated >= cursor.project-tracker.last_sync - 1h` in the JQL (fallback: `updated >= -7d`). This catches transitions you missed (Ready → Done overnight) without re-reading the entire backlog.
