@@ -921,3 +921,22 @@ Present grouped by confidence. High-confidence items offered to add directly; lo
   python3 /tmp/decode-email.py /path/to/email.json
   ```
 - For most sync purposes, the email subject + sender is sufficient to triage action items — only decode the body when the subject is ambiguous
+
+### Email search — query is a positional argument, not a flag
+
+`gog email search` takes the Gmail query as a **positional argument**, not a `--query` flag.
+
+- **NEVER** write: `gog email search --account ... --query "is:unread"` — exits code 2 with "unknown flag --query", produces no output, and looks identical to an auth or rate-limit failure
+- **ALWAYS** write: `gog email search --account ... --client ... --json "<query>"`
+
+Correct examples:
+```bash
+# Unread emails since a date
+gog email search --account nathan.vale@monash.edu --client monash --json "is:unread after:2026/05/18"
+
+# All unread
+gog email search --account nathan.vale@monash.edu --client monash --json "is:unread" --limit 15
+
+# Read a specific thread body
+gog email get --account nathan.vale@monash.edu --client monash --json <threadId>
+```
