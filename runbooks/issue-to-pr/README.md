@@ -106,7 +106,7 @@ findings are evidence only. Before user confirmation, the Orchestrator may
 request a read-only, proposal-only Builder dispatch to produce one bounded
 candidate patch-batch from confirmed ledger state and code evidence. The
 Orchestrator validates that candidate with
-`decompose.ts --patch-proposal <ledger-path>` and asks the user to confirm the
+`decompose.ts <patch-proposal-path> --patch-proposal <ledger-path>` and asks the user to confirm the
 files, dependencies, execution mode, tests, and rationale before appending it
 to `## Batches`. Builder and reviewer output never authorizes the patch
 contract by itself.
