@@ -129,6 +129,21 @@ follow the matching skill body directly and use the host's available agent,
 tool, or persona primitives to satisfy the same contract. Record the fallback
 in Notes only when it changes observable workflow behavior.
 
+### Helper Execution Context
+
+Run every `bun ~/.claude/runbooks/issue-to-pr/decompose.ts ...` helper command
+from the target repo root unless a step explicitly says otherwise. The helper
+intentionally reads the process working directory: repo-relative file checks
+use it to reject directory paths and stale paths, and ledger/finding validation
+uses the active git repository to verify `builder_commits` and fixed
+`commit <sha>` resolutions exist and are reachable from `HEAD`.
+
+Running the helper from the installed runbook directory, a home directory, or a
+different checkout can validate the same ledger against the wrong git
+repository. Keep the command shape stable and change directory to the target
+repo root before invoking it; do not add a separate repo-root flag unless this
+contract proves insufficient.
+
 ### Issue-to-PR
 
 ```

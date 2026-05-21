@@ -248,6 +248,12 @@ final_verdict. Recompute the three digests with:
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
 
+Run every helper command from the target repo root. The helper's path and git
+checks are intentionally bound to the current working directory:
+repo-relative `files` are validated against the active checkout, and
+`builder_commits` plus fixed `commit <sha>` resolutions must exist and be
+reachable from `HEAD` in the active target git repository.
+
 ### Stage 1: `pick-issue`
 
 **Inputs:** `{issue-number}` (required), `{target-repo}` (optional, defaults
@@ -409,6 +415,11 @@ working tree clean.
 ### Stage 3: `decompose`
 
 **Inputs:** Plan document from stage 2; AC list in ledger.
+
+**Helper context:** all helper commands in this stage must run from the target
+repo root. This keeps commit reachability, repo-relative path validation, and
+ledger checks pointed at the target repository rather than the installed
+runbook checkout.
 
 **Actions:**
 
