@@ -48,9 +48,41 @@ No .productivity.yml found. Run /productivity-setup first to configure connector
 ```
 
 **Flag mutual exclusion:**
+- See **Brief Mode** for `--brief` compatibility rules.
+- `--deep` and `--full` are compatible: `--full` resets cursor state (wide-window invalidation), `--deep` expands connector scope to chat / sent email / docs. Both flags can be passed together.
+
+## Brief Mode
+
+`--brief` is read-only meeting preparation. It builds the next 24 hours of pre-meeting briefs from calendar plus already persisted local context without consuming any external sync window.
+
+**Flag compatibility:**
 - `--brief` and `--deep` are mutually exclusive: if both are passed, emit `"--brief and --deep cannot be used together"` and exit without running.
 - `--brief` and `--full` are mutually exclusive: if both are passed, emit `"--brief and --full cannot be used together"` and exit without running. (`--full` resets cursor state; `--brief` is read-only preparation.)
-- `--deep` and `--full` are compatible: `--full` resets cursor state (wide-window invalidation), `--deep` expands connector scope to chat / sent email / docs. Both flags can be passed together.
+
+**Pre-flight contract:**
+- Probe **calendar** normally.
+- Probe `transcriptions` for cheap tool/auth awareness only. Do not search, fetch, inspect transcript metadata, or touch transcript content.
+- Show all other connectors as `⏭ skipped (brief mode)` in the pre-flight table. Skipped connectors are not ❌, not errors, and do not prompt.
+- If calendar is ❌, exit clearly with no prompt: `"Calendar unavailable, cannot build Brief Run. Run full sync or fix calendar connector."`
+- If transcriptions is ❌, show it as `⚠️ transcriptions (...) - unavailable, ignored in brief mode` and continue.
+- If calendar is ✅, continue after pre-flight regardless of skipped connectors and transcriptions warning state.
+
+**Execution contract:**
+- Run **calendar only** after pre-flight.
+- Build pre-meeting briefs from calendar plus already persisted local context (`TASKS.md`, `memory/`, and existing `docs/meetings/`).
+- Do not search or fetch transcriptions, inspect transcript metadata, create meeting notes, extract transcript actions, enrich people notes, or run any other connector.
+
+**Read-only guarantee:**
+- Do not advance `last_sync`, append to `run_history`, update `ok`, update `error`, mutate `consecutive_failures`, write commitments, or mutate pending items for any persisted cursor entry.
+- Do not create a `transcriptions` cursor entry. `transcriptions` is source configuration, not brief-mode cursor state.
+
+**Output contract:**
+- Render only the pre-meeting brief section from Step 2.
+- Suppress triage pass, dropped balls, git drift, email/Jira summaries, CLAUDE.md health check, stats line, and cursor advancement note.
+- After the brief section, check the stale-cursor trailer. Count persisted non-brief cursor entries where `last_sync` is absent or `now - last_sync > 4 hours`. Do not count `calendar`, because brief mode probes it normally, and do not count `transcriptions`, because it is connector configuration rather than persisted cursor state. Count `email`, `meetings`, `project-tracker`, `chat`, `messages`, and each git forge independently.
+- If count = 0, suppress the trailer. If count > 0, append one line:
+  - Singular: `"1 connector not checked. Run full sync when you can."`
+  - Plural: `"{N} connectors not checked. Run full sync when you can."`
 
 ## Pre-flight (30s connector check)
 
@@ -89,14 +121,11 @@ Proceeding with 3 of 6 declared connectors. Continue? [Y/n]
 
 **Rules:**
 
-- If `--brief` was passed, probe **calendar** normally and probe `transcriptions` as cheap informational tool/auth presence only. The transcriptions probe must not search, fetch, or inspect transcript metadata. All other connectors are shown as `⏭ skipped (brief mode)` in the pre-flight table. This is not ❌, not an error, and does not prompt for skipped connectors.
-- If `--brief` was passed and `calendar` is ❌, exit clearly with no prompt: `"Calendar unavailable, cannot build Brief Run. Run full sync or fix calendar connector."`
-- If `--brief` was passed and `transcriptions` is ❌, show it as `⚠️ transcriptions (...) - unavailable, ignored in brief mode` and continue without prompting.
-- If `--brief` was passed and calendar is ✅, continue after pre-flight regardless of skipped connectors and transcriptions warning state.
-- For non-brief runs, if **≥1 probed connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift; the user should consciously accept reduced coverage. Brief Run handles calendar and transcriptions failures with the two rules above.
+- If `--brief` was passed, follow the **Brief Mode** pre-flight contract above.
+- For non-brief runs, if **≥1 probed connector is ❌**, pause and ask the user before proceeding (single y/n prompt). Reason: silent partial syncs hide drift; the user should consciously accept reduced coverage. Brief Mode handles calendar and transcriptions failures without prompting.
 - If **all declared connectors are ✅**, print the table and continue without prompting.
 - If `--full` was passed, still run pre-flight — the cursor reset doesn't fix a broken connector.
-- For non-brief runs, persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing. Brief Run does not persist pre-flight results.
+- For non-brief runs, persist the pre-flight result into the cursor's `connectors.<name>.{ok,error}` so the next run knows last-known state without re-probing. Brief Mode does not persist pre-flight results.
 - **Repeat-failure escalation**: for non-brief runs, when a connector has been ❌ for **3+ consecutive runs**, append a `consecutive_failures: N` count to its cursor entry and surface it in the pre-flight table as `❌ <connector> (Nth consecutive run)`. After 3 runs, also add a one-line recovery hint to the pre-flight prompt (e.g. "M365 has been down 3 runs. Consider running `claude mcp list` to confirm the Graph MCP is loaded"). The prompt itself stays terse; the hint is a single line added beneath the table only when the threshold is hit. Don't repeat it every run after that. Keep nagging signal-to-noise high.
 - Keep it **terse**: one line per connector, no recovery suggestions in the table. Recovery advice belongs in the final report, not here (exception: the repeat-failure hint above).
 
@@ -264,7 +293,7 @@ Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry ru
 
 Read `.productivity.yml` and sync each declared connector. Reference the **productivity-connectors** skill for tool name mappings. If a declared connector's MCP tool is unavailable, skip with a note.
 
-**`--brief` mode: Brief Run gating:** When `--brief` is active, run **calendar only** after pre-flight and build the pre-meeting brief from calendar plus already persisted local context (`TASKS.md`, `memory/`, and existing `docs/meetings/`). Transcriptions are pre-flight awareness only: do not search, fetch, inspect transcript metadata, create meeting notes, extract transcript actions, or enrich people notes. All other connectors are skipped silently. No error, no prompt. The pre-meeting brief section is the only output (Step 9 is gated accordingly). `--brief` is read-only: do not advance `last_sync`, append to `run_history`, update `ok`, or mutate `consecutive_failures` for any persisted cursor entry. Do not create a `transcriptions` cursor entry during brief mode; transcriptions is probe-only source configuration. Rationale: brief mode prepares from local context but does not consume any external sync window. After rendering the pre-meeting briefs, check the stale-cursor trailer (see Step 9 `--brief` report section).
+**`--brief` mode:** Follow the **Brief Mode** execution contract above. The calendar substep below defines the pre-meeting brief content rendered in brief output.
 
 **Calendar** (if configured):
 - Window: `since = max(cursor.calendar.last_sync - 1h, now - 2d)`, plus next 3 days. Cursor narrows the past side; future is always +3d.
@@ -1064,14 +1093,7 @@ Include in the report summary (Step 9).
 
 ### 9. Report
 
-**`--brief` mode report:** When `--brief` is active, render **only** the pre-meeting brief section (see "Pre-meeting prep brief" in Step 2). Suppress all of the following: triage pass, git drift, email/Jira summaries, CLAUDE.md health check, stats line, and cursor advancement note.
-
-After the brief section, check the stale-cursor trailer: count persisted non-brief cursor entries where `last_sync` is absent or `now - last_sync > 4 hours`. Do not count `calendar`, because brief mode probes it normally, and do not count `transcriptions`, because it is connector configuration rather than persisted cursor state. Count `email`, `meetings`, `project-tracker`, `chat`, `messages`, and each git forge independently. Missing `last_sync` counts as stale. If count > 0, append one line:
-
-- Singular: `"1 connector not checked. Run full sync when you can."`
-- Plural: `"{N} connectors not checked. Run full sync when you can."`
-
-Suppress the trailer entirely if count = 0 (all non-brief connectors are fresh).
+**`--brief` mode report:** Follow the **Brief Mode** output contract above: render only the pre-meeting brief section (see "Pre-meeting prep brief" in Step 2), suppress normal sync report sections, and append the stale-cursor trailer only when applicable.
 
 Example `--brief` output:
 ```
