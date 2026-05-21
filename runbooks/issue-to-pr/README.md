@@ -38,10 +38,11 @@ This runbook reads three things from a GitHub issue:
    headings containing "must", "should", or "requirement". If none match,
    stage 1 prompts the user to paste a list inline OR draft one from the
    issue's prose. **The extracted list is always presented for user confirm
-   before stage 2 begins.** The ledger frontmatter records the extraction
-   source (`gold-standard`, `variant-heading`, `loose-checkbox-block`,
-   `numbered-requirements`, `pasted`, or `drafted`) so later audits can
-   weigh confidence.
+   before stage 2 begins.** After confirmation, the ledger frontmatter records
+   both the extraction source (`gold-standard`, `variant-heading`,
+   `loose-checkbox-block`, `numbered-requirements`, `pasted`, or `drafted`)
+   and `ac_confirmation_status: confirmed` with the matching `ac_digest`, so
+   resumed turns do not rely on transcript memory.
 
 2. **Blocked by.** Optional. If present, stage 1 parses `#N` references and
    refuses to run if any blocker is still open. Override by adding a
@@ -58,8 +59,9 @@ Each batch carries an `execution_mode` because execution discipline is part of
 the batch contract, not an improvisation left to Builder. `/ce-plan` proposes
 the mode, `decompose.ts` validates the machine-checkable shape, the stage 3
 user gate confirms the DAG and modes, and the ledger records the confirmed
-contract. Builder follows the ledger or fail-stops if the confirmed contract is
-unsafe or stale after reading the files.
+contract plus `batch_contract_confirmation_status: confirmed`. Builder follows
+the ledger or fail-stops if the confirmed contract is unsafe or stale after
+reading the files.
 
 Allowed modes:
 
@@ -145,6 +147,21 @@ repository. Keep the command shape stable and change directory to the target
 repo root before invoking it; do not add a separate repo-root flag unless this
 contract proves insufficient.
 
+### Confirmation State
+
+After the ledger exists, resumed turns should start with:
+
+```
+bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>
+```
+
+The helper reports `acceptance_criteria`, `batch_contract`, and `digests` as
+`pending`, `confirmed`, `stale`, or `blocked`. The states are derived from
+durable ledger evidence: confirmation status fields, stored digest values, the
+current AC section, the current or regenerable batch contract, and Stage 3
+Contract Review blockers. A `stale` digest state routes back to confirmation
+before Builder or ship work continues.
+
 ### Issue-to-PR
 
 ```
@@ -200,10 +217,13 @@ At the start of every turn:
 1. Re-read `issue-to-pr.md` (the workflow runbook).
 2. Re-read the per-issue ledger at
    `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`.
-3. Determine current stage from ledger frontmatter `status` + ledger contents.
-4. Execute the current stage per `issue-to-pr.md`.
-5. Update ledger state.
-6. Echo ledger frontmatter + batches YAML + findings data + findings table at
+3. If the ledger exists, run `--confirmation-state <ledger-path>` and route
+   pending, stale, or blocked gates before relying on ACs, batches, or
+   digests.
+4. Determine current stage from ledger frontmatter `status` + ledger contents.
+5. Execute the current stage per `issue-to-pr.md`.
+6. Update ledger state.
+7. Echo ledger frontmatter + batches YAML + findings data + findings table at
    the end of the turn.
 
 Each turn does one thing visible: advance a stage, commit one ledger lifecycle
@@ -306,10 +326,13 @@ the template at [issue-N-ledger.template.md](issue-N-ledger.template.md).
 
 Three sections plus frontmatter:
 
-1. **Frontmatter** - issue metadata, AC extraction source, run status, plan
-   path, final review checkpoint, PR URL (once shipped), ship mode, and
-   confirmed Stage 3 digests (`plan_digest`, `batch_contract_digest`,
-   `ac_digest`). Compute the plan digest with
+1. **Frontmatter** - issue metadata, AC extraction source, durable
+   confirmation gate state, run status, plan path, final review checkpoint,
+   PR URL (once shipped), ship mode, and confirmed digests (`plan_digest`,
+   `batch_contract_digest`, `ac_digest`). `ac_confirmation_status` and
+   `batch_contract_confirmation_status` are `pending`, `confirmed`, `stale`,
+   or `blocked`; `--confirmation-state` computes the effective state from
+   those fields plus current ledger evidence. Compute the plan digest with
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`.
    Compute the AC digest with
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`.

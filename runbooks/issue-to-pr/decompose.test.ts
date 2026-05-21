@@ -52,6 +52,126 @@ function sha256(payload: string): string {
 	return `sha256:${createHash("sha256").update(payload).digest("hex")}`;
 }
 
+function oneBatchContractDigest(options: { goal?: string } = {}): string {
+	return sha256(
+		JSON.stringify([
+			{
+				id: "one",
+				name: "One",
+				goal: options.goal ?? "AC 1",
+				files: currentCommitFiles,
+				depends_on: [],
+				execution_mode: "proof_first",
+				acceptance_tests: ["AC 1 holds"],
+				ac_mapping: [1],
+				rationale: null,
+			},
+		]),
+	);
+}
+
+function oneBatchPlanContents(options: { goal?: string } = {}): string {
+	return `# Plan
+
+\`\`\`yaml
+id: one
+name: One
+goal: ${options.goal ?? "AC 1"}
+files:
+${currentCommitFilesYaml(2)}
+depends_on: []
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+`;
+}
+
+function oneBatchLedgerYaml(options: { goal?: string } = {}): string {
+	return `batches:
+  - id: "one"
+    name: "One"
+    goal: "${options.goal ?? "AC 1"}"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null`;
+}
+
+function ledgerWithConfirmationState(options: {
+	acConfirmationStatus?: string;
+	acDigest?: string | null;
+	batchContractConfirmationStatus?: string;
+	batchContractDigest?: string | null;
+	batchesYaml?: string;
+	blockedReason?: string | null;
+	findingsYaml?: string;
+	planDigest?: string | null;
+	planPath?: string | null;
+}): string {
+	const acDigest = options.acDigest === undefined ? null : options.acDigest;
+	const batchContractDigest =
+		options.batchContractDigest === undefined
+			? null
+			: options.batchContractDigest;
+	const planDigest = options.planDigest === undefined ? null : options.planDigest;
+	return `---
+issue_number: 1
+issue_title: "Issue"
+issue_url: "https://github.com/owner/repo/issues/1"
+target_repo: "owner/repo"
+plan_path: ${options.planPath === null || options.planPath === undefined ? "null" : `"${options.planPath}"`}
+started_at: "2026-05-21T10:00:00+10:00"
+status: "in-progress"
+ac_source: "gold-standard"
+ac_confirmation_status: "${options.acConfirmationStatus ?? "pending"}"
+ac_confirmed_at: null
+batch_contract_confirmation_status: "${options.batchContractConfirmationStatus ?? "pending"}"
+batch_contract_confirmed_at: null
+blocked_reason: ${options.blockedReason === undefined || options.blockedReason === null ? "null" : `"${options.blockedReason}"`}
+pr_url: null
+ship_mode: "standard"
+final_reviewed_at: null
+plan_digest: ${planDigest === null ? "null" : `"${planDigest}"`}
+batch_contract_digest: ${batchContractDigest === null ? "null" : `"${batchContractDigest}"`}
+ac_digest: ${acDigest === null ? "null" : `"${acDigest}"`}
+---
+
+## Acceptance criteria
+
+- [ ] One
+
+## Batches
+
+\`\`\`yaml
+${options.batchesYaml ?? "batches: []"}
+\`\`\`
+
+## Findings data
+
+\`\`\`yaml
+${options.findingsYaml ?? "findings: []"}
+\`\`\`
+
+## Findings
+
+| id  | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+`;
+}
+
 function yamlList(items: string[], indent: number): string {
 	const padding = " ".repeat(indent);
 	return items.map((item) => `${padding}- "${item}"`).join("\n");
@@ -1637,6 +1757,143 @@ batches: []
 		expect(planResult.stdout).toBe(`Plan digest: ${sha256(planContents)}\n`);
 		expect(acResult.exitCode).toBe(0);
 		expect(acResult.stdout).toBe(`AC digest: ${sha256("- [ ] One")}\n`);
+	});
+
+	test("reports pending confirmation state from ledger frontmatter", async () => {
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "pending",
+				batchContractConfirmationStatus: "pending",
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: pending
+  batch_contract: pending
+  digests: pending
+`);
+	});
+
+	test("reports confirmed acceptance criteria before batch confirmation", async () => {
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "confirmed",
+				acDigest: sha256("- [ ] One"),
+				batchContractConfirmationStatus: "pending",
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: confirmed
+  batch_contract: pending
+  digests: pending
+`);
+	});
+
+	test("reports confirmed batch checkpoint before batches are materialized", async () => {
+		const planContents = oneBatchPlanContents();
+		const planPath = writeFixture("plan.md", planContents);
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "confirmed",
+				acDigest: sha256("- [ ] One"),
+				batchContractConfirmationStatus: "confirmed",
+				batchContractDigest: oneBatchContractDigest(),
+				planDigest: sha256(planContents),
+				planPath,
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: confirmed
+  batch_contract: confirmed
+  digests: confirmed
+`);
+	});
+
+	test("reports confirmed batch contract and digest state", async () => {
+		const planContents = oneBatchPlanContents();
+		const planPath = writeFixture("plan.md", planContents);
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "confirmed",
+				acDigest: sha256("- [ ] One"),
+				batchContractConfirmationStatus: "confirmed",
+				batchContractDigest: oneBatchContractDigest(),
+				batchesYaml: oneBatchLedgerYaml(),
+				planDigest: sha256(planContents),
+				planPath,
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: confirmed
+  batch_contract: confirmed
+  digests: confirmed
+`);
+	});
+
+	test("reports stale confirmation state when confirmed content changes", async () => {
+		const planContents = oneBatchPlanContents();
+		const planPath = writeFixture("plan.md", planContents);
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "confirmed",
+				acDigest: sha256("- [ ] One"),
+				batchContractConfirmationStatus: "confirmed",
+				batchContractDigest: oneBatchContractDigest(),
+				batchesYaml: oneBatchLedgerYaml({ goal: "AC 1 changed" }),
+				planDigest: sha256(planContents),
+				planPath,
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: confirmed
+  batch_contract: stale
+  digests: stale
+`);
+	});
+
+	test("reports blocked confirmation state from durable gate state", async () => {
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "confirmed",
+				acDigest: sha256("- [ ] One"),
+				batchContractConfirmationStatus: "blocked",
+				blockedReason: "contract-review-cycle-cap",
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: confirmed
+  batch_contract: blocked
+  digests: blocked
+`);
 	});
 
 	test("rejects incomplete AC coverage", async () => {

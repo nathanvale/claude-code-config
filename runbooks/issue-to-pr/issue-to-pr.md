@@ -240,11 +240,26 @@ Six stages, walked in order. Each turn advances exactly one stage, commits one
 ledger lifecycle checkpoint, or, for `batch-loop`, runs exactly one inner-loop
 iteration.
 
-At the start of every resumed turn and before every stage transition after
-stage 3, recompute the stored `plan_digest`, `batch_contract_digest`, and
-`ac_digest`. If any digest is null while `## Batches` is populated, or any
-digest differs, fail-stop and return to stage 3 confirmation before Builder
-or ship work continues. `batch_contract_digest` covers only immutable batch
+Once the ledger exists, at the start of every resumed turn, first read durable
+confirmation state:
+
+- `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>`
+
+The command reports whether `acceptance_criteria`, `batch_contract`, and the
+digest triple are `pending`, `confirmed`, `stale`, or `blocked`. A resumed
+agent must route from that state, not from conversation memory. `pending`
+means the relevant user gate has not been durably checkpointed yet;
+`confirmed` means stored confirmation evidence still matches current ledger or
+plan content; `stale` means confirmed evidence no longer matches current
+content; `blocked` means the relevant gate is blocked by durable ledger state
+such as Stage 3 Contract Review blockers or an explicit gate status.
+
+Before every stage transition after stage 3, recompute the stored
+`plan_digest`, `batch_contract_digest`, and `ac_digest`. If any digest is null
+while `## Batches` is populated, or any digest differs, fail-stop and return
+to stage 3 confirmation before Builder or ship work continues. Existing stale
+digest routing remains mandatory even when `--confirmation-state` has already
+reported the stale state. `batch_contract_digest` covers only immutable batch
 contract fields: id, name, goal, files, depends_on, execution_mode,
 acceptance_tests, ac_mapping, and rationale. It does not cover mutable
 lifecycle fields such as status, builder_commits, iterations, or
@@ -285,7 +300,33 @@ to `git remote get-url origin` parsed to `owner/repo`).
    - `closed` + label `reopen-for-implementation` → proceed.
    - `closed` otherwise → ask user; on `y` proceed, on `n` fail-stop.
 
-3. **Extract Acceptance Criteria from the body as a CANDIDATE list.** Never
+3. **Extract `## Blocked by` section.** If present, parse referenced issue
+   numbers (matching `#\d+`). For each, run `gh issue view <n> --repo
+   {target-repo} --json state`. If any blocker is `state: open`, check the
+   target issue labels from step 1:
+   - If the target issue has a `force-run` label, proceed and document the
+     blocker override in the ledger Notes section after the ledger exists.
+   - If the target issue does not have a `force-run` label, fail-stop:
+     `Issue #{issue-number} is blocked by open issues: #A, #B, #C. Resolve
+     them first, add a 'force-run' label to override, or run on the
+     unblocked dependency first.`
+
+4. **Branch preflight before durable gate writes.** Ensure the current branch
+   is an issue feature branch before creating or changing any ledger file.
+   Run this before the AC confirmation prompt so a user-confirmed AC list can
+   be written immediately after `y`, without relying on conversational memory
+   across branch setup.
+   - Resolve the default branch from
+     `gh repo view {target-repo} --json defaultBranchRef`.
+   - If a feature branch matching `feat/issue-{issue-number}-*` already
+     exists locally, check it out.
+   - Otherwise create `feat/issue-{issue-number}-pending` from the current
+     clean HEAD. The slug is filled in after stage 2 from the plan title.
+     Starting from the default branch is allowed for this step.
+   - If branch checkout or creation fails, fail-stop. Do not mutate the
+     ledger on the default branch.
+
+5. **Extract Acceptance Criteria from the body as a CANDIDATE list.** Never
    accept as final without user confirmation. Try these patterns in order;
    stop at the first that produces at least one item:
    - `## Acceptance criteria` (any case) + `- [ ]` checkboxes → source =
@@ -300,7 +341,7 @@ to `git remote get-url origin` parsed to `owner/repo`).
      confidence = low.
    - Nothing matched → source = `none`.
 
-4. **Present + confirm.** Echo the extracted list (or the "none found"
+6. **Present + confirm.** Echo the extracted list (or the "none found"
    prompt) inline at end of turn. The user gates every run:
    - **Heuristic matched:** show the list with its source label
      (e.g. "extracted from `## Acceptance criteria` heading, high
@@ -315,32 +356,10 @@ to `git remote get-url origin` parsed to `owner/repo`).
      - `abort` → stop, write nothing.
    - On `edit`: take the user's revised list, re-present. Loop on `edit`
      until `y` or `abort`.
-   - On `y`: store the confirmed list in memory for the ledger write in
-     step 7. Do not write to disk yet.
+   - On `y`: immediately create or resume the ledger and checkpoint the
+     confirmed AC state in durable ledger evidence before doing any later
+     stage work.
    - On `abort`: stop, fail-stop.
-
-5. **Extract `## Blocked by` section.** If present, parse referenced issue
-   numbers (matching `#\d+`). For each, run `gh issue view <n> --repo
-   {target-repo} --json state`. If any blocker is `state: open`, check the
-   target issue labels from step 1:
-   - If the target issue has a `force-run` label, proceed and document the
-     blocker override in the ledger Notes section after the ledger exists.
-   - If the target issue does not have a `force-run` label, fail-stop:
-     `Issue #{issue-number} is blocked by open issues: #A, #B, #C. Resolve
-     them first, add a 'force-run' label to override, or run on the
-     unblocked dependency first.`
-
-6. **Branch preflight before ledger mutation.** Ensure the current branch is
-   an issue feature branch before creating or changing any ledger file.
-   - Resolve the default branch from
-     `gh repo view {target-repo} --json defaultBranchRef`.
-   - If a feature branch matching `feat/issue-{issue-number}-*` already
-     exists locally, check it out.
-   - Otherwise create `feat/issue-{issue-number}-pending` from the current
-     clean HEAD. The slug is filled in after stage 2 from the plan title.
-     Starting from the default branch is allowed for this step.
-   - If branch checkout or creation fails, fail-stop. Do not mutate the
-     ledger on the default branch.
 
 7. Create or resume the ledger at
    `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`.
@@ -354,17 +373,29 @@ to `git remote get-url origin` parsed to `owner/repo`).
      `~/.claude/runbooks/issue-to-pr/issue-N-ledger.template.md`.
    Populate frontmatter: `issue_number`, `issue_title`, `issue_url`,
    `target_repo`, `started_at` (ISO 8601 with timezone),
-   `status: in-progress`, `ac_source: <one of the source values above>`.
-   Set `ship_mode: standard` and `final_reviewed_at: null`.
+   `status: in-progress`, `ac_source: <one of the source values above>`,
+   `ac_confirmation_status: confirmed`, `ac_confirmed_at: <current ISO 8601
+   timestamp>`, `batch_contract_confirmation_status: pending`, and
+   `batch_contract_confirmed_at: null`. Set `ship_mode: standard` and
+   `final_reviewed_at: null`.
    Write the confirmed AC list to the ledger's `## Acceptance criteria`
-   section as `- [ ]` checkboxes.
+   section as `- [ ]` checkboxes. Compute and store `ac_digest` with
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`.
+   Leave `plan_digest` and `batch_contract_digest` null until stage 3. If a
+   `force-run` blocker override was used in step 3, append the override
+   evidence to Notes in the same ledger checkpoint.
 
-8. Commit the ledger (initial state) before transitioning to stage 2:
-   `chore(issue-{issue-number}): bootstrap issue-to-pr ledger`.
+8. Run
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>`.
+   It must report `acceptance_criteria: confirmed`,
+   `batch_contract: pending`, and `digests: pending`. Commit the ledger
+   before transitioning to stage 2:
+   `chore(issue-{issue-number}): checkpoint acceptance criteria`.
 
 **Exit condition:** Ledger exists with populated `## Acceptance criteria` and
-frontmatter; user has confirmed the AC list; no open blockers (or override
-recorded); current branch is a feature branch; working tree is clean
+frontmatter `ac_confirmation_status: confirmed`; `ac_digest` matches the
+ledger AC section; user has confirmed the AC list; no open blockers (or
+override recorded); current branch is a feature branch; working tree is clean
 (ledger has been committed).
 
 **Stage 1 → stage 2 transition:** Echo ledger frontmatter + AC list at end
@@ -420,7 +451,8 @@ working tree clean.
 
 ### Stage 3: `decompose`
 
-**Inputs:** Plan document from stage 2; AC list in ledger.
+**Inputs:** Plan document from stage 2; AC list in ledger with durable
+confirmation state `acceptance_criteria: confirmed`.
 
 Stage 3 Contract Review behavior is sourced from
 `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
@@ -475,9 +507,9 @@ runbook checkout.
    ce-plan deviated from 1:1 AC-to-batch mapping and which `change_first`
    exceptions they are accepting.
 
-6. Record digests for the plan file, the ledger's `## Acceptance criteria`
-   section, and the candidate batch contract. Use the helper commands so
-   every run hashes the same payloads:
+6. Compute candidate digests for the plan file, the ledger's
+   `## Acceptance criteria` section, and the candidate batch contract. Use
+   the helper commands so every run hashes the same payloads:
    - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
    - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
    - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest`
@@ -500,7 +532,8 @@ runbook checkout.
    `{"reviewer":"<persona>","findings":[],"residual_risks":[],"testing_gaps":[]}`.
 
    Normalize findings with `batch_id: stage-3`. Open P0/P1 findings block
-   Stage 3 and prevent writing candidate batches to the ledger. Record those
+   Stage 3 and prevent writing candidate batches to the ledger. Set
+   frontmatter `batch_contract_confirmation_status: blocked`, record those
    blockers in `## Findings data`, render `## Findings`, run
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`,
    then run
@@ -508,9 +541,10 @@ runbook checkout.
    If the assertion fails, do not write to `## Batches`; send the plan back
    for revision. When a plan/DAG revision lands, close the Stage 3 blockers
    with `status: fixed` and
-   `resolution: plan-revision <sha>`, then rerun helper parsing, AC coverage,
-   digest computation, and Contract Review before asking for confirmation
-   again.
+   `resolution: plan-revision <sha>`, reset
+   `batch_contract_confirmation_status: pending`, then rerun helper parsing,
+   AC coverage, digest computation, and Contract Review before asking for
+   confirmation again.
 
    The Stage 3 Contract Review loop has a five-cycle cap. Hitting the cap
    fail-stops with `blocked_reason: contract-review-cycle-cap` and asks the
@@ -525,27 +559,44 @@ runbook checkout.
    AC text, DAG, execution modes, and surfaced Contract Review advisories
    before entering `batch-loop`. On `n`, stop and discuss.
 
-9. On `y`, re-run the helper and AC coverage check, then recompute the plan
-   digest, AC digest, and batch contract digest. If any digest changed, do
-   not write to the ledger. Print the changed candidate batch list and ask
-   for confirmation again.
+9. On `y`, immediately checkpoint the user gate in durable ledger state before
+   any later stage can rely on it: set
+   `batch_contract_confirmation_status: confirmed`,
+   `batch_contract_confirmed_at: <current ISO 8601 timestamp>`, and store the
+   confirmed `plan_digest`, `ac_digest`, and `batch_contract_digest` values in
+   frontmatter. Leave `## Batches` unchanged until the re-check below passes.
+   A resumed agent can regenerate the candidate DAG from `plan_path` and
+   compare it with these stored digests using `--confirmation-state`.
 
-10. After the re-check passes with matching digests, paste the YAML block into
+10. Re-run the helper and AC coverage check, then recompute the plan digest,
+    AC digest, and batch contract digest. If any digest changed, set
+    `batch_contract_confirmation_status: stale`, do not write candidate
+    batches to `## Batches`, print the changed candidate batch list, and ask
+    for confirmation again.
+
+11. After the re-check passes with matching digests, paste the YAML block into
    the ledger's `## Batches` section. Set all batches to `status: pending`.
    The ledger's `## Batches` section is the confirmed execution contract;
    never write candidate batches there before the user confirms the current
    digest triple. Store `plan_digest`, `batch_contract_digest`, and
-   `ac_digest` in the ledger frontmatter with the confirmed values.
+   `ac_digest` in the ledger frontmatter with the confirmed values. Keep
+   `batch_contract_confirmation_status: confirmed`.
 
-11. Commit the ledger (batches recorded) before transitioning to stage 4:
+12. Commit the ledger (batches recorded) before transitioning to stage 4:
    `chore(issue-{issue-number}): record batch DAG`.
    Before the commit, run
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-ledger-batches <ledger-path>`
    and `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`.
+   Then run
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>`;
+   it must report `acceptance_criteria: confirmed`,
+   `batch_contract: confirmed`, and `digests: confirmed`.
 
 **Exit condition:** Ledger has populated `## Batches` YAML block with all
-batches at `status: pending`; every AC covered; user has confirmed; working
-tree clean.
+batches at `status: pending`; frontmatter
+`batch_contract_confirmation_status: confirmed`; every AC covered; user has
+confirmed the digest triple, DAG, and execution modes; `--confirmation-state`
+reports all three states as `confirmed`; working tree clean.
 
 **Failure modes:**
 
@@ -720,7 +771,9 @@ with user confirmation); working tree clean.
            mark its status `pending` if the helper output did not already do
            so, recompute `batch_contract_digest` with
            `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`,
-           then return to stage 4 (batch-loop) to converge it.
+           keep `batch_contract_confirmation_status: confirmed`, update
+           `batch_contract_confirmed_at`, and run `--confirmation-state`
+           before returning to stage 4 (batch-loop) to converge it.
          - When the patch-batch converges, update the original
            `batch_id: final` finding row in `## Findings data` to
            `status: fixed` with `resolution: patch-batch <id>` (or

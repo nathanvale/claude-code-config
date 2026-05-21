@@ -72,9 +72,17 @@ interface LedgerBatchContext {
   terminalBuilderCommitsById: Map<string, Set<string>>;
 }
 
+interface ConfirmationStateReport {
+  acceptanceCriteria: ConfirmationState;
+  batchContract: ConfirmationState;
+  digests: ConfirmationState;
+}
+
+type ConfirmationState = "pending" | "confirmed" | "stale" | "blocked";
 type ExecutionMode = "tdd" | "proof_first" | "change_first";
 
 const EXECUTION_MODES = new Set<ExecutionMode>(["tdd", "proof_first", "change_first"]);
+const CONFIRMATION_STATES = new Set<ConfirmationState>(["pending", "confirmed", "stale", "blocked"]);
 const LEGACY_EXECUTION_MODE_HINTS = new Map([
   ["verification_first", "proof_first"],
   ["direct", "change_first"],
@@ -807,6 +815,245 @@ function emitPlanDigest(planPath: string): void {
 
 function emitAcDigest(ledgerPath: string): void {
   stdout.write(`AC digest: ${sha256Digest(readAcceptanceCriteriaDigestPayload(ledgerPath))}\n`);
+}
+
+function emitConfirmationState(ledgerPath: string): void {
+  const report = readConfirmationState(ledgerPath);
+  stdout.write(`confirmation_state:\n`);
+  stdout.write(`  acceptance_criteria: ${report.acceptanceCriteria}\n`);
+  stdout.write(`  batch_contract: ${report.batchContract}\n`);
+  stdout.write(`  digests: ${report.digests}\n`);
+}
+
+function readConfirmationState(ledgerPath: string): ConfirmationStateReport {
+  const frontmatter = readFrontmatter(ledgerPath);
+  const acceptanceCriteria = readAcceptanceCriteriaState(ledgerPath, frontmatter);
+  const batchContract = readBatchContractState(ledgerPath, frontmatter);
+  return {
+    acceptanceCriteria,
+    batchContract,
+    digests: readDigestState(ledgerPath, frontmatter, acceptanceCriteria, batchContract),
+  };
+}
+
+function readAcceptanceCriteriaState(ledgerPath: string, frontmatter: Record<string, string | null>): ConfirmationState {
+  const storedState = readFrontmatterConfirmationState(frontmatter, "ac_confirmation_status");
+  if (storedState === "blocked") return "blocked";
+  if (storedState === "stale") return "stale";
+  if (storedState === "pending") return "pending";
+
+  const storedDigest = readFrontmatterDigest(frontmatter, "ac_digest");
+  if (storedDigest === null) return "pending";
+
+  const currentDigest = readAcceptanceCriteriaDigestOrNull(ledgerPath);
+  if (currentDigest === null) return "stale";
+  return currentDigest === storedDigest ? "confirmed" : "stale";
+}
+
+function readBatchContractState(ledgerPath: string, frontmatter: Record<string, string | null>): ConfirmationState {
+  const storedState = readFrontmatterConfirmationState(frontmatter, "batch_contract_confirmation_status");
+  if (storedState === "blocked") return "blocked";
+  if (storedState === "stale") return "stale";
+  if (hasOpenStage3Blocker(ledgerPath)) return "blocked";
+  if (storedState === "pending") return "pending";
+
+  const storedDigest = readFrontmatterDigest(frontmatter, "batch_contract_digest");
+  if (storedDigest === null) return "pending";
+
+  const ledgerDigest = readLedgerBatchContractDigestOrNull(ledgerPath);
+  if (ledgerDigest !== null) return ledgerDigest === storedDigest ? "confirmed" : "stale";
+
+  if (storedState === "confirmed") {
+    const candidateDigest = readCandidateBatchContractDigestOrNull(frontmatter);
+    if (candidateDigest === null) return "stale";
+    return candidateDigest === storedDigest ? "confirmed" : "stale";
+  }
+
+  return "pending";
+}
+
+function readDigestState(
+  ledgerPath: string,
+  frontmatter: Record<string, string | null>,
+  acceptanceCriteria: ConfirmationState,
+  batchContract: ConfirmationState,
+): ConfirmationState {
+  if (acceptanceCriteria === "blocked" || batchContract === "blocked") return "blocked";
+  if (acceptanceCriteria === "stale" || batchContract === "stale") return "stale";
+
+  const storedPlanDigest = readFrontmatterDigest(frontmatter, "plan_digest");
+  const storedAcDigest = readFrontmatterDigest(frontmatter, "ac_digest");
+  const storedBatchContractDigest = readFrontmatterDigest(frontmatter, "batch_contract_digest");
+  if (storedPlanDigest === null || storedAcDigest === null || storedBatchContractDigest === null) return "pending";
+
+  const currentPlanDigest = readPlanDigestOrNull(frontmatter);
+  const currentAcDigest = readAcceptanceCriteriaDigestOrNull(ledgerPath);
+  const currentBatchContractDigest =
+    readLedgerBatchContractDigestOrNull(ledgerPath) ?? readCandidateBatchContractDigestOrNull(frontmatter);
+
+  if (currentPlanDigest === null || currentAcDigest === null || currentBatchContractDigest === null) return "stale";
+  if (
+    currentPlanDigest !== storedPlanDigest ||
+    currentAcDigest !== storedAcDigest ||
+    currentBatchContractDigest !== storedBatchContractDigest
+  ) {
+    return "stale";
+  }
+  return "confirmed";
+}
+
+function readFrontmatter(ledgerPath: string): Record<string, string | null> {
+  const src = readFileText(ledgerPath, "ledger");
+  const match = src.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!match) fail(`ledger ${ledgerPath} has no frontmatter block`);
+
+  const frontmatter: Record<string, string | null> = {};
+  for (const [index, raw] of match[1].split("\n").entries()) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith("#")) continue;
+    const field = line.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (!field) fail(`ledger ${ledgerPath} frontmatter line ${index + 1} is not a key/value pair`);
+    if (hasKey(frontmatter, field[1])) {
+      fail(`ledger ${ledgerPath} frontmatter has duplicate field "${field[1]}"`);
+    }
+    frontmatter[field[1]] = parseFrontmatterScalar(field[2]);
+  }
+  return frontmatter;
+}
+
+function parseFrontmatterScalar(raw: string): string | null {
+  const text = raw.trim();
+  if (text === "" || text === "null" || text === "~") return null;
+  return parseScalarValue(text);
+}
+
+function readFrontmatterConfirmationState(
+  frontmatter: Record<string, string | null>,
+  key: string,
+): ConfirmationState | null {
+  const value = frontmatter[key];
+  if (value === undefined || value === null) return null;
+  if (!CONFIRMATION_STATES.has(value as ConfirmationState)) {
+    fail(`frontmatter field "${key}" has invalid confirmation state "${value}"`);
+  }
+  return value as ConfirmationState;
+}
+
+function readFrontmatterDigest(frontmatter: Record<string, string | null>, key: string): string | null {
+  const value = frontmatter[key];
+  if (value === undefined || value === null) return null;
+  if (!/^sha256:[0-9a-f]{64}$/i.test(value)) fail(`frontmatter field "${key}" has invalid digest "${value}"`);
+  return value;
+}
+
+function readFrontmatterPath(frontmatter: Record<string, string | null>, key: string): string | null {
+  const value = frontmatter[key];
+  if (value === undefined || value === null) return null;
+  if (value.trim().length === 0) return null;
+  return value;
+}
+
+function readPlanDigestOrNull(frontmatter: Record<string, string | null>): string | null {
+  const planPath = readFrontmatterPath(frontmatter, "plan_path");
+  if (planPath === null) return null;
+  let src: string;
+  try {
+    src = readFileSync(planPath, "utf8");
+  } catch {
+    return null;
+  }
+  return sha256Digest(src);
+}
+
+function readCandidateBatchContractDigestOrNull(frontmatter: Record<string, string | null>): string | null {
+  const planPath = readFrontmatterPath(frontmatter, "plan_path");
+  if (planPath === null) return null;
+  try {
+    readFileSync(planPath, "utf8");
+  } catch {
+    return null;
+  }
+  return contractDigest(parse(planPath));
+}
+
+function readAcceptanceCriteriaDigestOrNull(ledgerPath: string): string | null {
+  const payload = readAcceptanceCriteriaDigestPayloadOrNull(ledgerPath);
+  return payload === null ? null : sha256Digest(payload);
+}
+
+function readAcceptanceCriteriaDigestPayloadOrNull(ledgerPath: string): string | null {
+  const src = readFileText(ledgerPath, "ledger");
+  const acSection = src.match(/##\s+Acceptance criteria\s*\n([\s\S]*?)(?=\n##\s|$)/);
+  if (!acSection) return null;
+  const payload = acSection[1].replace(/\r\n/g, "\n").trim();
+  if (!/^\s*-\s*\[[ x]\]\s+/m.test(payload)) return null;
+  return payload;
+}
+
+function readLedgerBatchContractDigestOrNull(ledgerPath: string): string | null {
+  const block = readOptionalFencedSectionBlock(ledgerPath, "Batches");
+  if (block === null) return null;
+  const rows = parseLedgerBatchRows(block);
+  if (rows.length === 0) return null;
+  for (const [index, row] of rows.entries()) validateLedgerBatchMetadata(row, index + 1);
+  const batches = ledgerRowsToBatches(rows);
+  validateBatchContracts(batches, { allowPatchBatches: true });
+  topoSortOrFail(batches);
+  for (const [index, row] of rows.entries()) validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
+  return contractDigest(batches);
+}
+
+function hasOpenStage3Blocker(ledgerPath: string): boolean {
+  const block = readOptionalFencedSectionBlock(ledgerPath, "Findings data");
+  if (block === null) return false;
+  const rows = parseSimpleFindingsRows(block);
+  return rows.some(
+    (row) =>
+      row.batch_id === STAGE_3_BATCH_ID &&
+      row.status === "open" &&
+      (row.severity === "P0" || row.severity === "P1"),
+  );
+}
+
+function parseSimpleFindingsRows(block: string): Record<string, string | null>[] {
+  const meaningfulLines = block
+    .split("\n")
+    .map((line) => stripYamlComment(line).trim())
+    .filter((line) => line.length > 0);
+  if (meaningfulLines.length === 1 && meaningfulLines[0] === "findings: []") return [];
+
+  const rows: Record<string, string | null>[] = [];
+  let current: Record<string, string | null> | null = null;
+  function flushRow(): void {
+    if (current) rows.push(current);
+    current = null;
+  }
+
+  for (const [index, raw] of block.split("\n").entries()) {
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (!line.trim() || /^\s*findings:\s*$/.test(line)) continue;
+    const firstField = line.match(/^\s*-\s+id:\s*(.+)$/);
+    if (firstField) {
+      flushRow();
+      current = { id: parseFrontmatterScalar(firstField[1]) };
+      continue;
+    }
+    if (!current) fail(`findings data line ${index + 1} appears before the first finding id`);
+    const scalar = line.match(/^\s{4}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (!scalar) fail(`findings data line ${index + 1} is not valid findings YAML`);
+    current[scalar[1]] = parseFrontmatterScalar(scalar[2]);
+  }
+  flushRow();
+  return rows;
+}
+
+function readFileText(filePath: string, label: string): string {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(`cannot read ${label} ${filePath}: ${message}`);
+  }
 }
 
 function readAcceptanceCriteriaDigestPayload(ledgerPath: string): string {
@@ -1696,6 +1943,11 @@ if (args[0] === "--ac-digest") {
   emitAcDigest(args[1]);
   exit(0);
 }
+if (args[0] === "--confirmation-state") {
+  if (args.length !== 2) fail("usage: decompose.ts --confirmation-state <ledger-path>");
+  emitConfirmationState(args[1]);
+  exit(0);
+}
 if (args[0] === "--validate-ledger-batches") {
   if (args.length !== 2) fail("usage: decompose.ts --validate-ledger-batches <ledger-path>");
   validateLedgerBatches(args[1]);
@@ -1725,7 +1977,7 @@ if (
   (args.length !== 1 && !patchProposalMode && !validateCoverage && !candidateContractDigest)
 ) {
   fail(
-    "usage: decompose.ts <plan-path> [--candidate-contract-digest | --validate-ac-coverage <ledger-path> | --patch-proposal <ledger-path>] | --plan-digest <plan-path> | --ac-digest <ledger-path> | --validate-ledger-batches <ledger-path> | --batch-contract-digest <ledger-path> | --validate-findings <ledger-path> | --assert-no-open-p0p1 <ledger-path>",
+    "usage: decompose.ts <plan-path> [--candidate-contract-digest | --validate-ac-coverage <ledger-path> | --patch-proposal <ledger-path>] | --plan-digest <plan-path> | --ac-digest <ledger-path> | --confirmation-state <ledger-path> | --validate-ledger-batches <ledger-path> | --batch-contract-digest <ledger-path> | --validate-findings <ledger-path> | --assert-no-open-p0p1 <ledger-path>",
   );
 }
 
