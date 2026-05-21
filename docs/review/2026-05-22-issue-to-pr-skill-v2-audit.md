@@ -60,7 +60,7 @@ The v2 move should not be "shorten the runbook". The v2 move should be to separa
 - **Conditional playbooks:** replacement batches, final-review patches, host fallbacks
 - **Reference material:** glossary, risk classification, persona selector, issue parsing details
 
-My staff-engineer recommendation: build v2 as a small orchestration shell plus one-level references, then promote repeatable packet shapes into templates. Keep `decompose.ts` as the executable contract boundary and push more "checkable truth" into helper modes rather than hot prose.
+My staff-engineer recommendation: build v2 as a small orchestration shell plus tiered references, then promote repeatable packet shapes into templates. Make `cli.ts` the deterministic front door for every command the runbook needs. Put runtime contract values in code, route all machine-consumed operations through structured CLI output, and push more "checkable truth" behind that front door rather than into hot prose.
 
 ADR 0002 should be treated as a governing constraint for v2, not background context. The v2 architecture should make the prose runbook the Orchestrator and introduce a `cli.ts` front door for every deterministic command the runbook needs. `decompose.ts` can remain the validation engine behind that front door, but agents should call the CLI, not memorize individual helper internals from prose.
 
@@ -73,7 +73,7 @@ ADR 0002 should be treated as a governing constraint for v2, not background cont
 | `issue-to-pr.md` | 1,293 lines | Loads every time the runbook is followed. Contains orchestration, contracts, schemas, prompts, and references. |
 | `README.md` | Human/runbook overview | Repeats issue shape, Builder dispatch, turn protocol, fix protocol, risk, glossary, ledger format. Useful, but overlaps hot path. |
 | `issue-N-ledger.template.md` | Ledger schema and operator hints | Also repeats schema rules and Builder attempt semantics. |
-| `decompose.ts` | Executable invariant boundary | Already validates many rules that the prose restates in full. |
+| `decompose.ts` | Executable invariant boundary | Already validates many rules that the prose restates in full, but it is exposed as scattered helper flags rather than a single front door. |
 
 Large sections in `issue-to-pr.md`:
 
@@ -161,12 +161,13 @@ Why it matters:
 
 v2 action:
 
-- Extract role contracts into `references/builder-dispatch.md` and `references/validator-loop.md`.
-- Extract prompt payloads into `templates/ce-plan-addendum.md` and `templates/builder-work-packet.md`.
-- Extract static lookup tables into `references/persona-selector.md` and `references/finding-lifecycle.md`.
+- Extract Builder and Proposer role contracts into `references/builder-dispatch.md`.
+- Merge Validator dispatch, persona selection, finding lifecycle, and escape hatches into `references/findings-and-validators.md`.
+- Extract prompt payloads into templates such as `templates/ce-plan-addendum.md` and `templates/builder-work-packet.md`.
+- Put deterministic schema values and command metadata in `lib/contract.ts`, emitted or enforced through `cli.ts`.
 - Use XML/tagged prompt templates for cross-agent handoffs where boundary clarity matters. Do not use XML tags as a replacement for helper-validated YAML or ledger data.
 
-### F3. The Runbook Repeats Truth Already Enforced By `decompose.ts`
+### F3. Deterministic Contracts Exist But Lack A Front Door
 
 Severity: P1 for maintainability and drift.
 
@@ -185,14 +186,17 @@ Why it matters:
 
 - Prose and executable validation will drift unless one owns each rule.
 - Long prose tempts agents to reason manually instead of using helper modes.
-- v2 should make deterministic helper calls feel mandatory and obvious.
+- Scattered helper flags make the agent learn implementation internals instead of one stable runbook interface.
+- v2 should make deterministic CLI calls feel mandatory and obvious.
 
 v2 action:
 
-- Keep only the helper command and expected routing result in the hot path.
-- Move schema details into `references/helper-contract.md`.
-- Add a helper mode index that says which command owns which invariant.
-- Prefer adding helper modes for repeated manual transformations, especially finding normalization and Work Packet validation.
+- Introduce `cli.ts` as the deterministic front door for every command the runbook needs.
+- Move runtime contract values into `contract.ts` or equivalent runtime data used by the CLI and validators.
+- Keep only CLI command names and expected routing result in the hot path.
+- Move schema details into `references/ledger-and-helper.md`.
+- Add a CLI command index that says which command owns which invariant.
+- Prefer adding CLI commands for repeated manual transformations, especially finding normalization, Work Packet generation, envelope validation, and next-action routing.
 
 ### F4. Stage 5 Is A Nested Workflow Masquerading As A Stage
 
@@ -215,9 +219,9 @@ Why it matters:
 
 v2 action:
 
-- Keep Stage 5 hot path to: run review, persist findings, gate P0/P1, either advance or invoke the patch-batch playbook.
-- Extract the patch-batch protocol into `references/final-review-patch-batches.md`.
-- Add a small decision table that routes each final finding: `no blocker`, `bounded patch candidate`, `needs replan`, `accepted risk`.
+- Keep Stage 5 hot path to: run review, persist findings, gate P0/P1, either advance or create patch batches that return to Stage 4.
+- Dissolve final-review patch-batch remediation into `references/stage-4-batch-loop.md`; Stage 5 becomes a read-only gate.
+- Add a small decision table that routes each final finding: `no blocker`, `patch batch`, `needs replan`, `accepted risk`.
 
 ### F5. Builder Dispatch Is Correct Architecturally But Too Heavy In The Orchestrator Body
 
@@ -332,6 +336,16 @@ Build a workflow skill that answers this in under 10 seconds of reading:
 
 > Given durable ledger state, what is the next permitted action, what file may I read next, what helper must I run, and when must I stop for Nathan?
 
+ADR 0002 sharpens that into a hard interface rule:
+
+> The prose runbook answers the judgment question. The CLI answers the deterministic question.
+
+In v2, the hot path should not teach agents individual `decompose.ts` flags as the primary interface. It should route deterministic work through:
+
+```bash
+bun ~/.claude/runbooks/issue-to-pr/cli.ts <command> --json
+```
+
 ### Proposed File Layout
 
 **Revised:** the original layout proposed 16 references + 5 templates = 21 new files. The adversarial pass demonstrated this is bloat-relocation rather than reduction (operator day-30 cognitive load becomes "remember 20 files and their load triggers"). Several references were tightly coupled and have been merged. Stage 5's nested patch-batch playbook is dissolved into Stage 4 (see W2 / "Stage 5 restructuring" below). Net reduction: ~10 references + 5 templates.
@@ -340,12 +354,15 @@ Build a workflow skill that answers this in under 10 seconds of reading:
 runbooks/issue-to-pr/
 ├── README.md
 ├── issue-to-pr.md
+├── cli.ts                            # deterministic front door for the runbook
 ├── lib/                               # decompose.ts split per A2 below
+│   ├── contract.ts                    # runtime contract values and command metadata
 │   ├── validate.ts
 │   ├── digest.ts
 │   ├── ledger.ts
 │   ├── route.ts
-│   └── cli.ts                         # thin dispatch shim
+│   └── packets.ts                     # deterministic prompt-packet rendering
+├── decompose.ts                       # compatibility shim during migration only
 ├── decompose.test.ts                  # may be split alongside lib/
 ├── issue-N-ledger.template.md
 ├── references/
@@ -375,7 +392,9 @@ If this is promoted from runbook to formal Codex skill, the equivalent structure
 issue-to-pr/
 ├── SKILL.md
 ├── scripts/
-│   └── decompose.ts
+│   ├── cli.ts
+│   ├── contract.ts
+│   └── validators/
 ├── references/
 │   └── ...
 └── assets/
@@ -384,6 +403,26 @@ issue-to-pr/
 ```
 
 Do not create that formal skill structure until the repo decides whether Issue-to-PR is meant to be invoked as a Codex skill or stay as a Claude-style runbook. The progressive-disclosure shape applies either way.
+
+The key v2 addition is `cli.ts`, not another prose reference. `decompose.ts` can survive as a compatibility shim while v1 commands migrate, but the v2 runbook should treat `cli.ts` as the only deterministic command surface it asks agents to call.
+
+### CLI Front Door Command Surface
+
+The CLI should cover every deterministic operation the runbook currently asks agents to perform from prose or scattered helper flags.
+
+| Command family | Responsibility |
+| --- | --- |
+| `state` / `next` | Read ledger evidence and emit current route, required reference, and blocking drift. |
+| `contract` | Emit runtime contract slices: batch, findings, Builder envelope, Proposer envelope, statuses, command metadata. |
+| `issue` / `ac` | Inspect issue JSON, extract candidate ACs, classify extraction source, and emit confirmation payloads. |
+| `ledger` | Initialize, validate, render mechanical sections, and report version skew. |
+| `plan` / `batches` | Parse plan units, validate DAG, validate AC coverage, compute digests, select eligible batch. |
+| `builder` / `proposer` | Generate scoped packets, validate returned envelopes, and classify host or schema failures. |
+| `findings` | Normalize, dedupe, validate, render, and gate on open P0/P1. |
+| `patch` | Validate patch-batch proposals against confirmed ledger state. |
+| `ship` / `diagnose` | Preflight final ledger state, local-check routing, and operator diagnostics. |
+
+All machine-consumed commands should support `--json` with a stable schema. Human-readable output is fine as a secondary mode, but the runbook should not require agents to parse prose stdout.
 
 ### Target Hot File Budget
 
@@ -501,10 +540,11 @@ Drive one GitHub issue to a PR using a per-issue ledger, Builder attempts, and V
 1. Durable ledger state beats transcript memory.
 2. User confirms ACs before planning.
 3. User confirms batch contract before Builder work.
-4. Builder edits only confirmed `batch.files`.
-5. Validators own correctness findings.
-6. Open P0/P1 blocks convergence and ship.
-7. Stage transitions require a clean tree.
+4. Prose orchestrates judgment; CLI owns deterministic validation and rendering.
+5. Builder edits only confirmed `batch.files`.
+6. Validators own correctness findings.
+7. Open P0/P1 blocks convergence and ship.
+8. Stage transitions require a clean tree.
 
 ## Reference loading
 
@@ -512,14 +552,14 @@ Drive one GitHub issue to a PR using a per-issue ledger, Builder attempts, and V
 | --- | --- |
 | Stage details | `references/stage-<n>-*.md` |
 | Builder dispatch | `references/builder-dispatch.md` |
-| Validator loop | `references/validator-loop.md` |
-| Final-review patches | `references/final-review-patch-batches.md` |
-| Helper commands and invariants | `references/helper-contract.md` |
+| Validators, findings, hatches | `references/findings-and-validators.md` |
+| Final-review patches | `references/stage-4-batch-loop.md` |
+| CLI commands and invariants | `references/ledger-and-helper.md` |
 
 ## Start every turn
 
 1. Read the ledger if it exists.
-2. Run `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>`.
+2. Run `bun ~/.claude/runbooks/issue-to-pr/cli.ts state <ledger-path> --json`.
 3. Route from durable state using the router table.
 4. Load only the reference for the chosen stage or playbook.
 5. Execute one visible workflow action.
@@ -550,23 +590,23 @@ The router should be the operational center of v2.
 
 | Current source | Move to | Load trigger |
 | --- | --- | --- |
-| Lines 13-21, file scope | Hot path invariant plus `references/ledger-contract.md` | Always for invariant, details only during Stage 3 or Builder dispatch. |
-| Lines 22-35, suggested reviewers | `references/persona-selector.md` | Before Validator dispatch. |
-| Lines 36-42, ADR guardrails | `references/validator-loop.md` | When recording Validator findings. |
+| Lines 13-21, file scope | Hot path invariant plus `references/ledger-and-helper.md`; deterministic scope checks behind `cli.ts` | Always for invariant, details only during Stage 3 or Builder dispatch. |
+| Lines 22-35, suggested reviewers | `references/findings-and-validators.md` | Before Validator dispatch. |
+| Lines 36-42, ADR guardrails | `references/findings-and-validators.md` | When recording Validator findings. |
 | Lines 43-66, role boundaries | Hot path summary plus `references/builder-dispatch.md` | Summary always, full details before Builder or Validator handoff. |
 | Lines 67-247, Builder dispatch contract | `references/builder-dispatch.md` and templates | Stage 4 dispatch or repair only. |
 | Lines 257-318, clean tree and stage overview | Hot path | Always. This is core orchestration. |
 | Lines 319-445, Stage 1 | `references/stage-1-pick-issue.md` | No ledger, AC pending, AC stale. |
 | Lines 446-493, Stage 2 | `references/stage-2-plan.md` and `templates/ce-plan-addendum.md` | Plan path missing. |
-| Lines 494-662, Stage 3 | `references/stage-3-decompose.md` and `references/helper-contract.md` | Batch contract pending, stale, or blocked by Stage 3 findings. |
+| Lines 494-662, Stage 3 | `references/stage-3-decompose.md`, `references/ledger-and-helper.md`, and CLI commands | Batch contract pending, stale, or blocked by Stage 3 findings. |
 | Lines 663-734, Stage 4 outer loop | Hot path plus `references/stage-4-batch-loop.md` | Pending or in-progress batch. |
-| Lines 735-882, Stage 5 | `references/stage-5-final-review.md` and `references/final-review-patch-batches.md` | No pending batches, final findings open. |
+| Lines 735-882, Stage 5 | `references/stage-5-final-review.md`; patch-batch creation is generalized into `references/stage-4-batch-loop.md` | No pending batches, final findings open. |
 | Lines 883-961, Stage 6 | `references/stage-6-ship.md` | Final review complete. |
-| Lines 962-996, Persona selector | `references/persona-selector.md` | Before Validator dispatch. |
-| Lines 997-1175, Inner loop | `references/validator-loop.md` and `references/builder-dispatch.md` | Stage 4 active. |
-| Lines 1176-1192, Escape hatches | `references/finding-lifecycle.md` | Open P0/P1 or hatch candidate. |
+| Lines 962-996, Persona selector | `references/findings-and-validators.md` | Before Validator dispatch. |
+| Lines 997-1175, Inner loop | `references/stage-4-batch-loop.md`, `references/builder-dispatch.md`, and `references/findings-and-validators.md` | Stage 4 active. |
+| Lines 1176-1192, Escape hatches | Hot path names plus `references/findings-and-validators.md` detail | Open P0/P1 or hatch candidate. |
 | Lines 1193-1267, ce-plan addendum | `templates/ce-plan-addendum.md` | Stage 2 only. |
-| Lines 1268-1281, closing findings | `references/finding-lifecycle.md` | Closing or rendering findings. |
+| Lines 1268-1281, closing findings | `references/findings-and-validators.md`; mechanical validation/rendering behind `cli.ts findings ... --json` | Closing or rendering findings. |
 | Lines 1282-1293, `/loop` fallback | README | Human invocation only. |
 
 ## Contract Ownership Model
@@ -576,8 +616,10 @@ v2 should assign each rule to one owner:
 | Rule type | Owner | Example |
 | --- | --- | --- |
 | Human invocation | README | `/goal` vs `/loop`, installed path, compatibility. |
-| Live routing | `issue-to-pr.md` | Which stage to execute from ledger state. |
-| Checkable schema | `decompose.ts` | Batch shape, findings shape, AC coverage, digest state. |
+| Workflow judgment | `issue-to-pr.md` | Which owner acts next, when to stop for Nathan, which reference/template to load. |
+| Deterministic command surface | `cli.ts` | `state`, `next`, `contract`, `findings gate`, `builder packet`, `patch validate`. |
+| Runtime contracts | `lib/contract.ts` | Allowed statuses, required fields, command metadata, schema slices. |
+| Validators and mechanics | `lib/*` behind CLI | Batch shape, findings shape, AC coverage, digest state, rendering, dedupe. |
 | Role packets | Templates | Builder Work Packet, Validator envelope, ce-plan addendum. |
 | Role policy | References | Builder authority, Validator normalization, patch-batch playbook. |
 | Durable state | Ledger template | Frontmatter and YAML sections. |
@@ -585,11 +627,11 @@ v2 should assign each rule to one owner:
 
 The current artifact blurs these owners. v2 should make ownership visually obvious.
 
-## Helper Boundary Recommendations
+## CLI Boundary Recommendations
 
-`decompose.ts` is the right place for deterministic checks. v2 should make that boundary stronger.
+`decompose.ts` proved the right instinct: deterministic checks should be executable, not hand-waved in prose. ADR 0002 changes the shape of the recommendation: v2 should put those checks behind a single CLI front door and split the implementation behind it.
 
-Keep helper-owned:
+Keep CLI-owned:
 
 - Batch YAML parsing
 - DAG validation
@@ -602,26 +644,30 @@ Keep helper-owned:
 - P0/P1 assertion
 - Builder attempt persistence validation
 - Commit reachability and touched-file scope
+- Contract slice emission
+- Next-action routing facts
+- Prompt-packet rendering from templates and durable ledger state
+- Structured diagnostic output
 
-Consider adding helper support for:
+Consider adding CLI support for:
 
 - Rendering `## Findings` from `## Findings data`
 - Normalizing raw Validator envelopes into candidate finding rows
 - Validating raw Builder envelopes before persistence
 - Emitting the current stage route from ledger state
-- Generating the Builder Work Packet from the ledger and batch id
+- Rendering complete Builder, Proposer, and Validator packets from templates after the prose router selects the role and target
 
-The more v2 can say "run the helper and route from its output", the less hot prose it needs.
+The more v2 can say "run the CLI and route from its JSON", the less hot prose it needs. The CLI is not the Orchestrator: it validates, renders, emits packets, and reports state. The `state` / `next` commands return route facts such as current state, drift, required reference, and blocking gates; they must not emit imperative workflow prose like "ask Nathan this" or "dispatch Builder now". The prose still decides when to ask Nathan, when a risk is acceptable, which role owns the next step, and how to explain the workflow.
 
 ## Proposed V2 Reference Contents
 
-### `references/stage-router.md`
+### Hot File Router (No Separate `stage-router.md`)
 
 Purpose:
 
-- Explain durable state routing.
-- Define stage detection from ledger frontmatter and sections.
-- Keep the "one visible action per turn" rule.
+- Keep the state router in `issue-to-pr.md` as the operational center.
+- Pair it with `cli.ts state <ledger> --json` and `cli.ts next <ledger> --json`.
+- Avoid hiding the resume algorithm in a reference.
 
 Key content:
 
@@ -631,16 +677,35 @@ Key content:
 - Resume rules
 - Stop conditions
 
+This supersedes the original `references/stage-router.md` idea. The router is hot-path orchestration, not background reference material.
+
+### Stage References
+
+Purpose:
+
+- Hold stage-specific details that would bloat the hot file.
+- Keep each stage reference load-triggered by the router.
+
+Files:
+
+- `references/stage-1-pick-issue.md` covers issue shape and AC extraction details.
+- `references/stage-2-plan.md` covers ce-plan invocation and addendum use.
+- `references/stage-3-decompose.md` covers plan parsing, contract review, and batch confirmation.
+- `references/stage-4-batch-loop.md` covers normal batches, replacement batches, repair batches, and final-review patch batches.
+- `references/stage-5-final-review.md` becomes a read-only review gate that creates patch batches and returns to Stage 4.
+- `references/stage-6-ship.md` covers local checks, PR creation/update, residual findings, and final ledger commit.
+
 ### `references/builder-dispatch.md`
 
 Purpose:
 
-- Define Builder authority and Work Packet assembly.
+- Define Builder, and if adopted, Proposer authority and packet assembly.
 - Keep ADR 0001 semantics outside the hot path.
 
 Key content:
 
 - Builder owns one batch attempt.
+- Proposer owns proposal-only patch-batch candidate generation, if v2 separates that role.
 - Orchestrator never implements Stage 4 directly.
 - Work Packet include and exclude lists.
 - Local Law Read Order.
@@ -649,11 +714,11 @@ Key content:
 - Return envelope contract.
 - Host readiness versus infrastructure failure.
 
-### `references/validator-loop.md`
+### `references/findings-and-validators.md`
 
 Purpose:
 
-- Define Validator dispatch and findings processing.
+- Define Validator dispatch, persona selection, findings processing, finding lifecycle, and escape hatches.
 
 Key content:
 
@@ -665,52 +730,33 @@ Key content:
 - Ledger persistence.
 - P0/P1 gate.
 - P2/P3 deferral.
+- Accepted-risk and out-of-scope closure rules.
+- Escape-hatch table.
 
-### `references/final-review-patch-batches.md`
-
-Purpose:
-
-- Isolate the complex Stage 5 remediation workflow.
-
-Key content:
-
-- Final-review result routing.
-- Bounded patch candidate criteria.
-- Proposal-only Builder dispatch.
-- Patch proposal schema.
-- Helper validation command.
-- User confirmation.
-- Return to Stage 4.
-- Rerun final review.
-
-### `references/helper-contract.md`
+### `references/ledger-and-helper.md`
 
 Purpose:
 
-- List every helper mode and its invariant ownership.
+- Explain the ledger shape and list every CLI command with invariant ownership.
 
 Key content:
 
 | Command | Owns |
 | --- | --- |
-| `--confirmation-state` | Durable gate routing. |
-| `--plan-digest` | Plan content digest. |
-| `--ac-digest` | AC section digest. |
-| `--candidate-contract-digest` | Candidate plan batch digest. |
-| `--validate-ac-coverage` | AC coverage by batch mapping. |
-| `--validate-ledger-batches` | Confirmed batch ledger invariants. |
-| `--batch-contract-digest` | Confirmed batch contract digest. |
-| `--patch-proposal` | Final-review patch-batch proposal shape. |
-| `--validate-findings` | Findings data and rendered table consistency. |
-| `--assert-no-open-p0p1` | Blocking gate before convergence or ship. |
+| `state <ledger> --json` | Durable gate routing and drift report. |
+| `contract <slice> --json` | Runtime contract values and required fields. |
+| `plan digest <plan> --json` | Plan content digest. |
+| `ledger ac-digest <ledger> --json` | AC section digest. |
+| `plan candidate-contract-digest <plan> --json` | Candidate plan batch digest. |
+| `plan validate-ac-coverage <plan> --ledger <ledger> --json` | AC coverage by batch mapping. |
+| `batches validate <ledger> --json` | Confirmed batch ledger invariants. |
+| `batches digest <ledger> --json` | Confirmed batch contract digest. |
+| `patch validate <proposal> --ledger <ledger> --json` | Final-review patch-batch proposal shape. |
+| `findings validate <ledger> --json` | Findings data and rendered table consistency. |
+| `findings gate <ledger> --json` | Blocking open P0/P1 gate before convergence or ship. |
+| `diagnose <ledger> --json` | Operator-facing state, loaded-reference, and drift diagnosis. |
 
-### `references/ledger-contract.md`
-
-Purpose:
-
-- Keep ledger shape out of hot path.
-
-Key content:
+Ledger key content:
 
 - Frontmatter fields.
 - AC section.
@@ -719,6 +765,8 @@ Key content:
 - Findings data schema.
 - Findings table render contract.
 - Notes append-only usage.
+
+This file replaces the separate `ledger-contract.md` and `helper-contract.md` references from the earlier draft. The point is not to add another reference: it is to give the prose runbook one compact map of deterministic CLI ownership.
 
 ### `references/host-adapters.md`
 
@@ -747,7 +795,7 @@ Actions:
 - Capture current helper tests and runbook search checks.
 - Record a line-map from old sections to new references.
 - Treat v2 extraction as a behavior-preserving refactor first.
-- Do not change helper semantics in the same slice as text extraction.
+- Do not change deterministic helper or CLI semantics in the same slice as text extraction.
 
 Deliverable:
 
@@ -759,7 +807,8 @@ Goal: progressive disclosure without semantic churn.
 
 Actions:
 
-- Move Builder dispatch, Validator loop, persona selector, finding lifecycle, ce-plan addendum, and final-review patch-batches into one-level references or templates.
+- Move Builder dispatch, findings/validators, ce-plan addendum, and packet payloads into the revised references or templates.
+- Move final-review patch-batch remediation into the generalized Stage 4 reference instead of creating a separate patch-batch playbook.
 - Leave short pointers in `issue-to-pr.md`.
 - Keep old wording mostly intact during extraction.
 
@@ -782,7 +831,7 @@ Deliverable:
 
 - `issue-to-pr.md` drops to 400-500 lines (**revised** from 250-350).
 
-**Router state space note:** the `--confirmation-state` output has three orthogonal axes (`acceptance_criteria`, `batch_contract`, `digests`) each with four values (`pending`, `confirmed`, `stale`, `blocked`). The reachable subset is approximately twelve distinct routings, not the nine in the Mermaid diagram below. The v2 router table must enumerate at least: no-ledger, AC-pending, AC-stale, plan-missing, batch-pending, batch-stale (digests confirmed), batch-blocked (Stage 3 Contract Review), digests-stale (re-route to Stage 3), batch-eligible, batch-in-progress, no-pending-batches, final-P0/P1-open, final-reviewed, shipped, replacement-batch-active. The current runbook handles several of these inline (digest re-check at `:296-311`, replacement-batch dependency rewrites at `:236-247`); v2 must not silently lose them.
+**Router state space note:** `cli.ts state <ledger> --json` should preserve the current `--confirmation-state` axes (`acceptance_criteria`, `batch_contract`, `digests`) with values such as `pending`, `confirmed`, `stale`, and `blocked`. The reachable subset is approximately twelve distinct routings, not the nine in the Mermaid diagram below. The v2 router table must enumerate at least: no-ledger, AC-pending, AC-stale, plan-missing, batch-pending, batch-stale (digests confirmed), batch-blocked (Stage 3 Contract Review), digests-stale (re-route to Stage 3), batch-eligible, batch-in-progress, no-pending-batches, final-P0/P1-open, final-reviewed, shipped, replacement-batch-active. The current runbook handles several of these inline (digest re-check at `:296-311`, replacement-batch dependency rewrites at `:236-247`); v2 must not silently lose them.
 
 ### Phase 3: Promote Packet Shapes To Templates
 
@@ -802,19 +851,22 @@ Deliverable:
 
 - Hot path instructs agents to fill templates instead of reconstructing prompt payloads from prose; tagged prompt packets make handoff boundaries explicit without adding hot-path bulk.
 
-### Phase 4: Strengthen Helper Ownership
+### Phase 4: Split The Helper, Then Build The CLI Front Door
 
-Goal: reduce prose that describes machine-checkable invariants.
+Goal: reduce prose that describes machine-checkable invariants, without piling more onto the already-oversized `decompose.ts`, and make ADR 0002 operational.
 
 Actions:
 
-- Add helper support only where repeated manual work remains after extraction.
-- Candidate first helpers: render findings table, validate raw Builder envelope, generate Work Packet, route current stage.
-- Keep helper changes separate from prose-only extraction.
+- Split `decompose.ts` into modules first (see "decompose.ts itself needs v2" under Revisions): `lib/contract.ts`, `lib/validate.ts`, `lib/digest.ts`, `lib/ledger.ts`, `lib/route.ts`, and `lib/packets.ts`. Per-module test files cap at 1,500 lines.
+- Add top-level `cli.ts` as the runbook's deterministic front door after the module split gives new commands a clear home.
+- Keep `decompose.ts` only as a compatibility shim while existing commands migrate.
+- Add new CLI commands in the appropriate module, not by extending one file. Candidates: render findings table (`validate.ts` / `ledger.ts`), validate raw Builder envelope (`validate.ts`), generate Work Packet (`packets.ts`), route current stage (`route.ts`).
+- Every machine-consumed command ships with `--json` output and a fixed schema. Agents do not parse prose stdout for routing decisions.
+- Keep helper changes separate from prose-only extraction (do Phase 1-3 first, then Phase 4).
 
 Deliverable:
 
-- A helper contract reference that maps each invariant to either code or prose.
+- A CLI contract reference (`references/ledger-and-helper.md`) that maps each invariant to either code or prose, names which module owns each command, and documents the `--json` schema for every machine-consumed command.
 
 ### Phase 5: Forward-Test V2
 
@@ -833,15 +885,17 @@ Deliverable:
 
 ## Priority Cut List
 
-If only three cuts are made, do these:
+**Revised:** the original draft framed these three cuts as independent quick wins. The adversarial pass demonstrated they are entangled (extracting Builder requires Work Packet template which requires ledger schema reference which is also needed for patch-batches). Treat them as a single coherent slice that lands together, not three independent merges.
+
+The coherent first slice:
 
 1. Extract `ce-plan addendum` to a template.
 2. Extract `Builder dispatch contract` to a reference plus Work Packet template.
-3. Extract `final-review patch-batches` to a reference.
+3. Dissolve `final-review patch-batches` into Stage 4 (per W2 in Revisions); Stage 5 becomes a read-only gate.
 
-Those three remove the biggest context blocks while preserving the most important safety behavior.
+Those three remove the biggest context blocks while preserving the most important safety behavior. They must land together, not in three sequential PRs, because the intermediate states are strictly worse than v1.
 
-If only one structural improvement is made, make the state router the first executable section in `issue-to-pr.md`.
+If only one structural improvement is made, make the state router the first executable section in `issue-to-pr.md` and reorder the file so non-negotiable invariants and the resumed-turn algorithm appear before any role contract. This alone gives most of the cognitive-load reduction without any extraction.
 
 ## Risks In The V2 Refactor
 
@@ -908,12 +962,15 @@ V2 action:
 
 The original draft treated Builder/Validator separation as architecturally sound. The adversarial pass identified a leak: proposal-only Builder dispatch is **not a Builder role**. It has Builder's read authority and probe catalog, but it does not commit, does not edit, and does not append `builder_attempts`. The current Builder envelope (six statuses) has no slot for "produced a candidate proposal."
 
-V2 must address this leak. Two options:
+V2 resolves this leak by introducing a distinct **Proposer** role:
 
-- **Option A (preferred):** introduce a distinct `Proposer` role with its own envelope contract. `references/builder-dispatch.md` covers both Builder and Proposer with explicit boundaries between them. The envelope for Proposer outputs a candidate batch contract YAML and has no `commit_sha` or `builder_attempts` semantics.
-- **Option B (acceptable if A is too costly):** keep the role folded into Builder, but document the leak explicitly in `references/builder-dispatch.md` and add a `status: proposal_only` value to the existing envelope.
+- Proposer is read-only.
+- Proposer produces candidate batch contract YAML for human confirmation.
+- Proposer has its own envelope contract.
+- Proposer output has no `commit_sha` and no `builder_attempts` semantics.
+- `references/builder-dispatch.md` covers Builder and Proposer with explicit boundaries between them.
 
-Either way, the runbook must specify what envelope status a successful proposal-only dispatch returns. The current runbook does not.
+The runbook must stop using "proposal-only Builder" as role language. If the Proposer needs Builder-like probes, describe that as shared probe authority, not shared role identity.
 
 ### XML granularity correction (X2, X4)
 
@@ -929,11 +986,9 @@ Additionally, reframe the XML-vs-no-XML rule: **XML is useful only when the cont
 
 The original draft was silent on the installed copy at `~/.claude/runbooks/issue-to-pr/`. The repo source at `runbooks/issue-to-pr/` is what gets edited, but the runbook prose references the installed path throughout. V2 must specify:
 
-- **Install topology:** which files are installed, and how the install script changes for v2. If `references/` and `templates/` are not synced into the installed copy, every Builder dispatch under v2 will fail to load `references/builder-dispatch.md`. The install script must add the new subdirectories to its sync set.
-- **Version detection:** add a `runbook_version` field to ledger frontmatter. The agent's first turn-start helper call should check this field; if the installed runbook version does not match the ledger's `runbook_version`, the agent must stop and ask the operator before proceeding.
-- **Migration semantics:** pick one and document it.
-  - **Atomic landing:** all in-flight ledgers must be drained to `shipped` or `blocked` before v2 ships. Document the operational gate.
-  - **Deprecation window:** v1 prose ships in parallel for N weeks; new issues use v2; in-flight v1 ledgers continue under v1 until they close. Document the dual-prose layout.
+- **Install topology:** install the whole `runbooks/issue-to-pr/` directory recursively so the source and installed copies are structurally identical. If `references/` and `templates/` are not synced into the installed copy, every Builder dispatch under v2 will fail to load `references/builder-dispatch.md`.
+- **Version detection:** add a `runbook_version` field to ledger frontmatter. This is a workflow contract version, not a release date or source commit; it changes only when ledger interpretation, routing, or migration semantics change. The agent's first turn-start helper call should check this field; if the installed runbook version does not match the ledger's `runbook_version`, the agent must stop and ask the operator before proceeding.
+- **Migration semantics:** use **atomic cutover**. All in-flight v1 ledgers must be drained to `shipped` or `blocked` before v2 ships; v2 does not support a dual-prose deprecation window. Document this operational gate in the runbook and install notes.
 - **Partial migration risk (M1):** Phase 1's "drops below 600 lines" deliverable is a half-extracted state. The v2 PR landing pattern should be a single atomic merge of the full reference tree plus the rewritten hot file, not an incremental sequence of "extract one section per PR" merges.
 
 ### Regression matrix (M3, R5)
@@ -953,35 +1008,43 @@ Phase 5's three smoke runs (happy path, stale contract, final-review patch-batch
 11. Selector signal precedence (overlap between `auth` and `migrations/`)
 12. Host-readiness-vs-infrastructure-failure boundary (`:687-694, :1027-1034`)
 
-V2 must ship with a regression matrix that exercises each of these under both v1 prose and v2 prose. The matrix can be a documented checklist of scripted scenarios, not necessarily automated tests, but the verification must happen before v2 lands. Phase 5's current smoke-test list exercises at most three of these in any given run; that is not coverage.
+V2 must ship with a hybrid regression matrix that exercises each of these under both v1 prose and v2 prose:
 
-### Helper output structuring (M6, Phase 4)
+- A documented manual scenario matrix covers the twelve prose-only invariants, role-boundary judgments, and reference-loading expectations.
+- Automated probes cover brittle deterministic surfaces: installed reference/template presence, `runbook_version` mismatch handling, `cli.ts state <ledger> --json` schema, and the startup route metric that the first non-read tool call is the state command.
 
-Every new helper mode added in Phase 4 must ship with `--json` structured output and a fixed schema. The agent never parses prose stdout for routing decisions. The existing nine modes can keep their prose output for human-readability, but their machine consumers (the agent) must be migrated to `--json` over time.
+Phase 5's current smoke-test list exercises at most three prose-only invariants in any given run; that is not coverage.
 
-Rationale: as helper modes multiply, the implicit contract between helper stdout and agent parsing becomes load-bearing. Without structured output, the agent-helper contract lives in runbook prose, which is exactly the prose-drift failure mode F3 warns against.
+### CLI output structuring (M6, Phase 4)
+
+Every new CLI command added in Phase 4 must ship with `--json` structured output and a fixed schema. The agent never parses prose stdout for routing decisions. The existing nine `decompose.ts` modes can keep their prose output for human-readability during migration, but their machine consumers (the agent) must be migrated to `cli.ts ... --json` over time.
+
+Rationale: as deterministic commands multiply, the implicit contract between stdout and agent parsing becomes load-bearing. Without structured output, the agent-tool contract lives in runbook prose, which is exactly the prose-drift failure mode F3 and ADR 0002 warn against.
 
 ### decompose.ts itself needs v2 (A2)
 
 The original draft's F3 and Phase 4 recommendations push more truth into `decompose.ts`. The adversarial pass demonstrated that `decompose.ts` is already 87,112 bytes / 2,164 lines, with one `describe` block and 77 tests in a 5,174-line test file. Adding render-findings-table, normalize-Validator-envelope, validate-raw-Builder-envelope, and route-current-stage modes (Phase 4) would push it to ~3,200 lines.
 
-The structural recommendation in F3 (push more truth into code) is correct. The placement recommendation (extend `decompose.ts`) is not. V2 should split the helper into modules per the proposed file layout above:
+The structural recommendation in F3 (push more truth into code) is correct. The placement recommendation (extend `decompose.ts`) is not. ADR 0002 makes the better boundary explicit: `cli.ts` is the deterministic front door; `decompose.ts` becomes implementation detail or compatibility shim. V2 must split the helper into modules before adding new route, packet, diagnose, or envelope-validation modes:
 
+- `cli.ts` — top-level deterministic front door used by the runbook.
+- `lib/contract.ts` — runtime contract values, schema slices, command metadata.
 - `lib/validate.ts` — schema validators (AC coverage, batch contract shape, DAG cycles, findings rows).
 - `lib/digest.ts` — content hashing (plan, AC, batch contract digests).
 - `lib/ledger.ts` — persistence and cross-document integrity (frontmatter, fenced YAML, supersedes references, commit reachability).
-- `lib/route.ts` — workflow routing (`--confirmation-state`, `--next-action`).
-- `lib/cli.ts` — thin dispatch shim.
+- `lib/route.ts` — workflow routing facts (`--confirmation-state`, `--next-action`) without imperative orchestration prose.
+- `lib/packets.ts` — deterministic rendering of complete Builder, Proposer, Validator, and planning packets from templates and durable ledger state.
 
-Each module's test file caps at 1,500 lines. The CLI dispatch becomes a thin shim that picks the right module per flag. This decouples Phase 4's helper extension work from the original file's growing single-file complexity.
+Each module's test file caps at 1,500 lines. The top-level CLI dispatch should remain thin, but it is still the front door agents call. This decouples Phase 4's helper extension work from the original file's growing single-file complexity and prevents the runbook from teaching internal helper flags as workflow policy.
 
 ### Observability (O1)
 
 The original draft has no observability surface. Diagnosing a stuck workflow under v2 (when the agent has loaded only the hot file and the operator suspects a missed rule in an unloaded reference) requires infrastructure the original draft does not propose. V2 must add:
 
-- **Helper `--diagnose <ledger-path>` mode:** prints inferred current state, the expected reference for the current state, and any drift (digest mismatch, finding-table drift, frontmatter version skew).
-- **Dispatch evidence in ledger Notes:** every Builder/Proposer dispatch appends a row recording which references were loaded before the dispatch decision.
+- **CLI `diagnose <ledger-path> --json` mode:** prints inferred current state, the expected reference for the current state, and any drift (digest mismatch, finding-table drift, frontmatter version skew).
+- **Dispatch evidence in ledger Notes:** every Builder/Proposer dispatch appends a minimal evidence row: timestamp, role, batch or finding id, loaded references/templates, and CLI route id. Do not paste the full packet, rationale, probes, or envelope into Notes.
 - **Escape-hatch reference tracking:** every escape-hatch fire records which reference (if any) was loaded immediately before. This catches "agent skipped the reference and fired the wrong hatch" failure modes.
+- **Override evidence:** `accepted-risk`, `force-run`, or equivalent override paths are allowed only with explicit ledger evidence: user decision, affected finding or batch, risk accepted, scope, timestamp, and the reference or CLI result used immediately before the override.
 
 These are operator-facing surfaces, not agent-facing. Without them, v2's reference-based structure makes diagnosis harder than v1, not easier.
 
@@ -992,6 +1055,7 @@ These are operator-facing surfaces, not agent-facing. Without them, v2's referen
 - Do not collapse Builder and Orchestrator roles.
 - Do not let Validators fix code.
 - Do not remove helper validation.
+- Do not turn the CLI into the Orchestrator. It is the deterministic front door, not the workflow owner.
 - Do not move all details into README.
 - Do not introduce a new generic workflow framework unless a second workflow needs it.
 
@@ -999,22 +1063,36 @@ The original draft included "Do not split references more than one level deep." 
 
 ## Acceptance Criteria For A Successful V2
 
-- `issue-to-pr.md` is under 500 lines (**revised** from 350; floor justified in Target Hot File Budget).
+- `issue-to-pr.md` targets 400-500 lines (**revised** from 350; floor justified in Target Hot File Budget). Safety invariants win over the budget; any overflow must include a worked enumeration explaining which hot-path invariants could not safely move to references.
 - Every reference file is linked directly from `issue-to-pr.md`, and every chained reference is linked from its parent reference.
 - Every reference link includes a clear "read when" trigger.
+- `cli.ts` is the single deterministic front door used by the runbook.
+- `cli.ts state` / `cli.ts next` emit route facts, not imperative workflow instructions.
+- Runtime contract values live in `lib/contract.ts` or equivalent runtime data, not only in prose or erased TypeScript types.
 - Builder Work Packet and ce-plan addendum are templates, not inline prose.
 - Cross-agent prompt templates use clear boundary mechanisms (XML or Markdown headings) where they reduce ambiguity, with tag granularity that does not split a single contract across multiple tags (see "XML granularity correction" below).
 - The active turn path can be determined from ledger state without reading Builder or final-review patch details.
-- Helper-owned invariants are named once in `references/ledger-and-helper.md`.
-- Every new helper mode added in Phase 4 ships with `--json` output and a fixed schema; agents do not parse helper prose stdout for routing.
+- CLI-owned invariants are named once in `references/ledger-and-helper.md`.
+- Every new CLI command added in Phase 4 ships with `--json` output and a fixed schema; agents do not parse helper prose stdout for routing.
 - README no longer repeats detailed workflow policy.
-- **Operationalized resume metric** (**revised** from "under one screen"): in a new Claude Code session with the runbook and ledger loaded by `/goal`, the agent's first non-read tool call after loading the runbook is `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state ...`, with no intermediate file reads other than the ledger and the runbook itself. This is testable; "one screen of reading" was not.
+- **Operationalized resume metric** (**revised** from "under one screen"): in a new Claude Code session with the runbook and ledger loaded by `/goal`, the agent's first non-read tool call after loading the runbook is `bun ~/.claude/runbooks/issue-to-pr/cli.ts state <ledger-path> --json`, with no intermediate file reads other than the ledger and the runbook itself. This is testable; "one screen of reading" was not.
 - No behavior is weakened relative to ADR 0001.
-- Every prose-only invariant in the regression matrix (see "Regression matrix" section) passes under both v1 and v2 prose.
-- Ledger frontmatter gains a `runbook_version` field that lets the agent detect mid-conversation version skew (see "Install topology and migration semantics").
+- Every prose-only invariant in the manual regression matrix (see "Regression matrix" section) passes under both v1 and v2 prose.
+- Automated probes pass for installed artifact presence, version-skew detection, `cli.ts state <ledger> --json`, and startup route behavior.
+- Ledger frontmatter gains a workflow-contract `runbook_version` field that lets the agent detect mid-conversation version skew (see "Install topology and migration semantics").
+- V2 ships through atomic cutover: no in-flight v1 ledger continues under v2 prose without an explicit operator decision.
+- Override paths such as `accepted-risk` and `force-run` require explicit ledger evidence and cannot bypass findings or batch gates silently.
 
 ## Bottom Line
 
 The current runbook is bloated because it is carrying real architectural load. Do not delete the load. Move it behind progressive-disclosure boundaries.
 
 The v2 skill should be a router first, a contract index second, and a policy manual only through references. The Builder/Validator architecture is worth keeping, but the hot path should only orchestrate it. The detailed contracts should live where they are loaded at the moment of need.
+
+After the adversarial pass and ADR 0002, five constraints harden:
+
+- The hot file budget is **400-500 lines**, not 250-350. Show your work before extracting.
+- References are **tiered** (static one-level, active orchestration max two hops), not flat.
+- `cli.ts` is the deterministic front door; `decompose.ts` itself needs v2 (split into modules) before Phase 4 adds more commands.
+- Runtime contracts live in code (`lib/contract.ts` or equivalent) and are emitted or enforced through the CLI, not duplicated in prose.
+- v2 lands as a **single atomic merge** of the full reference tree plus the rewritten hot file, with `runbook_version` in ledger frontmatter, install-script changes, and a regression matrix covering the twelve named prose-only invariants. No incremental "extract one section per PR" sequence.
