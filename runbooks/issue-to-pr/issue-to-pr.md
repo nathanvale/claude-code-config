@@ -431,6 +431,17 @@ with user confirmation); working tree clean.
    the host can run, and record any omitted reviewers plus the cap reason in
    Notes. If the fallback cannot cover correctness and testing, fail-stop.
 
+   **Mechanical-diff fallback.** When the cumulative diff is dominated by
+   mechanical changes (>80% of changed lines are pure renames, identifier
+   substitutions, or doc-pointer refreshes that batch-level validators have
+   already covered), the orchestrator may substitute a single
+   `ce-correctness-reviewer` subagent for the full `/ce-code-review` wave.
+   The subagent prompt MUST include the full list of ledger-recorded finding
+   signatures so it can signature-deduplicate and surface only NEW findings.
+   This is not a cap fallback; it is a cost-and-time choice for diffs where
+   the full reviewer suite would re-litigate already-closed surfaces. Record
+   the choice (and the >80% mechanical-line estimate) in Notes.
+
 3. ce-code-review returns findings. Write them into `## Findings data` with
    `batch_id: final`, then update the human-readable `## Findings` table from
    that data. Run
@@ -482,8 +493,15 @@ with user confirmation); working tree clean.
            `resolution: commit <sha>` when the commit is recorded in a
            terminal ledger batch) before evaluating the stage 5 exit
            condition.
-       - If finding's fix touches >2 files → fail-stop and ask the user to
-         re-plan. `frontmatter.status = blocked`,
+       - If finding's fix touches >2 files → first ask whether a smaller
+         patch exists that adjusts the *contract* the finding cites (a
+         documentation claim, an acceptance test, a comment, a runbook
+         section) rather than the full implementation surface. If yes,
+         propose that 1-2-file patch-batch through the normal patch-batch
+         path with rationale starting `contract-softening-exception:`. If
+         no (the finding is genuine behaviour drift that requires the full
+         sweep), fail-stop and ask the user to re-plan.
+         `frontmatter.status = blocked`,
          `blocked_reason: final-review-needs-replan`.
      - Apply the same iteration cap, `same-signature-twice` hatch, and
        `finding-count-rises` hatch used by the batch inner loop, keyed by
@@ -613,7 +631,7 @@ Inside `batch-loop` for each batch:
 flowchart TD
   IMPL["Builder initial implementation commit<br/>(scoped to batch.files)"] --> P["Compute persona set:<br/>always-on + adversarial + diff-conditional"]
   P --> V["Dispatch personas in parallel<br/>(all read-only)"]
-  V --> F["Classify findings:<br/>write to ## Findings data"]
+  V --> F["Normalize + dedupe findings:<br/>then write data/table"]
   F --> G{"Open P0/P1<br/>findings == 0?"}
   G -->|yes| C["Mark batch status: converged.<br/>Auto-close P2/P3.<br/>Exit inner loop."]
   G -->|no| E{"Escape hatch<br/>triggered?"}
@@ -640,7 +658,10 @@ and ask the user.
    `execution_mode`. Conventional commit format:
    `feat(issue-{issue-number}): implement <batch-id>` (use a more accurate
    conventional type such as `fix`, `docs`, or `chore` when the batch clearly
-   warrants it). Body lists the batch id, AC mapping, and acceptance checks.
+   warrants it -- for example, a pure `git mv` rename batch is a `chore`, a
+   documentation refresh is a `docs`, and a code change behind an existing
+   test is a `feat`). Body lists the batch id, AC mapping, and acceptance
+   checks.
 3. **One finding per fix commit.** After validation has produced findings,
    each Builder fix commit addresses exactly one P0/P1 finding by signature.
    Conventional commit format:
@@ -697,11 +718,33 @@ and ask the user.
    - Missing `findings`, non-array `findings`, malformed JSON or YAML, or a
      partial finding is malformed output. Rerun that persona once with the
      envelope contract. If it is still malformed, treat it as unavailable per
-     rule 5 and record the malformed shape in Notes.
-   Write normalized rows to `## Findings data` first, then render the
-   `## Findings` table from that data. If every persona has empty findings,
-   keep `findings: []`.
-4. Finding severity must be `P0`, `P1`, `P2`, or `P3`. Finding status must
+     the unavailable-persona rule below and record the malformed shape in
+     Notes.
+   Produce candidate ledger rows only. Do not write `## Findings data` until
+   after the dedupe step below. If every persona has empty findings, write
+   `findings: []`.
+4. Deduplicate normalized findings by `batch_id + signature` before writing
+   the ledger. The group represents one underlying issue even when multiple
+   personas report it. Keep one canonical finding row and mark the other rows
+   `status: superseded` with `resolution: superseded-by-<canonical-id>`. The
+   canonical row is usually open when first recorded; after convergence it may
+   close normally.
+   Choose the finding row with the highest severity as canonical. If multiple
+   rows have the same highest severity, the first row in stable normalized
+   order wins. Stable normalized order is the selected persona dispatch order
+   from rule 1, preserving each persona's finding order. Preserve corroborating
+   persona names or disagreements with a short "also reported by ..." clause in
+   the canonical summary, and record the full duplicate context in Notes. In v1
+   this is orchestrator-owned: `decompose.ts
+   --validate-findings` enforces the final ledger invariant, but it does not
+   normalize raw persona output into deduped rows. Add a helper normalizer only
+   if a future real run shows repeated friction. After dedupe, write
+   `## Findings data`, then render the `## Findings` table from that data.
+   The table's `summary` column must equal the YAML `summary` field verbatim;
+   `decompose.ts --validate-findings` rejects any drift. If a long summary
+   reads awkwardly in the rendered table, shorten the YAML to match (do not
+   shorten only the table).
+5. Finding severity must be `P0`, `P1`, `P2`, or `P3`. Finding status must
    be `open`, `fixed`, `accepted-risk`, `deferred-P2`, `deferred-P3`,
    `out-of-scope-for-this-issue`, `ADR-contradicts-<id>`, or `superseded`.
    An open P0/P1 means `severity` is `P0` or `P1` and `status` is `open`.
@@ -713,16 +756,16 @@ and ask the user.
    Run
    `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`
    before any convergence or ship transition that requires zero open P0/P1.
-5. If a persona is unavailable, record it in Notes and continue with the
+6. If a persona is unavailable, record it in Notes and continue with the
    remaining required personas. If fewer than the always-on personas can run,
    fail-stop and ask whether to use `/ce-code-review mode:report-only` as the
    validation fallback for that batch.
-6. Personas are read-only by contract. If a persona's output suggests a
+7. Personas are read-only by contract. If a persona's output suggests a
    fix, the runbook ignores the suggestion text; only the finding is
    recorded.
-7. Severities (P0/P1/P2/P3) come from the persona's own rubric. The
+8. Severities (P0/P1/P2/P3) come from the persona's own rubric. The
    runbook does not re-rank.
-8. P2 and P3 findings are auto-closed at batch convergence as
+9. P2 and P3 findings are auto-closed at batch convergence as
    `deferred-P2` / `deferred-P3`. They do NOT block the inner loop.
 
 ## Escape hatches
@@ -829,7 +872,7 @@ Allowed statuses and resolutions:
 | `deferred-P3` | `deferred-P3` | Auto-closed at batch or final-review convergence (P3 severity). Logged only. |
 | `out-of-scope-for-this-issue` | `out-of-scope-for-this-issue: <reason>` | The finding is real but belongs to a different issue. User creates the follow-up issue and notes its number here. |
 | `ADR-contradicts-<id>` | `ADR-contradicts-<id>` | Finding would violate an ADR. Closed without fix. |
-| `superseded` | `superseded-by-<finding-id>` | Same signature recurred; the latest open row supersedes this one. The referenced finding id must exist, be open, share the same signature, have equal-or-higher severity, and must not be itself. |
+| `superseded` | `superseded-by-<finding-id>` | Duplicate finding kept for audit trail. The referenced finding id must exist, be the canonical non-superseded row, share the same batch id and signature, have equal-or-higher severity, and must not be itself. |
 
 ## /loop fallback
 
