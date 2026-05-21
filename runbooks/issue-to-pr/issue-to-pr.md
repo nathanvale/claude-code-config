@@ -825,14 +825,14 @@ Inside `batch-loop` for each batch:
 flowchart TD
   IMPL["Builder initial implementation commit<br/>(scoped to batch.files)"] --> P["Compute persona set:<br/>always-on + adversarial + diff-conditional"]
   P --> V["Dispatch personas in parallel<br/>(all read-only)"]
-  V --> F["Normalize + dedupe findings:<br/>then write data/table"]
+  V --> F["Normalize + dedupe findings:<br/>write data/table and validate"]
   F --> G{"Open P0/P1<br/>findings == 0?"}
   G -->|yes| C["Mark batch status: converged.<br/>Auto-close P2/P3.<br/>Exit inner loop."]
   G -->|no| E{"Escape hatch<br/>triggered?"}
   E -->|yes| H["Stop. Surface to user.<br/>Mark batch: blocked-for-user."]
   E -->|no| CAP{"Iteration<br/>< 5?"}
   CAP -->|no| H
-  CAP -->|yes| S["Builder fix commit<br/>(one P0/P1 finding)"]
+  CAP -->|yes| S["Checkpoint findings,<br/>then Builder repair commit"]
   S --> P
 ```
 
@@ -873,9 +873,10 @@ the user chooses retry, import, or abandon.
    documentation refresh is a `docs`, and a code change behind an existing
    test is a `feat`). Body lists the batch id, AC mapping, and acceptance
    checks.
-3. **One finding per fix commit.** After validation has produced findings,
-   each Builder fix commit addresses exactly one P0/P1 finding by signature.
-   Conventional commit format:
+3. **One finding per fix commit.** After Validator findings have been written,
+   rendered, validated, and committed as a ledger-only checkpoint, each Builder
+   repair commit addresses exactly one P0/P1 finding by signature. Conventional
+   commit format:
    `fix(issue-{issue-number}): <signature>`. Body lists the finding id and
    persona.
 4. **Follow `execution_mode`.** The confirmed ledger chooses the execution
@@ -968,7 +969,17 @@ the user chooses retry, import, or abandon.
    from the rendered table.
    Run
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`
-   after writing findings and before marking any batch converged.
+   after writing findings and before marking any batch converged or routing
+   any P0/P1 to Builder repair.
+   If `--validate-findings` passes, commit a ledger-only Validator findings
+   checkpoint before any subsequent Builder repair dispatch:
+   `chore(issue-{issue-number}): checkpoint <batch-id> validator findings`.
+   This checkpoint may touch only the per-issue ledger path. It is
+   orchestrator-owned workflow state, not a Builder commit, not a Builder
+   attempt, and not part of `builder_commits` or `iterations`.
+   Verify the working tree is clean after this checkpoint. A resumed run must
+   route repair work from this committed findings state, never from transient
+   persona output or an uncommitted findings table.
    Run
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`
    before any convergence or ship transition that requires zero open P0/P1.

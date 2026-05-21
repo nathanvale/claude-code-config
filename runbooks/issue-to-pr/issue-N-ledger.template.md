@@ -66,4 +66,4 @@ findings: []
 
 ## Notes
 
-<append-only log of escape hatch fires, user decisions, blocker overrides, host-builder-tools-unavailable evidence, builder-infrastructure-failure evidence, reachable commit refs, dirty/staged path summaries>
+<append-only log of escape hatch fires, user decisions, blocker overrides, host-builder-tools-unavailable evidence, builder-infrastructure-failure evidence, Validator findings checkpoint evidence, reachable commit refs, dirty/staged path summaries>
