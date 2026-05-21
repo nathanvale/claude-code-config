@@ -744,33 +744,54 @@ with user confirmation); working tree clean.
      close final-review P2/P3 rows as described in step 5, then advance to
      stage 6.
    - If open P0/P1 > 0 → enter the **final-review inner loop**:
-     - For each open P0/P1, classify the finding's scope:
-       - If finding's fix touches ≤2 files (and those files are already in
-         some batch's `files` OR are new files of comparable shape with an
-         explicit `new-file-patch-exception:` rationale; use
-         `high-risk-new-file-patch-exception:` for auth, payment, API, data,
-         privacy, or other high-risk paths) →
-         propose a **patch-batch** with `id: patch-NNN` (incrementing),
-         `depends_on: [<last-batch-id>]`, proposed `files`,
-         `ac_mapping: []` (patch-batches don't map to ACs by design;
-         they're remediation, not feature), explicit `execution_mode`, and
-         rationale. Default toward `proof_first` when the finding is a
-         missing check or behavioural proof. Use `change_first` only under
-         the same guardrails as stage 3.
-         - Patch planning is Builder-owned. Treat reviewer output as evidence
-           only; Builder derives files, dependencies, `execution_mode`, and
-           rationale from the ledger plus the code before user confirmation.
-         - Write the Builder-owned proposal to a scratch file and run
+     - For each open P0/P1, treat the Validator finding as routing evidence,
+       not as an Orchestrator-authored implementation plan. The Orchestrator
+       may only decide whether the finding appears eligible for the bounded
+       patch-batch path or must fail-stop for user re-planning.
+       - If the Validator finding appears fixable in ≤2 files (and those
+         files are already in some confirmed batch's `files` OR are new files
+         of comparable shape with an explicit `new-file-patch-exception:`
+         rationale; use `high-risk-new-file-patch-exception:` for auth,
+         payment, API, data, privacy, or other high-risk paths) → request a
+         **proposal-only Builder dispatch** for one candidate patch-batch.
+         This dispatch is read-only and pre-confirmation: Builder must not
+         edit files, make commits, append `builder_attempts`, or increment
+         `iterations`.
+         - The proposal Work Packet contains the final-review finding row,
+           its signature and reviewer evidence, the confirmed ledger batch
+           summaries needed for terminal dependencies and file-scope checks,
+           the current confirmation/digest state, local-law read order, the
+           `decompose.ts --patch-proposal` helper contract, and the scratch
+           proposal schema. It does not contain unrelated raw Validator
+           envelopes or invite whole-plan replanning.
+         - Builder verifies the finding against ledger and code evidence,
+           then either returns exactly one candidate **patch-batch** with
+           `id: patch-NNN` (incrementing), terminal ledger-backed
+           `depends_on`, proposed `files`, `ac_mapping: []` (patch-batches
+           don't map to ACs by design; they're remediation, not feature),
+           explicit `execution_mode`, `acceptance_tests`, and `rationale`, or
+           fail-stops with blockers and `route_hint`. Default toward
+           `proof_first` when the finding is a missing check or behavioural
+           proof. Use `change_first` only under the same guardrails as stage 3.
+         - The Orchestrator may reject a missing, malformed, or obviously
+           unbounded candidate, but must not fill in missing files,
+           dependencies, `execution_mode`, tests, or rationale from its own
+           correctness reasoning. Until helper validation and user
+           confirmation pass, the Builder candidate remains evidence only.
+         - Write the Builder-owned candidate proposal to a scratch file and
+           run
            `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <patch-proposal-path> --patch-proposal <ledger-path>`.
-           The helper must validate exact fields, concrete paths,
-           ledger-backed dependencies, exactly one patch batch, files already
-           in the confirmed ledger scope unless `new-file-patch-exception:`
-           is present, high-risk new files only when
-           `high-risk-new-file-patch-exception:` is present,
+           The helper validates against confirmed ledger state: exact fields,
+           concrete paths, terminal ledger-backed dependencies, exactly one
+           patch batch, files already in confirmed ledger scope unless
+           `new-file-patch-exception:` is present, high-risk new files only
+           when `high-risk-new-file-patch-exception:` is present,
            `execution_mode`, `acceptance_tests`, patch `ac_mapping: []`, and
-           `change_first` guardrails before the proposal reaches the user.
+           `change_first` guardrails.
          - Print the validated patch-batch proposal and ask the user to
-           confirm the files, dependencies, execution mode, and rationale.
+           confirm the files, dependencies, execution mode, tests, and
+           rationale. The user confirmation gate, not Builder or reviewer
+           output, authorizes the patch contract.
          - On `n`, stop and discuss.
          - On `y`, append the confirmed helper output row to `## Batches`,
            mark its status `pending` if the helper output did not already do
@@ -778,7 +799,10 @@ with user confirmation); working tree clean.
            `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`,
            keep `batch_contract_confirmation_status: confirmed`, update
            `batch_contract_confirmed_at`, and run `--confirmation-state`
-           before returning to stage 4 (batch-loop) to converge it.
+           before returning to stage 4 (batch-loop) to converge it. The
+           appended patch-batch is now a confirmed batch; the Stage 4 Builder
+           owns one implementation or repair attempt against that confirmed
+           contract.
          - When the patch-batch converges, update the original
            `batch_id: final` finding row in `## Findings data` to
            `status: fixed` with `resolution: patch-batch <id>` (or
