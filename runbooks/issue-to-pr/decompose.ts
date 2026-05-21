@@ -1,4 +1,4 @@
-#!/usr/bin/env bunx tsx
+#!/usr/bin/env bun
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

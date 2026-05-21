@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execPath } from "node:process";
 import { afterEach, describe, expect, test } from "bun:test";
 
 const scriptPath = join(import.meta.dir, "decompose.ts");
+const bunExecutable = execPath || "bun";
 const tempDirs: string[] = [];
 const currentCommit = new TextDecoder().decode(Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"]).stdout).trim();
 
@@ -29,7 +31,7 @@ function sha256(payload: string): string {
 }
 
 async function runDecompose(args: string[]) {
-  const proc = Bun.spawn(["bunx", "tsx", scriptPath, ...args], {
+  const proc = Bun.spawn([bunExecutable, scriptPath, ...args], {
     stderr: "pipe",
     stdout: "pipe",
   });

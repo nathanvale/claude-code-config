@@ -250,12 +250,12 @@ Three sections plus frontmatter:
    path, final review checkpoint, PR URL (once shipped), ship mode, and
    confirmed Stage 3 digests (`plan_digest`, `batch_contract_digest`,
    `ac_digest`). Compute the plan digest with
-   `decompose.ts --plan-digest <plan-path>`. Compute the AC digest with
-   `decompose.ts --ac-digest <ledger-path>`. The batch contract digest covers
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`. Compute the AC digest with
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`. The batch contract digest covers
    immutable batch fields only: id, name, goal, files, depends_on,
    execution_mode, acceptance_tests, ac_mapping, and rationale. Compute it
-   with `decompose.ts <plan-path> --candidate-contract-digest` before
-   confirmation, and `decompose.ts --batch-contract-digest <ledger-path>`
+   with `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest` before
+   confirmation, and `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
    after the ledger is written.
 2. **`## Acceptance criteria`** - populated at stage 1 from the user-confirmed
    AC list. The source of truth for stage 2 and stage 3.

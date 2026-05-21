@@ -99,9 +99,9 @@ acceptance_tests, ac_mapping, and rationale. It does not cover mutable
 lifecycle fields such as status, builder_commits, iterations, or
 final_verdict. Recompute the three digests with:
 
-- `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
-- `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
-- `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
+- `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
+- `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
+- `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
 
 ### Stage 1: `pick-issue`
 
@@ -268,7 +268,7 @@ working tree clean.
 **Actions:**
 
 1. Invoke the decompose helper:
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path>`.
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path>`.
    - Output: a YAML batches block printed to stdout.
    - Errors: non-zero exit with a parse-error message on stderr.
 
@@ -296,7 +296,7 @@ working tree clean.
      rationale prefix so the stage 3 user gate can accept them deliberately.
 
 4. **Validate AC coverage.** Invoke
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path>
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path>
    --validate-ac-coverage <ledger-path>`. Every AC index (1..N) in the
    ledger's `## Acceptance criteria` section must appear in at least one
    batch's `ac_mapping`. Any AC not covered triggers fail-stop:
@@ -313,9 +313,9 @@ working tree clean.
 6. Record digests for the plan file, the ledger's `## Acceptance criteria`
    section, and the candidate batch contract. Use the helper commands so
    every run hashes the same payloads:
-   - `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
-   - `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
-   - `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest`
+   - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
+   - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
+   - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest`
    Print the candidate batch list inline at end of turn, including each
    `execution_mode`, any rationale, and all three digests. Ask the user to
    confirm the exact AC text, DAG, and execution modes before entering
@@ -336,8 +336,8 @@ working tree clean.
 9. Commit the ledger (batches recorded) before transitioning to stage 4:
    `chore(issue-{issue-number}): record batch DAG`.
    Before the commit, run
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-ledger-batches <ledger-path>`
-   and `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`.
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-ledger-batches <ledger-path>`
+   and `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`.
 
 **Exit condition:** Ledger has populated `## Batches` YAML block with all
 batches at `status: pending`; every AC covered; user has confirmed; working
@@ -447,12 +447,12 @@ with user confirmation); working tree clean.
 3. ce-code-review returns findings. Write them into `## Findings data` with
    `batch_id: final`, then update the human-readable `## Findings` table from
    that data. Run
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`
    before reading the open P0/P1 gate.
 
 4. Apply the same P0/P1 gate as the inner loop:
    - If open P0/P1 == 0 → run
-     `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`,
+     `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`,
      close final-review P2/P3 rows as described in step 5, then advance to
      stage 6.
    - If open P0/P1 > 0 → enter the **final-review inner loop**:
@@ -473,7 +473,7 @@ with user confirmation); working tree clean.
            only; Builder derives files, dependencies, `execution_mode`, and
            rationale from the ledger plus the code before user confirmation.
          - Write the Builder-owned proposal to a scratch file and run
-           `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts <patch-proposal-path> --patch-proposal <ledger-path>`.
+           `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <patch-proposal-path> --patch-proposal <ledger-path>`.
            The helper must validate exact fields, concrete paths,
            ledger-backed dependencies, exactly one patch batch, files already
            in the confirmed ledger scope unless `new-file-patch-exception:`
@@ -487,7 +487,7 @@ with user confirmation); working tree clean.
          - On `y`, append the confirmed helper output row to `## Batches`,
            mark its status `pending` if the helper output did not already do
            so, recompute `batch_contract_digest` with
-           `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`,
+           `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`,
            then return to stage 4 (batch-loop) to converge it.
          - When the patch-batch converges, update the original
            `batch_id: final` finding row in `## Findings data` to
@@ -512,7 +512,7 @@ with user confirmation); working tree clean.
        the top of stage 5.
 
 5. When ce-code-review returns zero open P0/P1, run
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`.
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`.
    Then close final-review P2 rows
    as `status: deferred-P2` and final-review P3 rows as
    `status: deferred-P3`, preserving their summaries and signatures. Set
@@ -753,10 +753,10 @@ and ask the user.
    All convergence gates read this predicate from `## Findings data`, not
    from the rendered table.
    Run
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`
    after writing findings and before marking any batch converged.
    Run
-   `bunx tsx ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`
    before any convergence or ship transition that requires zero open P0/P1.
 6. If a persona is unavailable, record it in Notes and continue with the
    remaining required personas. If fewer than the always-on personas can run,
