@@ -32,6 +32,13 @@ Format and protocol: see [README](file:///Users/nathanvale/.claude/runbooks/issu
 ## Batches
 
 Each batch row must include `execution_mode: tdd | proof_first | change_first`.
+Replacement batches may include optional `supersedes: <blocked-batch-id>` as
+audit metadata. `supersedes` does not satisfy dependencies; downstream
+`depends_on` edges must name the replacement batch after helper validation and
+user confirmation. Replacement rows may only supersede blocked batches,
+preserve every AC index from the superseded row, and include rationale prose
+when changing `files`, `acceptance_tests`, or `execution_mode`.
+Recommended rationale format: `replacement-contract: <reason>`.
 `builder_commits` entries must be reachable git commit refs.
 `builder_attempts` is the compact persisted audit trail for well-formed Builder
 envelopes. Each attempt row contains `attempt_type`, `status`, `commit_sha`,
