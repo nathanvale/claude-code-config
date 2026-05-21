@@ -524,9 +524,22 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
   - **owner** — the named person (`Nathan to ...`, `MJ to ...`, `Team to ...`). If unattributed, default `owner = unknown`.
   - **verb + object** — the action itself (`respond to Box file sharing`, `re-test POS-4038`).
   - **deadline** — explicit dates (`by Friday`, `before regression`) or relative phrases. Normalise to absolute date when possible.
-  - **ticket key** — any `POS-NNNN` mention in the surrounding bullet.
+  - **ticket key** — any `POS-NNNN` (or configured `ticket-prefix`-NNNN) mention in the surrounding bullet.
 - **Filter out** items where `owner != currentUser` AND there's no `Nathan` / `me` mention nearby. Other people's actions are tracked in the `🔗 Dependencies → I'm waiting on` section, not as your own todos.
 - **Deduplicate** against TASKS.md by fuzzy match on the verb+object string. Skip items that already appear in `🔥 Now`, `🎯 Ordered queue`, or any project file's open-checkbox list. If a near-match exists in `📋 Backlog`, surface as "already backlogged — promote?"
+
+**Ticket key verification gate (mandatory before any durable write):**
+
+Notion / Teams / Zoom transcripts are unreliable for ticket numbers. Speakers misremember keys, transcribers mishear digits (4154 ↔ 4155 ↔ 4145), and verbatim quotes captured by Notion AI carry the same errors forward. Before writing a transcript-extracted ticket key into TASKS.md, meeting notes' Action Items, or `memory/projects/*.md`:
+
+1. **Cross-check every extracted ticket key against the open-sprint query results** from the project-tracker step (above). The result is one of:
+   - **Match + assignee = currentUser** → safe to write as a Nathan-owned commitment.
+   - **Match + assignee ≠ currentUser** → **owner mismatch**. The transcript attributed the ticket to the user, but Jira shows someone else owns it. Surface verbatim quote + Jira ground truth side by side; ask the user to confirm before any write. The Jira owner usually wins — transcripts are lossy.
+   - **No match in open-sprint** → either (a) the ticket key was mis-transcribed, or (b) the ticket isn't filed yet. Run a targeted lookup (`key in (POS-NNNN-1, POS-NNNN, POS-NNNN+1)`) to test for an adjacent-digit mishear before concluding the ticket doesn't exist. If still no match, surface as "ticket key TBC — transcript said `<key>`, Jira has no such ticket" and **do not** commit the key into 🔥 Now. Use a placeholder like `(ticket TBC — to verify with <owner>)`.
+2. **Never copy a verbatim transcript ticket key directly into a durable write** without running step 1, even when the transcript is clear. The verification cost is one extra Jira call; the cleanup cost when a wrong key lands in TASKS.md is much higher (it propagates into PR descriptions, commit messages, and follow-up meeting notes).
+3. **The Notion AI `### Action Items` summary is doubly suspect** — it both inherits speaker misattributions AND can hallucinate ticket keys that weren't in the raw transcript. Always run verification against the raw `<transcript>` block, then verify the key against Jira. Two gates, not one.
+
+**Anti-pattern this gate prevents:** anchoring a Nathan commitment to a ticket key that's actually owned by another team member or doesn't exist yet, because the transcript said it confidently.
 
 **Routing rules — pick destination before asking:**
 
@@ -588,20 +601,28 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ Creating a people-note stub from transcript speaker matching — transcript enrichment can only propose updates to **existing** unambiguous people notes. Never pass `--create-if-missing` for transcript speaker matches.
 - ❌ Applying first-name matches when more than one people-note has that first name — ambiguous first-name matches are reported, never written.
 - ❌ **Using the Notion page title or transcript speaker names to determine who was in a meeting.** Notion AI generates the page title from the meeting *topic*, not from the *participants*. A 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Always use the calendar event attendees list as the authoritative participant source. If calendar is unavailable, flag the attendees as unverified in the meeting note.
+- ❌ **Writing a transcript-extracted ticket key directly into TASKS.md / meeting notes without verifying against Jira's open-sprint query.** Transcripts misattribute ticket keys constantly (4154 ↔ 4155, 4160 ↔ 4116, etc.). Always cross-check via the open-sprint query; if the key isn't there, run an adjacent-digit lookup. Use `(ticket TBC)` placeholders rather than committing a wrong key.
+- ❌ **Stopping the project-tracker step after the my-assignee query because "everything I own is already in TASKS.md."** The my-assignee query alone doesn't surface tickets mentioned in meeting transcripts that are owned by other team members, sibling tickets in the same epic, or just-filed release-train / regression-prep tickets that signal next-sprint shape. The open-sprint query is mandatory, not optional.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
-- Window: `updated >= cursor.project-tracker.last_sync - 1h` in the JQL (fallback: `updated >= -7d`). This catches transitions you missed (Ready → Done overnight) without re-reading the entire backlog.
-- Fetch tasks assigned to the user (open/in-progress)
-- Compare against TASKS.md:
+
+Run **two** queries in the project-tracker step, not one. Each has a different job:
+
+1. **My-assignee query** (`assignee = currentUser() AND updated >= cursor.project-tracker.last_sync - 1h`, fallback `-7d`) — finds tickets the user owns that moved since the last sync. **This query alone is insufficient** — it shows your own ticket transitions, but not the surrounding context that lets you reconcile a meeting transcript with what's actually on the sprint board.
+2. **Open-sprint context query** (`sprint in openSprints() AND project = <PREFIX>` with the same updated-window filter) — finds every recently-touched ticket in the active sprint, including ones owned by other people. This is what catches: (a) tickets *mentioned* in meeting transcripts but assigned to someone else, (b) sibling tickets in the same epic that affect dependency framing, (c) release-train / regression tickets just filed that signal upcoming sprint shape.
+
+**Always diff both queries against TASKS.md** — don't stop after the my-assignee query just because "everything I own is already in TASKS.md." The open-sprint query is the load-bearing drift detector.
 
 | External task | TASKS.md match? | Action |
 |---------------|-----------------|--------|
-| Found, not in TASKS.md | No match | Offer to add |
-| Found, already in TASKS.md | Match by title (fuzzy) | Skip |
-| In TASKS.md, not in external | No match | Flag as potentially stale |
-| Completed externally | In active section | Offer to mark done |
+| Found in my-assignee, not in TASKS.md | No match | Offer to add |
+| Found in my-assignee, already in TASKS.md | Match by title (fuzzy) | Skip |
+| In TASKS.md, not in either query | No match | Flag as potentially stale |
+| Completed externally (Done in my-assignee) | In active section | Offer to mark done |
+| Found in open-sprint, **not in my-assignee**, but **mentioned in a meeting transcript this run** | Surface as "context ticket" | Add to a "🌐 Surrounding work (visibility only — not yours)" section in TASKS.md, never to 🔥 Now |
+| Found in open-sprint, ticket key matches one extracted from a transcript, but assignee ≠ currentUser | **Speaker / owner mismatch** | Surface the discrepancy explicitly — the transcript may be misattributing the work. Do not write the ticket into 🔥 Now without user confirmation. |
 
-Present diff and let user decide what to add/complete.
+Present diff and let user decide what to add/complete. The "context ticket" surface keeps surrounding-sprint signal visible without polluting active task lists.
 
 **Git forges** (configured via `git:` block in `.productivity.yml`):
 
