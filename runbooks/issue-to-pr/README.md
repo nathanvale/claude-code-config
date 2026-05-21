@@ -101,6 +101,16 @@ preflight rules, and the return envelope contract. It excludes the full plan,
 full ledger, unrelated batch state, raw Validator envelopes, and rich Builder
 evidence fields that are not persisted wholesale in the ledger.
 
+Final-review patch proposals preserve the same ownership split. Validator
+findings are evidence only. Before user confirmation, the Orchestrator may
+request a read-only, proposal-only Builder dispatch to produce one bounded
+candidate patch-batch from confirmed ledger state and code evidence. The
+Orchestrator validates that candidate with
+`decompose.ts <patch-proposal-path> --patch-proposal <ledger-path>` and asks the user to confirm the
+files, dependencies, execution mode, tests, and rationale before appending it
+to `## Batches`. Builder and reviewer output never authorizes the patch
+contract by itself.
+
 If host readiness fails before Builder dispatch, record frontmatter
 `status: blocked` and `blocked_reason: host-builder-tools-unavailable`, append
 Notes evidence, leave batch statuses unchanged, and do not fall back to
