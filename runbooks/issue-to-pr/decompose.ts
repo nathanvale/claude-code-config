@@ -119,6 +119,7 @@ const BUILDER_ATTEMPT_STATUSES = new Set([
 ]);
 const FAIL_STOP_ATTEMPT_STATUSES = new Set([...BUILDER_ATTEMPT_STATUSES].filter((status) => status !== "committed"));
 const MAX_BUILDER_ATTEMPTS = 5;
+const STAGE_3_BATCH_ID = "stage-3";
 const FINDING_KEYS = new Set(["id", "batch_id", "signature", "persona", "severity", "status", "summary", "resolution"]);
 const FINDING_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
 const FINDING_STATUSES = new Set([
@@ -281,6 +282,9 @@ function validateBatchContracts(batches: Batch[], options: ParseOptions): void {
   for (const b of batches) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(b.id)) {
       fail(`batch id "${b.id}" must be a lowercase slug using letters, numbers, and hyphens`);
+    }
+    if (b.id === STAGE_3_BATCH_ID) {
+      fail(`batch id "${b.id}" is reserved for Stage 3 Contract Review findings`);
     }
     if (ids.has(b.id)) fail(`duplicate batch id "${b.id}"`);
     ids.add(b.id);
@@ -1453,7 +1457,7 @@ function validateFindingRow(row: Record<string, unknown>, index: number, batchCo
   };
   if (!FINDING_SEVERITIES.has(finding.severity)) fail(`${context} has invalid severity "${finding.severity}"`);
   if (!isValidFindingStatus(finding.status)) fail(`${context} has invalid status "${finding.status}"`);
-  if (finding.batch_id !== "final" && !batchContext.allIds.has(finding.batch_id)) {
+  if (finding.batch_id !== "final" && finding.batch_id !== STAGE_3_BATCH_ID && !batchContext.allIds.has(finding.batch_id)) {
     fail(`${context} has unknown batch_id "${finding.batch_id}"`);
   }
   if (finding.status === "open" && finding.resolution !== null) {
@@ -1480,6 +1484,17 @@ function validateFindingResolution(finding: Finding, context: string, batchConte
   if (finding.status === "open") return;
   if (resolution === null) fail(`${context} with status ${finding.status} must include a resolution`);
   if (finding.status === "fixed") {
+    const planRevisionMatch = resolution.match(/^plan-revision ([0-9a-f]{7,40})$/i);
+    if (finding.batch_id === STAGE_3_BATCH_ID) {
+      if (!planRevisionMatch) {
+        fail(`${context} Stage 3 fixed resolution must be "plan-revision <sha>"`);
+      }
+      validateReachableCommit(planRevisionMatch[1], `${context} plan revision`);
+      return;
+    }
+    if (planRevisionMatch) {
+      fail(`${context} plan-revision resolution is only valid for batch_id "${STAGE_3_BATCH_ID}"`);
+    }
     const commitMatch = resolution.match(/^commit [0-9a-f]{7,40}$/i);
     const patchMatch = resolution.match(/^patch-batch (patch-\d{3})$/);
     if (commitMatch) {

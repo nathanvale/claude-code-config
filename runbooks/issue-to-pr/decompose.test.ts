@@ -1375,6 +1375,35 @@ rationale: null
 		expect(result.stderr).toContain('duplicate batch id "same"');
 	});
 
+	test("rejects stage-3 as a real batch id", async () => {
+		const plan = writeFixture(
+			"reserved-stage-3-id.md",
+			`# Plan
+
+\`\`\`yaml
+id: stage-3
+name: Stage 3 collision
+goal: AC 1
+files:
+  - src/stage-three.ts
+depends_on: []
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+`,
+		);
+
+		const result = await runDecompose([plan]);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain(
+			'batch id "stage-3" is reserved for Stage 3 Contract Review findings',
+		);
+	});
+
 	test("rejects duplicate dependency, AC mapping, and canonical file entries", async () => {
 		const duplicateDependency = writeFixture(
 			"duplicate-dependency.md",
@@ -2885,6 +2914,172 @@ findings:
 		);
 		expect(assertResult.exitCode).toBe(1);
 		expect(assertResult.stderr).toContain("has 1 open P0/P1 blocker");
+	});
+
+	test("validates Stage 3 Contract Review blockers and plan revisions", async () => {
+		const ledgerPath = writeFixture(
+			"stage-3-contract-review.md",
+			`${ledger}
+## Findings data
+
+\`\`\`yaml
+findings:
+  - id: "cr1"
+    batch_id: "stage-3"
+    signature: "candidate-dag-drift"
+    persona: "contract-reviewer"
+    severity: "P1"
+    status: "open"
+    summary: "Candidate DAG does not match the plan"
+    resolution: null
+  - id: "cr2"
+    batch_id: "stage-3"
+    signature: "stale-plan-reference"
+    persona: "contract-reviewer"
+    severity: "P1"
+    status: "fixed"
+    summary: "Plan revision fixed stale reference"
+    resolution: "plan-revision ${currentCommit}"
+\`\`\`
+
+## Findings
+
+| id | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| cr1 | stage-3 | candidate-dag-drift | contract-reviewer | P1 | open | Candidate DAG does not match the plan |  |
+| cr2 | stage-3 | stale-plan-reference | contract-reviewer | P1 | fixed | Plan revision fixed stale reference | plan-revision ${currentCommit} |
+`,
+		);
+
+		const result = await runDecompose(["--validate-findings", ledgerPath]);
+		const assertResult = await runDecompose([
+			"--assert-no-open-p0p1",
+			ledgerPath,
+		]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain(
+			"Findings data OK: 2 findings, 1 open P0/P1",
+		);
+		expect(assertResult.exitCode).toBe(1);
+		expect(assertResult.stderr).toContain("has 1 open P0/P1 blocker");
+	});
+
+	test("does not count Stage 3 P2/P3 advisories as blockers", async () => {
+		const ledgerPath = writeFixture(
+			"stage-3-advisories.md",
+			`${ledger}
+## Findings data
+
+\`\`\`yaml
+findings:
+  - id: "cr1"
+    batch_id: "stage-3"
+    signature: "reviewer-coverage"
+    persona: "contract-reviewer"
+    severity: "P2"
+    status: "open"
+    summary: "Consider escalating Contract Review"
+    resolution: null
+  - id: "cr2"
+    batch_id: "stage-3"
+    signature: "confirmation-copy"
+    persona: "contract-reviewer"
+    severity: "P3"
+    status: "open"
+    summary: "Mention rationale wording at confirmation"
+    resolution: null
+\`\`\`
+
+## Findings
+
+| id | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| cr1 | stage-3 | reviewer-coverage | contract-reviewer | P2 | open | Consider escalating Contract Review |  |
+| cr2 | stage-3 | confirmation-copy | contract-reviewer | P3 | open | Mention rationale wording at confirmation |  |
+`,
+		);
+
+		const result = await runDecompose(["--validate-findings", ledgerPath]);
+		const assertResult = await runDecompose([
+			"--assert-no-open-p0p1",
+			ledgerPath,
+		]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain(
+			"Findings data OK: 2 findings, 0 open P0/P1",
+		);
+		expect(assertResult.exitCode).toBe(0);
+	});
+
+	test("rejects malformed Stage 3 plan revision resolutions", async () => {
+		const stage3CommitResolution = writeFixture(
+			"stage-3-commit-resolution.md",
+			`${ledger}
+## Findings data
+
+\`\`\`yaml
+findings:
+  - id: "cr1"
+    batch_id: "stage-3"
+    signature: "candidate-dag-drift"
+    persona: "contract-reviewer"
+    severity: "P1"
+    status: "fixed"
+    summary: "Closed with the wrong resolution kind"
+    resolution: "commit ${currentCommit}"
+\`\`\`
+
+## Findings
+
+| id | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| cr1 | stage-3 | candidate-dag-drift | contract-reviewer | P1 | fixed | Closed with the wrong resolution kind | commit ${currentCommit} |
+`,
+		);
+		const finalPlanRevision = writeFixture(
+			"final-plan-revision.md",
+			`${ledger}
+## Findings data
+
+\`\`\`yaml
+findings:
+  - id: "f1"
+    batch_id: "final"
+    signature: "final-review"
+    persona: "ce-correctness-reviewer"
+    severity: "P1"
+    status: "fixed"
+    summary: "Final review cannot close with plan revision"
+    resolution: "plan-revision ${currentCommit}"
+\`\`\`
+
+## Findings
+
+| id | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| f1 | final | final-review | ce-correctness-reviewer | P1 | fixed | Final review cannot close with plan revision | plan-revision ${currentCommit} |
+`,
+		);
+
+		const stage3CommitResult = await runDecompose([
+			"--validate-findings",
+			stage3CommitResolution,
+		]);
+		const finalPlanRevisionResult = await runDecompose([
+			"--validate-findings",
+			finalPlanRevision,
+		]);
+
+		expect(stage3CommitResult.exitCode).toBe(1);
+		expect(stage3CommitResult.stderr).toContain(
+			'Stage 3 fixed resolution must be "plan-revision <sha>"',
+		);
+		expect(finalPlanRevisionResult.exitCode).toBe(1);
+		expect(finalPlanRevisionResult.stderr).toContain(
+			'plan-revision resolution is only valid for batch_id "stage-3"',
+		);
 	});
 
 	test("validates closed finding resolution contracts", async () => {
