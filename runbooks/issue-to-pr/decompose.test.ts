@@ -326,6 +326,145 @@ rationale: null
 		expect(result.stdout).not.toContain("item comment");
 	});
 
+	test("emits optional supersedes from candidate batch YAML", async () => {
+		const plan = writeFixture(
+			"plan.md",
+			`# Plan
+
+\`\`\`yaml
+id: original
+name: Original
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+
+\`\`\`yaml
+id: replacement
+name: Replacement
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+supersedes: original
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+`,
+		);
+
+		const result = await runDecompose([plan]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain('supersedes: "original"');
+	});
+
+	test("rejects candidate supersedes duplicate targets and cycles before ledger confirmation", async () => {
+		const duplicateTargets = writeFixture(
+			"candidate-duplicate-supersedes.md",
+			`# Plan
+
+\`\`\`yaml
+id: original
+name: Original
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+
+\`\`\`yaml
+id: replacement-a
+name: Replacement A
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+supersedes: original
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+
+\`\`\`yaml
+id: replacement-b
+name: Replacement B
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+supersedes: original
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+`,
+		);
+		const supersedesCycle = writeFixture(
+			"candidate-supersedes-cycle.md",
+			`# Plan
+
+\`\`\`yaml
+id: a
+name: A
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+supersedes: b
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+
+\`\`\`yaml
+id: b
+name: B
+goal: AC 1
+files:
+  - ${currentCommitFile}
+depends_on: []
+supersedes: a
+execution_mode: proof_first
+acceptance_tests:
+  - "AC 1 holds"
+ac_mapping: [1]
+rationale: null
+\`\`\`
+`,
+		);
+
+		const duplicateResult = await runDecompose([duplicateTargets]);
+		const cycleResult = await runDecompose([supersedesCycle]);
+
+		expect(duplicateResult.exitCode).toBe(1);
+		expect(duplicateResult.stderr).toContain(
+			"only one replacement batch may supersede a blocked batch",
+		);
+		expect(cycleResult.exitCode).toBe(1);
+		expect(cycleResult.stderr).toContain("participates in a supersedes cycle");
+	});
+
 	test("rejects missing depends_on", async () => {
 		const plan = writeFixture(
 			"plan.md",
@@ -3050,6 +3189,769 @@ rationale: final-review remediation
 		expect(result.stdout).toContain('id: "patch-001"');
 	});
 
+	test("validates replacement batches with supersedes audit metadata", async () => {
+		const validReplacement = writeFixture(
+			"valid-replacement.md",
+			`${ledger}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1 and 2"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+      - 2
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1 and 2 with corrected file scope"
+    files:
+      - "src/replacement.ts"
+    depends_on: []
+    supersedes: "original"
+    execution_mode: tdd
+    acceptance_tests:
+      - "Replacement proof"
+    ac_mapping:
+      - 1
+      - 2
+    rationale: "replacement-contract: Builder preflight found required surfaces outside original files."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "dependent"
+    name: "Dependent"
+    goal: "AC 2 follow-up"
+    files:
+      - "src/dependent.ts"
+    depends_on:
+      - "replacement"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Dependent proof"
+    ac_mapping:
+      - 2
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const unblockedOriginal = writeFixture(
+			"unblocked-original.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const missingAcMapping = writeFixture(
+			"missing-ac-mapping.md",
+			`${ledger}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1 and 2"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+      - 2
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1 only"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const missingRationale = writeFixture(
+			"missing-rationale.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+      - "src/replacement.ts"
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const acceptanceTestsChanged = writeFixture(
+			"acceptance-tests-changed.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Replacement proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const allChanged = writeFixture(
+			"all-changed.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+      - "src/replacement.ts"
+    depends_on: []
+    supersedes: "original"
+    execution_mode: tdd
+    acceptance_tests:
+      - "Replacement proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+
+		const validResult = await runDecompose([
+			"--validate-ledger-batches",
+			validReplacement,
+		]);
+		const unblockedResult = await runDecompose([
+			"--validate-ledger-batches",
+			unblockedOriginal,
+		]);
+		const missingAcResult = await runDecompose([
+			"--validate-ledger-batches",
+			missingAcMapping,
+		]);
+		const rationaleResult = await runDecompose([
+			"--validate-ledger-batches",
+			missingRationale,
+		]);
+		const acceptanceTestsResult = await runDecompose([
+			"--validate-ledger-batches",
+			acceptanceTestsChanged,
+		]);
+		const allChangedResult = await runDecompose([
+			"--validate-ledger-batches",
+			allChanged,
+		]);
+
+		expect(validResult.exitCode).toBe(0);
+		expect(unblockedResult.exitCode).toBe(1);
+		expect(unblockedResult.stderr).toContain(
+			"replacement batches may only supersede blocked batches",
+		);
+		expect(missingAcResult.exitCode).toBe(1);
+		expect(missingAcResult.stderr).toContain("missing AC indices: 2");
+		expect(rationaleResult.exitCode).toBe(1);
+		expect(rationaleResult.stderr).toContain("must include rationale prose");
+		expect(acceptanceTestsResult.exitCode).toBe(1);
+		expect(acceptanceTestsResult.stderr).toContain("changes acceptance_tests");
+		expect(allChangedResult.exitCode).toBe(1);
+		expect(allChangedResult.stderr).toContain("changes files, acceptance_tests, and execution_mode");
+	});
+
+	test("validates replacement dependency rewrites from blocked originals", async () => {
+		function ledgerWithDependent(options: {
+			dependentDependsOn: string[];
+			dependentStatus?: string;
+			dependentVerdict?: string;
+		}): string {
+			return `${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "dependent"
+    name: "Dependent"
+    goal: "AC 1 downstream"
+    files:
+      - "src/dependent.ts"
+    depends_on:
+${yamlList(options.dependentDependsOn, 6)}
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Dependent proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: ${options.dependentStatus ?? "pending"}
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: ${options.dependentVerdict ?? "null"}
+\`\`\`
+`;
+		}
+
+		const pendingStale = writeFixture(
+			"pending-stale.md",
+			ledgerWithDependent({ dependentDependsOn: ["original"] }),
+		);
+		const inProgressStale = writeFixture(
+			"in-progress-stale.md",
+			ledgerWithDependent({
+				dependentDependsOn: ["original"],
+				dependentStatus: "in-progress",
+			}),
+		);
+		const duplicateDependency = writeFixture(
+			"duplicate-dependency.md",
+			ledgerWithDependent({
+				dependentDependsOn: ["original", "replacement"],
+			}),
+		);
+		const blockedDependent = writeFixture(
+			"blocked-dependent.md",
+			ledgerWithDependent({
+				dependentDependsOn: ["original"],
+				dependentStatus: "blocked",
+				dependentVerdict: "blocked-for-user",
+			}),
+		);
+
+		const pendingResult = await runDecompose([
+			"--validate-ledger-batches",
+			pendingStale,
+		]);
+		const inProgressResult = await runDecompose([
+			"--validate-ledger-batches",
+			inProgressStale,
+		]);
+		const duplicateResult = await runDecompose([
+			"--validate-ledger-batches",
+			duplicateDependency,
+		]);
+		const blockedResult = await runDecompose([
+			"--validate-ledger-batches",
+			blockedDependent,
+		]);
+
+		expect(pendingResult.exitCode).toBe(1);
+		expect(pendingResult.stderr).toContain(
+			'still depends_on superseded batch "original"; rewrite depends_on to "replacement"',
+		);
+		expect(inProgressResult.exitCode).toBe(1);
+		expect(inProgressResult.stderr).toContain(
+			"stop for user action before replacing dependencies",
+		);
+		expect(duplicateResult.exitCode).toBe(1);
+		expect(duplicateResult.stderr).toContain(
+			'depends_on both superseded batch "original" and replacement "replacement"',
+		);
+		expect(blockedResult.exitCode).toBe(1);
+		expect(blockedResult.stderr).toContain(
+			"stop for user action before replacing dependencies",
+		);
+	});
+
+	test("rejects invalid supersedes graph shapes", async () => {
+		const patchWithSupersedesPlan = writeFixture(
+			"patch-with-supersedes.md",
+			`# Plan
+
+\`\`\`yaml
+id: patch-001
+name: Patch
+goal: Final review patch
+files:
+  - ${currentCommitFile}
+depends_on: [original-batch]
+supersedes: original-batch
+execution_mode: proof_first
+acceptance_tests:
+  - "Regression proof passes"
+ac_mapping: []
+rationale: final-review remediation
+\`\`\`
+`,
+		);
+		const selfSupersedes = writeFixture(
+			"self-supersedes.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "one"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+\`\`\`
+`,
+		);
+		const dependsOnSuperseded = writeFixture(
+			"depends-on-superseded.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on:
+      - "original"
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const duplicateTargets = writeFixture(
+			"duplicate-targets.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement-a"
+    name: "Replacement A"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "replacement-b"
+    name: "Replacement B"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "original"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const supersedesCycle = writeFixture(
+			"supersedes-cycle.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "a"
+    name: "A"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "b"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "b"
+    name: "B"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "a"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6, "Builder stopped before editing again.")}
+    iterations: 1
+    final_verdict: blocked-for-user
+\`\`\`
+`,
+		);
+		const patchTarget = writeFixture(
+			"patch-target.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "patch-001"
+    name: "Patch"
+    goal: "Final review patch"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Patch proof"
+    ac_mapping: []
+    rationale: "final-review remediation"
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "patch-001"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+
+		const patchResult = await runDecompose([
+			patchWithSupersedesPlan,
+			"--patch-proposal",
+			writeFixture("ledger.md", ledgerWithBatch),
+		]);
+		const selfResult = await runDecompose([
+			"--validate-ledger-batches",
+			selfSupersedes,
+		]);
+		const dependsResult = await runDecompose([
+			"--validate-ledger-batches",
+			dependsOnSuperseded,
+		]);
+		const duplicateResult = await runDecompose([
+			"--validate-ledger-batches",
+			duplicateTargets,
+		]);
+		const cycleResult = await runDecompose([
+			"--validate-ledger-batches",
+			supersedesCycle,
+		]);
+		const patchTargetResult = await runDecompose([
+			"--validate-ledger-batches",
+			patchTarget,
+		]);
+
+		expect(patchResult.exitCode).toBe(1);
+		expect(patchResult.stderr).toContain("is a patch batch and must not use supersedes");
+		expect(selfResult.exitCode).toBe(1);
+		expect(selfResult.stderr).toContain("cannot supersede itself");
+		expect(dependsResult.exitCode).toBe(1);
+		expect(dependsResult.stderr).toContain("supersedes is audit metadata, not a depends_on edge");
+		expect(duplicateResult.exitCode).toBe(1);
+		expect(duplicateResult.stderr).toContain("only one replacement batch may supersede a blocked batch");
+		expect(cycleResult.exitCode).toBe(1);
+		expect(cycleResult.stderr).toContain("participates in a supersedes cycle");
+		expect(patchTargetResult.exitCode).toBe(1);
+		expect(patchTargetResult.stderr).toContain("must supersede a normal batch, not a patch batch");
+	});
+
 	test("batch contract digest ignores lifecycle fields and changes with contract fields", async () => {
 		const pendingLedger = writeFixture(
 			"pending-ledger.md",
@@ -3133,6 +4035,97 @@ ${currentCommitFilesYaml(6)}
 \`\`\`
 `,
 		);
+		const supersedesContractLedger = writeFixture(
+			"supersedes-contract-ledger.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    supersedes: "one"
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const twoBatchNoSupersedesLedger = writeFixture(
+			"two-batch-no-supersedes-ledger.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: blocked-for-user
+  - id: "replacement"
+    name: "Replacement"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
 
 		const pendingDigest = await runDecompose([
 			"--batch-contract-digest",
@@ -3146,12 +4139,25 @@ ${currentCommitFilesYaml(6)}
 			"--batch-contract-digest",
 			changedContractLedger,
 		]);
+		const supersedesDigest = await runDecompose([
+			"--batch-contract-digest",
+			supersedesContractLedger,
+		]);
+		const twoBatchNoSupersedesDigest = await runDecompose([
+			"--batch-contract-digest",
+			twoBatchNoSupersedesLedger,
+		]);
 
 		expect(pendingDigest.exitCode).toBe(0);
 		expect(convergedDigest.exitCode).toBe(0);
 		expect(changedDigest.exitCode).toBe(0);
+		expect(supersedesDigest.exitCode).toBe(0);
+		expect(twoBatchNoSupersedesDigest.exitCode).toBe(0);
 		expect(pendingDigest.stdout).toBe(convergedDigest.stdout);
+		expect(pendingDigest.stdout).toContain(oneBatchContractDigest());
 		expect(changedDigest.stdout).not.toBe(pendingDigest.stdout);
+		expect(supersedesDigest.stdout).not.toBe(twoBatchNoSupersedesDigest.stdout);
+		expect(supersedesDigest.stdout).not.toBe(pendingDigest.stdout);
 		expect(pendingDigest.stdout).toContain("Batch contract digest: sha256:");
 	});
 

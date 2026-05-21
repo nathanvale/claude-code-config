@@ -102,6 +102,21 @@ preflight rules, and the return envelope contract. It excludes the full plan,
 full ledger, unrelated batch state, raw Validator envelopes, and rich Builder
 evidence fields that are not persisted wholesale in the ledger.
 
+When Builder Preflight blocks a stale or unsafe batch contract, Orchestrator
+repairs through a replacement batch with `supersedes: <blocked-batch-id>`.
+The original row stays blocked for audit history; `supersedes` does not
+satisfy dependencies. Pending downstream `depends_on` edges are rewritten from
+the blocked original to the replacement, then
+`decompose.ts --validate-ledger-batches`, `--batch-contract-digest`, and the
+Stage 3-style user confirmation gate run again before Stage 4 continues. If a
+dependent is already `in-progress`, `converged`, `accepted-risk`, or `blocked`,
+Orchestrator stops for user action instead of rewriting automatically. This
+replacement flow is sourced from
+`docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
+After confirmation, Orchestrator updates the stored batch contract digest and
+confirmation timestamp, runs `--confirmation-state`, and commits the ledger
+before dispatching Builder again.
+
 Final-review patch proposals preserve the same ownership split. Validator
 findings are evidence only. Before user confirmation, the Orchestrator may
 request a read-only, proposal-only Builder dispatch to produce one bounded

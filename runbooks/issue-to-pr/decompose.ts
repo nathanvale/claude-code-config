@@ -12,6 +12,7 @@ interface Batch {
   goal: string;
   files: string[];
   depends_on: string[];
+  supersedes: string | null;
   execution_mode: ExecutionMode;
   acceptance_tests: string[];
   ac_mapping: number[];
@@ -72,6 +73,16 @@ interface LedgerBatchContext {
   terminalBuilderCommitsById: Map<string, Set<string>>;
 }
 
+interface SupersedesGraphEntry {
+  batch: Batch;
+  index: number;
+  label: string;
+}
+
+interface LedgerBatchEntry extends SupersedesGraphEntry {
+  row: Record<string, unknown>;
+}
+
 interface ConfirmationStateReport {
   acceptanceCriteria: ConfirmationState;
   batchContract: ConfirmationState;
@@ -100,6 +111,7 @@ const BATCH_KEYS = new Set([
   "goal",
   "files",
   "depends_on",
+  "supersedes",
   "execution_mode",
   "acceptance_tests",
   "ac_mapping",
@@ -222,6 +234,7 @@ function parse(planPath: string, options: ParseOptions = {}): Batch[] {
       goal: requiredString(parsed, "goal", id),
       files: requiredArray(parsed, "files", id),
       depends_on: requiredArray(parsed, "depends_on", id),
+      supersedes: optionalNullableScalar(parsed.supersedes, "supersedes"),
       execution_mode: asExecutionMode(requiredString(parsed, "execution_mode", id), id),
       acceptance_tests: requiredArray(parsed, "acceptance_tests", id),
       ac_mapping: requiredNumberArray(parsed, "ac_mapping", id),
@@ -296,11 +309,15 @@ function requiredNumberArray(parsed: Record<string, unknown>, key: string, conte
   });
 }
 
-function optionalRationale(value: unknown): string | null {
+function optionalNullableScalar(value: unknown, key: string): string | null {
   if (value === undefined || value === null || value === "null") return null;
-  if (Array.isArray(value)) fail("rationale must be a scalar or null");
+  if (Array.isArray(value)) fail(`${key} must be a scalar or null`);
   const text = String(value).trim();
   return text.length === 0 ? null : text;
+}
+
+function optionalRationale(value: unknown): string | null {
+  return optionalNullableScalar(value, "rationale");
 }
 
 function validateBatchContracts(batches: Batch[], options: ParseOptions): void {
@@ -342,6 +359,16 @@ function validateBatchContracts(batches: Batch[], options: ParseOptions): void {
     if (options.patchProposalMode && b.depends_on.length === 0) {
       fail(`batch ${b.id} is a patch batch and must depend on an existing ledger batch`);
     }
+    if (isPatch && b.supersedes !== null) {
+      fail(`batch ${b.id} is a patch batch and must not use supersedes`);
+    }
+    if (b.supersedes !== null) {
+      if (b.supersedes === b.id) fail(`batch ${b.id} cannot supersede itself`);
+      if (!ids.has(b.supersedes)) fail(`batch ${b.id} supersedes unknown id "${b.supersedes}"`);
+      if (b.depends_on.includes(b.supersedes)) {
+        fail(`batch ${b.id} supersedes "${b.supersedes}"; supersedes is audit metadata, not a depends_on edge`);
+      }
+    }
     if (isPatch && b.ac_mapping.length !== 0) {
       fail(`batch ${b.id} is a patch batch and must use ac_mapping: []`);
     }
@@ -351,6 +378,7 @@ function validateBatchContracts(batches: Batch[], options: ParseOptions): void {
     rejectDuplicates(b.depends_on, `batch ${b.id} depends_on`);
     const canonicalFiles = b.files.map((file) => validateRepoRelativePath(file, b.id));
     rejectDuplicates(canonicalFiles, `batch ${b.id} files`);
+    rejectDuplicates(b.acceptance_tests, `batch ${b.id} acceptance_tests`);
     rejectDuplicates(b.ac_mapping.map((i) => String(i)), `batch ${b.id} ac_mapping`);
     if (options.patchProposalMode) {
       const newFiles = canonicalFiles.filter((file) => !options.externalFilePaths?.has(file));
@@ -387,6 +415,8 @@ function validateBatchContracts(batches: Batch[], options: ParseOptions): void {
     }
     validateChangeFirstGuardrails(b);
   }
+  validateUniqueSupersedesTargets(batchSupersedesEntries(batches));
+  validateAcyclicSupersedesGraph(batchSupersedesEntries(batches));
 }
 
 function rejectDuplicates(values: string[], label: string): void {
@@ -781,6 +811,7 @@ function emit(batches: Batch[]): void {
       lines.push(`    depends_on:`);
       for (const d of b.depends_on) lines.push(`      - ${quoteYamlScalar(d)}`);
     }
+    if (b.supersedes !== null) lines.push(`    supersedes: ${quoteYamlScalar(b.supersedes)}`);
     lines.push(`    execution_mode: ${b.execution_mode}`);
     lines.push(`    acceptance_tests:`);
     for (const a of b.acceptance_tests) lines.push(`      - ${quoteYamlScalar(a)}`);
@@ -807,6 +838,8 @@ function contractDigest(batches: Batch[]): string {
     goal: b.goal,
     files: b.files,
     depends_on: b.depends_on,
+    // Omit null supersedes so legacy ledgers keep their stored digest.
+    ...(b.supersedes === null ? {} : { supersedes: b.supersedes }),
     execution_mode: b.execution_mode,
     acceptance_tests: b.acceptance_tests,
     ac_mapping: b.ac_mapping,
@@ -1019,8 +1052,7 @@ function readLedgerBatchContractDigestOrNull(ledgerPath: string): string | null 
   if (rows.length === 0) return null;
   for (const [index, row] of rows.entries()) validateLedgerBatchMetadata(row, index + 1);
   const batches = ledgerRowsToBatches(rows);
-  validateBatchContracts(batches, { allowPatchBatches: true });
-  topoSortOrFail(batches);
+  validateLedgerBatchContracts(rows, batches);
   for (const [index, row] of rows.entries()) validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   return contractDigest(batches);
 }
@@ -1131,8 +1163,7 @@ function readLedgerBatchContext(ledgerPath: string): LedgerBatchContext {
     validateLedgerBatchMetadata(row, index + 1);
   }
   const batches = ledgerRowsToBatches(rows);
-  validateBatchContracts(batches, { allowPatchBatches: true });
-  topoSortOrFail(batches);
+  validateLedgerBatchContracts(rows, batches);
   for (const [index, row] of rows.entries()) {
     validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   }
@@ -1156,8 +1187,7 @@ function readOptionalLedgerBatchContext(ledgerPath: string): LedgerBatchContext 
   if (rows.length === 0) return emptyLedgerBatchContext();
   for (const [index, row] of rows.entries()) validateLedgerBatchMetadata(row, index + 1);
   const batches = ledgerRowsToBatches(rows);
-  validateBatchContracts(batches, { allowPatchBatches: true });
-  topoSortOrFail(batches);
+  validateLedgerBatchContracts(rows, batches);
   for (const [index, row] of rows.entries()) {
     validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   }
@@ -1204,14 +1234,135 @@ function addTerminalBuilderCommits(
   commitsById.set(batchId, commitSet);
 }
 
+function batchSupersedesEntries(batches: Batch[]): SupersedesGraphEntry[] {
+  return batches.map((batch, index) => ({ batch, index: index + 1, label: `batch ${batch.id}` }));
+}
+
+function validateLedgerBatchContracts(rows: Record<string, unknown>[], batches: Batch[]): void {
+  validateBatchContracts(batches, { allowPatchBatches: true });
+  topoSortOrFail(batches);
+  validateLedgerReplacementBatchInvariants(ledgerBatchEntries(rows, batches));
+}
+
+function ledgerBatchEntries(rows: Record<string, unknown>[], batches: Batch[]): LedgerBatchEntry[] {
+  if (rows.length !== batches.length) {
+    fail(`ledger batch rows and parsed batches are misaligned (${rows.length} rows, ${batches.length} batches)`);
+  }
+  return batches.map((batch, index) => ({
+    batch,
+    index: index + 1,
+    label: `ledger batch ${index + 1}`,
+    row: rows[index] ?? fail(`ledger batch ${index + 1} has no row`),
+  }));
+}
+
+function validateLedgerReplacementBatchInvariants(entries: LedgerBatchEntry[]): void {
+  const entriesById = new Map(entries.map((entry) => [entry.batch.id, entry]));
+
+  for (const { batch, index } of entries) {
+    if (batch.supersedes === null) continue;
+    const context = `ledger batch ${index}`;
+    const superseded = entriesById.get(batch.supersedes);
+    if (!superseded) fail(`${context} supersedes unknown id "${batch.supersedes}"`);
+    if (superseded.batch.id.startsWith("patch-")) {
+      fail(`${context} supersedes "${batch.supersedes}", but replacement batches must supersede a normal batch, not a patch batch`);
+    }
+
+    const supersededStatus = requiredString(superseded.row, "status", `ledger batch ${superseded.index}`);
+    if (supersededStatus !== "blocked") {
+      fail(`${context} supersedes "${batch.supersedes}", but that batch is ${supersededStatus}; replacement batches may only supersede blocked batches`);
+    }
+
+    const missingAcIndices = superseded.batch.ac_mapping.filter((acIndex) => !batch.ac_mapping.includes(acIndex));
+    if (missingAcIndices.length > 0) {
+      fail(`${context} must preserve superseded batch "${batch.supersedes}" AC mapping; missing AC indices: ${missingAcIndices.join(", ")}`);
+    }
+
+    const changedFields = changedReplacementFields(batch, superseded.batch);
+    if (changedFields.length > 0 && batch.rationale === null) {
+      fail(`${context} changes ${humanList(changedFields)} from superseded batch "${batch.supersedes}" and must include rationale prose`);
+    }
+
+    for (const dependent of entriesById.values()) {
+      if (dependent.batch.id === batch.id || dependent.batch.id === batch.supersedes) continue;
+      const dependsOnSuperseded = dependent.batch.depends_on.includes(batch.supersedes);
+      const dependsOnReplacement = dependent.batch.depends_on.includes(batch.id);
+      if (dependsOnSuperseded && dependsOnReplacement) {
+        fail(
+          `ledger batch ${dependent.index} depends_on both superseded batch "${batch.supersedes}" and replacement "${batch.id}"; remove the superseded dependency before confirmation`,
+        );
+      }
+      if (!dependsOnSuperseded) continue;
+
+      const dependentStatus = requiredString(dependent.row, "status", `ledger batch ${dependent.index}`);
+      if (dependentStatus === "pending") {
+        fail(
+          `ledger batch ${dependent.index} is pending and still depends_on superseded batch "${batch.supersedes}"; rewrite depends_on to "${batch.id}"`,
+        );
+      }
+      fail(
+        `ledger batch ${dependent.index} is ${dependentStatus} and depends_on superseded batch "${batch.supersedes}"; stop for user action before replacing dependencies`,
+      );
+    }
+  }
+}
+
+function validateUniqueSupersedesTargets(entries: SupersedesGraphEntry[]): void {
+  const targets = new Map<string, SupersedesGraphEntry>();
+  for (const entry of entries) {
+    const target = entry.batch.supersedes;
+    if (target === null) continue;
+    const previous = targets.get(target);
+    if (previous) {
+      fail(`${entry.label} and ${previous.label} both supersede "${target}"; only one replacement batch may supersede a blocked batch`);
+    }
+    targets.set(target, entry);
+  }
+}
+
+function validateAcyclicSupersedesGraph(entries: SupersedesGraphEntry[]): void {
+  const supersedesById = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.batch.supersedes !== null) supersedesById.set(entry.batch.id, entry.batch.supersedes);
+  }
+
+  for (const entry of entries) {
+    const seen = new Set<string>();
+    let current: string | undefined = entry.batch.id;
+    while (current !== undefined) {
+      if (seen.has(current)) {
+        fail(`${entry.label} participates in a supersedes cycle involving "${current}"`);
+      }
+      seen.add(current);
+      current = supersedesById.get(current);
+    }
+  }
+}
+
+function changedReplacementFields(replacement: Batch, superseded: Batch): string[] {
+  const changed: string[] = [];
+  const replacementFiles = replacement.files.map(normalizeRepoPath);
+  const supersededFiles = superseded.files.map(normalizeRepoPath);
+  if (!sameStringSet(replacementFiles, supersededFiles)) changed.push("files");
+  if (!sameStringSet(replacement.acceptance_tests, superseded.acceptance_tests)) changed.push("acceptance_tests");
+  if (replacement.execution_mode !== superseded.execution_mode) changed.push("execution_mode");
+  return changed;
+}
+
+function humanList(items: string[]): string {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1] ?? ""}`;
+}
+
 function validateLedgerBatches(ledgerPath: string): void {
   const block = readFencedSectionBlock(ledgerPath, "Batches");
   const parsedRows = parseLedgerBatchRows(block);
   if (parsedRows.length === 0) fail(`ledger ${ledgerPath} has no confirmed batches`);
   for (const [index, row] of parsedRows.entries()) validateLedgerBatchMetadata(row, index + 1);
   const batches = ledgerRowsToBatches(parsedRows);
-  validateBatchContracts(batches, { allowPatchBatches: true });
-  topoSortOrFail(batches);
+  validateLedgerBatchContracts(parsedRows, batches);
   for (const [index, row] of parsedRows.entries()) {
     validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   }
@@ -1225,8 +1376,7 @@ function emitLedgerBatchContractDigest(ledgerPath: string): void {
   if (parsedRows.length === 0) fail(`ledger ${ledgerPath} has no confirmed batches`);
   for (const [index, row] of parsedRows.entries()) validateLedgerBatchMetadata(row, index + 1);
   const batches = ledgerRowsToBatches(parsedRows);
-  validateBatchContracts(batches, { allowPatchBatches: true });
-  topoSortOrFail(batches);
+  validateLedgerBatchContracts(parsedRows, batches);
   for (const [index, row] of parsedRows.entries()) {
     validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   }
@@ -1255,6 +1405,7 @@ function ledgerRowsToBatches(parsedRows: Record<string, unknown>[]): Batch[] {
       goal: requiredString(parsed, "goal", id),
       files: requiredArray(parsed, "files", id),
       depends_on: requiredArray(parsed, "depends_on", id),
+      supersedes: optionalNullableScalar(parsed.supersedes, "supersedes"),
       execution_mode: asExecutionMode(requiredString(parsed, "execution_mode", id), id),
       acceptance_tests: requiredArray(parsed, "acceptance_tests", id),
       ac_mapping: requiredNumberArray(parsed, "ac_mapping", id),

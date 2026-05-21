@@ -80,8 +80,8 @@ The Orchestrator sends Builder one batch-only Work Packet:
 - exactly one open P0/P1 target finding signature from committed
   `## Findings data` for repair attempts, and null otherwise;
 - the confirmed batch contract verbatim: `id`, `name`, `goal`, `files`,
-  `depends_on`, `execution_mode`, `acceptance_tests`, `ac_mapping`,
-  and `rationale`;
+  `depends_on`, optional `supersedes`, `execution_mode`,
+  `acceptance_tests`, `ac_mapping`, and `rationale`;
 - the current iteration number, existing `builder_commits`, and compact prior
   `builder_attempts` for this batch;
 - `## Findings data` rows for this batch only;
@@ -91,8 +91,12 @@ The Orchestrator sends Builder one batch-only Work Packet:
 
 The Work Packet must not include the full plan, full ledger, raw Validator
 envelopes, unrelated batch state, or rich Builder evidence that was not
-persisted in compact `builder_attempts`. Replacement-batch and `supersedes`
-mechanics remain deferred to #24.
+persisted in compact `builder_attempts`. Replacement-batch mechanics are
+sourced from
+`docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
+When present, `supersedes` is read-only audit context for Builder. It does not
+change Builder Preflight rules, authority boundaries, or return-envelope
+shape.
 
 When the batch depends on public-contract or domain-language constraints, the
 Orchestrator must materialize the needed authority summary from the confirmed
@@ -205,7 +209,60 @@ On a well-formed `fail-stop-preflight`, do not dispatch Validators. Append the
 blockers, probe results, and route hint to Notes, set the current batch
 `status: blocked` and `final_verdict: blocked-for-user`, append a compact
 fail-stop `builder_attempts` record with `commit_sha: null`, increment
-`iterations`, and leave replacement batch / `supersedes` mechanics to #24.
+`iterations`, and route repair through a replacement batch when the contract
+is stale or unsafe.
+
+### Replacement batches and `supersedes`
+
+Replacement-batch behavior is sourced from
+`docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
+
+A replacement batch is used when Builder Preflight proves the confirmed batch
+contract is stale or unsafe, typically because relevant surfaces exist outside
+`batch.files`. The original batch remains in the ledger as blocked evidence:
+`status: blocked` and `final_verdict: blocked-for-user`. The replacement row
+uses `supersedes: <blocked-batch-id>` to preserve the audit trail.
+
+`supersedes` is one-way audit metadata. It is not an implicit dependency
+resolver. `depends_on` remains the DAG truth.
+
+The replacement row must:
+
+- supersede only a blocked batch;
+- preserve every AC index from the superseded batch's `ac_mapping`;
+- include rationale prose when `files`, `acceptance_tests`, or
+  `execution_mode` differ from the superseded batch;
+- go through helper validation, digest recomputation, and user confirmation
+  before Stage 4 continues.
+
+When a replacement supersedes a blocked batch, pending downstream batches that
+depend on the blocked original must have `depends_on` rewritten from the
+original id to the replacement id. Because this mutates the confirmed batch
+contract, Orchestrator reruns
+`bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-ledger-batches <ledger-path>`,
+recomputes `--batch-contract-digest`, and asks the user to confirm the
+replacement DAG before dispatching Builder again. The confirmation prompt must
+show:
+
+- the replacement batch row verbatim, including `supersedes`;
+- each dependency rewrite as `<dependent-id>: <old depends_on> -> <new depends_on>`;
+- the superseded batch id and final blocked status;
+- the AC coverage check result;
+- the new `batch_contract_digest`.
+
+After user confirmation, set `batch_contract_confirmation_status: confirmed`,
+set `batch_contract_confirmed_at` to the current timestamp, overwrite
+`batch_contract_digest` with the new digest, run `--confirmation-state`, and
+commit the ledger before resuming Stage 4.
+
+If any dependent of the blocked original is already `in-progress`,
+`converged`, `accepted-risk`, or `blocked`, stop instead of rewriting automatically. The
+stop prompt must show the dependent batch id and status, the blocked original
+id, the replacement id, and these options: manually revise the dependent and
+confirm a new DAG, abandon the replacement and keep the original blocked, or
+abandon the run. If a dependent already lists both the original and
+replacement, helper validation rejects the duplicate dependency before
+confirmation.
 
 ## Scoped audit prompt
 
@@ -263,9 +320,10 @@ digest differs from its stored value, fail-stop and return to stage 3
 confirmation before Builder or ship work continues. Existing stale digest
 routing remains mandatory even when `--confirmation-state` has already reported
 the stale state. `batch_contract_digest` covers only immutable batch contract
-fields: id, name, goal, files, depends_on, execution_mode, acceptance_tests,
-ac_mapping, and rationale. It does not cover mutable lifecycle fields such as
-status, builder_commits, iterations, or builder_attempts, or final_verdict.
+fields: id, name, goal, files, depends_on, supersedes, execution_mode,
+acceptance_tests, ac_mapping, and rationale. It does not cover mutable
+lifecycle fields such as status, builder_commits, iterations, or
+builder_attempts, or final_verdict.
 Compute the three current digests with:
 
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
@@ -683,8 +741,9 @@ immediately before dispatch.
      `status: accepted-risk`, set `final_verdict: accepted-risk`, commit the
      ledger, and let dependents proceed.
    - Reframe the batch: set `status: blocked`, set
-     `final_verdict: blocked-for-user`, record the decision in Notes, and ask
-     the user for the revised batch contract.
+     `final_verdict: blocked-for-user`, record the decision in Notes, and use
+     the replacement-batch flow when the revised contract should supersede
+     the blocked original.
    - Abandon the run: set `status: blocked`, set
      `final_verdict: blocked-for-user`, and stop.
 8. When no batches remain pending: working tree must be clean; advance to
