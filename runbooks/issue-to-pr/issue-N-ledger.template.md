@@ -7,6 +7,10 @@ plan_path: null
 started_at: "<fill in: ISO 8601 with timezone>"
 status: "in-progress"
 ac_source: "<fill in: gold-standard | variant-heading | loose-checkbox-block | numbered-requirements | pasted | drafted>"
+ac_confirmation_status: "pending"
+ac_confirmed_at: null
+batch_contract_confirmation_status: "pending"
+batch_contract_confirmed_at: null
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
