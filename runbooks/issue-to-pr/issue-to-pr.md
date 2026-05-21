@@ -1,4 +1,4 @@
-      # Runbook: Issue to PR
+# Runbook: Issue to PR
 
 **Seam:** Drive a GitHub issue to a green PR using the Builder/Validator
 pattern over DAG-ordered batches.
