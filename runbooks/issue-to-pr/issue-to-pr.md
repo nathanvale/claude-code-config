@@ -81,16 +81,17 @@ The Orchestrator sends Builder one batch-only Work Packet:
 - the confirmed batch contract verbatim: `id`, `name`, `goal`, `files`,
   `depends_on`, `execution_mode`, `acceptance_tests`, `ac_mapping`,
   and `rationale`;
-- the current iteration number and existing `builder_commits` for this batch;
+- the current iteration number, existing `builder_commits`, and compact prior
+  `builder_attempts` for this batch;
 - `## Findings data` rows for this batch only;
 - non-authoritative Notes summaries for this batch only;
 - Local Law Read Order, authority boundary, Mechanic Discipline, Builder
   Preflight Checklist, and return envelope contract.
 
 The Work Packet must not include the full plan, full ledger, raw Validator
-envelopes, or unrelated batch state. Compact prior `builder_attempts` may be
-included only after the helper/schema work supports that persisted field.
-Replacement-batch and `supersedes` mechanics remain deferred to #24.
+envelopes, unrelated batch state, or rich Builder evidence that was not
+persisted in compact `builder_attempts`. Replacement-batch and `supersedes`
+mechanics remain deferred to #24.
 
 When the batch depends on public-contract or domain-language constraints, the
 Orchestrator must materialize the needed authority summary from the confirmed
@@ -191,14 +192,19 @@ missing `suggested_validator_focus` is malformed. Status owns workflow
 transition; `route_hint` is only next-owner guidance.
 
 Well-formed Builder fail-stops count as Builder attempts in workflow language.
-Executable `builder_attempts` persistence, attempt/commit validation, and
-iteration validation are deferred until the helper/schema work supports them.
+Every well-formed Builder envelope appends one compact ledger
+`builder_attempts` record with `attempt_type`, `status`, `commit_sha`,
+`files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
+Persisted `blockers` and `probe_results` are compact string summaries, not raw
+envelope object arrays. Rich evidence such as implementation steps, tests run,
+assumptions, risks, deferred items, and suggested Validator focus is passed to
+Validators or summarized in Notes rather than persisted wholesale.
 
 On a well-formed `fail-stop-preflight`, do not dispatch Validators. Append the
 blockers, probe results, and route hint to Notes, set the current batch
-`status: blocked` and `final_verdict: blocked-for-user`, and leave executable
-`builder_attempts` persistence plus replacement batch / `supersedes` mechanics
-to #22/#24.
+`status: blocked` and `final_verdict: blocked-for-user`, append a compact
+fail-stop `builder_attempts` record with `commit_sha: null`, increment
+`iterations`, and leave replacement batch / `supersedes` mechanics to #24.
 
 ## Scoped audit prompt
 
@@ -242,7 +248,7 @@ or ship work continues. `batch_contract_digest` covers only immutable batch
 contract fields: id, name, goal, files, depends_on, execution_mode,
 acceptance_tests, ac_mapping, and rationale. It does not cover mutable
 lifecycle fields such as status, builder_commits, iterations, or
-final_verdict. Recompute the three digests with:
+builder_attempts, or final_verdict. Recompute the three digests with:
 
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
@@ -553,9 +559,11 @@ immediately before dispatch.
    path and verify the working tree is clean after the commit.
 5. Run the inner loop (see `## Inner loop` below).
 6. On inner-loop success: set `status: converged`, append the Builder commit
-   refs to `builder_commits`, set `iterations` to the number of well-formed
-   Builder envelopes for that batch, committed or Builder-authored fail-stop,
-   excluding Validator persona waves, and set `final_verdict: converged`.
+   refs to `builder_commits`, append compact records for every well-formed
+   Builder envelope to `builder_attempts`, set `iterations` to the number of
+   well-formed Builder envelopes for that batch, committed or Builder-authored
+   fail-stop, excluding Validator persona waves, and set
+   `final_verdict: converged`.
    Auto-close batch P2/P3 findings as `deferred-P2` / `deferred-P3`, update
    the rendered findings table, run `--validate-findings`, and commit a
    ledger-only lifecycle checkpoint:

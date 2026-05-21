@@ -93,11 +93,11 @@ host-specific primitive name for those capabilities.
 
 The Builder Work Packet is batch-only. It includes the confirmed batch
 contract, the current iteration, existing `builder_commits`, relevant findings
-for that batch, non-authoritative Notes summaries for that batch, local-law
-instructions, authority boundaries, preflight rules, and the return envelope
-contract. It excludes the full plan, full ledger, unrelated batch state, and
-raw Validator envelopes. Compact prior `builder_attempts` become part of the
-packet only after the helper/schema work supports that persisted field.
+for that batch, compact prior `builder_attempts`, non-authoritative Notes
+summaries for that batch, local-law instructions, authority boundaries,
+preflight rules, and the return envelope contract. It excludes the full plan,
+full ledger, unrelated batch state, raw Validator envelopes, and rich Builder
+evidence fields that are not persisted wholesale in the ledger.
 
 If host readiness fails before Builder dispatch, record frontmatter
 `status: blocked` and `blocked_reason: host-builder-tools-unavailable`, append
@@ -105,8 +105,9 @@ Notes evidence, leave batch statuses unchanged, and do not fall back to
 Orchestrator-direct implementation. If dispatch, timeout, permission,
 serialization, schema, or malformed-envelope failure happens after Builder
 dispatch, record `blocked_reason: builder-infrastructure-failure`, leave the
-current batch `in-progress`, and surface any reachable commit refs or
-dirty/staged path summaries for user choice.
+current batch `in-progress`, append no `builder_attempts` row, do not
+increment `iterations`, and surface any reachable commit refs or dirty/staged
+path summaries for user choice.
 
 ## Why these seams
 
@@ -317,9 +318,17 @@ Three sections plus frontmatter:
    AC list. The source of truth for stage 2 and stage 3.
 3. **`## Batches`** - one fenced YAML block listing every batch (id, name,
    goal, files, depends_on, execution_mode, acceptance_tests, ac_mapping,
-   rationale, status, builder_commits, iterations, final_verdict).
+   rationale, status, builder_commits, builder_attempts, iterations,
+   final_verdict).
    `execution_mode` is one of `tdd`, `proof_first`, or `change_first`.
    `builder_commits` entries must be reachable git commit refs.
+   `builder_attempts` entries are compact persisted records with
+   `attempt_type`, `status`, `commit_sha`, `files_touched`, `route_hint`,
+   `blockers`, `probe_results`, and `notes`. Persisted `blockers` and
+   `probe_results` are string summaries. Raw Builder evidence such as
+   implementation steps, tests run, assumptions, risks, deferred items, and
+   suggested Validator focus is passed to Validators or summarized in Notes
+   rather than copied into `builder_attempts`.
 4. **`## Findings data`** - one fenced YAML block listing every finding with
    strict fields: id, batch_id, signature, persona, severity, status, summary,
    and resolution. Finding ids must be unique. `batch_id` must be `final` or

@@ -18,6 +18,17 @@ interface Batch {
   rationale: string | null;
 }
 
+interface BuilderAttempt {
+  attempt_type: string;
+  status: string;
+  commit_sha: string | null;
+  files_touched: string[];
+  route_hint: string | null;
+  blockers: string[];
+  probe_results: string[];
+  notes: string;
+}
+
 interface ParseOptions {
   patchProposalMode?: boolean;
   allowPatchBatches?: boolean;
@@ -79,7 +90,35 @@ const BATCH_KEYS = new Set([
   "ac_mapping",
   "rationale",
 ]);
-const LEDGER_BATCH_KEYS = new Set([...BATCH_KEYS, "status", "builder_commits", "iterations", "final_verdict"]);
+const LEDGER_BATCH_KEYS = new Set([
+  ...BATCH_KEYS,
+  "status",
+  "builder_commits",
+  "builder_attempts",
+  "iterations",
+  "final_verdict",
+]);
+const BUILDER_ATTEMPT_KEYS = new Set([
+  "attempt_type",
+  "status",
+  "commit_sha",
+  "files_touched",
+  "route_hint",
+  "blockers",
+  "probe_results",
+  "notes",
+]);
+const BUILDER_ATTEMPT_TYPES = new Set(["implementation", "repair"]);
+const BUILDER_ATTEMPT_STATUSES = new Set([
+  "committed",
+  "fail-stop-preflight",
+  "fail-stop-out-of-scope",
+  "fail-stop-execution-mode-mismatch",
+  "fail-stop-read-failed",
+  "fail-stop-other",
+]);
+const FAIL_STOP_ATTEMPT_STATUSES = new Set([...BUILDER_ATTEMPT_STATUSES].filter((status) => status !== "committed"));
+const MAX_BUILDER_ATTEMPTS = 5;
 const FINDING_KEYS = new Set(["id", "batch_id", "signature", "persona", "severity", "status", "summary", "resolution"]);
 const FINDING_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
 const FINDING_STATUSES = new Set([
@@ -720,6 +759,7 @@ function emit(batches: Batch[]): void {
     lines.push(`    rationale: ${b.rationale === null ? "null" : quoteYamlScalar(b.rationale)}`);
     lines.push(`    status: pending`);
     lines.push(`    builder_commits: []`);
+    lines.push(`    builder_attempts: []`);
     lines.push(`    iterations: 0`);
     lines.push(`    final_verdict: null`);
   }
@@ -821,6 +861,9 @@ function readLedgerBatchContext(ledgerPath: string): LedgerBatchContext {
   validateBatchContracts(batches, { allowPatchBatches: true });
   topoSortOrFail(batches);
   for (const [index, row] of rows.entries()) {
+    validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
+  }
+  for (const [index, row] of rows.entries()) {
     const status = requiredString(row, "status", `ledger batch ${index + 1}`);
     const id = batches[index]?.id ?? requiredString(row, "id", `ledger batch ${index + 1}`);
     allIds.add(id);
@@ -842,6 +885,9 @@ function readOptionalLedgerBatchContext(ledgerPath: string): LedgerBatchContext 
   const batches = ledgerRowsToBatches(rows);
   validateBatchContracts(batches, { allowPatchBatches: true });
   topoSortOrFail(batches);
+  for (const [index, row] of rows.entries()) {
+    validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
+  }
   const allIds = new Set<string>();
   const terminalSuccessIds = new Set<string>();
   const files = new Set<string>();
@@ -878,8 +924,9 @@ function addTerminalBuilderCommits(
   const commitSet = new Set<string>();
   for (const commit of row.builder_commits as unknown[]) {
     const text = String(commit).trim();
-    allCommits.add(text);
-    commitSet.add(text);
+    const resolved = validateReachableCommit(text, `ledger batch ${batchId} builder commit`);
+    allCommits.add(resolved);
+    commitSet.add(resolved);
   }
   commitsById.set(batchId, commitSet);
 }
@@ -892,6 +939,9 @@ function validateLedgerBatches(ledgerPath: string): void {
   const batches = ledgerRowsToBatches(parsedRows);
   validateBatchContracts(batches, { allowPatchBatches: true });
   topoSortOrFail(batches);
+  for (const [index, row] of parsedRows.entries()) {
+    validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
+  }
   validateAcCoverage(batches, ledgerPath);
   stdout.write(`Ledger batches OK: ${batches.length} batches\n`);
 }
@@ -904,6 +954,9 @@ function emitLedgerBatchContractDigest(ledgerPath: string): void {
   const batches = ledgerRowsToBatches(parsedRows);
   validateBatchContracts(batches, { allowPatchBatches: true });
   topoSortOrFail(batches);
+  for (const [index, row] of parsedRows.entries()) {
+    validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
+  }
   emitContractDigest(batches);
 }
 
@@ -919,7 +972,7 @@ function ledgerRowsToBatches(parsedRows: Record<string, unknown>[]): Batch[] {
     const context = `ledger batch ${index + 1}`;
     const unknownKeys = Object.keys(parsed).filter((key) => !LEDGER_BATCH_KEYS.has(key));
     if (unknownKeys.length > 0) fail(`${context} has unknown field "${unknownKeys[0]}"`);
-    for (const key of ["status", "builder_commits", "iterations", "final_verdict"]) {
+    for (const key of ["status", "builder_commits", "builder_attempts", "iterations", "final_verdict"]) {
       if (!hasKey(parsed, key)) fail(`${context} is missing required ledger field "${key}"`);
     }
     const id = requiredString(parsed, "id", context);
@@ -947,6 +1000,7 @@ function validateLedgerBatchMetadata(row: Record<string, unknown>, index: number
     if (text.length === 0) fail(`${context} field "builder_commits" must contain non-empty commit refs`);
     validateReachableCommit(text, `${context} builder commit`);
   }
+  requiredBuilderAttempts(row, context);
   const iterations = requiredString(row, "iterations", context);
   if (!/^\d+$/.test(iterations) || !Number.isSafeInteger(Number(iterations))) {
     fail(`${context} field "iterations" must be a non-negative integer`);
@@ -975,12 +1029,155 @@ function validateLedgerBatchMetadata(row: Record<string, unknown>, index: number
   }
 }
 
-function validateReachableCommit(ref: string, context: string): void {
+function requiredBuilderAttempts(row: Record<string, unknown>, context: string): BuilderAttempt[] {
+  const value = row.builder_attempts;
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail(`${context} field "builder_attempts" must be a list`);
+  return value.map((attempt, index) => {
+    if (attempt === null || typeof attempt !== "object" || Array.isArray(attempt)) {
+      fail(`${context} builder_attempts item ${index + 1} must be a mapping`);
+    }
+    const parsed = attempt as Record<string, unknown>;
+    const attemptContext = `${context} builder_attempts item ${index + 1}`;
+    const unknownKeys = Object.keys(parsed).filter((key) => !BUILDER_ATTEMPT_KEYS.has(key));
+    if (unknownKeys.length > 0) fail(`${attemptContext} has unknown builder_attempts field "${unknownKeys[0]}"`);
+    for (const key of BUILDER_ATTEMPT_KEYS) {
+      if (!hasKey(parsed, key)) fail(`${attemptContext} is missing required field "${key}"`);
+    }
+    return {
+      attempt_type: requiredString(parsed, "attempt_type", attemptContext),
+      status: requiredString(parsed, "status", attemptContext),
+      commit_sha: requiredNullableString(parsed, "commit_sha", attemptContext),
+      files_touched: requiredArray(parsed, "files_touched", attemptContext),
+      route_hint: requiredNullableString(parsed, "route_hint", attemptContext),
+      blockers: requiredArray(parsed, "blockers", attemptContext),
+      probe_results: requiredArray(parsed, "probe_results", attemptContext),
+      notes: requiredString(parsed, "notes", attemptContext),
+    };
+  });
+}
+
+function requiredNullableString(parsed: Record<string, unknown>, key: string, context: string): string | null {
+  if (!hasKey(parsed, key)) fail(`${context} is missing required field "${key}"`);
+  const value = parsed[key];
+  if (value === null || value === undefined || value === "null") return null;
+  if (Array.isArray(value)) fail(`${context} field "${key}" must be a scalar or null`);
+  const text = String(value).trim();
+  if (text.length === 0) fail(`${context} field "${key}" must be non-empty when not null`);
+  return text;
+}
+
+function validateLedgerBatchAttemptInvariants(row: Record<string, unknown>, batch: Batch, index: number): void {
+  const context = `ledger batch ${index}`;
+  const status = requiredString(row, "status", context);
+  const iterationsText = requiredString(row, "iterations", context);
+  const iterations = Number(iterationsText);
+  const attempts = requiredBuilderAttempts(row, context);
+  const builderCommitRefs = requiredArrayLike(row.builder_commits, "builder_commits", context);
+  const resolvedBuilderCommits = builderCommitRefs.map((commit) => validateReachableCommit(commit, `${context} builder commit`));
+  rejectDuplicates(resolvedBuilderCommits, `${context} builder_commits`);
+
+  if (attempts.length > MAX_BUILDER_ATTEMPTS) {
+    fail(`${context} must not have more than ${MAX_BUILDER_ATTEMPTS} builder_attempts`);
+  }
+  if (iterations !== attempts.length) {
+    fail(`${context} iterations must equal builder_attempts count (${attempts.length})`);
+  }
+
+  for (const attempt of attempts) {
+    if (!BUILDER_ATTEMPT_TYPES.has(attempt.attempt_type)) {
+      fail(`${context} has invalid builder_attempts attempt_type "${attempt.attempt_type}"`);
+    }
+    if (!BUILDER_ATTEMPT_STATUSES.has(attempt.status)) {
+      fail(`${context} has invalid builder_attempts status "${attempt.status}"`);
+    }
+    rejectDuplicates(attempt.files_touched.map((file) => validateRepoRelativePath(file, batch.id)), `${context} files_touched`);
+    if (attempt.status === "committed" && attempt.commit_sha === null) {
+      fail(`${context} committed attempts must include commit_sha`);
+    }
+    if (FAIL_STOP_ATTEMPT_STATUSES.has(attempt.status) && attempt.commit_sha !== null) {
+      fail(`${context} fail-stop attempts must use commit_sha: null`);
+    }
+  }
+
+  const batchFiles = new Set(batch.files.map((file) => validateRepoRelativePath(file, batch.id)));
+  const committedAttemptCommits = new Map<string, BuilderAttempt>();
+  for (const attempt of attempts.filter((item) => item.status === "committed")) {
+    if (attempt.commit_sha === null) continue;
+    const resolved = validateReachableCommit(attempt.commit_sha, `${context} builder_attempts commit`);
+    if (committedAttemptCommits.has(resolved)) {
+      fail(`${context} has duplicate committed builder_attempts for commit "${attempt.commit_sha}"`);
+    }
+    committedAttemptCommits.set(resolved, attempt);
+
+    const persistedFiles = attempt.files_touched.map((file) => validateRepoRelativePath(file, batch.id));
+    const derivedFiles = touchedFilesForCommit(attempt.commit_sha, `${context} builder_attempts commit`);
+    const unauthorized = [...new Set([...persistedFiles, ...derivedFiles])].filter((file) => !batchFiles.has(file));
+    if (unauthorized.length > 0) {
+      fail(`${context} builder_attempts commit "${attempt.commit_sha}" touches files outside confirmed batch files: ${unauthorized.join(", ")}`);
+    }
+    if (!sameStringSet(persistedFiles, derivedFiles)) {
+      fail(`${context} builder_attempts commit "${attempt.commit_sha}" files_touched does not match git diff`);
+    }
+  }
+
+  const builderCommitSet = new Set(resolvedBuilderCommits);
+  for (const [resolved, attempt] of committedAttemptCommits.entries()) {
+    if (!builderCommitSet.has(resolved)) {
+      fail(`${context} builder_attempts commit "${attempt.commit_sha}" is missing from builder_commits`);
+    }
+  }
+  for (const [index, resolved] of resolvedBuilderCommits.entries()) {
+    if (!committedAttemptCommits.has(resolved)) {
+      fail(`${context} builder_commits entry "${builderCommitRefs[index]}" has no committed builder_attempts item`);
+    }
+  }
+  if (TERMINAL_BATCH_STATUSES.has(status) && committedAttemptCommits.size === 0) {
+    fail(`${context} with status ${status} must include at least one committed builder_attempts item`);
+  }
+}
+
+function requiredArrayLike(value: unknown, key: string, context: string): string[] {
+  if (!Array.isArray(value)) fail(`${context} field "${key}" must be a list`);
+  const items = value.map((item) => String(item).trim());
+  if (items.some((item) => item.length === 0)) fail(`${context} field "${key}" must contain non-empty items`);
+  return items;
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  return [...leftSet].every((item) => rightSet.has(item));
+}
+
+function touchedFilesForCommit(ref: string, context: string): string[] {
+  const diff = spawnSync("git", ["diff-tree", "--no-commit-id", "--name-status", "-r", "--root", "-M", ref], {
+    encoding: "utf8",
+  });
+  if (diff.status !== 0) fail(`${context} "${ref}" touched files could not be read from git`);
+  const files = new Set<string>();
+  for (const raw of diff.stdout.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const parts = line.split("\t").filter((part) => part.length > 0);
+    if (parts.length < 2) continue;
+    const status = parts[0];
+    const touched = status.startsWith("R") || status.startsWith("C") ? parts.slice(1) : [parts[1]];
+    for (const file of touched) files.add(validateRepoRelativePath(file, context));
+  }
+  return [...files];
+}
+
+function validateReachableCommit(ref: string, context: string): string {
   if (!/^[0-9a-f]{7,40}$/i.test(ref)) fail(`${context} "${ref}" must be a 7-40 character hex commit ref`);
   const exists = spawnSync("git", ["cat-file", "-e", `${ref}^{commit}`], { stdio: "ignore" });
   if (exists.status !== 0) fail(`${context} "${ref}" must exist in the current git repo`);
   const reachable = spawnSync("git", ["merge-base", "--is-ancestor", ref, "HEAD"], { stdio: "ignore" });
   if (reachable.status !== 0) fail(`${context} "${ref}" must be reachable from HEAD`);
+  const resolved = spawnSync("git", ["rev-parse", `${ref}^{commit}`], { encoding: "utf8" });
+  if (resolved.status !== 0) fail(`${context} "${ref}" could not be resolved in the current git repo`);
+  return resolved.stdout.trim();
 }
 
 function parseLedgerBatchRows(block: string): Record<string, unknown>[] {
@@ -994,6 +1191,27 @@ function parseLedgerBatchRows(block: string): Record<string, unknown>[] {
   let current: Record<string, unknown> | null = null;
   let currentKey: string | null = null;
   let currentList: string[] | null = null;
+  let currentAttempts: Record<string, unknown>[] | null = null;
+  let currentAttempt: Record<string, unknown> | null = null;
+  let currentAttemptKey: string | null = null;
+  let currentAttemptList: string[] | null = null;
+
+  function flushAttemptList(): void {
+    if (currentAttempt && currentAttemptKey && currentAttemptList) {
+      currentAttempt[currentAttemptKey] = currentAttemptList;
+    }
+    currentAttemptKey = null;
+    currentAttemptList = null;
+  }
+
+  function flushAttempt(): void {
+    flushAttemptList();
+    if (currentAttempt) {
+      if (!currentAttempts) fail("ledger builder_attempts entry appears outside builder_attempts");
+      currentAttempts.push(currentAttempt);
+    }
+    currentAttempt = null;
+  }
 
   function flushList(): void {
     if (current && currentKey && currentList) current[currentKey] = currentList;
@@ -1002,9 +1220,11 @@ function parseLedgerBatchRows(block: string): Record<string, unknown>[] {
   }
 
   function flushRow(): void {
+    flushAttempt();
     flushList();
     if (current) rows.push(current);
     current = null;
+    currentAttempts = null;
   }
 
   for (const [index, raw] of block.split("\n").entries()) {
@@ -1019,20 +1239,69 @@ function parseLedgerBatchRows(block: string): Record<string, unknown>[] {
     if (!current) fail(`ledger batches line ${index + 1} appears before the first batch id`);
     const scalar = line.match(/^\s{4}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
     if (scalar) {
+      flushAttempt();
       flushList();
       const key = scalar[1];
       if (hasKey(current, key)) fail(`ledger batch ${current.id ?? "unknown"} has duplicate field "${key}"`);
       const rest = scalar[2];
-      if (rest === "" || rest === undefined) {
-        currentKey = key;
-        currentList = [];
-      } else if (rest === "[]") {
-        current[key] = [];
-      } else if (rest.trim().startsWith("[") && rest.trim().endsWith("]")) {
-        current[key] = parseInlineArray(rest);
+      if (key === "builder_attempts" && (rest === "" || rest === undefined)) {
+        currentAttempts = [];
+        current[key] = currentAttempts;
       } else {
-        current[key] = parseScalarValue(rest);
+        currentAttempts = null;
+        if (rest === "" || rest === undefined) {
+          currentKey = key;
+          currentList = [];
+        } else if (rest === "[]") {
+          current[key] = [];
+        } else if (rest.trim().startsWith("[") && rest.trim().endsWith("]")) {
+          current[key] = parseInlineArray(rest);
+        } else {
+          current[key] = parseScalarValue(rest);
+        }
       }
+      continue;
+    }
+    const attemptFirstField = line.match(/^\s{6}-\s+([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (attemptFirstField && currentAttempts) {
+      flushAttempt();
+      const key = attemptFirstField[1];
+      const rest = attemptFirstField[2];
+      currentAttempt = {};
+      if (hasKey(currentAttempt, key)) fail(`ledger builder_attempts entry has duplicate field "${key}"`);
+      if (rest === "" || rest === undefined) {
+        currentAttemptKey = key;
+        currentAttemptList = [];
+      } else if (rest === "[]") {
+        currentAttempt[key] = [];
+      } else if (rest.trim().startsWith("[") && rest.trim().endsWith("]")) {
+        currentAttempt[key] = parseInlineArray(rest);
+      } else {
+        currentAttempt[key] = parseScalarValue(rest);
+      }
+      continue;
+    }
+    const attemptScalar = line.match(/^\s{8}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (attemptScalar && currentAttempt) {
+      flushAttemptList();
+      const key = attemptScalar[1];
+      if (hasKey(currentAttempt, key)) fail(`ledger builder_attempts entry has duplicate field "${key}"`);
+      const rest = attemptScalar[2];
+      if (rest === "" || rest === undefined) {
+        currentAttemptKey = key;
+        currentAttemptList = [];
+      } else if (rest === "[]") {
+        currentAttempt[key] = [];
+      } else if (rest.trim().startsWith("[") && rest.trim().endsWith("]")) {
+        currentAttempt[key] = parseInlineArray(rest);
+      } else {
+        currentAttempt[key] = parseScalarValue(rest);
+      }
+      continue;
+    }
+    const attemptItem = line.match(/^\s{10}-\s+(.*)$/);
+    if (attemptItem && currentAttemptList) {
+      currentAttemptList.push(parseListItemValue(attemptItem[1], index + 1));
       continue;
     }
     const item = line.match(/^\s{6}-\s+(.*)$/);
@@ -1215,8 +1484,8 @@ function validateFindingResolution(finding: Finding, context: string, batchConte
     const patchMatch = resolution.match(/^patch-batch (patch-\d{3})$/);
     if (commitMatch) {
       const ref = resolution.slice("commit ".length);
-      validateReachableCommit(ref, `${context} fixed commit`);
-      validateLedgerOwnedFixedCommit(finding, ref, context, batchContext);
+      const resolved = validateReachableCommit(ref, `${context} fixed commit`);
+      validateLedgerOwnedFixedCommit(finding, ref, resolved, context, batchContext);
       return;
     }
     if (patchMatch) {
@@ -1257,16 +1526,17 @@ function validateFindingResolution(finding: Finding, context: string, batchConte
 function validateLedgerOwnedFixedCommit(
   finding: Finding,
   ref: string,
+  resolvedRef: string,
   context: string,
   batchContext: LedgerBatchContext,
 ): void {
   if (finding.batch_id === "final") {
-    if (!batchContext.terminalBuilderCommits.has(ref)) {
+    if (!batchContext.terminalBuilderCommits.has(resolvedRef)) {
       fail(`${context} fixed commit "${ref}" must be recorded in a terminal ledger batch`);
     }
     return;
   }
-  if (!batchContext.terminalBuilderCommitsById.get(finding.batch_id)?.has(ref)) {
+  if (!batchContext.terminalBuilderCommitsById.get(finding.batch_id)?.has(resolvedRef)) {
     fail(`${context} fixed commit "${ref}" must be recorded in terminal batch "${finding.batch_id}"`);
   }
 }
