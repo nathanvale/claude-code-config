@@ -425,16 +425,12 @@ Recommended tagged templates:
 | `templates/patch-proposal.md` | Yes | Proposal-only Builder dispatch must not blur into implementation authority. |
 | `issue-to-pr.md` hot path | No | The router should stay short Markdown; tags would add noise. |
 
-Example Builder packet shape:
+Example Builder packet shape (**revised** to correct tag granularity per the XML granularity correction in "Revisions From The Adversarial Pass"):
 
 ```xml
-<role>
-You are Builder for exactly one Issue-to-PR batch attempt.
-</role>
-
-<authority>
-You may edit only files listed in <allowed_files>. If the contract is stale or unsafe, return a fail-stop envelope before editing.
-</authority>
+<contract>
+You are Builder for exactly one Issue-to-PR batch attempt. You may edit only files listed in <allowed_files>. If the contract is stale or unsafe, return a fail-stop envelope before editing.
+</contract>
 
 <batch_contract>
 id: example-batch
@@ -451,22 +447,20 @@ execution_mode: proof_first
 null for implementation attempts, or one committed P0/P1 finding signature for repair attempts.
 </target_finding>
 
-<required_reads>
+<local_law_read_order>
 - target repo root AGENTS.md when present
 - nearest package AGENTS.md when present
 - every file in <allowed_files>
-</required_reads>
-
-<stop_conditions>
-Return fail-stop if preflight cannot prove the batch is safe, if required files are stale, or if relevant surfaces exist outside <allowed_files>.
-</stop_conditions>
+</local_law_read_order>
 
 <output_contract>
-Return exactly one Builder envelope with status, commit_sha, files_touched, blockers, probe_results, implementation_steps, tests_run, risks, deferred, and suggested_validator_focus.
+Return exactly one Builder envelope with status (success | fail-stop-preflight | fail-stop-out-of-scope | fail-stop-host-readiness | infrastructure-failure | proposal-only-success), commit_sha, files_touched, blockers, probe_results, implementation_steps, tests_run, risks, deferred, and suggested_validator_focus. Return fail-stop if preflight cannot prove the batch is safe, if required files are stale, or if relevant surfaces exist outside <allowed_files>.
 </output_contract>
 ```
 
-Design rule: each tagged packet should be assembled from durable ledger state plus the relevant template. Never paste the full runbook, full ledger, raw validator envelopes, or unrelated batches into tagged packets. XML improves boundary clarity only when the packet is already aggressively scoped.
+Note that this example wraps natural-language framing prose. The `<batch_contract>` payload is YAML and is already validated by the helper; do not invent XML inside it. The `<allowed_files>` list is a sub-field of the batch contract hoisted to top-level for boundary clarity, which is a deliberate redundancy. The Work Packet has additional content slots (issue + repo, attempt_type, iteration, prior commits, prior attempts, batch findings, batch notes, mechanic discipline, probe catalog) that this example elides; the v2 template must address all of them, either with additional tags or with Markdown sub-headings inside one of the existing tags.
+
+Design rule: each tagged packet should be assembled from durable ledger state plus the relevant template. Never paste the full runbook, full ledger, raw validator envelopes, or unrelated batches into tagged packets. XML improves boundary clarity only when the packet is already aggressively scoped and only where the wrapped content has no other contract.
 
 ### What Stays In `issue-to-pr.md`
 
@@ -892,6 +886,104 @@ Mitigation:
 - Keep contracts host-neutral.
 - Add `references/host-adapters.md` with concrete per-host mappings.
 - Require adapters to preserve the same authority boundary.
+
+## Revisions From The Adversarial Pass
+
+The following sections were added or expanded after the adversarial second pass surfaced gaps in the original draft. They are load-bearing for any v2 implementation; do not skip them.
+
+### Stage 5 restructuring (W2)
+
+The original draft proposed extracting Stage 5's patch-batch protocol into `references/final-review-patch-batches.md`. The adversarial pass argued this preserves Stage 5's mixed responsibility instead of resolving it. The stronger move is to **dissolve** the patch-batch protocol into Stage 4.
+
+Rationale: Stage 5 currently does two distinct jobs. The first (`/ce-code-review` + mechanical-diff fallback + persona dispatch) is a Validator dispatch equivalent to the inner loop. The second (proposal-only Builder dispatch + user confirmation + return-to-Stage-4) is a constrained batch that already has a precedent in the Stage 4 replacement-batch flow. Treating final-review findings that need fixes as just-another-batch in the DAG eliminates the nested workflow.
+
+V2 action:
+
+- Stage 5 becomes a read-only gate: run final review, persist findings, gate on open P0/P1.
+- When P0/P1 findings exist, create one or more patch batches and **return to Stage 4**; do not handle the fix inside Stage 5.
+- The patch-batch contract generalization lives in `references/stage-4-batch-loop.md` alongside the replacement-batch flow.
+- Stage 5 prose shrinks to ~30 lines instead of the 150 lines the original draft expected to extract into a playbook.
+
+### Builder role leak under proposal-only dispatch (W3)
+
+The original draft treated Builder/Validator separation as architecturally sound. The adversarial pass identified a leak: proposal-only Builder dispatch is **not a Builder role**. It has Builder's read authority and probe catalog, but it does not commit, does not edit, and does not append `builder_attempts`. The current Builder envelope (six statuses) has no slot for "produced a candidate proposal."
+
+V2 must address this leak. Two options:
+
+- **Option A (preferred):** introduce a distinct `Proposer` role with its own envelope contract. `references/builder-dispatch.md` covers both Builder and Proposer with explicit boundaries between them. The envelope for Proposer outputs a candidate batch contract YAML and has no `commit_sha` or `builder_attempts` semantics.
+- **Option B (acceptable if A is too costly):** keep the role folded into Builder, but document the leak explicitly in `references/builder-dispatch.md` and add a `status: proposal_only` value to the existing envelope.
+
+Either way, the runbook must specify what envelope status a successful proposal-only dispatch returns. The current runbook does not.
+
+### XML granularity correction (X2, X4)
+
+The original XML strategy (use tagged packets for Builder Work Packet, Validator prompt, patch proposal) is retained, but the specific tag set in the original example was wrong on three counts:
+
+1. **Collapse `<role>` and `<authority>` into a single `<contract>` tag.** The role and the authority are the same statement. Splitting them invites the model to treat `<role>` as flavor text.
+2. **Rename `<required_reads>` to `<local_law_read_order>`.** The current runbook uses the term "Local Law Read Order"; tag-name drift undermines auditability. Use the runbook's vocabulary.
+3. **Fold `<stop_conditions>` into `<output_contract>`.** Fail-stop is a status value inside the envelope, not a separate concern. Splitting them invites the model to satisfy the output contract without evaluating stop conditions.
+
+Additionally, reframe the XML-vs-no-XML rule: **XML is useful only when the content has no other contract.** Helper-validated YAML, JSON envelopes, and Markdown references already have contracts (the helper validator, the envelope schema, prose review). Wrapping them in XML shadows their existing contracts and forces dual validation. The Work Packet's structured payload (batch contract YAML, findings rows, prior attempts) is *mostly* not a good XML candidate. The framing prose around it (contract, allowed files, target finding, output contract) is the part where XML may help disambiguate.
+
+### Install topology and migration semantics (M1, M2, M5)
+
+The original draft was silent on the installed copy at `~/.claude/runbooks/issue-to-pr/`. The repo source at `runbooks/issue-to-pr/` is what gets edited, but the runbook prose references the installed path throughout. V2 must specify:
+
+- **Install topology:** which files are installed, and how the install script changes for v2. If `references/` and `templates/` are not synced into the installed copy, every Builder dispatch under v2 will fail to load `references/builder-dispatch.md`. The install script must add the new subdirectories to its sync set.
+- **Version detection:** add a `runbook_version` field to ledger frontmatter. The agent's first turn-start helper call should check this field; if the installed runbook version does not match the ledger's `runbook_version`, the agent must stop and ask the operator before proceeding.
+- **Migration semantics:** pick one and document it.
+  - **Atomic landing:** all in-flight ledgers must be drained to `shipped` or `blocked` before v2 ships. Document the operational gate.
+  - **Deprecation window:** v1 prose ships in parallel for N weeks; new issues use v2; in-flight v1 ledgers continue under v1 until they close. Document the dual-prose layout.
+- **Partial migration risk (M1):** Phase 1's "drops below 600 lines" deliverable is a half-extracted state. The v2 PR landing pattern should be a single atomic merge of the full reference tree plus the rewritten hot file, not an incremental sequence of "extract one section per PR" merges.
+
+### Regression matrix (M3, R5)
+
+Phase 5's three smoke runs (happy path, stale contract, final-review patch-batch) are not coverage. The current `decompose.test.ts` has 77 tests covering helper-validated invariants. Twelve prose-only invariants are not covered by any test and exist only in the runbook's prose:
+
+1. Local Law Read Order (`issue-to-pr.md:115-128`)
+2. Mechanic Discipline rules (`:130-134`)
+3. Public Contract Rule (`:136-140`)
+4. Domain Language Rule (`:142-145`)
+5. Preflight Checklist semantics (`:148-160`)
+6. Probe Catalog choices (`:166-174`)
+7. Decision tree for "≤2 files vs. needs replan" (`:790-861`)
+8. "Smallest patch that adjusts contract" heuristic (`:852-859`)
+9. Mechanical-diff fallback >80% line threshold (`:764-773`)
+10. Default-broad-reviewer-set fallback condition (`:976-981`)
+11. Selector signal precedence (overlap between `auth` and `migrations/`)
+12. Host-readiness-vs-infrastructure-failure boundary (`:687-694, :1027-1034`)
+
+V2 must ship with a regression matrix that exercises each of these under both v1 prose and v2 prose. The matrix can be a documented checklist of scripted scenarios, not necessarily automated tests, but the verification must happen before v2 lands. Phase 5's current smoke-test list exercises at most three of these in any given run; that is not coverage.
+
+### Helper output structuring (M6, Phase 4)
+
+Every new helper mode added in Phase 4 must ship with `--json` structured output and a fixed schema. The agent never parses prose stdout for routing decisions. The existing nine modes can keep their prose output for human-readability, but their machine consumers (the agent) must be migrated to `--json` over time.
+
+Rationale: as helper modes multiply, the implicit contract between helper stdout and agent parsing becomes load-bearing. Without structured output, the agent-helper contract lives in runbook prose, which is exactly the prose-drift failure mode F3 warns against.
+
+### decompose.ts itself needs v2 (A2)
+
+The original draft's F3 and Phase 4 recommendations push more truth into `decompose.ts`. The adversarial pass demonstrated that `decompose.ts` is already 87,112 bytes / 2,164 lines, with one `describe` block and 77 tests in a 5,174-line test file. Adding render-findings-table, normalize-Validator-envelope, validate-raw-Builder-envelope, and route-current-stage modes (Phase 4) would push it to ~3,200 lines.
+
+The structural recommendation in F3 (push more truth into code) is correct. The placement recommendation (extend `decompose.ts`) is not. V2 should split the helper into modules per the proposed file layout above:
+
+- `lib/validate.ts` — schema validators (AC coverage, batch contract shape, DAG cycles, findings rows).
+- `lib/digest.ts` — content hashing (plan, AC, batch contract digests).
+- `lib/ledger.ts` — persistence and cross-document integrity (frontmatter, fenced YAML, supersedes references, commit reachability).
+- `lib/route.ts` — workflow routing (`--confirmation-state`, `--next-action`).
+- `lib/cli.ts` — thin dispatch shim.
+
+Each module's test file caps at 1,500 lines. The CLI dispatch becomes a thin shim that picks the right module per flag. This decouples Phase 4's helper extension work from the original file's growing single-file complexity.
+
+### Observability (O1)
+
+The original draft has no observability surface. Diagnosing a stuck workflow under v2 (when the agent has loaded only the hot file and the operator suspects a missed rule in an unloaded reference) requires infrastructure the original draft does not propose. V2 must add:
+
+- **Helper `--diagnose <ledger-path>` mode:** prints inferred current state, the expected reference for the current state, and any drift (digest mismatch, finding-table drift, frontmatter version skew).
+- **Dispatch evidence in ledger Notes:** every Builder/Proposer dispatch appends a row recording which references were loaded before the dispatch decision.
+- **Escape-hatch reference tracking:** every escape-hatch fire records which reference (if any) was loaded immediately before. This catches "agent skipped the reference and fired the wrong hatch" failure modes.
+
+These are operator-facing surfaces, not agent-facing. Without them, v2's reference-based structure makes diagnosis harder than v1, not easier.
 
 ## Non-Goals For V2
 
