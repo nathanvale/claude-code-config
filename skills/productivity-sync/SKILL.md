@@ -242,6 +242,26 @@ Read `.productivity-sync-cursor.json` from the owning repo root. This file persi
 
 **Retention rules:** `run_history` keeps at most 7 entries per connector. `commitments` has a target cap of 50 open entries; prune `resolved` entries first, never silently drop `open` or `dismissed` entries, and surface a "commitment ledger over cap" note if the ledger remains over cap. `pending` has a soft cap of about 10 items because entries expire within 3 syncs by design.
 
+#### Commitment Ledger Policy
+
+`cursor.commitments` is shared sync state for commitments Nathan owns across connectors. Ledger writes do not require user confirmation because they do not write to `TASKS.md`, `memory/`, people notes, or external trackers. The user reviews open ledger entries through dropped-ball surfacing before any task or memory write happens.
+
+Shared contract:
+- Write only self-owned commitments where attribution evidence clearly identifies Nathan as the owner. Other people's promises are dependencies, not entries in `cursor.commitments`.
+- Store commitment fields according to the Step 1a field table. Required new-entry fields are `id`, `owner`, `text`, `verb_object`, `source`, `extracted_at`, and `status`; include `deadline` when a nearby `by <date/day>` phrase exists.
+- Use `id = hash(owner + verb_object + source)` for stable deduplication across re-extractions.
+- Do not ledger vague acknowledgements such as "I'll check", "I'll look", or "will do" unless source context supplies a concrete action object.
+- Collapse cross-source duplicates during Step 2b by fuzzy-matching `verb_object`, preserving the earliest entry, merging duplicate sources into `sources`, and dismissing duplicates with `dismissed_reason`.
+- Surface dropped balls from open commitments whose deadlines have passed or whose age threshold has elapsed, unless `deferred_until` is still in the future.
+- Defer/snooze writes `deferred_until: now + 5 days` while keeping `status: open`.
+- Dismiss writes `status: dismissed` and `dismissed_at: now`, preserving the entry as ledger history.
+- Apply the ledger cap by pruning `resolved` entries first; never silently drop `open` or `dismissed` entries.
+
+Per-source attribution evidence:
+- **Chat:** sender metadata must unambiguously confirm Nathan authored the message. First-person commitments such as "I'll ..." are allowed only with verified Nathan sender metadata.
+- **Meeting notes and transcripts:** ledger only explicit Nathan-owned patterns such as `Nathan to ...`, `@Nathan ...`, or action items attributed to Nathan. Unattributed first-person transcript phrases are not enough because transcript prose lacks reliable speaker identity.
+- **Future sources:** declare the source's attribution evidence in this policy before writing to `cursor.commitments`.
+
 **Cursor migration note:** When `commitments` or `pending` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with the defaults above. Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
 
 **Parse-error recovery:** If `JSON.parse` of the cursor file throws (truncated bytes, manual edit corruption, OS crash between flush and rename), treat the cursor as missing for this run (wide-window fallback per Step 1a). Emit one line to the report: `cursor file malformed: treating as first run`. Rename the corrupt file to `.productivity-sync-cursor.json.corrupt.<iso-timestamp>` before writing the next clean cursor. The rename preserves the corrupt content for post-mortem without blocking sync continuation.
@@ -431,7 +451,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 | **Dependency** | Someone else promises work Nathan is waiting on | Propose TASKS.md `🔗 I'm waiting on` / dependency update |
 | **Commitment** | "@Nathan can you ...", "Nathan to ...", or first-person "I'll ..." / "I'll send ..." / "Will do X by Y" sent by Nathan, with a concrete verb-object | Propose self-owned action item via the write-back flow |
 
-**Commitment ledger extraction (chat):** For each message where sender metadata confirms Nathan is the speaker, check for first-person patterns (`I'll ...`, `I will ...`, `I have ...`) with a concrete verb-object. Do not ledger vague acknowledgements such as "I'll check", "I'll look", or "will do" unless source context supplies the concrete action object. Only ledger commitments when sender identity is unambiguous. Do not ledger based on message content alone when sender is unknown or `ambiguous`. Other people's promises are dependencies, not commitments, and do not enter `cursor.commitments`. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (chat message timestamp or thread URL). Write to `cursor.commitments` per the schema in Step 1a. Deduplicate by id (hash of owner+verb_object+source). Do not require user confirmation for ledger writes because the ledger is sync state; the user reviews ledger entries via "Dropped balls" in the report before any task or memory write.
+**Commitment ledger extraction (chat):** Apply the Commitment Ledger Policy from Step 1a. Chat-specific attribution requires sender metadata that unambiguously confirms Nathan authored the message; first-person commitments (`I'll ...`, `I will ...`, `I have ...`) are allowed only with that verified sender metadata. Do not ledger based on message content alone when sender is unknown or `ambiguous`.
 
 **Filter aggressively — chat is high-volume:**
 - Drop reactions / acks / pure social messages
@@ -541,11 +561,11 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
 
    After action item extraction, append the enrichment summary to the per-meeting report line: `"1 speaker update proposed, 1 applied, 2 unmatched."` (or `"transcript enrichment skipped (apply-person-update.ts not found)"` on graceful-skip).
 
-   **Commitment extraction pass (meeting notes):** After action item extraction, scan the meeting note's `<transcript>` block for explicit self-attribution commitment patterns. Match only Nathan-owned obligations with a concrete verb-object:
+   **Commitment extraction pass (meeting notes):** Apply the Commitment Ledger Policy from Step 1a. After action item extraction, scan the meeting note's `<transcript>` block for explicit self-attribution commitment patterns. Match only Nathan-owned obligations with a concrete verb-object:
    - `(Nathan|@Nathan)( to| can you| please)` followed by a concrete verb-object (e.g. "Nathan to send the onboarding bundle to Kerry by Friday")
    - Patterns attributed to Nathan in the action items section of the note (e.g. `- [ ] Nathan to ...`)
 
-   Do **not** ledger unattributed first-person transcript phrases (e.g. "I'll follow up"). Notion transcripts are plain prose without reliable speaker labels; first-person phrases cannot be attributed to Nathan without explicit speaker metadata. Do not ledger vague acknowledgements like "I'll check" unless the concrete action object is present. Capture: owner ("Nathan"), verb-object, deadline (any `by <date/day>` phrase near the commitment), source (meeting note path). Write to `cursor.commitments`. Deduplicate by id (hash of owner+verb_object+source). This ledger write is automatic because it is cursor state; any write to `TASKS.md`, `memory/`, or people notes remains ask-gated via action item triage.
+   Do **not** ledger unattributed first-person transcript phrases (e.g. "I'll follow up"). Notion transcripts are plain prose without reliable speaker labels; first-person phrases cannot be attributed to Nathan without explicit speaker metadata. Any write to `TASKS.md`, `memory/`, or people notes remains ask-gated via action item triage.
 
 7. **Action item write-back** — never let action items vanish into the report. For every action item extracted in substep 6, decide its destination, then ask the user to apply.
 
