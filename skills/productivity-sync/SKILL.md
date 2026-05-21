@@ -195,7 +195,7 @@ Max 7 entries. Drop the oldest entry before appending if the array already conta
   deferred_until?: string // ISO datetime of snooze expiry (for dropped-ball deferrals)
 }[]
 ```
-Target cap: 50 open entries. Prune `resolved` and `dismissed` entries first when the array grows; never silently drop `open` entries. If open entries exceed the cap, keep them all and surface a "commitment ledger over cap" note in the report.
+Target cap: 50 open entries. Prune `resolved` entries first when the array grows; never silently drop `open` or `dismissed` entries. If the ledger remains over cap after pruning resolved entries, keep the remaining entries and surface a "commitment ledger over cap" note in the report.
 
 `pending` (top-level) — deferred action item triage queue:
 ```
@@ -923,7 +923,7 @@ After all connector steps in Step 2 complete, run a reconciliation pass on `curs
    - **Defer/snooze** — sets `deferred_until: now + 5 days` (commitment stays `status: open`; will not re-surface until snooze expires)
    - **Dismiss** — sets `status: dismissed`, `dismissed_at: now`; does not remove the entry immediately (preserves ledger history)
 
-4. **Ledger cap:** If open entries exceed 50 after pruning resolved/dismissed entries, keep all open entries and add a "commitment ledger over cap (N open entries) — consider resolving older entries" line to the report.
+4. **Ledger cap:** If the ledger exceeds the target cap, prune `resolved` entries first. Keep all `open` and `dismissed` entries. If the ledger remains over cap after pruning resolved entries, add a "commitment ledger over cap (N entries; dismissed history preserved) — consider resolving older open entries" line to the report.
 
 **Note:** Reconciliation depends on the project-tracker connector completing first for Jira matching. TASKS.md matching is unaffected by ordering.
 
