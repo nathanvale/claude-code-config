@@ -206,18 +206,24 @@ At the start of every turn:
    the end of the turn.
 
 Each turn does one thing visible: advance a stage, commit one ledger lifecycle
-checkpoint, run one Builder commit, run one validate pass, or fail-stop with a
-question. Never do two stages in one turn.
+checkpoint, commit one Validator findings checkpoint, run one Builder commit,
+run one validate pass, or fail-stop with a question. Never do two stages in one
+turn.
 
 ## Fix protocol (shared)
 
 Fixes happen inside `batch-loop`'s **inner loop** (see `issue-to-pr.md`,
 `## Inner loop`). They are NOT cross-batch. Each batch's inner loop:
 
-1. Builder commits one fix per P0/P1 finding (one finding → one commit, scoped
-   to the batch's `files`).
+1. Builder commits one implementation or repair attempt scoped to the batch's
+   `files`.
 2. Persona suite re-runs over the new diff.
-3. Repeat until open P0/P1 == 0 OR iteration cap hit OR an escape hatch fires.
+3. Orchestrator normalizes and deduplicates Validator findings, writes
+   `## Findings data`, renders `## Findings`, runs `--validate-findings`, and
+   commits a ledger-only Validator findings checkpoint before any repair
+   Builder starts.
+4. Builder repairs exactly one committed open P0/P1 finding by signature.
+5. Repeat until open P0/P1 == 0 OR iteration cap hit OR an escape hatch fires.
 
 P2 and P3 findings do NOT trigger fixes inside the inner loop. P2 findings are
 auto-closed at batch convergence with status `deferred-P2` and surfaced in the
