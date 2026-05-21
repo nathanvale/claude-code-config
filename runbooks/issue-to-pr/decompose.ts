@@ -522,7 +522,9 @@ function stripYamlComment(s: string): string {
       continue;
     }
     if (shouldToggleQuote(s, i, quote)) {
-      quote = quote === ch ? null : quote ?? ch;
+      const nextQuote = ch === "'" || ch === '"' ? ch : null;
+      if (nextQuote === null) continue;
+      quote = quote === nextQuote ? null : quote ?? nextQuote;
       continue;
     }
     const prev = i > 0 ? s[i - 1] : "";
@@ -545,7 +547,9 @@ function splitOutsideQuotes(s: string, delimiter: string): string[] {
       continue;
     }
     if (shouldToggleQuote(s, i, quote)) {
-      quote = quote === ch ? null : quote ?? ch;
+      const nextQuote = ch === "'" || ch === '"' ? ch : null;
+      if (nextQuote === null) continue;
+      quote = quote === nextQuote ? null : quote ?? nextQuote;
       continue;
     }
     if (ch === delimiter && quote === null) {

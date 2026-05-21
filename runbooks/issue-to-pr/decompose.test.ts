@@ -33,8 +33,9 @@ function sha256(payload: string): string {
 	return `sha256:${createHash("sha256").update(payload).digest("hex")}`;
 }
 
-async function runDecompose(args: string[]) {
+async function runDecompose(args: string[], options: { cwd?: string } = {}) {
 	const proc = Bun.spawn([bunExecutable, scriptPath, ...args], {
+		cwd: options.cwd,
 		stderr: "pipe",
 		stdout: "pipe",
 	});
@@ -2052,6 +2053,28 @@ batches:
 		expect(inProgressWithVerdictResult.exitCode).toBe(1);
 		expect(inProgressWithVerdictResult.stderr).toContain(
 			"must use final_verdict: null",
+		);
+	});
+
+	test("validates ledger commit refs against the current git repo", async () => {
+		const ledgerPath = writeFixture("ledger.md", ledgerWithBatch);
+		const otherRepo = tempDir();
+		const init = Bun.spawnSync(["git", "init"], {
+			cwd: otherRepo,
+			stderr: "pipe",
+			stdout: "pipe",
+		});
+
+		expect(init.exitCode).toBe(0);
+
+		const result = await runDecompose(
+			["--validate-ledger-batches", ledgerPath],
+			{ cwd: otherRepo },
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain(
+			`ledger batch 1 builder commit "${currentCommit}" must exist in the current git repo`,
 		);
 	});
 
