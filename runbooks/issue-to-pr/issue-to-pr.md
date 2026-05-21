@@ -254,16 +254,18 @@ plan content; `stale` means confirmed evidence no longer matches current
 content; `blocked` means the relevant gate is blocked by durable ledger state
 such as Stage 3 Contract Review blockers or an explicit gate status.
 
-Before every stage transition after stage 3, recompute the stored
-`plan_digest`, `batch_contract_digest`, and `ac_digest`. If any digest is null
-while `## Batches` is populated, or any digest differs, fail-stop and return
-to stage 3 confirmation before Builder or ship work continues. Existing stale
-digest routing remains mandatory even when `--confirmation-state` has already
-reported the stale state. `batch_contract_digest` covers only immutable batch
-contract fields: id, name, goal, files, depends_on, execution_mode,
-acceptance_tests, ac_mapping, and rationale. It does not cover mutable
-lifecycle fields such as status, builder_commits, iterations, or
-builder_attempts, or final_verdict. Recompute the three digests with:
+Before every stage transition after stage 3, recompute current
+`plan_digest`, `batch_contract_digest`, and `ac_digest` values and compare
+them with the stored frontmatter values. If any digest command exits non-zero,
+any stored digest is null while `## Batches` is populated, or any current
+digest differs from its stored value, fail-stop and return to stage 3
+confirmation before Builder or ship work continues. Existing stale digest
+routing remains mandatory even when `--confirmation-state` has already reported
+the stale state. `batch_contract_digest` covers only immutable batch contract
+fields: id, name, goal, files, depends_on, execution_mode, acceptance_tests,
+ac_mapping, and rationale. It does not cover mutable lifecycle fields such as
+status, builder_commits, iterations, or builder_attempts, or final_verdict.
+Compute the three current digests with:
 
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
@@ -388,8 +390,9 @@ to `git remote get-url origin` parsed to `owner/repo`).
 8. Run
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>`.
    It must report `acceptance_criteria: confirmed`,
-   `batch_contract: pending`, and `digests: pending`. Commit the ledger
-   before transitioning to stage 2:
+   `batch_contract: pending`, and `digests: pending`. If any value differs,
+   fail-stop and repair the ledger evidence before committing or transitioning
+   to stage 2. Commit the ledger before transitioning to stage 2:
    `chore(issue-{issue-number}): checkpoint acceptance criteria`.
 
 **Exit condition:** Ledger exists with populated `## Acceptance criteria` and
@@ -542,9 +545,11 @@ runbook checkout.
    for revision. When a plan/DAG revision lands, close the Stage 3 blockers
    with `status: fixed` and
    `resolution: plan-revision <sha>`, reset
-   `batch_contract_confirmation_status: pending`, then rerun helper parsing,
-   AC coverage, digest computation, and Contract Review before asking for
-   confirmation again.
+   `batch_contract_confirmation_status: pending`, clear `plan_digest` and
+   `batch_contract_digest` to null, and preserve or recompute `ac_digest` from
+   the current `## Acceptance criteria` section so the AC gate remains durable.
+   Then rerun helper parsing, AC coverage, digest computation, and Contract
+   Review before asking for confirmation again.
 
    The Stage 3 Contract Review loop has a five-cycle cap. Hitting the cap
    fail-stops with `blocked_reason: contract-review-cycle-cap` and asks the

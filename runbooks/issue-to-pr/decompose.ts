@@ -78,6 +78,13 @@ interface ConfirmationStateReport {
   digests: ConfirmationState;
 }
 
+class DecomposeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DecomposeError";
+  }
+}
+
 type ConfirmationState = "pending" | "confirmed" | "stale" | "blocked";
 type ExecutionMode = "tdd" | "proof_first" | "change_first";
 
@@ -160,10 +167,25 @@ const EXTENSIONLESS_FILE_NAMES = new Set([
   "rakefile",
   "readme",
 ]);
+let failMode: "exit" | "throw" = "exit";
 
 function fail(msg: string): never {
+  if (failMode === "throw") throw new DecomposeError(msg);
   stderr.write(`decompose: ${msg}\n`);
   exit(1);
+}
+
+function nonExiting<T>(fn: () => T): T | null {
+  const previousFailMode = failMode;
+  failMode = "throw";
+  try {
+    return fn();
+  } catch (error) {
+    if (error instanceof DecomposeError) return null;
+    throw error;
+  } finally {
+    failMode = previousFailMode;
+  }
 }
 
 function parse(planPath: string, options: ParseOptions = {}): Batch[] {
@@ -973,7 +995,7 @@ function readCandidateBatchContractDigestOrNull(frontmatter: Record<string, stri
   } catch {
     return null;
   }
-  return contractDigest(parse(planPath));
+  return nonExiting(() => contractDigest(parse(planPath)));
 }
 
 function readAcceptanceCriteriaDigestOrNull(ledgerPath: string): string | null {

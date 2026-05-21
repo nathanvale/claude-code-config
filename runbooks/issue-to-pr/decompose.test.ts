@@ -1823,6 +1823,43 @@ batches: []
 `);
 	});
 
+	test("reports stale state when confirmed candidate plan becomes malformed", async () => {
+		const planContents = oneBatchPlanContents();
+		const planPath = writeFixture(
+			"plan.md",
+			`# Plan
+
+\`\`\`yaml
+id: broken
+name: Broken
+goal: AC 1
+files:
+  -
+\`\`\`
+`,
+		);
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			ledgerWithConfirmationState({
+				acConfirmationStatus: "confirmed",
+				acDigest: sha256("- [ ] One"),
+				batchContractConfirmationStatus: "confirmed",
+				batchContractDigest: oneBatchContractDigest(),
+				planDigest: sha256(planContents),
+				planPath,
+			}),
+		);
+
+		const result = await runDecompose(["--confirmation-state", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe(`confirmation_state:
+  acceptance_criteria: confirmed
+  batch_contract: stale
+  digests: stale
+`);
+	});
+
 	test("reports confirmed batch contract and digest state", async () => {
 		const planContents = oneBatchPlanContents();
 		const planPath = writeFixture("plan.md", planContents);

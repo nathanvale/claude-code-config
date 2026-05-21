@@ -151,7 +151,7 @@ contract proves insufficient.
 
 After the ledger exists, resumed turns should start with:
 
-```
+```bash
 bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>
 ```
 
