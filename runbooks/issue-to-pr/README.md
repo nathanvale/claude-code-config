@@ -270,6 +270,12 @@ them.
 - **Corroborating evidence**: supporting context from duplicate persona
   findings. Keep a short "also reported by ..." clause in the canonical
   summary and the fuller detail in Notes.
+- **Contract Review**: Stage 3 read-only review of the authored plan plus
+  parsed candidate DAG before candidate batches become the ledger contract.
+  Source requirements:
+  `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
+- **Escalated Contract Review**: the higher-rigor Stage 3 review path used
+  only when deterministic risk triggers fire.
 - **Builder dispatch contract**: the runbook-owned prompt shape, required
   capabilities, preflight rules, authority boundary, and return envelope that
   each host maps to its own fresh Builder sub-agent per attempt.
@@ -331,20 +337,23 @@ Three sections plus frontmatter:
    rather than copied into `builder_attempts`.
 4. **`## Findings data`** - one fenced YAML block listing every finding with
    strict fields: id, batch_id, signature, persona, severity, status, summary,
-   and resolution. Finding ids must be unique. `batch_id` must be `final` or
-   a confirmed ledger batch id. This is the source of truth for P0/P1 gates,
-   duplicate signature detection, accepted-risk handling, and final
+   and resolution. Finding ids must be unique. `batch_id` must be `stage-3`,
+   `final`, or a confirmed ledger batch id. This is the source of truth for
+   Stage 3 Contract Review gates, P0/P1 gates, duplicate signature detection,
+   accepted-risk handling, and final
    convergence.
    `severity` must be `P0`, `P1`, `P2`, or `P3`. `status` must be `open`,
    `fixed`, `accepted-risk`, `deferred-P2`, `deferred-P3`,
    `out-of-scope-for-this-issue`, `ADR-contradicts-<id>`, or `superseded`.
    An open blocker means `severity` is `P0` or `P1` and `status` is `open`.
-   Fixed findings must reference a reachable `commit <sha>` recorded in a
+   Fixed Stage 3 findings must use `resolution: plan-revision <sha>`, where
+   the SHA is the reachable plan/DAG revision that closed the finding. Other
+   fixed findings must reference a reachable `commit <sha>` recorded in a
    terminal ledger batch, or a terminal `patch-batch patch-NNN`. Duplicate
-   findings are identified by `batch_id + signature`; superseded findings
-   must point to an existing different canonical finding with the same
-   signature, same batch id, and equal-or-higher severity. The canonical
-   finding may be open or closed, but it must not itself be superseded.
+   findings are identified by `batch_id + signature`; superseded findings must
+   point to an existing different canonical finding with the same signature,
+   same batch id, and equal-or-higher severity. The canonical finding may be
+   open or closed, but it must not itself be superseded.
    Convergence checks read this YAML source, not the rendered table.
 5. **`## Findings`** - markdown table rendered from `## Findings data` for
    human scanning. Append rows only after the YAML source is updated.

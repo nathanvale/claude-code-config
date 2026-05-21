@@ -56,11 +56,17 @@ the markdown table below in sync for human scanning. `severity` must be `P0`,
 `P1`, `P2`, or `P3`. `status` must be `open`, `fixed`, `accepted-risk`,
 `deferred-P2`, `deferred-P3`, `out-of-scope-for-this-issue`,
 `ADR-contradicts-<id>`, or `superseded`. An open blocker means `severity` is
-`P0` or `P1` and `status` is `open`. Fixed findings must use
+`P0` or `P1` and `status` is `open`. Use `batch_id: stage-3` for Stage 3
+Contract Review findings before batch confirmation, `batch_id: final` for
+final review findings, or a confirmed ledger batch id for batch-loop findings.
+Fixed Stage 3 findings must use `resolution: plan-revision <sha>` for the
+reachable plan/DAG revision that closed them. Other fixed findings must use
 `resolution: commit <sha>` recorded in a terminal ledger batch, or
 `resolution: patch-batch patch-NNN`. Duplicate findings are identified by
 `batch_id + signature`; superseded rows must point to the canonical
-non-superseded row with the same batch id and signature.
+non-superseded row with the same batch id and signature. Stage 3 Contract
+Review protocol is sourced from
+`docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
 
 ```yaml
 findings: []

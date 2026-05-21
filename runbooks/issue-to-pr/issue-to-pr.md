@@ -422,6 +422,9 @@ working tree clean.
 
 **Inputs:** Plan document from stage 2; AC list in ledger.
 
+Stage 3 Contract Review behavior is sourced from
+`docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
+
 **Helper context:** all helper commands in this stage must run from the target
 repo root. This keeps commit reachability, repo-relative path validation, and
 ledger checks pointed at the target repository rather than the installed
@@ -478,24 +481,63 @@ runbook checkout.
    - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
    - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`
    - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest`
-   Print the candidate batch list inline at end of turn, including each
-   `execution_mode`, any rationale, and all three digests. Ask the user to
-   confirm the exact AC text, DAG, and execution modes before entering
-   `batch-loop`. On `n`, stop and discuss.
 
-7. On `y`, re-run the helper and AC coverage check, then recompute the plan
+7. **Run Contract Review before batch confirmation.** Dispatch a read-only
+   Contract Reviewer with:
+   - the authored plan file path and content;
+   - the user-confirmed AC list;
+   - the parsed candidate DAG;
+   - the candidate contract digest;
+   - this rubric: catch plan/DAG drift, missing AC coverage not visible to the
+     helper, unsafe dependencies, stale file ownership, mode/rationale drift,
+     and batch boundaries that would push plan-wide decisions into Builder
+     Preflight.
+
+   Default to one Contract Reviewer. Run escalated Contract Review only when
+   deterministic triggers fire: rename, identity flip, migration, public API,
+   auth/data/privacy, many-file changes, or cross-package governance. Contract
+   Reviewer returns the existing Validator envelope shape:
+   `{"reviewer":"<persona>","findings":[],"residual_risks":[],"testing_gaps":[]}`.
+
+   Normalize findings with `batch_id: stage-3`. Open P0/P1 findings block
+   Stage 3 and prevent writing candidate batches to the ledger. Record those
+   blockers in `## Findings data`, render `## Findings`, run
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-findings <ledger-path>`,
+   then run
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --assert-no-open-p0p1 <ledger-path>`.
+   If the assertion fails, do not write to `## Batches`; send the plan back
+   for revision. When a plan/DAG revision lands, close the Stage 3 blockers
+   with `status: fixed` and
+   `resolution: plan-revision <sha>`, then rerun helper parsing, AC coverage,
+   digest computation, and Contract Review before asking for confirmation
+   again.
+
+   The Stage 3 Contract Review loop has a five-cycle cap. Hitting the cap
+   fail-stops with `blocked_reason: contract-review-cycle-cap` and asks the
+   user how to proceed. P2/P3 Contract Review findings are surfaced in the
+   confirmation prompt, but they do not block writing confirmed batches to the
+   ledger.
+
+8. **Ask for confirmation.**
+   Print the candidate batch list inline at end of turn, including each
+   `execution_mode`, any rationale, all three digests, and any nonblocking
+   Stage 3 P2/P3 Contract Review findings. Ask the user to confirm the exact
+   AC text, DAG, execution modes, and surfaced Contract Review advisories
+   before entering `batch-loop`. On `n`, stop and discuss.
+
+9. On `y`, re-run the helper and AC coverage check, then recompute the plan
    digest, AC digest, and batch contract digest. If any digest changed, do
    not write to the ledger. Print the changed candidate batch list and ask
    for confirmation again.
 
-8. After the re-check passes with matching digests, paste the YAML block into
+10. After the re-check passes with matching digests, paste the YAML block into
    the ledger's `## Batches` section. Set all batches to `status: pending`.
    The ledger's `## Batches` section is the confirmed execution contract;
    never write candidate batches there before the user confirms the current
    digest triple. Store `plan_digest`, `batch_contract_digest`, and
    `ac_digest` in the ledger frontmatter with the confirmed values.
 
-9. Commit the ledger (batches recorded) before transitioning to stage 4:
+11. Commit the ledger (batches recorded) before transitioning to stage 4:
    `chore(issue-{issue-number}): record batch DAG`.
    Before the commit, run
    `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --validate-ledger-batches <ledger-path>`
@@ -517,6 +559,11 @@ tree clean.
   ask user to revise the plan. Builder cannot infer whether the batch should
   use TDD, proof-first execution, or change-first execution.
 - AC uncovered → fail-stop (see step 4).
+- Contract Review open P0/P1 findings → record `batch_id: stage-3` findings,
+  revise the plan, close them with `resolution: plan-revision <sha>`, and
+  rerun Contract Review before confirmation.
+- Contract Review loop cap hit → fail-stop with
+  `blocked_reason: contract-review-cycle-cap`.
 
 ### Stage 4: `batch-loop`
 
