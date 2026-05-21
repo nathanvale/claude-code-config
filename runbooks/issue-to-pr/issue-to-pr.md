@@ -14,8 +14,10 @@ the target repo. Template at [issue-N-ledger.template.md](issue-N-ledger.templat
 
 This runbook does not own a fixed file list. The Builder is only permitted to
 touch the files listed in the current batch's `files` field (see `## Batch
-schema`). Out-of-scope edits trigger a fail-stop (see `## Inner loop` and
-`## Escape hatches`).
+schema`). A missing path listed in `files` may be created by Builder, but
+Builder must fail-stop if preflight suggests the path is stale, mistyped,
+wrong-package, or semantically unauthorized. Out-of-scope edits trigger a
+fail-stop (see `## Inner loop` and `## Escape hatches`).
 
 ## Suggested reviewer personas
 

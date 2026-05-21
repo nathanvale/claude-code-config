@@ -200,6 +200,44 @@ A batch is **high-risk** when any of these hold:
 High-risk batches trigger the `risk-high-finding` escape hatch on any open
 P0/P1: stop, summarise, ask the user before any inner-loop fix.
 
+## Local glossary
+
+These terms are local to the Issue-to-PR workflow until another workflow needs
+them.
+
+- **Finding**: one validator-reported issue recorded in `## Findings data`.
+  It belongs to one `batch_id` or to `final`.
+- **Canonical finding**: the non-superseded row that represents one underlying
+  issue for one `batch_id + signature` group. It is the row read by the P0/P1
+  gate.
+- **Superseded finding**: a duplicate row kept for audit trail, with
+  `status: superseded` and `resolution: superseded-by-<canonical-id>`.
+- **Duplicate finding group**: all findings with the same `batch_id +
+  signature`. The highest-severity row is canonical; ties use the first row in
+  stable normalized order.
+- **Corroborating evidence**: supporting context from duplicate persona
+  findings. Keep a short "also reported by ..." clause in the canonical
+  summary and the fuller detail in Notes.
+- **Builder dispatch contract**: the runbook-owned prompt shape, required
+  capabilities, preflight rules, authority boundary, and return envelope that
+  each host maps to its own fresh sub-agent primitive.
+- **Builder Work Packet**: the per-attempt, batch-only payload the Orchestrator
+  passes to Builder under the Builder dispatch contract.
+- **Builder Preflight Checklist**: Builder's read-only readiness and
+  deterministic-probe step before edits.
+- **Builder attempt**: one Builder dispatch that returns a well-formed Builder
+  envelope, whether it commits or Builder-authored fail-stops.
+- **Host Builder readiness failure**: an Orchestrator-owned block before
+  Builder exists because the host cannot provide the required fresh sub-agent
+  capabilities. Recorded as `host-builder-tools-unavailable`.
+- **Builder infrastructure failure**: a post-dispatch host, tool, permission,
+  dispatch, serialization, schema, or malformed-envelope failure before a
+  well-formed Builder envelope exists.
+- **Mechanic Discipline**: the Builder rules that keep implementation local,
+  reviewable, and non-architectural.
+- **Route hint**: a non-authoritative next-owner hint in a Builder fail-stop
+  envelope. Status owns workflow transition; `route_hint` owns routing advice.
+
 ## Ledger format
 
 One ledger file per issue, in the target repo at
@@ -237,9 +275,11 @@ Three sections plus frontmatter:
    `out-of-scope-for-this-issue`, `ADR-contradicts-<id>`, or `superseded`.
    An open blocker means `severity` is `P0` or `P1` and `status` is `open`.
    Fixed findings must reference a reachable `commit <sha>` recorded in a
-   terminal ledger batch, or a terminal `patch-batch patch-NNN`; superseded
-   findings must point to an existing different open finding with the same
-   signature and equal-or-higher severity.
+   terminal ledger batch, or a terminal `patch-batch patch-NNN`. Duplicate
+   findings are identified by `batch_id + signature`; superseded findings
+   must point to an existing different canonical finding with the same
+   signature, same batch id, and equal-or-higher severity. The canonical
+   finding may be open or closed, but it must not itself be superseded.
    Convergence checks read this YAML source, not the rendered table.
 5. **`## Findings`** - markdown table rendered from `## Findings data` for
    human scanning. Append rows only after the YAML source is updated.

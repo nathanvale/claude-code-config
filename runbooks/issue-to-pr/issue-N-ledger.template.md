@@ -29,6 +29,9 @@ Format and protocol: see [README](file:///Users/nathanvale/.claude/runbooks/issu
 
 Each batch row must include `execution_mode: tdd | proof_first | change_first`.
 `builder_commits` entries must be reachable git commit refs.
+Well-formed Builder fail-stops count as Builder attempts in runbook workflow
+language. Do not add executable `builder_attempts` fields here until the
+runbook helper/schema supports them.
 
 ```yaml
 batches: []
@@ -43,7 +46,9 @@ the markdown table below in sync for human scanning. `severity` must be `P0`,
 `ADR-contradicts-<id>`, or `superseded`. An open blocker means `severity` is
 `P0` or `P1` and `status` is `open`. Fixed findings must use
 `resolution: commit <sha>` recorded in a terminal ledger batch, or
-`resolution: patch-batch patch-NNN`.
+`resolution: patch-batch patch-NNN`. Duplicate findings are identified by
+`batch_id + signature`; superseded rows must point to the canonical
+non-superseded row with the same batch id and signature.
 
 ```yaml
 findings: []
