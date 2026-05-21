@@ -78,6 +78,36 @@ Allowed modes:
 Keep this vocabulary runbook-local until a second workflow adopts it. At that
 point, promote the terms into a shared pattern doc or ADR.
 
+## Builder dispatch overview
+
+Stage 4 uses the Builder dispatch contract instead of in-session
+implementation by the Orchestrator. The shared contract is host-neutral:
+hosts must provide an isolated Builder dispatch with the required Builder tool
+set and authority boundary, Work Packet delivery, git status and commit-ref
+visibility, envelope capture, and timeout/failure classification. The required
+Builder tool set is the ability to read/search target-repo files, edit only
+authorized `batch.files`, run deterministic repo-local checks/probes, inspect
+git status and diffs, create exactly one commit for a successful attempt, and
+return the structured envelope. The runbook must not depend on any
+host-specific primitive name for those capabilities.
+
+The Builder Work Packet is batch-only. It includes the confirmed batch
+contract, the current iteration, existing `builder_commits`, relevant findings
+for that batch, non-authoritative Notes summaries for that batch, local-law
+instructions, authority boundaries, preflight rules, and the return envelope
+contract. It excludes the full plan, full ledger, unrelated batch state, and
+raw Validator envelopes. Compact prior `builder_attempts` become part of the
+packet only after the helper/schema work supports that persisted field.
+
+If host readiness fails before Builder dispatch, record frontmatter
+`status: blocked` and `blocked_reason: host-builder-tools-unavailable`, append
+Notes evidence, leave batch statuses unchanged, and do not fall back to
+Orchestrator-direct implementation. If dispatch, timeout, permission,
+serialization, schema, or malformed-envelope failure happens after Builder
+dispatch, record `blocked_reason: builder-infrastructure-failure`, leave the
+current batch `in-progress`, and surface any reachable commit refs or
+dirty/staged path summaries for user choice.
+
 ## Why these seams
 
 | Seam        | Runbook                          | Ledger                                                                      | Files                                                  |
@@ -220,7 +250,9 @@ them.
   summary and the fuller detail in Notes.
 - **Builder dispatch contract**: the runbook-owned prompt shape, required
   capabilities, preflight rules, authority boundary, and return envelope that
-  each host maps to its own fresh sub-agent primitive.
+  each host maps to its own fresh Builder sub-agent per attempt.
+  Source requirements:
+  `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
 - **Builder Work Packet**: the per-attempt, batch-only payload the Orchestrator
   passes to Builder under the Builder dispatch contract.
 - **Builder Preflight Checklist**: Builder's read-only readiness and
@@ -250,12 +282,15 @@ Three sections plus frontmatter:
    path, final review checkpoint, PR URL (once shipped), ship mode, and
    confirmed Stage 3 digests (`plan_digest`, `batch_contract_digest`,
    `ac_digest`). Compute the plan digest with
-   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`. Compute the AC digest with
-   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`. The batch contract digest covers
-   immutable batch fields only: id, name, goal, files, depends_on,
-   execution_mode, acceptance_tests, ac_mapping, and rationale. Compute it
-   with `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest` before
-   confirmation, and `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`.
+   Compute the AC digest with
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --ac-digest <ledger-path>`.
+   The batch contract digest covers immutable batch fields only: id, name,
+   goal, files, depends_on, execution_mode, acceptance_tests, ac_mapping, and
+   rationale. Compute it with
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path> --candidate-contract-digest`
+   before confirmation, and
+   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --batch-contract-digest <ledger-path>`
    after the ledger is written.
 2. **`## Acceptance criteria`** - populated at stage 1 from the user-confirmed
    AC list. The source of truth for stage 2 and stage 3.

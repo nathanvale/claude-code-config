@@ -32,6 +32,11 @@ Each batch row must include `execution_mode: tdd | proof_first | change_first`.
 Well-formed Builder fail-stops count as Builder attempts in runbook workflow
 language. Do not add executable `builder_attempts` fields here until the
 runbook helper/schema supports them.
+Host readiness failures use frontmatter `blocked_reason:
+host-builder-tools-unavailable` before any batch status change. Post-dispatch
+host/schema/envelope failures use `blocked_reason:
+builder-infrastructure-failure`, leave the current batch `in-progress`, and
+record reachable commit refs plus dirty/staged path summaries in Notes.
 
 ```yaml
 batches: []
@@ -61,4 +66,4 @@ findings: []
 
 ## Notes
 
-<append-only log of escape hatch fires, user decisions, blocker overrides, infrastructure errors>
+<append-only log of escape hatch fires, user decisions, blocker overrides, host-builder-tools-unavailable evidence, builder-infrastructure-failure evidence, reachable commit refs, dirty/staged path summaries>

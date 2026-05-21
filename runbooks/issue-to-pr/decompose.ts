@@ -1093,6 +1093,8 @@ function parseFindingsData(ledgerPath: string, batchContext: LedgerBatchContext)
     "findings data ids",
   );
   validateSupersededTargets(findings);
+  validateUniqueNonSupersededFindings(findings);
+  validateCanonicalFindingSelection(findings);
   return findings;
 }
 
@@ -1104,9 +1106,14 @@ function validateSupersededTargets(findings: Finding[]): void {
     if (target === finding.id) fail(`finding "${finding.id}" cannot supersede itself`);
     const targetFinding = byId.get(target);
     if (!targetFinding) fail(`finding "${finding.id}" supersedes unknown finding "${target}"`);
-    if (targetFinding.status !== "open") fail(`finding "${finding.id}" must supersede an open finding`);
+    if (targetFinding.status === "superseded") {
+      fail(`finding "${finding.id}" must supersede a canonical finding`);
+    }
     if (targetFinding.signature !== finding.signature) {
       fail(`finding "${finding.id}" must supersede a finding with the same signature`);
+    }
+    if (targetFinding.batch_id !== finding.batch_id) {
+      fail(`finding "${finding.id}" must supersede a finding with the same batch_id`);
     }
     if (severityRank(targetFinding.severity) > severityRank(finding.severity)) {
       fail(`finding "${finding.id}" must not supersede a lower-severity finding`);
@@ -1116,6 +1123,42 @@ function validateSupersededTargets(findings: Finding[]): void {
 
 function severityRank(severity: string): number {
   return ["P0", "P1", "P2", "P3"].indexOf(severity);
+}
+
+function validateUniqueNonSupersededFindings(findings: Finding[]): void {
+  const seen = new Map<string, Finding>();
+  for (const finding of findings) {
+    if (finding.status === "superseded") continue;
+    const key = `${finding.batch_id}\0${finding.signature}`;
+    const existing = seen.get(key);
+    if (existing) {
+      fail(
+        `findings "${existing.id}" and "${finding.id}" share batch_id "${finding.batch_id}" and signature "${finding.signature}"; mark one superseded`,
+      );
+    }
+    seen.set(key, finding);
+  }
+}
+
+function validateCanonicalFindingSelection(findings: Finding[]): void {
+  const groups = new Map<string, Finding[]>();
+  for (const finding of findings) {
+    const key = `${finding.batch_id}\0${finding.signature}`;
+    groups.set(key, [...(groups.get(key) ?? []), finding]);
+  }
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const expectedCanonical = group.reduce((best, finding) =>
+      severityRank(finding.severity) < severityRank(best.severity) ? finding : best,
+    );
+    const canonical = group.find((finding) => finding.status !== "superseded");
+    if (canonical && canonical.id !== expectedCanonical.id) {
+      fail(
+        `finding "${expectedCanonical.id}" must be canonical for batch_id "${expectedCanonical.batch_id}" and signature "${expectedCanonical.signature}"`,
+      );
+    }
+  }
 }
 
 function validateFindingRow(row: Record<string, unknown>, index: number, batchContext: LedgerBatchContext): Finding {

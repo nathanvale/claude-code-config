@@ -50,10 +50,155 @@ The role language is executable contract language:
 - User gates confirm the AC list at stage 1 and the DAG plus execution modes
   at stage 3.
 - The ledger stores the confirmed execution contract.
-- Builder implements exactly one batch under the confirmed ledger contract, or
-  fail-stops if that contract is unsafe or stale after reading the files.
+- Orchestrator owns stages, ledger writes, user gates, Builder dispatch,
+  Builder envelope validation, Validator dispatch, and final workflow gates.
+- Builder is dispatched as a fresh Builder sub-agent per attempt. The
+  Orchestrator does not play Builder or implement batches directly during
+  Stage 4.
+- Builder implements exactly one batch attempt under the confirmed ledger
+  contract, or fail-stops if that contract is unsafe or stale after reading
+  the files.
 - Validator personas are read-only reviewers. They do not fix, choose modes, or
   re-rank severity.
+
+The Builder dispatch contract is sourced from
+`docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
+
+## Builder dispatch contract
+
+Stage 4 dispatches Builder as a fresh sub-agent per attempt. The dispatch is
+host-neutral: the runbook defines the Work Packet, authority boundary,
+preflight rules, and return envelope, while each host maps that contract to
+its own available execution primitive.
+
+### Builder Work Packet
+
+The Orchestrator sends Builder one batch-only Work Packet:
+
+- issue number and target repo;
+- `attempt_type: implementation | repair`;
+- the target finding id/signature for repair attempts, and null otherwise;
+- the confirmed batch contract verbatim: `id`, `name`, `goal`, `files`,
+  `depends_on`, `execution_mode`, `acceptance_tests`, `ac_mapping`,
+  and `rationale`;
+- the current iteration number and existing `builder_commits` for this batch;
+- `## Findings data` rows for this batch only;
+- non-authoritative Notes summaries for this batch only;
+- Local Law Read Order, authority boundary, Mechanic Discipline, Builder
+  Preflight Checklist, and return envelope contract.
+
+The Work Packet must not include the full plan, full ledger, raw Validator
+envelopes, or unrelated batch state. Compact prior `builder_attempts` may be
+included only after the helper/schema work supports that persisted field.
+Replacement-batch and `supersedes` mechanics remain deferred to #24.
+
+When the batch depends on public-contract or domain-language constraints, the
+Orchestrator must materialize the needed authority summary from the confirmed
+batch contract or decomposition output before dispatch. Builder must not infer
+that authority by reading the full plan or full ledger.
+
+### Authority and Local Law
+
+The ledger remains the source of authority. Builder may edit only files listed
+in `batch.files`, may create a missing path only when that path is already
+listed in `batch.files`, may make exactly one commit when preflight passes,
+and may run targeted repo-local checks relevant to the batch.
+
+Builder must not change acceptance criteria, dependencies, execution mode,
+durable domain language, public contracts, dependencies, governance docs, or
+files outside `batch.files` unless the confirmed batch contract explicitly
+authorizes that change.
+
+**Local Law Read Order:** before editing, Builder reads:
+
+1. target repo root agent instructions, when present;
+2. nearest package `AGENTS.md`, when present;
+3. nearest package `CONTEXT.md`, when present;
+4. package maps, ADRs, runbooks, or governance docs only when referenced by
+   local law or triggered by package-boundary/public-contract work;
+5. every file in `batch.files`;
+6. nearby tests and implementation needed to understand the existing seam.
+
+Builder may perform bounded read/search beyond `batch.files` for local law,
+nearby tests, deterministic probes, and equivalent literal probes named by the
+batch goal, rationale, or acceptance tests. Edits remain limited to
+`batch.files`. Whole-repo archaeology routes to a fail-stop.
+
+**Mechanic Discipline:** Builder finds an existing seam before editing, makes
+the smallest coherent diff, avoids opportunistic cleanup, avoids speculative
+abstractions, avoids generic helper dumping grounds, avoids dependency changes
+unless explicitly scoped, preserves local domain/system language, runs targeted
+checks where possible, and reports uncertainty instead of hiding it.
+
+**Public Contract Rule:** Builder may change exported symbols, API shapes, CLI
+flags/output, schemas, event payloads, config shapes, environment-variable
+expectations, migration manifests, or package boundaries only when the
+confirmed batch contract explicitly names the public surface and includes
+checks/proofs for the change.
+
+**Domain Language Rule:** Builder preserves existing target-repo language from
+local law, nearby tests, and nearby code. Unowned terms may appear
+provisionally in the envelope only. If missing language affects ownership, API,
+behaviour, or durable meaning, Builder fail-stops.
+
+### Builder Preflight Checklist
+
+Preflight is required before any Builder edit. Builder verifies that:
+
+- task and attempt type are understood;
+- acceptance criteria are present;
+- package ownership is clear enough for this batch;
+- an existing seam is found, or a missing listed path can be created without
+  stale-path, typo, wrong-package, or semantic-authorization risk;
+- test/proof strategy is clear enough for the confirmed `execution_mode`;
+- public API impact is `none` or explicitly authorized;
+- domain language is existing or safely provisional;
+- required fixtures, types, and environment are available or not needed;
+- targeted checks can be run, or the inability to run them is explainable.
+
+No readiness, no build. If readiness fails, Builder returns a fail-stop
+envelope before editing or committing.
+
+Builder may run only deterministic probes from this catalog, plus equivalent
+literal probes named by the batch goal, rationale, or acceptance tests:
+
+- rename path probe: old path literal to new path literal;
+- identity flip probe: old package/plugin identity literal to new identity
+  literal;
+- command/path reference probe: command or path literal named in the batch;
+- public API probe: exported symbol or manifest surface named in the batch;
+- package governance probe: package map, `AGENTS.md`, `CONTEXT.md`, and
+  package-knowledge references for package-boundary work.
+
+If a probe finds relevant matches outside `batch.files`, Builder must not
+expand scope opportunistically. It returns `status: fail-stop-preflight` with
+blockers, probe results, route hint, and optional non-authoritative scope
+suggestions.
+
+### Builder return envelope
+
+Builder returns one structured envelope. Status is one of `committed`,
+`fail-stop-preflight`, `fail-stop-out-of-scope`,
+`fail-stop-execution-mode-mismatch`, `fail-stop-read-failed`, or
+`fail-stop-other`.
+
+The envelope includes `attempt_type`, optional target finding signature,
+`commit_sha`, `files_touched`, `route_hint`, `blockers`, `probe_results`,
+`suggested_scope_changes`, `implementation_steps`, `existing_seams_used`,
+`tests_run`, `assumptions`, `risks`, `deferred`,
+`suggested_validator_focus`, and `notes`. Required array fields may be empty;
+missing `suggested_validator_focus` is malformed. Status owns workflow
+transition; `route_hint` is only next-owner guidance.
+
+Well-formed Builder fail-stops count as Builder attempts in workflow language.
+Executable `builder_attempts` persistence, attempt/commit validation, and
+iteration validation are deferred until the helper/schema work supports them.
+
+On a well-formed `fail-stop-preflight`, do not dispatch Validators. Append the
+blockers, probe results, and route hint to Notes, set the current batch
+`status: blocked` and `final_verdict: blocked-for-user`, and leave executable
+`builder_attempts` persistence plus replacement batch / `supersedes` mechanics
+to #22/#24.
 
 ## Scoped audit prompt
 
@@ -360,23 +505,46 @@ tree clean.
 
 **Inputs:** Ledger with batches in topological order.
 
+If Stage 4 resumes with a batch already `in-progress` and another Builder
+dispatch is needed, do not select a new pending batch and do not change batch
+status. Verify host Builder readiness for the current in-progress batch
+immediately before dispatch.
+
 **Outer loop:**
 
 1. Select the next batch: first batch in YAML order where `status ==
    pending` AND every batch in `depends_on` has terminal-success status
    (`converged` or `accepted-risk`). (v1 sequential mode: this is always the
    next eligible pending row.)
-2. Mark `status: in-progress` and commit a ledger-only lifecycle checkpoint
+2. If pending batches remain but none are eligible, fail-stop with
+   `blocked_reason: no-eligible-batch` and print the blocked dependencies. If
+   no batches remain pending, skip host readiness and advance when step 8
+   applies.
+3. Verify host Builder readiness for the selected eligible batch before any
+   batch status mutation. The host must be able to create a fresh isolated
+   Builder dispatch with the required Builder tool set and authority boundary:
+   read/search target-repo files, edit only `batch.files`, run deterministic
+   repo-local checks/probes, inspect git status and diffs, create exactly one
+   commit for a successful attempt, return the structured envelope, deliver
+   the Work Packet, expose git status and commit refs, capture the Builder
+   envelope, and classify timeout/failure. If any capability is unavailable,
+   record frontmatter `status: blocked` and
+   `blocked_reason: host-builder-tools-unavailable`, append Notes evidence,
+   leave every batch status unchanged, do not append `builder_attempts`, do
+   not increment `iterations`, do not dispatch Validators, and do not fall
+   back to Orchestrator-direct implementation.
+4. Mark `status: in-progress` and commit a ledger-only lifecycle checkpoint
    before Builder starts:
    `chore(issue-{issue-number}): start <batch-id> batch`.
    This is a stage-visible `batch-loop` turn. It does not count toward
    `iterations`, and it is outside Builder scope discipline because the
    orchestrator owns ledger lifecycle state. Stage only the per-issue ledger
    path and verify the working tree is clean after the commit.
-3. Run the inner loop (see `## Inner loop` below).
-4. On inner-loop success: set `status: converged`, append the Builder commit
-   refs to `builder_commits`, set `iterations` to the number of Builder /
-   Validator attempts for that batch, and set `final_verdict: converged`.
+5. Run the inner loop (see `## Inner loop` below).
+6. On inner-loop success: set `status: converged`, append the Builder commit
+   refs to `builder_commits`, set `iterations` to the number of well-formed
+   Builder envelopes for that batch, committed or Builder-authored fail-stop,
+   excluding Validator persona waves, and set `final_verdict: converged`.
    Auto-close batch P2/P3 findings as `deferred-P2` / `deferred-P3`, update
    the rendered findings table, run `--validate-findings`, and commit a
    ledger-only lifecycle checkpoint:
@@ -384,7 +552,7 @@ tree clean.
    This is a stage-visible `batch-loop` turn. It does not count toward
    `iterations`, and it may touch only the per-issue ledger path. Continue to
    step 1.
-5. On inner-loop escape-hatch fire or iteration-cap hit: fail-stop and ask
+7. On inner-loop escape-hatch fire or iteration-cap hit: fail-stop and ask
    the user. Options:
    - Accept remaining findings as risk: close the relevant `## Findings data`
      rows with `status: accepted-risk` and
@@ -396,9 +564,7 @@ tree clean.
      the user for the revised batch contract.
    - Abandon the run: set `status: blocked`, set
      `final_verdict: blocked-for-user`, and stop.
-6. If pending batches remain but none are eligible, fail-stop with
-   `blocked_reason: no-eligible-batch` and print the blocked dependencies.
-7. When no batches remain pending: working tree must be clean; advance to
+8. When no batches remain pending: working tree must be clean; advance to
    stage 5.
 
 **Exit condition:** Every batch has `status: converged` (or `accepted-risk`
@@ -607,20 +773,35 @@ working tree clean; final ledger update pushed. Goal met.
 
 ## Persona selector
 
-After every Builder commit, compute the conditional persona list from the
-diff (`git diff HEAD~1 --name-only` plus the file contents). When in doubt,
-dispatch (false-positives waste tokens; false-negatives miss bugs).
+After every committed Builder envelope, compute the conditional persona list
+from touched file names, the batch contract, and Builder
+`suggested_validator_focus`. Orchestrator may read full commit diff content
+only for Builder authority checks, envelope integrity, and lightweight
+correctness sanity checks; persona selection must not depend on Orchestrator
+implementation analysis. When path/name signals or Builder focus are
+incomplete, dispatch the default broad reviewer set. Existing path,
+touched-file, and batch-contract signals that match the table below must
+dispatch their validators regardless of Builder suggestion.
+Before Validator dispatch, Orchestrator stops only for Builder authority
+breaches or malformed envelopes; correctness concerns without an
+authority/envelope violation are passed only as transient Validator focus.
 
-| Diff signal | Persona dispatched |
+The **default broad reviewer set** is the always-on reviewer list plus every
+conditional reviewer in the table below, except
+`ce-previous-comments-reviewer` unless the PR or issue signal is present or
+unknown. Use it only when selector evidence is incomplete enough that a
+path/name/focus-driven conditional set would risk false negatives.
+
+| Selector signal | Persona dispatched |
 | --- | --- |
-| Paths or changed content matching `auth`, `session`, `token`, `password`, `crypto`, `oauth`, `sso`, `permission`, `acl`, `rbac`, `csrf` | `ce-security-reviewer` |
+| Paths, batch contract, or Builder focus matching `auth`, `session`, `token`, `password`, `crypto`, `oauth`, `sso`, `permission`, `acl`, `rbac`, `csrf` | `ce-security-reviewer` |
 | Paths matching `migrations/`, `prisma/schema.prisma`, `schema.rb`, migration `*.sql` files | `ce-data-migrations-reviewer` |
 | Any `index.ts`/`index.js` at a package boundary (re-exports), OpenAPI/Swagger spec, GraphQL schema | `ce-api-contract-reviewer` |
-| Files with `bench`, `perf`, `virtualis` in path, OR diff contains loop vocabulary on large-N data | `ce-performance-reviewer` |
-| Diff touches retry, circuit-breaker, queue, timeout, error-handling middleware | `ce-reliability-reviewer` |
+| Paths, batch contract, or Builder focus mentioning `bench`, `perf`, `virtualis`, loop-heavy large-N data, caching, or I/O-heavy work | `ce-performance-reviewer` |
+| Paths, batch contract, or Builder focus mentioning retry, circuit-breaker, queue, timeout, or error-handling middleware | `ce-reliability-reviewer` |
 | Files matching `*.swift`, `*.m`, `*.mm`, or paths under `ios/` | `ce-swift-ios-reviewer` |
 | Files matching `*.rb`, `app/models/`, `app/controllers/`, `config/routes.rb` | `ce-dhh-rails-reviewer` AND `ce-kieran-rails-reviewer` |
-| Files matching `*.tsx` AND touching React hooks/state AND containing race-shaped vocabulary (debounce, throttle, abort, signal, effect cleanup) | `ce-julik-frontend-races-reviewer` |
+| Paths, batch contract, or Builder focus for `*.tsx` React hooks/state work with race-shaped vocabulary (debounce, throttle, abort, signal, effect cleanup) | `ce-julik-frontend-races-reviewer` |
 | Files matching `*.py` | `ce-kieran-python-reviewer` |
 | Files matching `*.ts`/`*.tsx` AND no other language reviewer fired | `ce-kieran-typescript-reviewer` |
 | The PR (if pre-existing) has prior review comments OR the issue body links a prior PR | `ce-previous-comments-reviewer` |
@@ -644,8 +825,25 @@ flowchart TD
   S --> P
 ```
 
-**Inner-loop iteration cap: 5.** After 5 Builder commits in one batch, stop
-and ask the user.
+**Inner-loop iteration cap: 5.** After 5 well-formed Builder envelopes in one
+batch, committed or Builder-authored fail-stop, stop and ask the user.
+
+Before every Builder dispatch, including resumed implementation and repair
+dispatches, verify host Builder readiness against the current in-progress
+batch. If readiness is unavailable, record frontmatter `status: blocked` and
+`blocked_reason: host-builder-tools-unavailable`, append Notes evidence, leave
+the current batch status unchanged, do not increment `iterations`, do not
+dispatch Validators, and ask the user to retry or abandon.
+
+If Builder dispatch begins but timeout, permission, tool, serialization,
+schema, or malformed-envelope failure prevents a well-formed Builder envelope,
+record frontmatter `status: blocked` and
+`blocked_reason: builder-infrastructure-failure`, append host/schema evidence
+to Notes, leave the batch `in-progress`, do not append `builder_attempts`, do
+not increment `iterations`, and do not dispatch Validators. Surface any
+reachable Builder commit refs plus dirty/staged path summaries from git
+status. Do not clean up, import, discard, or auto-revert side effects before
+the user chooses retry, import, or abandon.
 
 **Builder rules** (apply every iteration):
 
@@ -705,8 +903,13 @@ and ask the user.
 1. Resolve each persona skill name against the host's available-skills list
    before dispatching. Use the exact listed name, including plugin namespace
    when present.
-2. Pass each persona the batch id, goal, files, `execution_mode`,
-   acceptance tests, AC mapping, current diff, and relevant ledger findings.
+2. Pass each persona commit refs/ranges, touched file names, batch id, goal,
+   files, `execution_mode`, acceptance tests, AC mapping, relevant ledger
+   findings, and Builder evidence from the envelope (`implementation_steps`,
+   `existing_seams_used`, `tests_run`, `assumptions`, `risks`, `deferred`,
+   and `suggested_validator_focus`). Include transient Orchestrator sanity
+   concerns only as Validator focus; do not persist them as ledger entries or
+   Orchestrator-authored findings.
 3. Ask each persona to return this envelope:
    `{"reviewer":"<persona>","findings":[],"residual_risks":[],"testing_gaps":[]}`.
    Before writing the ledger, normalize the response:
