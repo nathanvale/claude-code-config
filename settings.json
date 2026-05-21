@@ -103,6 +103,38 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/biome/biome-check.ts",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*biome-runner__(biome_lintCheck|biome_lintFix|biome_formatCheck)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SQ_HOOK_DEDUP_ENABLED=1 bunx @side-quest/claude-hooks posttool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "mcp__.*biome-runner__(biome_lintCheck|biome_lintFix|biome_formatCheck)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SQ_HOOK_DEDUP_ENABLED=1 bunx @side-quest/claude-hooks posttool-failure",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PreCompact": [
@@ -125,6 +157,16 @@
             "type": "command",
             "command": "$HOME/code/claude-code-config/scripts/check-prompt-drift-on-stop.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/biome/biome-ci.ts",
+            "timeout": 120
           }
         ]
       }

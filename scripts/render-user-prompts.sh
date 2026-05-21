@@ -23,6 +23,7 @@ SHARED_FRAGMENTS=(
   "shared/communication-style.md"
   "shared/key-people.md"
   "shared/context-index.md"
+  "shared/agent-skills.md"
 )
 
 # Claude-only fragments appended to CLAUDE.md

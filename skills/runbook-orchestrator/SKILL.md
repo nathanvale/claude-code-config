@@ -23,8 +23,11 @@ For the runbook convention this skill expects, see [convention.md](references/co
 /runbook-orchestrator audit docs/runbooks/data-table-review
 ```
 
-If no `area-path` is given, the skill scans the current working directory
-for any `docs/runbooks/*/README.md` and asks the user to pick.
+If no `area-path` is given, the skill scans both the current working
+directory for `docs/runbooks/*/README.md` (repo-scope) and
+`~/.claude/runbooks/*/README.md` (user-scope), and asks the user to
+pick. User-scope holds host-neutral workflow runbooks like `issue-to-pr`
+that operate on a target repo passed in at launch.
 
 ## Arguments
 

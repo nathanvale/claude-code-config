@@ -22,6 +22,7 @@ symlinks=(
 	"${CLAUDE_HOME}/commands|${SCRIPT_DIR}/commands"
 	"${CLAUDE_HOME}/skills|${SCRIPT_DIR}/skills"
 	"${CLAUDE_HOME}/agents|${SCRIPT_DIR}/agents"
+	"${CLAUDE_HOME}/runbooks|${SCRIPT_DIR}/runbooks"
 	"${CLAUDE_HOME}/hooks|${SCRIPT_DIR}/hooks"
 	"${CLAUDE_HOME}/hooks.json|${SCRIPT_DIR}/hooks.json"
 	"${CLAUDE_HOME}/settings.json|${SCRIPT_DIR}/settings.json"

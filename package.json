@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-config",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "biome:check": "biome check --diagnostic-level=error .",
+    "biome:fix": "biome check --write .",
+    "biome:format": "biome format --write .",
+    "biome:lint": "biome lint --diagnostic-level=error ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15"
+  }
+}

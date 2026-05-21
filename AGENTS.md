@@ -203,3 +203,23 @@ Consult additional context docs when the task needs repo-specific guidance.
 - `contract-text-message.md` → Text message output contract
 - `template-perel-baldwin-bundle.md` → ContextBundle fill-in template for Perel-Baldwin dispatch
 
+## Agent skills
+
+These settings apply when working in the `claude-code-config` repo at
+`/Users/nathanvale/code/claude-code-config`. For other repos, prefer their
+repo-local `docs/agents/` configuration when present.
+
+### Issue tracker
+
+Issues and PRDs for `nathanvale/claude-code-config` live in GitHub Issues. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the canonical mattpocock/skills label vocabulary. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context domain doc layout. See `docs/agents/domain.md`.
+
