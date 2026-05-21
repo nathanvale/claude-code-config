@@ -77,7 +77,8 @@ The Orchestrator sends Builder one batch-only Work Packet:
 
 - issue number and target repo;
 - `attempt_type: implementation | repair`;
-- the target finding id/signature for repair attempts, and null otherwise;
+- exactly one open P0/P1 target finding signature from committed
+  `## Findings data` for repair attempts, and null otherwise;
 - the confirmed batch contract verbatim: `id`, `name`, `goal`, `files`,
   `depends_on`, `execution_mode`, `acceptance_tests`, `ac_mapping`,
   and `rationale`;
@@ -1012,8 +1013,9 @@ the user chooses retry, import, or abandon.
    checks.
 3. **One finding per fix commit.** After Validator findings have been written,
    rendered, validated, and committed as a ledger-only checkpoint, each Builder
-   repair commit addresses exactly one P0/P1 finding by signature. Conventional
-   commit format:
+   repair commit addresses exactly one P0/P1 finding by signature. Builder must
+   fix only that target signature, not additional findings, P2/P3 debt,
+   opportunistic cleanup, or unrelated refactors. Conventional commit format:
    `fix(issue-{issue-number}): <signature>`. Body lists the finding id and
    persona.
 4. **Follow `execution_mode`.** The confirmed ledger chooses the execution

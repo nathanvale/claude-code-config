@@ -95,7 +95,8 @@ host-specific primitive name for those capabilities.
 
 The Builder Work Packet is batch-only. It includes the confirmed batch
 contract, the current iteration, existing `builder_commits`, relevant findings
-for that batch, compact prior `builder_attempts`, non-authoritative Notes
+for that batch, exactly one committed open P0/P1 target finding signature for
+repair attempts, compact prior `builder_attempts`, non-authoritative Notes
 summaries for that batch, local-law instructions, authority boundaries,
 preflight rules, and the return envelope contract. It excludes the full plan,
 full ledger, unrelated batch state, raw Validator envelopes, and rich Builder
@@ -253,7 +254,8 @@ Fixes happen inside `batch-loop`'s **inner loop** (see `issue-to-pr.md`,
    `## Findings data`, renders `## Findings`, runs `--validate-findings`, and
    commits a ledger-only Validator findings checkpoint before any repair
    Builder starts.
-4. Builder repairs exactly one committed open P0/P1 finding by signature.
+4. Builder repairs exactly one committed open P0/P1 finding by signature, and
+   fixes only that target finding.
 5. Repeat until open P0/P1 == 0 OR iteration cap hit OR an escape hatch fires.
 
 P2 and P3 findings do NOT trigger fixes inside the inner loop. P2 findings are
