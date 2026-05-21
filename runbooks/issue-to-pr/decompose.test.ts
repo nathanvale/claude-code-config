@@ -11,6 +11,25 @@ const tempDirs: string[] = [];
 const currentCommit = new TextDecoder()
 	.decode(Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"]).stdout)
 	.trim();
+const currentCommitFull = new TextDecoder()
+	.decode(Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout)
+	.trim();
+const currentCommitFiles = new TextDecoder()
+	.decode(
+		Bun.spawnSync([
+			"git",
+			"diff-tree",
+			"--no-commit-id",
+			"--name-only",
+			"-r",
+			"--root",
+			currentCommit,
+		]).stdout,
+	)
+	.trim()
+	.split("\n")
+	.filter((file) => file.length > 0);
+const currentCommitFile = currentCommitFiles[0] ?? "README.md";
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0))
@@ -31,6 +50,52 @@ function writeFixture(name: string, contents: string): string {
 
 function sha256(payload: string): string {
 	return `sha256:${createHash("sha256").update(payload).digest("hex")}`;
+}
+
+function yamlList(items: string[], indent: number): string {
+	const padding = " ".repeat(indent);
+	return items.map((item) => `${padding}- "${item}"`).join("\n");
+}
+
+function currentCommitFilesYaml(indent = 6): string {
+	return yamlList(currentCommitFiles, indent);
+}
+
+function currentCommittedAttemptYaml(
+	indent = 4,
+	options: { commitSha?: string | null; files?: string[]; notes?: string } = {},
+): string {
+	const commitSha = options.commitSha === undefined ? currentCommit : options.commitSha;
+	const files = options.files ?? currentCommitFiles;
+	const notes = options.notes ?? "Implemented the confirmed batch.";
+	const padding = " ".repeat(indent);
+	const itemPadding = " ".repeat(indent + 2);
+	const listPadding = " ".repeat(indent + 4);
+	return `${padding}builder_attempts:
+${itemPadding}- attempt_type: implementation
+${listPadding}status: committed
+${listPadding}commit_sha: ${commitSha === null ? "null" : `"${commitSha}"`}
+${listPadding}files_touched:
+${yamlList(files, indent + 6)}
+${listPadding}route_hint: null
+${listPadding}blockers: []
+${listPadding}probe_results: []
+${listPadding}notes: "${notes}"`;
+}
+
+function failStopAttemptItemYaml(indent = 6, notes = "Builder stopped before editing."): string {
+	const padding = " ".repeat(indent);
+	const fieldPadding = " ".repeat(indent + 2);
+	const listPadding = " ".repeat(indent + 4);
+	return `${padding}- attempt_type: implementation
+${fieldPadding}status: fail-stop-preflight
+${fieldPadding}commit_sha: null
+${fieldPadding}files_touched: []
+${fieldPadding}route_hint: "user"
+${fieldPadding}blockers:
+${listPadding}- "Could not prove scope."
+${fieldPadding}probe_results: []
+${fieldPadding}notes: "${notes}"`;
 }
 
 async function runDecompose(args: string[], options: { cwd?: string } = {}) {
@@ -67,7 +132,7 @@ batches:
     name: "Original"
     goal: "Original goal"
     files:
-      - "src/original.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -78,6 +143,7 @@ batches:
     status: converged
     builder_commits:
       - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -150,7 +216,7 @@ id: missing-dep
 name: Missing dep
 goal: AC 1
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 execution_mode: proof_first
 acceptance_tests:
   - "AC 1 holds"
@@ -357,7 +423,7 @@ id: duplicate-field
 name: Duplicate field
 goal: AC 1
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: []
 execution_mode: proof_first
 execution_mode: tdd
@@ -386,7 +452,7 @@ id: unknown-field
 name: Unknown field
 goal: AC 1
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: []
 execution_mode: proof_first
 acceptance_tests:
@@ -458,7 +524,7 @@ id: real-batch
 name: Real batch
 goal: AC 1
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: []
 execution_mode: proof_first
 acceptance_tests:
@@ -485,7 +551,7 @@ id: apostrophe-comment
 name: Apostrophe comment
 goal: Don't regress # strip this comment
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: []
 execution_mode: proof_first
 acceptance_tests:
@@ -540,7 +606,7 @@ id: patch-001
 name: Patch finding
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -581,7 +647,7 @@ id: normal
 name: Normal
 goal: Should not be a patch
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -611,7 +677,7 @@ id: patch-001
 name: Patch finding
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -639,7 +705,7 @@ id: patch-001
 name: Patch finding
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [ghost-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -669,7 +735,7 @@ id: patch-001
 name: Patch finding
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [spoofed-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -705,7 +771,7 @@ id: patch-001
 name: Duplicate patch
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -760,6 +826,12 @@ not-read: true
 					"ac_mapping: []",
 				)
 				.replace("status: converged", "status: pending")
+				.replace(
+					`builder_commits:
+      - "${currentCommit}"`,
+					"builder_commits: []",
+				)
+				.replace(currentCommittedAttemptYaml(4), "    builder_attempts: []")
 				.replace("iterations: 1", "iterations: 0")
 				.replace("final_verdict: converged", "final_verdict: null"),
 		);
@@ -793,7 +865,7 @@ id: patch-001
 name: Patch finding
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -812,6 +884,7 @@ rationale: final-review remediation
       - "${currentCommit}"`,
 					"builder_commits: []",
 				)
+				.replace(currentCommittedAttemptYaml(4), "    builder_attempts: []")
 				.replace("iterations: 1", "iterations: 0")
 				.replace("final_verdict: converged", "final_verdict: null"),
 		);
@@ -834,7 +907,7 @@ id: patch-001
 name: First patch
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -848,7 +921,7 @@ id: patch-002
 name: Second patch
 goal: Fix another part
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [patch-001]
 execution_mode: proof_first
 acceptance_tests:
@@ -1716,8 +1789,544 @@ findings: []
 		]);
 
 		expect(emitted.exitCode).toBe(0);
+		expect(emitted.stdout).toContain("    builder_attempts: []");
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("Ledger batches OK: 1 batches");
+	});
+
+	test("accepts compact builder attempt records in ledger batches", async () => {
+		const committedLedger = writeFixture(
+			"committed-attempt.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: converged
+    builder_commits:
+      - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
+    iterations: 1
+    final_verdict: converged
+\`\`\`
+`,
+		);
+		const failStopLedger = writeFixture(
+			"fail-stop-attempt.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+      - attempt_type: implementation
+        status: fail-stop-preflight
+        commit_sha: null
+        files_touched: []
+        route_hint: "user"
+        blockers:
+          - "Missing writable seam."
+        probe_results:
+          - "Preflight detected an out-of-scope file."
+        notes: "Builder stopped before editing."
+    iterations: 1
+    final_verdict: blocked-for-user
+\`\`\`
+`,
+		);
+
+		const committedResult = await runDecompose([
+			"--validate-ledger-batches",
+			committedLedger,
+		]);
+		const failStopResult = await runDecompose([
+			"--validate-ledger-batches",
+			failStopLedger,
+		]);
+
+		expect(committedResult.exitCode).toBe(0);
+		expect(failStopResult.exitCode).toBe(0);
+	});
+
+	test("rejects malformed compact builder attempt records", async () => {
+		const unknownAttemptField = writeFixture(
+			"unknown-attempt-field.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+      - attempt_type: implementation
+        status: fail-stop-preflight
+        commit_sha: null
+        files_touched: []
+        route_hint: "user"
+        blockers: []
+        probe_results: []
+        transcript: "raw envelope data"
+        notes: "Builder stopped before editing."
+    iterations: 1
+    final_verdict: blocked-for-user
+\`\`\`
+`,
+		);
+		const rawNestedBlocker = writeFixture(
+			"raw-nested-blocker.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+      - attempt_type: implementation
+        status: fail-stop-preflight
+        commit_sha: null
+        files_touched: []
+        route_hint: "user"
+        blockers:
+          - code: raw-object
+        probe_results: []
+        notes: "Builder stopped before editing."
+    iterations: 1
+    final_verdict: blocked-for-user
+\`\`\`
+`,
+		);
+		const missingAttempts = writeFixture(
+			"missing-attempts.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+
+		const unknownResult = await runDecompose([
+			"--validate-ledger-batches",
+			unknownAttemptField,
+		]);
+		const nestedResult = await runDecompose([
+			"--validate-ledger-batches",
+			rawNestedBlocker,
+		]);
+		const missingResult = await runDecompose([
+			"--validate-ledger-batches",
+			missingAttempts,
+		]);
+
+		expect(unknownResult.exitCode).toBe(1);
+		expect(unknownResult.stderr).toContain('unknown builder_attempts field "transcript"');
+		expect(nestedResult.exitCode).toBe(1);
+		expect(nestedResult.stderr).toContain("list item must be a scalar string");
+		expect(missingResult.exitCode).toBe(1);
+		expect(missingResult.stderr).toContain(
+			'is missing required ledger field "builder_attempts"',
+			);
+	});
+
+	test("validates committed builder attempts against commits and touched files", async () => {
+		const fullBuilderCommitContents = `${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: converged
+    builder_commits:
+      - "${currentCommitFull}"
+${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+    iterations: 1
+    final_verdict: converged
+\`\`\`
+`;
+		const fullBuilderCommit = writeFixture(
+			"full-builder-commit.md",
+			fullBuilderCommitContents,
+		);
+		const duplicateBuilderCommits = writeFixture(
+			"duplicate-builder-commits.md",
+			fullBuilderCommitContents.replace(
+				`builder_commits:
+      - "${currentCommitFull}"`,
+				`builder_commits:
+      - "${currentCommitFull}"
+      - "${currentCommit}"`,
+			),
+		);
+		const duplicateCommittedAttempts = writeFixture(
+			"duplicate-committed-attempts.md",
+			fullBuilderCommitContents.replace(
+				`${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+    iterations: 1`,
+				`${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+      - attempt_type: repair
+        status: committed
+        commit_sha: "${currentCommitFull}"
+        files_touched:
+${currentCommitFilesYaml(10)}
+        route_hint: null
+        blockers: []
+        probe_results: []
+        notes: "Repeated the same commit."
+    iterations: 2`,
+			),
+		);
+		const attemptMissingFromCommits = writeFixture(
+			"attempt-missing-from-commits.md",
+			fullBuilderCommitContents
+				.replace("status: converged", "status: in-progress")
+				.replace(
+					`builder_commits:
+      - "${currentCommitFull}"`,
+					"builder_commits: []",
+				)
+				.replace("final_verdict: converged", "final_verdict: null"),
+		);
+		const commitMissingAttempt = writeFixture(
+			"commit-missing-attempt.md",
+			fullBuilderCommitContents.replace(
+				`${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+    iterations: 1`,
+				`    builder_attempts:
+      - attempt_type: implementation
+        status: fail-stop-preflight
+        commit_sha: null
+        files_touched: []
+        route_hint: "user"
+        blockers:
+          - "Could not prove scope."
+        probe_results: []
+        notes: "Stopped before editing."
+    iterations: 1`,
+			),
+		);
+		const committedNullSha = writeFixture(
+			"committed-null-sha.md",
+			fullBuilderCommitContents.replace(
+				currentCommittedAttemptYaml(4, { commitSha: currentCommit }),
+				currentCommittedAttemptYaml(4, { commitSha: null }),
+			),
+		);
+		const failStopWithSha = writeFixture(
+			"fail-stop-with-sha.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+      - attempt_type: implementation
+        status: fail-stop-preflight
+        commit_sha: "${currentCommit}"
+        files_touched: []
+        route_hint: "user"
+        blockers:
+          - "Could not prove scope."
+        probe_results: []
+        notes: "Stopped before editing."
+    iterations: 1
+    final_verdict: blocked-for-user
+\`\`\`
+`,
+		);
+		const mismatchedFiles = writeFixture(
+			"mismatched-files.md",
+			fullBuilderCommitContents.replace(
+				currentCommittedAttemptYaml(4, { commitSha: currentCommit }),
+				currentCommittedAttemptYaml(4, {
+					commitSha: currentCommit,
+					files: [],
+					notes: "Recorded the wrong files.",
+				}),
+			),
+		);
+		const outsideBatchFiles = writeFixture(
+			"outside-batch-files.md",
+			fullBuilderCommitContents.replace(
+				`files:
+${currentCommitFilesYaml(6)}`,
+				`files:
+      - "README.md"`,
+			),
+		);
+
+		const fullRefResult = await runDecompose([
+			"--validate-ledger-batches",
+			fullBuilderCommit,
+		]);
+		const duplicateCommitsResult = await runDecompose([
+			"--validate-ledger-batches",
+			duplicateBuilderCommits,
+		]);
+		const duplicateAttemptsResult = await runDecompose([
+			"--validate-ledger-batches",
+			duplicateCommittedAttempts,
+		]);
+		const attemptMissingResult = await runDecompose([
+			"--validate-ledger-batches",
+			attemptMissingFromCommits,
+		]);
+		const commitMissingResult = await runDecompose([
+			"--validate-ledger-batches",
+			commitMissingAttempt,
+		]);
+		const committedNullResult = await runDecompose([
+			"--validate-ledger-batches",
+			committedNullSha,
+		]);
+		const failStopWithShaResult = await runDecompose([
+			"--validate-ledger-batches",
+			failStopWithSha,
+		]);
+		const mismatchedFilesResult = await runDecompose([
+			"--validate-ledger-batches",
+			mismatchedFiles,
+		]);
+		const outsideBatchResult = await runDecompose([
+			"--validate-ledger-batches",
+			outsideBatchFiles,
+		]);
+
+		expect(fullRefResult.exitCode).toBe(0);
+		expect(duplicateCommitsResult.exitCode).toBe(1);
+		expect(duplicateCommitsResult.stderr).toContain("builder_commits contains duplicate");
+		expect(duplicateAttemptsResult.exitCode).toBe(1);
+		expect(duplicateAttemptsResult.stderr).toContain("duplicate committed builder_attempts");
+		expect(attemptMissingResult.exitCode).toBe(1);
+		expect(attemptMissingResult.stderr).toContain("is missing from builder_commits");
+		expect(commitMissingResult.exitCode).toBe(1);
+		expect(commitMissingResult.stderr).toContain("has no committed builder_attempts item");
+		expect(committedNullResult.exitCode).toBe(1);
+		expect(committedNullResult.stderr).toContain("committed attempts must include commit_sha");
+		expect(failStopWithShaResult.exitCode).toBe(1);
+		expect(failStopWithShaResult.stderr).toContain("fail-stop attempts must use commit_sha: null");
+		expect(mismatchedFilesResult.exitCode).toBe(1);
+		expect(mismatchedFilesResult.stderr).toContain("files_touched does not match git diff");
+		expect(outsideBatchResult.exitCode).toBe(1);
+		expect(outsideBatchResult.stderr).toContain("touches files outside confirmed batch files");
+	});
+
+	test("enforces builder attempt iteration semantics", async () => {
+		const infrastructureFailure = writeFixture(
+			"infrastructure-failure.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+      - "src/one.ts"
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: in-progress
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+
+## Notes
+
+- Builder infrastructure failure: host serialization failed before a well-formed envelope.
+`,
+		);
+		const inProgressAfterAttemptContents = `${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+      - "src/one.ts"
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: in-progress
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    iterations: 1
+    final_verdict: null
+\`\`\`
+`;
+		const inProgressAfterAttempt = writeFixture(
+			"in-progress-after-attempt.md",
+			inProgressAfterAttemptContents,
+		);
+		const iterationsLow = writeFixture(
+			"iterations-low.md",
+			inProgressAfterAttemptContents.replace("iterations: 1", "iterations: 0"),
+		);
+		const iterationsHigh = writeFixture(
+			"iterations-high.md",
+			inProgressAfterAttemptContents.replace("iterations: 1", "iterations: 2"),
+		);
+		const sixAttempts = writeFixture(
+			"six-attempts.md",
+			inProgressAfterAttemptContents
+				.replace(
+					failStopAttemptItemYaml(6),
+					Array.from({ length: 6 }, (_, index) =>
+						failStopAttemptItemYaml(6, `Builder stopped before editing ${index + 1}.`),
+					).join("\n"),
+				)
+				.replace("iterations: 1", "iterations: 6"),
+		);
+		const terminalFailStopsOnly = writeFixture(
+			"terminal-fail-stops-only.md",
+			inProgressAfterAttemptContents
+				.replace("status: in-progress", "status: accepted-risk")
+				.replace("builder_commits: []", `builder_commits:\n      - "${currentCommit}"`)
+				.replace("final_verdict: null", "final_verdict: accepted-risk"),
+		);
+
+		const infrastructureResult = await runDecompose([
+			"--validate-ledger-batches",
+			infrastructureFailure,
+		]);
+		const inProgressResult = await runDecompose([
+			"--validate-ledger-batches",
+			inProgressAfterAttempt,
+		]);
+		const lowResult = await runDecompose([
+			"--validate-ledger-batches",
+			iterationsLow,
+		]);
+		const highResult = await runDecompose([
+			"--validate-ledger-batches",
+			iterationsHigh,
+		]);
+		const sixResult = await runDecompose([
+			"--validate-ledger-batches",
+			sixAttempts,
+		]);
+		const terminalFailStopsResult = await runDecompose([
+			"--validate-ledger-batches",
+			terminalFailStopsOnly,
+		]);
+
+		expect(infrastructureResult.exitCode).toBe(0);
+		expect(inProgressResult.exitCode).toBe(0);
+		expect(lowResult.exitCode).toBe(1);
+		expect(lowResult.stderr).toContain("iterations must equal builder_attempts count");
+		expect(highResult.exitCode).toBe(1);
+		expect(highResult.stderr).toContain("iterations must equal builder_attempts count");
+		expect(sixResult.exitCode).toBe(1);
+		expect(sixResult.stderr).toContain("must not have more than 5 builder_attempts");
+		expect(terminalFailStopsResult.exitCode).toBe(1);
+		expect(terminalFailStopsResult.stderr).toContain("has no committed builder_attempts item");
 	});
 
 	test("ledger batch validation rejects lifecycle drift and AC coverage drift", async () => {
@@ -1732,7 +2341,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -1758,7 +2367,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -1768,6 +2377,7 @@ batches:
     rationale: null
     status: converged
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: converged
 \`\`\`
@@ -1794,6 +2404,7 @@ batches:
     rationale: null
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: converged
 \`\`\`
@@ -1837,7 +2448,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -1848,6 +2459,7 @@ batches:
     status: converged
     builder_commits:
       - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -1880,7 +2492,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -1891,6 +2503,7 @@ batches:
     status: accepted-risk
     builder_commits:
       - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
     iterations: 1
     final_verdict: accepted-risk
 \`\`\`
@@ -1907,7 +2520,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -1918,6 +2531,7 @@ batches:
     status: accepted-risk
     builder_commits:
       - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -1944,6 +2558,7 @@ batches:
     rationale: null
     status: blocked
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: converged
 \`\`\`
@@ -1970,6 +2585,7 @@ batches:
     rationale: null
     status: in-progress
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: accepted-risk
 \`\`\`
@@ -2088,7 +2704,7 @@ id: patch-001
 name: Patch finding
 goal: Fix final review finding
 files:
-  - src/original.ts
+  - ${currentCommitFile}
 depends_on: [original-batch]
 execution_mode: proof_first
 acceptance_tests:
@@ -2123,7 +2739,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -2133,6 +2749,7 @@ batches:
     rationale: null
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -2149,7 +2766,7 @@ batches:
     name: "One"
     goal: "AC 1"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -2160,6 +2777,7 @@ batches:
     status: converged
     builder_commits:
       - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -2176,7 +2794,7 @@ batches:
     name: "One"
     goal: "AC 1 changed"
     files:
-      - "src/one.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -2186,6 +2804,7 @@ batches:
     rationale: null
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -2280,7 +2899,7 @@ batches:
     name: "Patch finding"
     goal: "Fix final review finding"
     files:
-      - "src/original.ts"
+${currentCommitFilesYaml(6)}
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -2290,6 +2909,7 @@ batches:
     status: converged
     builder_commits:
       - "${currentCommit}"
+${currentCommittedAttemptYaml(4)}
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -2495,6 +3115,7 @@ batches:
     rationale: null
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: null
   - id: "two"
@@ -2511,6 +3132,7 @@ batches:
     rationale: null
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -2650,7 +3272,7 @@ batches:
     name: "Patch finding"
     goal: "Fix final review finding"
     files:
-      - "src/original.ts"
+      - "${currentCommitFile}"
     depends_on: []
     execution_mode: proof_first
     acceptance_tests:
@@ -2659,6 +3281,7 @@ batches:
     rationale: "final-review remediation"
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3005,6 +3628,7 @@ batches:
     rationale: null
     status: pending
     builder_commits: []
+    builder_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`

@@ -29,14 +29,21 @@ Format and protocol: see [README](file:///Users/nathanvale/.claude/runbooks/issu
 
 Each batch row must include `execution_mode: tdd | proof_first | change_first`.
 `builder_commits` entries must be reachable git commit refs.
-Well-formed Builder fail-stops count as Builder attempts in runbook workflow
-language. Do not add executable `builder_attempts` fields here until the
-runbook helper/schema supports them.
+`builder_attempts` is the compact persisted audit trail for well-formed Builder
+envelopes. Each attempt row contains `attempt_type`, `status`, `commit_sha`,
+`files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
+Persisted `blockers` and `probe_results` are compact string summaries, not raw
+Builder envelope object arrays. Rich Builder evidence stays transient for
+Validator handoff or summarized in Notes.
+Well-formed Builder fail-stops count as Builder attempts and increment
+`iterations`; fail-stop attempts use `commit_sha: null` and do not append to
+`builder_commits`.
 Host readiness failures use frontmatter `blocked_reason:
 host-builder-tools-unavailable` before any batch status change. Post-dispatch
 host/schema/envelope failures use `blocked_reason:
 builder-infrastructure-failure`, leave the current batch `in-progress`, and
-record reachable commit refs plus dirty/staged path summaries in Notes.
+record reachable commit refs plus dirty/staged path summaries in Notes without
+adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
 batches: []
