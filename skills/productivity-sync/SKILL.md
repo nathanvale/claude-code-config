@@ -156,7 +156,7 @@ If `~/.config/memory/AGENTS.md` exists, resolve the owning repo first and treat 
 
 Read `.productivity-sync-cursor.json` from the owning repo root. This file persists per-connector "last successful sync" timestamps so each connector queries only what's changed.
 
-**Schema:**
+**Schema:** This example and field table are the source of truth for cursor fields. Later sections describe when fields are written without redefining their shape.
 
 ```json
 {
@@ -200,46 +200,49 @@ Read `.productivity-sync-cursor.json` from the owning repo root. This file persi
 }
 ```
 
-**New sub-key field definitions:**
+**Field table:**
 
-`connectors.<name>.run_history` — rolling 7-entry success/failure log per connector:
-```
-{ run_at: "<ISO-datetime>", ok: boolean }[]
-```
-Max 7 entries. Drop the oldest entry before appending if the array already contains 7 entries. Initialise as `[]` when key is missing (first run after schema upgrade). Written in the same atomic cursor pass as `last_sync`.
+| Field | Purpose | Default or migration | Write site |
+|---|---|---|---|
+| `version` | Cursor schema version. | Initialise to `1` when creating a cursor. | Cursor initialisation. |
+| `last_full_sync` | Last wide/deep sync checkpoint for deep-mode-specific windows. | Missing means no full/deep checkpoint exists. | Cursor write rule 3 when `--deep` is used. |
+| `connectors` | Map of persisted connector state. | Initialise to `{}` when creating a cursor. | Connector sync completion and pre-flight failure handling. |
+| `connectors.<name>` | State for persisted connectors such as `calendar`, `email`, `messages`, `meetings`, `project-tracker`, and `chat`. | Missing connector entry uses the first-run fallback window. | Connector sync completion or connector failure. |
+| `connectors.<name>.last_sync` | Last successful consumed sync window for that connector. | Missing means stale/first-run for that connector. | Cursor write rule 1 after that connector succeeds. |
+| `connectors.<name>.ok` | Last-known health for that connector. | Missing is treated as unknown health. | Cursor write rules 1-2 and non-brief pre-flight persistence. |
+| `connectors.<name>.error` | Short sanitized failure reason for the last failed connector run. | Omit when the connector is healthy or has no known failure. | Cursor write rule 2 and non-brief pre-flight persistence. |
+| `connectors.<name>.consecutive_failures` | Repeat-failure escalation count for pre-flight failures. | Missing means no repeat-failure count. | Pre-flight repeat-failure escalation. |
+| `connectors.<name>.run_history` | Rolling 7-entry success/failure log: `{ run_at: "<ISO-datetime>", ok: boolean }[]`. | Initialise to `[]` when missing. | Cursor write rule 4 during normal, non-brief syncs. |
+| `connectors.git_forges` | Per-forge cursor state keyed by `.productivity.yml` `git:` names. | If absent and legacy `connectors.github` exists, migrate per the git forge migration rules below. | Git forge migration and per-forge sync completion/failure. |
+| `connectors.git_forges._migrated_from_legacy_github` | Sentinel that throttles the legacy `github:` deprecation note. | Missing means the next legacy migration may surface the note. | First successful legacy GitHub cursor migration. |
+| `connectors.git_forges.<forge-name>` | State for a declared git forge. | Missing forge entry uses the first-run fallback window. | Per-forge sync completion or forge failure. |
+| `connectors.git_forges.<forge-name>.last_sync`, `.ok`, `.error`, `.consecutive_failures`, `.run_history` | Per-forge sync window, health, failure, escalation, and history fields. | Same defaults as the matching `connectors.<name>` fields. | Per-forge sync completion, forge failure, and pre-flight escalation. |
+| `connectors.git_forges.<forge-name>.last_auth` | Last successful forge `auth` mode, used to force a wide-window run after auth changes. | Optional, default unset. | Successful forge cursor write after comparing current auth config. |
+| `commitments` | Cross-connector commitment ledger for Nathan-owned commitments. | Initialise to `[]` when missing. | Commitment extraction, reconciliation, dropped-ball triage, and ledger-cap pruning. |
+| `commitments[].id` | Stable deduplication id: hash of `owner + verb_object + source`. | Required for new entries. | Commitment extraction and duplicate collapse. |
+| `commitments[].owner` | Commitment owner, always `"Nathan"` for self-commitments. | Required for new entries. | Commitment extraction. |
+| `commitments[].text` | Full commitment sentence shown back to the user. | Required for new entries. | Commitment extraction. |
+| `commitments[].verb_object` | Normalized action object used for matching and deduplication. | Required for new entries. | Commitment extraction and reconciliation. |
+| `commitments[].deadline` | ISO date when a deadline is found. | Optional. | Commitment extraction. |
+| `commitments[].source` | Primary meeting note path, chat timestamp, or thread URL where the commitment came from. | Required for new entries. | Commitment extraction. |
+| `commitments[].sources` | Additional source paths merged during cross-source duplicate collapse. | Optional, default absent. | Step 2b duplicate collapse. |
+| `commitments[].extracted_at` | ISO datetime when the commitment was extracted. | Required for new entries. | Commitment extraction. |
+| `commitments[].status` | Commitment state: `open`, `resolved`, or `dismissed`. | New entries start as `open`. | Commitment extraction, reconciliation, duplicate collapse, and dropped-ball triage. |
+| `commitments[].resolved_at` | ISO datetime when a commitment was matched as done. | Optional. | TASKS.md or project-tracker reconciliation. |
+| `commitments[].dismissed_at` | ISO datetime when a commitment was dismissed. | Optional. | Dropped-ball Dismiss action and duplicate collapse. |
+| `commitments[].dismissed_reason` | Reason for dismissal, such as `duplicate of <surviving-id>`. | Optional. | Step 2b duplicate collapse. |
+| `commitments[].deferred_until` | ISO datetime of dropped-ball snooze expiry. | Optional. | Dropped-ball Defer/snooze action. |
+| `pending` | Deferred action item triage queue. | Initialise to `[]` when missing. | Triage defer/re-defer and auto-expiry. |
+| `pending[].id` | Stable pending-item id: hash of `text + source_meeting`. | Required for new entries. | Pending-item defer. |
+| `pending[].text` | Original action item text. | Required for new entries. | Pending-item defer. |
+| `pending[].source_meeting` | Originating meeting note path. | Required for new entries. | Pending-item defer. |
+| `pending[].routing_suggestion` | Original suggested destination. | Required for new entries. | Pending-item defer. |
+| `pending[].defer_count` | Number of times the pending item has been deferred. | New entries start at `1`; missing is invalid for queued items. | Pending-item defer/re-defer and auto-expiry. |
+| `pending[].deferred_at` | ISO datetime of most recent deferral. | Required for new entries. | Pending-item defer/re-defer. |
 
-`commitments` (top-level) — cross-connector commitment ledger:
-```
-{
-  id: string,             // hash of owner+verb_object+source — stable across re-extractions
-  owner: string,          // always "Nathan" for self-commitments
-  text: string,           // full commitment sentence
-  verb_object: string,    // extracted action (e.g. "send the onboarding bundle to Kerry")
-  deadline?: string,      // ISO date if a deadline was found
-  source: string,         // path to meeting note or chat source
-  extracted_at: string,   // ISO datetime of extraction
-  status: "open" | "resolved" | "dismissed",
-  resolved_at?: string,   // ISO datetime when resolved
-  dismissed_at?: string,  // ISO datetime when dismissed
-  deferred_until?: string // ISO datetime of snooze expiry (for dropped-ball deferrals)
-}[]
-```
-Target cap: 50 open entries. Prune `resolved` entries first when the array grows; never silently drop `open` or `dismissed` entries. If the ledger remains over cap after pruning resolved entries, keep the remaining entries and surface a "commitment ledger over cap" note in the report.
+**Retention rules:** `run_history` keeps at most 7 entries per connector. `commitments` has a target cap of 50 open entries; prune `resolved` entries first, never silently drop `open` or `dismissed` entries, and surface a "commitment ledger over cap" note if the ledger remains over cap. `pending` has a soft cap of about 10 items because entries expire within 3 syncs by design.
 
-`pending` (top-level) — deferred action item triage queue:
-```
-{
-  id: string,                    // hash of text+source_meeting
-  text: string,                  // original action item text
-  source_meeting: string,        // path to originating meeting note
-  routing_suggestion: string,    // original suggested destination
-  defer_count: number,           // starts at 1, incremented on each re-deferral
-  deferred_at: string            // ISO datetime of most recent deferral
-}[]
-```
-Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry rule above in section 1). The 3rd re-surface fires expiry after the item has been deferred twice. Cap: ~10 items (they expire within 3 syncs by design).
-
-**Cursor migration note:** When `commitments` or `pending` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with empty arrays (`[]`). Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
+**Cursor migration note:** When `commitments` or `pending` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with the defaults above. Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
 
 **Parse-error recovery:** If `JSON.parse` of the cursor file throws (truncated bytes, manual edit corruption, OS crash between flush and rename), treat the cursor as missing for this run (wide-window fallback per Step 1a). Emit one line to the report: `cursor file malformed: treating as first run`. Rename the corrupt file to `.productivity-sync-cursor.json.corrupt.<iso-timestamp>` before writing the next clean cursor. The rename preserves the corrupt content for post-mortem without blocking sync continuation.
 
@@ -265,14 +268,14 @@ Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry ru
   - GitHub: `updatedAt >= -7d`
 - **Subsequent runs** — pass `since: <last_sync>` (or the equivalent JQL / `--search` clause) to each connector. Always apply a 1-hour overlap (subtract 1h from cursor) to absorb clock drift and late-arriving events. iMessage's `sync_archive` already does this internally — match its pattern for the others.
 - **Per-connector independence** — a Jira failure doesn't reset the GitHub cursor. Only update each connector's `last_sync` when *that* connector completed successfully. Persist `ok: false` plus `error: "<short reason>"` on failure so the next run knows to widen its window.
-- **Bounded growth** — cursors only ever store a single timestamp per connector. The file stays tiny (~500 bytes).
+- **Bounded growth** — connector history, pending items, and commitment pruning follow the retention rules in the field table above.
 
 **Cursor write rules (write-after-success, never-before):**
 
 1. At skill end, for each connector that completed without error, set `connectors.<name>.last_sync = now` and `ok = true`.
 2. For each connector that errored, leave `last_sync` unchanged (so next run retries the same window) and set `ok = false`, `error = "<reason>"`.
 3. If `--deep` was used, also bump `last_full_sync` so deep-mode-specific cursors (chat 7d, sent email) shift forward.
-4. For each persisted connector that ran or failed pre-flight during a normal sync, append `{ run_at: now, ok: <true/false> }` to `connectors.<name>.run_history`. Drop the oldest entry before appending if the array already contains 7 entries. Track meeting transcript and meeting-note freshness under `connectors.meetings.run_history`. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
+4. For each persisted connector that ran or failed pre-flight during a normal sync, append a `run_history` entry according to the field table retention rules. Track meeting transcript and meeting-note freshness under `connectors.meetings.run_history`. Track git forge health per declared forge name under `connectors.git_forges.<forge-name>.run_history`, surfaced as labels like `git.bitbucket-monash`. **`--brief` mode must not append to `run_history` for any connector**. Brief runs are not consumed sync windows.
 5. Write `commitments` and `pending` arrays in the same atomic pass: any new commitment entries appended during this run are flushed here; any `pending` mutations (new deferrals, expiry removals) are flushed here.
 6. Write atomically: serialise to `.productivity-sync-cursor.json.tmp`, then `mv` over the real file. Avoids a half-written cursor if the skill is interrupted.
 7. **Never** write the cursor on user abort (e.g. `--dry-run` or user said "no, don't apply"). Cursor advance = "we successfully consumed this window," not "we ran the skill."
@@ -283,7 +286,7 @@ Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry ru
 - The file is older than 7 days (treat as stale; user probably skipped a week)
 - Connector's previous run had `ok: false`
 - Connector's MCP tool name changed (cursor pre-dates the rename)
-- Forge `auth` field changed since the last successful run (e.g. `auth: env` upgraded to `auth: bb-pr-plugin`). Detect by comparing the current `.productivity.yml`'s forge `auth` value against the cursor's last recorded value; cache the auth value per forge in `connectors.git_forges.<name>.last_auth` on each successful write. `last_auth` is a new optional field on each git_forges entry, default unset.
+- Forge `auth` field changed since the last successful run (e.g. `auth: env` upgraded to `auth: bb-pr-plugin`). Detect by comparing the current `.productivity.yml`'s forge `auth` value against the cursor's last recorded `connectors.git_forges.<name>.last_auth` value; cache the current auth value per forge on each successful write.
 
 **Why a file, not memory:** the skill must survive across sessions. `memory/` is wrong (durable knowledge, not state). `TASKS.md` is wrong (human-edited). A dot-file at repo root is the right surface — `.gitignore` it so the cursor doesn't churn git.
 
