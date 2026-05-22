@@ -277,6 +277,26 @@ automatically**. The stop prompt must show:
 Helper validation rejects a dependent that lists both the original and the
 replacement before the confirmation gate.
 
+## Packet rendering contract (U5)
+
+The Builder Work Packet shape above is rendered deterministically by
+`renderBuilderPacket()` in
+[`../lib/packets.ts`](../lib/packets.ts), invoked through the v2 CLI
+front door: `runbooks/issue-to-pr-v2/cli.ts packet builder --ledger
+<path> --batch <id> --attempt-type <implementation|repair>
+[--target-finding-signature <sig>] --json`. The CLI returns the rendered
+packet body, a structured `packet` payload that mirrors the YAML in
+`templates/builder-work-packet.md`, and a `dispatch_evidence` object
+(timestamp, role, target id, loaded references/templates, CLI route
+id). The Orchestrator carries that evidence into ledger Notes once U6
+lands the write infrastructure; the U5 CLI is read-only and does not
+mutate ledger state.
+
+The renderer scopes inputs to the target batch only: findings, prior
+attempts, and Notes are filtered by `batch_id` before render, so the
+context-leak invariant in `docs/runbooks/issue-to-pr-v2-refactor/
+u5-packet-rendering.md` is enforced at the render boundary.
+
 ## See also
 
 - [stage-4-batch-loop.md](stage-4-batch-loop.md) for the outer/inner loop that
@@ -287,3 +307,5 @@ replacement before the confirmation gate.
   invocation rules and the persona selector.
 - Templates: [`templates/builder-work-packet.md`](../templates/builder-work-packet.md)
   fills this contract in for a concrete dispatch.
+- [`../templates/builder-return-envelope.md`](../templates/builder-return-envelope.md)
+  cross-references the canonical schema above for the Builder envelope.

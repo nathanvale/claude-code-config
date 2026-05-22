@@ -35,6 +35,19 @@ one patch batch, files already in confirmed ledger scope unless
 
 ## Scratch file shape
 
+**Rendered by `lib/packets.ts` (U5).** Invoke
+`runbooks/issue-to-pr-v2/cli.ts packet patch-proposal --ledger <path>
+--finding <id> --patch-id patch-NNN --patch-name "<title>" --patch-goal
+"<sentence>" --patch-file <path>... --patch-depends-on <terminal-id>...
+--patch-execution-mode <mode> --patch-acceptance-test "<test>"...
+--patch-rationale "<text>" --json` to render the scratch file body. The
+renderer enforces: exactly one `patch_batches` entry, `ac_mapping: []`,
+and a `patch-NNN` id shape.
+
+The rendered scratch **MUST NOT** include more than one `patch_batches`
+entry, wildcard paths, non-empty `ac_mapping`, or findings beyond the
+cited `final_finding`.
+
 The scratch file is a fenced YAML document (no XML-style wrapping). Exactly
 one entry under `patch_batches`. Concrete paths only; no wildcards.
 

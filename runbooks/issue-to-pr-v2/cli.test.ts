@@ -745,6 +745,7 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
       "contract",
       "diagnose",
       "next",
+      "packet",
       "state",
     ]);
     expect(data.contract_slices.length).toBeGreaterThan(0);
@@ -861,5 +862,396 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     // No human-style prose on stderr — the error envelope on stdout is
     // the single source of truth for agents.
     expect(stderr).toBe("");
+  });
+});
+
+// ---------------- packet command (U5) ----------------
+
+describe("packet command (U5)", () => {
+  function writePacketLedger(): string {
+    return writeLedger(
+      [
+        "---",
+        "issue_number: 5",
+        "target_repo: \"acme/widgets\"",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        "---",
+        "",
+        "# Issue 5",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        "```yaml",
+        "batches:",
+        "  - id: b1",
+        "    name: \"Batch one\"",
+        "    goal: \"implement one\"",
+        "    files:",
+        "      - app/one.ts",
+        "    depends_on: []",
+        "    execution_mode: tdd",
+        "    acceptance_tests:",
+        "      - \"AC 1 holds: behavior\"",
+        "    ac_mapping:",
+        "      - 1",
+        "    rationale: null",
+        "    status: pending",
+        "    builder_commits: []",
+        "    builder_attempts: []",
+        "    iterations: 0",
+        "    final_verdict: null",
+        "```",
+        "",
+        "## Findings data",
+        "",
+        "```yaml",
+        "findings: []",
+        "```",
+        "",
+        "## Findings",
+        "",
+        "| id | batch_id | signature | persona | severity | status | summary | resolution |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "",
+        "## Notes",
+        "",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  test("requires --json", () => {
+    const { envelope, exit_code } = invoke(["packet", "builder"]);
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe("missing-json-flag");
+    expect(exit_code).toBe(64);
+  });
+
+  test("missing role returns missing-required-arg", () => {
+    const { envelope, exit_code } = invoke(["packet", "--json"]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("unknown role returns unknown-packet-role", () => {
+    const { envelope, exit_code } = invoke(["packet", "wizard", "--json"]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "unknown-packet-role",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("builder packet emits success envelope with packet + dispatch_evidence", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "builder",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      role: string;
+      packet: { batch_contract: { id: string } };
+      packet_markdown: string;
+      dispatch_evidence: { role: string; cli_route_id: string };
+    };
+    expect(data.role).toBe("builder");
+    expect(data.packet.batch_contract.id).toBe("b1");
+    expect(data.packet_markdown).toContain("<local_law_read_order>");
+    expect(data.dispatch_evidence.role).toBe("builder");
+    expect(data.dispatch_evidence.cli_route_id).toBe("packet.builder");
+  });
+
+  test("builder missing --ledger returns missing-packet-flag", () => {
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "builder",
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-packet-flag",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("builder unknown batch returns packet-render-failed", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "builder",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "no-such-batch",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "packet-render-failed",
+    );
+    expect(exit_code).toBe(1);
+  });
+
+  test("envelope carries schema_version: '1' and run_id (preserves U4 contract)", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope } = invoke([
+      "packet",
+      "builder",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    expect(envelope.schema_version).toBe("1");
+    expect(typeof envelope.run_id).toBe("string");
+    expect(typeof envelope.started_at_ms).toBe("number");
+    expect(typeof envelope.duration_ms).toBe("number");
+  });
+
+  test("ce-plan packet does not require any ledger flag", () => {
+    const { envelope, exit_code } = invoke(["packet", "ce-plan", "--json"]);
+    expect(exit_code).toBe(0);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      role: string;
+      packet: { addendum_body: string };
+    };
+    expect(data.role).toBe("ce-plan");
+    expect(data.packet.addendum_body).toContain("Structured-output requirement");
+  });
+
+  test("help catalog lists packet command and packet_roles", () => {
+    const { envelope } = invoke(["--help"]);
+    const help = envelope.data as {
+      commands: Array<{ name: string }>;
+      packet_roles: string[];
+    };
+    expect(help.commands.map((c) => c.name)).toContain("packet");
+    expect(help.packet_roles).toEqual([
+      "builder",
+      "proposer",
+      "validator",
+      "patch-proposal",
+      "ce-plan",
+    ]);
+  });
+
+  // F020 / F034 / F021 fix — CLI-level happy-path coverage for the
+  // three previously-uncovered roles, including dispatch_evidence
+  // shape assertions and deny-list spot checks at the CLI boundary.
+
+  function writeProposerLedger(): string {
+    return writeLedger(
+      [
+        "---",
+        "issue_number: 5",
+        "target_repo: \"acme/widgets\"",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        "---",
+        "",
+        "# Issue 5",
+        "## Acceptance criteria",
+        "- [ ] AC 1",
+        "## Batches",
+        "```yaml",
+        "batches: []",
+        "```",
+        "## Findings data",
+        "```yaml",
+        "findings: []",
+        "```",
+        "## Findings",
+        "| id | batch_id | signature | persona | severity | status | summary | resolution |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| ff1 | final | sig-x | reviewer | P1 | open | a final blocker | |",
+        "## Notes",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  test("proposer packet through CLI emits role + dispatch_evidence and no commit-write slot", () => {
+    const ledgerPath = writeProposerLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "proposer",
+      "--ledger",
+      ledgerPath,
+      "--finding",
+      "ff1",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    const data = envelope.data as {
+      role: string;
+      packet: unknown;
+      dispatch_evidence: { role: string; cli_route_id: string; target_id: string };
+    };
+    expect(data.role).toBe("proposer");
+    expect(data.dispatch_evidence.cli_route_id).toBe("packet.proposer");
+    expect(data.dispatch_evidence.target_id).toBe("ff1");
+    const json = JSON.stringify(data.packet);
+    expect(json).not.toContain("commit_sha");
+    expect(json).not.toContain("builder_commits");
+  });
+
+  test("validator packet through CLI emits role + dispatch_evidence + scoped findings", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "validator",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--persona",
+      "compound-engineering:ce-correctness-reviewer",
+      "--commit",
+      "abc1234",
+      "--touched-file",
+      "app/one.ts",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    const data = envelope.data as {
+      role: string;
+      packet: { batch_id: string };
+      dispatch_evidence: { cli_route_id: string };
+    };
+    expect(data.role).toBe("validator");
+    expect(data.packet.batch_id).toBe("b1");
+    expect(data.dispatch_evidence.cli_route_id).toBe("packet.validator");
+  });
+
+  test("patch-proposal packet through CLI emits ac_mapping: [] and exactly one patch_batches entry", () => {
+    const ledgerPath = writeProposerLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "patch-proposal",
+      "--ledger",
+      ledgerPath,
+      "--finding",
+      "ff1",
+      "--patch-id",
+      "patch-001",
+      "--patch-name",
+      "Patch one",
+      "--patch-goal",
+      "fix the bug",
+      "--patch-file",
+      "app/x.ts",
+      "--patch-file",
+      "app/x.test.ts",
+      "--patch-depends-on",
+      "b-terminal",
+      "--patch-execution-mode",
+      "tdd",
+      "--patch-acceptance-test",
+      "AC 1 holds: bug gone",
+      "--patch-rationale",
+      "new-file-patch-exception: test sibling",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    const data = envelope.data as {
+      role: string;
+      packet: {
+        patch_batches: Array<{
+          id: string;
+          ac_mapping: number[];
+          files: string[];
+        }>;
+      };
+    };
+    expect(data.role).toBe("patch-proposal");
+    expect(data.packet.patch_batches.length).toBe(1);
+    expect(data.packet.patch_batches[0].id).toBe("patch-001");
+    expect(data.packet.patch_batches[0].ac_mapping).toEqual([]);
+    expect(data.packet.patch_batches[0].files).toEqual([
+      "app/x.ts",
+      "app/x.test.ts",
+    ]);
+  });
+
+  test("F024: invalid --attempt-type value surfaces missing-packet-flag", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "builder",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "wizard",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-packet-flag",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("F011: dispatch_evidence carries all six documented fields", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope } = invoke([
+      "packet",
+      "builder",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    const evidence = (envelope.data as {
+      dispatch_evidence: {
+        timestamp: string;
+        role: string;
+        target_id: string;
+        loaded_references: string[];
+        loaded_templates: string[];
+        cli_route_id: string;
+      };
+    }).dispatch_evidence;
+    expect(typeof evidence.timestamp).toBe("string");
+    expect(evidence.timestamp).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+    expect(evidence.role).toBe("builder");
+    expect(evidence.target_id).toBe("b1");
+    expect(Array.isArray(evidence.loaded_references)).toBe(true);
+    expect(evidence.loaded_references.length).toBeGreaterThan(0);
+    expect(Array.isArray(evidence.loaded_templates)).toBe(true);
+    expect(evidence.loaded_templates.length).toBeGreaterThan(0);
+    expect(evidence.cli_route_id).toBe("packet.builder");
   });
 });

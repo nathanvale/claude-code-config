@@ -25,6 +25,7 @@ small enough to audit on a screen, with findings that stay inside the seam.
 | V2 contract coverage | [v2-contract-coverage.md](v2-contract-coverage.md) | [v2-contract-coverage-ledger.md](v2-contract-coverage-ledger.md) | v1 sources: `runbooks/issue-to-pr/issue-to-pr.md`, `runbooks/issue-to-pr/README.md`, `runbooks/issue-to-pr/issue-N-ledger.template.md`, `runbooks/issue-to-pr/decompose.ts`; v2 matrix: `runbooks/issue-to-pr-v2/references/regression-matrix.md` |
 | V2 shadow tree extraction | [v2-shadow-tree-extraction.md](v2-shadow-tree-extraction.md) | [v2-shadow-tree-extraction-ledger.md](v2-shadow-tree-extraction-ledger.md) | v2 shadow tree (writable): `runbooks/issue-to-pr-v2/references/*.md`, `runbooks/issue-to-pr-v2/templates/*.md`; v1 sources (read-only): `runbooks/issue-to-pr/`; U1 anchor (read-only): `runbooks/issue-to-pr-v2/references/regression-matrix.md` |
 | V2 CLI front door | [u4-cli-front-door.md](u4-cli-front-door.md) | [u4-cli-front-door-ledger.md](u4-cli-front-door-ledger.md) | Writable: `runbooks/issue-to-pr-v2/cli.ts`, `runbooks/issue-to-pr-v2/cli.test.ts`, `runbooks/issue-to-pr-v2/lib/cli-envelope.ts`, `runbooks/issue-to-pr-v2/lib/cli-diagnostics.ts`, `runbooks/issue-to-pr-v2/lib/route.ts`, their `*.test.ts`, plus targeted edits to `runbooks/issue-to-pr-v2/lib/ledger.ts` (fail-mode toggle) and `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` (route id catalog). Read-only: v1 sources, U3 helper internals, U2 shadow references not named writable, U1 matrix |
+| V2 packet rendering | [u5-packet-rendering.md](u5-packet-rendering.md) | [u5-packet-rendering-ledger.md](u5-packet-rendering-ledger.md) | Writable: `runbooks/issue-to-pr-v2/lib/packets.ts` + tests, additive packet subcommands in `runbooks/issue-to-pr-v2/cli.ts` + tests, the five role templates under `runbooks/issue-to-pr-v2/templates/`, plus targeted edits to `runbooks/issue-to-pr-v2/references/builder-dispatch.md` and `runbooks/issue-to-pr-v2/references/findings-and-validators.md` (placeholder syntax). Read-only: v1 sources, U3 helper internals beyond the packet rendering needs, U4 envelope contracts (forward-compatible), U1 matrix, U6 runbook_version territory |
 
 **Cross-cutting seams** (each spans many files):
 
@@ -59,6 +60,16 @@ inline at the end of every turn. Stop after 30 turns.
 ```
 /goal Follow docs/runbooks/issue-to-pr-v2-refactor/u4-cli-front-door.md.
 Re-read the runbook and u4-cli-front-door-ledger.md at the start of every
+turn. Drive every ledger row to status fixed or closed and the most recent
+/ce-code-review pass to zero new findings. Echo the full ledger status table
+inline at the end of every turn. Stop after 30 turns.
+```
+
+### V2 packet rendering
+
+```
+/goal Follow docs/runbooks/issue-to-pr-v2-refactor/u5-packet-rendering.md.
+Re-read the runbook and u5-packet-rendering-ledger.md at the start of every
 turn. Drive every ledger row to status fixed or closed and the most recent
 /ce-code-review pass to zero new findings. Echo the full ledger status table
 inline at the end of every turn. Stop after 30 turns.

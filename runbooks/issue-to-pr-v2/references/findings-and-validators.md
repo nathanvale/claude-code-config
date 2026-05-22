@@ -309,6 +309,30 @@ every turn. Stop when ledger frontmatter status is `shipped` or `blocked`.
 v1-era hot-router location; U7 will update the path to the v2 hot router
 when the cutover lands.)
 
+## Packet rendering contract (U5)
+
+Validator, Proposer, and patch-proposal dispatch packets are rendered
+deterministically by `lib/packets.ts`. CLI invocations:
+
+- `cli.ts packet validator --ledger <path> --batch <id> --persona <skill>
+  --commit <ref> [--touched-file <path>...] --json`
+- `cli.ts packet proposer --ledger <path> --finding <id> --json`
+- `cli.ts packet patch-proposal --ledger <path> --finding <id>
+  --patch-id patch-NNN ... --json`
+
+Each invocation returns a `CliSuccessEnvelope` carrying the rendered
+packet data, a `packet_markdown` body, and a `dispatch_evidence` block
+(timestamp, role, target id, loaded references / templates, CLI route
+id). The U5 CLI is read-only; the dispatch evidence shape is *defined*
+here but the write into ledger Notes lands in U6.
+
+The per-packet allow-list / deny-list invariants are owned by the
+templates ([validator-envelope.md](../templates/validator-envelope.md),
+[proposer-envelope.md](../templates/proposer-envelope.md),
+[patch-proposal.md](../templates/patch-proposal.md)). This reference
+intentionally does not restate them — see those templates for the
+contractual surface.
+
 ## See also
 
 - [builder-dispatch.md](builder-dispatch.md) for the Builder authority boundary

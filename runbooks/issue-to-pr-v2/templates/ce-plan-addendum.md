@@ -18,6 +18,13 @@ XML-style tags.
 
 ## Addendum body (paste verbatim after the issue body and ledger AC list)
 
+**Rendered by `lib/packets.ts` (U5).** Invoke
+`runbooks/issue-to-pr-v2/cli.ts packet ce-plan --json` to return this
+addendum body verbatim. The packet **MUST NOT** include any
+issue-specific content, target_repo, or Builder/Proposer/Validator packet
+slots — the addendum is reusable across issues.
+
+
 ````markdown
 ## Structured-output requirement (issue-to-pr workflow)
 

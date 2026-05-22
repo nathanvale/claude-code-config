@@ -22,11 +22,25 @@ read-only and is not the Proposer.
 
 ## Packet slots
 
+**Rendered by `lib/packets.ts` (U5).** The Orchestrator does not hand-fill
+this template. The shape below is the contract for `renderBuilderPacket()`
+in `runbooks/issue-to-pr-v2/lib/packets.ts`; invoke
+`runbooks/issue-to-pr-v2/cli.ts packet builder --ledger <path> --batch <id>
+--attempt-type <implementation|repair> --json` to render the packet body
+plus the dispatch evidence shape.
+
 The packet body uses fenced YAML for helper-validated fields plus selective
 XML framing tags (`<local_law_read_order>`, `<preflight_checklist>`,
 `<allowed_probes>`, `<output_contract>`) for prose framing only, per the U2
 approach. The XML tags **never** wrap helper-validated YAML or JSON; they
 only frame the prose payload the Builder sub-agent reads on entry.
+
+The rendered packet **MUST** include exactly the fields below and **MUST
+NOT** include the full plan file, raw Validator envelopes, unrelated batch
+state, rich Builder evidence (implementation_steps, existing_seams_used,
+tests_run, assumptions, risks, deferred, suggested_validator_focus) from
+prior envelopes, ACs not in the target batch's `ac_mapping`, or findings
+from other batches or stage-3 findings.
 
 ```yaml
 issue_number: <int>

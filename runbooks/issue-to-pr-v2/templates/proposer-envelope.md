@@ -33,6 +33,17 @@ Proposer candidate remains evidence only.
 
 ## Packet slots (orchestrator → Proposer)
 
+**Rendered by `lib/packets.ts` (U5).** Invoke
+`runbooks/issue-to-pr-v2/cli.ts packet proposer --ledger <path> --finding
+<id> --json` to render this packet. The cited finding must satisfy
+`batch_id: final`, severity `P0|P1`, and status `open`; otherwise the CLI
+returns a `packet-render-failed` envelope.
+
+The rendered packet **MUST NOT** contain any commit-write slot
+(`commit_sha`, `builder_commits`), `builder_attempts` from any batch, the
+full ledger contents, unrelated raw Validator envelopes, findings outside
+`batch_id: final`, or whole-plan replanning prompts.
+
 ```yaml
 issue_number: <int>
 target_repo: "<owner/repo>"
