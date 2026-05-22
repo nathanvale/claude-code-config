@@ -24,6 +24,32 @@ new pending batch and do not change batch status. Verify host Builder
 readiness for the current in-progress batch immediately before dispatch (see
 [host-adapters.md](host-adapters.md)).
 
+## Pre-stage gates (must clear before any Builder dispatch)
+
+Stage 4 inherits two stop-required gates from the durable ledger snapshot
+exposed by `cli.ts state <ledger-path> --json`. The orchestrator routes
+off the returned envelope, not conversation memory:
+
+- **Version-skew gate.** If `data.runbook_version_skew` is `missing` or
+  `mismatched` (and not `continuation-evidence-present`), `route_id` is
+  `blocked-runbook-version-skew` and `blocking_gates` contains a
+  `{kind: "field", field: "frontmatter.runbook_version", value: ...}`
+  entry. Do not dispatch Builder, Proposer, or Validator packets, do not
+  ship; stop and ask the operator to either align `runbook_version` or
+  record continuation evidence per
+  [ledger-and-helper.md](ledger-and-helper.md#continuation-evidence-shape-u6).
+- **Install-presence gate.** If
+  `data.installed_artifact_presence.all_present` is `false`, the v2
+  install is incomplete. The full shape is
+  `{references: bool, templates: bool, cli_ts: bool, lib_dir: bool, all_present: bool, missing: ('references'|'templates'|'cli_ts'|'lib_dir')[]}`;
+  any per-root boolean that is `false` appears in the
+  `missing` list. Stop and surface the `missing` list to the
+  operator; Builder dispatch against a partial install would render
+  packets without their templates.
+
+Both gates re-fire on every turn: a resumed run must `cli.ts state` first
+and short-circuit before selecting a batch.
+
 ## Outer loop (v1 L692-753)
 
 1. **Select the next batch.** First batch in YAML order where
@@ -109,6 +135,26 @@ Validator invocation, normalization, dedupe, and `--validate-findings`
 behaviour live in
 [findings-and-validators.md](findings-and-validators.md).
 
+### Packet rendering for Stage 4 dispatch
+
+Builder, Proposer, and Validator dispatch material is rendered
+deterministically from ledger state plus templates, not assembled by the
+orchestrator inline. Use the v2 packet CLI to produce the canonical
+dispatch packet (each command writes one `CliSuccessEnvelope` to stdout,
+carrying both `packet` (machine-readable) and `packet_markdown`
+(human/agent-readable) plus `dispatch_evidence`):
+
+- Builder implementation attempt:
+  `cli.ts packet builder --ledger <ledger-path> --batch <batch-id> --attempt-type implementation --json`
+- Builder repair attempt (target-finding-signature required):
+  `cli.ts packet builder --ledger <ledger-path> --batch <batch-id> --attempt-type repair --target-finding-signature <signature> --json`
+- Validator persona:
+  `cli.ts packet validator --ledger <ledger-path> --batch <batch-id> --persona <skill-name> --commit <ref> --touched-file <path> [--touched-file <path> ...] --json`
+- Proposer (final-review finding handoff):
+  `cli.ts packet proposer --ledger <ledger-path> --finding <finding-id> --json`
+- Patch-proposal candidate persistence:
+  `cli.ts packet patch-proposal --ledger <ledger-path> --finding <finding-id> --patch-id <patch-NNN> --patch-name <title> --patch-goal <sentence> --patch-execution-mode <mode> --patch-rationale <text> [--patch-file <path> ...] [--patch-depends-on <batch-id> ...] [--patch-acceptance-test <text> ...] --json`
+
 ## Final-review patch-batch decision tree (v1 L806-886)
 
 Stage 5 routes every open P0/P1 finding from `/ce-code-review` back to this
@@ -169,8 +215,11 @@ bounded patch-batch path or must fail-stop for user re-planning.
     `decompose.ts --batch-contract-digest <ledger-path>`, keep
     `batch_contract_confirmation_status: confirmed`, update
     `batch_contract_confirmed_at`, and run
-    `decompose.ts --confirmation-state <ledger-path>` before returning to
-    Stage 4 (batch-loop) to converge it. The appended patch-batch
+    `cli.ts state <ledger-path> --json` before returning to Stage 4
+    (batch-loop). The envelope must report
+    `confirmation_state.batch_contract: "confirmed"` and
+    `route_id: "batch-loop"` with the appended patch-batch present in
+    `## Batches` and pending. The appended patch-batch
     is now a confirmed batch; the Stage 4 Builder owns one implementation or
     repair attempt against that confirmed contract.
   - When the patch-batch converges, update the original `batch_id: final`

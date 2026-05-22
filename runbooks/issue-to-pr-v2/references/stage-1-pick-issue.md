@@ -78,31 +78,43 @@ ledger creation, before branch preflight). See also:
      stage work.
    - On `abort`: stop, fail-stop.
 7. Create or resume the ledger at
-   `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`. (The ledger
-   location pointer is a v1-era path; U7 will update both the directory and
-   the template source to v2 paths once the hot router cuts over.)
+   `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md` in the target
+   repo. (Ledger paths stay under `docs/runbooks/issue-to-pr/` for the
+   shadow-v2 era; U9 will reassess the directory at public cutover.)
    - Concurrent-run guard: if frontmatter `status == in-progress` with
      `started_at` within the last hour, fail-stop with the concurrent-run
      warning.
    - Re-run guard: if `status == shipped`, ask the user re-run or abandon.
    - First-run: copy from
-     `~/.claude/runbooks/issue-to-pr/issue-N-ledger.template.md` until U6
-     lands `runbooks/issue-to-pr-v2/issue-N-ledger.template.md` and U7
-     points this step at it.
+     `~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md` (U6
+     template; declares `runbook_version: "2"`).
    Populate frontmatter: `issue_number`, `issue_title`, `issue_url`,
    `target_repo`, `started_at` (ISO 8601 with timezone), `status: in-progress`,
-   `ac_source`, `ac_confirmation_status: confirmed`, `ac_confirmed_at`,
+   `runbook_version: "2"`, `ac_source`,
+   `ac_confirmation_status: confirmed`, `ac_confirmed_at`,
    `batch_contract_confirmation_status: pending`,
    `batch_contract_confirmed_at: null`, `ship_mode: standard`,
    `final_reviewed_at: null`. Write the confirmed AC list to
-   `## Acceptance criteria` as `- [ ]` checkboxes. Compute and store
-   `ac_digest` via `decompose.ts --ac-digest <ledger-path>`. Leave
-   `plan_digest` and
-   `batch_contract_digest` null until Stage 3. If a `force-run` override was
-   used, append override evidence to Notes in the same checkpoint.
-8. Run `decompose.ts --confirmation-state <ledger-path>`. It must report
-   `acceptance_criteria: confirmed`, `batch_contract: pending`,
-   `digests: pending`. Any drift fails the stage. Commit before transitioning:
+   `## Acceptance criteria` as `- [ ]` checkboxes. The `ac_digest`,
+   `plan_digest`, and `batch_contract_digest` fields stay null at
+   Stage 1 and are populated at Stage 3 confirmation. The orchestrator
+   computes them at Stage 3 via the named helper commands
+   (`decompose.ts --ac-digest <ledger-path>`,
+   `decompose.ts --plan-digest <plan-path>`,
+   `decompose.ts --batch-contract-digest <ledger-path>`) and persists
+   the returned values to frontmatter in the same checkpoint commit;
+   the CLI itself is read-only per ADR 0002 and never writes the
+   digest fields. If a `force-run` override was used, append override
+   evidence to Notes in the same checkpoint.
+8. Run `cli.ts state <ledger-path> --json` (the v2 fact-emitter; see
+   [ledger-and-helper.md](ledger-and-helper.md#cli-ts-state-facts)).
+   The returned `data` envelope must report
+   `confirmation_state.acceptance_criteria: "confirmed"`,
+   `confirmation_state.batch_contract: "pending"`,
+   `confirmation_state.digests: "pending"`,
+   `route_id: "plan"` (or `route_id: "pick-issue"` if AC was already
+   stale — see precedence in route.ts), and an empty `blocking_gates`
+   array. Any drift fails the stage. Commit before transitioning:
    `chore(issue-{issue-number}): checkpoint acceptance criteria`.
 
 ## Exit condition

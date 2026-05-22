@@ -28,7 +28,11 @@ acceptance criteria, batch contracts, or any non-ledger artifact.
 ## Inputs
 
 Cumulative diff after all batches converged
-(`git diff <default-branch>...HEAD`).
+(`git diff <default-branch>...HEAD`). Confirm Stage 4 has fully converged
+by running `cli.ts state <ledger-path> --json` and verifying
+`data.all_batches_terminal: true`, `data.final_reviewed_at: null`, and
+`data.route_id: "final-review"`. If any of those three facts disagrees
+with conversation memory, route from the envelope.
 
 ## Actions
 

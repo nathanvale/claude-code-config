@@ -247,6 +247,34 @@ describe("classifyRoute: blocked states", () => {
       classifyRoute(inputs({ digests: "stale" })),
     ).toBe("blocked-digests-stale");
   });
+
+  test("U7 F016: blocked-digests-stale wins over final-review when digests drift after every batch terminal", () => {
+    // Regression for the U7 audit's scenario 4: stale digests must
+    // route to Stage 3 BEFORE Stage 5 or Stage 6 work, even when the
+    // happy-path classifier would otherwise return `final-review` or
+    // `ship`. The precedence walk inside classifyRoute (route.ts
+    // L148-149) reads digest staleness before any final-review or
+    // ship-state check; this test pins that precedence.
+    expect(
+      classifyRoute(
+        inputs({
+          digests: "stale",
+          all_batches_terminal: true,
+          final_reviewed_at: null,
+        }),
+      ),
+    ).toBe("blocked-digests-stale");
+    expect(
+      classifyRoute(
+        inputs({
+          digests: "stale",
+          all_batches_terminal: true,
+          final_reviewed_at: "2026-05-23T00:00:00.000Z",
+          pr_url: null,
+        }),
+      ),
+    ).toBe("blocked-digests-stale");
+  });
 });
 
 describe("classifyRoute: determinism", () => {

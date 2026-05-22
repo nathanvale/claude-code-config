@@ -21,33 +21,59 @@ Six stages, walked in order: `pick-issue`, `plan`, `decompose`, `batch-loop`,
 ledger lifecycle checkpoint, or, for `batch-loop`, runs exactly one inner-loop
 iteration.
 
-Once the ledger exists, at the start of every resumed turn, first read durable
-confirmation state:
+### `cli.ts state` facts
+
+Once the ledger exists, at the start of every resumed turn, run the
+v2 fact emitter BEFORE reading frontmatter, batches, findings, or
+notes from conversation memory:
 
 ```bash
-bun ~/.claude/runbooks/issue-to-pr/decompose.ts --confirmation-state <ledger-path>
+bun ~/.claude/runbooks/issue-to-pr-v2/cli.ts state <ledger-path> --json
 ```
 
-(The full bun path is the v1-era invocation; U3/U4 will move this behind a v2
-`cli.ts state --json` command and U7 will point the hot router at the new
-form. The helper contract is unchanged in the meantime.)
+The command writes exactly one `CliSuccessEnvelope` to stdout
+(newline-terminated). The `data` shape is the contract; the hot router
+routes off it without re-parsing the ledger inline:
 
-The command reports whether `acceptance_criteria`, `batch_contract`, and the
-digest triple are `pending`, `confirmed`, `stale`, or `blocked`. A resumed
-agent must route from that state, not from conversation memory. (The full
-four-state semantics and the routing rule body live with the U1
-`confirmation-state-routing` out-of-scope invariant; a future seam covering
-the v2 hot router invocation contract owns the rule body. This sentence is
-the minimum pointer needed for the in-scope `--confirmation-state` invocation
-to be useful.)
+- `confirmation_state.{acceptance_criteria, batch_contract, digests}` —
+  each one of `pending | confirmed | stale | blocked`.
+- `digest_drift.{acceptance_criteria, batch_contract, digests, any}` —
+  per-axis booleans for "stored frontmatter digest no longer matches
+  ledger content".
+- `route_id` — one of `ROUTE_IDS` (see [Route ids](#route-ids-v2-clits)
+  below); this is the single fact the hot router routes off.
+- `required_reference_ids` — string[] of v2 reference filenames
+  load-bearing for the returned route.
+- `blocking_gates` — discriminated union; non-empty means the workflow
+  cannot advance without operator action.
+- `installed_artifact_presence.{references, templates, cli_ts,
+  lib_dir, all_present, missing[]}` — install topology facts (U6).
+- `runbook_version`, `runbook_version_skew` — version-contract facts
+  (U6).
+- `plan_path`, `has_batches`, `all_batches_terminal`,
+  `final_reviewed_at`, `pr_url`, `frontmatter_status` — durable
+  workflow facts mirrored from the ledger.
 
-## Helper execution context (v1 L314-337)
+A resumed agent must route from this envelope, not from conversation
+memory. The four-state confirmation semantics live in `lib/contract.ts`
+(`CONFIRMATION_STATES`); the route-id catalog lives in `lib/route.ts`
+(`ROUTE_IDS`). The CLI never says "run X" or "execute Y" — ADR 0002.
+
+For richer diagnosis (per-axis digest drift, expected reference list,
+install presence) the same shape is available via
+`bun ~/.claude/runbooks/issue-to-pr-v2/cli.ts diagnose <ledger-path>
+--json`; for the legal route-id list use
+`cli.ts contract route_ids --json`.
+
+## Helper execution context
 
 Helper command invocations in this runbook use the path
-`bun ~/.claude/runbooks/issue-to-pr/decompose.ts`. Helpers are pure: they read
-the ledger and plan paths and emit either JSON on stdout (for digest commands)
-or a structured line-oriented result (for confirmation-state). They do not
-mutate filesystem state.
+`bun ~/.claude/runbooks/issue-to-pr-v2/cli.ts` for fact reads and
+`bun ~/.claude/runbooks/issue-to-pr-v2/decompose.ts` for validation /
+digest / parse mechanics. Both helpers are pure: they read ledger,
+plan, and template paths and emit either JSON on stdout (CLI envelope
+shape for `cli.ts`, helper-specific JSON or line-oriented output for
+`decompose.ts`). Neither mutates filesystem state.
 
 **Run helpers from the target repo root.** Running the helper from the
 installed runbook directory, a home directory, or a different checkout can
@@ -205,15 +231,17 @@ one batch's `ac_mapping`. Investigation placeholders use
 `rationale: "out-of-scope: investigation-required"` and are surfaced as a
 Stage 3 user gate.
 
-## Turn protocol (v1 README L239-258)
+## Turn protocol
 
 At the start of every turn:
 
-1. Re-read the v2 hot router (when it exists; until U7 this remains the v1
-   `runbooks/issue-to-pr/issue-to-pr.md`).
+1. Re-read the v2 hot router at
+   `~/.claude/runbooks/issue-to-pr-v2/issue-to-pr.md`.
 2. Re-read the per-issue ledger.
-3. Run `decompose.ts --confirmation-state <ledger-path>` and route from its
-   output before relying on AC/batch/digest content from memory.
+3. Run `cli.ts state <ledger-path> --json` and route from the returned
+   `route_id` + `blocking_gates` + `confirmation_state` fields. This is
+   the first non-read operation of every resumed turn — never infer
+   route from memory.
 4. Walk one stage step (or one inner-loop iteration during `batch-loop`).
 5. Commit the ledger lifecycle checkpoint or Builder commit appropriate to
    the step.

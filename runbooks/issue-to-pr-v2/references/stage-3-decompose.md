@@ -24,18 +24,21 @@ All Stage 3 helper commands must run from the **target repo root**. This keeps
 commit reachability, repo-relative path validation, and ledger checks pointed
 at the target repository rather than the installed runbook checkout. The
 canonical helper invocation path and the cwd-correctness rule live in
-[ledger-and-helper.md](ledger-and-helper.md#helper-execution-context-v1-l314-337).
+[ledger-and-helper.md](ledger-and-helper.md#helper-execution-context).
 
-The bare command form `decompose.ts <plan-path>` below stands in for the v1
-invocation `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path>` until
-U3/U4 land the v2 `cli.ts` surface; the helper contract is unchanged.
+Read-facts use the v2 fact emitter (`cli.ts state <ledger-path> --json`,
+`cli.ts diagnose <ledger-path> --json`, `cli.ts contract <slice> --json`).
+Validation / digest / parse mechanics still run through the bare command
+form `decompose.ts ...` below; it stands in for the in-repo invocation
+`bun ~/.claude/runbooks/issue-to-pr-v2/decompose.ts ...`. The CLI is
+read-only per ADR 0002 — every ledger mutation is the orchestrator's
+responsibility, not a CLI command.
 
 ## Actions
 
 1. Invoke the decompose helper: `decompose.ts <plan-path>` (per the Helper
-   context note above, this stands in for the v1 invocation
-   `bun ~/.claude/runbooks/issue-to-pr/decompose.ts <plan-path>` until U3/U4
-   land the v2 `cli.ts` surface).
+   context note above, this stands in for the in-repo invocation
+   `bun ~/.claude/runbooks/issue-to-pr-v2/decompose.ts <plan-path>`).
    Output is a YAML batches block on stdout; errors are non-zero exits with a
    parse-error message on stderr.
 2. On non-zero exit, fail-stop with the parse error verbatim.
@@ -114,9 +117,10 @@ U3/U4 land the v2 `cli.ts` surface; the helper contract is unchanged.
    `batch_contract_confirmed_at: <current ISO 8601 timestamp>`, and store the
    confirmed `plan_digest`, `ac_digest`, and `batch_contract_digest` values in
    frontmatter. A resumed agent can regenerate the candidate DAG from
-   `plan_path` and compare it with these stored digests using
-   `--confirmation-state`. Leave `## Batches` unchanged until the re-check
-   passes.
+   `plan_path` and compare it with these stored digests by running
+   `cli.ts state <ledger-path> --json` (the `confirmation_state` and
+   `digest_drift` fields surface drift without re-reading source state
+   inline). Leave `## Batches` unchanged until the re-check passes.
 10. Re-run the helper, AC coverage check, and digest recomputation. If any
     digest changed, set `batch_contract_confirmation_status: stale`, do not
     write candidate batches to `## Batches`, print the changed candidate list,
@@ -131,9 +135,12 @@ U3/U4 land the v2 `cli.ts` surface; the helper contract is unchanged.
     `chore(issue-{issue-number}): record batch DAG`. Before the commit, run
     `decompose.ts --validate-ledger-batches <ledger-path>` and
     `decompose.ts --batch-contract-digest <ledger-path>`. Then run
-    `decompose.ts --confirmation-state <ledger-path>`; it must report
-    `acceptance_criteria: confirmed`, `batch_contract: confirmed`, and
-    `digests: confirmed`.
+    `cli.ts state <ledger-path> --json`; the `data` envelope must report
+    `confirmation_state.acceptance_criteria: "confirmed"`,
+    `confirmation_state.batch_contract: "confirmed"`,
+    `confirmation_state.digests: "confirmed"`, and
+    `route_id: "batch-loop"` (or `"final-review"` if every batch is
+    already terminal in the durable ledger state).
 
 ## Exit condition
 

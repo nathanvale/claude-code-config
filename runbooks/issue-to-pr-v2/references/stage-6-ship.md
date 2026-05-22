@@ -14,7 +14,12 @@ checks and the ship path, or when re-entering Stage 6 after a
 ## Inputs
 
 Clean working tree (everything committed by `batch-loop` and final-review fix
-cycles).
+cycles). Confirm the ship gate by running
+`cli.ts state <ledger-path> --json`: `data.route_id` must be `"ship"`
+(implying `final_reviewed_at` is set and `pr_url` is null) and
+`data.blocking_gates` must be empty. If `route_id` is `"shipped"` the
+run is already terminal; if anything else, route from the returned
+envelope instead of forcing Stage 6.
 
 ## Actions
 

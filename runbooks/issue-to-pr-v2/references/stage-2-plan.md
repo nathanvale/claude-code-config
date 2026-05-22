@@ -23,8 +23,11 @@ Stage 1).
    runbook. Pass it:
    - the issue title + body;
    - the ledger's `## Acceptance criteria` section as the canonical AC list;
-   - the structured-output addendum verbatim from
-     [`templates/ce-plan-addendum.md`](../templates/ce-plan-addendum.md);
+   - the structured-output addendum body — render it deterministically
+     with `cli.ts packet ce-plan --json` (returns the reusable addendum
+     verbatim — see [`templates/ce-plan-addendum.md`](../templates/ce-plan-addendum.md)
+     for the rendered shape) and append it after the issue body and AC
+     list;
    - this posture instruction: "Issue-to-PR pipeline planning posture: write
      the plan and structured unit YAML only; skip post-generation menus,
      deepening prompts, implementation offers, and separate review flows;

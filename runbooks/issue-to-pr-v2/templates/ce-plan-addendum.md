@@ -4,8 +4,11 @@
 
 **Read trigger:** the Orchestrator appends this addendum verbatim after the
 issue body and the ledger's `## Acceptance criteria` section when invoking
-`/ce-plan` in Stage 2 with Issue-to-PR pipeline planning posture. See also:
-[`references/stage-2-plan.md`](../references/stage-2-plan.md),
+`/ce-plan` in Stage 2 with Issue-to-PR pipeline planning posture. The
+hot router at `runbooks/issue-to-pr-v2/issue-to-pr.md` points Stage 2 at
+this template via [`references/stage-2-plan.md`](../references/stage-2-plan.md);
+the addendum body itself is rendered deterministically by the v2 packet
+CLI rather than inlined into stage prose. See also:
 [`references/stage-3-decompose.md`](../references/stage-3-decompose.md).
 
 **v1 source anchor:** `runbooks/issue-to-pr/issue-to-pr.md` L1213-1286.
@@ -19,10 +22,12 @@ XML-style tags.
 ## Addendum body (paste verbatim after the issue body and ledger AC list)
 
 **Rendered by `lib/packets.ts` (U5).** Invoke
-`runbooks/issue-to-pr-v2/cli.ts packet ce-plan --json` to return this
-addendum body verbatim. The packet **MUST NOT** include any
-issue-specific content, target_repo, or Builder/Proposer/Validator packet
-slots — the addendum is reusable across issues.
+`bun runbooks/issue-to-pr-v2/cli.ts packet ce-plan --json` to return this
+addendum body in the `data.packet_markdown` field of a U4 CLI envelope.
+The packet **MUST NOT** include any issue-specific content, target_repo,
+or Builder/Proposer/Validator packet slots — the addendum is reusable
+across issues. U6 owns the ledger Notes write that records the dispatch
+evidence; the CLI is read-only per ADR 0002.
 
 
 ````markdown
