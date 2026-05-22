@@ -3,10 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { RUNBOOK_VERSION } from "./contract";
 import {
   DecomposeError,
   fail,
   parse,
+  parseRunbookVersionContinuationEvidence,
+  readLedgerSnapshot,
   validateAcCoverage,
   validateFindingsData,
   validateLedgerBatches,
@@ -526,5 +529,616 @@ describe("validateAcCoverage (in-process via withFailMode)", () => {
     expect(() =>
       withFailMode("throw", () => validateAcCoverage(batches, ledgerPath)),
     ).toThrow(/AC coverage incomplete; missing AC indices: 2/);
+  });
+});
+
+// ---------------- U6: runbook_version skew classifier ----------------
+
+function writeLedgerWithFrontmatter(
+  frontmatterLines: string[],
+  bodyLines: string[] = [],
+): string {
+  return writeLedger(
+    [
+      "---",
+      "issue_number: 1",
+      ...frontmatterLines,
+      "---",
+      "",
+      "# Issue 1",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- [ ] AC 1",
+      "",
+      ...bodyLines,
+    ].join("\n"),
+  );
+}
+
+describe("readLedgerSnapshot: U6 runbook_version", () => {
+  test("returns runbook_version: null and runbook_version_skew: null for no-ledger", () => {
+    const snapshot = readLedgerSnapshot("/tmp/does-not-exist-u6.md");
+    expect(snapshot.ledger_exists).toBe(false);
+    expect(snapshot.runbook_version).toBe(null);
+    expect(snapshot.runbook_version_skew).toBe(null);
+  });
+
+  test("classifies matched skew when frontmatter runbook_version equals RUNBOOK_VERSION", () => {
+    const ledgerPath = writeLedgerWithFrontmatter([
+      `runbook_version: "${RUNBOOK_VERSION}"`,
+    ]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe(RUNBOOK_VERSION);
+    expect(snapshot.runbook_version_skew).toBe("matched");
+  });
+
+  test("classifies missing skew when frontmatter has no runbook_version field", () => {
+    const ledgerPath = writeLedgerWithFrontmatter([]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe(null);
+    expect(snapshot.runbook_version_skew).toBe("missing");
+  });
+
+  test("classifies missing skew when runbook_version is empty string", () => {
+    const ledgerPath = writeLedgerWithFrontmatter([
+      'runbook_version: ""',
+    ]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe(null);
+    expect(snapshot.runbook_version_skew).toBe("missing");
+  });
+
+  test("classifies mismatched skew when runbook_version differs from RUNBOOK_VERSION", () => {
+    const ledgerPath = writeLedgerWithFrontmatter([
+      'runbook_version: "1"',
+    ]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe("1");
+    expect(snapshot.runbook_version_skew).toBe("mismatched");
+  });
+
+  test("string comparison only — no semver / numeric coercion", () => {
+    // "2.0" must NOT equal "2"; the contract is exact string equality.
+    const ledgerPath = writeLedgerWithFrontmatter([
+      'runbook_version: "2.0"',
+    ]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe("2.0");
+    expect(snapshot.runbook_version_skew).toBe("mismatched");
+  });
+});
+
+describe("readLedgerSnapshot: runbook_version_skew continuation evidence", () => {
+  function completeEvidenceBlock(overrides: Partial<{
+    ledger_version: string;
+    runtime_version: string;
+  }> = {}): string[] {
+    const ledgerVersion = overrides.ledger_version ?? "null";
+    const runtimeVersion = overrides.runtime_version ?? RUNBOOK_VERSION;
+    return [
+      "## Notes",
+      "",
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      `  ledger_version: ${ledgerVersion === "null" ? "null" : `"${ledgerVersion}"`}`,
+      `  runtime_version: "${runtimeVersion}"`,
+      '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "v1 ledger resumed; v2 changes are additive"',
+      "```",
+      "",
+    ];
+  }
+
+  test("missing skew with complete evidence → continuation-evidence-present", () => {
+    const ledgerPath = writeLedgerWithFrontmatter(
+      [],
+      completeEvidenceBlock({ ledger_version: "null" }),
+    );
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe(null);
+    expect(snapshot.runbook_version_skew).toBe(
+      "continuation-evidence-present",
+    );
+  });
+
+  test("mismatched skew with complete evidence → continuation-evidence-present", () => {
+    const ledgerPath = writeLedgerWithFrontmatter(
+      ['runbook_version: "1"'],
+      completeEvidenceBlock({ ledger_version: "1" }),
+    );
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version).toBe("1");
+    expect(snapshot.runbook_version_skew).toBe(
+      "continuation-evidence-present",
+    );
+  });
+
+  test("evidence with mismatched ledger_version field is rejected", () => {
+    // Evidence row claims it documents a v0 ledger, but the actual ledger
+    // is v1. The parser refuses to apply v0 evidence to a v1 ledger.
+    const ledgerPath = writeLedgerWithFrontmatter(
+      ['runbook_version: "1"'],
+      completeEvidenceBlock({ ledger_version: "0" }),
+    );
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version_skew).toBe("mismatched");
+  });
+
+  test("evidence with mismatched runtime_version field is rejected", () => {
+    // Evidence row recorded under v3 runtime is not honored by v2 runtime.
+    const ledgerPath = writeLedgerWithFrontmatter(
+      [],
+      completeEvidenceBlock({ runtime_version: "3" }),
+    );
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version_skew).toBe("missing");
+  });
+
+  test("matched skew never promotes to continuation-evidence-present", () => {
+    // Even when an evidence row exists, a matched ledger stays matched.
+    const ledgerPath = writeLedgerWithFrontmatter(
+      [`runbook_version: "${RUNBOOK_VERSION}"`],
+      completeEvidenceBlock({ ledger_version: RUNBOOK_VERSION }),
+    );
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version_skew).toBe("matched");
+  });
+});
+
+describe("parseRunbookVersionContinuationEvidence", () => {
+  function ledgerWithNotes(notesBody: string[]): string {
+    return writeLedgerWithFrontmatter([], ["## Notes", "", ...notesBody]);
+  }
+
+  test("returns null when the ledger file does not exist", () => {
+    expect(
+      parseRunbookVersionContinuationEvidence("/tmp/does-not-exist-u6.md"),
+    ).toBe(null);
+  });
+
+  test("returns null when there is no ## Notes section", () => {
+    const ledgerPath = writeLedgerWithFrontmatter([]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("returns null when there is no continuation marker", () => {
+    const ledgerPath = ledgerWithNotes([
+      "Plain notes prose, no marker.",
+      "",
+      "```yaml",
+      "some_other_block:",
+      "  key: value",
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("returns the parsed evidence when all seven fields are present", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      '  ledger_version: "1"',
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "v1 ledger resumed; v2 changes are additive"',
+      "```",
+      "",
+    ]);
+    const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+    expect(evidence).toEqual({
+      ledger_version: "1",
+      runtime_version: "2",
+      operator_decision: "Nathan @ 2026-05-22T19:00",
+      timestamp: "2026-05-22T19:00:00+10:00",
+      route_context: "batch-loop",
+      reference_context: "references/ledger-and-helper.md",
+      accepted_risk: "v1 ledger resumed; v2 changes are additive",
+    });
+  });
+
+  test("accepts ledger_version: null (literal) for a missing-version ledger", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "legacy v1 ledger, no version field"',
+      "```",
+      "",
+    ]);
+    const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+    expect(evidence?.ledger_version).toBe(null);
+    expect(evidence?.runtime_version).toBe("2");
+  });
+
+  test("returns null when any of the seven required fields is missing", () => {
+    const required = [
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+    ];
+    for (let omitted = 0; omitted < required.length; omitted++) {
+      const fields = required.filter((_, i) => i !== omitted);
+      const ledgerPath = ledgerWithNotes([
+        "<!-- runbook-version-skew-continuation -->",
+        "```yaml",
+        "runbook_version_skew_continuation:",
+        ...fields,
+        "```",
+        "",
+      ]);
+      expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+    }
+  });
+
+  test("returns null when a field is empty", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      "  operator_decision: ",
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("rejects forged evidence that uses non-comment marker text", () => {
+    // A hostile Notes line that looks like the marker but is plain prose
+    // (no `<!-- ... -->` html comment) must not be honored.
+    const ledgerPath = ledgerWithNotes([
+      "runbook-version-skew-continuation",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("rejects unknown extra fields inside the evidence block", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+      '  extra_smuggled_field: "value"',
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("rejects duplicate field declarations", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  runtime_version: "3"',
+      '  operator_decision: "Nathan"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("rejects a malformed YAML block with no header", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("first complete evidence row wins; later rows are ignored", () => {
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "First operator"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "first"',
+      "```",
+      "",
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Stale operator"',
+      '  timestamp: "2026-05-22T20:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "stale"',
+      "```",
+      "",
+    ]);
+    const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+    expect(evidence?.operator_decision).toBe("First operator");
+    expect(evidence?.accepted_risk).toBe("first");
+  });
+
+  test("F-U6-SEC-002: nested fenced block cannot smuggle a marker + evidence", () => {
+    // The hostile pattern: a 4-backtick wrapper hides a 3-backtick yaml
+    // body that contains a complete evidence row. Before the security
+    // fix, the markerPattern matched the inner yaml and the row was
+    // honored. After the fix, stripNestedFencedRegions blanks the
+    // wrapper body so the inner marker cannot reach the scanner.
+    const ledgerPath = ledgerWithNotes([
+      "````text",
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Hostile"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "smuggled"',
+      "```",
+      "````",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("F-U6-SEC-001: blockquoted '## Notes' line cannot fabricate a Notes scope", () => {
+    // The hostile pattern: a line `> ## Notes` would have matched the
+    // pre-fix unanchored regex and let an attacker plant evidence
+    // inside an earlier section. The fixed regex requires the heading
+    // at column zero.
+    const ledgerPath = writeLedgerWithFrontmatter(
+      [],
+      [
+        "## Acceptance criteria",
+        "",
+        "> ## Notes",
+        "",
+        "<!-- runbook-version-skew-continuation -->",
+        "```yaml",
+        "runbook_version_skew_continuation:",
+        "  ledger_version: null",
+        '  runtime_version: "2"',
+        '  operator_decision: "Hostile"',
+        '  timestamp: "2026-05-22T19:00:00+10:00"',
+        '  route_context: "batch-loop"',
+        '  reference_context: "references/ledger-and-helper.md"',
+        '  accepted_risk: "smuggled"',
+        "```",
+        "",
+      ],
+    );
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+
+  test("F-U6-SEC-005: evidence field with a C0 control byte is rejected", () => {
+    // Embed a literal NUL byte in the operator_decision quoted string.
+    // The parser rejects the field for control-byte content; the
+    // overall row is therefore null.
+    const ledgerPath = ledgerWithNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      `  operator_decision: "before\x00after"`,
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+      "```",
+      "",
+    ]);
+    expect(parseRunbookVersionContinuationEvidence(ledgerPath)).toBe(null);
+  });
+});
+
+describe("readLedgerSnapshot: U6 runbook_version hardening", () => {
+  test("F-U6-SEC-013: NBSP / ZWSP / BOM around the runbook_version value are stripped before comparison", () => {
+    // Each Unicode-whitespace-padded version string must still classify
+    // as matched, not mismatched. Otherwise an attacker who can write
+    // the ledger could stick the workflow.
+    const writer = (paddedVersion: string): string =>
+      writeLedgerWithFrontmatter([
+        `runbook_version: "${paddedVersion}"`,
+      ]);
+    for (const padded of [" 2", "2​", "﻿2﻿", " 2 "]) {
+      const path = writer(padded);
+      const snapshot = withFailMode("throw", () => readLedgerSnapshot(path));
+      expect(snapshot.runbook_version_skew).toBe("matched");
+    }
+  });
+
+  test("F-U6-SEC-005: runbook_version containing a control byte is rejected (treated as missing)", () => {
+    const path = writeLedgerWithFrontmatter([
+      `runbook_version: "2\x00x"`,
+    ]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(path));
+    expect(snapshot.runbook_version).toBe(null);
+    expect(snapshot.runbook_version_skew).toBe("missing");
+  });
+
+  // Boundary table for the C0/C1 control-byte filter (sweep-2 testing
+  // gap T-1). Tab (0x09) MUST stay allowed; 0x08, 0x1F, 0x7F, 0x9F
+  // MUST be rejected; 0xA0 (NBSP) MUST stay allowed (NBSP is U+00A0,
+  // one byte outside the C1 range).
+  test.each<[string, number, "matched" | "missing"]>([
+    ["0x08 backspace", 0x08, "missing"],
+    ["0x09 tab", 0x09, "matched"],
+    ["0x1f unit separator", 0x1f, "missing"],
+    ["0x7f delete", 0x7f, "missing"],
+    ["0x9f application-program-command", 0x9f, "missing"],
+    ["0xA0 NBSP (just above C1 range)", 0xa0, "matched"],
+  ])(
+    "containsControlByte boundary: runbook_version with %s is classified as %s when stripped",
+    (_label, codePoint, expected) => {
+      // Embed the byte at the leading boundary so stripBoundaryWhitespace
+      // can drop it for the allowed cases (tab and NBSP are stripped as
+      // boundary whitespace); for the rejected control bytes, the
+      // strip leaves them in place and containsControlByte rejects the
+      // whole value.
+      const char = String.fromCharCode(codePoint);
+      const path = writeLedgerWithFrontmatter([
+        `runbook_version: "${char}2"`,
+      ]);
+      const snapshot = withFailMode("throw", () =>
+        readLedgerSnapshot(path),
+      );
+      expect(snapshot.runbook_version_skew).toBe(expected);
+    },
+  );
+});
+
+// ---------------- U6 sweep-2: walker recovery + fence-edge cases ----------------
+
+describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
+  function ledgerWithRawNotes(notesBody: string[]): string {
+    return writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Notes",
+        "",
+        ...notesBody,
+      ].join("\n"),
+    );
+  }
+
+  test("rejected first row + valid second row → second row wins (sweep-2 recovery branch)", () => {
+    const ledgerPath = ledgerWithRawNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      "  operator_decision: ",
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "first-row-missing-operator"',
+      "```",
+      "",
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+      '  timestamp: "2026-05-22T20:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "recovered"',
+      "```",
+      "",
+    ]);
+    const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+    expect(evidence?.accepted_risk).toBe("recovered");
+  });
+
+  test("evidence fence with no closing fence (EOF) → null without hang", () => {
+    const ledgerPath = ledgerWithRawNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "x"',
+      // intentionally no closing ``` fence
+    ]);
+    const startedAt = Date.now();
+    const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(evidence).toBe(null);
+  });
+
+  test("template-documented blank line between marker and yaml fence is honored", () => {
+    // The template at issue-N-ledger.template.md explicitly says blank
+    // lines are allowed between the marker comment and the opening
+    // yaml fence. This regression test pins the walker against the
+    // sweep-2 finding where the immediate-previous-line check would
+    // have silently dropped the legitimate row.
+    const ledgerPath = ledgerWithRawNotes([
+      "<!-- runbook-version-skew-continuation -->",
+      "",
+      "",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      "  ledger_version: null",
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "blank-line-tolerated"',
+      "```",
+      "",
+    ]);
+    const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+    expect(evidence?.accepted_risk).toBe("blank-line-tolerated");
   });
 });

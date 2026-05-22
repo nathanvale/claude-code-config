@@ -55,6 +55,7 @@ import {
   LEGACY_EXECUTION_MODE_HINTS,
   MAX_BUILDER_ATTEMPTS,
   NEW_FILE_PATCH_EXCEPTION_PREFIX,
+  RUNBOOK_VERSION,
   STAGE_3_BATCH_ID,
   TERMINAL_BATCH_STATUSES,
 } from "./contract";
@@ -963,9 +964,24 @@ export type LedgerSnapshot = {
    */
   frontmatter_status: "in-progress" | "blocked" | "shipped" | null;
   /**
-   * U6 `runbook_version` skew classification. `null` until U6 lands the
-   * field on the ledger template; for now the CLI reports null and the
-   * router treats it as `matched` until U6.
+   * U6 R11: verbatim string value from the ledger frontmatter
+   * `runbook_version` field. `null` when the frontmatter field is missing
+   * or empty. No coercion — strings only. Compared against
+   * `RUNBOOK_VERSION` from `lib/contract.ts` to derive
+   * `runbook_version_skew`. Always `null` for the no-ledger case.
+   */
+  runbook_version: string | null;
+  /**
+   * U6 runbook-version skew classification. Always `null` for the
+   * no-ledger case. Otherwise exactly one of:
+   *
+   * - `"matched"` — frontmatter value equals `RUNBOOK_VERSION`.
+   * - `"missing"` — frontmatter has no `runbook_version` field.
+   * - `"mismatched"` — frontmatter has a value but it does NOT equal
+   *   `RUNBOOK_VERSION`.
+   * - `"continuation-evidence-present"` — skew detected (missing or
+   *   mismatched) BUT a complete continuation evidence row exists in
+   *   `## Notes` for the current runtime version.
    */
   runbook_version_skew:
     | "matched"
@@ -1004,6 +1020,7 @@ export function readLedgerSnapshot(ledgerPath: string): LedgerSnapshot {
       final_reviewed_at: null,
       pr_url: null,
       frontmatter_status: null,
+      runbook_version: null,
       runbook_version_skew: null,
     };
   }
@@ -1045,6 +1062,12 @@ export function readLedgerSnapshot(ledgerPath: string): LedgerSnapshot {
     }
   }
 
+  const runbookVersion = readFrontmatterRunbookVersion(frontmatter);
+  const runbookVersionSkew = classifyRunbookVersionSkew(
+    runbookVersion,
+    ledgerPath,
+  );
+
   return {
     ledger_path: ledgerPath,
     ledger_exists: true,
@@ -1059,7 +1082,368 @@ export function readLedgerSnapshot(ledgerPath: string): LedgerSnapshot {
     final_reviewed_at: finalReviewedAt,
     pr_url: prUrl,
     frontmatter_status: frontmatterStatus,
-    runbook_version_skew: null, // U6 will populate this when runbook_version lands
+    runbook_version: runbookVersion,
+    runbook_version_skew: runbookVersionSkew,
+  };
+}
+
+/**
+ * Verbatim string value from the ledger frontmatter `runbook_version`
+ * field. Returns `null` when the field is missing, empty, or any
+ * non-string value (per U6 R11: no coercion, strings only).
+ *
+ * Security hardening (F-U6-SEC-013, F-U6-SEC-005): the trim strips
+ * ASCII whitespace AND the most common Unicode whitespace characters
+ * (NBSP, ZWSP, BOM) so an attacker cannot construct a runbook_version
+ * that prints identically to `RUNBOOK_VERSION` but compares unequal.
+ * Values that contain a C0/C1 control byte after trimming are
+ * rejected (returns null) so terminal-escape banners cannot ride a
+ * field into a CLI envelope.
+ */
+function readFrontmatterRunbookVersion(
+  frontmatter: Record<string, string | null>,
+): string | null {
+  if (!hasKey(frontmatter, "runbook_version")) return null;
+  const value = frontmatter.runbook_version;
+  if (value === null || value === undefined) return null;
+  const text = stripBoundaryWhitespace(String(value));
+  if (text.length === 0) return null;
+  if (containsControlByte(text)) return null;
+  return text;
+}
+
+/**
+ * Trim ASCII whitespace plus the three Unicode whitespace characters
+ * most commonly used to construct visually-identical-but-not-equal
+ * strings: NBSP (U+00A0), ZWSP (U+200B), BOM / ZWNBSP (U+FEFF).
+ *
+ * Intentionally narrow — we are NOT normalising the entire Unicode
+ * whitespace class (would risk silently collapsing operator-intent
+ * differences in non-ASCII fields like `operator_decision`). Only
+ * `runbook_version` and similar machine-compared identifiers route
+ * through here.
+ */
+function stripBoundaryWhitespace(value: string): string {
+  return value.replace(/^[\s ​﻿]+|[\s ​﻿]+$/g, "");
+}
+
+/**
+ * Return true if `value` contains any C0 (0x00-0x1F except tab) or C1
+ * (0x7F-0x9F) control byte. Tab is allowed because legitimate YAML
+ * values may include it; everything else is a smell that points at
+ * either a corrupted ledger or an injection attempt.
+ *
+ * Implemented with a code-point scan rather than a regex so the source
+ * does not embed literal control bytes (which would otherwise trip
+ * biome's `noControlCharactersInRegex` lint).
+ */
+function containsControlByte(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x09) continue; // tab is allowed
+    if (code <= 0x1f) return true;
+    if (code >= 0x7f && code <= 0x9f) return true;
+  }
+  return false;
+}
+
+/**
+ * Four-state skew classifier per U6 contract:
+ *
+ * - `matched` — frontmatter value equals `RUNBOOK_VERSION`.
+ * - `missing` — frontmatter has no `runbook_version` field.
+ * - `mismatched` — frontmatter has a value but it does NOT equal
+ *   `RUNBOOK_VERSION`.
+ * - `continuation-evidence-present` — skew detected (missing or
+ *   mismatched) BUT a complete continuation evidence row exists in
+ *   `## Notes` for the current runtime version.
+ *
+ * Comparison is string-equality only; no semver, no integer coercion
+ * (U6 R11). Continuation evidence must use the runtime version
+ * `RUNBOOK_VERSION` — evidence for any other runtime version is ignored
+ * (otherwise an operator could carry forward a v0→v2 escape through a
+ * later v2→v3 cutover).
+ */
+function classifyRunbookVersionSkew(
+  ledgerVersion: string | null,
+  ledgerPath: string,
+):
+  | "matched"
+  | "missing"
+  | "mismatched"
+  | "continuation-evidence-present" {
+  if (ledgerVersion === RUNBOOK_VERSION) return "matched";
+
+  const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
+  if (
+    evidence !== null &&
+    evidence.ledger_version === ledgerVersion &&
+    evidence.runtime_version === RUNBOOK_VERSION
+  ) {
+    return "continuation-evidence-present";
+  }
+
+  if (ledgerVersion === null) return "missing";
+  return "mismatched";
+}
+
+/**
+ * The seven required fields of a continuation evidence row per U6 R13.
+ * Every field MUST be present; a missing field disqualifies the evidence
+ * and the snapshot falls back to the underlying `missing` or
+ * `mismatched` skew classification.
+ *
+ * `ledger_version` carries the verbatim frontmatter string or `null` when
+ * the row documents a missing-version ledger; every other field is a
+ * non-empty string.
+ */
+export interface RunbookVersionContinuationEvidence {
+  ledger_version: string | null;
+  runtime_version: string;
+  operator_decision: string;
+  timestamp: string;
+  route_context: string;
+  reference_context: string;
+  accepted_risk: string;
+}
+
+/**
+ * Parse the `## Notes` section for a single continuation-evidence row.
+ *
+ * Looks for an HTML-comment-prefixed fenced YAML block of the form:
+ *
+ * ```yaml
+ * runbook_version_skew_continuation:
+ *   ledger_version: "<value | null>"
+ *   runtime_version: "<value>"
+ *   operator_decision: "<actor>"
+ *   timestamp: "<ISO 8601>"
+ *   route_context: "<route id at the time of decision>"
+ *   reference_context: "<reference file the operator consulted>"
+ *   accepted_risk: "<one-line reason>"
+ * ```
+ *
+ * Returns `null` when:
+ *
+ * - the ledger has no `## Notes` section, or
+ * - no `<!-- runbook-version-skew-continuation -->` marker precedes any
+ *   fenced YAML block in `## Notes`, or
+ * - the YAML block is malformed (not a single
+ *   `runbook_version_skew_continuation:` mapping), or
+ * - any required field is missing or empty (partial evidence is
+ *   rejected per U6 R13).
+ *
+ * The first complete evidence row wins; later rows are ignored so an
+ * append-only Notes log cannot accumulate stale evidence that silently
+ * overrides a current row.
+ */
+export function parseRunbookVersionContinuationEvidence(
+  ledgerPath: string,
+): RunbookVersionContinuationEvidence | null {
+  let src: string;
+  try {
+    src = readFileSync(ledgerPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  // U6 security hardening: the section heading must be column-zero
+  // anchored so a blockquoted or fenced "## Notes" line cannot fabricate
+  // a Notes scope (F-U6-SEC-001).
+  const notesSection = src.match(
+    /(?:^|\n)##\s+Notes\s*\n([\s\S]*?)(?=\n##\s|$)/,
+  );
+  if (!notesSection) return null;
+  const notesBody = notesSection[1];
+
+  // Walk the Notes body line by line. The marker line and the opening
+  // ```yaml fence must both live OUTSIDE any other column-zero fenced
+  // region (F-U6-SEC-002): an attacker who wraps the marker + yaml
+  // body inside a 4-backtick text-fenced display block must not get
+  // their evidence honored as if it were operator-authored. The marker
+  // and fence must both be column-zero.
+  const lines = notesBody.split("\n");
+  let openFence: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fenceMatch = line.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const fence = fenceMatch[1];
+      if (openFence === null) {
+        // Look backward past blank lines for the legitimate marker →
+        // yaml pair. The template at `issue-N-ledger.template.md`
+        // explicitly permits blank lines between the marker comment
+        // and the opening yaml fence; require column-zero marker and
+        // column-zero fence but otherwise tolerate the blank-line
+        // gap. If the immediate-previous-non-blank line is the marker
+        // (and we are not currently inside another fenced region),
+        // treat this fence as the evidence opener.
+        const previousMarkerFound = findPrecedingMarker(lines, i);
+        if (fence === "```" && /^```yaml/.test(line) && previousMarkerFound) {
+          const evidence = consumeEvidenceFence(lines, i);
+          if (evidence !== null) return evidence;
+          // Parser rejected this row — keep scanning subsequent lines
+          // for the next candidate.
+          // Skip past the closing fence we already located, if any.
+          const closeIndex = findClosingFenceIndex(lines, i + 1, fence);
+          i = closeIndex === -1 ? lines.length : closeIndex;
+          continue;
+        }
+        openFence = fence;
+        continue;
+      }
+      if (fence[0] === openFence[0] && fence.length >= openFence.length) {
+        openFence = null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Walk backward from `index - 1`, skipping blank lines (including
+ * lines that contain only ASCII whitespace), and return true iff the
+ * first non-blank predecessor is the marker comment. Returns false
+ * when no predecessor exists or when the predecessor is anything other
+ * than the literal `<!-- runbook-version-skew-continuation -->`
+ * marker. The marker must live at column zero.
+ */
+function findPrecedingMarker(
+  lines: readonly string[],
+  index: number,
+): boolean {
+  for (let j = index - 1; j >= 0; j--) {
+    const candidate = lines[j];
+    if (candidate.trim().length === 0) continue;
+    return /^<!--\s*runbook-version-skew-continuation\s*-->\s*$/.test(
+      candidate,
+    );
+  }
+  return false;
+}
+
+function findClosingFenceIndex(
+  lines: readonly string[],
+  startIndex: number,
+  openFence: string,
+): number {
+  for (let i = startIndex; i < lines.length; i++) {
+    const m = lines[i].match(/^(`{3,}|~{3,})/);
+    if (
+      m !== null &&
+      m[1][0] === openFence[0] &&
+      m[1].length >= openFence.length
+    ) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function consumeEvidenceFence(
+  lines: readonly string[],
+  openIndex: number,
+): RunbookVersionContinuationEvidence | null {
+  const closeIndex = findClosingFenceIndex(lines, openIndex + 1, "```");
+  if (closeIndex === -1) return null;
+  const body = lines.slice(openIndex + 1, closeIndex).join("\n");
+  return parseContinuationEvidenceBlock(body);
+}
+
+function parseContinuationEvidenceBlock(
+  block: string,
+): RunbookVersionContinuationEvidence | null {
+  const lines = block.split("\n");
+  let sawHeader = false;
+  const fields = new Map<string, string | null>();
+  for (const raw of lines) {
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (line.trim().length === 0) continue;
+    if (!sawHeader) {
+      if (!/^runbook_version_skew_continuation:\s*$/.test(line.trim())) {
+        return null;
+      }
+      sawHeader = true;
+      continue;
+    }
+    const scalar = line.match(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (!scalar) return null;
+    const key = scalar[1];
+    if (fields.has(key)) return null;
+    const rawValue = scalar[2].trim();
+    if (rawValue.length === 0) return null;
+    if (rawValue === "null" || rawValue === "~") {
+      fields.set(key, null);
+      continue;
+    }
+    let parsed: string | null;
+    try {
+      parsed = withFailMode("throw", () => parseScalarValue(rawValue));
+    } catch {
+      return null;
+    }
+    if (parsed === null || parsed.length === 0) return null;
+    // Security hardening (F-U6-SEC-005): reject any evidence field
+    // value that contains a control byte. Operator-authored values are
+    // expected to be plain text; control bytes are either corruption
+    // or terminal-escape injection.
+    if (containsControlByte(parsed)) return null;
+    fields.set(key, parsed);
+  }
+  if (!sawHeader) return null;
+
+  const required = [
+    "ledger_version",
+    "runtime_version",
+    "operator_decision",
+    "timestamp",
+    "route_context",
+    "reference_context",
+    "accepted_risk",
+  ] as const;
+  for (const key of required) {
+    if (!fields.has(key)) return null;
+  }
+  for (const key of fields.keys()) {
+    if (!required.includes(key as (typeof required)[number])) return null;
+  }
+
+  // Both `ledger_version` and `runtime_version` are compared
+  // verbatim against frontmatter / `RUNBOOK_VERSION`. The frontmatter
+  // values flow through `stripBoundaryWhitespace`, so for symmetry we
+  // strip the same boundary characters on the evidence side. Without
+  // this, a Unicode-whitespace-padded evidence value would fail to
+  // match a legitimately-padded ledger version (F-U6-SEC-013).
+  const ledgerVersionRaw = fields.get("ledger_version") ?? null;
+  const ledgerVersionField =
+    ledgerVersionRaw === null ? null : stripBoundaryWhitespace(ledgerVersionRaw);
+  const runtimeVersionRaw = fields.get("runtime_version");
+  if (typeof runtimeVersionRaw !== "string") return null;
+  const runtimeVersionField = stripBoundaryWhitespace(runtimeVersionRaw);
+  if (runtimeVersionField.length === 0) return null;
+  const operatorDecision = fields.get("operator_decision");
+  const timestamp = fields.get("timestamp");
+  const routeContext = fields.get("route_context");
+  const referenceContext = fields.get("reference_context");
+  const acceptedRisk = fields.get("accepted_risk");
+  if (
+    typeof operatorDecision !== "string" ||
+    typeof timestamp !== "string" ||
+    typeof routeContext !== "string" ||
+    typeof referenceContext !== "string" ||
+    typeof acceptedRisk !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    ledger_version: ledgerVersionField,
+    runtime_version: runtimeVersionField,
+    operator_decision: operatorDecision,
+    timestamp,
+    route_context: routeContext,
+    reference_context: referenceContext,
+    accepted_risk: acceptedRisk,
   };
 }
 

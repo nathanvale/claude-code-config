@@ -444,6 +444,92 @@ describe("blockingGatesFor (F006 fix: typed discriminated union)", () => {
       value: "blocked",
     });
   });
+
+  test("U6: missing runbook_version_skew emits frontmatter.runbook_version stop-required field gate", () => {
+    const gates = blockingGatesFor({
+      route: "blocked-runbook-version-skew",
+      confirmation_state: {
+        acceptance_criteria: "confirmed",
+        batch_contract: "confirmed",
+        digests: "confirmed",
+      },
+      frontmatter_status: "in-progress",
+      runbook_version_skew: "missing",
+    });
+    expect(gates).toContainEqual({
+      kind: "field",
+      field: "frontmatter.runbook_version",
+      value: "missing",
+    });
+    expect(gates).toContainEqual({
+      kind: "route_id",
+      value: "blocked-runbook-version-skew",
+    });
+  });
+
+  test("U6: mismatched runbook_version_skew emits frontmatter.runbook_version stop-required field gate", () => {
+    const gates = blockingGatesFor({
+      route: "blocked-runbook-version-skew",
+      confirmation_state: {
+        acceptance_criteria: "confirmed",
+        batch_contract: "confirmed",
+        digests: "confirmed",
+      },
+      frontmatter_status: "in-progress",
+      runbook_version_skew: "mismatched",
+    });
+    expect(gates).toContainEqual({
+      kind: "field",
+      field: "frontmatter.runbook_version",
+      value: "mismatched",
+    });
+  });
+
+  test("U6: continuation-evidence-present does NOT emit the runbook_version stop-required gate", () => {
+    const gates = blockingGatesFor({
+      route: "batch-loop",
+      confirmation_state: {
+        acceptance_criteria: "confirmed",
+        batch_contract: "confirmed",
+        digests: "confirmed",
+      },
+      frontmatter_status: "in-progress",
+      runbook_version_skew: "continuation-evidence-present",
+    });
+    for (const gate of gates) {
+      if (gate.kind === "field") {
+        expect(gate.field).not.toBe("frontmatter.runbook_version");
+      }
+    }
+  });
+
+  test("U6: matched runbook_version_skew does NOT emit the stop-required gate", () => {
+    const gates = blockingGatesFor({
+      route: "batch-loop",
+      confirmation_state: {
+        acceptance_criteria: "confirmed",
+        batch_contract: "confirmed",
+        digests: "confirmed",
+      },
+      frontmatter_status: "in-progress",
+      runbook_version_skew: "matched",
+    });
+    expect(gates).toEqual([]);
+  });
+
+  test("U6: null runbook_version_skew (no-ledger case) does NOT emit the stop-required gate", () => {
+    const gates = blockingGatesFor({
+      route: "no-ledger",
+      confirmation_state: {
+        acceptance_criteria: "pending",
+        batch_contract: "pending",
+        digests: "pending",
+      },
+      frontmatter_status: null,
+      runbook_version_skew: null,
+    });
+    expect(gates).toEqual([]);
+  });
 });
 
 describe("buildDiagnoseDrift (F037 hoist: dedicated unit test)", () => {
@@ -494,14 +580,259 @@ describe("buildDiagnoseDrift (F037 hoist: dedicated unit test)", () => {
   });
 });
 
-describe("installedArtifactPresence (F020 fix: hoisted out of cli.ts)", () => {
-  test("returns the static U4 baseline: every artifact present", () => {
-    expect(installedArtifactPresence()).toEqual({
-      cli: true,
-      lib: true,
+describe("installedArtifactPresence (U6: real recursive walk)", () => {
+  test("default invocation against the live v2 install reports every root present", () => {
+    const presence = installedArtifactPresence();
+    expect(presence).toEqual({
       references: true,
       templates: true,
+      cli_ts: true,
+      lib_dir: true,
+      all_present: true,
+      missing: [],
     });
+  });
+
+  test("non-existent install path collapses every root to missing", () => {
+    const presence = installedArtifactPresence(
+      "/tmp/does-not-exist-u6-install-root",
+    );
+    expect(presence.all_present).toBe(false);
+    expect(presence.references).toBe(false);
+    expect(presence.templates).toBe(false);
+    expect(presence.cli_ts).toBe(false);
+    expect(presence.lib_dir).toBe(false);
+    expect([...presence.missing].sort()).toEqual(
+      ["cli_ts", "lib_dir", "references", "templates"],
+    );
+  });
+
+  test("partial install reports only the missing roots", () => {
+    // Use the v2 root for references/templates/lib_dir, but resolve
+    // cli_ts off a sibling directory that doesn't contain cli.ts.
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-"));
+    try {
+      mkdirSync(join(fakeRoot, "references"));
+      writeFileSync(join(fakeRoot, "references", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      // No cli.ts on purpose.
+      const presence = installedArtifactPresence(fakeRoot);
+      expect(presence.references).toBe(true);
+      expect(presence.templates).toBe(true);
+      expect(presence.lib_dir).toBe(true);
+      expect(presence.cli_ts).toBe(false);
+      expect(presence.all_present).toBe(false);
+      expect(presence.missing).toEqual(["cli_ts"]);
+      // Loop-safety smoke: a symlink loop inside references/ does not
+      // hang or escape the walk.
+      symlinkSync(
+        join(fakeRoot, "references"),
+        join(fakeRoot, "references", "loop"),
+      );
+      const presence2 = installedArtifactPresence(fakeRoot);
+      expect(presence2.references).toBe(true);
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("empty subdirectory is reported as missing (recursive walk requires at least one file)", () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-empty-"));
+    try {
+      // references/ exists but is empty.
+      mkdirSync(join(fakeRoot, "references"));
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      writeFileSync(join(fakeRoot, "cli.ts"), "// noop\n");
+      const presence = installedArtifactPresence(fakeRoot);
+      expect(presence.references).toBe(false);
+      expect(presence.missing).toEqual(["references"]);
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("only-empty-nested-directory subtree is missing (no file at any depth)", () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-nested-"));
+    try {
+      mkdirSync(join(fakeRoot, "references", "deep", "deeper"), {
+        recursive: true,
+      });
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      writeFileSync(join(fakeRoot, "cli.ts"), "// noop\n");
+      const presence = installedArtifactPresence(fakeRoot);
+      expect(presence.references).toBe(false);
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("does not leak any per-file enumeration in the response shape (U6 MUST-NOT)", () => {
+    const presence = installedArtifactPresence();
+    const keys = Object.keys(presence).sort();
+    expect(keys).toEqual(
+      [
+        "all_present",
+        "cli_ts",
+        "lib_dir",
+        "missing",
+        "references",
+        "templates",
+      ].sort(),
+    );
+    // No path-shaped strings anywhere — `missing` is a fixed-vocabulary
+    // tag set, not a file list.
+    for (const tag of presence.missing) {
+      expect(["references", "templates", "cli_ts", "lib_dir"]).toContain(tag);
+    }
+  });
+
+  test("regular file at a directory-root path reports that root missing", () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-fileat-"));
+    try {
+      // references is a regular file, not a directory.
+      writeFileSync(join(fakeRoot, "references"), "oops\n");
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      writeFileSync(join(fakeRoot, "cli.ts"), "// noop\n");
+      const presence = installedArtifactPresence(fakeRoot);
+      expect(presence.references).toBe(false);
+      expect(presence.missing).toContain("references");
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("directory at the cli_ts path reports cli_ts missing", () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-dirat-"));
+    try {
+      mkdirSync(join(fakeRoot, "references"));
+      writeFileSync(join(fakeRoot, "references", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      // cli.ts is a directory, not a file.
+      mkdirSync(join(fakeRoot, "cli.ts"));
+      const presence = installedArtifactPresence(fakeRoot);
+      expect(presence.cli_ts).toBe(false);
+      expect(presence.missing).toContain("cli_ts");
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("directory containing only a symlink-to-file reports that root present", () => {
+    // Regression for the correctness sweep-1 finding: previously a
+    // root containing only a symlink pointing at a regular file was
+    // misclassified as missing because walkHasFile expected a
+    // directory after dereferencing.
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-sym2file-"));
+    try {
+      writeFileSync(join(fakeRoot, "real.md"), "hello\n");
+      mkdirSync(join(fakeRoot, "references"));
+      symlinkSync(
+        join(fakeRoot, "real.md"),
+        join(fakeRoot, "references", "linked.md"),
+      );
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      writeFileSync(join(fakeRoot, "cli.ts"), "// noop\n");
+      const presence = installedArtifactPresence(fakeRoot);
+      expect(presence.references).toBe(true);
+      expect(presence.all_present).toBe(true);
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("broken symlink does not poison the walk", () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-broken-"));
+    try {
+      mkdirSync(join(fakeRoot, "references"));
+      // Symlink to a target that does not exist.
+      symlinkSync(
+        join(fakeRoot, "nope.md"),
+        join(fakeRoot, "references", "broken.md"),
+      );
+      writeFileSync(join(fakeRoot, "references", "real.md"), "x\n");
+      mkdirSync(join(fakeRoot, "templates"));
+      writeFileSync(join(fakeRoot, "templates", "stub.md"), "x\n");
+      mkdirSync(join(fakeRoot, "lib"));
+      writeFileSync(join(fakeRoot, "lib", "stub.ts"), "export {};\n");
+      writeFileSync(join(fakeRoot, "cli.ts"), "// noop\n");
+      const presence = installedArtifactPresence(fakeRoot);
+      // Broken symlink is skipped; real.md still counts.
+      expect(presence.references).toBe(true);
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
+  });
+
+  test("isolated symlink loop returns bounded result without hang", () => {
+    // Build a root whose references/ subtree contains nothing but a
+    // self-loop. The walk must terminate (no hang, no exception) and
+    // report references missing because no regular file exists in the
+    // subtree.
+    const { mkdtempSync, rmSync, mkdirSync, symlinkSync } =
+      require("node:fs") as typeof import("node:fs");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const { join } = require("node:path") as typeof import("node:path");
+    const fakeRoot = mkdtempSync(join(tmpdir(), "u6-presence-loop-"));
+    try {
+      mkdirSync(join(fakeRoot, "references"));
+      symlinkSync(
+        join(fakeRoot, "references"),
+        join(fakeRoot, "references", "self"),
+      );
+      const startedAt = Date.now();
+      const presence = installedArtifactPresence(fakeRoot);
+      const elapsedMs = Date.now() - startedAt;
+      expect(elapsedMs).toBeLessThan(1000);
+      expect(presence.references).toBe(false);
+    } finally {
+      rmSync(fakeRoot, { force: true, recursive: true });
+    }
   });
 });
 

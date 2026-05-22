@@ -241,3 +241,16 @@ describe("contract: file-name special cases", () => {
     );
   });
 });
+
+import { RUNBOOK_VERSION } from "./contract";
+
+describe("contract: U6 runbook version", () => {
+  test("RUNBOOK_VERSION is the literal string '2'", () => {
+    // The value is intentionally a plain string so future major versions
+    // (3, 4...) stay comparable without semver tooling. A regression
+    // bumping this silently is a workflow-contract change that requires
+    // explicit operator continuation evidence per U6.
+    expect(RUNBOOK_VERSION).toBe("2");
+    expect(typeof RUNBOOK_VERSION).toBe("string");
+  });
+});

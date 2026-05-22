@@ -92,6 +92,43 @@ that points back to the rule body above. The v2
 [findings-and-validators.md](findings-and-validators.md) glossary keeps the
 same pointer.
 
+## Install-artifact presence (U6)
+
+The v2 helper at `lib/route.ts` exports `installedArtifactPresence()`,
+which walks the v2 install root and returns a structured map of artifact
+roots to boolean presence:
+
+```ts
+{
+  references: boolean;   // references/ exists and contains at least one file
+  templates: boolean;    // templates/ exists and contains at least one file
+  cli_ts: boolean;       // cli.ts exists at the v2 root
+  lib_dir: boolean;      // lib/ exists and contains at least one file
+  all_present: boolean;  // true iff every root above is present
+  missing: ("references" | "templates" | "cli_ts" | "lib_dir")[];
+}
+```
+
+The walk follows symlinks (the install topology is symlink-only per the
+`install.sh` contract; the v2 install lives at
+`~/.claude/runbooks/issue-to-pr-v2/` and dereferences through
+`~/.claude/runbooks → ${REPO}/runbooks`). A visited-realpath set bounds
+the walk against symlink loops, and a depth cap is the belt-and-braces
+guard.
+
+The structured map is intentionally bounded. It does NOT enumerate
+individual files (avoids leaking unrelated repo contents), does NOT
+expose symlink targets, inode numbers, or mtimes (those are
+non-determinism vectors), and does NOT report paths outside the v2
+install root. `cli.ts state` and `cli.ts diagnose` surface this map
+verbatim; the hot router (U7) treats `all_present: false` as a
+stop-required signal alongside the runbook-version skew gate.
+
+A genuinely missing root (deleted from disk, never installed, empty
+subdirectory) reports `false`. The orchestrator is expected to
+re-run `install.sh` and re-invoke the CLI rather than dispatch into a
+broken install.
+
 ## See also
 
 - [stage-4-batch-loop.md](stage-4-batch-loop.md) for the Stage 4 batch-loop
@@ -101,3 +138,6 @@ same pointer.
   contract.
 - [findings-and-validators.md](findings-and-validators.md) for the glossary
   pointer this rule body anchors.
+- [ledger-and-helper.md](ledger-and-helper.md) for the runbook-version skew
+  classifier that pairs with install-artifact presence in the U7 stop-required
+  routing.

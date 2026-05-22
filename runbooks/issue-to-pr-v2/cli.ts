@@ -31,6 +31,7 @@ import {
   FINAL_VERDICTS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  RUNBOOK_VERSION_SKEW_STATES,
   TERMINAL_BATCH_STATUSES,
 } from "./lib/contract";
 import {
@@ -67,6 +68,7 @@ import {
   renderValidatorPacket,
 } from "./lib/packets";
 import {
+  BLOCKING_GATE_FIELD_NAMES,
   blockingGatesFor,
   buildDiagnoseDrift,
   classifyRoute,
@@ -98,6 +100,17 @@ const CONTRACT_SLICES = [
   // packet vocabulary lives alongside the other agent-discoverable
   // enums (route_ids, agent_hint_actions, etc.).
   "packet_roles",
+  // U6 sweep-1 api-contract finding: surface the four-state skew
+  // enum alongside confirmation_states so agents can enumerate it
+  // without source-reading. `ordering: catalog` because the order
+  // encodes precedence (matched is the success state; the failure
+  // states fire the stop-required gate).
+  "runbook_version_skew_states",
+  // U6 sweep-2 api-contract finding: surface the fixed set of
+  // BlockingGate `field` identifiers so an agent can enumerate them
+  // without grepping route.ts. `ordering: catalog` because the order
+  // mirrors the precedence walk inside `blockingGatesFor`.
+  "blocking_gate_field_names",
 ] as const;
 type ContractSlice = (typeof CONTRACT_SLICES)[number];
 
@@ -185,6 +198,14 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   },
   packet_roles: {
     values: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
+    ordering: "catalog",
+  },
+  runbook_version_skew_states: {
+    values: [...RUNBOOK_VERSION_SKEW_STATES],
+    ordering: "catalog",
+  },
+  blocking_gate_field_names: {
+    values: [...BLOCKING_GATE_FIELD_NAMES],
     ordering: "catalog",
   },
 };
@@ -346,6 +367,56 @@ const HELP_DATA = {
       "Deterministically rendered from packet data; suitable for direct dispatch to a role agent prompt. `packet` is the canonical machine-readable form.",
     dispatch_evidence:
       "{ timestamp: ISO-8601, role: PacketRole, target_id: string, loaded_references: string[], loaded_templates: string[], cli_route_id: string }; defined in U5, persisted by U6.",
+  },
+  // U6 sweep-1 api-contract finding: surface the state + diagnose
+  // response shapes alongside packet_response_shape so an agent can
+  // enumerate every field without reading source. Lists the U6 fields
+  // (runbook_version, runbook_version_skew, the new
+  // installed_artifact_presence shape) and the surfaces they appear
+  // on so a hot router can dispatch from --help alone.
+  state_response_shape: {
+    ledger_path: "string",
+    ledger_exists: "boolean",
+    confirmation_state:
+      "{ acceptance_criteria, batch_contract, digests } each one of confirmation_states",
+    digest_drift: "{ acceptance_criteria, batch_contract, digests, any } booleans",
+    version_skew:
+      "back-compat string. One of runbook_version_skew_states; for the no-ledger case the value defaults to 'matched' so consumers that do not handle null can route safely. Prefer the unambiguous `runbook_version_skew` below.",
+    runbook_version:
+      "verbatim ledger frontmatter runbook_version string, or null when missing / no-ledger.",
+    runbook_version_skew:
+      "one of runbook_version_skew_states, or null for the no-ledger case. Source of truth for the skew classification.",
+    route_id: "one of route_ids",
+    required_reference_ids: "string[]",
+    blocking_gates:
+      "BlockingGate[]: discriminated union of { kind: 'route_id'; value: one of route_ids (only the blocked-* members) } or { kind: 'field'; field: one of blocking_gate_field_names; value: string }. U6 introduces { kind: 'field'; field: 'frontmatter.runbook_version'; value: 'missing' | 'mismatched' } for the stop-required version-skew gate.",
+    installed_artifact_presence:
+      "{ references, templates, cli_ts, lib_dir, all_present } booleans + missing: ('references' | 'templates' | 'cli_ts' | 'lib_dir')[]",
+    plan_path: "string or null",
+    has_batches: "boolean",
+    all_batches_terminal: "boolean",
+    final_reviewed_at: "ISO 8601 string or null",
+    pr_url: "string or null",
+    frontmatter_status:
+      "one of 'in-progress' | 'blocked' | 'shipped', or null when frontmatter is absent / unrecognised",
+  },
+  diagnose_response_shape: {
+    ledger_path: "string",
+    ledger_exists: "boolean",
+    inferred_route_id: "one of route_ids",
+    expected_reference_ids: "string[]",
+    installed_artifact_presence:
+      "same shape as state_response_shape.installed_artifact_presence",
+    drift:
+      "{ digest_drift: same shape as state_response_shape.digest_drift, findings_table_drift: null (forward-compat slot) }",
+    version_skew:
+      "back-compat string; same semantics as state_response_shape.version_skew",
+    runbook_version:
+      "same semantics as state_response_shape.runbook_version",
+    runbook_version_skew:
+      "same semantics as state_response_shape.runbook_version_skew",
+    blocking_gates:
+      "same shape as state_response_shape.blocking_gates",
   },
   contract_slices: CONTRACT_SLICES,
   // F025 fix: document the `ordering` discriminator on contract
@@ -592,14 +663,23 @@ function runStateCommand(ctx: CommandContext): RunResult {
           ledger_exists: snapshot.ledger_exists,
           confirmation_state: snapshot.confirmation_state,
           digest_drift: computeDigestDrift(snapshot.confirmation_state),
+          // U6 additive surface — preserve the U4-vintage `version_skew`
+          // string for back-compat (defaults to "matched" when the
+          // snapshot has no opinion) and add `runbook_version` plus the
+          // unambiguous `runbook_version_skew` (which can be null in
+          // the no-ledger case).
           version_skew: snapshot.runbook_version_skew ?? "matched",
+          runbook_version: snapshot.runbook_version,
+          runbook_version_skew: snapshot.runbook_version_skew,
           route_id: route,
           required_reference_ids: requiredReferenceIdsFor(route),
           blocking_gates: blockingGatesFor({
             route,
             confirmation_state: snapshot.confirmation_state,
             frontmatter_status: snapshot.frontmatter_status,
+            runbook_version_skew: snapshot.runbook_version_skew,
           }),
+          installed_artifact_presence: installedArtifactPresence(),
           plan_path: snapshot.plan_path,
           has_batches: snapshot.has_batches,
           all_batches_terminal: snapshot.all_batches_terminal,
@@ -724,7 +804,18 @@ function runDiagnoseCommand(ctx: CommandContext): RunResult {
           expected_reference_ids: requiredReferenceIdsFor(route),
           installed_artifact_presence: installedArtifactPresence(),
           drift: buildDiagnoseDrift(snapshot),
+          // U6 additive surface — same `version_skew` back-compat string
+          // plus the verbatim `runbook_version` and unambiguous
+          // `runbook_version_skew` enums.
           version_skew: snapshot.runbook_version_skew ?? "matched",
+          runbook_version: snapshot.runbook_version,
+          runbook_version_skew: snapshot.runbook_version_skew,
+          blocking_gates: blockingGatesFor({
+            route,
+            confirmation_state: snapshot.confirmation_state,
+            frontmatter_status: snapshot.frontmatter_status,
+            runbook_version_skew: snapshot.runbook_version_skew,
+          }),
         },
       }),
     );

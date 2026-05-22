@@ -95,6 +95,7 @@ function minimalConfirmedLedger(extra: { final_reviewed_at?: string; pr_url?: st
     "ac_confirmation_status: confirmed",
     "batch_contract_confirmation_status: confirmed",
     "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+    'runbook_version: "2"',
   ];
   if (extra.final_reviewed_at) {
     frontmatterLines.push(`final_reviewed_at: ${extra.final_reviewed_at}`);
@@ -354,19 +355,28 @@ describe("AC4: diagnose reports the documented diagnostic shape", () => {
     expect(drift.findings_table_drift).toBe(null);
   });
 
-  test("installed_artifact_presence reports cli, lib, references, templates as the static U4 baseline true (F016 fix: literal value, not just typeof)", () => {
+  test("installed_artifact_presence carries the U6 shape (cli_ts/lib_dir/references/templates + all_present + missing)", () => {
     const { envelope } = invoke([
       "diagnose",
       nonExistentLedgerPath(),
       "--json",
     ]);
     const presence = (envelope.data as {
-      installed_artifact_presence: Record<string, boolean>;
+      installed_artifact_presence: {
+        references: boolean;
+        templates: boolean;
+        cli_ts: boolean;
+        lib_dir: boolean;
+        all_present: boolean;
+        missing: string[];
+      };
     }).installed_artifact_presence;
-    expect(presence.cli).toBe(true);
-    expect(presence.lib).toBe(true);
     expect(presence.references).toBe(true);
     expect(presence.templates).toBe(true);
+    expect(presence.cli_ts).toBe(true);
+    expect(presence.lib_dir).toBe(true);
+    expect(presence.all_present).toBe(true);
+    expect(presence.missing).toEqual([]);
   });
 
   test("diagnose envelope carries the documented version_skew default", () => {
@@ -525,6 +535,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
         "ac_confirmation_status: stale",
         "batch_contract_confirmation_status: confirmed",
         "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        'runbook_version: "2"',
         "---",
         "",
         "# Issue 1",
@@ -556,6 +567,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
         "ac_confirmation_status: confirmed",
         "batch_contract_confirmation_status: stale",
         "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        'runbook_version: "2"',
         "---",
         "",
         "# Issue 1",
@@ -586,6 +598,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
         "status: in-progress",
         "ac_confirmation_status: confirmed",
         "batch_contract_confirmation_status: pending",
+        'runbook_version: "2"',
         "---",
         "",
         "# Issue 1",
@@ -1253,5 +1266,437 @@ describe("packet command (U5)", () => {
     expect(Array.isArray(evidence.loaded_templates)).toBe(true);
     expect(evidence.loaded_templates.length).toBeGreaterThan(0);
     expect(evidence.cli_route_id).toBe("packet.builder");
+  });
+});
+
+// ---------------- U6: runbook_version surface through state + diagnose ----------------
+
+describe("U6: runbook_version surfaced on state command", () => {
+  function ledger(extra: {
+    runbookVersion?: string | null;
+    notesBody?: string[];
+  } = {}): string {
+    const frontmatter = [
+      "---",
+      "issue_number: 1",
+      "status: in-progress",
+      "ac_confirmation_status: confirmed",
+      "batch_contract_confirmation_status: confirmed",
+      "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+    ];
+    if (extra.runbookVersion !== null && extra.runbookVersion !== undefined) {
+      frontmatter.push(`runbook_version: "${extra.runbookVersion}"`);
+    }
+    frontmatter.push("---");
+    return writeLedger(
+      [
+        ...frontmatter,
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        "```yaml",
+        "batches: []",
+        "```",
+        "",
+        ...(extra.notesBody ?? []),
+      ].join("\n"),
+    );
+  }
+
+  test("matched skew surfaces runbook_version + runbook_version_skew on state", () => {
+    const path = ledger({ runbookVersion: "2" });
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as {
+      runbook_version: string | null;
+      runbook_version_skew: string | null;
+      version_skew: string;
+    };
+    expect(data.runbook_version).toBe("2");
+    expect(data.runbook_version_skew).toBe("matched");
+    expect(data.version_skew).toBe("matched");
+  });
+
+  test("missing skew routes to blocked-runbook-version-skew with stop-required gate", () => {
+    const path = ledger({ runbookVersion: null });
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as {
+      route_id: string;
+      runbook_version: string | null;
+      runbook_version_skew: string;
+      blocking_gates: Array<
+        | { kind: "route_id"; value: string }
+        | { kind: "field"; field: string; value: string }
+      >;
+    };
+    expect(data.route_id).toBe("blocked-runbook-version-skew");
+    expect(data.runbook_version).toBe(null);
+    expect(data.runbook_version_skew).toBe("missing");
+    expect(data.blocking_gates).toContainEqual({
+      kind: "field",
+      field: "frontmatter.runbook_version",
+      value: "missing",
+    });
+  });
+
+  test("mismatched skew routes to blocked-runbook-version-skew with stop-required gate", () => {
+    const path = ledger({ runbookVersion: "1" });
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as {
+      route_id: string;
+      runbook_version_skew: string;
+      blocking_gates: Array<
+        | { kind: "route_id"; value: string }
+        | { kind: "field"; field: string; value: string }
+      >;
+    };
+    expect(data.route_id).toBe("blocked-runbook-version-skew");
+    expect(data.runbook_version_skew).toBe("mismatched");
+    expect(data.blocking_gates).toContainEqual({
+      kind: "field",
+      field: "frontmatter.runbook_version",
+      value: "mismatched",
+    });
+  });
+
+  test("continuation-evidence-present clears the stop-required gate and lets routing proceed", () => {
+    const notes = [
+      "## Notes",
+      "",
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      '  ledger_version: "1"',
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      '  reference_context: "references/ledger-and-helper.md"',
+      '  accepted_risk: "v1 ledger resumed"',
+      "```",
+      "",
+    ];
+    const path = ledger({ runbookVersion: "1", notesBody: notes });
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as {
+      route_id: string;
+      runbook_version_skew: string;
+      blocking_gates: Array<{ kind: string; field?: string; value: string }>;
+    };
+    expect(data.runbook_version_skew).toBe("continuation-evidence-present");
+    expect(data.route_id).not.toBe("blocked-runbook-version-skew");
+    for (const gate of data.blocking_gates) {
+      if (gate.kind === "field") {
+        expect(gate.field).not.toBe("frontmatter.runbook_version");
+      }
+    }
+  });
+
+  test("partial continuation evidence (missing field) is rejected; skew stays mismatched", () => {
+    const notes = [
+      "## Notes",
+      "",
+      "<!-- runbook-version-skew-continuation -->",
+      "```yaml",
+      "runbook_version_skew_continuation:",
+      '  ledger_version: "1"',
+      '  runtime_version: "2"',
+      '  operator_decision: "Nathan"',
+      '  timestamp: "2026-05-22T19:00:00+10:00"',
+      '  route_context: "batch-loop"',
+      // reference_context omitted
+      '  accepted_risk: "x"',
+      "```",
+      "",
+    ];
+    const path = ledger({ runbookVersion: "1", notesBody: notes });
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as {
+      route_id: string;
+      runbook_version_skew: string;
+    };
+    expect(data.runbook_version_skew).toBe("mismatched");
+    expect(data.route_id).toBe("blocked-runbook-version-skew");
+  });
+});
+
+describe("U6: runbook_version surfaced on diagnose command", () => {
+  test("diagnose envelope mirrors state on runbook_version + runbook_version_skew", () => {
+    const path = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        'runbook_version: "2"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+      ].join("\n"),
+    );
+    const { envelope } = invoke(["diagnose", path, "--json"]);
+    const data = envelope.data as {
+      runbook_version: string | null;
+      runbook_version_skew: string;
+      installed_artifact_presence: { all_present: boolean };
+      blocking_gates: unknown[];
+    };
+    expect(data.runbook_version).toBe("2");
+    expect(data.runbook_version_skew).toBe("matched");
+    expect(data.installed_artifact_presence.all_present).toBe(true);
+    expect(data.blocking_gates).toEqual([]);
+  });
+
+  test("diagnose envelope surfaces frontmatter.runbook_version stop-required gate on missing skew", () => {
+    const path = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+      ].join("\n"),
+    );
+    const { envelope } = invoke(["diagnose", path, "--json"]);
+    const data = envelope.data as {
+      runbook_version_skew: string;
+      blocking_gates: Array<
+        | { kind: "route_id"; value: string }
+        | { kind: "field"; field: string; value: string }
+      >;
+    };
+    expect(data.runbook_version_skew).toBe("missing");
+    expect(data.blocking_gates).toContainEqual({
+      kind: "field",
+      field: "frontmatter.runbook_version",
+      value: "missing",
+    });
+  });
+});
+
+describe("U6: U4 envelope shape preserved (additive only)", () => {
+  test("envelope still carries the U4 schema_version 1 + run_id/started_at_ms/duration_ms fields", () => {
+    const path = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        'runbook_version: "2"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+      ].join("\n"),
+    );
+    const { envelope } = invoke(["state", path, "--json"]);
+    expect(envelope.status).toBe("ok");
+    expect(envelope.schema_version).toBe("1");
+    expect(typeof envelope.run_id).toBe("string");
+    expect(typeof envelope.started_at_ms).toBe("number");
+    expect(typeof envelope.duration_ms).toBe("number");
+  });
+});
+
+describe("U6: verbatim runbook_version + skew determinism", () => {
+  test("CLI surfaces a non-trivial runbook_version verbatim (no numeric coercion)", () => {
+    const path = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        'runbook_version: "2.0-beta"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+      ].join("\n"),
+    );
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as {
+      runbook_version: string | null;
+      runbook_version_skew: string;
+    };
+    expect(data.runbook_version).toBe("2.0-beta");
+    expect(typeof data.runbook_version).toBe("string");
+    expect(data.runbook_version_skew).toBe("mismatched");
+  });
+
+  test("running state twice on a mismatched + evidence-bearing ledger yields the same skew + gates", () => {
+    const path = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        'runbook_version: "1"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Notes",
+        "",
+        "<!-- runbook-version-skew-continuation -->",
+        "```yaml",
+        "runbook_version_skew_continuation:",
+        '  ledger_version: "1"',
+        '  runtime_version: "2"',
+        '  operator_decision: "Nathan @ 2026-05-22T19:00"',
+        '  timestamp: "2026-05-22T19:00:00+10:00"',
+        '  route_context: "batch-loop"',
+        '  reference_context: "references/ledger-and-helper.md"',
+        '  accepted_risk: "v1 ledger resumed"',
+        "```",
+        "",
+      ].join("\n"),
+    );
+    const a = invoke(["state", path, "--json"]);
+    const b = invoke(["state", path, "--json"]);
+    const dataA = a.envelope.data as {
+      runbook_version: string | null;
+      runbook_version_skew: string;
+      blocking_gates: unknown[];
+    };
+    const dataB = b.envelope.data as {
+      runbook_version: string | null;
+      runbook_version_skew: string;
+      blocking_gates: unknown[];
+    };
+    expect(dataA.runbook_version).toBe(dataB.runbook_version);
+    expect(dataA.runbook_version_skew).toBe(dataB.runbook_version_skew);
+    expect(dataA.blocking_gates).toEqual(dataB.blocking_gates);
+  });
+
+  test("F-U6-SEC-002 through the CLI: a nested-fence smuggled marker does not change the skew classification", () => {
+    const path = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        'runbook_version: "1"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Notes",
+        "",
+        "````text",
+        "<!-- runbook-version-skew-continuation -->",
+        "```yaml",
+        "runbook_version_skew_continuation:",
+        '  ledger_version: "1"',
+        '  runtime_version: "2"',
+        '  operator_decision: "Hostile"',
+        '  timestamp: "2026-05-22T19:00:00+10:00"',
+        '  route_context: "batch-loop"',
+        '  reference_context: "references/ledger-and-helper.md"',
+        '  accepted_risk: "smuggled"',
+        "```",
+        "````",
+        "",
+      ].join("\n"),
+    );
+    const { envelope } = invoke(["state", path, "--json"]);
+    const data = envelope.data as { runbook_version_skew: string; route_id: string };
+    expect(data.runbook_version_skew).toBe("mismatched");
+    expect(data.route_id).toBe("blocked-runbook-version-skew");
+  });
+});
+
+describe("U6: contract slice for runbook_version_skew_states", () => {
+  test("contract runbook_version_skew_states returns the catalog-ordered four states", () => {
+    const { envelope } = invoke([
+      "contract",
+      "runbook_version_skew_states",
+      "--json",
+    ]);
+    const data = envelope.data as {
+      slice: string;
+      values: string[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("runbook_version_skew_states");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values).toEqual([
+      "matched",
+      "missing",
+      "mismatched",
+      "continuation-evidence-present",
+    ]);
+  });
+});
+
+describe("U6: contract slice for blocking_gate_field_names", () => {
+  test("contract blocking_gate_field_names returns the catalog-ordered four field names", () => {
+    const { envelope } = invoke([
+      "contract",
+      "blocking_gate_field_names",
+      "--json",
+    ]);
+    const data = envelope.data as {
+      slice: string;
+      values: string[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("blocking_gate_field_names");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values).toEqual([
+      "frontmatter.status",
+      "ac_confirmation_status",
+      "batch_contract_confirmation_status",
+      "frontmatter.runbook_version",
+    ]);
+  });
+});
+
+describe("U6: HELP_DATA documents the state + diagnose response shapes", () => {
+  test("--help envelope enumerates state_response_shape + diagnose_response_shape", () => {
+    const { envelope } = invoke(["--help"]);
+    const data = envelope.data as {
+      state_response_shape: Record<string, string>;
+      diagnose_response_shape: Record<string, string>;
+      contract_slices: readonly string[];
+    };
+    expect(data.state_response_shape.runbook_version).toMatch(/verbatim/i);
+    expect(data.state_response_shape.runbook_version_skew).toMatch(
+      /runbook_version_skew_states/,
+    );
+    expect(data.state_response_shape.installed_artifact_presence).toMatch(
+      /cli_ts/,
+    );
+    expect(data.state_response_shape.blocking_gates).toMatch(
+      /frontmatter\.runbook_version/,
+    );
+    expect(data.diagnose_response_shape.runbook_version).toBeDefined();
+    expect(data.diagnose_response_shape.runbook_version_skew).toBeDefined();
+    expect(data.contract_slices).toContain("runbook_version_skew_states");
   });
 });

@@ -16,6 +16,11 @@
  * `next --json` command output trivial to consume.
  */
 
+import type { Dirent } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { ConfirmationState } from "./contract";
 
 /**
@@ -268,11 +273,37 @@ export function requiredReferenceIdsFor(route: RouteId): readonly string[] {
  */
 export type BlockingGate =
   | { kind: "route_id"; value: BlockedRouteId }
-  | { kind: "field"; field: string; value: string };
+  | { kind: "field"; field: BlockingGateFieldName; value: string };
+
+/**
+ * The fixed set of `field` identifiers a `kind: "field"` blocking gate
+ * may carry. Declared as a tuple so the order is contractually
+ * significant — it mirrors the precedence walk inside `blockingGatesFor`
+ * (frontmatter.status first, then ac/batch contract statuses, then the
+ * U6 runbook_version gate last). Adding a new field gate requires
+ * extending this tuple AND the dispatch logic; the contract slice in
+ * `cli.ts` then surfaces the addition automatically.
+ */
+export const BLOCKING_GATE_FIELD_NAMES = [
+  "frontmatter.status",
+  "ac_confirmation_status",
+  "batch_contract_confirmation_status",
+  "frontmatter.runbook_version",
+] as const;
+export type BlockingGateFieldName = (typeof BLOCKING_GATE_FIELD_NAMES)[number];
 
 /**
  * Compute blocking gates for the current route + snapshot. Returns zero
  * or more gates that prevent the workflow from advancing.
+ *
+ * U6 adds the optional `runbook_version_skew` input. When skew is
+ * `missing` or `mismatched` (and no continuation evidence has promoted
+ * it to `continuation-evidence-present`), the function emits an
+ * additional `{ kind: "field", field: "frontmatter.runbook_version",
+ * value: "missing" | "mismatched" }` field gate so the hot router (U7)
+ * can fail closed before dispatching any packet rendered against a
+ * contract the runbook no longer honors. (U7 prose calls this the
+ * "version-skew-stop-required" event.)
  */
 export function blockingGatesFor(input: {
   route: RouteId;
@@ -282,6 +313,12 @@ export function blockingGatesFor(input: {
     digests: ConfirmationState;
   };
   frontmatter_status: "in-progress" | "blocked" | "shipped" | null;
+  runbook_version_skew?:
+    | "matched"
+    | "missing"
+    | "mismatched"
+    | "continuation-evidence-present"
+    | null;
 }): readonly BlockingGate[] {
   const gates: BlockingGate[] = [];
   if (isBlockedRouteId(input.route)) {
@@ -304,6 +341,22 @@ export function blockingGatesFor(input: {
       value: "blocked",
     });
   }
+  if (
+    input.runbook_version_skew === "missing" ||
+    input.runbook_version_skew === "mismatched"
+  ) {
+    // U6 field-gate names follow the same shape as the existing
+    // gates (named ledger field with the offending value); the wire
+    // identifier `frontmatter.runbook_version` mirrors
+    // `frontmatter.status` so a router can route off field name
+    // without a casing-convention special case. The U7 prose calls
+    // this the "version-skew-stop-required" event.
+    gates.push({
+      kind: "field",
+      field: "frontmatter.runbook_version",
+      value: input.runbook_version_skew,
+    });
+  }
   return gates;
 }
 
@@ -312,26 +365,162 @@ function isBlockedRouteId(value: RouteId): value is BlockedRouteId {
 }
 
 /**
- * Static install-artifact presence report. U9 will replace this with a
- * real filesystem walk; for U4 the CLI guarantees that loading this
- * module means cli.ts + lib/* are present, and the v2 references and
- * templates ship alongside per the U2 shadow tree.
+ * Structured install-artifact presence report. Each root is a boolean
+ * presence flag plus an aggregate `all_present` and a list of the
+ * `missing` roots for diagnostic output. The shape is the U6 contract:
  *
- * (F020 fix: hoisted out of cli.ts so it can live with the other
- * pure-fact helpers and be tested in isolation.)
+ * - `references` — the `references/` directory contains at least one
+ *   readable file.
+ * - `templates` — the `templates/` directory contains at least one
+ *   readable file.
+ * - `cli_ts` — `cli.ts` exists at the v2 install root.
+ * - `lib_dir` — the `lib/` directory contains at least one readable
+ *   file.
+ *
+ * No per-file enumeration: U6 R "MUST NOT leak" forbids exposing a
+ * file list (avoids unrelated-repo content disclosure and keeps the
+ * diagnostic surface bounded).
  */
-export function installedArtifactPresence(): {
-  cli: boolean;
-  lib: boolean;
+export type InstalledArtifactPresence = {
   references: boolean;
   templates: boolean;
-} {
+  cli_ts: boolean;
+  lib_dir: boolean;
+  all_present: boolean;
+  missing: ("references" | "templates" | "cli_ts" | "lib_dir")[];
+};
+
+/**
+ * Resolve the v2 install root from this module's own location. Walking
+ * up from `lib/route.ts` lands at the v2 directory regardless of
+ * whether the consumer invoked the CLI through the in-repo path
+ * (`${REPO}/runbooks/issue-to-pr-v2/`) or the installed symlink path
+ * (`~/.claude/runbooks/issue-to-pr-v2/`, which itself dereferences
+ * through `~/.claude/runbooks → ${REPO}/runbooks`).
+ *
+ * Symlinks are NOT eagerly resolved — preserving the symlink topology
+ * is part of the U6 install contract. The recursive walk uses
+ * `realpathSync` only when checking for loops.
+ */
+function v2InstallRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+/**
+ * Real recursive install-artifact presence walk (U6). Replaces the U4
+ * static stub. Defensive against:
+ *
+ * - non-existent install paths (returns every root false),
+ * - empty directories (treated as missing — a present-but-empty
+ *   `references/` is a broken install, not a present one),
+ * - symlink loops (visited-realpath set bounds recursion to each
+ *   physical path once).
+ *
+ * Does NOT throw on any filesystem error — every failure mode collapses
+ * to "this root is missing" so the CLI can keep emitting a structured
+ * envelope.
+ */
+export function installedArtifactPresence(
+  rootPath: string = v2InstallRoot(),
+): InstalledArtifactPresence {
+  const references = directoryHasAnyFile(resolve(rootPath, "references"));
+  const templates = directoryHasAnyFile(resolve(rootPath, "templates"));
+  const cliTs = fileExists(resolve(rootPath, "cli.ts"));
+  const libDir = directoryHasAnyFile(resolve(rootPath, "lib"));
+
+  const missing: InstalledArtifactPresence["missing"] = [];
+  if (!references) missing.push("references");
+  if (!templates) missing.push("templates");
+  if (!cliTs) missing.push("cli_ts");
+  if (!libDir) missing.push("lib_dir");
+
   return {
-    cli: true,
-    lib: true,
-    references: true,
-    templates: true,
+    references,
+    templates,
+    cli_ts: cliTs,
+    lib_dir: libDir,
+    all_present: missing.length === 0,
+    missing,
   };
+}
+
+function fileExists(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns true iff `dirPath` exists, is a directory, and the subtree
+ * rooted at it contains at least one regular file. Recursive so an
+ * `install.sh` regression that ships `references/` as an empty folder
+ * surfaces as a missing root, not a present one.
+ *
+ * Bounded by a visited-realpath set so symlink loops are detected and
+ * pruned. Bounded again by a depth cap (32) as a belt-and-braces guard
+ * against any realpath drift.
+ */
+function directoryHasAnyFile(dirPath: string): boolean {
+  const visited = new Set<string>();
+  return walkHasFile(dirPath, visited, 0);
+}
+
+function walkHasFile(
+  dirPath: string,
+  visited: Set<string>,
+  depth: number,
+): boolean {
+  if (depth > 32) return false;
+
+  let canonical: string;
+  try {
+    canonical = realpathSync(dirPath);
+  } catch {
+    return false;
+  }
+  if (visited.has(canonical)) return false;
+  visited.add(canonical);
+
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(canonical);
+  } catch {
+    return false;
+  }
+  if (!stat.isDirectory()) return false;
+
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(canonical, { withFileTypes: true }) as Dirent[];
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const entryPath = resolve(canonical, String(entry.name));
+    if (entry.isFile()) return true;
+    if (entry.isSymbolicLink()) {
+      // A symlink may point at either a regular file or a directory.
+      // statSync follows the link; if the target is a file, this root
+      // counts as present without recursing (which would otherwise
+      // short-circuit to false because walkHasFile expects a
+      // directory). The visited set still catches loops; the depth cap
+      // is the belt-and-braces guard.
+      try {
+        if (statSync(entryPath).isFile()) return true;
+      } catch {
+        // Broken symlink — skip this entry but keep scanning siblings.
+        continue;
+      }
+      if (walkHasFile(entryPath, visited, depth + 1)) return true;
+      continue;
+    }
+    if (entry.isDirectory()) {
+      if (walkHasFile(entryPath, visited, depth + 1)) return true;
+    }
+  }
+  return false;
 }
 
 /**

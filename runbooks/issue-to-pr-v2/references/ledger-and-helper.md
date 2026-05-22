@@ -256,7 +256,7 @@ the U4 audit prompt.
 | Route id | When the CLI emits it |
 | --- | --- |
 | `blocked-frontmatter-blocked-reason` | `frontmatter.status` is the literal `blocked`. Highest-precedence blocked state. |
-| `blocked-runbook-version-skew` | `runbook_version` skew classification is `mismatched` or `missing` (U6 work — the field itself lands there; until then the CLI never emits this id). |
+| `blocked-runbook-version-skew` | `runbook_version` skew classification is `mismatched` or `missing` (U6). A `continuation-evidence-present` classification suppresses this id and routing falls through to the happy-path stage. |
 | `blocked-acceptance-criteria-stale` | `ac_confirmation_status` is `blocked` or the stored AC digest no longer matches the ledger's `## Acceptance criteria` content. |
 | `blocked-stage-3` | `batch_contract_confirmation_status` is `blocked` because Stage 3 Contract Review surfaced an open P0/P1 finding. |
 | `blocked-batch-contract-stale` | The stored batch contract digest no longer matches the ledger's `## Batches` content. |
@@ -286,6 +286,67 @@ order, returning the first match:
 7. Happy-path stage progression in stage order.
 
 Tests at `runbooks/issue-to-pr-v2/lib/route.test.ts` pin every branch.
+
+## Runbook version skew (U6)
+
+The v2 helper at `lib/contract.ts` exports the workflow-contract version
+as a plain string (`RUNBOOK_VERSION`). The per-issue ledger frontmatter
+declares the version the ledger was authored against in the
+`runbook_version` field; the v2 helper compares the two strings
+verbatim — no semver coercion, no integer parsing. A bumped
+`RUNBOOK_VERSION` is a deliberate contract change that requires either a
+matching ledger frontmatter update or an operator-authored continuation
+evidence row in `## Notes`.
+
+`readLedgerSnapshot` in `lib/ledger.ts` classifies the skew into one of
+four states:
+
+| Skew state | When |
+| --- | --- |
+| `matched` | Frontmatter `runbook_version` equals `RUNBOOK_VERSION`. |
+| `missing` | Frontmatter has no `runbook_version` field (legacy v1 ledger). |
+| `mismatched` | Frontmatter has a value but it does NOT equal `RUNBOOK_VERSION` (legacy v0, future v3, or a typo). |
+| `continuation-evidence-present` | Skew detected (missing or mismatched) BUT a complete continuation evidence row exists in `## Notes` for the current runtime version. |
+
+When the skew is `missing` or `mismatched` and no continuation evidence
+applies, `classifyRoute` returns `blocked-runbook-version-skew` and
+`blockingGatesFor` adds a `{kind: "field", field:
+"frontmatter.runbook_version", value: "missing" | "mismatched"}` field
+gate (the U7 prose calls this the "version-skew-stop-required" event)
+so the hot router can fail closed before dispatching any packet
+rendered against a contract the runbook no longer honors.
+
+### Continuation evidence shape (U6)
+
+Operators record continuation evidence in `## Notes` using a fenced YAML
+block prefixed by an HTML comment marker. Every field is required; a
+missing field disqualifies the row and the snapshot reports the
+underlying `missing` or `mismatched` skew.
+
+```text
+<!-- runbook-version-skew-continuation -->
+```
+
+```yaml
+runbook_version_skew_continuation:
+  ledger_version: "<value | null>"     # what the ledger says (or null)
+  runtime_version: "<value>"            # the RUNBOOK_VERSION the run is using
+  operator_decision: "<actor>"          # e.g. "Nathan @ 2026-05-22T19:00"
+  timestamp: "<ISO 8601>"
+  route_context: "<route id at the time of decision>"
+  reference_context: "<reference file the operator consulted>"
+  accepted_risk: "<one-line reason>"
+```
+
+The parser additionally requires that `ledger_version` matches the
+actual ledger frontmatter value (or both are null) AND that
+`runtime_version` matches the current `RUNBOOK_VERSION`. Evidence for a
+different runtime version cannot be carried forward across a later
+version bump; the operator must record a fresh row.
+
+The first complete evidence row wins; later rows are ignored. The CLI
+is read-only per ADR 0002 — the operator and orchestrator are
+responsible for authoring this row through normal ledger editing.
 
 ## See also
 

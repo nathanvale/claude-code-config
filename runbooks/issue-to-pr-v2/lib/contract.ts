@@ -8,7 +8,50 @@
  * or prose) is acceptance criterion AC2 of issue #51.
  *
  * No behavior changes: every value is byte-identical to v1.
+ *
+ * **U6 addition:** `RUNBOOK_VERSION` is the single source of truth for the
+ * v2 workflow-contract version. Compared as a string against the ledger
+ * frontmatter `runbook_version` field — no semver, no integer coercion.
  */
+
+/**
+ * The workflow-contract version this runtime implements. Changes only when
+ * ledger interpretation, routing, migration, override evidence, or role
+ * packet semantics change — not for documentation edits, reference
+ * reshuffles, source commits, or added tests.
+ *
+ * Plain string by design so future major versions ("3", "4") can stay
+ * comparable without semver tooling. Bumping this value is a deliberate
+ * U6+ contract decision.
+ */
+export const RUNBOOK_VERSION = "2" as const;
+export type RunbookVersion = typeof RUNBOOK_VERSION;
+
+/**
+ * The four-state enum the U6 runbook-version skew classifier returns
+ * (alongside `null` for the no-ledger case). Ordered to match the U6
+ * spec's `LedgerSnapshot.runbook_version_skew` enumeration:
+ *
+ * 1. `matched` — frontmatter equals `RUNBOOK_VERSION`.
+ * 2. `missing` — frontmatter has no value (legacy v1 ledger).
+ * 3. `mismatched` — frontmatter has a value but it does not equal
+ *    `RUNBOOK_VERSION`.
+ * 4. `continuation-evidence-present` — skew detected but operator-
+ *    authored continuation evidence in `## Notes` lets the workflow
+ *    proceed.
+ *
+ * `ordering: catalog` on the surfaced contract slice reflects this
+ * spec-defined order so an agent enumerating skew states without
+ * reading source sees the same order documented in the references.
+ */
+export const RUNBOOK_VERSION_SKEW_STATES = [
+  "matched",
+  "missing",
+  "mismatched",
+  "continuation-evidence-present",
+] as const;
+export type RunbookVersionSkewState =
+  (typeof RUNBOOK_VERSION_SKEW_STATES)[number];
 
 export type ConfirmationState = "pending" | "confirmed" | "stale" | "blocked";
 export type ExecutionMode = "tdd" | "proof_first" | "change_first";
