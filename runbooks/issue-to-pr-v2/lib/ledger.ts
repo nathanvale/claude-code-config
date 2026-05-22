@@ -142,27 +142,58 @@ export class DecomposeError extends Error {
   }
 }
 
-let failMode: "exit" | "throw" = "exit";
+export type FailMode = "exit" | "throw";
+
+let failMode: FailMode = "exit";
 
 /**
  * The helper's universal error sink.
  *
  * Defaults to `failMode: "exit"`, in which case `fail()` writes
- * `decompose: <msg>\n` to stderr and calls `process.exit(1)`. The internal-
- * only `nonExiting()` wrapper flips `failMode` to `"throw"` for the duration
- * of one wrapped call so a recoverable read can return `null` instead of
+ * `decompose: <msg>\n` to stderr and calls `process.exit(1)`. The
+ * `withFailMode()` helper temporarily flips `failMode` to `"throw"` for
+ * the duration of one wrapped call so a CLI consumer can convert
+ * validator failures into a structured `CliErrorEnvelope` instead of
  * killing the process.
  *
- * **Do not call `fail()` from outside the v2 entrypoint or this module's
- * own helpers.** It terminates the process unless an in-flight `nonExiting`
- * frame is on the stack. Library consumers that want a recoverable
- * validator should wait for U4's `cli.ts` surface, which will provide a
- * structured-error mode.
+ * **`decompose.ts` (the v1-compatible entrypoint) leaves the default
+ * `"exit"` mode in place** so its CLI semantics remain byte-for-byte
+ * identical to v1. `cli.ts` (U4 v2 CLI front door) wraps its validator
+ * calls in `withFailMode("throw", () => …)` to catch the
+ * `DecomposeError` and surface it as a `CliErrorEnvelope`.
  */
 export function fail(msg: string): never {
   if (failMode === "throw") throw new DecomposeError(msg);
   stderr.write(`decompose: ${msg}\n`);
   exit(1);
+}
+
+/**
+ * Run `fn` with `failMode` temporarily set to `mode`, restoring the
+ * previous value (including via uncaught exceptions) on exit. Returns
+ * whatever `fn` returns.
+ *
+ * Use this from `cli.ts` to convert v1's exit-on-fail semantics into a
+ * structured-error path. Example:
+ *
+ * ```ts
+ * try {
+ *   const data = withFailMode("throw", () => validateFindingsData(ledger));
+ *   return createSuccessEnvelope({ ... });
+ * } catch (e) {
+ *   if (e instanceof DecomposeError) return createErrorEnvelope({ ... });
+ *   throw e;
+ * }
+ * ```
+ */
+export function withFailMode<T>(mode: FailMode, fn: () => T): T {
+  const previous = failMode;
+  failMode = mode;
+  try {
+    return fn();
+  } finally {
+    failMode = previous;
+  }
 }
 
 function nonExiting<T>(fn: () => T): T | null {
@@ -879,6 +910,157 @@ export function emitConfirmationState(ledgerPath: string): void {
   stdout.write(`  acceptance_criteria: ${report.acceptanceCriteria}\n`);
   stdout.write(`  batch_contract: ${report.batchContract}\n`);
   stdout.write(`  digests: ${report.digests}\n`);
+}
+
+/**
+ * Structured snapshot of the ledger's durable state, suitable for direct
+ * consumption by the v2 CLI front door (U4) without going through any
+ * stdout-writing emitter.
+ *
+ * The shape is the minimal superset that `cli.ts`'s `state`, `next`, and
+ * `diagnose` commands need to build their JSON responses.
+ *
+ * Run inside `withFailMode("throw", () => readLedgerSnapshot(...))` so a
+ * malformed ledger surfaces as a recoverable `DecomposeError` instead of
+ * killing the CLI process.
+ */
+export type LedgerSnapshot = {
+  ledger_path: string;
+  ledger_exists: boolean;
+  /** Confirmation state report (same triple `emitConfirmationState` emits). */
+  confirmation_state: {
+    acceptance_criteria: ConfirmationState;
+    batch_contract: ConfirmationState;
+    digests: ConfirmationState;
+  };
+  /**
+   * Pointer to the plan file recorded in frontmatter, or null when Stage 2
+   * has not yet committed a plan path.
+   */
+  plan_path: string | null;
+  /**
+   * True when the ledger has at least one row in the `## Batches` fenced
+   * YAML block. Stage 4 requires this.
+   */
+  has_batches: boolean;
+  /**
+   * True when every batch in `## Batches` has a terminal status
+   * (`converged` or `accepted-risk`). Stage 5 entry condition.
+   */
+  all_batches_terminal: boolean;
+  /**
+   * ISO 8601 frontmatter timestamp set by Stage 5 when final review
+   * completes, or null.
+   */
+  final_reviewed_at: string | null;
+  /**
+   * PR URL set by Stage 6 ship, or null.
+   */
+  pr_url: string | null;
+  /**
+   * Frontmatter `status` field. `in-progress` by default; transitions to
+   * `blocked` or `shipped` per the v1 stage rules.
+   */
+  frontmatter_status: "in-progress" | "blocked" | "shipped" | null;
+  /**
+   * U6 `runbook_version` skew classification. `null` until U6 lands the
+   * field on the ledger template; for now the CLI reports null and the
+   * router treats it as `matched` until U6.
+   */
+  runbook_version_skew:
+    | "matched"
+    | "missing"
+    | "mismatched"
+    | "continuation-evidence-present"
+    | null;
+};
+
+/**
+ * Read the ledger and build a `LedgerSnapshot`. Returns
+ * `{ ledger_exists: false, ... }` when the file does not exist; otherwise
+ * may call `fail()` on a malformed ledger (which `withFailMode("throw")`
+ * converts to a `DecomposeError`).
+ */
+export function readLedgerSnapshot(ledgerPath: string): LedgerSnapshot {
+  let ledgerExists = false;
+  try {
+    statSync(ledgerPath);
+    ledgerExists = true;
+  } catch {
+    // Fall through to the no-ledger snapshot below.
+  }
+  if (!ledgerExists) {
+    return {
+      ledger_path: ledgerPath,
+      ledger_exists: false,
+      confirmation_state: {
+        acceptance_criteria: "pending",
+        batch_contract: "pending",
+        digests: "pending",
+      },
+      plan_path: null,
+      has_batches: false,
+      all_batches_terminal: false,
+      final_reviewed_at: null,
+      pr_url: null,
+      frontmatter_status: null,
+      runbook_version_skew: null,
+    };
+  }
+
+  const frontmatter = readFrontmatter(ledgerPath);
+  const report = readConfirmationState(ledgerPath);
+  const planPath = readFrontmatterPath(frontmatter, "plan_path");
+  const finalReviewedAt = readFrontmatterPath(frontmatter, "final_reviewed_at");
+  const prUrl = readFrontmatterPath(frontmatter, "pr_url");
+
+  // Frontmatter status: validate against the known set and pass through
+  // any unrecognised value as null (the v1 ledger schema only allows the
+  // three documented values, but parsing must not invent new ones).
+  const rawStatus = frontmatter.status;
+  let frontmatterStatus:
+    | "in-progress"
+    | "blocked"
+    | "shipped"
+    | null = null;
+  if (
+    rawStatus === "in-progress" ||
+    rawStatus === "blocked" ||
+    rawStatus === "shipped"
+  ) {
+    frontmatterStatus = rawStatus;
+  }
+
+  const batchesBlock = readOptionalFencedSectionBlock(ledgerPath, "Batches");
+  let hasBatches = false;
+  let allBatchesTerminal = false;
+  if (batchesBlock !== null) {
+    const rows = parseLedgerBatchRows(batchesBlock);
+    hasBatches = rows.length > 0;
+    if (hasBatches) {
+      allBatchesTerminal = rows.every((row) => {
+        const status = String(row.status ?? "").trim();
+        return TERMINAL_BATCH_STATUSES.has(status);
+      });
+    }
+  }
+
+  return {
+    ledger_path: ledgerPath,
+    ledger_exists: true,
+    confirmation_state: {
+      acceptance_criteria: report.acceptanceCriteria,
+      batch_contract: report.batchContract,
+      digests: report.digests,
+    },
+    plan_path: planPath,
+    has_batches: hasBatches,
+    all_batches_terminal: allBatchesTerminal,
+    final_reviewed_at: finalReviewedAt,
+    pr_url: prUrl,
+    frontmatter_status: frontmatterStatus,
+    runbook_version_skew: null, // U6 will populate this when runbook_version lands
+  };
 }
 
 function readConfirmationState(ledgerPath: string): ConfirmationStateReport {

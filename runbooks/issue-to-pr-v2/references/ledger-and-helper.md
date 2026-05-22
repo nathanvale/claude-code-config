@@ -226,6 +226,67 @@ lifecycle checkpoint, commit one Validator findings checkpoint, run one
 Builder commit, run one validate pass, or fail-stop with a question. **Never
 do two stages in one turn.**
 
+## Route ids (v2 `cli.ts`)
+
+The v2 CLI front door at `runbooks/issue-to-pr-v2/cli.ts` (U4) emits a
+**route id** with every `state --json` and `next --json` response. Route
+ids are **facts** about where the workflow currently sits, not imperative
+instructions — ADR 0002. The hot router (U7) consumes a route id and
+decides what to do next; the CLI never says "run X" or "execute Y".
+
+The executable source of truth is the `ROUTE_IDS` const in
+`runbooks/issue-to-pr-v2/lib/route.ts`. The catalog below mirrors that
+const verbatim; drift between code and this section is a P1 finding per
+the U4 audit prompt.
+
+### Stage route ids (happy path)
+
+| Route id | When the CLI emits it |
+| --- | --- |
+| `pick-issue` | Ledger exists but `ac_confirmation_status` is not `confirmed`; Stage 1 has not yet committed the AC checkpoint. |
+| `plan` | AC is confirmed but `frontmatter.plan_path` is null; Stage 2 has not yet recorded a plan file. |
+| `decompose` | Plan path present but `batch_contract_confirmation_status` is not `confirmed`, or no batches have been written to `## Batches`. |
+| `batch-loop` | Batch contract confirmed and at least one batch exists, but not every batch is in a terminal status (`converged` or `accepted-risk`). |
+| `final-review` | Every batch is terminal but `frontmatter.final_reviewed_at` is null; Stage 5 has not yet committed the cumulative-diff review checkpoint. |
+| `ship` | Final review complete but `frontmatter.pr_url` is null; Stage 6 has not yet recorded the PR URL. |
+| `shipped` | `frontmatter.pr_url` is set and `frontmatter.status` is `shipped`. Terminal success state. |
+
+### Blocked route ids
+
+| Route id | When the CLI emits it |
+| --- | --- |
+| `blocked-frontmatter-blocked-reason` | `frontmatter.status` is the literal `blocked`. Highest-precedence blocked state. |
+| `blocked-runbook-version-skew` | `runbook_version` skew classification is `mismatched` or `missing` (U6 work — the field itself lands there; until then the CLI never emits this id). |
+| `blocked-acceptance-criteria-stale` | `ac_confirmation_status` is `blocked` or the stored AC digest no longer matches the ledger's `## Acceptance criteria` content. |
+| `blocked-stage-3` | `batch_contract_confirmation_status` is `blocked` because Stage 3 Contract Review surfaced an open P0/P1 finding. |
+| `blocked-batch-contract-stale` | The stored batch contract digest no longer matches the ledger's `## Batches` content. |
+| `blocked-digests-stale` | One of `plan_digest`, `ac_digest`, or `batch_contract_digest` no longer matches the source content but the individual `*_confirmation_status` fields haven't been flipped yet. |
+
+### Special route ids
+
+| Route id | When the CLI emits it |
+| --- | --- |
+| `no-ledger` | The ledger file does not exist on disk. The CLI never advances past this point; the consuming router must invoke Stage 1 to create the ledger. |
+
+### Precedence order
+
+`classifyRoute` in `lib/route.ts` walks the inputs in this fixed precedence
+order, returning the first match:
+
+1. `no-ledger` — ledger file absent.
+2. `blocked-frontmatter-blocked-reason` — explicit user decision wins
+   over any derived state.
+3. `blocked-runbook-version-skew` — version mismatch must be resolved
+   before any other gate.
+4. `blocked-*` durable states (AC blocked, Stage 3 blocked).
+5. `blocked-*` stale states (AC stale, batch contract stale, digests
+   stale).
+6. `shipped` (when both `pr_url` and `frontmatter.status: shipped` are
+   set).
+7. Happy-path stage progression in stage order.
+
+Tests at `runbooks/issue-to-pr-v2/lib/route.test.ts` pin every branch.
+
 ## See also
 
 - [host-adapters.md](host-adapters.md) for the host-readiness boundary that

@@ -565,6 +565,41 @@ flowchart TB
 
 **Execution note:** Change-first for shadow v2 prose after U1-U6 have created the safety net; verify through regression matrix and probes before treating it as ready. Do not rewrite `runbooks/issue-to-pr/issue-to-pr.md` in this unit.
 
+**Observability follow-on (carried over from U4):** U4 shipped the
+JSON-Lines diagnostic *shape* — `run_id`, `started_at_ms`, `duration_ms`,
+`level`, `category`, `event`, plus the `--quiet | --verbose | --debug`
+verbosity ladder — but deliberately deferred the *runtime infrastructure*
+to U7. U7 is the natural place to wire it up properly because the hot
+router is the first surface that does multi-step async work where these
+patterns earn their keep. Concretely, layer the following onto
+`runbooks/issue-to-pr-v2/lib/cli-diagnostics.ts` as part of U7:
+
+- **LogTape integration.** Swap the direct `stderr.write` for
+  `getLogger(category).log(level, message, attributes)` so categories
+  become a real tree and consumers can filter by namespace. Add a
+  `configureCliDiagnostics({ categoryRoot, diagnosticWriter, redact })`
+  entrypoint mirroring the sidequest pattern in
+  `~/code/side-quest-engineering/packages/cli-command-facade/src/cli-diagnostics.ts`.
+- **AsyncLocalStorage run-id propagation.** Today `run_id` threads through
+  `CommandContext` explicitly. The hot router's multi-step turns will
+  call deeply into lib helpers that should not need the runId in their
+  signature; `withCliDiagnosticContext` + `getCurrentCliDiagnosticContext`
+  let them call `emitDiagnostic` without it.
+- **Redactor hook.** The hot router surfaces ledger excerpts (frontmatter
+  values, builder commit refs, finding summaries). Add a
+  `CliDiagnosticRedactor` so an Issue-to-PR-v2-specific redactor can scrub
+  anything matching credential / token / secret patterns before records
+  hit stderr. U4's pure fact-emitter CLI did not need this; U7's router
+  does.
+- **Optional post-mortem buffer.** Sidequest's pattern buffers the last
+  ~250 records so a crash dump carries pre-crash context. Defer to U9
+  (regression probes) unless U7's debugging experience needs it sooner.
+
+The shape contract from U4 is already forward-compatible — no envelope
+field or diagnostic record needs to change; only the *emitter* under the
+hood changes. The U7 seam runbook should call out this scope explicitly
+in its writable file list so the change does not look like creep.
+
 **Patterns to follow:**
 - Audit "Proposed Hot Path Skeleton" and "Proposed State Router".
 - ADR 0001 and ADR 0002.
