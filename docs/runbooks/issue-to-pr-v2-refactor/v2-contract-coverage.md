@@ -35,7 +35,7 @@ zero unmapped contracts across multiple sweeps.
 
 ## Scoped audit prompt
 
-````
+````text
 Review `runbooks/issue-to-pr-v2/references/regression-matrix.md` against the four
 v1 sources listed in Files in scope.
 
@@ -102,7 +102,7 @@ Seam-specific close reasons (in addition to the shared `out-of-scope-for-this-is
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/v2-contract-coverage.md.
 Re-read the runbook and v2-contract-coverage-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.

@@ -1144,6 +1144,38 @@ describe("Patch proposal packet", () => {
         }),
       ).toThrow(PacketRenderError);
     });
+
+    test("rejects invalid execution_mode with PacketRenderError", () => {
+      const ledgerPath = writeLedger(
+        patchLedger(
+          "| ff1 | final | sig-x | reviewer | P0 | open | a final P0 blocker | |",
+        ),
+      );
+      let caught: unknown;
+      try {
+        renderPatchProposalPacket({
+          ledgerPath,
+          findingId: "ff1",
+          candidatePatchBatch: {
+            id: "patch-001",
+            name: "Patch one",
+            goal: "fix the bug",
+            files: ["app/x.ts"],
+            depends_on: ["b-terminal"],
+            execution_mode: "bogus-mode",
+            acceptance_tests: ["AC 1 holds: bug gone"],
+            rationale: "rationale",
+          },
+          now: FROZEN_TIME,
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(PacketRenderError);
+      expect((caught as PacketRenderError).code).toBe(
+        "invalid-execution-mode",
+      );
+    });
   });
 
   describe("MUST include (allow-list)", () => {

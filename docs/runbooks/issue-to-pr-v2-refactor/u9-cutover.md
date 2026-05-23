@@ -221,7 +221,7 @@ In `runbooks/issue-to-pr-v2/references/regression-matrix.md`, the
 naming the specific test file path + `it()` description for each row
 whose `probe` is `cli.ts ... --json`. Example shape:
 
-```
+```text
 | probe-cli-state | `cli.ts state --json` | ... | `cli.ts state --json` | U4 | mapped | runbooks/issue-to-pr-v2/cli.test.ts: "data carries confirmation_state, digest_drift, version_skew, route_id, required_reference_ids, blocking_gates" |
 ```
 
@@ -299,7 +299,7 @@ owning seam.
 
 ## Scoped audit prompt
 
-````
+````text
 Review U9 public cutover. Phase 1 adds a `test_anchor` column to
 `runbooks/issue-to-pr-v2/references/regression-matrix.md` citing the
 existing test that exercises each deterministic probe row. Phase 2
@@ -397,7 +397,7 @@ Stop when ALL of the following hold:
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/u9-cutover.md.
 Re-read the runbook and u9-cutover-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every

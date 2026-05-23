@@ -177,6 +177,40 @@ describe("classifyRoute: happy-path stage progression", () => {
       ),
     ).toBe("shipped");
   });
+
+  test("ship when pr_url set but frontmatter_status still in-progress (CodeRabbit edge case)", () => {
+    // Regression: the fall-through return at the end of classifyRoute
+    // must require BOTH pr_url !== null AND frontmatter_status ===
+    // "shipped" before yielding "shipped". A pr_url alone is not enough
+    // — if the operator pushed the PR but forgot to flip
+    // `frontmatter.status` to "shipped", the workflow is still in the
+    // terminal-ship step and the route id must report that.
+    expect(
+      classifyRoute(
+        inputs({
+          all_batches_terminal: true,
+          final_reviewed_at: "2026-05-22T03:00:00Z",
+          pr_url: "https://example.test/pr/1",
+          frontmatter_status: "in-progress",
+        }),
+      ),
+    ).toBe("ship");
+  });
+
+  test("ship when pr_url set but frontmatter_status null (defensive)", () => {
+    // Defensive: a null status (no frontmatter status set yet) is not
+    // the same as "shipped" and must not collapse to the terminal state.
+    expect(
+      classifyRoute(
+        inputs({
+          all_batches_terminal: true,
+          final_reviewed_at: "2026-05-22T03:00:00Z",
+          pr_url: "https://example.test/pr/1",
+          frontmatter_status: null,
+        }),
+      ),
+    ).toBe("ship");
+  });
 });
 
 describe("classifyRoute: blocked states", () => {

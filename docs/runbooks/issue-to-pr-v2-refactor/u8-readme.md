@@ -259,7 +259,7 @@ each topic the v1 README used to cover inline:
 
 ## Scoped audit prompt
 
-````
+````text
 Review U8 v2 README at `runbooks/issue-to-pr-v2/README.md` plus the
 two writable references (`references/ledger-and-helper.md`,
 `references/host-adapters.md`). The README is a maintainer-facing
@@ -331,7 +331,7 @@ Seam-specific close reasons:
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/u8-readme.md.
 Re-read the runbook and u8-readme-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every

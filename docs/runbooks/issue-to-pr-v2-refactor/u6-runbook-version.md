@@ -249,7 +249,7 @@ skew.
 
 ## Scoped audit prompt
 
-````
+````text
 Review U6 runbook versioning + install topology in
 `runbooks/issue-to-pr-v2/lib/contract.ts` (new `RUNBOOK_VERSION` export),
 `runbooks/issue-to-pr-v2/lib/ledger.ts` (extended `LedgerSnapshot` +
@@ -320,7 +320,7 @@ Seam-specific close reasons:
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/u6-runbook-version.md.
 Re-read the runbook and u6-runbook-version-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.

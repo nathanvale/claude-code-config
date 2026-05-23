@@ -24,7 +24,7 @@ closed on a partial install; the U6 contract for that envelope lives in
 
 The hot router is the single entry point. Drive it with `/goal`:
 
-```
+```text
 /goal Follow ~/.claude/runbooks/issue-to-pr-v2/issue-to-pr.md.
 Target issue is {issue-number} in {target-repo}.
 Re-read the runbook AND the per-issue ledger at

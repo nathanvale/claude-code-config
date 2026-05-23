@@ -70,7 +70,7 @@ source for which v1 prose lands at which shadow destination.)
 
 ## Scoped audit prompt
 
-````
+````text
 Review the v2 shadow tree under `runbooks/issue-to-pr-v2/references/` and
 `runbooks/issue-to-pr-v2/templates/` against the v1 sources in
 `runbooks/issue-to-pr/` and the U1 regression matrix at
@@ -139,7 +139,7 @@ Seam-specific close reasons (in addition to the shared `out-of-scope-for-this-is
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/v2-shadow-tree-extraction.md.
 Re-read the runbook and v2-shadow-tree-extraction-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.

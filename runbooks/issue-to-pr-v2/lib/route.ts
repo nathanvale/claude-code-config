@@ -161,7 +161,16 @@ export function classifyRoute(inputs: RouteInputs): RouteId {
   }
   if (!inputs.all_batches_terminal) return "batch-loop";
   if (inputs.final_reviewed_at === null) return "final-review";
-  if (inputs.pr_url === null) return "ship";
+  // Stay in `ship` until BOTH the PR exists AND the operator has flipped
+  // `frontmatter.status` to `shipped`. Without the second clause, a
+  // forgotten status flip would route to the terminal `shipped` state
+  // even though the workflow's frontmatter still says `in-progress`,
+  // masking the incomplete transition. The same terminal-success
+  // condition is checked above at the early-return on the pr_url +
+  // frontmatter_status pair.
+  if (inputs.pr_url === null || inputs.frontmatter_status !== "shipped") {
+    return "ship";
+  }
   return "shipped";
 }
 

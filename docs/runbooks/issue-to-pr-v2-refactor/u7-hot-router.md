@@ -262,7 +262,7 @@ already-emitted U4/U5/U6 envelope.
 
 ## Scoped audit prompt
 
-````
+````text
 Review U7 shadow v2 hot router in
 `runbooks/issue-to-pr-v2/issue-to-pr.md`, the writable references
 (`stage-1-pick-issue.md` through `stage-6-ship.md`,
@@ -329,7 +329,7 @@ Seam-specific close reasons:
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/u7-hot-router.md.
 Re-read the runbook and u7-hot-router-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.

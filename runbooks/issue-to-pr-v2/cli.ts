@@ -3,13 +3,14 @@
 /**
  * Issue-to-PR v2 CLI front door (U4).
  *
- * Deterministic CLI that emits **facts**, not orchestration. Four
+ * Deterministic CLI that emits **facts**, not orchestration. Five
  * JSON-only commands:
  *
  *   cli.ts state <ledger> --json
  *   cli.ts next <ledger> --json
  *   cli.ts contract <slice> --json
  *   cli.ts diagnose <ledger> --json
+ *   cli.ts packet <role> --json [role flags]
  *
  * Every command writes exactly one `CliSuccessEnvelope<TData>` or
  * `CliErrorEnvelope` to stdout (newline-terminated). Diagnostics — when
@@ -878,9 +879,8 @@ function runPacketCommand(ctx: CommandContext): RunResult {
     return { exit_code: 64 };
   }
 
-  const flags = parsePacketFlags(ctx.args.slice(1));
-
   try {
+    const flags = parsePacketFlags(ctx.args.slice(1));
     const packet = dispatchPacketRender(role, flags);
     writeJson(
       ctx.stdoutWriter,
@@ -927,44 +927,48 @@ function parsePacketFlags(args: readonly string[]): PacketFlags {
     patchDependsOn: [],
     patchAcceptanceTests: [],
   };
+  // Consume the value that follows a flag at args[i]. Throws if the value
+  // is absent or looks like another flag (e.g., `--ledger --batch foo`
+  // would otherwise silently set ledger to "--batch"). The caller is
+  // responsible for advancing the loop index past the consumed value.
+  const consumeValue = (flag: string, i: number): string => {
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new PacketFlagError(`flag ${flag} requires a value`);
+    }
+    return value;
+  };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    const value = args[i + 1];
     switch (arg) {
-      case "--ledger": flags.ledger = value; i++; break;
-      case "--batch": flags.batch = value; i++; break;
-      case "--attempt-type": flags.attemptType = value; i++; break;
+      case "--ledger": flags.ledger = consumeValue(arg, i); i++; break;
+      case "--batch": flags.batch = consumeValue(arg, i); i++; break;
+      case "--attempt-type":
+        flags.attemptType = consumeValue(arg, i); i++; break;
       case "--target-finding-signature":
-        flags.targetFindingSignature = value; i++; break;
-      case "--finding": flags.finding = value; i++; break;
-      case "--persona": flags.persona = value; i++; break;
-      case "--commit": flags.commit = value; i++; break;
+        flags.targetFindingSignature = consumeValue(arg, i); i++; break;
+      case "--finding": flags.finding = consumeValue(arg, i); i++; break;
+      case "--persona": flags.persona = consumeValue(arg, i); i++; break;
+      case "--commit": flags.commit = consumeValue(arg, i); i++; break;
       case "--touched-file":
-        if (value) flags.touchedFiles.push(value);
-        i++;
-        break;
-      case "--patch-id": flags.patchId = value; i++; break;
-      case "--patch-name": flags.patchName = value; i++; break;
-      case "--patch-goal": flags.patchGoal = value; i++; break;
+        flags.touchedFiles.push(consumeValue(arg, i)); i++; break;
+      case "--patch-id": flags.patchId = consumeValue(arg, i); i++; break;
+      case "--patch-name": flags.patchName = consumeValue(arg, i); i++; break;
+      case "--patch-goal": flags.patchGoal = consumeValue(arg, i); i++; break;
       case "--patch-file":
-        if (value) flags.patchFiles.push(value);
-        i++;
-        break;
+        flags.patchFiles.push(consumeValue(arg, i)); i++; break;
       case "--patch-depends-on":
-        if (value) flags.patchDependsOn.push(value);
-        i++;
-        break;
+        flags.patchDependsOn.push(consumeValue(arg, i)); i++; break;
       case "--patch-execution-mode":
-        flags.patchExecutionMode = value; i++; break;
+        flags.patchExecutionMode = consumeValue(arg, i); i++; break;
       case "--patch-acceptance-test":
-        if (value) flags.patchAcceptanceTests.push(value);
-        i++;
-        break;
-      case "--patch-rationale": flags.patchRationale = value; i++; break;
+        flags.patchAcceptanceTests.push(consumeValue(arg, i)); i++; break;
+      case "--patch-rationale":
+        flags.patchRationale = consumeValue(arg, i); i++; break;
       default:
-        // Unknown flags fall through; missing required flags are caught
-        // by dispatchPacketRender with structured errors.
-        break;
+        // Reject unknown flags so typos like `--legder` fail loudly
+        // instead of silently producing a packet with missing inputs.
+        throw new PacketFlagError(`unknown packet flag ${arg}`);
     }
   }
   return flags;

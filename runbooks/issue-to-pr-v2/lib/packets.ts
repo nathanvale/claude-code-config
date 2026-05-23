@@ -635,6 +635,13 @@ export function renderPatchProposalPacket(
       );
     }
   }
+  // Reject contract-invalid execution_mode values up front, matching the
+  // ledger-derived path (validateExecutionMode is reused so the error
+  // code/message stays consistent across both batch sources).
+  const validatedExecutionMode = validateExecutionMode(
+    input.candidatePatchBatch.execution_mode,
+    input.candidatePatchBatch.id,
+  );
 
   const data: PatchProposalPacketData = {
     final_finding: {
@@ -651,7 +658,7 @@ export function renderPatchProposalPacket(
         goal: input.candidatePatchBatch.goal,
         files: input.candidatePatchBatch.files,
         depends_on: input.candidatePatchBatch.depends_on,
-        execution_mode: input.candidatePatchBatch.execution_mode,
+        execution_mode: validatedExecutionMode,
         acceptance_tests: input.candidatePatchBatch.acceptance_tests,
         ac_mapping: [],
         rationale: input.candidatePatchBatch.rationale,

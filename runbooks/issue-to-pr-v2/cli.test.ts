@@ -1007,6 +1007,48 @@ describe("packet command (U5)", () => {
     expect(exit_code).toBe(64);
   });
 
+  test("builder rejects unknown packet flag (typo) with missing-packet-flag", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "builder",
+      "--legder",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-packet-flag",
+    );
+    expect((envelope.error as { message: string }).message).toContain(
+      "unknown packet flag --legder",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("builder rejects --ledger with missing value as missing-packet-flag", () => {
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "builder",
+      "--ledger",
+      "--batch",
+      "b1",
+      "--attempt-type",
+      "implementation",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-packet-flag",
+    );
+    expect((envelope.error as { message: string }).message).toContain(
+      "flag --ledger requires a value",
+    );
+    expect(exit_code).toBe(64);
+  });
+
   test("builder unknown batch returns packet-render-failed", () => {
     const ledgerPath = writePacketLedger();
     const { envelope, exit_code } = invoke([

@@ -473,7 +473,7 @@ Before stopping a turn with a question, confirm:
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow ~/.claude/runbooks/issue-to-pr-v2/issue-to-pr.md.
 Re-read the hot router and the per-issue ledger at the start of every
 turn. Run cli.ts state <ledger-path> --json before any other action.
