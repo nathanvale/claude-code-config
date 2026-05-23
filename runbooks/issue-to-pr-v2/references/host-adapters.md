@@ -140,4 +140,6 @@ broken install.
   pointer this rule body anchors.
 - [ledger-and-helper.md](ledger-and-helper.md) for the runbook-version skew
   classifier that pairs with install-artifact presence in the U7 stop-required
-  routing.
+  routing, and for the canonical helper execution context rule.
+- [`../README.md`](../README.md#helper-execution-context) for the maintainer
+  summary of helper execution context.

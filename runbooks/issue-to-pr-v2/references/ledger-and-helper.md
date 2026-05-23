@@ -23,13 +23,12 @@ iteration.
 
 ### `cli.ts state` facts
 
-Once the ledger exists, at the start of every resumed turn, run the
-v2 fact emitter BEFORE reading frontmatter, batches, findings, or
-notes from conversation memory:
-
-```bash
-bun ~/.claude/runbooks/issue-to-pr-v2/cli.ts state <ledger-path> --json
-```
+Once the ledger exists, at the start of every resumed turn, run
+`cli.ts state <ledger-path> --json` BEFORE reading frontmatter,
+batches, findings, or notes from conversation memory. (The installed
+path and invocation shape live in
+[`README.md`](../README.md#invocation); this reference does not restate
+them.)
 
 The command writes exactly one `CliSuccessEnvelope` to stdout
 (newline-terminated). The `data` shape is the contract; the hot router
@@ -60,10 +59,10 @@ memory. The four-state confirmation semantics live in `lib/contract.ts`
 (`ROUTE_IDS`). The CLI never says "run X" or "execute Y" — ADR 0002.
 
 For richer diagnosis (per-axis digest drift, expected reference list,
-install presence) the same shape is available via
-`bun ~/.claude/runbooks/issue-to-pr-v2/cli.ts diagnose <ledger-path>
---json`; for the legal route-id list use
-`cli.ts contract route_ids --json`.
+install presence) the same shape is available via `cli.ts diagnose
+<ledger-path> --json`; for the legal route-id list use `cli.ts
+contract route_ids --json`. (Command surface and installed path live
+in [`README.md`](../README.md#file-map).)
 
 ## Helper execution context
 

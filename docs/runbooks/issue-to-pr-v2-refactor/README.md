@@ -87,6 +87,26 @@ turn. Drive every ledger row to status fixed or closed and the most recent
 inline at the end of every turn. Stop after 30 turns.
 ```
 
+### V2 shadow hot router
+
+```
+/goal Follow docs/runbooks/issue-to-pr-v2-refactor/u7-hot-router.md.
+Re-read the runbook and u7-hot-router-ledger.md at the start of every
+turn. Drive every ledger row to status fixed or closed and the most recent
+/ce-code-review pass to zero new findings. Echo the full ledger status table
+inline at the end of every turn. Stop after 30 turns.
+```
+
+### V2 README as human index
+
+```
+/goal Follow docs/runbooks/issue-to-pr-v2-refactor/u8-readme.md.
+Re-read the runbook and u8-readme-ledger.md at the start of every
+turn. Drive every ledger row to status fixed or closed and the most recent
+/ce-code-review pass to zero new findings. Echo the full ledger status table
+inline at the end of every turn. Stop after 30 turns.
+```
+
 ## Driver: /goal vs /loop
 
 | | `/goal` (preferred) | `/loop` (fallback) |
