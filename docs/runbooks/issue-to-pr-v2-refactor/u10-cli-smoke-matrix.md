@@ -108,11 +108,9 @@ the process exit behaviour.
   expand it.
 - **No edits to `cli.ts` source.** If a smoke test surfaces a real
   bug, file a separate issue with risk `high` and ask before touching
-  the CLI. The process-exit-vs-envelope drift surfaced during U9
-  manual smoke (missing-`--json` returns `exit_code: 64` in the
-  envelope but the process exits 0) is **pinned as-is** in U10 with a
-  residual-risk comment naming the separate-issue tracker. Pinning
-  current behaviour, not fixing it, is the U10 design decision.
+  the CLI. (The U9 manual-smoke "process exit vs envelope" suspicion
+  turned out to be a false alarm; see Block 10 and ledger finding
+  `false-alarm-process-exit-divergence`.)
 - **No edits to `lib/*.ts` source.** Same rule.
 - **No edits to existing `*.test.ts` files.** U10 adds one new test
   file, does not modify the existing 420-test surface.
@@ -122,9 +120,10 @@ the process exit behaviour.
   changes, no edits to existing rows.
 - **No README-level edits beyond the refactor-area README seam-row
   addition.** v2 README and v1 README both stay frozen.
-- **No process-exit-vs-envelope alignment work.** That stays a
-  separate issue per the U10 design decision. U10 pins current
-  behaviour exactly.
+- **No process-exit-vs-envelope alignment work.** Writing the smoke
+  block disproved the suspected divergence — process exit codes
+  already match envelope `exit_code` today. Block 10 pins the
+  alignment as a regression surface.
 
 ## Matrix structure (MUST include)
 
@@ -250,17 +249,20 @@ or `--debug`), MUST verify:
 - The stdout payload contains no diagnostic content
 - The stderr payload contains no envelope content
 
-### Block 10: Pinned current behaviour (drift residuals)
+### Block 10: Process exit code alignment
 
-Behaviours U10 pins as-is but flags as residual risks for a future
-agentic-CLI design conversation:
+Pins that process exit codes today match the envelope's documented
+`exit_code` values for both success (0) and every error class (64
+for usage errors, 1 for validation errors, 1 for packet-render-failed,
+70 for unexpected errors). The seam runbook initially named this as a
+suspected divergence based on a U9 manual-smoke `exit=$?` reading that
+turned out to be a shell artifact (a piped `head -3` ate the real
+exit code). Writing this block disproved the premise — see ledger
+finding `false-alarm-process-exit-divergence` for the audit trail.
 
-- **Process exit code vs envelope `exit_code` divergence.** Today,
-  error envelopes carry `exit_code: 64` (or `1`, `70`) in the payload,
-  but the process itself often exits 0. U10 asserts the **current
-  reality** (process exit is what it is today) and documents the
-  envelope-vs-process-exit divergence in a top-of-file comment. A
-  future issue covers the alignment work — do NOT fix it here.
+If the alignment drifts in a future change (intentional or not), this
+block surfaces it loudly so the alignment work can update process
+exit, the envelope `exit_code` docs, and these assertions together.
 
 ## Implementation patterns (MUST follow)
 
@@ -418,10 +420,10 @@ Stop when ALL of the following hold:
 5. The most recent `/ce-code-review` pass returns zero new
    findings.
 6. Every ledger row is `fixed` or `closed`.
-7. The process-exit-vs-envelope divergence is documented as a
-   residual risk in the smoke file's top-of-file comment AND filed
-   as a separate GitHub issue (issue URL recorded in the U10
-   ledger as evidence).
+7. The smoke file's top-of-file comment documents the
+   process-exit-vs-envelope alignment status (false alarm closed)
+   and the ledger records `false-alarm-process-exit-divergence` as
+   the audit trail.
 
 ## /loop fallback
 
