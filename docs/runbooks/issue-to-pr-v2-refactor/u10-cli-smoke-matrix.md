@@ -333,7 +333,7 @@ Conditional:
 
 ## Scoped audit prompt
 
-````
+````text
 Review U10 CLI smoke matrix. The new test file at
 `runbooks/issue-to-pr-v2/cli-smoke.test.ts` adds exhaustive
 process-boundary smoke tests for every command in `cli.ts` against
@@ -427,7 +427,7 @@ Stop when ALL of the following hold:
 
 ## /loop fallback
 
-```
+```text
 /loop 5 Follow docs/runbooks/issue-to-pr-v2-refactor/u10-cli-smoke-matrix.md.
 Re-read the runbook and u10-cli-smoke-matrix-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.

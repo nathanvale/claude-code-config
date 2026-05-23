@@ -226,6 +226,21 @@ function assertNullableString(value: unknown, label: string): void {
   );
 }
 
+/**
+ * Pin a value as a plain non-null, non-array object. `typeof === "object"`
+ * alone accepts `null` (typeof null === "object") and arrays (typeof [] ===
+ * "object"), which the documented envelope contract does not permit for
+ * `data`, `error`, or `error.hint`. This helper enforces the documented
+ * shape — a plain `Record<string, unknown>` — by rejecting both.
+ */
+function assertPlainObject(value: unknown, label: string): void {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(
+      `expected ${label} to be a plain object, got ${value === null ? "null" : Array.isArray(value) ? "array" : typeof value}`,
+    );
+  }
+}
+
 function assertSuccessEnvelopeShape(envelope: Record<string, unknown>): void {
   expect(envelope.status).toBe("ok");
   expect(envelope.schema_version).toBe("1");
@@ -235,7 +250,7 @@ function assertSuccessEnvelopeShape(envelope: Record<string, unknown>): void {
   expect(envelope.started_at_ms as number).toBeGreaterThan(0);
   expect(typeof envelope.duration_ms).toBe("number");
   expect(envelope.duration_ms as number).toBeGreaterThanOrEqual(0);
-  expect(typeof envelope.data).toBe("object");
+  assertPlainObject(envelope.data, "envelope.data");
 }
 
 /**
@@ -259,7 +274,7 @@ function assertErrorEnvelopeShape(
     expect(typeof envelope.started_at_ms).toBe("number");
     expect(typeof envelope.duration_ms).toBe("number");
     const error = envelope.error as Record<string, unknown>;
-    expect(typeof error).toBe("object");
+    assertPlainObject(error, "envelope.error");
     expect(error.code).toBe(expectedCode);
     const catalog = findErrorCodeEntry(expectedCode);
     expect(error.exit_code).toBe(catalog.exit_code);
@@ -267,7 +282,7 @@ function assertErrorEnvelopeShape(
     expect(error.recoverability).toBe(catalog.recoverability);
     expect(error.retryable).toBe(catalog.retryable);
     const hint = error.hint as Record<string, unknown>;
-    expect(typeof hint).toBe("object");
+    assertPlainObject(hint, "envelope.error.hint");
     expect(hint.action).toBe(catalog.hint.action);
   } catch (err) {
     if (context && err instanceof Error) {
@@ -527,14 +542,16 @@ describe("Block 3: state command × ledger states", () => {
     assertSuccessEnvelopeShape(result.envelope);
     const data = result.envelope.data as Record<string, unknown>;
     // Documented in HELP_DATA.state_response_shape. Pin every top-level
-    // key by presence + type so renames/removals fail loudly.
-    expect(typeof data.confirmation_state).toBe("object");
-    expect(typeof data.digest_drift).toBe("object");
+    // key by presence + type so renames/removals fail loudly. Sub-object
+    // fields use assertPlainObject to reject null and arrays per the
+    // documented contract (typeof === "object" alone would accept both).
+    assertPlainObject(data.confirmation_state, "data.confirmation_state");
+    assertPlainObject(data.digest_drift, "data.digest_drift");
     expect(typeof data.version_skew).toBe("string");
     expect(typeof data.route_id).toBe("string");
     expect(Array.isArray(data.required_reference_ids)).toBe(true);
     expect(Array.isArray(data.blocking_gates)).toBe(true);
-    expect(typeof data.installed_artifact_presence).toBe("object");
+    assertPlainObject(data.installed_artifact_presence, "data.installed_artifact_presence");
     expect(typeof data.ledger_path).toBe("string");
     expect(typeof data.ledger_exists).toBe("boolean");
     // runbook_version and runbook_version_skew are documented as
@@ -634,11 +651,12 @@ describe("Block 6: diagnose command × ledger states", () => {
     const result = await runCli(["diagnose", ledger, "--json"]);
     assertSuccessEnvelopeShape(result.envelope);
     const data = result.envelope.data as Record<string, unknown>;
-    // Documented in HELP_DATA.diagnose_response_shape.
+    // Documented in HELP_DATA.diagnose_response_shape. Sub-object fields
+    // use assertPlainObject to reject null and arrays per contract.
     expect(typeof data.inferred_route_id).toBe("string");
     expect(Array.isArray(data.expected_reference_ids)).toBe(true);
-    expect(typeof data.installed_artifact_presence).toBe("object");
-    expect(typeof data.drift).toBe("object");
+    assertPlainObject(data.installed_artifact_presence, "data.installed_artifact_presence");
+    assertPlainObject(data.drift, "data.drift");
     expect(typeof data.version_skew).toBe("string");
     expect(Array.isArray(data.blocking_gates)).toBe(true);
     expect(typeof data.ledger_path).toBe("string");

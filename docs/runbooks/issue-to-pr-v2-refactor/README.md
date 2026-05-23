@@ -122,7 +122,7 @@ inline at the end of every turn. Stop after 30 turns.
 
 ### V2 CLI smoke matrix
 
-```
+```text
 /goal Follow docs/runbooks/issue-to-pr-v2-refactor/u10-cli-smoke-matrix.md.
 Re-read the runbook and u10-cli-smoke-matrix-ledger.md at the start of every
 turn. Drive every ledger row to status fixed or closed and the most recent
