@@ -26,8 +26,8 @@ For the runbook convention this skill expects, see [convention.md](references/co
 If no `area-path` is given, the skill scans both the current working
 directory for `docs/runbooks/*/README.md` (repo-scope) and
 `~/.claude/runbooks/*/README.md` (user-scope), and asks the user to
-pick. User-scope holds host-neutral workflow runbooks like `issue-to-pr`
-that operate on a target repo passed in at launch.
+pick. User-scope holds host-neutral workflow runbooks like
+`issue-to-pr-v2` that operate on a target repo passed in at launch.
 
 ## Arguments
 
