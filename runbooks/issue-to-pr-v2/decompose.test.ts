@@ -243,12 +243,19 @@ function currentCommittedAttemptYaml(
 	const padding = " ".repeat(indent);
 	const itemPadding = " ".repeat(indent + 2);
 	const listPadding = " ".repeat(indent + 4);
+	// Render `files_touched: []` inline when the list is empty so the YAML stays
+	// unambiguous (a bare `files_touched:` block with no items parses as null,
+	// not as an empty array). The mismatch fixture below relies on this so
+	// `files: []` round-trips through the parser as an empty array.
+	const filesTouchedYaml =
+		files.length === 0
+			? `${listPadding}files_touched: []`
+			: `${listPadding}files_touched:\n${yamlList(files, indent + 6)}`;
 	return `${padding}builder_attempts:
 ${itemPadding}- attempt_type: implementation
 ${listPadding}status: committed
 ${listPadding}commit_sha: ${commitSha === null ? "null" : `"${commitSha}"`}
-${listPadding}files_touched:
-${yamlList(files, indent + 6)}
+${filesTouchedYaml}
 ${listPadding}route_hint: null
 ${listPadding}blockers: []
 ${listPadding}probe_results: []
@@ -2641,19 +2648,23 @@ ${currentCommitFilesYaml(6)}
 \`\`\`
 `,
 		);
-		// Persisted files_touched here is a proper subset of the batch's allowed
-		// files but differs from what the validator derives via `git diff-tree`
-		// (no `-m`) for `currentCommit`. The single-file persisted list is
-		// guaranteed unequal to the derived set on both merge-commit HEAD (where
-		// derived is empty) and non-merge HEAD (where derived has more than one
-		// file), so the `sameStringSet` check always reports a mismatch.
+		// Persisted files_touched must differ from the validator-derived set
+		// (`currentCommitTouchedFiles`) so `sameStringSet` reports a mismatch.
+		// When the validator-derived set is empty (merge-commit HEAD), use a
+		// non-empty proper subset of `batch.files`. When the validator-derived
+		// set is non-empty (non-merge HEAD), use `[]` which can never equal a
+		// non-empty set. This holds for both single-file and multi-file non-
+		// merge HEADs, and `currentCommittedAttemptYaml` serializes `[]`
+		// unambiguously as `files_touched: []`.
+		const mismatchedPersistedFiles =
+			currentCommitTouchedFiles.length === 0 ? [currentCommitFile] : [];
 		const mismatchedFiles = writeFixture(
 			"mismatched-files.md",
 			fullBuilderCommitContents.replace(
 				currentCommittedAttemptYaml(4, { commitSha: currentCommit }),
 				currentCommittedAttemptYaml(4, {
 					commitSha: currentCommit,
-					files: [currentCommitFile],
+					files: mismatchedPersistedFiles,
 					notes: "Recorded the wrong files.",
 				}),
 			),
