@@ -1,10 +1,8 @@
-# Issue to PR (v2 shadow install — human index)
+# Issue to PR (v2 install — human index)
 
-Maintainer-facing index for the v2 shadow tree at
-`runbooks/issue-to-pr-v2/`. The v2 install is in **shadow** until U9 cuts
-over the public hot-router entry point. The runnable, public reference
-remains the v1 install at `~/.claude/runbooks/issue-to-pr/` until that
-cutover lands.
+Maintainer-facing index for the v2 install at
+`runbooks/issue-to-pr-v2/`. v1 stays on disk at
+`~/.claude/runbooks/issue-to-pr/` as a frozen behavior baseline.
 
 This README is a **finder**, not a workflow manual. Agents never read
 this file: agents read the hot router at `issue-to-pr.md`, the per-stage
@@ -143,9 +141,9 @@ directory validates against the wrong git repository — lives in
 
 ## Compatibility notes
 
-- **v1 still runnable.** `~/.claude/runbooks/issue-to-pr/` remains the
-  public, runnable reference until U9. U8 does not change any
-  installation script, symlink, or v1 file.
+- **v1 frozen on disk.** `~/.claude/runbooks/issue-to-pr/` stays
+  available as the behavior baseline the v2 refactor preserves. v2
+  is the active public runbook.
 - **Ledger path is shared with v1.** See [Per-issue
   ledger](#per-issue-ledger) above. The v1-vs-v2 skew rules live in
   [`references/ledger-and-helper.md`](references/ledger-and-helper.md).
@@ -178,7 +176,7 @@ README used to cover inline:
 
 ## See also
 
-- [v1 install](../issue-to-pr/) — runnable until U9 cutover.
+- [v1 install](../issue-to-pr/) — frozen behavior baseline.
 - [Refactor runbook area](../../docs/runbooks/issue-to-pr-v2-refactor/) —
   seam runbooks and ledgers that drove this install.
 - [U8 seam runbook](../../docs/runbooks/issue-to-pr-v2-refactor/u8-readme.md)
