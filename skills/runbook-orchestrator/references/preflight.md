@@ -35,8 +35,8 @@ find "$HOME/.claude/runbooks" -maxdepth 2 -name "README.md" -type f 2>/dev/null
 Repo-scope (`docs/runbooks/*/`) holds runbooks tied to a specific
 codebase. User-scope (`~/.claude/runbooks/*/`) holds host-neutral
 workflow runbooks that operate on a *target* repo passed in at launch
-(for example, `issue-to-pr`). Both follow the same convention; only the
-path differs.
+(for example, `issue-to-pr-v2`). Both follow the same convention; only
+the path differs.
 
 Possible outcomes:
 

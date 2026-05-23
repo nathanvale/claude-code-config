@@ -12,7 +12,7 @@ Two valid locations, same convention:
   specific codebase (e.g. `docs/runbooks/data-table-review/`).
 - **User-scope**: `~/.claude/runbooks/<name>/` - host-neutral workflow
   runbooks that operate on a *target* repo passed in at launch
-  (e.g. `~/.claude/runbooks/issue-to-pr/`).
+  (e.g. `~/.claude/runbooks/issue-to-pr-v2/`).
 
 Both follow the folder shape and section requirements below. Per-run
 ledger state for user-scope runbooks lives in the target repo at

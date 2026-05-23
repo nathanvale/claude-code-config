@@ -119,6 +119,59 @@ show_status() {
 		fi
 	done
 	echo ""
+
+	check_v2_artifact_presence
+}
+
+# U6: verify the v2 issue-to-pr install topology resolves through the
+# installed symlink path. Walks references/, templates/, cli.ts, and lib/
+# under ${CLAUDE_HOME}/runbooks/issue-to-pr-v2/. A subdirectory counts as
+# present iff it contains at least one regular file (recursive). Preserves
+# the symlink-only install topology - no cp -r, no copy install path.
+check_v2_artifact_presence() {
+	local v2_root="${CLAUDE_HOME}/runbooks/issue-to-pr-v2"
+
+	echo "Issue-to-PR v2 install artifacts (under ${v2_root/#$HOME/~})"
+	printf "%-40s %s\n" "ARTIFACT" "STATUS"
+	printf "%-40s %s\n" "--------" "------"
+
+	if [[ ! -e "$v2_root" ]]; then
+		printf "%-40s \033[31m%s\033[0m\n" "(v2 install root)" "MISSING"
+		printf "         re-run ./install.sh to create the runbooks symlink.\n"
+		return
+	fi
+
+	v2_check_file "$v2_root/cli.ts" "cli.ts"
+	v2_check_dir_recursive "$v2_root/lib" "lib/"
+	v2_check_dir_recursive "$v2_root/references" "references/"
+	v2_check_dir_recursive "$v2_root/templates" "templates/"
+	echo ""
+}
+
+v2_check_file() {
+	local path="$1"
+	local label="$2"
+	if [[ -f "$path" ]]; then
+		printf "%-40s \033[32m%s\033[0m\n" "$label" "PRESENT"
+	else
+		printf "%-40s \033[31m%s\033[0m\n" "$label" "MISSING"
+	fi
+}
+
+v2_check_dir_recursive() {
+	local path="$1"
+	local label="$2"
+	if [[ ! -d "$path" ]]; then
+		printf "%-40s \033[31m%s\033[0m\n" "$label" "MISSING"
+		return
+	fi
+	# -L follows symlinks so the installed symlink topology is honored.
+	# -type f returns regular files; head -n 1 short-circuits to one match.
+	if [[ -n "$(find -L "$path" -type f -print -quit 2>/dev/null)" ]]; then
+		printf "%-40s \033[32m%s\033[0m\n" "$label" "PRESENT (recursive)"
+	else
+		printf "%-40s \033[33m%s\033[0m\n" "$label" "EMPTY"
+	fi
 }
 
 case "${1:-}" in

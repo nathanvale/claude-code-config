@@ -1,3 +1,8 @@
+> **Frozen v1 reference.** The active runbook lives at
+> [`runbooks/issue-to-pr-v2/`](../issue-to-pr-v2/README.md). This v1
+> tree stays on disk as a behavior baseline for the v2 refactor; it
+> is no longer the public entry point.
+
 # Issue to PR - Workflow Runbook
 
 This is a **single-workflow runbook area**, not a multi-seam review area like
