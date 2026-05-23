@@ -14,22 +14,72 @@ const currentCommit = new TextDecoder()
 const currentCommitFull = new TextDecoder()
 	.decode(Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout)
 	.trim();
-const currentCommitFiles = new TextDecoder()
-	.decode(
-		Bun.spawnSync([
-			"git",
-			"diff-tree",
-			"--no-commit-id",
-			"--name-only",
-			"-r",
-			"--root",
-			currentCommit,
-		]).stdout,
-	)
-	.trim()
-	.split("\n")
-	.filter((file) => file.length > 0);
-const currentCommitFile = currentCommitFiles[0] ?? "README.md";
+function gitDiffTreeLines(extraFlags: string[]): string[] {
+	return new TextDecoder()
+		.decode(
+			Bun.spawnSync([
+				"git",
+				"diff-tree",
+				"--no-commit-id",
+				"-r",
+				"--root",
+				...extraFlags,
+				currentCommit,
+			]).stdout,
+		)
+		.trim()
+		.split("\n")
+		.filter((line) => line.length > 0);
+}
+// Files the test fixtures interpolate into batch `files:` arrays.
+//
+// `-m` makes `git diff-tree` emit per-parent diffs for merge commits (otherwise
+// merge commits show empty output and every fixture below ends up with empty
+// `files:` arrays). Dedup the union via Set; for non-merge commits this is a
+// no-op. Insertion order is preserved by Set, which keeps `contractDigest` in
+// `lib/ledger.ts` deterministic for a given HEAD (the digest hashes a JSON
+// stringify of the batch list, so file-array order matters).
+//
+// Downstream consumers of `currentCommitFiles[0]` (via `currentCommitFile`)
+// rely on the first element NOT being `"README.md"` so the
+// `outside-batch-files.md` per-test fixture can pin the validator's
+// `unauthorized` check; `currentCommitFile` enforces that explicitly below.
+const currentCommitFiles = [...new Set(gitDiffTreeLines(["--name-only", "-m"]))];
+// Files the in-lib `touchedFilesForCommit` validator derives for `currentCommit`
+// using the same `git diff-tree` flags the validator uses (no `-m`, with `-M`
+// for rename detection, parsed from `--name-status`). Tests that persist
+// `files_touched` for a `committed` builder attempt default to this value (see
+// `currentCommittedAttemptYaml`) so the validator's `sameStringSet` check
+// passes on merge-commit HEADs where the validator-derived set is empty.
+//
+// This block mirrors `touchedFilesForCommit` in
+// `runbooks/issue-to-pr-v2/lib/ledger.ts` by convention - the validator runs
+// in a spawned `decompose.ts` subprocess so it cannot be called directly from
+// fixture-bootstrap context. If the validator's flag set changes, update this
+// block to match.
+const currentCommitTouchedFiles = gitDiffTreeLines([
+	"--name-status",
+	"-M",
+]).flatMap((raw) => {
+	const parts = raw.trim().split("\t").filter((part) => part.length > 0);
+	if (parts.length < 2) return [];
+	const status = parts[0];
+	return status.startsWith("R") || status.startsWith("C")
+		? parts.slice(1)
+		: [parts[1]];
+});
+// Pick the first file that is not the hard-coded `"README.md"` used by the
+// `outside-batch-files.md` per-test fixture as the constrained batch path.
+// Without this filter, a future HEAD whose first changed file happens to be
+// `README.md` would make `currentCommitFile === "README.md"`, which would in
+// turn make that fixture's `files_touched: [currentCommitFile]` a subset of
+// `batch.files: ["README.md"]` and the `unauthorized` validator would not fire.
+// The hard-coded fallback `"src/wrong-file.ts"` is reached only when every
+// element of `currentCommitFiles` equals `"README.md"`, which would also imply
+// `currentCommitFiles.length <= 1` and other test failures.
+const currentCommitFile =
+	currentCommitFiles.find((file) => file !== "README.md") ??
+	"src/wrong-file.ts";
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0))
@@ -186,17 +236,26 @@ function currentCommittedAttemptYaml(
 	options: { commitSha?: string | null; files?: string[]; notes?: string } = {},
 ): string {
 	const commitSha = options.commitSha === undefined ? currentCommit : options.commitSha;
-	const files = options.files ?? currentCommitFiles;
+	// Default to the validator-derived set so the lib's `sameStringSet` check
+	// passes on merge-commit HEAD. See `currentCommitTouchedFiles` initializer.
+	const files = options.files ?? currentCommitTouchedFiles;
 	const notes = options.notes ?? "Implemented the confirmed batch.";
 	const padding = " ".repeat(indent);
 	const itemPadding = " ".repeat(indent + 2);
 	const listPadding = " ".repeat(indent + 4);
+	// Render `files_touched: []` inline when the list is empty so the YAML stays
+	// unambiguous (a bare `files_touched:` block with no items parses as null,
+	// not as an empty array). The mismatch fixture below relies on this so
+	// `files: []` round-trips through the parser as an empty array.
+	const filesTouchedYaml =
+		files.length === 0
+			? `${listPadding}files_touched: []`
+			: `${listPadding}files_touched:\n${yamlList(files, indent + 6)}`;
 	return `${padding}builder_attempts:
 ${itemPadding}- attempt_type: implementation
 ${listPadding}status: committed
 ${listPadding}commit_sha: ${commitSha === null ? "null" : `"${commitSha}"`}
-${listPadding}files_touched:
-${yamlList(files, indent + 6)}
+${filesTouchedYaml}
 ${listPadding}route_hint: null
 ${listPadding}blockers: []
 ${listPadding}probe_results: []
@@ -2589,25 +2648,49 @@ ${currentCommitFilesYaml(6)}
 \`\`\`
 `,
 		);
+		// Persisted files_touched must differ from the validator-derived set
+		// (`currentCommitTouchedFiles`) so `sameStringSet` reports a mismatch.
+		// When the validator-derived set is empty (merge-commit HEAD), use a
+		// non-empty proper subset of `batch.files`. When the validator-derived
+		// set is non-empty (non-merge HEAD), use `[]` which can never equal a
+		// non-empty set. This holds for both single-file and multi-file non-
+		// merge HEADs, and `currentCommittedAttemptYaml` serializes `[]`
+		// unambiguously as `files_touched: []`.
+		const mismatchedPersistedFiles =
+			currentCommitTouchedFiles.length === 0 ? [currentCommitFile] : [];
 		const mismatchedFiles = writeFixture(
 			"mismatched-files.md",
 			fullBuilderCommitContents.replace(
 				currentCommittedAttemptYaml(4, { commitSha: currentCommit }),
 				currentCommittedAttemptYaml(4, {
 					commitSha: currentCommit,
-					files: [],
+					files: mismatchedPersistedFiles,
 					notes: "Recorded the wrong files.",
 				}),
 			),
 		);
+		// Pair the constrained batch (`files: ["README.md"]`) with a non-empty
+		// `files_touched` so the validator's `unauthorized` check has a file to
+		// flag. `currentCommitFile` is selected to exclude `"README.md"` (see
+		// the `currentCommitFile` initializer above); on merge-commit HEAD the
+		// default `currentCommitTouchedFiles` is empty, which would otherwise
+		// trivially satisfy the validator.
 		const outsideBatchFiles = writeFixture(
 			"outside-batch-files.md",
-			fullBuilderCommitContents.replace(
-				`files:
+			fullBuilderCommitContents
+				.replace(
+					`files:
 ${currentCommitFilesYaml(6)}`,
-				`files:
+					`files:
       - "README.md"`,
-			),
+				)
+				.replace(
+					currentCommittedAttemptYaml(4, { commitSha: currentCommit }),
+					currentCommittedAttemptYaml(4, {
+						commitSha: currentCommit,
+						files: [currentCommitFile],
+					}),
+				),
 		);
 
 		const fullRefResult = await runDecompose([
