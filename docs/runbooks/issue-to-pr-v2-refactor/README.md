@@ -30,6 +30,7 @@ small enough to audit on a screen, with findings that stay inside the seam.
 | V2 shadow hot router | [u7-hot-router.md](u7-hot-router.md) | [u7-hot-router-ledger.md](u7-hot-router-ledger.md) | Writable: new `runbooks/issue-to-pr-v2/issue-to-pr.md` (hot file), targeted edits to `runbooks/issue-to-pr-v2/references/stage-1-pick-issue.md` through `stage-6-ship.md` + `ledger-and-helper.md`, `runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md`, and the `runbooks/issue-to-pr-v2/lib/cli-diagnostics.ts` LogTape/AsyncLocalStorage/redactor upgrade. Read-only: v1 sources (frozen until U9), all other `lib/*` modules, U4/U5/U6 envelope shapes, U6 ledger template |
 | V2 README as human index | [u8-readme.md](u8-readme.md) | [u8-readme-ledger.md](u8-readme-ledger.md) | Writable: new `runbooks/issue-to-pr-v2/README.md` (v2 finder/index), targeted trims to `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` (installed-path narration + helper invocation example) and `runbooks/issue-to-pr-v2/references/host-adapters.md` (See-also alignment). Read-only: U7 hot router, all `lib/*` modules, U4/U5/U6/U7 references not named writable, all templates, U6 ledger template, v1 sources (frozen until U9) |
 | V2 public cutover | [u9-cutover.md](u9-cutover.md) | [u9-cutover-ledger.md](u9-cutover-ledger.md) | Writable: `runbooks/issue-to-pr-v2/references/regression-matrix.md` (add `test_anchor` column citing existing tests; no new probe code), single legacy-pointer block at the top of `runbooks/issue-to-pr/README.md`, shadow-caveat trim in `runbooks/issue-to-pr-v2/README.md`. Read-only: all `lib/*.ts` source + tests (probes already shipped by U4-U6), `cli.ts`, `cli.test.ts`, `decompose.ts`, `decompose.test.ts`, U7 hot router, all references except `regression-matrix.md`, all templates, `tsconfig.json` (already includes v2), `install.sh` (already surfaces v2 status), all `runbooks/issue-to-pr/` files except the single legacy-pointer block |
+| V2 CLI smoke matrix | [u10-cli-smoke-matrix.md](u10-cli-smoke-matrix.md) | [u10-cli-smoke-matrix-ledger.md](u10-cli-smoke-matrix-ledger.md) | Writable: new `runbooks/issue-to-pr-v2/cli-smoke.test.ts` (exhaustive process-boundary smoke for every command × every documented contract; no new CLI surface), one new row added to `runbooks/issue-to-pr-v2/references/regression-matrix.md`. Read-only: `runbooks/issue-to-pr-v2/cli.ts` source, all `lib/*.ts` source + tests, existing `cli.test.ts`, `decompose.ts/test`, U7 hot router, all references except the one matrix-row addition, all templates, v1 tree, `tsconfig.json`, `install.sh`. Pins current process-exit-vs-envelope divergence as-is; alignment work is a separate issue |
 
 **Cross-cutting seams** (each spans many files):
 
@@ -114,6 +115,16 @@ inline at the end of every turn. Stop after 30 turns.
 ```
 /goal Follow docs/runbooks/issue-to-pr-v2-refactor/u9-cutover.md.
 Re-read the runbook and u9-cutover-ledger.md at the start of every
+turn. Drive every ledger row to status fixed or closed and the most recent
+/ce-code-review pass to zero new findings. Echo the full ledger status table
+inline at the end of every turn. Stop after 30 turns.
+```
+
+### V2 CLI smoke matrix
+
+```
+/goal Follow docs/runbooks/issue-to-pr-v2-refactor/u10-cli-smoke-matrix.md.
+Re-read the runbook and u10-cli-smoke-matrix-ledger.md at the start of every
 turn. Drive every ledger row to status fixed or closed and the most recent
 /ce-code-review pass to zero new findings. Echo the full ledger status table
 inline at the end of every turn. Stop after 30 turns.
@@ -218,6 +229,7 @@ across passes — keep it stable.
 7. V2 shadow hot router  *(U7 — depends on U2-U6; hot file points at the assembled v2 surface)*
 8. V2 README as human index  *(U8 — depends on U7; readme indexes the hot router and references)*
 9. V2 public cutover  *(U9 — canonical close; depends on U7+U8. The deterministic probes called out in the master plan as U9 deliverables were already shipped by U4-U6; U9's real work is augmenting the regression matrix with test anchors and flipping the two public-facing README pointers. v1 stays on disk as a frozen baseline)*
+10. V2 CLI smoke matrix  *(U10 — post-cutover hardening; depends on U9. Exhaustive process-boundary smoke pinning every command × every documented contract surface from `HELP_DATA`. Lives as a single new `cli-smoke.test.ts` file; pins current process-exit-vs-envelope divergence as-is and defers alignment to a separate agentic-CLI design issue)*
 
 ## Closing reports
 
