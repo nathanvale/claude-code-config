@@ -115,11 +115,21 @@ batches:
     ac_mapping:
       - 2
     rationale: null
-    status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
-    final_verdict: null
+    status: converged
+    iterations: 1
+    builder_commits:
+      - "86f2d8e06809539666c6db2fa3d27c64be02cfcd"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "86f2d8e06809539666c6db2fa3d27c64be02cfcd"
+        files_touched:
+          - "skills/issue-to-pr/SKILL.md"
+        route_hint: "Hand to Validator, then U3 retires recipe 2.3 once both links exist."
+        blockers: []
+        probe_results: []
+        notes: "Extended the shared route_catalog bullet to add 'and recipe 2.3 (blocked-digests-stale)' after the existing recipe 2.2 link; one bullet preserved, single-bullet change."
+    final_verdict: converged
   - id: "u3-retire-recipe-2-3"
     name: "Retire recipe 2.3 retire-when bar and verify no contradiction"
     goal: "Recipe 2.3's retire-when bar in first-run-gotchas.md is retired (marked retired per the entry-governance contract, recipe body retained), recording that the ledger-and-helper.md link satisfies the literal retire-when bar and the SKILL.md link closes the companion route-catalog targeting gap, with no contradiction across the three edited surfaces and both test suites green."
