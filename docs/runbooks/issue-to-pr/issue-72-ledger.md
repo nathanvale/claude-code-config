@@ -5,7 +5,7 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/72"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-05-24-006-fix-issue-to-pr-runbook-heal-merge-guard-plan.md"
 started_at: "2026-05-24T19:17:33+10:00"
-status: "in-progress"
+status: "shipped"
 runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
@@ -13,7 +13,7 @@ ac_confirmed_at: "2026-05-24T19:17:33+10:00"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-05-24T19:22:06+10:00"
 blocked_reason: null
-pr_url: null
+pr_url: "https://github.com/nathanvale/claude-code-config/pull/75"
 ship_mode: "standard"
 final_reviewed_at: "2026-05-24T19:49:30+10:00"
 plan_digest: "sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95"
@@ -183,6 +183,7 @@ findings: []
 - 2026-05-24T19:35:04+10:00 - Stage 4 lifecycle: started `stage5-p2-policy` batch after dependency `runbook-heal-merge-guard` converged and host readiness check passed.
 - 2026-05-24T19:41:58+10:00 - Stage 4 validator wave for `stage5-p2-policy`: Builder commit `395a8aad8a5ff0aec4c654e2b206b705bc6a74ee` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, and `ce-adversarial-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
 - 2026-05-24T19:49:30+10:00 - Stage 5 final review: cumulative `main...HEAD` review dispatched to `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`, and `ce-kieran-typescript-reviewer`; all returned zero findings, zero residual risks, and zero testing gaps. Local checks already run: `bun_testFile runbooks/issue-to-pr-v2/lib/ledger.test.ts` passed 76/76, `tsc_check runbooks/issue-to-pr-v2/lib/ledger.ts` passed, and `biome_lintCheck runbooks/issue-to-pr-v2` reported 0 errors with 2 existing runner warnings lacking file locations.
+- 2026-05-24T19:52:30+10:00 - Stage 6 ship: pushed branch `feat/issue-72-runbook-heal-merge-guard`, created PR https://github.com/nathanvale/claude-code-config/pull/75, and recorded no residual review findings.
 
 ### runbook_version skew continuation evidence (U6)
 
