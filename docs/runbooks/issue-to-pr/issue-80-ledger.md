@@ -260,6 +260,26 @@ dirty/staged path summaries>
   deferred follow-up); first-run-gotchas.md read-trigger still says
   "discretionary" and contradicts step 7b until batch-2 reconciles it
   (correctly scoped to batch-2, which owns that file).
+- 2026-05-24: batch-2-guide-and-verify Validator wave on commit
+  caf086c40caae714cda5438f8635a32b60635025; personas (always-on set):
+  ce-correctness-reviewer, ce-project-standards-reviewer,
+  ce-maintainability-reviewer, ce-adversarial-reviewer. Findings: b2-001
+  (P2, annotation-step7b-block-mislabel) fixed by repair commit
+  363cd4f2c13b6b1c84d3c3811c9836645ede962c (re-check correctness clean);
+  b2-002/b2-003 P3 deferred. Bar text verbatim and entry-governance
+  preserved confirmed by all reviewers; adversarial independently re-ran
+  route.test.ts (77/0 green).
+- 2026-05-24: Stage 5 final review via /ce-code-review (report-only) over
+  the cumulative diff main...HEAD. Docs-only diff; full reviewer suite ran
+  (no cap failure, no fanout reduction). 0 open P0/P1. Three P3 findings
+  recorded as batch_id: final, deferred-P3: fr-001 (read-trigger
+  install-presence over-claim, PLAUSIBLE then mitigated), fr-002 (`7b.`
+  markdown list marker), fr-003 (step 7b single-visible-action ambiguity).
+  Stage 5 read-only gate (--assert-stage5-readonly b31fc6a) passed.
+- 2026-05-24: Stage 6 local checks. biome_lintCheck (json)
+  first-run-gotchas.md: 0/0 clean. biome_lintCheck (json) SKILL.md: 0/0
+  clean. bun_runTests (json) pattern issue-to-pr-v2: 503 pass / 0 fail
+  (route.test.ts pinned mapping green = AC #2 regression gate).
 
 ### runbook_version skew continuation evidence (U6)
 
