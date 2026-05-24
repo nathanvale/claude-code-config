@@ -84,9 +84,13 @@ the markdown table below in sync for human scanning. `severity` must be `P0`,
 Contract Review findings before batch confirmation, `batch_id: final` for
 final review findings, or a confirmed ledger batch id for batch-loop findings.
 Fixed Stage 3 findings must use `resolution: plan-revision <sha>` for the
-reachable plan/DAG revision that closed them. Other fixed findings must use
-`resolution: commit <sha>` recorded in a terminal ledger batch, or
-`resolution: patch-batch patch-NNN`. Duplicate findings are identified by
+reachable plan/DAG revision that closed them. Fixed `batch_id: final` findings
+closed by an in-run orchestrator runbook self-heal use `resolution:
+runbook-heal <sha>`, where the cited commit is control-plane-only
+(`runbooks/issue-to-pr-v2/` or `skills/issue-to-pr/`, never a deliverable or
+the per-issue ledger path). Other fixed findings must use `resolution: commit
+<sha>` recorded in a terminal ledger batch, or `resolution: patch-batch
+patch-NNN`. Duplicate findings are identified by
 `batch_id + signature`; superseded rows must point to the canonical
 non-superseded row with the same batch id and signature.
 

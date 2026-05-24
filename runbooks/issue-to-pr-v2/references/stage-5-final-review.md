@@ -25,6 +25,22 @@ ledger (writing `## Findings data`, updating the rendered table, setting
 `final_reviewed_at`, closing P2/P3 rows) and may not edit source files,
 acceptance criteria, batch contracts, or any non-ledger artifact.
 
+### Blocked-by-doc-defect carve-out
+
+Runbook self-heals discovered at final review normally route through the
+`runbook-heal <sha>` closure form on a separate concern
+([findings-and-validators.md](findings-and-validators.md#closing-a-finding-without-fixing-it-v1-l1288-1301)),
+not onto the issue branch. There is one narrow exception. When a runbook
+**prose** defect actually **blocks the run from continuing** (the prose is the
+sole carrier of a runtime-affecting instruction, e.g. it names a non-existent
+`decompose.ts` helper flag), an in-branch heal is permitted to unblock the run
+and is recorded via `runbook-heal <sha>`. This is the only carve-out to the
+read-only rule. Unrelated runbook defects that do not block the run stay off
+the issue branch and route through the normal `runbook-heal` concern. The heal
+commit is still control-plane-only: it touches `runbooks/issue-to-pr-v2/` or
+`skills/issue-to-pr/`, never deliverable files and never the per-issue ledger
+path.
+
 ## Inputs
 
 Cumulative diff after all batches converged
@@ -90,6 +106,19 @@ with conversation memory, route from the envelope.
    advance to Stage 6. If final review found zero findings and the table
    would not otherwise change, the `final_reviewed_at` frontmatter update is
    the required final-review checkpoint.
+
+   **Enforce the read-only gate.** AFTER committing the final-review ledger
+   checkpoint, the orchestrator MUST run
+   `decompose.ts --assert-stage5-readonly <ledger-path> <checkpoint-commit-ref>`
+   against that checkpoint commit. The gate asserts the checkpoint touched ONLY
+   the ledger path and rejects a merge-commit checkpoint. If it fails (a
+   non-ledger path was touched during final review), that is a Stage-5
+   read-only violation that MUST be surfaced, not ignored: record a synthetic
+   `batch_id: final` finding for the violation and fail-stop. This makes the
+   gate part of the protected flow so an in-run non-ledger edit is surfaced,
+   never silent. (The only sanctioned non-ledger mutation at Stage 5 is the
+   blocked-by-doc-defect carve-out above, closed via `runbook-heal <sha>` on a
+   separate control-plane commit, not folded into the final-review checkpoint.)
 
 ## Exit condition
 

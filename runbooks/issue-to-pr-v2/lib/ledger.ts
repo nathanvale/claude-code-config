@@ -2512,10 +2512,17 @@ function validateFindingResolution(finding: Finding, context: string, batchConte
     }
     const commitMatch = resolution.match(/^commit [0-9a-f]{7,40}$/i);
     const patchMatch = resolution.match(/^patch-batch (patch-\d{3})$/);
+    const runbookHealMatch = resolution.match(/^runbook-heal [0-9a-f]{7,40}$/i);
     if (commitMatch) {
       const ref = resolution.slice("commit ".length);
       const resolved = validateReachableCommit(ref, `${context} fixed commit`);
       validateLedgerOwnedFixedCommit(finding, ref, resolved, context, batchContext);
+      return;
+    }
+    if (runbookHealMatch && finding.batch_id === "final") {
+      const ref = resolution.slice("runbook-heal ".length);
+      const resolved = validateReachableCommit(ref, `${context} runbook-heal commit`);
+      validateControlPlaneOnlyCommit(ref, resolved, context);
       return;
     }
     if (patchMatch) {
@@ -2568,6 +2575,90 @@ function validateLedgerOwnedFixedCommit(
   }
   if (!batchContext.terminalBuilderCommitsById.get(finding.batch_id)?.has(resolvedRef)) {
     fail(`${context} fixed commit "${ref}" must be recorded in terminal batch "${finding.batch_id}"`);
+  }
+}
+
+/**
+ * Decide whether a `git diff-tree --raw` block carries at least one
+ * content-bearing change, as opposed to ONLY mode-only (no-op) modifications.
+ *
+ * Each `--raw` line is `:<oldmode> <newmode> <oldsha> <newsha> <STATUS>\t<path...>`.
+ * A pure `chmod` reports status `M` with IDENTICAL old/new blob SHAs (only the
+ * mode bits differ): it proves no content delta and is the vacuous-pass class
+ * this guard targets. Every other change kind is content-bearing and accepted:
+ *
+ *   - `A` add / `D` delete                 — structural tree change
+ *   - `R` rename / `C` copy                — structural change (even a pure
+ *                                            rename keeps an identical blob SHA,
+ *                                            so the STATUS letter, not the SHA,
+ *                                            is what distinguishes it from chmod)
+ *   - `T` type-change (e.g. file→symlink)  — real change
+ *   - `M` modify with DIFFERING SHAs       — real content change (covers binary
+ *                                            files, which `--numstat` reports as
+ *                                            `-` and cannot be summed to detect)
+ *
+ * Returns true if any entry is content-bearing; false if every entry is a pure
+ * mode-only `M` (identical blob SHAs) or the block is empty.
+ */
+export function rawDiffHasContentBearingChange(rawDiffOutput: string): boolean {
+  for (const raw of rawDiffOutput.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const tabIndex = line.indexOf("\t");
+    if (tabIndex < 0) continue;
+    const meta = line.slice(0, tabIndex).replace(/^:/, "").trim().split(/\s+/);
+    if (meta.length < 5) continue;
+    const oldSha = meta[2];
+    const newSha = meta[3];
+    const status = meta[4];
+    // A pure mode-only modification is the only non-content-bearing case: the
+    // STATUS is `M` and the blob SHA is unchanged. Anything else (A/D/R/C/T, or
+    // `M` with a changed SHA) is a real change.
+    const modeOnly = status.startsWith("M") && oldSha === newSha;
+    if (!modeOnly) return true;
+  }
+  return false;
+}
+
+function rawDiffForCommit(ref: string, context: string): string {
+  const diff = spawnSync("git", ["diff-tree", "--no-commit-id", "--raw", "-r", "--root", "-M", ref], {
+    encoding: "utf8",
+  });
+  if (diff.status !== 0) fail(`${context} "${ref}" raw diff could not be read from git`);
+  return diff.stdout;
+}
+
+/**
+ * Abuse guard for the `runbook-heal <sha>` fixed resolution: assert the cited
+ * commit's diff touches ONLY control-plane paths AND carries at least one
+ * content-bearing change. The allowlist is the Issue-to-PR control plane
+ * (`runbooks/issue-to-pr-v2/` or `skills/issue-to-pr/`). Any touched path
+ * outside the allowlist — a pure-deliverable commit, a mixed
+ * control-plane+deliverable commit, or a commit touching the per-issue ledger
+ * path `docs/runbooks/issue-to-pr/` (which is NOT control plane) — fails,
+ * naming the first offending path.
+ *
+ * A commit whose ONLY change is a mode-bit flip (chmod) proves no content
+ * change and is rejected as the same vacuous-proof class the empty-commit guard
+ * targets, narrowed to the per-file level. Renames, deletes, adds, copies, and
+ * type-changes carry real tree changes and remain accepted.
+ */
+function validateControlPlaneOnlyCommit(ref: string, resolvedRef: string, context: string): void {
+  const allowedPrefixes = ["runbooks/issue-to-pr-v2/", "skills/issue-to-pr/"];
+  const touched = touchedFilesForCommit(resolvedRef, `${context} runbook-heal commit`);
+  if (touched.length === 0) {
+    fail(`${context} runbook-heal commit "${ref}" changed no files; a runbook-heal must touch a control-plane path`);
+  }
+  for (const file of touched) {
+    if (!allowedPrefixes.some((prefix) => file.startsWith(prefix))) {
+      fail(`${context} runbook-heal commit "${ref}" touches non-control-plane path: ${file}`);
+    }
+  }
+  const rawDiff = rawDiffForCommit(resolvedRef, `${context} runbook-heal commit`);
+  if (!rawDiffHasContentBearingChange(rawDiff)) {
+    fail(
+      `${context} runbook-heal commit "${ref}" carries no content change (mode-only / no-op); a runbook-heal must change control-plane content`,
+    );
   }
 }
 

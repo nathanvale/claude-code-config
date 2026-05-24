@@ -137,33 +137,33 @@ findings:
     signature: mismatched-ac-digest-routes-to-blocked-not-pick-issue
     persona: ce-adversarial-reviewer
     severity: P2
-    status: out-of-scope-for-this-issue
+    status: fixed
     summary: "Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table."
-    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (null vs mismatched distinguished; self-contradiction removed); re-verified against lib/ledger.ts and lib/route.ts."
+    resolution: "runbook-heal 8be31d4"
   - id: fr-002
     batch_id: final
     signature: readacceptancecriteriastate-pending-claim-overstated
     persona: ce-adversarial-reviewer
     severity: P3
-    status: out-of-scope-for-this-issue
+    status: fixed
     summary: "Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent."
-    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (status-first short-circuit now described accurately)."
+    resolution: "runbook-heal 8be31d4"
   - id: fr-003
     batch_id: final
     signature: stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing
     persona: ce-correctness-reviewer
     severity: P3
-    status: out-of-scope-for-this-issue
+    status: fixed
     summary: "Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed."
-    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (Stage 3 now says ac_digest/plan_digest re-confirmed, batch_contract_digest first-stored)."
+    resolution: "runbook-heal 8be31d4"
   - id: fr-004
     batch_id: final
     signature: plan-digest-at-stage-2-claim-has-no-stage-2-doc-support
     persona: ce-adversarial-reviewer
     severity: P3
-    status: out-of-scope-for-this-issue
+    status: fixed
     summary: "Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2."
-    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (added decompose.ts --plan-digest step to stage-2-plan.md)."
+    resolution: "runbook-heal 8be31d4"
 ```
 
 ## Findings
@@ -171,10 +171,10 @@ findings:
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 | cr-001 | stage-3 | acceptance-test-looser-than-plan-byte-for-byte | contract-reviewer | P3 | deferred-P3 | Candidate acceptance_tests describe AC1 as exact specified content but do not restate the two literal lines or carry the plan byte-for-byte guard; contract digest binds it to the plan and content is trivial. | deferred-P3 |
-| fr-001 | final | mismatched-ac-digest-routes-to-blocked-not-pick-issue | ce-adversarial-reviewer | P2 | out-of-scope-for-this-issue | Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (null vs mismatched distinguished; self-contradiction removed); re-verified against lib/ledger.ts and lib/route.ts. |
-| fr-002 | final | readacceptancecriteriastate-pending-claim-overstated | ce-adversarial-reviewer | P3 | out-of-scope-for-this-issue | Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (status-first short-circuit now described accurately). |
-| fr-003 | final | stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing | ce-correctness-reviewer | P3 | out-of-scope-for-this-issue | Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (Stage 3 now says ac_digest/plan_digest re-confirmed, batch_contract_digest first-stored). |
-| fr-004 | final | plan-digest-at-stage-2-claim-has-no-stage-2-doc-support | ce-adversarial-reviewer | P3 | out-of-scope-for-this-issue | Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (added decompose.ts --plan-digest step to stage-2-plan.md). |
+| fr-001 | final | mismatched-ac-digest-routes-to-blocked-not-pick-issue | ce-adversarial-reviewer | P2 | fixed | Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table. | runbook-heal 8be31d4 |
+| fr-002 | final | readacceptancecriteriastate-pending-claim-overstated | ce-adversarial-reviewer | P3 | fixed | Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent. | runbook-heal 8be31d4 |
+| fr-003 | final | stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing | ce-correctness-reviewer | P3 | fixed | Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed. | runbook-heal 8be31d4 |
+| fr-004 | final | plan-digest-at-stage-2-claim-has-no-stage-2-doc-support | ce-adversarial-reviewer | P3 | fixed | Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2. | runbook-heal 8be31d4 |
 
 ## Notes
 
@@ -194,6 +194,7 @@ dirty/staged path summaries>
   - prompt-system render/check not triggered: no changed files under prompt-fragments/, rules/, or context/.
   - tsc/bun tests: not applicable, diff is markdown/YAML only (no .ts or test changes).
 - 2026-05-24T16:22+10:00 — Stage 6 ship (standard mode): branch feat/issue-68-hello-world-smoke-test pushed; PR #70 created via /ce-commit-push-pr (https://github.com/nathanvale/claude-code-config/pull/70), Closes #68, with ## Residual Review Findings (0 deferred-P2, 1 deferred-P3 cr-001). status: shipped.
+- 2026-05-24 — fr-001..fr-004 amended from out-of-scope-for-this-issue to status:fixed / resolution:runbook-heal 8be31d4 once the runbook-heal closure form landed (issue #71). The prior rows were self-contradictory (status out-of-scope but resolution claimed "fixed in runbook commit 8be31d4"); the runbook-heal closure form lets a batch_id:final finding cite a control-plane-only heal commit honestly. cr-001 (stage-3 deferred-P3) untouched.
 
 ### runbook_version skew continuation evidence (U6)
 

@@ -9,6 +9,7 @@ import {
   fail,
   parse,
   parseRunbookVersionContinuationEvidence,
+  rawDiffHasContentBearingChange,
   readLedgerSnapshot,
   validateAcCoverage,
   validateFindingsData,
@@ -1140,5 +1141,379 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
     ]);
     const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
     expect(evidence?.accepted_risk).toBe("blank-line-tolerated");
+  });
+});
+
+// ---------------- runbook-heal closure form (AC 1, 2, 5) ----------------
+//
+// A guarded `runbook-heal <sha>` fixed-resolution arm on the batch_id:final
+// path. The cited commit must be reachable AND touch only control-plane
+// allowlist paths (`runbooks/issue-to-pr-v2/` or `skills/issue-to-pr/`). Any
+// touched path outside the allowlist — deliverable files, mixed commits, and
+// the per-issue ledger path `docs/runbooks/issue-to-pr/` — rejects, naming the
+// first offending path. Fixtures are real reachable commits on this branch:
+//
+//   8be31d4 — control-plane only (runbooks/issue-to-pr-v2/ references)  ACCEPT
+//   915f666 — deliverable docs/scratch/hello-world.md                    REJECT
+//   7c6b569 — mixed: docs/.../parity-audit + skills/issue-to-pr/SKILL.md REJECT
+//   67f2163 — ledger path docs/runbooks/issue-to-pr/issue-71-ledger.md   REJECT
+//   dc6868a — empty: touches zero files (no-op commit)                   REJECT
+const RUNBOOK_HEAL_CONTROL_PLANE_SHA = "8be31d4";
+const RUNBOOK_HEAL_DELIVERABLE_SHA = "915f666";
+const RUNBOOK_HEAL_MIXED_SHA = "7c6b569";
+const RUNBOOK_HEAL_LEDGER_PATH_SHA = "67f2163";
+// A real, reachable-from-HEAD commit whose `touchedFilesForCommit` returns an
+// empty list (the #70 merge commit recorded no file changes against its first
+// parent). Used to exercise the empty-commit / no-op vacuous-pass guard path
+// hermetically: no git object is created and no ref is advanced, so the
+// working tree and branch history stay clean across the test run.
+const RUNBOOK_HEAL_EMPTY_COMMIT_SHA = "dc6868a";
+
+/**
+ * Build a complete ledger (frontmatter + AC + optional `## Batches` + matching
+ * `## Findings data` / `## Findings` table) holding a single finding row, then
+ * run `validateFindingsData` against it via `withFailMode("throw")`.
+ *
+ * `validateFindingsData` cross-checks the data block against the rendered
+ * table, so the table row is generated to match the data row.
+ */
+function runFindingsFixture(
+  finding: {
+    id: string;
+    batch_id: string;
+    signature: string;
+    persona: string;
+    severity: string;
+    status: string;
+    summary: string;
+    resolution: string;
+  },
+  batchesBlock: string[] = ["```yaml", "batches: []", "```"],
+): void {
+  const ledgerPath = writeLedger(
+    [
+      "---",
+      "issue_number: 1",
+      "---",
+      "",
+      "# Issue 1",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- [ ] AC 1",
+      "",
+      "## Batches",
+      "",
+      ...batchesBlock,
+      "",
+      "## Findings data",
+      "",
+      "```yaml",
+      "findings:",
+      `  - id: ${finding.id}`,
+      `    batch_id: ${finding.batch_id}`,
+      `    signature: ${finding.signature}`,
+      `    persona: ${finding.persona}`,
+      `    severity: ${finding.severity}`,
+      `    status: ${finding.status}`,
+      `    summary: "${finding.summary}"`,
+      `    resolution: "${finding.resolution}"`,
+      "```",
+      "",
+      "## Findings",
+      "",
+      "| id | batch_id | signature | persona | severity | status | summary | resolution |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      `| ${finding.id} | ${finding.batch_id} | ${finding.signature} | ${finding.persona} | ${finding.severity} | ${finding.status} | ${finding.summary} | ${finding.resolution} |`,
+      "",
+    ].join("\n"),
+  );
+  withFailMode("throw", () => validateFindingsData(ledgerPath));
+}
+
+// The 5 control-plane reference paths that commit 8be31d4 touches. A terminal
+// batch that records 8be31d4 must declare these as its `files` (the helper
+// asserts a recorded commit touches only the batch's confirmed files).
+const RUNBOOK_HEAL_CONTROL_PLANE_FILES = [
+  "runbooks/issue-to-pr-v2/issue-to-pr.md",
+  "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+  "runbooks/issue-to-pr-v2/references/stage-1-pick-issue.md",
+  "runbooks/issue-to-pr-v2/references/stage-2-plan.md",
+  "runbooks/issue-to-pr-v2/references/stage-3-decompose.md",
+];
+
+/**
+ * A terminal (`converged`) batch whose `builder_commits` records `sha`, so a
+ * `final` finding closed by `commit <sha>` passes `validateLedgerOwnedFixedCommit`.
+ * `files` must cover every path the recorded commit touches.
+ */
+function terminalBatchRecording(sha: string, files: string[]): string[] {
+  return [
+    "```yaml",
+    "batches:",
+    '  - id: "b1"',
+    '    name: "B1"',
+    '    goal: "AC 1"',
+    "    files:",
+    ...files.map((file) => `      - "${file}"`),
+    "    depends_on: []",
+    "    execution_mode: tdd",
+    "    acceptance_tests:",
+    '      - "AC 1 holds"',
+    "    ac_mapping:",
+    "      - 1",
+    "    rationale: null",
+    "    status: converged",
+    "    builder_commits:",
+    `      - "${sha}"`,
+    "    builder_attempts:",
+    "      - attempt_type: implementation",
+    "        status: committed",
+    `        commit_sha: "${sha}"`,
+    "        files_touched:",
+    ...files.map((file) => `          - "${file}"`),
+    '        route_hint: "validator-wave"',
+    "        blockers: []",
+    "        probe_results: []",
+    '        notes: "terminal batch fixture"',
+    "    iterations: 1",
+    "    final_verdict: converged",
+    "```",
+  ];
+}
+
+function baseRunbookHealFinding(
+  overrides: Partial<{ batch_id: string; resolution: string }> = {},
+): {
+  id: string;
+  batch_id: string;
+  signature: string;
+  persona: string;
+  severity: string;
+  status: string;
+  summary: string;
+  resolution: string;
+} {
+  return {
+    id: "fr-1",
+    batch_id: overrides.batch_id ?? "final",
+    signature: "runbook-heal-form",
+    persona: "ce-correctness",
+    severity: "P1",
+    status: "fixed",
+    summary: "final-review finding fixed by an orchestrator runbook-heal",
+    resolution: overrides.resolution ?? `runbook-heal ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+  };
+}
+
+describe("validateFindingResolution: runbook-heal closure form", () => {
+  test("AC1 ACCEPT: batch_id:final fixed by runbook-heal on a control-plane-only commit", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `runbook-heal ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  test("AC2 REJECT deliverable: runbook-heal on a commit touching a deliverable path names the path", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `runbook-heal ${RUNBOOK_HEAL_DELIVERABLE_SHA}`,
+        }),
+      ),
+    ).toThrow(/docs\/scratch\/hello-world\.md/);
+  });
+
+  test("AC2 REJECT mixed: runbook-heal on a control-plane+deliverable commit names the offending path", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `runbook-heal ${RUNBOOK_HEAL_MIXED_SHA}`,
+        }),
+      ),
+    ).toThrow(/docs\/runbooks\/issue-to-pr-skill-parity-audit\/stop-conditions-ledger\.md/);
+  });
+
+  test("AC2 REJECT ledger path: runbook-heal on a commit touching docs/runbooks/issue-to-pr/ rejects", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `runbook-heal ${RUNBOOK_HEAL_LEDGER_PATH_SHA}`,
+        }),
+      ),
+    ).toThrow(/docs\/runbooks\/issue-to-pr\/issue-71-ledger\.md/);
+  });
+
+  test("AC2 REJECT empty commit: runbook-heal on a commit touching zero files fails (no vacuous pass)", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `runbook-heal ${RUNBOOK_HEAL_EMPTY_COMMIT_SHA}`,
+        }),
+      ),
+    ).toThrow(/changed no files|touches no files/);
+  });
+
+  test("REJECT unreachable: runbook-heal on a nonexistent 40-hex sha fails", () => {
+    const missing = "0".repeat(40);
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({ resolution: `runbook-heal ${missing}` }),
+      ),
+    ).toThrow();
+  });
+
+  test("REJECT bad grammar: runbook-heal with no sha falls through to the catch-all reject", () => {
+    expect(() =>
+      runFindingsFixture(baseRunbookHealFinding({ resolution: "runbook-heal" })),
+    ).toThrow(/fixed resolution must be/);
+  });
+
+  test("REJECT bad grammar: runbook-heal with a non-hex token falls through to the catch-all reject", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({ resolution: "runbook-heal zzzzzzz" }),
+      ),
+    ).toThrow(/fixed resolution must be/);
+  });
+
+  test("REJECT stage-3 scope: a stage-3 finding with runbook-heal must still require plan-revision", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          batch_id: "stage-3",
+          resolution: `runbook-heal ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+      ),
+    ).toThrow(/Stage 3 fixed resolution must be "plan-revision <sha>"/);
+  });
+
+  test("REJECT batch-loop scope: a batch-loop (non-final) finding with runbook-heal falls through to the catch-all reject", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          batch_id: "b1",
+          resolution: `runbook-heal ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+        terminalBatchRecording(
+          RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+          RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+        ),
+      ),
+    ).toThrow(/fixed resolution must be/);
+  });
+
+  test("NON-REGRESSION: a terminal-batch commit closure still validates", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `commit ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+        terminalBatchRecording(
+          RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+          RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+        ),
+      ),
+    ).not.toThrow();
+  });
+
+  test("NON-REGRESSION: a stage-3 plan-revision closure still validates", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          batch_id: "stage-3",
+          resolution: `plan-revision ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+      ),
+    ).not.toThrow();
+  });
+});
+
+// ---------------- runbook-heal mode-only / no-op content guard (vw-007) ------
+//
+// vw-002 closed the zero-touched-file vacuous pass, but a runbook-heal commit
+// whose ONLY change is a mode-bit flip (chmod) still emits a touched path under
+// the control-plane allowlist and would pass vacuously — proving no content
+// change, the same abuse class narrowed to the per-file level.
+// `rawDiffHasContentBearingChange` parses `git diff-tree --raw` output and
+// returns false ONLY when every entry is a pure mode-only `M` (identical blob
+// SHAs); `validateControlPlaneOnlyCommit` rejects such commits.
+//
+// HERMETICITY NOTE: the full end-to-end reject (a runbook-heal finding citing a
+// reachable mode-only control-plane commit, run through validateFindingsData)
+// cannot be exercised hermetically: no mode-only or type-change commit exists
+// anywhere in this branch's history reachable from HEAD (verified by scanning
+// `git diff-tree --raw` over `git rev-list HEAD`), and validateReachableCommit
+// requires `--is-ancestor <ref> HEAD`, so a dangling commit-tree object would
+// fail reachability — and fabricating a reachable one would advance a branch
+// ref and pollute history. The content-detection logic is therefore pinned at
+// the parser seam with the exact byte format git emits for each change kind
+// (captured from `git diff-tree --no-commit-id --raw -r --root -M`). The
+// existing AC2 empty-commit test (RUNBOOK_HEAL_EMPTY_COMMIT_SHA) still covers
+// the end-to-end reject for the zero-file no-op sibling case.
+describe("rawDiffHasContentBearingChange: mode-only vacuous-proof guard", () => {
+  // ":<oldmode> <newmode> <oldsha> <newsha> <STATUS>\t<path...>" — exactly what
+  // `git diff-tree --no-commit-id --raw -r --root -M <sha>` prints.
+  const SHA_A = "e5c5c5583f49a34e86ce622b59363df99e09d4c6";
+  const SHA_B = "85025d98693fe77b700bcf818dfd8fcd13c4e961";
+  const ZERO = "0".repeat(40);
+
+  test("REJECT mode-only: a pure chmod `M` (identical blob SHAs) is NOT content-bearing", () => {
+    const raw = `:100644 100755 ${SHA_A} ${SHA_A} M\trunbooks/issue-to-pr-v2/issue-to-pr.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(false);
+  });
+
+  test("REJECT no-op: an empty raw block is NOT content-bearing", () => {
+    expect(rawDiffHasContentBearingChange("")).toBe(false);
+    expect(rawDiffHasContentBearingChange("\n  \n")).toBe(false);
+  });
+
+  test("REJECT all-mode-only: every entry a chmod still rejects", () => {
+    const raw = [
+      `:100644 100755 ${SHA_A} ${SHA_A} M\trunbooks/issue-to-pr-v2/a.md`,
+      `:100644 100755 ${SHA_B} ${SHA_B} M\trunbooks/issue-to-pr-v2/b.md`,
+    ].join("\n");
+    expect(rawDiffHasContentBearingChange(raw)).toBe(false);
+  });
+
+  test("ACCEPT modify: an `M` with differing blob SHAs is content-bearing", () => {
+    const raw = `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/issue-to-pr.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT binary modify: an `M` with differing SHAs (numstat would show `-`) is content-bearing", () => {
+    const raw = `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/asset.bin`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT add: an `A` entry (old SHA all-zero) is content-bearing", () => {
+    const raw = `:000000 100644 ${ZERO} ${SHA_A} A\trunbooks/issue-to-pr-v2/new.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT delete: a `D` entry (new SHA all-zero) is content-bearing", () => {
+    const raw = `:100644 000000 ${SHA_A} ${ZERO} D\trunbooks/issue-to-pr-v2/stale.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT pure rename: an `R100` entry keeps identical SHAs but the STATUS letter makes it content-bearing", () => {
+    const raw = `:100644 100644 ${SHA_A} ${SHA_A} R100\trunbooks/issue-to-pr-v2/old.md\trunbooks/issue-to-pr-v2/new.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT type-change: a `T` entry (file→symlink) is content-bearing", () => {
+    const raw = `:100644 120000 ${SHA_A} ${SHA_B} T\trunbooks/issue-to-pr-v2/link`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT mixed: a chmod alongside a real modify is content-bearing", () => {
+    const raw = [
+      `:100644 100755 ${SHA_A} ${SHA_A} M\trunbooks/issue-to-pr-v2/chmod-only.md`,
+      `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/real-edit.md`,
+    ].join("\n");
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
   });
 });
