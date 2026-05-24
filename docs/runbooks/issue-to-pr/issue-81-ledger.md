@@ -289,7 +289,7 @@ batches:
     ac_mapping:
       - 8
     rationale: "out-of-scope: investigation-required"
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
