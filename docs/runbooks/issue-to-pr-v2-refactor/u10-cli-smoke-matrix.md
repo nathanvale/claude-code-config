@@ -417,8 +417,7 @@ Stop when ALL of the following hold:
 4. The regression matrix `Deterministic probe targets` table has
    the new `probe-cli-smoke-matrix` row with a `test_anchor`
    naming every top-level `describe()` block verbatim.
-5. The most recent `/ce-code-review` pass returns zero new
-   findings.
+5. Two consecutive independent `/ce-code-review` passes each return zero new findings (see the README Convergence protocol).
 6. Every ledger row is `fixed` or `closed`.
 7. The smoke file's top-of-file comment documents the
    process-exit-vs-envelope alignment status (false alarm closed)
@@ -432,3 +431,8 @@ Stop when ALL of the following hold:
 Re-read the runbook and u10-cli-smoke-matrix-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.
 ```
+
+Convergence is the README's [Convergence
+protocol](README.md#convergence-protocol): two consecutive independent
+clean passes from different angles, not zero-open after one pass. A
+pass that files or fixes a finding resets the counter.

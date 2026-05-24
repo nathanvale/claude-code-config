@@ -277,7 +277,7 @@ Stop when ALL of the following hold:
 4. `bun_runTests pattern: "cli-smoke"` returns 51/51 (U10 untouched).
 5. `tsc_check` clean across all touched files.
 6. `biome_lintCheck` clean across all touched files.
-7. The most recent `/ce-code-review` pass returns zero new findings.
+7. Two consecutive independent `/ce-code-review` passes each return zero new findings (see the README Convergence protocol).
 8. Every ledger row in `u1-decompose-validator-order-ledger.md` is `fixed` or
    `closed`.
 9. v1 and v2 fixture blocks (`runbooks/issue-to-pr/decompose.test.ts` and
@@ -291,3 +291,8 @@ Stop when ALL of the following hold:
 Re-read the runbook and u1-decompose-validator-order-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.
 ```
+
+Convergence is the README's [Convergence
+protocol](README.md#convergence-protocol): two consecutive independent
+clean passes from different angles, not zero-open after one pass. A
+pass that files or fixes a finding resets the counter.

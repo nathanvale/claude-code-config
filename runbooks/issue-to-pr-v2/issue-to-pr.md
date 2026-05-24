@@ -1,10 +1,10 @@
-# Issue to PR (v2 shadow hot router)
+# Issue to PR (v2 hot-router support file)
 
 Drive one GitHub issue to a PR using a per-issue ledger, Builder
 attempts, and Validator gates. The v2 hot router is prose orchestration;
 the mechanic is the v2 CLI front door at
 `~/.claude/runbooks/issue-to-pr-v2/cli.ts` (read-only, ADR 0002). Every
-routing decision is made off the CLI's emitted facts — never from
+routing decision is made off the CLI's emitted facts, never from
 conversation memory.
 
 **Ledger:** `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`
@@ -12,9 +12,11 @@ in the target repo. Template at
 `~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.
 Frontmatter declares `runbook_version: "2"`.
 
-This file is the shadow v2 entry point. The runnable v1 hot file at
-`~/.claude/runbooks/issue-to-pr/issue-to-pr.md` stays available as a
-reference until U9 flips the public entry point.
+The public host-neutral control plane lives at
+`skills/issue-to-pr/SKILL.md`. This file remains the installed v2
+hot-router support artifact and Claude Code compatibility reference.
+The runnable v1 hot file at `~/.claude/runbooks/issue-to-pr/` stays
+available as the frozen behavior baseline.
 
 ## Core invariants
 
