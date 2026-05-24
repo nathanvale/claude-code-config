@@ -3,7 +3,7 @@ issue_number: 87
 issue_title: "issue-to-pr: retire first-run-gotchas recipe 2.3 (blocked-digests-stale) and close its targeting gaps"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/87"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-25-001-docs-retire-recipe-2-3-targeting-gaps-plan.md"
 started_at: "2026-05-25T07:40:00+10:00"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:801326ee1088da8fe8e1c3c59ee0e473bf190ad989306c2bf0a37e28210d62c0"
 batch_contract_digest: null
 ac_digest: "sha256:91d190d541ba670ae0ccc2e8b6df99f5ad2b946427be4202c2edf4be188ce30e"
 ---
