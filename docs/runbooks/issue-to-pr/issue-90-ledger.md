@@ -414,6 +414,94 @@ findings:
     status: deferred-P3
     summary: "In the unreadable-candidate test the file path is pushed to tempDirs instead of the parent temp dir, so afterEach rmSync best-effort-skips it and the created temp dir leaks; test correctness unaffected"
     resolution: deferred-P3
+  - id: F22
+    batch_id: upsert-op
+    signature: emit-scalar-nul-byte-breaks-yaml-roundtrip
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "emitScalar leaves a NUL byte (U+0000) literal in the double-quoted scalar, so any candidate whose summary or evidence field contains a NUL crashes Bun.YAML.parse on re-read and the registry file on disk becomes unparseable"
+    resolution: null
+  - id: F23
+    batch_id: upsert-op
+    signature: emit-yaml-unescaped-mapping-keys-corrupt-file
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "emitYaml writes mapping keys verbatim (evidence record keys) with no escaping; an adversarial key containing a colon or newline produces a corrupt YAML body the next parseRegistry rejects"
+    resolution: null
+  - id: F24
+    batch_id: upsert-op
+    signature: dispatcher-writes-without-reparse-validate
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "The --upsert dispatcher serializes then writeFileSyncs the new markdown with no parseRegistry + validateRegistry round-trip on the emitted bytes; any emitter defect silently overwrites the registry with an unparseable file and the prior good state is lost"
+    resolution: null
+  - id: F25
+    batch_id: upsert-op
+    signature: lifecycle-omission-not-tested
+    persona: ce-testing-reviewer
+    severity: P1
+    status: open
+    summary: "No test asserts that omitting a lifecycle field (e.g. follow_up) on a candidate preserves the existing entry's value rather than blanking it; the contract is not pinned"
+    resolution: null
+  - id: F26
+    batch_id: upsert-op
+    signature: upsert-follow-up-omitted-not-blanked
+    persona: ce-correctness-reviewer
+    severity: P2
+    status: open
+    summary: "Lifecycle merge uses `field in cand` for follow_up which means an explicit null in the candidate overwrites prior follow_up while an omitted follow_up preserves it; verify the intent (related to F25)"
+    resolution: null
+  - id: F27
+    batch_id: upsert-op
+    signature: backtick-fence-value-test-too-weak
+    persona: ce-testing-reviewer
+    severity: P2
+    status: open
+    summary: "The validate-op-guard round-trip test embeds the backtick sequence as an escaped string literal; the in-memory value never contains a real newline or a real column-0 fence-sequence; the emitted yaml therefore cannot reproduce the truncation scenario it claims to guard"
+    resolution: null
+  - id: F28
+    batch_id: upsert-op
+    signature: canonical-update-partial-omission-untested
+    persona: ce-testing-reviewer
+    severity: P2
+    status: open
+    summary: "The canonical-update branch only tests the all-fields-present case; no test covers canonical_update: true with one canonical field omitted, to confirm the omitted field is preserved rather than overwritten with undefined"
+    resolution: null
+  - id: F29
+    batch_id: upsert-op
+    signature: emit-yaml-empty-evidence-record-produces-invalid-shape
+    persona: ce-correctness-reviewer
+    severity: P2
+    status: open
+    summary: "emitYaml writes an `evidence:` parent line then iterates records; an empty record yields no list items so re-parse produces `evidence: null` which validateRegistry rejects (validateCandidate currently does not enforce per-evidence-field shape)"
+    resolution: null
+  - id: F30
+    batch_id: upsert-op
+    signature: validate-candidate-skips-evidence-record-shape
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "validateCandidate accepts any object as the evidence record without checking key shape or value types; adversarial keys and non-string values flow into emitYaml which assumes safe input"
+    resolution: null
+  - id: F31
+    batch_id: upsert-op
+    signature: serialize-reads-file-second-time-tocttou
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "serializeRegistry re-reads the registry from disk to capture surrounding prose, so between the dispatcher's parseRegistry call and this second read the file may have changed; produces a hybrid file. Combined with no file lock, concurrent runs silently last-write-wins"
+    resolution: null
+  - id: F32
+    batch_id: upsert-op
+    signature: regex-parity-parseRegistry-serializeRegistry
+    persona: ce-maintainability-reviewer
+    severity: P2
+    status: open
+    summary: "The fenced-yaml regex is duplicated (slightly differently) in parseRegistry and serializeRegistry; the two patterns can drift silently since neither references a shared constant"
+    resolution: null
 ```
 
 ## Findings
@@ -441,6 +529,17 @@ findings:
 | F19 | candidate-ingest | checkenumfields-label-empty-branch-unreachable | ce-maintainability-reviewer | P3 | deferred-P3 | checkEnumFields documents an empty-string label as the top-level/candidate convention, but neither caller passes empty; the label-empty branch is unreachable and the doc comment misdescribes actual usage | deferred-P3 |
 | F20 | candidate-ingest | candidate-required-strings-implicit-coupling-to-registry | ce-maintainability-reviewer | P3 | deferred-P3 | validateCandidate derives required fields as REQUIRED_STRING_FIELDS minus signature; a future addition to the registry required list silently becomes required on candidates too, an implicit coupling | deferred-P3 |
 | F21 | candidate-ingest | candidate-missing-test-pushes-file-not-dir-to-cleanup | ce-correctness-reviewer | P3 | deferred-P3 | In the unreadable-candidate test the file path is pushed to tempDirs instead of the parent temp dir, so afterEach rmSync best-effort-skips it and the created temp dir leaks; test correctness unaffected | deferred-P3 |
+| F22 | upsert-op | emit-scalar-nul-byte-breaks-yaml-roundtrip | ce-adversarial-reviewer | P1 | open | emitScalar leaves a NUL byte (U+0000) literal in the double-quoted scalar, so any candidate whose summary or evidence field contains a NUL crashes Bun.YAML.parse on re-read and the registry file on disk becomes unparseable | |
+| F23 | upsert-op | emit-yaml-unescaped-mapping-keys-corrupt-file | ce-adversarial-reviewer | P1 | open | emitYaml writes mapping keys verbatim (evidence record keys) with no escaping; an adversarial key containing a colon or newline produces a corrupt YAML body the next parseRegistry rejects | |
+| F24 | upsert-op | dispatcher-writes-without-reparse-validate | ce-adversarial-reviewer | P1 | open | The --upsert dispatcher serializes then writeFileSyncs the new markdown with no parseRegistry + validateRegistry round-trip on the emitted bytes; any emitter defect silently overwrites the registry with an unparseable file and the prior good state is lost | |
+| F25 | upsert-op | lifecycle-omission-not-tested | ce-testing-reviewer | P1 | open | No test asserts that omitting a lifecycle field (e.g. follow_up) on a candidate preserves the existing entry's value rather than blanking it; the contract is not pinned | |
+| F26 | upsert-op | upsert-follow-up-omitted-not-blanked | ce-correctness-reviewer | P2 | open | Lifecycle merge uses `field in cand` for follow_up which means an explicit null in the candidate overwrites prior follow_up while an omitted follow_up preserves it; verify the intent (related to F25) | |
+| F27 | upsert-op | backtick-fence-value-test-too-weak | ce-testing-reviewer | P2 | open | The validate-op-guard round-trip test embeds the backtick sequence as an escaped string literal; the in-memory value never contains a real newline or a real column-0 fence-sequence; the emitted yaml therefore cannot reproduce the truncation scenario it claims to guard | |
+| F28 | upsert-op | canonical-update-partial-omission-untested | ce-testing-reviewer | P2 | open | The canonical-update branch only tests the all-fields-present case; no test covers canonical_update: true with one canonical field omitted, to confirm the omitted field is preserved rather than overwritten with undefined | |
+| F29 | upsert-op | emit-yaml-empty-evidence-record-produces-invalid-shape | ce-correctness-reviewer | P2 | open | emitYaml writes an `evidence:` parent line then iterates records; an empty record yields no list items so re-parse produces `evidence: null` which validateRegistry rejects (validateCandidate currently does not enforce per-evidence-field shape) | |
+| F30 | upsert-op | validate-candidate-skips-evidence-record-shape | ce-adversarial-reviewer | P2 | open | validateCandidate accepts any object as the evidence record without checking key shape or value types; adversarial keys and non-string values flow into emitYaml which assumes safe input | |
+| F31 | upsert-op | serialize-reads-file-second-time-tocttou | ce-adversarial-reviewer | P2 | open | serializeRegistry re-reads the registry from disk to capture surrounding prose, so between the dispatcher's parseRegistry call and this second read the file may have changed; produces a hybrid file. Combined with no file lock, concurrent runs silently last-write-wins | |
+| F32 | upsert-op | regex-parity-parseRegistry-serializeRegistry | ce-maintainability-reviewer | P2 | open | The fenced-yaml regex is duplicated (slightly differently) in parseRegistry and serializeRegistry; the two patterns can drift silently since neither references a shared constant | |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
