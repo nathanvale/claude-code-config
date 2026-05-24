@@ -112,8 +112,8 @@ The artifacts a maintainer needs to find, in this order:
    README does not restate it.
 6. **`references/`** - per-stage prose. The read trigger for each file
    lives in its own header. The skill's reference-loading policy and the
-   support hot router name the file to open for each route id. Files in
-   this directory:
+   support hot router name which file to open for each route id. Files
+   in this directory:
    `stage-1-pick-issue.md`, `stage-2-plan.md`, `stage-3-decompose.md`,
    `stage-4-batch-loop.md`, `stage-5-final-review.md`,
    `stage-6-ship.md`, `builder-dispatch.md`,
@@ -158,8 +158,10 @@ README used to cover inline:
 
 - **Builder dispatch policy** lives in
   [`references/builder-dispatch.md`](references/builder-dispatch.md).
-- **Turn protocol** lives in the v2 hot router at
-  [`issue-to-pr.md`](issue-to-pr.md).
+- **Turn protocol** lives in the skill control plane at
+  [`../../skills/issue-to-pr/SKILL.md`](../../skills/issue-to-pr/SKILL.md);
+  the v2 hot router at [`issue-to-pr.md`](issue-to-pr.md) remains the
+  compatibility/support reference.
 - **Fix protocol** lives in
   [`references/findings-and-validators.md`](references/findings-and-validators.md).
 - **Risk classification** lives in
