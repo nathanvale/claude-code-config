@@ -294,6 +294,10 @@ the U4 audit prompt.
 | `blocked-batch-contract-stale` | The stored batch contract digest no longer matches the ledger's `## Batches` content. |
 | `blocked-digests-stale` | One of `plan_digest`, `ac_digest`, or `batch_contract_digest` no longer matches the source content but the individual `*_confirmation_status` fields haven't been flipped yet. |
 
+For symptom-first recovery recipes for these blocked routes (exact command,
+JSON fields, what they prove, and the recovery action), see
+[first-run-gotchas.md](first-run-gotchas.md).
+
 ### Special route ids
 
 | Route id | When the CLI emits it |
@@ -389,3 +393,5 @@ responsible for authoring this row through normal ledger editing.
   shape and helper validation of `## Findings data`.
 - [stage-3-decompose.md](stage-3-decompose.md) for the batches contract author
   flow.
+- [first-run-gotchas.md](first-run-gotchas.md) for symptom-first CLI evidence
+  recipes covering digest-timing confusion and blocked-state recovery.

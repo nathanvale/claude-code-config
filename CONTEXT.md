@@ -8,6 +8,10 @@ This context defines the durable language for the agent configuration, prompt, s
 The workflow promise for how an operator starts the Issue-to-PR helper. It covers runner shape and documented invocation, not helper semantics, command modes, or ledger validation behaviour. When contrasting runner families, say package-runner shape, not package-runner path.
 _Avoid_: helper invocation contract, command contract, runner path, package-runner path
 
+**CLI evidence recipe**:
+A workflow-guide pattern that pairs a confusing operator state with the observable CLI facts that identify it and the recovery meaning of those facts. Use this for Issue-to-PR gotchas where the operator needs evidence from the CLI, not memory or inference.
+_Avoid_: evidence proof, proof recipe, CLI proof
+
 **Capability**:
 A registry-managed skill or agent, together with the files owned by that skill or agent. In v1, runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins are not capabilities.
 _Avoid_: imported thing, tool, plugin, runbook capability
