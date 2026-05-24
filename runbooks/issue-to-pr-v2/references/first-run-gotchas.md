@@ -427,8 +427,8 @@ block points to this recipe by name (it currently links only to
 `ledger-and-helper.md` for the continuation-evidence shape). (Re-evaluated
 2026-05 against the deterministic blocked-route load, issue #80: still open.
 Step 7b loads the whole guide on every `blocked-` route, which improves
-*loading*, not *per-recipe targeting* — and it is a `<route_catalog>` load
-keyed on the `blocked-` prefix, a different mechanism from the
+*loading*, not *per-recipe targeting* — and it is an `<orchestration_loop>`
+step (7b) keyed on the `blocked-` prefix, a different mechanism from the
 `<pre_route_gates>` version-skew link this bar requires, so that link is
 still absent.)
 
