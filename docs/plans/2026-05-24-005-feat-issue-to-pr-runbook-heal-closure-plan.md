@@ -42,10 +42,21 @@ for closing *deliverable* findings off-batch.
 In scope:
 
 - A `resolution: runbook-heal <sha>` form under `status: fixed` for
-  `batch_id: final` (and `batch_id: stage-3`) findings, accepting a reachable
-  commit without terminal-batch membership.
-- An abuse guard: the cited commit's diff must touch only runbook/skill
-  control-plane paths, never deliverable files.
+  `batch_id: final` findings ONLY, accepting a reachable commit without
+  terminal-batch membership. (Revision r1/CR-003: stage-3 findings keep their
+  existing `plan-revision <sha>`-only contract; `validateFindingResolution`
+  short-circuits stage-3 before the commit/patch/runbook-heal arms, so adding
+  runbook-heal there would be dead code. Mirror the existing
+  `validateLedgerOwnedFixedCommit` `final` special-case.)
+- An abuse guard: the cited commit's diff must touch ONLY control-plane paths
+  under `runbooks/issue-to-pr-v2/` or `skills/issue-to-pr/`. ANY other touched
+  path rejects the commit, including deliverable files (`src/**`, `docs/scratch/**`,
+  etc.) AND the per-issue ledger path under `docs/runbooks/issue-to-pr/`
+  (revision r1/CR-004: the ledger is NOT control-plane; a runbook-heal commit is
+  a pure runbook fix, and the ledger checkpoint is always a separate commit). A
+  commit touching both a control-plane path and any non-allowlisted path is
+  rejected, naming the offending non-allowlisted path. Allowlist match is
+  path-prefix.
 - A Stage 5 read-only enforcement gate (a validate-time check that a Stage 5
   ledger checkpoint commit touches only the ledger path).
 - Documentation: closure-table row, Stage 5 cross-reference, blocked-by-doc-defect
@@ -78,16 +89,22 @@ Out of scope:
 ## Key Technical Decisions
 
 1. **`runbook-heal <sha>` is a new RESOLUTION grammar under the existing
-   `status: fixed`, not a new status.** Keeps `FINDING_STATUSES` unchanged,
-   keeps "fixed means fixed," and avoids touching the open-P0/P1 predicate and
-   the rendered-table/status machinery. Rationale: the finding *was* fixed; only
-   the *provenance* of the fixing commit differs. (Directional; the implementer
-   confirms against `validateFinalFindingResolution` structure.)
+   `status: fixed`, not a new status, and only for `batch_id: final`.** Keeps
+   `FINDING_STATUSES` unchanged, keeps "fixed means fixed," and avoids touching
+   the open-P0/P1 predicate and the rendered-table/status machinery. Rationale:
+   the finding *was* fixed; only the *provenance* of the fixing commit differs.
+   The new arm sits beside the `commit <sha>` and `patch-batch` arms inside the
+   `batch_id: final` path of `validateFindingResolution` (`lib/ledger.ts`
+   ~L2497-2554), AFTER the stage-3 plan-revision short-circuit (~L2503-2509) so
+   it never shadows that contract.
 2. **Abuse guard reuses `touchedFilesForCommit(ref, context)`** (already in
-   `lib/ledger.ts` ~L2163) to get the commit's changed paths, then asserts every
-   path matches a control-plane allowlist (`runbooks/issue-to-pr-v2/`,
-   `skills/issue-to-pr/`) and none is a deliverable file. A commit touching any
-   non-allowlisted path is rejected.
+   `lib/ledger.ts` ~L2163) to get the commit's changed paths, then asserts EVERY
+   touched path is prefix-matched by the control-plane allowlist
+   (`runbooks/issue-to-pr-v2/`, `skills/issue-to-pr/`). Any path outside that
+   allowlist rejects the commit, naming the offending path. This excludes
+   deliverable files AND the per-issue ledger path
+   (`docs/runbooks/issue-to-pr/`): a runbook-heal commit is a pure runbook fix,
+   never a ledger or deliverable commit.
 3. **Stage 5 read-only gate is a validate-time helper assertion**, not just
    prose: given a candidate Stage 5 checkpoint commit, assert its diff touches
    only the per-issue ledger path. Surfaced as a fail, not silent. (The exact
@@ -98,10 +115,10 @@ Out of scope:
 
 ### U1. Guarded `runbook-heal <sha>` closure form
 
-**Goal:** A final-review (or stage-3) finding fixed by an orchestrator
-runbook-heal commit can be recorded `status: fixed` with
-`resolution: runbook-heal <sha>`, accepted only when the commit is reachable AND
-its diff touches only runbook/skill control-plane paths.
+**Goal:** A `batch_id: final` finding fixed by an orchestrator runbook-heal
+commit can be recorded `status: fixed` with `resolution: runbook-heal <sha>`,
+accepted only when the commit is reachable AND its diff touches only the
+control-plane allowlist (`runbooks/issue-to-pr-v2/`, `skills/issue-to-pr/`).
 
 **Requirements:** AC1, AC2 (and AC5 test coverage for this unit).
 
@@ -109,19 +126,23 @@ its diff touches only runbook/skill control-plane paths.
 
 **Files:**
 
-- `runbooks/issue-to-pr-v2/lib/ledger.ts` (modify `validateFinalFindingResolution`
-  ~L2498-2554 to recognize the `runbook-heal <sha>` grammar; add an abuse-guard
-  helper alongside `validateLedgerOwnedFixedCommit` ~L2556-2572)
+- `runbooks/issue-to-pr-v2/lib/ledger.ts` (modify `validateFindingResolution`
+  ~L2497-2554 — add the `runbook-heal <sha>` arm inside the `batch_id: final`
+  path, AFTER the stage-3 plan-revision short-circuit ~L2503-2509; add an
+  abuse-guard helper alongside `validateLedgerOwnedFixedCommit` ~L2556-2572)
 - `runbooks/issue-to-pr-v2/lib/contract.ts` (only if the resolution grammar set
   is enumerated there; otherwise no change)
 - `runbooks/issue-to-pr-v2/lib/ledger.test.ts` (tests)
 
 **Approach:** Add a `runbook-heal <sha>` arm to the `fixed`-resolution matcher
-(sibling to the `commit <sha>` and `patch-batch` arms). It calls
-`validateReachableCommit` for reachability, then a new abuse-guard helper that
-runs `touchedFilesForCommit` and asserts every touched path is in the
-control-plane allowlist and none is a deliverable path. Reject with a clear
-message naming the offending deliverable path.
+on the `batch_id: final` path (sibling to the `commit <sha>` and `patch-batch`
+arms; NOT reachable for `batch_id: stage-3`, which short-circuits to
+`plan-revision` first). It calls `validateReachableCommit` for reachability,
+then a new abuse-guard helper that runs `touchedFilesForCommit` and asserts
+every touched path is prefix-matched by the control-plane allowlist. Any path
+outside the allowlist (deliverable files, AND the per-issue ledger path under
+`docs/runbooks/issue-to-pr/`) rejects the commit with a message naming the
+offending path.
 
 **Execution note:** Implement test-first (`tdd`). The abuse guard is the
 highest-risk piece; write the deliverable-file-reject test red before the guard.
@@ -131,11 +152,14 @@ highest-risk piece; write the deliverable-file-reject test red before the guard.
 `validateReachableCommit` rather than re-deriving git access.
 
 **Test scenarios:**
-- Happy path: a finding with `status: fixed`, `resolution: runbook-heal <reachable-control-plane-sha>` validates clean.
-- Abuse reject: `resolution: runbook-heal <sha>` where the commit's diff touches a deliverable file (e.g. `docs/scratch/x.md` or `src/**`) is REJECTED with a message naming the offending path.
+- Happy path: a `batch_id: final` finding with `status: fixed`, `resolution: runbook-heal <reachable commit touching only runbooks/issue-to-pr-v2/>` validates clean.
+- Abuse reject (deliverable): `runbook-heal <sha>` where the commit's diff touches a deliverable file (e.g. `docs/scratch/x.md` or `src/**`) is REJECTED, naming the offending path.
+- Abuse reject (mixed): `runbook-heal <sha>` where the commit touches BOTH a control-plane path AND a non-allowlisted path is REJECTED, naming the non-allowlisted path (every path must be allowlisted, not just one).
+- Abuse reject (ledger path): `runbook-heal <sha>` where the commit touches the per-issue ledger path `docs/runbooks/issue-to-pr/issue-N-ledger.md` is REJECTED (the ledger is not control-plane; heal commits are separate from ledger checkpoints).
 - Unreachable reject: `runbook-heal <nonexistent-sha>` is rejected as unreachable.
 - Grammar reject: malformed `runbook-heal` (no sha / bad sha) is rejected.
-- Non-regression: existing `commit <sha>` (terminal-batch) and `patch-batch` closures still validate exactly as before.
+- Stage-3 scope: a `batch_id: stage-3` finding with `resolution: runbook-heal <sha>` is REJECTED (stage-3 keeps plan-revision-only; the runbook-heal arm must not be reachable there).
+- Non-regression: existing `commit <sha>` (terminal-batch), `patch-batch`, and stage-3 `plan-revision` closures still validate exactly as before.
 
 **Verification:** `bun_runTests` over `lib/ledger.test.ts` passes including the
 new cases; `tsc_check` clean; existing resolution tests unchanged in behavior.
@@ -143,21 +167,21 @@ new cases; `tsc_check` clean; existing resolution tests unchanged in behavior.
 ```yaml
 id: runbook-heal-resolution
 name: Guarded runbook-heal closure form
-goal: A final-review finding fixed by an orchestrator runbook-heal commit can be recorded fixed with status and resolution that agree, guarded against deliverable-file commits.
+goal: A batch_id-final finding fixed by an orchestrator runbook-heal commit can be recorded fixed with status and resolution that agree, guarded so the commit touches only control-plane paths.
 files:
   - runbooks/issue-to-pr-v2/lib/ledger.ts
   - runbooks/issue-to-pr-v2/lib/ledger.test.ts
 depends_on: []
 execution_mode: tdd
 acceptance_tests:
-  - "AC 1 holds: a finding with status fixed + resolution 'runbook-heal <reachable control-plane sha>' validates clean (status and resolution agree, no out-of-scope fudge)."
-  - "AC 2 holds: resolution 'runbook-heal <sha>' is REJECTED when the cited commit's diff touches any deliverable (non-control-plane) path; reachable but deliverable-touching commits fail."
-  - "AC 5 holds (partial): tests pin the accept case and the deliverable-file reject case for the runbook-heal form."
+  - "AC 1 holds: a batch_id-final finding with status fixed + resolution 'runbook-heal <reachable commit touching only control-plane paths>' validates clean (status and resolution agree, no out-of-scope fudge)."
+  - "AC 2 holds: 'runbook-heal <sha>' is REJECTED when the commit touches any non-allowlisted path - a pure deliverable commit, a mixed control-plane+deliverable commit, and a commit touching the per-issue ledger path all fail, naming the offending path."
+  - "AC 5 holds (partial): tests pin the accept case, the deliverable-reject case, the mixed-commit reject, the ledger-path reject, and a stage-3-scope reject for the runbook-heal form."
 ac_mapping:
   - 1
   - 2
   - 5
-rationale: "Merge AC1+AC2: the resolution form and its abuse guard live in the same function (validateFinalFindingResolution) with inseparable tests, per the merge rule."
+rationale: "replacement-contract r1: merge AC1+AC2 (form and abuse guard live in the same validateFindingResolution function with inseparable tests); narrowed to batch_id final only (CR-003); allowlist excludes the ledger path (CR-004)."
 ```
 
 ### U2. Stage 5 read-only enforcement gate
@@ -167,14 +191,20 @@ surfaced as a failure, not silently accepted.
 
 **Requirements:** AC3 (and AC5 test coverage for this unit).
 
-**Dependencies:** None (independent of U1; can run in parallel).
+**Dependencies:** None (independent of U1; runs in parallel — file sets are now
+disjoint after revision r1/CR-001).
 
 **Files:**
 
-- `runbooks/issue-to-pr-v2/lib/ledger.ts` or `runbooks/issue-to-pr-v2/decompose.ts`
-  (add the gate — implementer chooses the cleanest wiring point; a `decompose.ts`
-  assertion flag mirrors the existing `--assert-no-open-p0p1` shape)
-- the corresponding `*.test.ts` (tests)
+- `runbooks/issue-to-pr-v2/decompose.ts` (add the gate as an assertion flag
+  mirroring the existing `--assert-no-open-p0p1` shape; if the implementer
+  instead wires it inside an existing validator in `lib/ledger.ts`, that is
+  acceptable, but U1 owns `lib/ledger.ts` so coordinate via the dependency-free
+  parallel order — prefer the `decompose.ts` flag route to keep file sets
+  disjoint)
+- `runbooks/issue-to-pr-v2/lib/stage5-readonly.test.ts` (tests — a NEW file,
+  distinct from U1's `lib/ledger.test.ts`, per CR-001 to avoid shared-file
+  ownership across the two parallel-eligible tdd batches)
 
 **Approach:** Given a candidate Stage 5 checkpoint commit (or the staged diff),
 assert the changed paths are exactly the per-issue ledger path. If any other
@@ -201,7 +231,7 @@ name: Stage 5 read-only enforcement gate
 goal: A Stage 5 ledger checkpoint touching any non-ledger path is surfaced as a failure rather than silently accepted.
 files:
   - runbooks/issue-to-pr-v2/decompose.ts
-  - runbooks/issue-to-pr-v2/lib/ledger.test.ts
+  - runbooks/issue-to-pr-v2/lib/stage5-readonly.test.ts
 depends_on: []
 execution_mode: tdd
 acceptance_tests:
