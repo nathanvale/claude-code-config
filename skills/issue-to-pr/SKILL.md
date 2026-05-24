@@ -129,7 +129,9 @@ Start every turn in this order:
    attempt, run one Validator wave, converge one batch, or fail-stop
    with a specific question.
 9. Commit any required lifecycle checkpoint before ending the turn when
-   the stage requires durable state.
+   the stage requires durable state. The working tree must be committed
+   and clean before any state-changing stage transition, not only at the
+   stages whose exit conditions restate it.
 10. When the host evaluator needs transcript evidence, echo the ledger
     frontmatter, `## Batches`, `## Findings data`, and `## Findings`
     table or provide an equivalent host-visible summary.
@@ -266,8 +268,8 @@ required references before taking the one visible action.
   review, present the digest-backed batch contract for confirmation, or
   persist the confirmed `## Batches` checkpoint.
 - Exit condition: batch contract is confirmed, every batch starts
-  pending, coverage and digests are confirmed, next state routes to
-  `batch-loop`.
+  pending, coverage and digests are confirmed, tree is clean, next state
+  routes to `batch-loop`.
 - Stop conditions: parse error, cyclic DAG, uncovered AC, missing batch
   contract field, open Stage 3 P0/P1, stale digest, or confirmation
   refusal.
@@ -280,7 +282,7 @@ required references before taking the one visible action.
   `findings-and-validators.md`, and `ledger-and-helper.md` for writes.
 - One visible action: exactly one Stage 4 subroute below.
 - Exit condition: every batch is `converged` or `accepted-risk`, no
-  open P0/P1 blocks the batch loop, next state routes to
+  open P0/P1 blocks the batch loop, tree is clean, next state routes to
   `final-review`.
 - Stop conditions: host readiness failure, Builder infrastructure
   failure, no eligible batch, escape hatch fire, iteration cap, or user
