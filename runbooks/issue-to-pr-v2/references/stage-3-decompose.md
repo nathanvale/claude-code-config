@@ -115,8 +115,10 @@ responsibility, not a CLI command.
    later stage can rely on it: set
    `batch_contract_confirmation_status: confirmed`,
    `batch_contract_confirmed_at: <current ISO 8601 timestamp>`, and store the
-   confirmed `plan_digest`, `ac_digest`, and `batch_contract_digest` values in
-   frontmatter. A resumed agent can regenerate the candidate DAG from
+   confirmed digest triple in frontmatter. `ac_digest` (set at Stage 1) and
+   `plan_digest` (set at Stage 2) are re-confirmed here against current
+   content rather than first-stored; `batch_contract_digest` is first computed
+   and stored at this Stage 3 confirmation. A resumed agent can regenerate the candidate DAG from
    `plan_path` and compare it with these stored digests by running
    `cli.ts state <ledger-path> --json` (the `confirmation_state` and
    `digest_drift` fields surface drift without re-reading source state

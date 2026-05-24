@@ -95,17 +95,30 @@ ledger creation, before branch preflight). See also:
    `batch_contract_confirmation_status: pending`,
    `batch_contract_confirmed_at: null`, `ship_mode: standard`,
    `final_reviewed_at: null`. Write the confirmed AC list to
-   `## Acceptance criteria` as `- [ ]` checkboxes. The `ac_digest`,
-   `plan_digest`, and `batch_contract_digest` fields stay null at
-   Stage 1 and are populated at Stage 3 confirmation. The orchestrator
-   computes them at Stage 3 via the named helper commands
-   (`decompose.ts --ac-digest <ledger-path>`,
-   `decompose.ts --plan-digest <plan-path>`,
-   `decompose.ts --batch-contract-digest <ledger-path>`) and persists
-   the returned values to frontmatter in the same checkpoint commit;
-   the CLI itself is read-only per ADR 0002 and never writes the
-   digest fields. If a `force-run` override was used, append override
-   evidence to Notes in the same checkpoint.
+   `## Acceptance criteria` as `- [ ]` checkboxes. Compute and persist
+   `ac_digest` in this same Stage 1 checkpoint: the derived
+   `confirmation_state.acceptance_criteria` only reaches `confirmed` when
+   `ac_confirmation_status: confirmed` AND a stored `ac_digest` matches the
+   ledger AC content (see `lib/ledger.ts` `readAcceptanceCriteriaState`,
+   which checks `ac_confirmation_status` first: a `blocked`, `stale`, or
+   `pending` status short-circuits to that state, and only a `confirmed`
+   status with a null `ac_digest` falls through to `pending`). So at Stage 1,
+   when `ac_confirmation_status: confirmed` is set but `ac_digest` is still
+   null, the derived state is `pending`, which keeps the route at
+   `pick-issue` and Stage 1 can never advance to `plan`. The `plan_digest`
+   and
+   `batch_contract_digest` fields stay null at Stage 1 because their source
+   content (the plan, the batch contract) does not exist yet; they are
+   populated at Stage 2 and Stage 3 confirmation respectively. The
+   orchestrator computes each digest via the named helper command at the
+   stage that produces its source content
+   (`decompose.ts --ac-digest <ledger-path>` at Stage 1,
+   `decompose.ts --plan-digest <plan-path>` at Stage 2,
+   `decompose.ts --batch-contract-digest <ledger-path>` at Stage 3) and
+   persists the returned value to frontmatter in the same checkpoint commit;
+   the CLI itself is read-only per ADR 0002 and never writes the digest
+   fields. If a `force-run` override was used, append override evidence to
+   Notes in the same checkpoint.
 8. Run `cli.ts state <ledger-path> --json` (the v2 fact-emitter; see
    [ledger-and-helper.md](ledger-and-helper.md#cli-ts-state-facts)).
    The returned `data` envelope must report

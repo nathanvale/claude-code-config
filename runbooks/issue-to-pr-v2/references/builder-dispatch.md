@@ -176,8 +176,9 @@ Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger
 `builder_attempts` record with `attempt_type`, `status`, `commit_sha`,
 `files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
-Persisted `blockers` and `probe_results` are compact string summaries, not raw
-envelope object arrays. Rich evidence such as implementation steps, tests run,
+Persisted `blockers` and `probe_results` are YAML lists of compact string
+summaries (`[]` when empty), not raw envelope object arrays; `notes` is a
+single string. Rich evidence such as implementation steps, tests run,
 assumptions, risks, deferred items, and suggested Validator focus is passed to
 Validators or summarized in Notes rather than persisted wholesale.
 

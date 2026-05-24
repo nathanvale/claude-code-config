@@ -185,7 +185,7 @@ route in this file.
 | `route_id` | Meaning | Hot-router action |
 | --- | --- | --- |
 | `no-ledger` | Ledger file does not exist | Run [Stage 1 shell](#stage-1-shell-pick-issue) to create the ledger. |
-| `pick-issue` | Ledger exists but AC not yet `confirmed` | Run [Stage 1 shell](#stage-1-shell-pick-issue) from the AC-confirmation step. |
+| `pick-issue` | Ledger exists but derived AC state not yet `confirmed` (status not `confirmed`, or status `confirmed` with a null `ac_digest`). A non-null but mismatched `ac_digest` routes to `blocked-acceptance-criteria-stale`, not here. | Run [Stage 1 shell](#stage-1-shell-pick-issue) from the AC-confirmation step. |
 | `plan` | AC confirmed but `plan_path` is null | Run [Stage 2 shell](#stage-2-shell-plan). |
 | `decompose` | Plan present but batch contract not yet `confirmed`, or no batches written | Run [Stage 3 shell](#stage-3-shell-decompose). |
 | `batch-loop` | Batch contract confirmed; not every batch terminal | Run [Stage 4 shell](#stage-4-shell-batch-loop). |

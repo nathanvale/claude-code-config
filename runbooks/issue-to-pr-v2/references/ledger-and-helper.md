@@ -144,8 +144,11 @@ Required fields (set at Stage 1 unless noted):
   `ac_confirmed_at`.
 - `batch_contract_confirmation_status` (`pending | confirmed | stale | blocked`),
   `batch_contract_confirmed_at`.
-- `plan_path` (set at Stage 2), `plan_digest`, `ac_digest`,
-  `batch_contract_digest` (digests set at Stage 3 confirmation).
+- `plan_path` (set at Stage 2). Digests are set at the stage that produces
+  their source content: `ac_digest` at Stage 1 (the AC confirmation
+  checkpoint anchors the derived `acceptance_criteria` confirmation state to
+  this digest), `plan_digest` at Stage 2, and `batch_contract_digest` at
+  Stage 3 confirmation.
 - `final_reviewed_at` (set at Stage 5 final-review checkpoint).
 - `ship_mode`: `standard` (default) or `smoke-direct`.
 - `pr_url` (set at Stage 6).
@@ -173,7 +176,9 @@ Stage 4 mutates batch entries at runtime to add:
   this batch.
 - `builder_attempts`: compact records, one per well-formed Builder envelope,
   each with `attempt_type`, `status`, `commit_sha`, `files_touched`,
-  `route_hint`, `blockers`, `probe_results`, `notes`. Rich envelope evidence
+  `route_hint`, `blockers`, `probe_results`, `notes`. `blockers` and
+  `probe_results` are YAML lists of compact strings (`[]` when empty);
+  `notes` is a single string. Rich envelope evidence
   (implementation steps, tests run, assumptions, risks, deferred, suggested
   Validator focus) is **not** persisted here; it lives in Notes or is passed to
   Validators.
@@ -270,7 +275,7 @@ the U4 audit prompt.
 
 | Route id | When the CLI emits it |
 | --- | --- |
-| `pick-issue` | Ledger exists but `ac_confirmation_status` is not `confirmed`; Stage 1 has not yet committed the AC checkpoint. |
+| `pick-issue` | Ledger exists but the derived `confirmation_state.acceptance_criteria` is not `confirmed` — either `ac_confirmation_status` is not `confirmed`, or it is `confirmed` with a null `ac_digest`, so Stage 1 has not yet committed a digest-anchored AC checkpoint. A non-null but mismatched `ac_digest` is `stale`, which routes to `blocked-acceptance-criteria-stale` (see the blocked-route table below), not `pick-issue`. |
 | `plan` | AC is confirmed but `frontmatter.plan_path` is null; Stage 2 has not yet recorded a plan file. |
 | `decompose` | Plan path present but `batch_contract_confirmation_status` is not `confirmed`, or no batches have been written to `## Batches`. |
 | `batch-loop` | Batch contract confirmed and at least one batch exists, but not every batch is in a terminal status (`converged` or `accepted-risk`). |
