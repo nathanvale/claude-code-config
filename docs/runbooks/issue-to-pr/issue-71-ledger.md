@@ -5,7 +5,7 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/71"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-05-24-005-feat-issue-to-pr-runbook-heal-closure-plan.md"
 started_at: "2026-05-24T16:47:00+10:00"
-status: "in-progress"
+status: "shipped"
 runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
@@ -13,7 +13,7 @@ ac_confirmed_at: "2026-05-24T16:47:00+10:00"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-05-24T17:11:00+10:00"
 blocked_reason: null
-pr_url: null
+pr_url: "https://github.com/nathanvale/claude-code-config/pull/73"
 ship_mode: "standard"
 final_reviewed_at: "2026-05-24T18:37:00+10:00"
 plan_digest: "sha256:d86c6a18c2eb82b81266b966e04fa91bb95f15b590ac4b850d0df9493427d972"
@@ -548,6 +548,7 @@ dirty/staged path summaries>
   - tsc_check runbooks/issue-to-pr-v2 -> 0 errors.
   - biome_lintCheck decompose.ts -> 0 errors/0 warnings; lib/ledger.ts -> 0 errors, 2 warnings (noNonNullAssertion, noPrototypeBuiltins) PRE-EXISTING on main, not in this branch's added lines; repo gate is --diagnostic-level=error so warnings do not fail.
   - CI: no .github/workflows/ in repo. prompt-system render check not triggered (no prompt-fragments/rules/context changes).
+- 2026-05-24T18:52+10:00 — Stage 6 ship (standard mode): branch feat/issue-71-runbook-heal-closure pushed; PR #73 created via /ce-commit-push-pr (https://github.com/nathanvale/claude-code-config/pull/73), Closes #71, with ## Residual Review Findings (3 deferred-P2 surfaced + 2 deferred-P3 noted, all tracked in #72). status: shipped.
 
 ### runbook_version skew continuation evidence (U6)
 
