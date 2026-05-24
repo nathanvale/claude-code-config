@@ -32,8 +32,10 @@ governance, and local skills.
 ## Vocabulary
 
 **Capability**:
-A skill or agent that can be tracked, adapted, validated, and installed.
-Capabilities are the primary unit of ownership.
+A registry-managed skill or agent, together with the files owned by that skill
+or agent. Capabilities are the primary unit of ownership. In v1, runbooks,
+prompt fragments, rules, commands, MCP tools, and whole plugins are not
+capabilities.
 
 **Source**:
 Where a capability came from, such as a Git repository or local plugin cache.
@@ -45,7 +47,7 @@ Snapshots are committed to git and treated as dependency input.
 
 **Canonical capability**:
 Nathan's adapted copy of a capability. Canonical capabilities are the source for
-installation.
+installation and preserve source-native operating behavior by default.
 
 **Overlay**:
 A small harness-specific patch applied at install time when Claude Code and
@@ -135,6 +137,15 @@ repo.
 18. `install.sh` integration is deferred until the standalone installer is
    proven.
 19. This spec is the first durable artifact before implementation planning.
+20. Runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins
+    are out of scope as v1 capabilities.
+21. Overlay folders mirror target paths rather than introducing a separate patch
+    language in v1.
+22. Retired capabilities are preserved for provenance and are not installable in
+    v1.
+23. Install collisions block by default unless the manifest explicitly declares
+    ownership or replacement.
+24. The first Peter capability is `one-password`.
 
 ## Lifecycle Status
 
@@ -147,7 +158,8 @@ installed  copied to one or more harness targets
 retired    preserved for provenance, no longer installed
 ```
 
-Status controls lifecycle. Risk flags control review posture.
+Status controls lifecycle. Risk flags control review posture. Retired
+capabilities are preserved for provenance and are not installable in v1.
 
 ## Risk Flags
 
@@ -228,6 +240,10 @@ canonical = source-native operating behavior
 overlay = smallest possible harness-specific patch
 ```
 
+In v1, overlays are represented as folders that mirror the installed target
+paths. This keeps review simple and avoids inventing a patch language before the
+registry has proven its install model.
+
 ## Install Targets
 
 Install defaults are global and overridable:
@@ -270,6 +286,27 @@ installed alias: 1password -> one-password
 
 The alias wrapper should only route discovery and invocation to the canonical
 capability.
+
+## Adding A Capability From Another Source
+
+The add flow should stay deliberately reviewable:
+
+1. Choose a single skill or agent as the capability. Do not import a whole
+   source repository or plugin as one capability.
+2. Record the source in `capabilities/manifest.yml`, including kind, upstream
+   location, pinned version or commit, and local snapshot path.
+3. Snapshot the selected capability folder under `capabilities/snapshots/`.
+   Parent-owned `scripts/`, `references/`, `assets/`, and `templates/` travel
+   with the capability.
+4. Create the canonical copy under `capabilities/canonical/skills/` or
+   `capabilities/canonical/agents/`.
+5. Adapt only what Nathan needs: remove source-specific personal leakage,
+   declare dependencies, set lifecycle status, set risk flags, and keep exact
+   harness differences for overlays.
+6. Add aliases only as thin redirect wrappers.
+7. Run validation before any install. High-confidence leakage blocks; ambiguous
+   leakage warns.
+8. Run a dry-run install before writing real Claude Code or Codex targets.
 
 ## Validation
 
@@ -323,14 +360,14 @@ Raw URLs, package registries, and custom fetch adapters are out of scope for v1.
 ## Open Questions
 
 - What exact manifest schema should v1 use?
-- What should the first source import set be?
-- Which capabilities need Claude Code overlays on day one?
+- Which Compound Engineering capability should pair with `one-password` in the
+  first implementation slice?
+- Which capabilities need harness overlays on day one?
 - What should the validator consider high-confidence secret leakage?
 - How should update commands present three-way diffs without overwhelming the
   user?
 - How should install collision handling behave when a local skill already exists
   outside the registry?
-- Should retired capabilities remain installable by explicit command?
 - Should the installer preserve executable bits for scripts, and how should that
   be validated?
 - Should source snapshots include entire capability folders only, or also a
@@ -341,7 +378,7 @@ Raw URLs, package registries, and custom fetch adapters are out of scope for v1.
 The first build should be deliberately small:
 
 1. Create `capabilities/manifest.yml`.
-2. Snapshot one Peter skill and one Compound Engineering skill.
+2. Snapshot Peter's `one-password` skill and one Compound Engineering skill.
 3. Create canonical copies for those capabilities.
 4. Validate manifest shape, paths, frontmatter, dependencies, and obvious
    leakage.
