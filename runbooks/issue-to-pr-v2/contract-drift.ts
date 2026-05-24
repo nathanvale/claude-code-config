@@ -32,6 +32,35 @@
  * well-formed `ok` envelope carrying an EMPTY fact set (empty arrays / empty
  * response shapes) is a hard error: an empty / partial fact set would mask
  * drift or make every doc claim look like drift, so we throw instead.
+ *
+ * ---------------------------------------------------------------------------
+ * Scope boundary (AC8) — what this check DELIBERATELY does NOT do
+ * ---------------------------------------------------------------------------
+ * This module is a narrow contract-drift check, NOT a broad docs auditor. The
+ * boundary below is intentional; a future maintainer must NOT extend it into a
+ * general prose/consistency linter without re-opening the scope decision.
+ *
+ *  - SCOPE is exactly the four operator docs in `SCOPED_DOCS`
+ *    (skills/issue-to-pr/SKILL.md, runbooks/issue-to-pr-v2/README.md,
+ *    references/ledger-and-helper.md, references/first-run-gotchas.md). It does
+ *    NOT validate other Issue-to-PR references (stage-*.md,
+ *    findings-and-validators.md, builder-dispatch.md, host-adapters.md, etc.).
+ *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
+ *    command names, `contract <slice>` names, packet roles (ONLY in explicit
+ *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
+ *    and the scoped recovery/control-plane links (the first-run-gotchas
+ *    relationship). It does NOT judge prose truth, broad docs consistency, or
+ *    any token kind beyond these.
+ *  - It adds NO dependency (imports are node/bun stdlib + bun:test only), NO
+ *    new CLI command, NO new emitted fact (it only READS the existing CLI via
+ *    subprocess), and generates NO docs.
+ *  - It does NOT validate decompose.ts flags
+ *    (`decompose.ts --validate-ledger-batches` yields no command claim),
+ *    route-precedence ORDER, enum-value prose (`committed`, `needs-revision`),
+ *    template filenames (`builder-dispatch.md`), or role-ish workflow words in
+ *    PROSE ("the Builder", "a validator") OUTSIDE explicit `cli.ts packet
+ *    <role>` positions. The extractor is scoped by structural POSITION, not by
+ *    token shape, precisely so these stay out of scope.
  */
 
 import { statSync } from "node:fs";
