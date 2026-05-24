@@ -178,8 +178,8 @@ preparing that packet or handoff.
 | Stage 1 issue/ledger setup | `runbooks/issue-to-pr-v2/references/stage-1-pick-issue.md` |
 | Stage 2 planning | `runbooks/issue-to-pr-v2/references/stage-2-plan.md`; `runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md` |
 | Stage 3 decomposition and contract review | `runbooks/issue-to-pr-v2/references/stage-3-decompose.md` |
-| Blocked Stage 3, stale AC, stale batch contract, or stale digests | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/stage-3-decompose.md`; `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` |
-| First-run gotchas or confusing blocked-state recovery | `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` |
+| Blocked Stage 3, stale AC, stale batch contract, or stale digests | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/stage-3-decompose.md` |
+| First-run gotchas or confusing blocked-state recovery (discretionary; see note below) | `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` |
 | Frontmatter blocked reason | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/findings-and-validators.md` |
 | Stage 4 batch loop | `runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md` |
 | Stage 4 Builder dispatch | `runbooks/issue-to-pr-v2/references/builder-dispatch.md`; `runbooks/issue-to-pr-v2/templates/builder-work-packet.md` |
@@ -195,6 +195,13 @@ Do not copy packet schemas, ledger schema, route field tuples, or full
 hatch semantics into this skill. If a route needs a reference that
 `data.required_reference_ids` does not name, file the drift against
 `runbooks/issue-to-pr-v2/lib/route.ts` or the packet renderer.
+
+`first-run-gotchas.md` is the one discretionary exception: it is a
+recovery overlay the operator loads when a state is confusing, not a
+CLI-required reference. `requiredReferenceIdsFor` does not return it for any
+route, and that is intentional, not a route.ts drift to file. Load it on
+operator judgment from the blocked-route path below, not because
+`data.required_reference_ids` named it.
 
 </reference_loading_policy>
 

@@ -22,9 +22,18 @@ running a helper from the installed runbook directory or a different checkout
 validates the ledger against the wrong git repository and produces false
 drift.
 
-Every command requires `--json`. The CLI is a read-only fact emitter
-(ADR 0002): it never says "run X". It tells you where the workflow sits;
-you choose the recovery.
+Two command families appear in these recipes, and they take different flags:
+
+- **`cli.ts` probes** (`state`, `diagnose`, `contract`) are JSON fact
+  emitters. Every `cli.ts` command requires `--json` and writes one envelope
+  to stdout. The CLI is read-only (ADR 0002): it never says "run X". It tells
+  you where the workflow sits; you choose the recovery.
+- **`decompose.ts` validators** (`--validate-ledger-batches`,
+  `--assert-no-open-p0p1`, the `--*-digest` flags) are line-oriented checks.
+  They do **not** take `--json`; they print human-readable lines on stdout
+  and signal pass/fail through the exit code (`0` pass, non-zero violation).
+  Adding `--json` to a `decompose.ts` command makes it print a usage error
+  and skip the check, so read its exit code, not a JSON envelope.
 
 `{ledger}` below is shorthand for
 `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`.
@@ -245,12 +254,21 @@ bun runbooks/issue-to-pr-v2/cli.ts diagnose {ledger} --json
 `data.drift.digest_drift.acceptance_criteria`,
 `data.blocking_gates`.
 
-**What the fields prove.** `inferred_route_id:
-"blocked-acceptance-criteria-stale"` with
-`drift.digest_drift.acceptance_criteria: true` proves the stored
-`ac_digest` no longer matches the `## Acceptance criteria` content. A
-`blocking_gates` entry of `{kind: "route_id", value:
-"blocked-acceptance-criteria-stale"}` confirms the workflow cannot advance.
+**What the fields prove.** Both cases share `inferred_route_id:
+"blocked-acceptance-criteria-stale"`, but the proof differs by case, and the
+two are mutually exclusive in the drift field:
+
+- **Stale digest (AC edited after confirmation).**
+  `drift.digest_drift.acceptance_criteria: true` proves the stored
+  `ac_digest` no longer matches the `## Acceptance criteria` content. Drift
+  is computed only from the `stale` axis, so this boolean is the evidence
+  here.
+- **Blocked status (`ac_confirmation_status: blocked`).**
+  `drift.digest_drift.acceptance_criteria` is `false` for this case (a
+  blocked status is not a digest mismatch). The evidence is instead a
+  `blocking_gates` entry `{kind: "field", field: "ac_confirmation_status",
+  value: "blocked"}`. If you see the blocked route with no AC digest drift,
+  read the field gate, not the drift boolean.
 
 **Recovery / next.** Return to Stage 1 and re-confirm the AC list with the
 user. Do not auto-rewrite ACs. After re-confirmation, recompute `ac_digest`
