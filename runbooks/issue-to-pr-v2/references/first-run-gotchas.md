@@ -36,7 +36,12 @@ Two command families appear in these recipes, and they take different flags:
   and skip the check, so read its exit code, not a JSON envelope.
 
 `{ledger}` below is shorthand for
-`docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`.
+`docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`. The recipes show
+the repo-local helper path `runbooks/issue-to-pr-v2/`; if your host installs
+the runbook elsewhere, substitute the host-resolved path (`SKILL.md` calls
+this `{v2-cli}`, which is `~/.claude/runbooks/issue-to-pr-v2/cli.ts` in a
+Claude Code install). Always run helpers from the target repo root, whatever
+the helper path.
 
 If you are seeing digest drift but no specific `*-stale` route fired, read
 the `blocked-digests-stale` recipe (Part 2.3) first: it is the catch-all
@@ -99,9 +104,13 @@ recomputes them via `decompose.ts --ac-digest`, `--plan-digest`, and
 
 **Model note.** Digests anchor a confirmation to a specific snapshot of
 content. A digest over content that does not exist yet is meaningless, so it
-stays null until its stage runs. A null digest before its stage is normal; a
-null digest *after* its stage, while the source content is populated, is the
-`blocked-digests-stale` route (Part 2.3).
+stays null until its stage runs. A null *stored* digest never routes to
+`blocked-digests-stale`: it yields `confirmation_state.digests: "pending"`
+(`lib/ledger.ts` `readDigestState`), which routes to the happy-path stage
+that produces that content. `blocked-digests-stale` fires only when a digest
+is *populated* but no longer matches its recomputed source content (Part
+2.3). So null-before-stage is normal `pending`; populated-but-mismatched
+after stage is the stale route.
 
 **Owner:** `gotchas guide`.
 **Retire when** `cli.ts diagnose` emits a per-field "digest pending vs.
@@ -179,14 +188,15 @@ content is genuinely unchanged and the digest still mismatches, that is a
 real drift to investigate, not a comparison artifact. See
 [stage-3-decompose.md](stage-3-decompose.md).
 
-**Model note.** The digest covers only the immutable contract fields (`id`,
-`name`, `goal`, `files`, `depends_on`, `supersedes`, `execution_mode`,
-`acceptance_tests`, `ac_mapping`, `rationale`). Runtime lifecycle fields
-(`status`, `iterations`, `builder_commits`, `builder_attempts`,
-`final_verdict`) are excluded, so Stage 4 progress never trips this gate.
-If you believe a candidate serialization is being compared instead of the
-ledger block, that is a CLI-observability question: the CLI only ever
-digests the stored ledger content.
+**Model note.** The digest covers only the immutable batch-contract fields,
+not the runtime lifecycle fields (`status`, `iterations`, `builder_commits`,
+`builder_attempts`, `final_verdict`), so Stage 4 progress never trips this
+gate. For the exact immutable-field list see
+[ledger-and-helper.md](ledger-and-helper.md#helper-execution-context), which
+is the canonical source (don't re-enumerate it here, so the two surfaces
+can't drift). If you believe a candidate serialization is being compared
+instead of the ledger block, that is a CLI-observability question: the CLI
+only ever digests the stored ledger content.
 
 **Owner:** `gotchas guide`.
 **Retire when** `cli.ts diagnose` reports which field of the batch contract
@@ -280,9 +290,10 @@ breaks the digest anchor on purpose, so a human re-confirms before the run
 commits more work against criteria that moved.
 
 **Owner:** `gotchas guide`.
-**Retire when** `SKILL.md` links here directly from the
-`blocked-acceptance-criteria-stale` route handling and the recovery is
-discoverable at the point of pain.
+**Retire when** the `blocked-acceptance-criteria-stale` bullet in the
+`SKILL.md` `<route_catalog>` block points to this recipe by name (a
+per-route link, not the generic blocked-route paragraph that already exists
+below those bullets).
 
 ### 2.2 `blocked-batch-contract-stale`
 
@@ -313,15 +324,21 @@ the immutable fields means the plan-of-record changed, which requires a fresh
 human confirmation before Builders run against it.
 
 **Owner:** `gotchas guide`.
-**Retire when** `SKILL.md` links here from the `blocked-batch-contract-stale`
-route handling.
+**Retire when** the `blocked-batch-contract-stale` bullet in the `SKILL.md`
+`<route_catalog>` block points to this recipe by name (a per-route link, not
+the generic blocked-route paragraph that already exists below those
+bullets).
 
 ### 2.3 `blocked-digests-stale`
 
-**Symptom / route id.** `route_id: "blocked-digests-stale"`. One of
-`plan_digest`, `ac_digest`, or `batch_contract_digest` no longer matches its
-source content, but the individual `*_confirmation_status` fields have not
-been flipped to `stale` yet.
+**Symptom / route id.** `route_id: "blocked-digests-stale"`. In practice this
+route is reached by `plan_digest` drift: an `ac_digest` mismatch makes
+`acceptance_criteria` go `stale` and routes to
+`blocked-acceptance-criteria-stale` first, and a `batch_contract_digest`
+mismatch routes to `blocked-batch-contract-stale` first (route precedence in
+`lib/route.ts` `classifyRoute` checks both before digests-stale). So if you
+are on `blocked-digests-stale` with AC and batch contract both still
+confirmed, the drifted digest is the plan digest.
 
 **Command.**
 
@@ -335,7 +352,9 @@ any}`.
 
 **What the fields prove.** `inferred_route_id: "blocked-digests-stale"`
 with `drift.digest_drift.any: true` proves at least one digest drifted. The
-per-axis booleans tell you which source content moved.
+per-axis booleans tell you which source content moved; on this route, with
+AC and batch contract confirmed, expect the plan digest to be the drifted
+one.
 
 **Recovery / next.** Return to Stage 3, recompute the drifted digest(s) over
 the current source content, and get user re-confirmation. Do not flip
@@ -388,7 +407,9 @@ The gate stops a run from dispatching packets rendered against a contract the
 runbook no longer honors, until a human records the carry-forward decision.
 
 **Owner:** `gotchas guide`.
-**Retire when** `SKILL.md` links here from the version-skew pre-route gate.
+**Retire when** the version-skew entry in the `SKILL.md` `<pre_route_gates>`
+block points to this recipe by name (it currently links only to
+`ledger-and-helper.md` for the continuation-evidence shape).
 
 ### 2.5 Install-presence block: `installed_artifact_presence.all_present: false`
 
