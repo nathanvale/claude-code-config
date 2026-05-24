@@ -744,6 +744,116 @@ describe("serializeRegistry", () => {
     expect(entry.summary).toBe(candidate.summary);
     expect(validateRegistry(reparsed)).toEqual([]);
   });
+
+  test("round-trips a string scalar that contains a NUL byte (F22: emit-scalar-nul-byte-breaks-yaml-roundtrip)", () => {
+    // A candidate value containing U+0000 must survive serialize + write + parse.
+    // Before the fix, emitScalar leaves the literal NUL in the double-quoted
+    // scalar and Bun.YAML.parse rejects it on re-read.
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:nul-byte";
+    candidate.summary = `summary with embedded NUL ${String.fromCharCode(0)} byte`;
+    const registry = upsert(parseRegistry(path), candidate);
+    const updated = serializeRegistry(path, registry);
+    writeFileSync(path, updated);
+    // The critical assertion: re-parse does NOT throw.
+    const reparsed = parseRegistry(path);
+    expect(reparsed.learnings).toHaveLength(1);
+    const entry = reparsed.learnings[0] as Record<string, unknown>;
+    expect(entry.summary).toBe(candidate.summary);
+    expect(validateRegistry(reparsed)).toEqual([]);
+  });
+
+  test("round-trips a string scalar that contains assorted C0 control bytes (F22 generalization)", () => {
+    // BEL (0x07), backspace (0x08), vertical tab (0x0B), form feed (0x0C),
+    // and DEL-area control 0x1F all need escaping for re-parse safety.
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:c0-controls";
+    candidate.summary = `controls: ${String.fromCharCode(7)}${String.fromCharCode(8)}${String.fromCharCode(11)}${String.fromCharCode(12)}${String.fromCharCode(31)}`;
+    const registry = upsert(parseRegistry(path), candidate);
+    const updated = serializeRegistry(path, registry);
+    writeFileSync(path, updated);
+    const reparsed = parseRegistry(path);
+    const entry = reparsed.learnings[0] as Record<string, unknown>;
+    expect(entry.summary).toBe(candidate.summary);
+  });
+});
+
+describe("validateCandidate (evidence-key whitelist, F23: emit-yaml-unescaped-mapping-keys-corrupt-file)", () => {
+  test("rejects a candidate whose evidence record carries an unknown key", () => {
+    const candidate = validCandidateObject();
+    (candidate.evidence as Record<string, unknown>).bogus_key = "not allowed";
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /bogus_key/.test(e))).toBe(true);
+    // The error must list the allowed key set so the message is self-correcting.
+    const evidenceError = errors.find((e) => /bogus_key/.test(e));
+    expect(evidenceError).toMatch(/run/);
+    expect(evidenceError).toMatch(/affected_surface/);
+    expect(evidenceError).toMatch(/verification_idea/);
+  });
+
+  test("accepts a candidate whose evidence record omits optional documented fields", () => {
+    // The PRD lets a run capture only what is known; the whitelist must
+    // tolerate documented keys being absent.
+    const candidate = validCandidateObject();
+    const ev = candidate.evidence as Record<string, unknown>;
+    delete ev.discovery_method;
+    delete ev.root_cause;
+    delete ev.scope;
+    expect(validateCandidate(candidate)).toEqual([]);
+  });
+
+  test("rejects an evidence key that contains a YAML-special character (colon)", () => {
+    const candidate = validCandidateObject();
+    (candidate.evidence as Record<string, unknown>)["key:with:colon"] = "x";
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /key:with:colon/.test(e))).toBe(true);
+  });
+
+  test("upsert refuses an evidence record with an unknown key (defense in depth)", () => {
+    const candidate = validCandidateObject();
+    (candidate.evidence as Record<string, unknown>).rogue = "x";
+    expect(() => upsert({ learnings: [] }, candidate)).toThrow(/rogue/);
+  });
+});
+
+describe("upsert lifecycle-omission contract (F25: lifecycle-omission-not-tested)", () => {
+  test("omitting follow_up on a matched upsert preserves the existing follow_up value", () => {
+    const first = validCandidateObject();
+    first.signature = "sha256:lifecycle-preserve";
+    first.follow_up = "https://example.test/issue/999";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:lifecycle-preserve";
+    // Deliberately omit follow_up; the merge must not blank the existing value.
+    delete second.follow_up;
+    second.status = "filed";
+    registry = upsert(registry, second);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect(entry.follow_up).toBe("https://example.test/issue/999");
+    // Sanity: other lifecycle fields still merge from the candidate.
+    expect(entry.status).toBe("filed");
+  });
+
+  test("an explicit null follow_up on a matched upsert overwrites the existing value", () => {
+    // Paired contract test: explicit null is a documented semantic and must
+    // clear the field, distinguishing it from absence.
+    const first = validCandidateObject();
+    first.signature = "sha256:lifecycle-clear";
+    first.follow_up = "https://example.test/issue/123";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:lifecycle-clear";
+    second.follow_up = null;
+    registry = upsert(registry, second);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect(entry.follow_up).toBeNull();
+  });
 });
 
 const scriptPathRoot = join(import.meta.dir, "..", "learnings-registry.ts");
@@ -815,5 +925,47 @@ describe("learnings-registry.ts --upsert", () => {
     const result = await runRegistry(["--validate", realRegistryPath]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/ok/i);
+  });
+
+  test("re-validates the serialized bytes before writing and leaves the registry unchanged on failure (F24: dispatcher-writes-without-reparse-validate)", async () => {
+    // Stand up a valid registry whose pre-existing entry carries an evidence
+    // key that the emitter will write verbatim and that re-parse will reject
+    // (a newline embedded in the key). The candidate is valid (the new
+    // whitelist runs on the candidate, not on the pre-existing entry), but
+    // serializeRegistry will faithfully emit the poisoned key from the
+    // pre-existing entry, and the dispatcher's pre-write re-validate gate
+    // must catch the round-trip failure and refuse to write. The on-disk
+    // file must be byte-identical afterwards.
+    const seededBody =
+      "learnings:\n" +
+      "  - summary: \"existing\"\n" +
+      "    owner: runbook-reference\n" +
+      "    retirement_condition: \"existing\"\n" +
+      "    signature: \"sha256:existing\"\n" +
+      "    disposition: needs-evidence\n" +
+      "    status: open\n" +
+      "    confidence: medium\n" +
+      "    evidence:\n" +
+      "      - run: issue-90\n" +
+      "        affected_surface: \"x\"\n" +
+      "        what_was_wrong: \"y\"\n" +
+      "        \"rogue\\nkey\": \"poisoned\"\n";
+    const path = writeRegistry(registryDoc(seededBody));
+    const before = readFileSync(path, "utf8");
+
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:fresh";
+    const candidatePath = writeCandidate(
+      "candidate.json",
+      JSON.stringify(candidate, null, 2),
+    );
+
+    const result = await runRegistry(["--upsert", path, candidatePath]);
+    expect(result.exitCode).not.toBe(0);
+    // The dispatcher must name the failure as a serialization / re-validate
+    // problem so an operator can fix the registry, not the candidate.
+    expect(result.stderr).toMatch(/serialize|re-?validate|round-?trip|refusing/i);
+    // The file must be byte-identical: defense-in-depth prevents silent corruption.
+    expect(readFileSync(path, "utf8")).toBe(before);
   });
 });

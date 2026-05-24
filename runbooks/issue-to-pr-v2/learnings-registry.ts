@@ -23,6 +23,7 @@ import {
   type Registry,
   loadCandidate,
   parseRegistry,
+  parseRegistryFromString,
   serializeRegistry,
   signatureFor,
   upsert,
@@ -118,6 +119,34 @@ if (args[0] === "--upsert") {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     fail(message);
+  }
+
+  // Defense in depth: re-parse and re-validate the bytes we are about to
+  // write BEFORE we touch disk. If the emitter ever produces yaml the parser
+  // would reject (e.g. an un-escaped control byte, a corrupt mapping key,
+  // an unknown shape), we abort with an actionable error and leave the
+  // existing on-disk registry intact instead of silently overwriting it
+  // with a corrupt file.
+  try {
+    const reparsed = parseRegistryFromString(
+      newMarkdown,
+      `<serialized-registry for ${registryPath}>`,
+    );
+    const reparsedErrors = validateRegistry(reparsed);
+    if (reparsedErrors.length > 0) {
+      stderr.write(
+        `learnings-registry: refusing to write ${registryPath}: serialized output failed re-validate (registry left unchanged)\n`,
+      );
+      for (const error of reparsedErrors) {
+        stderr.write(`learnings-registry: ${error}\n`);
+      }
+      exit(1);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(
+      `refusing to write ${registryPath}: serialized output failed round-trip parse (registry left unchanged): ${message}`,
+    );
   }
 
   // Write-scope guard lands in the next batch; this batch writes to the path

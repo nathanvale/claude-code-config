@@ -65,6 +65,26 @@ const REQUIRED_STRING_FIELDS = [
   "confidence",
 ] as const;
 
+/**
+ * Closed set of allowed evidence-record keys, fixed by PRD #88 and documented
+ * in `references/workflow-learnings-registry.md` ("Append-only evidence"). The
+ * hand-rolled emitter writes mapping keys verbatim, so an unknown or
+ * YAML-special key would corrupt the on-disk yaml block; pinning the schema at
+ * candidate-ingestion time means a bad key is rejected with an actionable
+ * error BEFORE it reaches upsert or the serializer. Not every key has to be
+ * present on a given run (the PRD lets a run capture only what is known).
+ */
+const ALLOWED_EVIDENCE_KEYS = [
+  "run",
+  "affected_surface",
+  "what_was_wrong",
+  "discovery_method",
+  "root_cause",
+  "scope",
+  "proposed_fix",
+  "verification_idea",
+] as const;
+
 /** The four closed-enum fields and their allowed-value sets, in schema order. */
 const ENUM_FIELDS: ReadonlyArray<{
   field: "owner" | "disposition" | "status" | "confidence";
@@ -103,7 +123,24 @@ export function parseRegistry(path: string): Registry {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`cannot read registry ${path}: ${message}`);
   }
+  return parseRegistryFromString(src, path);
+}
 
+/**
+ * Parse a registry from an in-memory Markdown string, applying the same
+ * single-fenced-yaml-block contract as `parseRegistry`. `originLabel` is used
+ * only to name the source in actionable error messages (a file path for
+ * on-disk parses, a synthetic label like `"<serialized-registry>"` for the
+ * dispatcher's pre-write re-validate gate).
+ *
+ * Factored out so the `--upsert` dispatcher can re-parse the bytes it is
+ * about to write WITHOUT going through disk, closing the defect where a
+ * faulty emitter could silently corrupt the registry (F24).
+ */
+export function parseRegistryFromString(
+  src: string,
+  originLabel: string,
+): Registry {
   // The closing fence must be a line that STARTS with the triple-backtick at
   // column 0 (multiline `^...$`), so a triple-backtick that appears INSIDE a
   // yaml scalar value (e.g. a learning whose summary references a fenced code
@@ -114,11 +151,11 @@ export function parseRegistry(path: string): Registry {
     ...src.matchAll(/^```yaml[^\n]*\n([\s\S]*?)\n^```[ \t]*$/gim),
   ].map((match) => match[1]);
   if (blocks.length === 0) {
-    throw new Error(`no fenced yaml block found in registry ${path}`);
+    throw new Error(`no fenced yaml block found in registry ${originLabel}`);
   }
   if (blocks.length > 1) {
     throw new Error(
-      `registry ${path} must contain a single fenced yaml block, found ${blocks.length}`,
+      `registry ${originLabel} must contain a single fenced yaml block, found ${blocks.length}`,
     );
   }
 
@@ -127,7 +164,9 @@ export function parseRegistry(path: string): Registry {
     parsed = Bun.YAML.parse(blocks[0]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`registry ${path} yaml block did not parse: ${message}`);
+    throw new Error(
+      `registry ${originLabel} yaml block did not parse: ${message}`,
+    );
   }
 
   if (
@@ -136,7 +175,7 @@ export function parseRegistry(path: string): Registry {
     !Array.isArray((parsed as { learnings?: unknown }).learnings)
   ) {
     throw new Error(
-      `registry ${path} yaml block has no "learnings" array at the top level`,
+      `registry ${originLabel} yaml block has no "learnings" array at the top level`,
     );
   }
 
@@ -326,6 +365,17 @@ export function validateCandidate(candidate: unknown): string[] {
     errors.push(
       `candidate: missing required field "evidence" (expected a single evidence record object)`,
     );
+  } else {
+    // Whitelist evidence-record keys. The emitter writes mapping keys
+    // verbatim, so an unknown or YAML-special key would corrupt the yaml
+    // body; rejecting here keeps validation upstream of upsert + serialize.
+    for (const key of Object.keys(evidence as Record<string, unknown>)) {
+      if (!(ALLOWED_EVIDENCE_KEYS as readonly string[]).includes(key)) {
+        errors.push(
+          `candidate: evidence record has unknown field "${key}"; allowed fields are ${ALLOWED_EVIDENCE_KEYS.join(", ")}`,
+        );
+      }
+    }
   }
 
   checkEnumFields(entry, errors, "candidate");
@@ -645,18 +695,40 @@ function emitYaml(registry: Registry): string {
  * double-quoted scalar so they cannot collide with YAML's special tokens
  * (yes/no/on/off, bare colons, leading dashes) and their backticks stay
  * indented under the parent line.
+ *
+ * Control characters (C0 range 0x00-0x1F, plus DEL 0x7F) are escaped so the
+ * emitted scalar always round-trips through `Bun.YAML.parse`: a literal NUL
+ * byte (U+0000) in particular crashes the parser on re-read and would
+ * otherwise silently corrupt the registry. `\n`, `\r`, and `\t` keep their
+ * familiar YAML escape sequences; every other control byte goes out as a
+ * two-hex-digit `\xNN` escape (YAML's documented 8-bit unicode form).
  */
 function emitScalar(value: unknown): string {
   if (value === null || value === undefined) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
   if (typeof value === "string") {
-    const escaped = value
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/\n/g, "\\n")
-      .replace(/\r/g, "\\r")
-      .replace(/\t/g, "\\t");
+    let escaped = "";
+    for (let i = 0; i < value.length; i += 1) {
+      const ch = value[i];
+      const code = value.charCodeAt(i);
+      if (ch === "\\") {
+        escaped += "\\\\";
+      } else if (ch === '"') {
+        escaped += '\\"';
+      } else if (code === 0x0a) {
+        escaped += "\\n";
+      } else if (code === 0x0d) {
+        escaped += "\\r";
+      } else if (code === 0x09) {
+        escaped += "\\t";
+      } else if (code <= 0x1f || code === 0x7f) {
+        // YAML's double-quoted scalar accepts `\xNN` for 8-bit characters.
+        escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+      } else {
+        escaped += ch;
+      }
+    }
     return `"${escaped}"`;
   }
   // Fallback: stringify any unexpected shape so the failure is visible rather
