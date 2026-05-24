@@ -10,12 +10,14 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { statSync } from "node:fs";
 import { execPath } from "node:process";
 import { join } from "node:path";
 
 import {
   type DocClaims,
   type DriftFinding,
+  checkContractDrift,
   checkGotchasRelationship,
   compareClaimsToFacts,
   extractDocClaims,
@@ -1703,5 +1705,228 @@ describe("comparator returns findings as DATA, never throws on claim drift", () 
     expect(f.claim).toBe("blocked-nope");
     expect(typeof f.reason).toBe("string");
     expect(f.reason.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Issue #81 — batch 4 (orchestrator + runnable entry).
+ *
+ * `checkContractDrift(opts?)` ties the loader, extractor, comparator, and
+ * gotchas-relationship check together over the four scoped operator docs and
+ * returns `{ ok, findings }`. These tests prove:
+ *  - AC7: a fixture doc with a deliberately STALE contract claim (a route id
+ *    not in the live route_ids, a removed command, a bogus data.* path, a
+ *    missing scoped link) makes the check return `ok:false` with a finding
+ *    NAMING that token — the check fails for a real mismatch (load-bearing).
+ *  - AC1: over the four REAL scoped docs the check returns `ok:true` (docs in
+ *    sync), and a MISSING scoped doc is a hard error (throw), not a clean pass.
+ *  - AC6: the check (and the runnable entry) perform no filesystem writes / no
+ *    git mutations; the four scoped docs are unchanged after a run.
+ *
+ * Fixture docs are written to a temp dir (test scaffolding); the CHECK under
+ * test reads them read-only. Stale tokens are provably NOT contract values
+ * (e.g. `blocked-nonexistent-route`, `frobnicate`, `data.totally_made_up`).
+ */
+describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
+  const realRepoRoot = join(import.meta.dir, "..", "..");
+  const scopedDocRels = [
+    "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/README.md",
+    "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ];
+
+  /**
+   * Stage a fixture repo by copying the four REAL scoped docs into a temp dir,
+   * so the gotchas relationship + clean-pass invariants hold by default. The
+   * caller mutates one doc to inject drift. The CLI is still the real sibling
+   * cli.ts (facts come from the live surface), via the default cliPath.
+   */
+  async function stageFixtureRepo(): Promise<string> {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-cd-orch-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    for (const rel of scopedDocRels) {
+      const text = await Bun.file(join(realRepoRoot, rel)).text();
+      await Bun.write(join(dir, rel), text);
+    }
+    return dir;
+  }
+
+  test("AC1: over the 4 REAL scoped docs the check returns ok:true with no findings", async () => {
+    const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    if (!result.ok) {
+      throw new Error(
+        `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("AC7: a fixture doc with a stale route-ID claim makes the check fail, naming the token", async () => {
+    const dir = await stageFixtureRepo();
+    // Inject a route_id assignment whose value is provably NOT a live route id.
+    const staleToken = "blocked-nonexistent-route";
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const original = await Bun.file(readme).text();
+    await Bun.write(
+      readme,
+      `${original}\n\nStale claim: \`route_id: "${staleToken}"\` should be caught.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      const named = result.findings.find(
+        (f) => f.kind === "route-id" && f.claim === staleToken,
+      );
+      expect(named).toBeDefined();
+      expect(named?.doc).toBe("runbooks/issue-to-pr-v2/README.md");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a removed/bogus command claim makes the check fail, naming the command", async () => {
+    const dir = await stageFixtureRepo();
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const original = await Bun.file(readme).text();
+    await Bun.write(
+      readme,
+      `${original}\n\nRun \`bun runbooks/issue-to-pr-v2/cli.ts frobnicate --json\`.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) => f.kind === "command" && f.claim === "frobnicate",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a bogus data.* field-path claim makes the check fail, naming the path", async () => {
+    const dir = await stageFixtureRepo();
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const original = await Bun.file(readme).text();
+    await Bun.write(
+      readme,
+      `${original}\n\nInspect \`data.totally_made_up\` for the result.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) => f.kind === "field-path" && f.claim === "data.totally_made_up",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC7: a missing scoped-link target makes the check fail, naming the resolved target", async () => {
+    const dir = await stageFixtureRepo();
+    const ledger = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const original = await Bun.file(ledger).text();
+    await Bun.write(
+      ledger,
+      `${original}\n\nSee [missing recipe](./no-such-recovery-doc.md) for details.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) =>
+            f.kind === "scoped-link" &&
+            f.claim.endsWith("no-such-recovery-doc.md"),
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC6: aggregation — drift in two different docs is collected, not short-circuited", async () => {
+    const dir = await stageFixtureRepo();
+    const readme = join(dir, "runbooks/issue-to-pr-v2/README.md");
+    const gotchas = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    await Bun.write(
+      readme,
+      `${await Bun.file(readme).text()}\n\nStale: \`route_id: "blocked-nonexistent-route"\`.\n`,
+    );
+    await Bun.write(
+      gotchas,
+      `${await Bun.file(gotchas).text()}\n\nBogus: \`data.totally_made_up\`.\n`,
+    );
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      const docsWithFindings = new Set(result.findings.map((f) => f.doc));
+      expect(docsWithFindings.has("runbooks/issue-to-pr-v2/README.md")).toBe(
+        true,
+      );
+      expect(
+        docsWithFindings.has(
+          "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("AC1/KD8: a MISSING scoped doc is a hard error (throw), not a clean ok:true result", async () => {
+    // Point the doc list at a path that does not exist; the orchestrator must
+    // throw (naming the doc), never return a clean pass for an absent doc.
+    const missingRel = "runbooks/issue-to-pr-v2/does-not-exist.md";
+    await expect(
+      checkContractDrift({
+        repoRoot: realRepoRoot,
+        scopedDocs: [missingRel],
+      }),
+    ).rejects.toThrow(/does-not-exist\.md/);
+  });
+
+  test("AC6: a failed CLI load throws (hard error), never a clean result", async () => {
+    await expect(
+      checkContractDrift({
+        repoRoot: realRepoRoot,
+        cliPath: join(import.meta.dir, "does-not-exist-cli.ts"),
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("AC6: the check performs no writes — the 4 scoped docs are unchanged after a run", async () => {
+    // Capture content + mtime of each real scoped doc, run the check, and
+    // assert nothing changed on disk (read-only invariant).
+    const before = await Promise.all(
+      scopedDocRels.map(async (rel) => {
+        const abs = join(realRepoRoot, rel);
+        return {
+          rel,
+          text: await Bun.file(abs).text(),
+          mtimeMs: statSync(abs).mtimeMs,
+        };
+      }),
+    );
+    await checkContractDrift({ repoRoot: realRepoRoot });
+    for (const snap of before) {
+      const abs = join(realRepoRoot, snap.rel);
+      expect(await Bun.file(abs).text()).toBe(snap.text);
+      expect(statSync(abs).mtimeMs).toBe(snap.mtimeMs);
+    }
   });
 });

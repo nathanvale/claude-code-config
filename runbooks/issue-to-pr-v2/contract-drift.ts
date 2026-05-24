@@ -1290,3 +1290,141 @@ export async function checkGotchasRelationship(
 
   return findings;
 }
+
+// ---------------------------------------------------------------------------
+// Batch 4: orchestrator + runnable entry
+// ---------------------------------------------------------------------------
+
+/**
+ * The four operator-facing docs the drift check is scoped to. These are
+ * structural file COORDINATES (the check's SCOPE), not contract VALUES (AC5):
+ * they say WHICH docs to validate, never WHAT the contract is. The contract
+ * facts themselves still come exclusively from `loadContractFacts()`.
+ *
+ * Repo-relative so the orchestrator can resolve them against any `repoRoot`
+ * (tests point at a fixture repo; production resolves against the real root)
+ * AND so `extractDocClaims` attributes claims back to the canonical path.
+ */
+export const SCOPED_DOCS: readonly string[] = [
+  "skills/issue-to-pr/SKILL.md",
+  "runbooks/issue-to-pr-v2/README.md",
+  "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+  "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+];
+
+/**
+ * Options for the orchestrator. All are overridable so tests can point at a
+ * fixture repo / fixture doc list / fake CLI (the AC7 stale-doc test relies on
+ * `repoRoot`, the missing-doc test on `scopedDocs`, the CLI-failure test on
+ * `cliPath`). Production callers pass nothing and get the real four docs, the
+ * real repo root, and the sibling `cli.ts`.
+ */
+export type CheckContractDriftOptions = {
+  /** Repo root that scoped-doc paths and link targets resolve against. */
+  repoRoot?: string;
+  /** Repo-relative scoped doc paths. Defaults to the four `SCOPED_DOCS`. */
+  scopedDocs?: readonly string[];
+  /** CLI path forwarded to `loadContractFacts`. Defaults to sibling cli.ts. */
+  cliPath?: string;
+};
+
+/** The orchestrator result: `ok` is true exactly when there are no findings. */
+export type ContractDriftResult = {
+  ok: boolean;
+  findings: DriftFinding[];
+};
+
+/**
+ * Read a scoped doc the check is asked to validate. A MISSING scoped doc is a
+ * HARD ERROR (throw, naming the doc), not a clean result (AC1, Key Decision
+ * 8): the check was told this doc is in scope, so its absence is an
+ * environment/scope failure that must not be silently reported as "in sync".
+ */
+async function readScopedDocOrThrow(
+  absPath: string,
+  relLabel: string,
+): Promise<string> {
+  const file = Bun.file(absPath);
+  if (!(await file.exists())) {
+    throw new Error(
+      `contract-drift orchestrator: required scoped doc "${relLabel}" is missing at ${absPath} — a missing scoped doc is a hard error, not a clean result.`,
+    );
+  }
+  return file.text();
+}
+
+/**
+ * Run the runtime contract-drift check over the four scoped operator docs and
+ * report aggregated drift findings.
+ *
+ * Pipeline (composes batches 1-3, re-implements none of them):
+ *  1. Load the authoritative contract facts ONCE via `loadContractFacts()`
+ *     (batch 1). A failed CLI load THROWS (hard error, AC6 / Key Decision 8) —
+ *     never swallowed into a clean result.
+ *  2. For EACH scoped doc: read its text (missing → hard error), extract its
+ *     claims (batch 2), compare them to the facts (batch 3, awaited), and
+ *     aggregate the findings. ALL docs are processed — the check never
+ *     short-circuits at the first doc with drift.
+ *  3. Run the first-run-gotchas relationship check ONCE (batch 3) and
+ *     aggregate its findings.
+ *
+ * `ok` is true exactly when zero findings were collected. Read-only (AC6):
+ * the orchestrator only reads docs and spawns the read-only CLI; it performs
+ * no filesystem writes, no git, and no ledger mutation.
+ *
+ * @param opts Overrides for repo root, scoped doc list, and CLI path so tests
+ *   can point the check at fixture docs / a fake CLI; production passes none.
+ */
+export async function checkContractDrift(
+  opts: CheckContractDriftOptions = {},
+): Promise<ContractDriftResult> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const scopedDocs = opts.scopedDocs ?? SCOPED_DOCS;
+
+  // Load facts once — a CLI failure throws here and aborts the whole check.
+  const facts = await loadContractFacts({ cliPath: opts.cliPath });
+
+  const findings: DriftFinding[] = [];
+
+  // Per-doc claim extraction + comparison. Collect every doc's findings; a
+  // missing scoped doc throws (never a clean pass).
+  for (const rel of scopedDocs) {
+    const text = await readScopedDocOrThrow(join(repoRoot, rel), rel);
+    const claims = extractDocClaims(text, rel);
+    findings.push(...(await compareClaimsToFacts(claims, facts, { repoRoot })));
+  }
+
+  // The deterministic control-plane relationship the workflow relies on.
+  findings.push(...(await checkGotchasRelationship({ repoRoot })));
+
+  return { ok: findings.length === 0, findings };
+}
+
+/**
+ * Render one finding as a single readable block for the runnable entry: which
+ * doc, the kind, the offending claim, an optional 1-based line, and the human
+ * reason. Output only (no writes).
+ */
+function formatFinding(f: DriftFinding): string {
+  const where = f.line === undefined ? f.doc : `${f.doc}:${f.line}`;
+  return `  [${f.kind}] ${where}\n    claim: ${f.claim}\n    ${f.reason}`;
+}
+
+// Top-level script entrypoint. Only runs when the file is executed directly
+// (Bun's import.meta.main is true for the entry script). Read-only: it prints a
+// human-readable report and sets the exit code; it writes no files (AC6).
+if (import.meta.main) {
+  const result = await checkContractDrift();
+  if (result.ok) {
+    console.log(
+      `contract-drift: OK — the ${SCOPED_DOCS.length} scoped docs are in sync with the live CLI contract.`,
+    );
+  } else {
+    console.error(
+      `contract-drift: ${result.findings.length} drift finding(s):\n${result.findings
+        .map(formatFinding)
+        .join("\n")}`,
+    );
+  }
+  process.exit(result.ok ? 0 : 1);
+}
