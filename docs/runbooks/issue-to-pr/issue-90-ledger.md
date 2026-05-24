@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-25T08:25:02+1000"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-25T08:37:14+1000"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: "sha256:6779b6bdfaa1313953bdae74420718fd6f54dc72300dd9a6499b7f489d121b77"
-batch_contract_digest: null
+plan_digest: "sha256:9da9ab9f9c9043088d83213851d61f5ae5f1b19234aa6ada735d51c07c29dfd1"
+batch_contract_digest: "sha256:9ce54fc1c34c46a2e3ccf5a08154e793b749e3ed10d0bae4837f65f2aca81a21"
 ac_digest: "sha256:17e9d98826395a5c32a2439fe846e176880adcd0af5e4d768d376476d59eb6f9"
 ---
 
@@ -75,7 +75,106 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "registry-file"
+    name: "Create the workflow learnings registry file"
+    goal: "A repo-level Workflow Learnings registry exists in the Issue-to-PR runbook documentation area as human-readable Markdown with a structured YAML block."
+    files:
+      - "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md"
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "AC 1 holds: the registry file exists at runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md as Markdown, and its single fenced yaml block parses to { learnings: [] }."
+    ac_mapping:
+      - 1
+    rationale: "proof_first: greenfield scaffold file; the right first move is a target-state parse check (Bun.YAML.parse yields { learnings: [] }) before/with creating it, as a red test would be artificial for a static doc."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "validate-op"
+    name: "Registry parse, schema validation, and the --validate operation"
+    goal: "A focused helper validates required fields, allowed dispositions, allowed lifecycle statuses, owner classifications, and confidence values."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+      - "runbooks/issue-to-pr-v2/lib/learnings.test.ts"
+      - "runbooks/issue-to-pr-v2/learnings-registry.ts"
+    depends_on:
+      - "registry-file"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 2 holds: validateRegistry accepts a well-formed entry and rejects each of missing-required-field, bad disposition, bad status, bad owner, and bad confidence with an actionable error; --validate surfaces the same via exit code."
+    ac_mapping:
+      - 2
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "candidate-ingest"
+    name: "Candidate-file ingestion (JSON + YAML) and candidate-shape validation"
+    goal: "The helper accepts both JSON and YAML candidate files, and malformed candidate files fail with actionable errors."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+      - "runbooks/issue-to-pr-v2/lib/learnings.test.ts"
+    depends_on:
+      - "validate-op"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 4 holds: a valid JSON candidate and an equivalent valid YAML candidate both load to the same validated structure; malformed JSON, malformed YAML, and unrecognized-extension inputs each fail with an actionable error naming the file."
+    ac_mapping:
+      - 4
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "upsert-op"
+    name: "Signature dedupe, evidence append, lifecycle update, and canonical-overwrite protection"
+    goal: "Upsert appends run evidence and updates lifecycle fields without silently overwriting canonical fields such as summary, owner, or retirement condition unless the candidate explicitly marks a canonical update."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+      - "runbooks/issue-to-pr-v2/lib/learnings.test.ts"
+      - "runbooks/issue-to-pr-v2/learnings-registry.ts"
+    depends_on:
+      - "candidate-ingest"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 3 holds: upsert by matching signature appends evidence and updates lifecycle fields, preserves canonical summary/owner/retirement_condition by default, and replaces them only when the candidate sets canonical_update: true; a non-matching signature appends a new entry."
+    ac_mapping:
+      - 3
+      - 2
+    rationale: "ac_mapping includes 2 because this unit also satisfies AC2's dedupe/upsert-behavior clause; AC2's enum-validation clause is covered by U2."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "write-scope"
+    name: "Write-scope enforcement - registry-only writes"
+    goal: "The helper cannot write skills, runbook references, source code, per-issue ledgers, or any surface outside the registry metadata it owns."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+      - "runbooks/issue-to-pr-v2/learnings-registry.ts"
+      - "runbooks/issue-to-pr-v2/learnings-registry.test.ts"
+    depends_on:
+      - "upsert-op"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 5 holds: --upsert writes only the owned registry path; targeting a skill, another reference, a lib source file, a per-issue ledger, or a traversal path is refused before any write, and the forbidden file is proven unmodified."
+      - "AC 6 holds: the co-located test suites across U2-U5 cover accepted inputs, rejected malformed entries, dedupe/upsert behavior, evidence append, lifecycle updates, canonical-field overwrite protection, and write-scope limits."
+    ac_mapping:
+      - 5
+      - 6
+    rationale: "ac_mapping includes 6 because AC6 is a cross-cutting test-coverage requirement satisfied by the co-located test suites across U2-U5, not by a standalone unit; it is anchored here on the final test-bearing unit (which also delivers AC6's explicitly-named write-scope-limits tests)."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
 ```
 
 ## Findings data
@@ -100,12 +199,31 @@ patch-NNN`. Duplicate findings are identified by
 non-superseded row with the same batch id and signature.
 
 ```yaml
-findings: []
+findings:
+  - id: F1
+    batch_id: stage-3
+    signature: u4-forward-references-u5-write-guard
+    persona: correctness
+    severity: P2
+    status: open
+    summary: "U4 approach text forward-references the U5 write-scope guard; advisory sequencing note"
+    resolution: null
+  - id: F2
+    batch_id: stage-3
+    signature: ac6-coverage-anchored-only-on-write-scope
+    persona: correctness
+    severity: P2
+    status: open
+    summary: "AC6 cross-cutting test coverage is machine-mapped only to U5; per-unit test scenarios cover the behaviors"
+    resolution: null
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+| F1 | stage-3 | u4-forward-references-u5-write-guard | correctness | P2 | open | U4 approach text forward-references the U5 write-scope guard; advisory sequencing note | |
+| F2 | stage-3 | ac6-coverage-anchored-only-on-write-scope | correctness | P2 | open | AC6 cross-cutting test coverage is machine-mapped only to U5; per-unit test scenarios cover the behaviors | |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes

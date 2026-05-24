@@ -54,7 +54,7 @@ that advances each:
 | AC3 | Upsert appends evidence + updates lifecycle without silently overwriting canonical fields unless candidate explicitly marks a canonical update | U4 |
 | AC4 | Helper accepts JSON and YAML candidate files; malformed files fail with actionable errors | U3 |
 | AC5 | Helper cannot write skills, runbook references, source code, per-issue ledgers, or any surface outside the registry it owns | U5 |
-| AC6 | Tests cover accepted inputs, rejected malformed entries, dedupe/upsert, evidence append, lifecycle updates, canonical-overwrite protection, write-scope limits | U2-U5 (co-located tests) |
+| AC6 | Tests cover accepted inputs, rejected malformed entries, dedupe/upsert, evidence append, lifecycle updates, canonical-overwrite protection, write-scope limits | U2-U5 co-located tests; anchored on U5 in `ac_mapping` |
 
 Schema vocabulary is fixed by PRD #88's Implementation Decisions (not invented
 here):
@@ -81,7 +81,7 @@ here):
 `runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md`. This is
 the "Issue-to-PR runbook documentation area" the PRD names, and it follows the
 existing `references/` naming convention. The file is human-readable Markdown
-with a single fenced ` ```yaml ` block holding the structured registry data
+with a single fenced YAML code block holding the structured registry data
 (mirrors the ledger's `## Batches` / `## Findings data` YAML-in-Markdown
 pattern in `runbooks/issue-to-pr-v2/issue-N-ledger.template.md`). The YAML
 block is the machine source of truth; surrounding prose documents the schema
@@ -235,7 +235,7 @@ runbook documentation area", "format is a YAML block inside Markdown".
 registry's purpose, the entry schema (canonical vs lifecycle fields, the five
 owner classifications, five dispositions, four statuses, three confidence
 values, the signature dedupe key), and the canonical-overwrite rule. Follow it
-with a single fenced ` ```yaml ` block seeded with `learnings: []` (empty
+with a single fenced YAML code block seeded with `learnings: []` (empty
 registry). Mirror the documentation tone of the sibling files in
 `references/` and the YAML-in-Markdown layout of
 `runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.
@@ -540,9 +540,11 @@ depends_on:
 execution_mode: tdd
 acceptance_tests:
   - "AC 5 holds: --upsert writes only the owned registry path; targeting a skill, another reference, a lib source file, a per-issue ledger, or a traversal path is refused before any write, and the forbidden file is proven unmodified."
+  - "AC 6 holds: the co-located test suites across U2-U5 cover accepted inputs, rejected malformed entries, dedupe/upsert behavior, evidence append, lifecycle updates, canonical-field overwrite protection, and write-scope limits."
 ac_mapping:
   - 5
-rationale: null
+  - 6
+rationale: "ac_mapping includes 6 because AC6 is a cross-cutting test-coverage requirement satisfied by the co-located test suites across U2-U5, not by a standalone unit; it is anchored here on the final test-bearing unit (which also delivers AC6's explicitly-named write-scope-limits tests)."
 ```
 
 ---
