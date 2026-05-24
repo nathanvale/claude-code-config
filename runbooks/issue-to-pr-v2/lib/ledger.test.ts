@@ -9,6 +9,7 @@ import {
   fail,
   parse,
   parseRunbookVersionContinuationEvidence,
+  rawDiffHasContentBearingChange,
   readLedgerSnapshot,
   validateAcCoverage,
   validateFindingsData,
@@ -1428,5 +1429,91 @@ describe("validateFindingResolution: runbook-heal closure form", () => {
         }),
       ),
     ).not.toThrow();
+  });
+});
+
+// ---------------- runbook-heal mode-only / no-op content guard (vw-007) ------
+//
+// vw-002 closed the zero-touched-file vacuous pass, but a runbook-heal commit
+// whose ONLY change is a mode-bit flip (chmod) still emits a touched path under
+// the control-plane allowlist and would pass vacuously — proving no content
+// change, the same abuse class narrowed to the per-file level.
+// `rawDiffHasContentBearingChange` parses `git diff-tree --raw` output and
+// returns false ONLY when every entry is a pure mode-only `M` (identical blob
+// SHAs); `validateControlPlaneOnlyCommit` rejects such commits.
+//
+// HERMETICITY NOTE: the full end-to-end reject (a runbook-heal finding citing a
+// reachable mode-only control-plane commit, run through validateFindingsData)
+// cannot be exercised hermetically: no mode-only or type-change commit exists
+// anywhere in this branch's history reachable from HEAD (verified by scanning
+// `git diff-tree --raw` over `git rev-list HEAD`), and validateReachableCommit
+// requires `--is-ancestor <ref> HEAD`, so a dangling commit-tree object would
+// fail reachability — and fabricating a reachable one would advance a branch
+// ref and pollute history. The content-detection logic is therefore pinned at
+// the parser seam with the exact byte format git emits for each change kind
+// (captured from `git diff-tree --no-commit-id --raw -r --root -M`). The
+// existing AC2 empty-commit test (RUNBOOK_HEAL_EMPTY_COMMIT_SHA) still covers
+// the end-to-end reject for the zero-file no-op sibling case.
+describe("rawDiffHasContentBearingChange: mode-only vacuous-proof guard", () => {
+  // ":<oldmode> <newmode> <oldsha> <newsha> <STATUS>\t<path...>" — exactly what
+  // `git diff-tree --no-commit-id --raw -r --root -M <sha>` prints.
+  const SHA_A = "e5c5c5583f49a34e86ce622b59363df99e09d4c6";
+  const SHA_B = "85025d98693fe77b700bcf818dfd8fcd13c4e961";
+  const ZERO = "0".repeat(40);
+
+  test("REJECT mode-only: a pure chmod `M` (identical blob SHAs) is NOT content-bearing", () => {
+    const raw = `:100644 100755 ${SHA_A} ${SHA_A} M\trunbooks/issue-to-pr-v2/issue-to-pr.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(false);
+  });
+
+  test("REJECT no-op: an empty raw block is NOT content-bearing", () => {
+    expect(rawDiffHasContentBearingChange("")).toBe(false);
+    expect(rawDiffHasContentBearingChange("\n  \n")).toBe(false);
+  });
+
+  test("REJECT all-mode-only: every entry a chmod still rejects", () => {
+    const raw = [
+      `:100644 100755 ${SHA_A} ${SHA_A} M\trunbooks/issue-to-pr-v2/a.md`,
+      `:100644 100755 ${SHA_B} ${SHA_B} M\trunbooks/issue-to-pr-v2/b.md`,
+    ].join("\n");
+    expect(rawDiffHasContentBearingChange(raw)).toBe(false);
+  });
+
+  test("ACCEPT modify: an `M` with differing blob SHAs is content-bearing", () => {
+    const raw = `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/issue-to-pr.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT binary modify: an `M` with differing SHAs (numstat would show `-`) is content-bearing", () => {
+    const raw = `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/asset.bin`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT add: an `A` entry (old SHA all-zero) is content-bearing", () => {
+    const raw = `:000000 100644 ${ZERO} ${SHA_A} A\trunbooks/issue-to-pr-v2/new.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT delete: a `D` entry (new SHA all-zero) is content-bearing", () => {
+    const raw = `:100644 000000 ${SHA_A} ${ZERO} D\trunbooks/issue-to-pr-v2/stale.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT pure rename: an `R100` entry keeps identical SHAs but the STATUS letter makes it content-bearing", () => {
+    const raw = `:100644 100644 ${SHA_A} ${SHA_A} R100\trunbooks/issue-to-pr-v2/old.md\trunbooks/issue-to-pr-v2/new.md`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT type-change: a `T` entry (file→symlink) is content-bearing", () => {
+    const raw = `:100644 120000 ${SHA_A} ${SHA_B} T\trunbooks/issue-to-pr-v2/link`;
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+
+  test("ACCEPT mixed: a chmod alongside a real modify is content-bearing", () => {
+    const raw = [
+      `:100644 100755 ${SHA_A} ${SHA_A} M\trunbooks/issue-to-pr-v2/chmod-only.md`,
+      `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/real-edit.md`,
+    ].join("\n");
+    expect(rawDiffHasContentBearingChange(raw)).toBe(true);
   });
 });
