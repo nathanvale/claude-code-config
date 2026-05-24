@@ -44,8 +44,10 @@ Claude Code install). Always run helpers from the target repo root, whatever
 the helper path.
 
 If you are seeing digest drift but no specific `*-stale` route fired, read
-the `blocked-digests-stale` recipe (Part 2.3) first: it is the catch-all
-that fires before a more specific confirmation status is recorded.
+the `blocked-digests-stale` recipe (Part 2.3): it is the lowest-precedence
+stale gate, reached only after the more specific
+`blocked-acceptance-criteria-stale` and `blocked-batch-contract-stale` gates
+are ruled out, so it is where plan-digest drift surfaces.
 
 ## Entry governance
 
@@ -189,14 +191,13 @@ real drift to investigate, not a comparison artifact. See
 [stage-3-decompose.md](stage-3-decompose.md).
 
 **Model note.** The digest covers only the immutable batch-contract fields,
-not the runtime lifecycle fields (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `final_verdict`), so Stage 4 progress never trips this
-gate. For the exact immutable-field list see
-[ledger-and-helper.md](ledger-and-helper.md#helper-execution-context), which
-is the canonical source (don't re-enumerate it here, so the two surfaces
-can't drift). If you believe a candidate serialization is being compared
-instead of the ledger block, that is a CLI-observability question: the CLI
-only ever digests the stored ledger content.
+not the runtime lifecycle fields Stage 4 mutates, so Stage 4 progress never
+trips this gate. For the exact split of immutable versus runtime fields see
+[ledger-and-helper.md](ledger-and-helper.md#helper-execution-context), the
+canonical source (not re-enumerated here, so the two surfaces can't drift).
+If you believe a candidate serialization is being compared instead of the
+ledger block, that is a CLI-observability question: the CLI only ever digests
+the stored ledger content.
 
 **Owner:** `gotchas guide`.
 **Retire when** `cli.ts diagnose` reports which field of the batch contract
@@ -362,9 +363,11 @@ confirmation statuses by hand to "clear" the route. See
 [stage-3-decompose.md](stage-3-decompose.md) and
 [ledger-and-helper.md](ledger-and-helper.md#helper-execution-context).
 
-**Model note.** This route is the catch-all digest drift detector that fires
-before a more specific `*-stale` confirmation status has been recorded. It
-keeps a digest mismatch from slipping through a stage transition unnoticed.
+**Model note.** This route is the lowest-precedence stale gate (route.ts
+`classifyRoute` checks `blocked-acceptance-criteria-stale` and
+`blocked-batch-contract-stale` before it). It catches digest drift that has
+no more-specific gate of its own, notably plan-digest drift, so a mismatch
+cannot slip through a stage transition unnoticed.
 
 **Owner:** `gotchas guide`.
 **Retire when** the stage-transition digest recheck in
