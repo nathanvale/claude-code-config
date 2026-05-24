@@ -253,7 +253,7 @@ batches:
       - 5
       - 6
     rationale: "ac_mapping includes 6 because AC6 is a cross-cutting test-coverage requirement satisfied by the co-located test suites across U2-U5, not by a standalone unit; it is anchored here on the final test-bearing unit (which also delivers AC6's explicitly-named write-scope-limits tests)."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
