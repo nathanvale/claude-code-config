@@ -190,7 +190,10 @@ before any Builder, Validator, Proposer, or ship work.
   mismatched without continuation evidence, stop.
 - Surface the mismatch and load
   `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` for the
-  continuation evidence shape.
+  continuation evidence shape. See also
+  `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` recipe 2.4
+  (`blocked-runbook-version-skew`) for the symptom-first evidence
+  recipe (the exact `state --json` fields that prove the skew).
 - Do not auto-rewrite the ledger frontmatter version field.
 
 **Installed artifact presence**
@@ -272,10 +275,15 @@ plane.
   reason and ask whether to unblock, abandon, or reframe.
 - `blocked-runbook-version-skew`: use the version-skew gate above.
 - `blocked-acceptance-criteria-stale`: return to Stage 1 AC
-  re-confirmation; do not auto-rewrite ACs.
+  re-confirmation; do not auto-rewrite ACs. See
+  `first-run-gotchas.md` recipe 2.1
+  (`blocked-acceptance-criteria-stale`) for the symptom-first evidence
+  recipe and the stale-digest vs. blocked-status proof split.
 - `blocked-stage-3`: return to Stage 3 plan or contract revision.
 - `blocked-batch-contract-stale` and `blocked-digests-stale`: return
-  to Stage 3 recompute and user confirmation.
+  to Stage 3 recompute and user confirmation. See
+  `first-run-gotchas.md` recipe 2.2 (`blocked-batch-contract-stale`)
+  for the symptom-first evidence recipe.
 
 `first-run-gotchas.md` gives a symptom-first CLI evidence recipe (the
 exact command, JSON fields, what they prove, and the recovery action).
