@@ -542,7 +542,7 @@ Concrete checks (run in U4):
 | Reconciled note still contradicts itself (softened "discretionary" but didn't state the CLI-absence half) | Medium | D2 forces both halves into the note; U4 greps for both vocabularies |
 | Step renumbering in `<orchestration_loop>` breaks an internal "step N" reference | Low | U1 checks for step-number citations before renumbering; prefer "7b" style insertion |
 | Edit accidentally reads as "first-run-gotchas.md is CLI-required," tripping the parity-audit seam | Low | D1/D2 frame it as skill-loop load; U4 re-runs the seam convergence; never touch route.ts |
-| Over-editing the guide (rewording retire-when bar text that should stay verbatim) | Low | D4 + user decision: bar text stays verbatim; only an annotation line is added after each retire-when |
+| Over-editing the guide (rewording retire-when bar text that should stay verbatim) | Low | D4 + user decision: bar text stays verbatim; only a parenthetical annotation is folded into each Retire-when line (not a new line after it) |
 | Read-trigger reconciliation contradicts the new deterministic load, or the contradiction survives the grep net | Low | U4 step 2 makes the read-trigger edit required and qualifies it to the D3 split; U4 step 3 adds the read-trigger to the grep-consistency net |
 | Re-evaluation annotation breaks the guide's entry-governance contract ("each entry ends with Owner and Retire when lines") | Low | U4 step 1 folds the annotation into the Retire-when line as a parenthetical so the line stays terminal; U4 step 3 verifies the contract holds and the governance sentence is untouched |
 

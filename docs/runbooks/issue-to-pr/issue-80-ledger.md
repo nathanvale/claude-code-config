@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: "https://github.com/nathanvale/claude-code-config/pull/82"
 ship_mode: "standard"
 final_reviewed_at: "2026-05-24T22:15:00+10:00"
-plan_digest: "sha256:2ee41531149675bbcbca7d9cd70e62183c8d52213ca081dd085da409ded5651f"
+plan_digest: "sha256:73df10a2008a9895693b03e0280f6e3cdfc157aef88dd6316388110344207915"
 batch_contract_digest: "sha256:2cba9f3af989eb209813bab81e4a90853dc51afcb7d1460c02e5399e876cbde8"
 ac_digest: "sha256:0b74444e5bdf8647763a3a27e40e805591b43c3d0a5544bcfbc78be05c5203e1"
 ---
@@ -280,6 +280,15 @@ dirty/staged path summaries>
   first-run-gotchas.md: 0/0 clean. biome_lintCheck (json) SKILL.md: 0/0
   clean. bun_runTests (json) pattern issue-to-pr-v2: 503 pass / 0 fail
   (route.test.ts pinned mapping green = AC #2 regression gate).
+- 2026-05-24: AC checklist completion. The `## Acceptance criteria`
+  checkboxes are intentionally left unchecked: that section is the
+  `ac_digest` payload (`lib/ledger.ts readAcceptanceCriteriaDigestPayload`
+  hashes the raw section, checkbox markers included), so toggling `- [ ]`
+  to `- [x]` would drift `ac_digest` and route the shipped ledger to
+  `blocked-digests-stale`. Completion is tracked by frontmatter
+  (`status: shipped`, `ac_confirmation_status: confirmed`), the two
+  converged batches (AC 1/2/3 -> batch-1, AC 4 -> batch-2), and the plan's
+  Requirements Traceability table. Re: PR #82 CodeRabbit review.
 
 ### runbook_version skew continuation evidence (U6)
 
