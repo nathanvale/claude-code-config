@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-24T16:47:00+10:00"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-24T17:11:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: "sha256:d86c6a18c2eb82b81266b966e04fa91bb95f15b590ac4b850d0df9493427d972"
-batch_contract_digest: null
+batch_contract_digest: "sha256:d1e6c9a1f380d50763f7fe335004fc07a1bbaaf2a39ab85904dfce65fbdf44fd"
 ac_digest: "sha256:b424d7bd4f91af17b31d4122a02728760d76765dc5cd4b496a84f4f7e47b0ed2"
 ---
 
@@ -75,7 +75,88 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "runbook-heal-resolution"
+    name: "Guarded runbook-heal closure form"
+    goal: "A batch_id-final finding fixed by an orchestrator runbook-heal commit can be recorded fixed with status and resolution that agree, guarded so the commit touches only control-plane paths."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+      - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+    depends_on: []
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 1 holds: a batch_id-final finding with status fixed + resolution 'runbook-heal <reachable commit touching only control-plane paths>' validates clean (status and resolution agree, no out-of-scope fudge)."
+      - "AC 2 holds: 'runbook-heal <sha>' is REJECTED when the commit touches any non-allowlisted path - a pure deliverable commit, a mixed control-plane+deliverable commit, and a commit touching the per-issue ledger path all fail, naming the offending path."
+      - "AC 5 holds (partial): tests pin the accept case, the deliverable-reject case, the mixed-commit reject, the ledger-path reject, and a stage-3-scope reject for the runbook-heal form."
+    ac_mapping:
+      - 1
+      - 2
+      - 5
+    rationale: "replacement-contract r1: merge AC1+AC2 (form and abuse guard live in the same validateFindingResolution function with inseparable tests); narrowed to batch_id final only (CR-003); allowlist excludes the ledger path (CR-004)."
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
+  - id: "stage5-readonly-gate"
+    name: "Stage 5 read-only enforcement gate"
+    goal: "A Stage 5 ledger checkpoint touching any non-ledger path is surfaced as a failure rather than silently accepted."
+    files:
+      - "runbooks/issue-to-pr-v2/decompose.ts"
+      - "runbooks/issue-to-pr-v2/lib/stage5-readonly.test.ts"
+    depends_on: []
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 3 holds: a gate exists that, given a Stage 5 checkpoint touching a non-ledger path, fails (non-zero / surfaced finding) and names the offending path; a ledger-only checkpoint passes."
+      - "AC 5 holds (partial): tests pin the Stage 5 read-only violation case (synthetic ledger-plus-extra-path fixture) and the ledger-only pass case."
+    ac_mapping:
+      - 3
+      - 5
+    rationale: null
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
+  - id: "historical-rows-disposition"
+    name: "Historical fr-001..fr-004 disposition"
+    goal: "Decide and execute whether to amend the self-contradictory fr-001..fr-004 rows in the issue-68 ledger to the runbook-heal form or leave them as audit precedent."
+    files:
+      - "docs/runbooks/issue-to-pr/issue-68-ledger.md"
+    depends_on:
+      - "runbook-heal-resolution"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 6 holds: a decision on fr-001..fr-004 is recorded and executed -- either the rows are amended to status fixed + resolution runbook-heal 8be31d4 and the issue-68 ledger validates clean, or a Notes line records the deliberate leave-as-precedent decision."
+    ac_mapping:
+      - 6
+    rationale: "change_first ledger doc edit; AC6 is a decision criterion surfaced at the Stage 3 user gate (amend vs leave)."
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
+  - id: "runbook-heal-docs"
+    name: "Closure table, Stage 5 cross-ref, blocked-by-doc-defect carve-out"
+    goal: "Document the runbook-heal closure form, the Stage 5 read-only gate, and the blocked-by-doc-defect carve-out."
+    files:
+      - "runbooks/issue-to-pr-v2/references/findings-and-validators.md"
+      - "runbooks/issue-to-pr-v2/references/stage-5-final-review.md"
+      - "runbooks/issue-to-pr-v2/issue-N-ledger.template.md"
+    depends_on:
+      - "runbook-heal-resolution"
+      - "stage5-readonly-gate"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 4 holds: the blocked-by-doc-defect carve-out is documented in stage-5-final-review.md, and the findings-and-validators.md closure table has a runbook-heal row consistent with the U1 validator grammar."
+    ac_mapping:
+      - 4
+    rationale: "docs-only change_first; documents the behavior runbook-heal-resolution and stage5-readonly-gate implement."
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
 ```
 
 ## Findings data
@@ -184,6 +265,7 @@ evidence, Validator findings checkpoint evidence, reachable commit refs,
 dirty/staged path summaries>
 
 - 2026-05-24T16:47+10:00 — Stage 1: AC confirmed by Nathan (source: gold-standard, high confidence, 6 criteria). Full scope: Reading A guarded runbook-heal resolution + Stage 5 read-only gate + carve-out doc + tests. Feature branch feat/issue-71-pending created from main (post-PR-70 merge, commit dc6868a). Recursion noted: the deliverable is the issue-to-pr runbook + lib code itself.
+- 2026-05-24T17:11+10:00 — Stage 3: batch contract confirmed by Nathan after 2 Contract Review cycles. Cycle 1: 3 P1 (cr-001 shared test file, cr-003 stage-3 scope, cr-004 undefined allowlist) + cr-002 P2, closed via plan-revision 89c6b5e (r1). Cycle 2: 3 P3 cosmetics (cr-006/cr-007/cr-008) closed via plan-revision 55f4357 (r2). AC6 user decision: AMEND fr-001..fr-004 in issue-68-ledger.md to status fixed + resolution runbook-heal 8be31d4 when the historical-rows-disposition batch runs.
 
 ### runbook_version skew continuation evidence (U6)
 
