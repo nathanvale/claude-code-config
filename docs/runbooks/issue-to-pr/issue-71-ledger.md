@@ -94,10 +94,11 @@ batches:
       - 5
     rationale: "replacement-contract r1: merge AC1+AC2 (form and abuse guard live in the same validateFindingResolution function with inseparable tests); narrowed to batch_id final only (CR-003); allowlist excludes the ledger path (CR-004)."
     status: in-progress
-    iterations: 2
+    iterations: 3
     builder_commits:
       - "a83bbd1c86f2f31caf7a47b0016f2ff187f601b2"
       - "c93f5a0c3e77a24020cf08a2dad6d48bb20a9fa2"
+      - "fd1839c9fd40e5fe78d6a016ee67e03cffa3f2d8"
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -121,6 +122,17 @@ batches:
         probe_results:
           - "No FINAL_BATCH_ID constant; code uses bare \"final\" literal (ledger.ts 2407/2475/2570). Gated runbook-heal arm on finding.batch_id === final."
         notes: "Repair of vw-001. RED batch-loop-reject test (batch_id b1) red before gate, green after. 65/65 ledger tests, tsc clean (orchestrator re-verified). vw-002 empty-commit left for separate repair."
+      - attempt_type: repair
+        status: committed
+        commit_sha: "fd1839c9fd40e5fe78d6a016ee67e03cffa3f2d8"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+          - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "Hermetic empty-commit fixture: PR-70 merge dc6868a is reachable from HEAD and touchedFilesForCommit returns [] (merge records zero changes vs first parent); no git object created, no ref advanced."
+        notes: "Repair of vw-002. Added touched.length === 0 reject before the allowlist loop. RED empty-commit test (dc6868a) red before fix, green after. 66/66 ledger tests, tsc clean (orchestrator re-verified)."
     final_verdict: null
   - id: "stage5-readonly-gate"
     name: "Stage 5 read-only enforcement gate"
