@@ -2512,10 +2512,17 @@ function validateFindingResolution(finding: Finding, context: string, batchConte
     }
     const commitMatch = resolution.match(/^commit [0-9a-f]{7,40}$/i);
     const patchMatch = resolution.match(/^patch-batch (patch-\d{3})$/);
+    const runbookHealMatch = resolution.match(/^runbook-heal [0-9a-f]{7,40}$/i);
     if (commitMatch) {
       const ref = resolution.slice("commit ".length);
       const resolved = validateReachableCommit(ref, `${context} fixed commit`);
       validateLedgerOwnedFixedCommit(finding, ref, resolved, context, batchContext);
+      return;
+    }
+    if (runbookHealMatch) {
+      const ref = resolution.slice("runbook-heal ".length);
+      const resolved = validateReachableCommit(ref, `${context} runbook-heal commit`);
+      validateControlPlaneOnlyCommit(ref, resolved, context);
       return;
     }
     if (patchMatch) {
@@ -2568,6 +2575,25 @@ function validateLedgerOwnedFixedCommit(
   }
   if (!batchContext.terminalBuilderCommitsById.get(finding.batch_id)?.has(resolvedRef)) {
     fail(`${context} fixed commit "${ref}" must be recorded in terminal batch "${finding.batch_id}"`);
+  }
+}
+
+/**
+ * Abuse guard for the `runbook-heal <sha>` fixed resolution: assert the cited
+ * commit's diff touches ONLY control-plane paths. The allowlist is the
+ * Issue-to-PR control plane (`runbooks/issue-to-pr-v2/` or `skills/issue-to-pr/`).
+ * Any touched path outside the allowlist — a pure-deliverable commit, a mixed
+ * control-plane+deliverable commit, or a commit touching the per-issue ledger
+ * path `docs/runbooks/issue-to-pr/` (which is NOT control plane) — fails,
+ * naming the first offending path.
+ */
+function validateControlPlaneOnlyCommit(ref: string, resolvedRef: string, context: string): void {
+  const allowedPrefixes = ["runbooks/issue-to-pr-v2/", "skills/issue-to-pr/"];
+  const touched = touchedFilesForCommit(resolvedRef, `${context} runbook-heal commit`);
+  for (const file of touched) {
+    if (!allowedPrefixes.some((prefix) => file.startsWith(prefix))) {
+      fail(`${context} runbook-heal commit "${ref}" touches non-control-plane path: ${file}`);
+    }
   }
 }
 
