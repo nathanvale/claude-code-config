@@ -385,7 +385,15 @@ cannot slip through a stage transition unnoticed.
 **Owner:** `gotchas guide`.
 **Retire when** the stage-transition digest recheck in
 [ledger-and-helper.md](ledger-and-helper.md#helper-execution-context)
-links here for the recovery sequence.
+links here for the recovery sequence. **Retired 2026-05 (issue #87):** the
+stage-transition digest recheck in
+[ledger-and-helper.md](ledger-and-helper.md#helper-execution-context) now
+links to this recipe (2.3) for the recovery sequence, satisfying the literal
+bar; and, for parity with recipes 2.1/2.2/2.4, the `blocked-digests-stale`
+bullet in the `SKILL.md` `<route_catalog>` block now also names this recipe
+(2.3), closing the companion route-catalog targeting gap. The recipe content
+is kept as the recovery reference the named links point at; this entry is
+retired from the "open follow-up" sense, not deleted.
 
 ### 2.4 `blocked-runbook-version-skew`
 
