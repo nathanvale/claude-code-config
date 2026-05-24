@@ -6,11 +6,18 @@
  * paths) against the live CLI surface, so docs drift is caught mechanically
  * instead of by review eyeballing.
  *
- * Batch 1 (this file's current surface): the **contract-fact loader**. It
- * reads the authoritative contract facts from the running CLI subprocess —
- * never by importing CLI internals or duplicating any value as a literal.
- * Later batches add the doc-claim extractor, the comparator, and the
- * orchestrator on top of these facts.
+ * Batch 1: the **contract-fact loader**. It reads the authoritative contract
+ * facts from the running CLI subprocess — never by importing CLI internals or
+ * duplicating any value as a literal.
+ *
+ * Batch 2 (added below `loadContractFacts`): the **doc-claim extractor**.
+ * `extractDocClaims()` parses ONE scoped doc's text and reports the
+ * contract-token claims it makes (route ids, command names, slice names,
+ * packet roles, `data.*` field paths, and scoped recovery/control-plane
+ * links) using bounded patterns over prose and fenced code blocks. It holds
+ * no expected contract VALUES of its own (AC5): it only reads structural
+ * markers and emits what the doc says, leaving the comparison to later
+ * batches. Later batches add the comparator and the orchestrator.
  *
  * Design law (AC5): this file holds NO literal route ids, slice names,
  * packet roles, or field paths as expected values. The only contract
@@ -28,7 +35,7 @@
  */
 
 import { execPath } from "node:process";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -436,5 +443,281 @@ export async function loadContractFacts(
       state: stateFieldPaths,
       diagnose: diagnoseFieldPaths,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Batch 2: doc-claim extractor
+// ---------------------------------------------------------------------------
+
+/**
+ * A single contract-token claim found in a doc. `token` is the raw token the
+ * doc asserts (a route id, command, slice, packet role, or `data.*` path).
+ * `line` is the 1-based line the claim was found on, so the comparator can
+ * point an operator at the drift. `context` is the trimmed source line, kept
+ * for human-readable drift reports.
+ */
+export type DocClaim = {
+  token: string;
+  line: number;
+  context: string;
+};
+
+/**
+ * A scoped markdown-link claim. `token` is the link text, `rawTarget` is the
+ * link destination exactly as written (may carry a `#fragment`), and
+ * `resolvedTarget` is that destination resolved relative to the doc's own
+ * path (fragment stripped) so the comparator can check the file exists.
+ */
+export type ScopedLinkClaim = DocClaim & {
+  rawTarget: string;
+  resolvedTarget: string;
+};
+
+/**
+ * The structured claim set extracted from one scoped doc. Each array holds
+ * the claims of one KIND; `docPath` echoes the doc the claims came from so
+ * the orchestrator can attribute drift back to a file.
+ */
+export type DocClaims = {
+  docPath: string;
+  routeIds: DocClaim[];
+  commands: DocClaim[];
+  slices: DocClaim[];
+  packetRoles: DocClaim[];
+  fieldPaths: DocClaim[];
+  scopedLinks: ScopedLinkClaim[];
+};
+
+/** A token is a `<...>` angle-bracket placeholder, not a real claim. */
+function isPlaceholder(token: string): boolean {
+  return token.startsWith("<") && token.endsWith(">");
+}
+
+/** A CLI flag (`--json`, `--ledger`, ...), never a command/slice/role token. */
+function isFlag(token: string): boolean {
+  return token.startsWith("-");
+}
+
+/** Line number (1-based) of `index` within `text`. */
+function lineOf(text: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < text.length; i++) {
+    if (text[i] === "\n") line++;
+  }
+  return line;
+}
+
+/** Trimmed source line containing `index`, for human-readable context. */
+function contextOf(text: string, index: number): string {
+  const start = text.lastIndexOf("\n", index - 1) + 1;
+  const endNl = text.indexOf("\n", index);
+  const end = endNl === -1 ? text.length : endNl;
+  return text.slice(start, end).trim();
+}
+
+/** Build a claim anchored at `index` in `text`. */
+function claimAt(text: string, index: number, token: string): DocClaim {
+  return { token, line: lineOf(text, index), context: contextOf(text, index) };
+}
+
+/**
+ * Extract route-ID claims from EXPLICIT route-ID positions only:
+ *  - `route_id: "X"` / `inferred_route_id: "X"` quoted assignments.
+ *  - backtick-quoted `blocked-*` tokens (the blocked-route shape heuristic).
+ *  - backtick-quoted kebab tokens that lead a route-catalog bullet
+ *    (`- \`X\`: ...` / `- \`X\` and \`Y\`: ...`).
+ *
+ * It deliberately does NOT treat every backtick kebab token as a route id:
+ * tokens with whitespace (`git status`) or a file extension
+ * (`first-run-gotchas.md`) are rejected, and non-blocked tokens only count in
+ * a bullet position. The `blocked-` prefix is an extraction shape, not a
+ * contract value (AC5).
+ */
+function extractRouteIds(text: string): DocClaim[] {
+  const claims: DocClaim[] = [];
+  const seen = new Set<string>();
+  const push = (token: string, index: number) => {
+    const key = `${token}@${lineOf(text, index)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    claims.push(claimAt(text, index, token));
+  };
+
+  // `route_id: "X"` and `inferred_route_id: "X"`.
+  const assignRe = /\b(?:inferred_)?route_id:\s*"([a-z0-9-]+)"/g;
+  for (const m of text.matchAll(assignRe)) {
+    push(m[1], m.index ?? 0);
+  }
+
+  // Backtick `blocked-*` tokens anywhere (blocked-route shape heuristic).
+  const blockedRe = /`(blocked-[a-z0-9-]+)`/g;
+  for (const m of text.matchAll(blockedRe)) {
+    push(m[1], m.index ?? 0);
+  }
+
+  // Backtick kebab tokens leading a route-catalog bullet. A bullet token is
+  // followed by `:` or ` and ` (joining two ids on one bullet). The token is
+  // a single kebab word: no whitespace, no dot, so file names and `git
+  // status` are excluded.
+  const bulletRe = /^[\t ]*[-*]\s+`([a-z][a-z0-9-]*)`(?=\s*(?::|and\b))/gm;
+  for (const m of text.matchAll(bulletRe)) {
+    push(m[1], m.index ?? 0);
+  }
+  // A second backtick id on the same bullet: `` `X` and `Y`: ``.
+  const bulletPairRe =
+    /^[\t ]*[-*]\s+`[a-z][a-z0-9-]*`\s+and\s+`([a-z][a-z0-9-]*)`(?=\s*:)/gm;
+  for (const m of text.matchAll(bulletPairRe)) {
+    push(m[1], m.index ?? 0);
+  }
+
+  return claims;
+}
+
+/**
+ * Extract command, slice, and packet-role claims from `cli.ts` command
+ * positions. The token immediately after `cli.ts ` is a command; after
+ * `cli.ts contract ` it is also a slice; after `cli.ts packet ` it is also a
+ * packet role. Flags and `<placeholder>` args are skipped. Reading the
+ * `cli.ts `, `contract`, and `packet` markers is structural extraction, not a
+ * contract value (AC5).
+ */
+function extractCliClaims(text: string): {
+  commands: DocClaim[];
+  slices: DocClaim[];
+  packetRoles: DocClaim[];
+} {
+  const commands: DocClaim[] = [];
+  const slices: DocClaim[] = [];
+  const packetRoles: DocClaim[] = [];
+
+  // The token after `cli.ts ` is the command. Allow `<...>` so the
+  // placeholder is captured then skipped, rather than silently matching the
+  // wrong token.
+  const cliRe = /\bcli\.ts\s+(<[a-z-]+>|[a-z][a-z0-9-]*)/g;
+  for (const m of text.matchAll(cliRe)) {
+    const command = m[1];
+    const index = m.index ?? 0;
+    if (!isPlaceholder(command) && !isFlag(command)) {
+      commands.push(claimAt(text, index, command));
+    }
+
+    // The token following the command, for `contract`/`packet` sub-positions.
+    const after = text.slice(index + m[0].length);
+    const nextMatch = after.match(/^\s+(<[a-z-]+>|[a-z][a-z0-9_-]*)/);
+    if (!nextMatch) continue;
+    const next = nextMatch[1];
+    if (isPlaceholder(next) || isFlag(next)) continue;
+
+    if (command === "contract") {
+      slices.push(claimAt(text, index, next));
+    } else if (command === "packet") {
+      packetRoles.push(claimAt(text, index, next));
+    }
+  }
+
+  return { commands, slices, packetRoles };
+}
+
+/**
+ * Extract `data.*` field-path claims from prose and fenced code blocks,
+ * expanding `{a, b, c}` brace sets (including multiline ones) into individual
+ * `data.prefix.a` paths and skipping any path carrying a `<placeholder>`
+ * segment. A bare field name without the `data.` prefix is NOT a claim.
+ * Reading the `data.` prefix is structural extraction, not a value (AC5).
+ */
+function extractFieldPaths(text: string): DocClaim[] {
+  const claims: DocClaim[] = [];
+  const seen = new Set<string>();
+  const push = (token: string, index: number) => {
+    if (token.includes("<") || token.includes(">")) return;
+    const key = `${token}@${lineOf(text, index)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    claims.push(claimAt(text, index, token));
+  };
+
+  // Brace-set form: `data.prefix.{a, b, c}` where the brace inner may span
+  // newlines. Matched first so the plain-path pass does not capture the
+  // `data.prefix` stem on its own.
+  const braceRe = /data((?:\.[a-z0-9_]+)+)\.\{([^{}]*)\}/gi;
+  for (const m of text.matchAll(braceRe)) {
+    const prefix = `data${m[1]}`;
+    const index = m.index ?? 0;
+    for (const raw of m[2].split(",")) {
+      const child = raw.trim();
+      if (!/^[a-z0-9_]+$/i.test(child)) continue;
+      push(`${prefix}.${child}`, index);
+    }
+  }
+
+  // Mask consumed brace sets so the plain-path pass below cannot re-capture
+  // the `data.prefix` stem of an already-expanded brace path.
+  const masked = text.replace(braceRe, (match) => " ".repeat(match.length));
+
+  // Plain dotted form: `data.a.b.c`. Requires at least one segment after
+  // `data.`; bare field names without the prefix never match.
+  const plainRe = /\bdata(?:\.[a-z0-9_]+)+\b/gi;
+  for (const m of masked.matchAll(plainRe)) {
+    push(m[0], m.index ?? 0);
+  }
+
+  return claims;
+}
+
+/**
+ * Extract scoped markdown-link claims `[text](target)` whose target is a
+ * relative doc (control-plane / recovery references the comparator will check
+ * for existence). External `http(s)` links and pure in-page `#fragment` links
+ * are ignored. `resolvedTarget` is the target resolved relative to the doc's
+ * directory, with any `#fragment` stripped.
+ */
+function extractScopedLinks(text: string, docPath: string): ScopedLinkClaim[] {
+  const links: ScopedLinkClaim[] = [];
+  const docDir = posix.dirname(docPath);
+  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+  for (const m of text.matchAll(linkRe)) {
+    const token = m[1];
+    const rawTarget = m[2].trim();
+    if (/^[a-z]+:\/\//i.test(rawTarget) || rawTarget.startsWith("#")) {
+      continue;
+    }
+    const withoutFragment = rawTarget.split("#")[0];
+    if (withoutFragment.length === 0) continue;
+    const resolvedTarget = posix.normalize(
+      posix.join(docDir === "." ? "" : docDir, withoutFragment),
+    );
+    const index = m.index ?? 0;
+    links.push({
+      ...claimAt(text, index, token),
+      rawTarget,
+      resolvedTarget,
+    });
+  }
+  return links;
+}
+
+/**
+ * Parse ONE scoped operator doc's text and return the contract-token claims
+ * it makes. Bounded extraction over prose and fenced code blocks (the scanner
+ * does not skip fences — a stale `cli.ts` command or `data.*` path inside a
+ * code block IS a claim). The extractor holds no expected contract values
+ * (AC5): it reads structural markers and reports what the doc asserts; the
+ * comparator batch decides whether each claim matches the live CLI facts.
+ *
+ * @param docText The full text of the doc.
+ * @param docPath The doc's path, used to resolve scoped-link targets and to
+ *   attribute claims back to a file. Not used to gate which kinds are parsed.
+ */
+export function extractDocClaims(docText: string, docPath: string): DocClaims {
+  const { commands, slices, packetRoles } = extractCliClaims(docText);
+  return {
+    docPath,
+    routeIds: extractRouteIds(docText),
+    commands,
+    slices,
+    packetRoles,
+    fieldPaths: extractFieldPaths(docText),
+    scopedLinks: extractScopedLinks(docText, docPath),
   };
 }

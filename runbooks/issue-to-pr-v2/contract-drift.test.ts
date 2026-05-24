@@ -13,7 +13,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execPath } from "node:process";
 import { join } from "node:path";
 
-import { finiteChildKeys, loadContractFacts } from "./contract-drift";
+import {
+  extractDocClaims,
+  finiteChildKeys,
+  loadContractFacts,
+} from "./contract-drift";
 
 const cliPath = join(import.meta.dir, "cli.ts");
 
@@ -503,5 +507,340 @@ describe("AC6: empty/partial well-formed fact sets are hard errors", () => {
       packetRoles: ["builder", "validator"],
     });
     await rejects.toThrow(/route_ids|empty/i);
+  });
+});
+
+/**
+ * Issue #81 — batch 2 (doc-claim extractor).
+ *
+ * `extractDocClaims(docText, docPath)` parses ONE scoped operator doc's text
+ * and returns the contract-token CLAIMS it makes — route ids, command names,
+ * contract slice names, packet roles, `data.*` field paths, and scoped
+ * recovery/control-plane links. It holds no expected contract VALUES of its
+ * own (AC5): it reads bounded structural markers and reports what the doc
+ * says. The comparator (batch 3) and orchestrator (batch 4) consume these.
+ *
+ * Fixtures below are small real snippets from the four scoped docs so the
+ * extractor's patterns stay grounded in the actual prose.
+ */
+
+/** Collect just the token strings from a claim array, for terse assertions. */
+function tokens(claims: { token: string }[]): string[] {
+  return claims.map((c) => c.token);
+}
+
+describe("AC1: route-ID claims from explicit route-ID positions", () => {
+  test("extracts a quoted `route_id: \"...\"` value", () => {
+    const claims = extractDocClaims(
+      'route_id: "blocked-stage-3".',
+      "doc.md",
+    );
+    expect(tokens(claims.routeIds)).toContain("blocked-stage-3");
+  });
+
+  test("extracts backtick-quoted kebab tokens from route-catalog bullets", () => {
+    const doc = [
+      "**Blocked routes**",
+      "",
+      "- `blocked-frontmatter-blocked-reason`: surface the reason.",
+      "- `blocked-acceptance-criteria-stale`: return to Stage 1.",
+      "- `no-ledger` and `pick-issue`: enter Stage 1.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "SKILL.md").routeIds);
+    expect(got).toContain("blocked-frontmatter-blocked-reason");
+    expect(got).toContain("blocked-acceptance-criteria-stale");
+    expect(got).toContain("no-ledger");
+    expect(got).toContain("pick-issue");
+  });
+
+  test("extracts the `inferred_route_id: \"...\"` diagnose form", () => {
+    const claims = extractDocClaims(
+      'with `inferred_route_id: "blocked-digests-stale"` proves drift.',
+      "first-run-gotchas.md",
+    );
+    expect(tokens(claims.routeIds)).toContain("blocked-digests-stale");
+  });
+
+  test("extracts a backtick `blocked-*` route id from prose", () => {
+    const claims = extractDocClaims(
+      "read the `blocked-digests-stale` recipe (Part 2.3).",
+      "first-run-gotchas.md",
+    );
+    expect(tokens(claims.routeIds)).toContain("blocked-digests-stale");
+  });
+
+  test("does NOT treat `git status` or a filename as a route id", () => {
+    const doc =
+      "prose backtick like `git status`, and the file `first-run-gotchas.md` is linked.";
+    const got = tokens(extractDocClaims(doc, "doc.md").routeIds);
+    expect(got).not.toContain("git status");
+    expect(got).not.toContain("first-run-gotchas.md");
+    expect(got).not.toContain("status");
+  });
+
+  test("carries a line number for each route-ID claim", () => {
+    const doc = ["line one", '`route_id: "shipped"`'].join("\n");
+    const claim = extractDocClaims(doc, "doc.md").routeIds.find(
+      (c) => c.token === "shipped",
+    );
+    expect(claim?.line).toBe(2);
+  });
+});
+
+describe("AC2: command, slice, and packet-role claims from cli.ts positions", () => {
+  test("extracts the command token following `cli.ts `", () => {
+    const doc = [
+      "Run `bun runbooks/issue-to-pr-v2/cli.ts state {ledger} --json`",
+      "and `cli.ts diagnose <ledger> --json`.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").commands);
+    expect(got).toContain("state");
+    expect(got).toContain("diagnose");
+  });
+
+  test("skips `--json`/`--help` flags and `<placeholder>` command args", () => {
+    const got = tokens(
+      extractDocClaims("`cli.ts diagnose <ledger> --json`", "doc.md").commands,
+    );
+    expect(got).toEqual(["diagnose"]);
+    expect(got).not.toContain("<ledger>");
+    expect(got).not.toContain("--json");
+  });
+
+  test("extracts the slice token following `cli.ts contract ` only", () => {
+    const doc = [
+      "`cli.ts contract route_ids --json`",
+      "`cli.ts contract packet_roles --json`",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "doc.md");
+    expect(tokens(claims.slices)).toEqual(["route_ids", "packet_roles"]);
+    // `contract` is itself a command; the slice is the NEXT token, not a
+    // duplicate command claim of the slice name.
+    expect(tokens(claims.commands)).toContain("contract");
+  });
+
+  test("does NOT emit a slice claim for the literal `<slice>` placeholder", () => {
+    const claims = extractDocClaims("`cli.ts contract <slice> --json`", "doc.md");
+    expect(tokens(claims.slices)).not.toContain("<slice>");
+    expect(claims.slices.length).toBe(0);
+  });
+
+  test("extracts packet-role token from `cli.ts packet <role>` command position", () => {
+    const doc = [
+      "`cli.ts packet builder --ledger <ledger> --json`",
+      "`cli.ts packet validator --ledger <path> --persona <skill> --json`",
+      "`cli.ts packet proposer --ledger <path> --finding <id> --json`",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").packetRoles);
+    expect(got).toContain("builder");
+    expect(got).toContain("validator");
+    expect(got).toContain("proposer");
+  });
+
+  test("does NOT extract a packet role from a template filename or prose noun", () => {
+    const doc = [
+      "the `builder-work-packet.md` template renders for the Builder.",
+      "Validators run against the batch; the Builder dispatches.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").packetRoles);
+    expect(got).not.toContain("builder-work-packet.md");
+    expect(got).not.toContain("Builder");
+    expect(got).not.toContain("Validators");
+    expect(got.length).toBe(0);
+  });
+
+  test("packet-role placeholder `<role>` is skipped", () => {
+    const got = tokens(
+      extractDocClaims(
+        "`cli.ts packet <role> --ledger <path> [...] --json`",
+        "doc.md",
+      ).packetRoles,
+    );
+    expect(got.length).toBe(0);
+  });
+});
+
+describe("AC3: data.* field-path claims with brace expansion", () => {
+  test("expands a single-line `{a, b, c}` brace set into individual paths", () => {
+    const claims = extractDocClaims(
+      "`data.confirmation_state.{acceptance_criteria, batch_contract, digests}`",
+      "first-run-gotchas.md",
+    );
+    const got = tokens(claims.fieldPaths);
+    expect(got).toContain("data.confirmation_state.acceptance_criteria");
+    expect(got).toContain("data.confirmation_state.batch_contract");
+    expect(got).toContain("data.confirmation_state.digests");
+    expect(got).not.toContain("data.confirmation_state");
+  });
+
+  test("expands a MULTILINE brace set into individual paths", () => {
+    const doc = [
+      "`data.drift.digest_drift.{acceptance_criteria,",
+      "batch_contract, digests, any}`.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "first-run-gotchas.md").fieldPaths);
+    expect(got).toContain("data.drift.digest_drift.acceptance_criteria");
+    expect(got).toContain("data.drift.digest_drift.batch_contract");
+    expect(got).toContain("data.drift.digest_drift.digests");
+    expect(got).toContain("data.drift.digest_drift.any");
+  });
+
+  test("extracts plain `data.<dotted.path>` claims from prose", () => {
+    const doc =
+      "inspect `data.route_id`, `data.plan_path`, and `data.has_batches`.";
+    const got = tokens(extractDocClaims(doc, "first-run-gotchas.md").fieldPaths);
+    expect(got).toContain("data.route_id");
+    expect(got).toContain("data.plan_path");
+    expect(got).toContain("data.has_batches");
+  });
+
+  test("skips `<placeholder>` segments inside a data.* path", () => {
+    const got = tokens(
+      extractDocClaims("`data.drift.digest_drift.<axis>`", "doc.md").fieldPaths,
+    );
+    for (const p of got) {
+      expect(p).not.toContain("<axis>");
+    }
+  });
+
+  test("a bare field name without the `data.` prefix is NOT a claim", () => {
+    const got = tokens(
+      extractDocClaims(
+        "the field `installed_artifact_presence.all_present` is checked.",
+        "doc.md",
+      ).fieldPaths,
+    );
+    expect(got).not.toContain("installed_artifact_presence.all_present");
+    expect(got.length).toBe(0);
+  });
+
+  test("enum prose `matched | missing` produces no field-path claim", () => {
+    const got = tokens(
+      extractDocClaims(
+        "`runbook_version_skew` (`matched | missing | mismatched`)",
+        "doc.md",
+      ).fieldPaths,
+    );
+    expect(got.length).toBe(0);
+  });
+});
+
+describe("doc-claim extractor scans fenced code blocks too", () => {
+  test("a `cli.ts` command inside a fenced block IS extracted", () => {
+    const doc = [
+      "Run:",
+      "```",
+      "bun runbooks/issue-to-pr-v2/cli.ts state {ledger} --json",
+      "```",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "first-run-gotchas.md").commands);
+    expect(got).toContain("state");
+  });
+
+  test("a stale `data.*` path inside a fenced block IS extracted", () => {
+    const doc = ["```", "data.confirmation_state.stale_axis", "```"].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").fieldPaths);
+    expect(got).toContain("data.confirmation_state.stale_axis");
+  });
+
+  test("`decompose.ts --validate-ledger-batches` yields no cli.ts command claim", () => {
+    const doc = [
+      "```",
+      "bun runbooks/issue-to-pr-v2/decompose.ts --validate-ledger-batches {ledger}",
+      "```",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "first-run-gotchas.md");
+    expect(claims.commands.length).toBe(0);
+    expect(tokens(claims.commands)).not.toContain("decompose.ts");
+    expect(tokens(claims.commands)).not.toContain("--validate-ledger-batches");
+  });
+});
+
+describe("scoped-link claims for control-plane / recovery docs", () => {
+  test("extracts a markdown link to first-run-gotchas.md with resolved target", () => {
+    const doc =
+      "use [first-run-gotchas.md](first-run-gotchas.md) for recipes.";
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const link = claims.scopedLinks.find(
+      (l) => l.token === "first-run-gotchas.md",
+    );
+    expect(link).toBeDefined();
+    expect(link?.resolvedTarget).toBe(
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+  });
+
+  test("resolves a relative-up link target against the doc path", () => {
+    const doc = "see the [README](../README.md#file-map).";
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    const link = claims.scopedLinks.find((l) => l.token === "README");
+    expect(link?.resolvedTarget).toBe("runbooks/issue-to-pr-v2/README.md");
+  });
+
+  test("ignores external http(s) links", () => {
+    const doc = "see [docs](https://example.com/page) online.";
+    const claims = extractDocClaims(doc, "doc.md");
+    expect(claims.scopedLinks.length).toBe(0);
+  });
+});
+
+describe("AC5: extractor emits claims only, holds no contract values", () => {
+  test("source has no hardcoded route id / slice / role / field-path literal beyond extraction markers", async () => {
+    const source = await Bun.file(
+      join(import.meta.dir, "contract-drift.ts"),
+    ).text();
+
+    // Pull the real contract values from the live CLI and forbid them as
+    // literals in the SOURCE. Reading structural markers (`route_id:`,
+    // `cli.ts `, `data.`, the `blocked-` prefix) is allowed; pasting a
+    // contract VALUE the extractor compares against is not.
+    const routeIds = (await runCli(["contract", "route_ids", "--json"])).data
+      .values as string[];
+    const packetRoles = (await runCli(["contract", "packet_roles", "--json"]))
+      .data.values as string[];
+    const help = await runCli(["--help", "--json"]);
+    const slices = help.data.contract_slices as string[];
+    const facts = await loadContractFacts();
+    const fieldPathLeaves = [
+      ...facts.responseFieldPaths.state,
+      ...facts.responseFieldPaths.diagnose,
+    ].flatMap((p) => p.split(".").filter((seg) => seg !== "data"));
+
+    // `route_ids` / `packet_roles` are slice ARGUMENT names (read-coordinates),
+    // not duplicated contract values, so they may appear in the source.
+    const allowedReadCoordinates = new Set(["route_ids", "packet_roles"]);
+
+    const forbidden = [
+      ...routeIds,
+      ...packetRoles,
+      ...slices,
+      ...fieldPathLeaves,
+    ].filter((v) => !allowedReadCoordinates.has(v));
+
+    for (const value of new Set(forbidden)) {
+      expect(source.includes(`"${value}"`)).toBe(false);
+      expect(source.includes(`'${value}'`)).toBe(false);
+    }
+  });
+
+  test("extractor returns ONLY what the doc text contains (no injected values)", () => {
+    const claims = extractDocClaims("plain prose with no contract tokens.", "doc.md");
+    expect(claims.routeIds.length).toBe(0);
+    expect(claims.commands.length).toBe(0);
+    expect(claims.slices.length).toBe(0);
+    expect(claims.packetRoles.length).toBe(0);
+    expect(claims.fieldPaths.length).toBe(0);
+    expect(claims.scopedLinks.length).toBe(0);
+  });
+
+  test("carries docPath through so the orchestrator can attribute claims", () => {
+    const claims = extractDocClaims('`route_id: "shipped"`', "some/doc.md");
+    expect(claims.docPath).toBe("some/doc.md");
   });
 });
