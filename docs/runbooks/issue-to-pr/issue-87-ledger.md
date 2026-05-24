@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-25T07:52:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-25T08:00:00+10:00"
 plan_digest: "sha256:7e6c309be55faefb3491635a5bccb4f3ef85fdb9278be8be39958c34e8c9f6c7"
 batch_contract_digest: "sha256:1ce7bc105a3c6c25af830ecd42b01a014fe5356a4b0fdc51557b4f75a6b4e637"
 ac_digest: "sha256:91d190d541ba670ae0ccc2e8b6df99f5ad2b946427be4202c2edf4be188ce30e"
@@ -240,6 +240,8 @@ findings:
 - 2026-05-25: Stage 1 started. ACs extracted from issue #87 `## Acceptance criteria` heading (gold-standard, high confidence), confirmed as-is by Nathan. No `## Blocked by` section; issue open; no override needed. Branch `feat/issue-87-pending` created from clean `main` HEAD before ledger mutation.
 - 2026-05-25: Stage 2 plan written and refined (U3 goal tightened to distinguish the literal retire-when bar from the companion route-catalog gap; added Bun MCP runner note). plan_digest recomputed after refinement. Branch renamed to `feat/issue-87-retire-recipe-2-3-targeting-gaps`.
 - 2026-05-25: Stage 3 Contract Review (1 reviewer, no escalation triggers): no P0/P1 blockers. Two P3 advisories recorded as F1/F2. Key reviewer findings to carry into Builder/verification: (a) correct test paths are `runbooks/issue-to-pr-v2/contract-drift.test.ts` and `runbooks/issue-to-pr-v2/lib/route.test.ts`, combined run = 186 pass; (b) AC6 cross-surface consistency and AC3 body-retention are NOT asserted by either suite (no token/phrasing pin on recipe 2.3 retirement), so the U3 git-diff re-read is the hard gate; (c) U1's new link is additive and safe (the existing `### Blocked route ids` link at line ~299 already satisfies the gotchas-relationship check). Batch contract confirmed by Nathan: 3-batch DAG, all change_first, AC coverage 6/6. Confirmed digest triple persisted.
+- 2026-05-25: Stage 4 batch loop. u1 (commit 8f18d32) added the ledger-and-helper.md recovery-sequence link; validator wave clean (2 P3 advisories F3/F4 deferred). u2 (commit 86f2d8e) added the SKILL.md route_catalog recipe 2.3 named link; validator wave clean. u3 (commit 5268706) retired recipe 2.3's bar (issue #87 record, body retained); validator wave clean (correctness/adversarial/project-standards/maintainability). Adversarial reviewer independently re-ran contract-drift.test.ts (109/109) and confirmed both link claims true on disk. All 3 batches converged.
+- 2026-05-25: Stage 5 final review (read-only, report-only over cumulative diff main...HEAD). Cumulative deliverable diff = exactly the 3 intended markdown files, 16 insertions, zero .ts files (AC4). Independently re-confirmed both suites green via bun-runner MCP: contract-drift 109/109, route 77/77. Three-surface consistency re-verified (SKILL.md route_catalog, ledger-and-helper.md digest-recheck link, recipe 2.3 retirement record all agree; recipe 2.3 body intact). Zero new open P0/P1 findings; no `batch_id: final` rows added. final_reviewed_at set.
 
 ### runbook_version skew continuation evidence (U6)
 
