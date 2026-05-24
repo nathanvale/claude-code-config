@@ -119,11 +119,35 @@ batches:
     ac_mapping:
       - 2
     rationale: null
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - 72778e02eb374f15ee7e483f48fe05b10b367499
+      - fad4c0a666c8616c4c178347a5f10a331b24a236
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: 72778e02eb374f15ee7e483f48fe05b10b367499
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+          - "runbooks/issue-to-pr-v2/lib/learnings.test.ts"
+          - "runbooks/issue-to-pr-v2/learnings-registry.ts"
+        route_hint: "candidate-ingest batch, then upsert-op"
+        blockers: []
+        probe_results: []
+        notes: "parseRegistry + validateRegistry + --validate dispatcher; 18/18 tests green, tsc/biome clean."
+      - attempt_type: repair
+        status: committed
+        commit_sha: fad4c0a666c8616c4c178347a5f10a331b24a236
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+          - "runbooks/issue-to-pr-v2/lib/learnings.test.ts"
+        route_hint: "repair P1 roundtrip-backtick-in-value-truncates-block"
+        blockers: []
+        probe_results:
+          - "red 18/19 then green 19/19; column-0 line-anchored fence close"
+        notes: "Fixed parseRegistry fence-close to a column-0 line-anchored fence so inline backticks in YAML scalars no longer truncate the block; closes F7 P1."
+    iterations: 2
+    final_verdict: converged
   - id: "candidate-ingest"
     name: "Candidate-file ingestion (JSON + YAML) and candidate-shape validation"
     goal: "The helper accepts both JSON and YAML candidate files, and malformed candidate files fail with actionable errors."
@@ -264,41 +288,65 @@ findings:
     signature: roundtrip-backtick-in-value-truncates-block
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "parseRegistry lazy fenced-yaml regex closes at the first code-fence sequence anywhere in the block, so any registry value containing a backtick-fence sequence truncates the YAML and parse throws; latent round-trip trap for upsert-op when real entries hold fence references"
-    resolution: null
+    resolution: "commit fad4c0a666c8616c4c178347a5f10a331b24a236"
   - id: F8
     batch_id: validate-op
     signature: case-insensitive-fence-accepts-uppercase-YAML
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "The case-insensitive flag accepts an uppercase or suffixed yaml fence as the data block, weaker than the doc single-block wording (mirrors ledger.ts, so consistent)"
-    resolution: null
+    resolution: deferred-P3
   - id: F9
     batch_id: validate-op
     signature: empty-string-enum-double-report
     persona: ce-correctness-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "An empty-string enum field emits two error lines (missing-required AND invalid-value); still rejects correctly but double-reports"
-    resolution: null
+    resolution: deferred-P3
   - id: F10
     batch_id: validate-op
     signature: validate-op-secondary-error-branches-untested
     persona: ce-testing-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Secondary error branches untested: non-object/null entry, evidence-not-array, malformed-yaml parse failure, index-fallback label, and multi-entry error aggregation; AC2 core enum/required behaviors are covered with strong assertions"
-    resolution: null
+    resolution: deferred-P3
   - id: F11
     batch_id: validate-op
     signature: readme-file-map-omits-learnings-modules
     persona: ce-project-standards-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "README File map enumerates lib/ modules and root helpers by name but is not updated for new lib/learnings.ts or root learnings-registry.ts; README is outside this batch's files list"
-    resolution: null
+    resolution: deferred-P3
+  - id: F12
+    batch_id: validate-op
+    signature: parseregistry-jsdoc-claims-ledger-parity-now-false
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "parseRegistry JSDoc still claims it mirrors ledger.ts with the same fenced-yaml regex, but the repair diverged them; ledger.ts keeps the old regex while learnings.ts is now column-0 anchored, so the documented parity is stale"
+    resolution: deferred-P3
+  - id: F13
+    batch_id: validate-op
+    signature: closing-fence-trailing-whitespace-tolerance-untested
+    persona: ce-testing-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "New regex adds trailing-whitespace tolerance on the closing fence but no test exercises a closing fence with trailing spaces, so that branch is unguarded"
+    resolution: deferred-P3
+  - id: F14
+    batch_id: validate-op
+    signature: column-0-fence-inside-value-still-truncates-undocumented-in-tests
+    persona: ce-testing-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "The fix relies on the assumption that a column-0 fence cannot appear inside a yaml scalar value (not producible by a real serializer); this residual limitation is asserted only in a source comment, not pinned by a test"
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -311,11 +359,14 @@ findings:
 | F4 | registry-file | registry-single-yaml-block-no-committed-regression-guard | ce-testing-reviewer | P3 | deferred-P3 | Single-fenced-yaml-block invariant verified by a one-off parse check, not a committed regression test; later helper batches own the durable scan test | deferred-P3 |
 | F5 | registry-file | invariant-claim-mismatches-cited-helper-scope | ce-maintainability-reviewer | P3 | deferred-P3 | Prose claims the future helper uses the same fenced-yaml scan as the ledger helper, but the ledger helper is section-scoped not whole-file; registry's stricter whole-file invariant is safe but the precedent description is imprecise | deferred-P3 |
 | F6 | registry-file | read-trigger-callout-not-near-top | ce-project-standards-reviewer | P3 | deferred-P3 | Sibling references place the Read trigger callout in the header block; this file places it after three intro paragraphs (callout exists, position deviates) | deferred-P3 |
-| F7 | validate-op | roundtrip-backtick-in-value-truncates-block | ce-adversarial-reviewer | P1 | open | parseRegistry lazy fenced-yaml regex closes at the first code-fence sequence anywhere in the block, so any registry value containing a backtick-fence sequence truncates the YAML and parse throws; latent round-trip trap for upsert-op when real entries hold fence references | |
-| F8 | validate-op | case-insensitive-fence-accepts-uppercase-YAML | ce-adversarial-reviewer | P3 | open | The case-insensitive flag accepts an uppercase or suffixed yaml fence as the data block, weaker than the doc single-block wording (mirrors ledger.ts, so consistent) | |
-| F9 | validate-op | empty-string-enum-double-report | ce-correctness-reviewer | P3 | open | An empty-string enum field emits two error lines (missing-required AND invalid-value); still rejects correctly but double-reports | |
-| F10 | validate-op | validate-op-secondary-error-branches-untested | ce-testing-reviewer | P3 | open | Secondary error branches untested: non-object/null entry, evidence-not-array, malformed-yaml parse failure, index-fallback label, and multi-entry error aggregation; AC2 core enum/required behaviors are covered with strong assertions | |
-| F11 | validate-op | readme-file-map-omits-learnings-modules | ce-project-standards-reviewer | P3 | open | README File map enumerates lib/ modules and root helpers by name but is not updated for new lib/learnings.ts or root learnings-registry.ts; README is outside this batch's files list | |
+| F7 | validate-op | roundtrip-backtick-in-value-truncates-block | ce-adversarial-reviewer | P1 | fixed | parseRegistry lazy fenced-yaml regex closes at the first code-fence sequence anywhere in the block, so any registry value containing a backtick-fence sequence truncates the YAML and parse throws; latent round-trip trap for upsert-op when real entries hold fence references | commit fad4c0a666c8616c4c178347a5f10a331b24a236 |
+| F8 | validate-op | case-insensitive-fence-accepts-uppercase-YAML | ce-adversarial-reviewer | P3 | deferred-P3 | The case-insensitive flag accepts an uppercase or suffixed yaml fence as the data block, weaker than the doc single-block wording (mirrors ledger.ts, so consistent) | deferred-P3 |
+| F9 | validate-op | empty-string-enum-double-report | ce-correctness-reviewer | P3 | deferred-P3 | An empty-string enum field emits two error lines (missing-required AND invalid-value); still rejects correctly but double-reports | deferred-P3 |
+| F10 | validate-op | validate-op-secondary-error-branches-untested | ce-testing-reviewer | P3 | deferred-P3 | Secondary error branches untested: non-object/null entry, evidence-not-array, malformed-yaml parse failure, index-fallback label, and multi-entry error aggregation; AC2 core enum/required behaviors are covered with strong assertions | deferred-P3 |
+| F11 | validate-op | readme-file-map-omits-learnings-modules | ce-project-standards-reviewer | P3 | deferred-P3 | README File map enumerates lib/ modules and root helpers by name but is not updated for new lib/learnings.ts or root learnings-registry.ts; README is outside this batch's files list | deferred-P3 |
+| F12 | validate-op | parseregistry-jsdoc-claims-ledger-parity-now-false | ce-adversarial-reviewer | P3 | deferred-P3 | parseRegistry JSDoc still claims it mirrors ledger.ts with the same fenced-yaml regex, but the repair diverged them; ledger.ts keeps the old regex while learnings.ts is now column-0 anchored, so the documented parity is stale | deferred-P3 |
+| F13 | validate-op | closing-fence-trailing-whitespace-tolerance-untested | ce-testing-reviewer | P3 | deferred-P3 | New regex adds trailing-whitespace tolerance on the closing fence but no test exercises a closing fence with trailing spaces, so that branch is unguarded | deferred-P3 |
+| F14 | validate-op | column-0-fence-inside-value-still-truncates-undocumented-in-tests | ce-testing-reviewer | P3 | deferred-P3 | The fix relies on the assumption that a column-0 fence cannot appear inside a yaml scalar value (not producible by a real serializer); this residual limitation is asserted only in a source comment, not pinned by a test | deferred-P3 |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
