@@ -119,9 +119,16 @@ dirty/staged path summaries>
   is a surgical docs-only change (2 markdown files, 6 fully-specified edits,
   no `.ts` changes). Per the code-pipeline workflow-sizing guidance, stepped
   off the full Stage 2-6 pipeline after Stage 1 and shipped directly: made
-  the 6 edits, verified `route.test.ts` stays green (77/77), confirmed no
+  the 6 edits, verified the doc-contract suite stays green, confirmed no
   cross-section contradiction, then committed and opened the PR. All 6 ACs
   satisfied. No batch decomposition was needed.
+- **2026-05-25T07:19 (code review):** Verification-evidence correction. The
+  suite that governs the changed docs is `contract-drift.test.ts` (it reads
+  the real `SKILL.md` and `first-run-gotchas.md` from disk and checks them
+  against the live contract, including the AC-6 cross-section consistency
+  check) — passes 109/109. `route.test.ts` (77/77) covers runtime routing
+  logic only and reads no doc content; it confirms the no-`.ts`-change
+  constraint but is not the suite that exercises this diff.
 
 ### runbook_version skew continuation evidence (U6)
 
