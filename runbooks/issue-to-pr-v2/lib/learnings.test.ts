@@ -130,6 +130,28 @@ describe("parseRegistry", () => {
     const path = writeRegistry(registryDoc("not_learnings: []"));
     expect(() => parseRegistry(path)).toThrow(/learnings/);
   });
+
+  test("does not truncate the block when a string value contains an inline triple-backtick fence", () => {
+    // A learning whose string field legitimately references a fenced code
+    // block (this very issue is about yaml fences). The inline ``` must NOT
+    // close the surrounding markdown fence; the whole block must round-trip.
+    const yamlBody =
+      "learnings:\n" +
+      "  - summary: |\n" +
+      "      Parser truncates on inline fences. Repro:\n" +
+      "      ```yaml\n" +
+      "      learnings: []\n" +
+      "      ```\n" +
+      '  - signature: "sha256:after-the-fence"\n';
+    const path = writeRegistry(registryDoc(yamlBody));
+    const registry = parseRegistry(path);
+    expect(Array.isArray(registry.learnings)).toBe(true);
+    expect(registry.learnings).toHaveLength(2);
+    const second = registry.learnings[1] as { signature?: string };
+    expect(second.signature).toBe("sha256:after-the-fence");
+    const first = registry.learnings[0] as { summary?: string };
+    expect(first.summary).toContain("```yaml");
+  });
 });
 
 describe("validateRegistry", () => {

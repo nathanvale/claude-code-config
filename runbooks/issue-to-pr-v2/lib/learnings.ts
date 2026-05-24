@@ -102,9 +102,15 @@ export function parseRegistry(path: string): Registry {
     throw new Error(`cannot read registry ${path}: ${message}`);
   }
 
-  const blocks = [...src.matchAll(/```yaml[^\n]*\n([\s\S]*?)```/gi)].map(
-    (match) => match[1],
-  );
+  // The closing fence must be a line that STARTS with the triple-backtick at
+  // column 0 (multiline `^...$`), so a triple-backtick that appears INSIDE a
+  // yaml scalar value (e.g. a learning whose summary references a fenced code
+  // block, which is necessarily indented under the scalar) does not
+  // prematurely truncate the captured block. The registry's single yaml block
+  // is always emitted with its fences at column 0.
+  const blocks = [
+    ...src.matchAll(/^```yaml[^\n]*\n([\s\S]*?)\n^```[ \t]*$/gim),
+  ].map((match) => match[1]);
   if (blocks.length === 0) {
     throw new Error(`no fenced yaml block found in registry ${path}`);
   }
