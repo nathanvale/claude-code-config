@@ -154,11 +154,33 @@ batches:
       - 3
       - 5
     rationale: "Split from comparison (U3) because extraction patterns and fact-comparison are separable concerns tested independently; the extractor is the surface most prone to false positives and warrants its own unit."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - f6b941a5be4c07ed444ed630cf32ce951f06bee2
+      - cb005bc3a33e432234efb40dd865cf86956565c9
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: f6b941a5be4c07ed444ed630cf32ce951f06bee2
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "validators on doc-claim-extractor"
+        blockers: []
+        probe_results: ["55 tests green; extractor over prose + fenced code blocks"]
+        notes: "Initial extractDocClaims + sub-extractors + claim types; 55 tests green."
+      - attempt_type: repair
+        status: committed
+        commit_sha: cb005bc3a33e432234efb40dd865cf86956565c9
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "converge doc-claim-extractor"
+        blockers: []
+        probe_results: ["batch-4 clean-pass simulated: 0 false-positive claims across 4 live docs", "installed_artifact_presence.missing now consistent extractor/loader"]
+        notes: "Repaired F11/F12 (P1) + F13/F14/F15 (P2) + F16 (P3) in one combined commit; 68 tests green. F12 used loader approach (arraySiblingKeys)."
+    iterations: 2
+    final_verdict: converged
   - id: "claim-fact-comparator"
     name: "Claim-vs-fact comparator and scoped-link existence check"
     goal: "The check validates extracted claims against loaded contract facts and validates only the recovery/control-plane links needed for this scope, especially links involving the first-run gotchas guide, producing structured drift findings."
@@ -338,49 +360,49 @@ findings:
     signature: route-id-bullet-heuristic-over-captures-non-route-tokens
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "extractRouteIds bulletRe matches ANY backtick kebab token, not tokens in genuine route-ID positions. Run against live docs it falsely extracts SKILL.md Stage 4 subroute names (select-eligible-batch, start-batch-checkpoint, builder-attempt, validator-wave, finding-repair, converge-batch, accepted-risk-or-reframe) and ledger-and-helper.md field bullets (status, iterations) as route-ID claims; none are in facts.routeIds, so the comparator will flag false drift and the live docs cannot pass clean (breaks AC1/AC7)."
-    resolution: null
+    resolution: "commit cb005bc3a33e432234efb40dd865cf86956565c9"
   - id: F12
     batch_id: doc-claim-extractor
     signature: brace-expander-emits-array-sibling-as-finite-child-asymmetry
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "first-run-gotchas.md writes data.installed_artifact_presence.{references,templates,cli_ts,lib_dir,all_present,missing} and the extractor expands all 6 incl. missing, but the loader's finiteChildKeys excludes missing (array sibling), so the two parsers disagree on the same source field and data.installed_artifact_presence.missing reads as false-positive drift; resolve the extractor/loader asymmetry so the live docs pass clean."
-    resolution: null
+    resolution: "commit cb005bc3a33e432234efb40dd865cf86956565c9"
   - id: F13
     batch_id: doc-claim-extractor
     signature: no-test-asserts-claims-against-live-scoped-docs
     persona: ce-correctness-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "Extraction is only tested on hand-built fixtures; no test runs extractDocClaims over the actual 4 scoped docs and asserts emitted claims are consistent with live CLI facts. This is exactly why the route-ID and brace over-capture false positives (F11, F12) went uncaught; a live-doc test is the load-bearing guard."
-    resolution: null
+    resolution: "commit cb005bc3a33e432234efb40dd865cf86956565c9"
   - id: F14
     batch_id: doc-claim-extractor
     signature: route-id-and-packet-role-guards-untested
     persona: ce-testing-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "The route-ID bullet-position guard and the packet-role command gate (command equals packet) both have happy-path tests but no mutation-proof negative case; weakening either keeps all tests green. Add negative tests: a non-blocked kebab token in prose is NOT a route id, and a non-packet cli.ts command argument (cli.ts state X) is NOT a packet role."
-    resolution: null
+    resolution: "commit cb005bc3a33e432234efb40dd865cf86956565c9"
   - id: F15
     batch_id: doc-claim-extractor
     signature: bulletre-jsdoc-misdescribes-extraction-scope
     persona: ce-maintainability-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "contract-drift.ts bulletRe JSDoc claims it only matches tokens leading a route-catalog bullet followed by ':' or ' and ', but the regex matches any backtick kebab token anywhere in prose; the comment actively misleads the next maintainer about extraction scope (and is the root of F11). bulletPairRe is also dead code subsumed by bulletRe."
-    resolution: null
+    resolution: "commit cb005bc3a33e432234efb40dd865cf86956565c9"
   - id: F16
     batch_id: doc-claim-extractor
     signature: scoped-link-title-and-image-mis-parse
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: fixed
     summary: "linkRe captures '[t](y.md \"title\")' target as 'y.md \"title\"' (title not stripped) and matches the [alt](img.png) portion of an image '![alt](img.png)'; both would resolve to nonexistent paths and produce false-positive link-misses. Not reachable in the current 4 scoped docs but latent for future edits."
-    resolution: null
+    resolution: "commit cb005bc3a33e432234efb40dd865cf86956565c9"
 ```
 
 ## Findings
@@ -397,12 +419,12 @@ findings:
 | F8 | contract-fact-loader | finite-child-keys-or-word-and-multi-crossref-fragility | ce-adversarial-reviewer | P3 | deferred-P3 | Latent finiteChildKeys/deriveFieldPaths fragilities: the /\bor\b/ guard drops all finite children from any description containing the standalone word 'or'; only the first 'same shape as' cross-reference per description is resolved; firstLine envelope parsing would reject a pretty-printed multi-line envelope. Currently unreachable with the compact-emitting CLI. | deferred-P3 |
 | F9 | contract-fact-loader | ac6-no-data-branch-regex-not-load-bearing | ce-testing-reviewer | P2 | fixed | F5 test (c) matcher for the ok-envelope-with-no-data branch is too loose (its alternation includes a bare 'data' alternative): deleting the no-data throw leaves all tests green because that bare alternative matches the downstream 'data.commands is not an array' error, so the test does not pin branch (c). Impl branch is correct and fires in production; only test load-bearingness is weak. | commit fbf72d0e2da7911628554ae17e1cb7c6f5a788df |
 | F10 | contract-fact-loader | finite-child-keys-single-brace-array-union-over-correction | ce-adversarial-reviewer | P3 | fixed | F7 over-corrected: scoping the []/union rejection to the brace inner means a single-brace array-of-objects ('{ a, b, c }[]') or single-brace union ('string or { a, b }') now has children invented; not reachable against the current CLI surface but latent if a future shape adds one. | commit fbf72d0e2da7911628554ae17e1cb7c6f5a788df |
-| F11 | doc-claim-extractor | route-id-bullet-heuristic-over-captures-non-route-tokens | ce-adversarial-reviewer | P1 | open | extractRouteIds bulletRe matches ANY backtick kebab token, not tokens in genuine route-ID positions. Run against live docs it falsely extracts SKILL.md Stage 4 subroute names (select-eligible-batch, start-batch-checkpoint, builder-attempt, validator-wave, finding-repair, converge-batch, accepted-risk-or-reframe) and ledger-and-helper.md field bullets (status, iterations) as route-ID claims; none are in facts.routeIds, so the comparator will flag false drift and the live docs cannot pass clean (breaks AC1/AC7). |  |
-| F12 | doc-claim-extractor | brace-expander-emits-array-sibling-as-finite-child-asymmetry | ce-adversarial-reviewer | P1 | open | first-run-gotchas.md writes data.installed_artifact_presence.{references,templates,cli_ts,lib_dir,all_present,missing} and the extractor expands all 6 incl. missing, but the loader's finiteChildKeys excludes missing (array sibling), so the two parsers disagree on the same source field and data.installed_artifact_presence.missing reads as false-positive drift; resolve the extractor/loader asymmetry so the live docs pass clean. |  |
-| F13 | doc-claim-extractor | no-test-asserts-claims-against-live-scoped-docs | ce-correctness-reviewer | P2 | open | Extraction is only tested on hand-built fixtures; no test runs extractDocClaims over the actual 4 scoped docs and asserts emitted claims are consistent with live CLI facts. This is exactly why the route-ID and brace over-capture false positives (F11, F12) went uncaught; a live-doc test is the load-bearing guard. |  |
-| F14 | doc-claim-extractor | route-id-and-packet-role-guards-untested | ce-testing-reviewer | P2 | open | The route-ID bullet-position guard and the packet-role command gate (command equals packet) both have happy-path tests but no mutation-proof negative case; weakening either keeps all tests green. Add negative tests: a non-blocked kebab token in prose is NOT a route id, and a non-packet cli.ts command argument (cli.ts state X) is NOT a packet role. |  |
-| F15 | doc-claim-extractor | bulletre-jsdoc-misdescribes-extraction-scope | ce-maintainability-reviewer | P2 | open | contract-drift.ts bulletRe JSDoc claims it only matches tokens leading a route-catalog bullet followed by ':' or ' and ', but the regex matches any backtick kebab token anywhere in prose; the comment actively misleads the next maintainer about extraction scope (and is the root of F11). bulletPairRe is also dead code subsumed by bulletRe. |  |
-| F16 | doc-claim-extractor | scoped-link-title-and-image-mis-parse | ce-adversarial-reviewer | P3 | open | linkRe captures '[t](y.md "title")' target as 'y.md "title"' (title not stripped) and matches the [alt](img.png) portion of an image '![alt](img.png)'; both would resolve to nonexistent paths and produce false-positive link-misses. Not reachable in the current 4 scoped docs but latent for future edits. |  |
+| F11 | doc-claim-extractor | route-id-bullet-heuristic-over-captures-non-route-tokens | ce-adversarial-reviewer | P1 | fixed | extractRouteIds bulletRe matches ANY backtick kebab token, not tokens in genuine route-ID positions. Run against live docs it falsely extracts SKILL.md Stage 4 subroute names (select-eligible-batch, start-batch-checkpoint, builder-attempt, validator-wave, finding-repair, converge-batch, accepted-risk-or-reframe) and ledger-and-helper.md field bullets (status, iterations) as route-ID claims; none are in facts.routeIds, so the comparator will flag false drift and the live docs cannot pass clean (breaks AC1/AC7). | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
+| F12 | doc-claim-extractor | brace-expander-emits-array-sibling-as-finite-child-asymmetry | ce-adversarial-reviewer | P1 | fixed | first-run-gotchas.md writes data.installed_artifact_presence.{references,templates,cli_ts,lib_dir,all_present,missing} and the extractor expands all 6 incl. missing, but the loader's finiteChildKeys excludes missing (array sibling), so the two parsers disagree on the same source field and data.installed_artifact_presence.missing reads as false-positive drift; resolve the extractor/loader asymmetry so the live docs pass clean. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
+| F13 | doc-claim-extractor | no-test-asserts-claims-against-live-scoped-docs | ce-correctness-reviewer | P2 | fixed | Extraction is only tested on hand-built fixtures; no test runs extractDocClaims over the actual 4 scoped docs and asserts emitted claims are consistent with live CLI facts. This is exactly why the route-ID and brace over-capture false positives (F11, F12) went uncaught; a live-doc test is the load-bearing guard. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
+| F14 | doc-claim-extractor | route-id-and-packet-role-guards-untested | ce-testing-reviewer | P2 | fixed | The route-ID bullet-position guard and the packet-role command gate (command equals packet) both have happy-path tests but no mutation-proof negative case; weakening either keeps all tests green. Add negative tests: a non-blocked kebab token in prose is NOT a route id, and a non-packet cli.ts command argument (cli.ts state X) is NOT a packet role. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
+| F15 | doc-claim-extractor | bulletre-jsdoc-misdescribes-extraction-scope | ce-maintainability-reviewer | P2 | fixed | contract-drift.ts bulletRe JSDoc claims it only matches tokens leading a route-catalog bullet followed by ':' or ' and ', but the regex matches any backtick kebab token anywhere in prose; the comment actively misleads the next maintainer about extraction scope (and is the root of F11). bulletPairRe is also dead code subsumed by bulletRe. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
+| F16 | doc-claim-extractor | scoped-link-title-and-image-mis-parse | ce-adversarial-reviewer | P3 | fixed | linkRe captures '[t](y.md "title")' target as 'y.md "title"' (title not stripped) and matches the [alt](img.png) portion of an image '![alt](img.png)'; both would resolve to nonexistent paths and produce false-positive link-misses. Not reachable in the current 4 scoped docs but latent for future edits. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
 
 ## Notes
 
