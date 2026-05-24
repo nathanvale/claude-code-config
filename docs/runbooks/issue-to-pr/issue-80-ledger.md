@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-24T21:45:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-24T22:15:00+10:00"
 plan_digest: "sha256:2ee41531149675bbcbca7d9cd70e62183c8d52213ca081dd085da409ded5651f"
 batch_contract_digest: "sha256:2cba9f3af989eb209813bab81e4a90853dc51afcb7d1460c02e5399e876cbde8"
 ac_digest: "sha256:0b74444e5bdf8647763a3a27e40e805591b43c3d0a5544bcfbc78be05c5203e1"
@@ -193,6 +193,30 @@ findings:
     status: deferred-P3
     summary: "Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them."
     resolution: "deferred-P3"
+  - id: fr-001
+    batch_id: final
+    signature: "read-trigger-install-presence-overclaim"
+    persona: ce-code-review
+    severity: P3
+    status: deferred-P3
+    summary: "Read-trigger characterizes all of Part 2 as blocked-route recovery recipes already in context, but Part 2.5 (install-presence) carries no blocked- route_id so step 7b never fires for an install-presence stop; mitigated (one-file load, SKILL.md sibling-field gate covers recovery)."
+    resolution: "deferred-P3"
+  - id: fr-002
+    batch_id: final
+    signature: "step-7b-markdown-list-marker"
+    persona: ce-code-review
+    severity: P3
+    status: deferred-P3
+    summary: "Step `7b.` is not a valid Markdown ordered-list marker; rendered views break the 1-10 numbering and show it as literal text (raw-source agents read it fine; cross-references resolve)."
+    resolution: "deferred-P3"
+  - id: fr-003
+    batch_id: final
+    signature: "step-7b-single-visible-action-ambiguity"
+    persona: ce-code-review
+    severity: P3
+    status: deferred-P3
+    summary: "Step 7b is a peer numbered loop step just before the single-visible-action step; a literal agent could read the load as consuming the turn (mitigated by 7b's layered-load prose and step 8's action enumeration)."
+    resolution: "deferred-P3"
 ```
 
 ## Findings
@@ -202,6 +226,9 @@ findings:
 | b2-001 | batch-2-guide-and-verify | annotation-step7b-block-mislabel | ce-correctness-reviewer | P2 | fixed | 2.4 retire-when annotation calls step 7b a `<route_catalog>` load; step 7b lives in `<orchestration_loop>`. | commit 363cd4f2c13b6b1c84d3c3811c9836645ede962c |
 | b2-002 | batch-2-guide-and-verify | annotations-lengthen-retire-when-block | ce-project-standards-reviewer | P3 | deferred-P3 | 2026-05 re-evaluation parentheticals lengthen each Retire-when block; stacking future notes could erode the no-junk-drawer intent. | deferred-P3 |
 | b2-003 | batch-2-guide-and-verify | split-trigger-prose-drift-four-surfaces | ce-adversarial-reviewer | P3 | deferred-P3 | Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them. | deferred-P3 |
+| fr-001 | final | read-trigger-install-presence-overclaim | ce-code-review | P3 | deferred-P3 | Read-trigger characterizes all of Part 2 as blocked-route recovery recipes already in context, but Part 2.5 (install-presence) carries no blocked- route_id so step 7b never fires for an install-presence stop; mitigated (one-file load, SKILL.md sibling-field gate covers recovery). | deferred-P3 |
+| fr-002 | final | step-7b-markdown-list-marker | ce-code-review | P3 | deferred-P3 | Step `7b.` is not a valid Markdown ordered-list marker; rendered views break the 1-10 numbering and show it as literal text (raw-source agents read it fine; cross-references resolve). | deferred-P3 |
+| fr-003 | final | step-7b-single-visible-action-ambiguity | ce-code-review | P3 | deferred-P3 | Step 7b is a peer numbered loop step just before the single-visible-action step; a literal agent could read the load as consuming the turn (mitigated by 7b's layered-load prose and step 8's action enumeration). | deferred-P3 |
 
 ## Notes
 
