@@ -1,11 +1,15 @@
 # First-run gotchas: CLI evidence recipes
 
-**Read trigger:** open this guide when an Issue-to-PR run lands in a state
-that looks wrong but probably is not, or in a blocked route whose recovery
-is not obvious from the route id alone. It is a recovery overlay, not a
-second runbook. For full stage playbooks use the stage references; for the
-ledger schema and route catalog use
-[ledger-and-helper.md](ledger-and-helper.md).
+**Read trigger:** this guide has a split trigger. On a `blocked-` route the
+skill loop loads it **deterministically** (`SKILL.md` orchestration step
+7b), so on those routes it is not a reader's choice: it is already in
+context for the blocked-route recovery recipes (Part 2). The discretionary
+judgment cue, *open this guide when an Issue-to-PR run lands in a state that
+looks wrong but probably is not, when recovery is not obvious from the route
+id alone*, applies to the **non-blocked cryptic-state** path (the Part 1
+sharp edges). Either way it is a recovery overlay, not a second runbook. For
+full stage playbooks use the stage references; for the ledger schema and
+route catalog use [ledger-and-helper.md](ledger-and-helper.md).
 
 ## How to read this guide
 
@@ -294,7 +298,11 @@ commits more work against criteria that moved.
 **Retire when** the `blocked-acceptance-criteria-stale` bullet in the
 `SKILL.md` `<route_catalog>` block points to this recipe by name (a
 per-route link, not the generic blocked-route paragraph that already exists
-below those bullets).
+below those bullets). (Re-evaluated 2026-05 against the deterministic
+blocked-route load, issue #80: still open. Step 7b loads the whole guide on
+every `blocked-` route, which improves *loading*, not *per-recipe
+targeting* — it does not point the agent at this recipe by name, so the
+per-route `<route_catalog>` link this bar requires is still absent.)
 
 ### 2.2 `blocked-batch-contract-stale`
 
@@ -328,7 +336,11 @@ human confirmation before Builders run against it.
 **Retire when** the `blocked-batch-contract-stale` bullet in the `SKILL.md`
 `<route_catalog>` block points to this recipe by name (a per-route link, not
 the generic blocked-route paragraph that already exists below those
-bullets).
+bullets). (Re-evaluated 2026-05 against the deterministic blocked-route
+load, issue #80: still open. Step 7b loads the whole guide on every
+`blocked-` route, which improves *loading*, not *per-recipe targeting* — it
+does not point the agent at this recipe by name, so the per-route
+`<route_catalog>` link this bar requires is still absent.)
 
 ### 2.3 `blocked-digests-stale`
 
@@ -412,7 +424,13 @@ runbook no longer honors, until a human records the carry-forward decision.
 **Owner:** `gotchas guide`.
 **Retire when** the version-skew entry in the `SKILL.md` `<pre_route_gates>`
 block points to this recipe by name (it currently links only to
-`ledger-and-helper.md` for the continuation-evidence shape).
+`ledger-and-helper.md` for the continuation-evidence shape). (Re-evaluated
+2026-05 against the deterministic blocked-route load, issue #80: still open.
+Step 7b loads the whole guide on every `blocked-` route, which improves
+*loading*, not *per-recipe targeting* — and it is a `<route_catalog>` load
+keyed on the `blocked-` prefix, a different mechanism from the
+`<pre_route_gates>` version-skew link this bar requires, so that link is
+still absent.)
 
 ### 2.5 Install-presence block: `installed_artifact_presence.all_present: false`
 
