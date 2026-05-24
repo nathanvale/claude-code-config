@@ -844,3 +844,222 @@ describe("AC5: extractor emits claims only, holds no contract values", () => {
     expect(claims.docPath).toBe("some/doc.md");
   });
 });
+
+/**
+ * Issue #81 — batch-2 repair (F11/F12/F13/F14/F16).
+ *
+ * These tests run the extractor over the REAL scoped docs and reconcile its
+ * claims with `loadContractFacts()` live output — the actual clean-pass
+ * invariant batch 3's comparator will enforce. They are the load-bearing
+ * guard (F13) that catches the route-ID over-capture (F11) and the
+ * installed_artifact_presence.missing asymmetry (F12). They never hardcode an
+ * expected route-id / field-path list (AC5): the "must include" anchors are
+ * read from the live `loadContractFacts()` facts, and the "must NOT include"
+ * anchors are conceptual subroute / field NAMES read out of the docs
+ * themselves, not contract values.
+ */
+
+const repoRoot = join(import.meta.dir, "..", "..");
+const skillDocPath = "skills/issue-to-pr/SKILL.md";
+const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
+const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
+
+/** Read one scoped doc's text by its repo-relative path. */
+async function readScopedDoc(relPath: string): Promise<string> {
+  return Bun.file(join(repoRoot, relPath)).text();
+}
+
+describe("F11/F13: live-doc route-ID claims reconcile with loadContractFacts", () => {
+  test("SKILL.md + ledger-and-helper route-ID claims are all live route ids", async () => {
+    const facts = await loadContractFacts();
+    const liveRouteIds = new Set(facts.routeIds);
+
+    const skillClaims = extractDocClaims(
+      await readScopedDoc(skillDocPath),
+      skillDocPath,
+    );
+    const ledgerClaims = extractDocClaims(
+      await readScopedDoc(ledgerDocPath),
+      ledgerDocPath,
+    );
+
+    const docRouteIds = new Set(
+      [...skillClaims.routeIds, ...ledgerClaims.routeIds].map((c) => c.token),
+    );
+
+    // The real clean-pass invariant: every route-ID the live docs CLAIM must
+    // be a member of the live CLI's route_ids. A false positive (subroute or
+    // field name leaking in) would not be a member and would fail here.
+    for (const claimed of docRouteIds) {
+      expect(liveRouteIds.has(claimed)).toBe(true);
+    }
+  });
+
+  test("Stage 4 subroute names are NOT extracted as route ids (F11)", async () => {
+    // These are conceptual subroute names from SKILL.md's <stage_shells>
+    // section, structurally identical to route-catalog bullets but NOT route
+    // ids. They previously leaked in via the unscoped bullet heuristic.
+    const subrouteNames = [
+      "select-eligible-batch",
+      "start-batch-checkpoint",
+      "builder-attempt",
+      "validator-wave",
+      "finding-repair",
+      "converge-batch",
+      "accepted-risk-or-reframe",
+    ];
+    const got = tokens(
+      extractDocClaims(await readScopedDoc(skillDocPath), skillDocPath)
+        .routeIds,
+    );
+    for (const name of subrouteNames) {
+      expect(got).not.toContain(name);
+    }
+  });
+
+  test("YAML field-name bullets are NOT extracted as route ids (F11)", async () => {
+    // `status` / `iterations` are ledger field-name bullets under non-route
+    // headings; they must not be mistaken for route ids.
+    const got = tokens(
+      extractDocClaims(await readScopedDoc(ledgerDocPath), ledgerDocPath)
+        .routeIds,
+    );
+    expect(got).not.toContain("status");
+    expect(got).not.toContain("iterations");
+  });
+
+  test("genuine route ids from the route catalog ARE still extracted", async () => {
+    // The happy-path and blocked-* route ids live in SKILL.md's
+    // <route_catalog>; scoping must not drop them. Anchor the "must include"
+    // set to the live facts so this is not a hardcoded expectation (AC5): we
+    // assert every live route id that the doc text literally mentions in a
+    // route-catalog bullet is captured.
+    const facts = await loadContractFacts();
+    const skillText = await readScopedDoc(skillDocPath);
+    const got = new Set(
+      tokens(extractDocClaims(skillText, skillDocPath).routeIds),
+    );
+    // Sanity floor: the catalog covers the full happy path + blocked family,
+    // so the extractor must capture the bulk of live route ids, not a handful.
+    const captured = facts.routeIds.filter((id) => got.has(id));
+    expect(captured.length).toBe(facts.routeIds.length);
+  });
+});
+
+describe("F12: installed_artifact_presence.missing reconciles loader vs extractor", () => {
+  test("loader facts now include data.installed_artifact_presence.missing", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.responseFieldPaths.state).toContain(
+      "data.installed_artifact_presence.missing",
+    );
+    // The diagnose copy resolves via cross-reference to the same children.
+    expect(facts.responseFieldPaths.diagnose).toContain(
+      "data.installed_artifact_presence.missing",
+    );
+  });
+
+  test("every live-doc installed_artifact_presence field claim is a known fact", async () => {
+    const facts = await loadContractFacts();
+    const knownPaths = new Set([
+      ...facts.responseFieldPaths.state,
+      ...facts.responseFieldPaths.diagnose,
+    ]);
+    const gotchasClaims = extractDocClaims(
+      await readScopedDoc(gotchasDocPath),
+      gotchasDocPath,
+    );
+    const iapClaims = gotchasClaims.fieldPaths
+      .map((c) => c.token)
+      .filter((p) => p.startsWith("data.installed_artifact_presence"));
+
+    // The doc's brace set expands to references/templates/cli_ts/lib_dir/
+    // all_present/missing — including the previously-asymmetric `missing`.
+    expect(iapClaims).toContain("data.installed_artifact_presence.missing");
+    for (const path of iapClaims) {
+      expect(knownPaths.has(path)).toBe(true);
+    }
+  });
+
+  test("regression: blocking_gates still yields no invented children (F7/F10)", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.responseFieldPaths.state).toContain("data.blocking_gates");
+    const invented = facts.responseFieldPaths.state.some((p) =>
+      p.startsWith("data.blocking_gates."),
+    );
+    expect(invented).toBe(false);
+  });
+});
+
+describe("F14: route-id and packet-role negative guards", () => {
+  test("a non-blocked kebab token in plain PROSE is NOT a route id", () => {
+    // No route-catalog context, not a blocked-* token, not a route_id:
+    // assignment — a backtick kebab token in prose must not be extracted.
+    const doc =
+      "The `select-eligible-batch` step runs first in normal prose, see below.";
+    const got = tokens(extractDocClaims(doc, "doc.md").routeIds);
+    expect(got).not.toContain("select-eligible-batch");
+    expect(got.length).toBe(0);
+  });
+
+  test("a non-blocked kebab bullet OUTSIDE a route section is NOT a route id", () => {
+    // A bullet whose nearest section heading does not mention routes must not
+    // be treated as a route-catalog bullet.
+    const doc = [
+      "**Lifecycle fields**",
+      "",
+      "- `start-batch-checkpoint`: record the start.",
+      "- `converge-batch`: run the gate.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").routeIds);
+    expect(got).not.toContain("start-batch-checkpoint");
+    expect(got).not.toContain("converge-batch");
+    expect(got.length).toBe(0);
+  });
+
+  test("a non-packet cli.ts command arg does NOT yield a packet role", () => {
+    // `cli.ts state somearg` — `state` is the command, `somearg` is its arg,
+    // NOT a packet role. Only `cli.ts packet <role>` yields a packet role.
+    const claims = extractDocClaims("`cli.ts state somearg --json`", "doc.md");
+    expect(tokens(claims.packetRoles)).not.toContain("somearg");
+    expect(claims.packetRoles.length).toBe(0);
+  });
+});
+
+describe("F16: scoped-link title and image mis-parse", () => {
+  test("strips a link title so the resolved target excludes the quoted title", () => {
+    const doc = 'see [guide](first-run-gotchas.md "the recipes") for help.';
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const link = claims.scopedLinks.find((l) => l.token === "guide");
+    expect(link).toBeDefined();
+    expect(link?.rawTarget).toBe("first-run-gotchas.md");
+    expect(link?.resolvedTarget).toBe(
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+  });
+
+  test("does NOT match the image portion of `![alt](img.png)`", () => {
+    const doc = "an inline image ![diagram](diagram.png) in prose.";
+    const claims = extractDocClaims(doc, "doc.md");
+    expect(claims.scopedLinks.find((l) => l.token === "diagram")).toBeUndefined();
+    expect(
+      claims.scopedLinks.some((l) => l.rawTarget === "diagram.png"),
+    ).toBe(false);
+  });
+
+  test("a real link adjacent to an image still extracts (image skipped only)", () => {
+    const doc =
+      "![alt](pic.png) and then [README](../README.md) for the map.";
+    const claims = extractDocClaims(
+      doc,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    expect(claims.scopedLinks.some((l) => l.rawTarget === "pic.png")).toBe(
+      false,
+    );
+    const readme = claims.scopedLinks.find((l) => l.token === "README");
+    expect(readme?.resolvedTarget).toBe("runbooks/issue-to-pr-v2/README.md");
+  });
+});

@@ -259,6 +259,47 @@ export function finiteChildKeys(description: string): string[] | null {
 }
 
 /**
+ * Collect the names of trailing NAMED array-typed sibling fields a finite
+ * object shape advertises OUTSIDE its `{ ... }` brace group (F12).
+ *
+ * `finiteChildKeys` returns only the brace-group keys; some shapes describe
+ * one more field after the brace, of the form:
+ *   `{ a, b, c } booleans + extra: (...)[]`
+ * Here `extra` is a genuine named field of the SAME finite object (the object
+ * lists a, b, c AND extra as keys); it just happens to be array-typed, so a
+ * doc legitimately references `data.K.extra`. We surface it so the loader's
+ * facts agree with the docs instead of falsely flagging drift.
+ *
+ * Only fires when the description has a finite brace group (so the named
+ * sibling belongs to a real finite object) AND a `name: (...)[]` field follows
+ * it. It deliberately does NOT fire for array-of-union element shapes (a
+ * `Foo[]:` element described by `{ ... } or { ... }`), which carry no single
+ * finite brace group and whose `[]` belongs to the whole element type, not a
+ * named field — so `finiteChildKeys` already returns null for them and no
+ * sibling is invented (preserves F7/F10).
+ */
+function arraySiblingKeys(description: string): string[] {
+  // Require a single finite brace group; otherwise there is no finite object
+  // for a named sibling to belong to.
+  if (finiteChildKeys(description) === null) return [];
+  const braceGroups = description.match(/\{[^{}]*\}/g);
+  if (!braceGroups || braceGroups.length !== 1) return [];
+
+  // Look only at the text AFTER the brace group for `name: (...)[]` siblings.
+  const afterBrace = description.slice(
+    description.indexOf(braceGroups[0]) + braceGroups[0].length,
+  );
+  const keys: string[] = [];
+  // A named array sibling: an identifier, a colon, then an array-typed value
+  // ending in `[]` (e.g. a `name: (...)[]` field after the finite brace).
+  const siblingRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[^;{}]*\[\]/g;
+  for (const m of afterBrace.matchAll(siblingRe)) {
+    keys.push(m[1]);
+  }
+  return keys;
+}
+
+/**
  * Resolve a `"same shape as <shape>.<key>"` cross-reference in a description
  * to that referenced shape's own description string, so finite children can
  * be derived transitively. Returns `null` when no such reference is present
@@ -281,7 +322,9 @@ function resolveCrossReference(
  * Derive the set of valid `data.*` dotted paths from a single response-shape
  * object. Each top-level key K yields `data.K`. When K's description (or its
  * resolved cross-reference) advertises a finite `{ ... }` child set, also
- * emit `data.K.child` for each child. Non-finite shapes stop at `data.K`.
+ * emit `data.K.child` for each child, INCLUDING any named array-typed sibling
+ * the same finite object carries outside the brace (F12, e.g.
+ * `installed_artifact_presence.missing`). Non-finite shapes stop at `data.K`.
  *
  * `shapes` carries every named shape so cross-references like "same shape as
  * state_response_shape.digest_drift" resolve to the referenced finite set.
@@ -299,11 +342,15 @@ function deriveFieldPaths(
 
     // A description may both name nested keys AND cross-reference a shape for
     // one of those keys (e.g. drift: `{ digest_drift: same shape as ...,
-    // findings_table_drift: null }`). Emit the directly-named children first.
+    // findings_table_drift: null }`). Emit the directly-named children first,
+    // then any named array-typed sibling of the same finite object (F12).
     const directChildren = finiteChildKeys(rawDescription);
     if (directChildren) {
       for (const child of directChildren) {
         paths.push(`${path}.${child}`);
+      }
+      for (const sibling of arraySiblingKeys(rawDescription)) {
+        paths.push(`${path}.${sibling}`);
       }
     }
 
@@ -325,6 +372,11 @@ function deriveFieldPaths(
           const base = childSegment ? `${path}.${childSegment}` : path;
           for (const refChild of refChildren) {
             paths.push(`${base}.${refChild}`);
+          }
+          // A pure cross-ref also inherits the referenced object's named array
+          // siblings (e.g. diagnose's installed_artifact_presence → missing).
+          for (const sibling of arraySiblingKeys(resolved)) {
+            paths.push(`${base}.${sibling}`);
           }
         }
       }
@@ -522,17 +574,113 @@ function claimAt(text: string, index: number, token: string): DocClaim {
 }
 
 /**
+ * Compute the half-open character ranges of `text` that sit inside a
+ * **route-catalog context** — the only place a bare backtick kebab bullet may
+ * be read as a route id (F11). The route catalog and the Stage-4 subroute list
+ * use structurally identical bullets (`- \`X\`: ...`), so token SHAPE cannot
+ * tell a real route id from a conceptual subroute name. Section CONTEXT can.
+ *
+ * Two context layers, scanned line by line:
+ *  - **Tag layer** (authoritative): an XML-style `<route_catalog>` opener
+ *    turns route context ON until its `</route_catalog>` (or any other
+ *    `<section>` tag) closes it. Any OTHER `<tag>` opener (e.g.
+ *    `<stage_shells>`) turns route context OFF, so the Stage-4 subroute
+ *    bullets nested there are excluded even though one sub-heading reads
+ *    "Stage 4 subroutes". Bold sub-labels inside a tag region (e.g.
+ *    `**Happy path**`) do not flip context — the enclosing tag wins.
+ *  - **Heading layer** (fallback, only when NOT inside any tag region): a
+ *    markdown heading or bold-only label whose text matches `/route/i` opens
+ *    route context; the next heading/bold that does NOT match closes it. This
+ *    keeps tag-less docs (and small fixtures) working off a "routes" heading.
+ *
+ * Returning ranges rather than a per-line flag lets the bullet matcher reuse
+ * its existing global regex and simply test whether each match index falls in
+ * a route-context range.
+ */
+function routeCatalogRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let inRoute = false;
+  let rangeStart = 0;
+  // Tag region we are currently inside: "route", "other", or null (none).
+  let tagRegion: "route" | "other" | null = null;
+  // Heading-layer flag, only consulted when tagRegion is null.
+  let headingRoute = false;
+
+  const open = (at: number) => {
+    if (!inRoute) {
+      inRoute = true;
+      rangeStart = at;
+    }
+  };
+  const close = (at: number) => {
+    if (inRoute) {
+      inRoute = false;
+      ranges.push([rangeStart, at]);
+    }
+  };
+
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const lineStart = offset;
+    const trimmed = line.trim();
+
+    const openTag = trimmed.match(/^<([a-z_]+)>$/i);
+    const closeTag = trimmed.match(/^<\/([a-z_]+)>$/i);
+    const heading = trimmed.match(/^#{1,6}\s+(.*)$/);
+    const boldLabel = trimmed.match(/^\*\*(.+?)\*\*$/);
+
+    if (openTag) {
+      tagRegion = /route/i.test(openTag[1]) ? "route" : "other";
+      if (tagRegion === "route") open(lineStart);
+      else close(lineStart);
+    } else if (closeTag) {
+      tagRegion = null;
+      // Falling out of a tag region: defer to the heading layer's last state.
+      if (headingRoute) open(lineStart);
+      else close(lineStart);
+    } else if (heading || boldLabel) {
+      const labelText = (heading?.[1] ?? boldLabel?.[1] ?? "").trim();
+      headingRoute = /route/i.test(labelText);
+      // Headings only flip context when not pinned by an enclosing tag region.
+      if (tagRegion === null) {
+        if (headingRoute) open(lineStart);
+        else close(lineStart);
+      }
+    }
+
+    offset += line.length + 1; // account for the split "\n"
+  }
+  close(text.length);
+  return ranges;
+}
+
+/** True when `index` falls within any route-catalog context range. */
+function inRouteCatalog(
+  index: number,
+  ranges: Array<[number, number]>,
+): boolean {
+  return ranges.some(([start, end]) => index >= start && index < end);
+}
+
+/**
  * Extract route-ID claims from EXPLICIT route-ID positions only:
- *  - `route_id: "X"` / `inferred_route_id: "X"` quoted assignments.
- *  - backtick-quoted `blocked-*` tokens (the blocked-route shape heuristic).
- *  - backtick-quoted kebab tokens that lead a route-catalog bullet
- *    (`- \`X\`: ...` / `- \`X\` and \`Y\`: ...`).
+ *  - `route_id: "X"` / `inferred_route_id: "X"` quoted assignments (anywhere).
+ *  - backtick-quoted `blocked-*` tokens anywhere (the blocked-route shape
+ *    heuristic: every documented backtick `blocked-<kebab>` token is a real
+ *    route id, so this position is safe without section scoping).
+ *  - backtick-quoted kebab tokens that lead a bullet, but ONLY when that
+ *    bullet sits inside a route-catalog context section (see
+ *    `routeCatalogRanges`). This is the F11 fix: structurally identical
+ *    bullets in a Stage-4 subroute list or a field-name list are NOT route
+ *    ids, so the bullet heuristic is scoped by section context, not by token
+ *    shape, and never by a hardcoded route list (AC5).
  *
  * It deliberately does NOT treat every backtick kebab token as a route id:
  * tokens with whitespace (`git status`) or a file extension
- * (`first-run-gotchas.md`) are rejected, and non-blocked tokens only count in
- * a bullet position. The `blocked-` prefix is an extraction shape, not a
- * contract value (AC5).
+ * (`first-run-gotchas.md`) are rejected by the bullet pattern, and a
+ * route-catalog bullet may carry two ids joined by ` and ` (`- \`X\` and
+ * \`Y\`: ...`) — both are captured. The `blocked-` prefix is an extraction
+ * shape, not a contract value (AC5).
  */
 function extractRouteIds(text: string): DocClaim[] {
   const claims: DocClaim[] = [];
@@ -556,19 +704,20 @@ function extractRouteIds(text: string): DocClaim[] {
     push(m[1], m.index ?? 0);
   }
 
-  // Backtick kebab tokens leading a route-catalog bullet. A bullet token is
-  // followed by `:` or ` and ` (joining two ids on one bullet). The token is
-  // a single kebab word: no whitespace, no dot, so file names and `git
-  // status` are excluded.
-  const bulletRe = /^[\t ]*[-*]\s+`([a-z][a-z0-9-]*)`(?=\s*(?::|and\b))/gm;
+  // Backtick kebab tokens on a route-catalog bullet. The pattern captures one
+  // or both ids of a `- \`X\`: ...` / `- \`X\` and \`Y\`: ...` bullet; the
+  // token is a single kebab word (no whitespace, no dot) so file names and
+  // `git status` are excluded. The match is kept ONLY when its bullet sits in
+  // a route-catalog context range, so identical-shaped subroute / field-name
+  // bullets elsewhere are skipped (F11).
+  const routeRanges = routeCatalogRanges(text);
+  const bulletRe =
+    /^[\t ]*[-*]\s+`([a-z][a-z0-9-]*)`(?:\s+and\s+`([a-z][a-z0-9-]*)`)?(?=\s*:)/gm;
   for (const m of text.matchAll(bulletRe)) {
-    push(m[1], m.index ?? 0);
-  }
-  // A second backtick id on the same bullet: `` `X` and `Y`: ``.
-  const bulletPairRe =
-    /^[\t ]*[-*]\s+`[a-z][a-z0-9-]*`\s+and\s+`([a-z][a-z0-9-]*)`(?=\s*:)/gm;
-  for (const m of text.matchAll(bulletPairRe)) {
-    push(m[1], m.index ?? 0);
+    const index = m.index ?? 0;
+    if (!inRouteCatalog(index, routeRanges)) continue;
+    push(m[1], index);
+    if (m[2]) push(m[2], index);
   }
 
   return claims;
@@ -671,11 +820,19 @@ function extractFieldPaths(text: string): DocClaim[] {
  * for existence). External `http(s)` links and pure in-page `#fragment` links
  * are ignored. `resolvedTarget` is the target resolved relative to the doc's
  * directory, with any `#fragment` stripped.
+ *
+ * Two markdown details are handled (F16):
+ *  - An optional link title `[t](y.md "title")` is stripped, so `rawTarget`
+ *    and `resolvedTarget` carry only `y.md`, never the quoted title.
+ *  - Image syntax `![alt](img.png)` is NOT a scoped doc link: the preceding
+ *    `!` is required to be absent, so the image portion is skipped.
  */
 function extractScopedLinks(text: string, docPath: string): ScopedLinkClaim[] {
   const links: ScopedLinkClaim[] = [];
   const docDir = posix.dirname(docPath);
-  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+  // `(?<!!)` rejects the `(...)` of an image `![alt](img.png)`. The target
+  // capture stops at whitespace so an optional `"title"` is excluded.
+  const linkRe = /(?<!!)\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
   for (const m of text.matchAll(linkRe)) {
     const token = m[1];
     const rawTarget = m[2].trim();
