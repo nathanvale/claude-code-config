@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-24T15:57:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-24T16:18:00+10:00"
 plan_digest: "sha256:770958ac3561f12644deee1e00a00ba6b9e952a53f5badc1439c5809b3d8ce8e"
 batch_contract_digest: "sha256:83952af8f7573a0cf097dc6d24a31802955c068b06f1b93eaecc1bf5c4733dcd"
 ac_digest: "sha256:c9245e979faf0a512b6dd356bacc66603d870dde8dfbdb414c60ede52ed21b25"
@@ -137,33 +137,33 @@ findings:
     signature: mismatched-ac-digest-routes-to-blocked-not-pick-issue
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: out-of-scope-for-this-issue
     summary: "Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table."
-    resolution: ""
+    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (null vs mismatched distinguished; self-contradiction removed); re-verified against lib/ledger.ts and lib/route.ts."
   - id: fr-002
     batch_id: final
     signature: readacceptancecriteriastate-pending-claim-overstated
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: out-of-scope-for-this-issue
     summary: "Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent."
-    resolution: ""
+    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (status-first short-circuit now described accurately)."
   - id: fr-003
     batch_id: final
     signature: stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing
     persona: ce-correctness-reviewer
     severity: P3
-    status: open
+    status: out-of-scope-for-this-issue
     summary: "Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed."
-    resolution: ""
+    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (Stage 3 now says ac_digest/plan_digest re-confirmed, batch_contract_digest first-stored)."
   - id: fr-004
     batch_id: final
     signature: plan-digest-at-stage-2-claim-has-no-stage-2-doc-support
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: out-of-scope-for-this-issue
     summary: "Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2."
-    resolution: ""
+    resolution: "out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (added decompose.ts --plan-digest step to stage-2-plan.md)."
 ```
 
 ## Findings
@@ -171,10 +171,10 @@ findings:
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 | cr-001 | stage-3 | acceptance-test-looser-than-plan-byte-for-byte | contract-reviewer | P3 | deferred-P3 | Candidate acceptance_tests describe AC1 as exact specified content but do not restate the two literal lines or carry the plan byte-for-byte guard; contract digest binds it to the plan and content is trivial. | deferred-P3 |
-| fr-001 | final | mismatched-ac-digest-routes-to-blocked-not-pick-issue | ce-adversarial-reviewer | P2 | open | Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table. |  |
-| fr-002 | final | readacceptancecriteriastate-pending-claim-overstated | ce-adversarial-reviewer | P3 | open | Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent. |  |
-| fr-003 | final | stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing | ce-correctness-reviewer | P3 | open | Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed. |  |
-| fr-004 | final | plan-digest-at-stage-2-claim-has-no-stage-2-doc-support | ce-adversarial-reviewer | P3 | open | Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2. |  |
+| fr-001 | final | mismatched-ac-digest-routes-to-blocked-not-pick-issue | ce-adversarial-reviewer | P2 | out-of-scope-for-this-issue | Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (null vs mismatched distinguished; self-contradiction removed); re-verified against lib/ledger.ts and lib/route.ts. |
+| fr-002 | final | readacceptancecriteriastate-pending-claim-overstated | ce-adversarial-reviewer | P3 | out-of-scope-for-this-issue | Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (status-first short-circuit now described accurately). |
+| fr-003 | final | stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing | ce-correctness-reviewer | P3 | out-of-scope-for-this-issue | Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (Stage 3 now says ac_digest/plan_digest re-confirmed, batch_contract_digest first-stored). |
+| fr-004 | final | plan-digest-at-stage-2-claim-has-no-stage-2-doc-support | ce-adversarial-reviewer | P3 | out-of-scope-for-this-issue | Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2. | out-of-scope-for-this-issue: runbook-doc heal, not the issue-68 deliverable; fixed in runbook commit 8be31d4 (added decompose.ts --plan-digest step to stage-2-plan.md). |
 
 ## Notes
 
