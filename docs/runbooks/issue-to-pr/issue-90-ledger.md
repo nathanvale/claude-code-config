@@ -88,7 +88,7 @@ batches:
     ac_mapping:
       - 1
     rationale: "proof_first: greenfield scaffold file; the right first move is a target-state parse check (Bun.YAML.parse yields { learnings: [] }) before/with creating it, as a red test would be artificial for a static doc."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
