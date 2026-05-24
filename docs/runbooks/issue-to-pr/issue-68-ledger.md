@@ -3,7 +3,7 @@ issue_number: 68
 issue_title: "test: hello world for issue-to-pr skill test drive"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/68"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-24-004-test-hello-world-smoke-test-plan.md"
 started_at: "2026-05-24T15:22:00+10:00"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:770958ac3561f12644deee1e00a00ba6b9e952a53f5badc1439c5809b3d8ce8e"
 batch_contract_digest: null
 ac_digest: "sha256:c9245e979faf0a512b6dd356bacc66603d870dde8dfbdb414c60ede52ed21b25"
 ---
