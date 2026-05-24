@@ -18,7 +18,7 @@ ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: null
 batch_contract_digest: null
-ac_digest: "sha256:3b3a12d855bb8166ca9c8b86d693224d7f43116427ee03992e0e26b7a5048bae"
+ac_digest: "sha256:68f036c94dd6e78df5de9b6b2cd3a7820fe5d5835776cff2c4e038be114d0936"
 ---
 
 # Issue 83 - issue-to-pr: add per-route named links to retire first-run-gotchas triggers 2.1/2.2/2.4
@@ -39,12 +39,12 @@ row in `## Notes` (see the evidence shape below).
 
 ## Acceptance criteria
 
-- [x] The `<route_catalog>` `blocked-acceptance-criteria-stale` bullet in `SKILL.md` links to `first-run-gotchas.md` recipe 2.1 by name.
-- [x] The `<route_catalog>` `blocked-batch-contract-stale` bullet in `SKILL.md` links to `first-run-gotchas.md` recipe 2.2 by name.
-- [x] The `<pre_route_gates>` version-skew entry in `SKILL.md` links to `first-run-gotchas.md` recipe 2.4 by name, in addition to its existing `ledger-and-helper.md` link.
-- [x] Triggers 2.1, 2.2, 2.4 in `first-run-gotchas.md` are retired (the entries removed or marked retired per the guide's entry-governance contract), since the named links now satisfy each retire-when bar. The 2026-05 "still open" re-evaluation annotations added in #80 are removed or updated to record the retirement.
-- [x] No change to `lib/route.ts`, `requiredReferenceIdsFor`, or CLI runtime behavior (route.test.ts stays green).
-- [x] No contradiction across `<orchestration_loop>` step 7b, `<reference_loading_policy>`, `<route_catalog>`, `<pre_route_gates>`, and the guide read-trigger after the change.
+- [ ] The `<route_catalog>` `blocked-acceptance-criteria-stale` bullet in `SKILL.md` links to `first-run-gotchas.md` recipe 2.1 by name.
+- [ ] The `<route_catalog>` `blocked-batch-contract-stale` bullet in `SKILL.md` links to `first-run-gotchas.md` recipe 2.2 by name.
+- [ ] The `<pre_route_gates>` version-skew entry in `SKILL.md` links to `first-run-gotchas.md` recipe 2.4 by name, in addition to its existing `ledger-and-helper.md` link.
+- [ ] Triggers 2.1, 2.2, 2.4 in `first-run-gotchas.md` are retired (the entries removed or marked retired per the guide's entry-governance contract), since the named links now satisfy each retire-when bar. The 2026-05 "still open" re-evaluation annotations added in #80 are removed or updated to record the retirement.
+- [ ] No change to `lib/route.ts`, `requiredReferenceIdsFor`, or CLI runtime behavior (route.test.ts stays green).
+- [ ] No contradiction across `<orchestration_loop>` step 7b, `<reference_loading_policy>`, `<route_catalog>`, `<pre_route_gates>`, and the guide read-trigger after the change.
 
 ## Batches
 
