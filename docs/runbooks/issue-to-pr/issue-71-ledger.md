@@ -542,6 +542,12 @@ dirty/staged path summaries>
 
 - 2026-05-24T16:47+10:00 — Stage 1: AC confirmed by Nathan (source: gold-standard, high confidence, 6 criteria). Full scope: Reading A guarded runbook-heal resolution + Stage 5 read-only gate + carve-out doc + tests. Feature branch feat/issue-71-pending created from main (post-PR-70 merge, commit dc6868a). Recursion noted: the deliverable is the issue-to-pr runbook + lib code itself.
 - 2026-05-24T17:11+10:00 — Stage 3: batch contract confirmed by Nathan after 2 Contract Review cycles. Cycle 1: 3 P1 (cr-001 shared test file, cr-003 stage-3 scope, cr-004 undefined allowlist) + cr-002 P2, closed via plan-revision 89c6b5e (r1). Cycle 2: 3 P3 cosmetics (cr-006/cr-007/cr-008) closed via plan-revision 55f4357 (r2). AC6 user decision: AMEND fr-001..fr-004 in issue-68-ledger.md to status fixed + resolution runbook-heal 8be31d4 when the historical-rows-disposition batch runs.
+- 2026-05-24T18:37+10:00 — Stage 5 final review: /ce-code-review report-only over main...HEAD (3 finders, cumulative-diff lens). 5 findings, all P2/P3, all deferred (Proposer refuses P2; no in-stage P2-fix path). fr5-001/002/003 deferred-P2, fr5-004/005 deferred-P3. Follow-up issue #72 filed. Stage 5 read-only gate run against checkpoint 8a37c8c (the wired instruction) -> PASS.
+- 2026-05-24T18:52+10:00 — Stage 6 local checks (ship_mode standard, active harness repo):
+  - bun_testFile lib/ledger.test.ts -> 76/76; lib/stage5-readonly.test.ts -> 5/5; bun_runTests pattern decompose -> 156/156.
+  - tsc_check runbooks/issue-to-pr-v2 -> 0 errors.
+  - biome_lintCheck decompose.ts -> 0 errors/0 warnings; lib/ledger.ts -> 0 errors, 2 warnings (noNonNullAssertion, noPrototypeBuiltins) PRE-EXISTING on main, not in this branch's added lines; repo gate is --diagnostic-level=error so warnings do not fail.
+  - CI: no .github/workflows/ in repo. prompt-system render check not triggered (no prompt-fragments/rules/context changes).
 
 ### runbook_version skew continuation evidence (U6)
 
