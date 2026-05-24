@@ -5,7 +5,7 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/87"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-05-25-001-docs-retire-recipe-2-3-targeting-gaps-plan.md"
 started_at: "2026-05-25T07:40:00+10:00"
-status: "in-progress"
+status: "shipped"
 runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
@@ -13,7 +13,7 @@ ac_confirmed_at: "2026-05-25T07:40:00+10:00"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-05-25T07:52:00+10:00"
 blocked_reason: null
-pr_url: null
+pr_url: "https://github.com/nathanvale/claude-code-config/pull/89"
 ship_mode: "standard"
 final_reviewed_at: "2026-05-25T08:00:00+10:00"
 plan_digest: "sha256:7e6c309be55faefb3491635a5bccb4f3ef85fdb9278be8be39958c34e8c9f6c7"
@@ -243,6 +243,7 @@ findings:
 - 2026-05-25: Stage 4 batch loop. u1 (commit 8f18d32) added the ledger-and-helper.md recovery-sequence link; validator wave clean (2 P3 advisories F3/F4 deferred). u2 (commit 86f2d8e) added the SKILL.md route_catalog recipe 2.3 named link; validator wave clean. u3 (commit 5268706) retired recipe 2.3's bar (issue #87 record, body retained); validator wave clean (correctness/adversarial/project-standards/maintainability). Adversarial reviewer independently re-ran contract-drift.test.ts (109/109) and confirmed both link claims true on disk. All 3 batches converged.
 - 2026-05-25: Stage 5 final review (read-only, report-only over cumulative diff main...HEAD). Cumulative deliverable diff = exactly the 3 intended markdown files, 16 insertions, zero .ts files (AC4). Independently re-confirmed both suites green via bun-runner MCP: contract-drift 109/109, route 77/77. Three-surface consistency re-verified (SKILL.md route_catalog, ledger-and-helper.md digest-recheck link, recipe 2.3 retirement record all agree; recipe 2.3 body intact). Zero new open P0/P1 findings; no `batch_id: final` rows added. final_reviewed_at set. Stage 5 read-only gate (`--assert-stage5-readonly` against checkpoint 4a63be4): passed (ledger-only).
 - 2026-05-25: Stage 6 ship. Local checks via bun-runner MCP `bun_runTests` (pattern issue-to-pr-v2, response_format json): 612/612 pass, 0 fail (includes contract-drift 109 + route 77). No type/lint gate applies to the docs-only deliverable. Tree clean. No pre-existing PR for the branch; shipping in create-PR mode via /ce-commit-push-pr.
+- 2026-05-25: PR opened: https://github.com/nathanvale/claude-code-config/pull/89 (create-PR mode, base main). Body confirmed non-empty (2707 chars) with Closes #87, the three-edit summary, verification, and the `## Residual Review Findings` section (2 deferred-P3 advisories). status: shipped.
 
 ### runbook_version skew continuation evidence (U6)
 
