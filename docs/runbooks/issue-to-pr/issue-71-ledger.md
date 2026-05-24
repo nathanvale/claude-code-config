@@ -326,6 +326,14 @@ findings:
     status: open
     summary: "The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it)."
     resolution: null
+  - id: vw-007
+    batch_id: runbook-heal-resolution
+    signature: runbook-heal-mode-only-commit-vacuous-pass
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed."
+    resolution: null
 ```
 
 ## Findings
@@ -346,6 +354,7 @@ findings:
 | vw-004 | runbook-heal-resolution | runbook-heal-skill-artifact-allowlisted-backdoor | ce-adversarial-reviewer | P2 | open | skills/issue-to-pr/ is allowlisted, but skills/issue-to-pr/SKILL.md is a shippable artifact; for an issue whose deliverable IS the skill, a runbook-heal citing a SKILL.md-only commit passes despite mutating a deliverable. Allowlist conflates control-plane tooling with shipped skill content. |  |
 | vw-005 | runbook-heal-resolution | stale-fixed-resolution-catch-all-message | ce-kieran-typescript-reviewer | P3 | open | The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form. |  |
 | vw-006 | runbook-heal-resolution | inline-control-plane-allowlist-vs-named-constant | ce-kieran-typescript-reviewer | P3 | open | The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it). |  |
+| vw-007 | runbook-heal-resolution | runbook-heal-mode-only-commit-vacuous-pass | ce-adversarial-reviewer | P2 | open | Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed. |  |
 
 ## Notes
 
