@@ -123,7 +123,7 @@ batches:
       - 3
       - 4
     rationale: "docs-only policy recording; no red test would add signal beyond grep-visible documentation checks."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
@@ -167,6 +167,7 @@ findings: []
 - 2026-05-24T19:22:06+10:00 - Stage 3 batch contract confirmation: plan decomposed to 2 batches; AC coverage helper reported 4/4 covered; inline Contract Review found no P0/P1 blockers and no nonblocking findings. Nathan's inline run request is treated as confirmation of the exact AC text, DAG, execution modes, rationales, and digest triple.
 - 2026-05-24T19:24:26+10:00 - Stage 4 lifecycle: started `runbook-heal-merge-guard` batch after host readiness check passed (Builder/Validator agents available, scoped files editable, checks available).
 - 2026-05-24T19:34:05+10:00 - Stage 4 validator wave for `runbook-heal-merge-guard`: Builder commit `e4f0b342a614d62740e4abf3c34b836d430fa4bd` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`, and `ce-kieran-typescript-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
+- 2026-05-24T19:35:04+10:00 - Stage 4 lifecycle: started `stage5-p2-policy` batch after dependency `runbook-heal-merge-guard` converged and host readiness check passed.
 
 ### runbook_version skew continuation evidence (U6)
 
