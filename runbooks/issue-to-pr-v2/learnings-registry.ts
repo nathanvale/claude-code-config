@@ -21,6 +21,7 @@ import { argv, exit, stderr, stdout } from "node:process";
 
 import {
   type Registry,
+  assertRegistryWriteTarget,
   loadCandidate,
   parseRegistry,
   parseRegistryFromString,
@@ -86,6 +87,18 @@ if (args[0] === "--upsert") {
       stderr.write(`learnings-registry: ${candidatePath}: ${error}\n`);
     }
     exit(1);
+  }
+
+  // Write-scope guard (AC5): refuse any registry target outside the canonical
+  // surface BEFORE we read the registry from disk or compute a write. Placed
+  // after candidate validation so genuine candidate-shape errors still surface
+  // first (more actionable for the operator); placed before parseRegistry so a
+  // forbidden target never even reads the on-disk file.
+  try {
+    assertRegistryWriteTarget(registryPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(message);
   }
 
   // Load + validate the existing registry before mutating, so an existing

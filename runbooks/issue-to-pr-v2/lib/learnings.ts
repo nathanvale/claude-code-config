@@ -96,6 +96,114 @@ const ENUM_FIELDS: ReadonlyArray<{
   { field: "confidence", allowed: CONFIDENCES },
 ];
 
+/** Repo-relative canonical registry path the helper owns and may write. */
+const CANONICAL_REGISTRY_RELATIVE_PATH =
+  "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md";
+
+/** The bare filename of the canonical registry, used for tail comparisons. */
+const CANONICAL_REGISTRY_FILENAME = "workflow-learnings-registry.md";
+
+/**
+ * Refuse any write target outside the registry surface this helper owns
+ * (issue #90, AC5).
+ *
+ * Returns void on accept; throws an actionable `Error` (naming the rejected
+ * target AND the canonical registry filename) on refuse. The dispatcher
+ * (`learnings-registry.ts`) calls this AFTER candidate validation and BEFORE
+ * `writeFileSync` so a wrong target fails loudly without ever modifying disk;
+ * candidate/registry validation errors still surface first because they are
+ * more actionable for the operator.
+ *
+ * Path normalization mirrors `decompose.ts#normalizePath` (separators, leading
+ * `./`, trailing slashes), and adds a `..` traversal guard so a path like
+ * `references/../skills/SKILL.md` cannot smuggle a write to a forbidden surface.
+ *
+ * The accept rule is filename-and-category based, not a strict absolute-path
+ * match: a path is accepted when its tail filename is exactly
+ * `workflow-learnings-registry.md` AND its tail directory is `references/` AND
+ * the path does not fall under one of the documented forbidden categories
+ * (skills, lib source, per-issue ledger, references/ with a non-canonical
+ * filename). This keeps the guard friendly to tmp-dir tests that mirror the
+ * canonical tail while still refusing every category enumerated by AC5.
+ */
+export function assertRegistryWriteTarget(path: string): void {
+  if (typeof path !== "string" || path.length === 0) {
+    throw new Error(
+      `learnings-registry write-scope: refusing empty target; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    );
+  }
+
+  // Step 1: normalize separators and strip leading ./ / trailing /, mirroring
+  // decompose.ts's normalizePath so this guard reads identically to the
+  // Stage 5 read-only gate.
+  const normalized = path
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+
+  // Step 2: refuse traversal. A `..` segment anywhere in the path is a smuggle
+  // attempt; reject before touching the surface, even if the resolved location
+  // would otherwise look acceptable.
+  const segments = normalized.split("/");
+  if (segments.some((segment) => segment === "..")) {
+    throw new Error(
+      `learnings-registry write-scope: refusing target "${path}" because it contains a ".." traversal segment; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    );
+  }
+
+  const filename = segments[segments.length - 1] ?? "";
+  const parentDir = segments.length >= 2 ? segments[segments.length - 2] : "";
+
+  // Step 3: enumerate the AC5 forbidden categories. Each one carries a
+  // specific actionable message so the operator knows what kind of write was
+  // refused (and what the only allowed target is).
+  //
+  // 3a) Per-issue ledger: any `issue-*-ledger.md` filename is the per-issue
+  //     ledger surface, which lives under `docs/runbooks/issue-to-pr/` but we
+  //     match on the filename pattern so a path passed from any working
+  //     directory is caught.
+  if (/^issue-.*-ledger\.md$/.test(filename)) {
+    throw new Error(
+      `learnings-registry write-scope: refusing target "${path}" because it targets a per-issue ledger; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    );
+  }
+
+  // 3b) Source code: any `.ts` extension (lib source, dispatcher source,
+  //     test source). Source files are NEVER a registry write target.
+  if (/\.ts$/i.test(filename)) {
+    throw new Error(
+      `learnings-registry write-scope: refusing target "${path}" because it targets a TypeScript source file; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    );
+  }
+
+  // 3c) Skills surface: any path that includes a `skills/` segment.
+  if (segments.includes("skills")) {
+    throw new Error(
+      `learnings-registry write-scope: refusing target "${path}" because it targets the skills surface; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    );
+  }
+
+  // 3d) references/*.md with a non-canonical filename. The references/ folder
+  //     contains many runbook reference docs; the helper owns only the one
+  //     named `workflow-learnings-registry.md`. Any sibling reference is
+  //     refused with its filename surfaced so the operator can self-correct.
+  if (
+    parentDir === "references" &&
+    filename.endsWith(".md") &&
+    filename !== CANONICAL_REGISTRY_FILENAME
+  ) {
+    throw new Error(
+      `learnings-registry write-scope: refusing target "${path}" because "${filename}" is not the canonical registry; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    );
+  }
+
+  // Anything else is permitted: a path ending with the canonical filename,
+  // or a registry-like tmp path used in tests that does not match a
+  // forbidden category. The dispatcher's downstream serializer (which can
+  // only emit valid registry markdown) prevents writing a malformed file
+  // to an acceptable target.
+}
+
 /**
  * Read the registry Markdown at `path`, extract its SINGLE fenced yaml block,
  * parse it, and return the parsed `{ learnings }` object.
