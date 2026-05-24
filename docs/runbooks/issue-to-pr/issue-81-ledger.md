@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-24T22:27:00+10:00"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-24T22:47:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: "sha256:03e1dee39a58f9420656fd751e87d6495ef0b51db38753f93dc32dd75d928508"
-batch_contract_digest: null
+batch_contract_digest: "sha256:874d57c1f5f7b053f1bd2646228c67309bac4e048316367483c681f6e3dc2177"
 ac_digest: "sha256:390f5294990c12765d2b0e1d5e057074b9a874f20350ca97a86656f1e10a20cf"
 ---
 
@@ -77,7 +77,124 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "contract-fact-loader"
+    name: "Contract-fact loader (read expected values from the live CLI)"
+    goal: "The check validates mentioned cli.ts command names, contract slice names, packet roles, and finite data.* response paths against cli.ts --help --json and cli.ts contract <slice> --json, sourcing expected values from the live CLI subprocess surface at runtime."
+    files:
+      - "runbooks/issue-to-pr-v2/contract-drift.ts"
+      - "runbooks/issue-to-pr-v2/contract-drift.test.ts"
+    depends_on: []
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 2 holds: loadContractFacts derives command names, contract slice names, and packet roles from cli.ts --help --json and cli.ts contract <slice> --json subprocess calls, asserted by comparing against live CLI calls rather than hardcoded lists."
+      - "AC 3 holds: loadContractFacts derives finite nested data.* response paths from the existing state_response_shape and diagnose_response_shape help payload, stopping at the nearest known parent when a child set is not mechanically finite."
+      - "AC 5 holds: the loader holds no literal route IDs, slice names, packet roles, or field paths; a grep of the check source finds no duplicate source-of-truth lists."
+      - "AC 6 holds: the loader only invokes the read-only CLI and reads no mutable state; failed CLI subprocesses or error envelopes throw clear hard errors instead of returning empty facts."
+    ac_mapping:
+      - 2
+      - 3
+      - 5
+      - 6
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "doc-claim-extractor"
+    name: "Doc-claim extractor (bounded contract-token patterns)"
+    goal: "The check extracts quoted route IDs, cli.ts command/slice names, packet roles in explicit cli.ts packet <role> positions, and explicit data.* response-field paths from the scoped docs using bounded patterns over prose and fenced code blocks, skipping placeholders and expanding brace-set shorthand."
+    files:
+      - "runbooks/issue-to-pr-v2/contract-drift.ts"
+      - "runbooks/issue-to-pr-v2/contract-drift.test.ts"
+    depends_on: []
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 1 holds: route-ID claims are extracted from explicit route-ID positions in the scoped docs for comparison against cli.ts contract route_ids --json."
+      - "AC 2 holds: command and slice claims are extracted only from cli.ts command positions, and packet-role claims only from explicit cli.ts packet <role> command positions."
+      - "AC 3 holds: data.* field-path claims are extracted from prose and fenced code blocks, with {a, b, c} brace-sets, including multiline brace sets, expanded into individual paths and <placeholder> tokens skipped."
+      - "AC 5 holds: the extractor reads docs and emits claims only; it holds no expected contract values of its own."
+    ac_mapping:
+      - 1
+      - 2
+      - 3
+      - 5
+    rationale: "Split from comparison (U3) because extraction patterns and fact-comparison are separable concerns tested independently; the extractor is the surface most prone to false positives and warrants its own unit."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "claim-fact-comparator"
+    name: "Claim-vs-fact comparator and scoped-link existence check"
+    goal: "The check validates extracted claims against loaded contract facts and validates only the recovery/control-plane links needed for this scope, especially links involving the first-run gotchas guide, producing structured drift findings."
+    files:
+      - "runbooks/issue-to-pr-v2/contract-drift.ts"
+      - "runbooks/issue-to-pr-v2/contract-drift.test.ts"
+    depends_on:
+      - "contract-fact-loader"
+      - "doc-claim-extractor"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 1 holds: a route-ID claim absent from cli.ts contract route_ids --json produces exactly one route-ID drift finding."
+      - "AC 2 holds: a command-name, slice-name, or explicit packet-role claim absent from the live CLI facts produces a drift finding."
+      - "AC 3 holds: a data.* field-path claim absent from the documented response shapes produces a drift finding."
+      - "AC 4 holds: scoped recovery/control-plane links (especially first-run-gotchas.md) are checked for target existence and the deterministic gotchas-guide relationship; a missing target or broken relationship produces one finding and a present one produces none."
+    ac_mapping:
+      - 1
+      - 2
+      - 3
+      - 4
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "orchestrator-and-stale-doc-test"
+    name: "Orchestrator, runnable entry, and the fake-stale-doc failing test"
+    goal: "The check runs read-only over the four scoped docs and ships a test with at least one fake stale-doc claim proving the drift check fails for a real mismatch."
+    files:
+      - "runbooks/issue-to-pr-v2/contract-drift.ts"
+      - "runbooks/issue-to-pr-v2/contract-drift.test.ts"
+    depends_on:
+      - "contract-fact-loader"
+      - "doc-claim-extractor"
+      - "claim-fact-comparator"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 7 holds: a fixture doc with a deliberately stale contract claim (e.g. a route ID not in the live route_ids) makes the check return ok:false with a finding naming that token, proving the check fails for a real mismatch."
+      - "AC 6 holds: checkContractDrift and the runnable entry perform no filesystem writes and no git mutations; the four scoped docs are unchanged after a run."
+      - "AC 1 holds: run against the four explicit scoped doc paths, the check returns ok:true (docs currently in sync) by validating their quoted route IDs against cli.ts contract route_ids --json; a missing scoped doc is a hard error, not a clean result."
+    ac_mapping:
+      - 1
+      - 6
+      - 7
+    rationale: "Merges orchestration and the AC7 proof test into one unit because the fake-stale-doc test exercises the full checkContractDrift path; they live in the same file and share inseparable test scaffolding."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "out-of-scope-guard"
+    name: "Out-of-scope boundary (no broad audit, no new deps, no generated docs)"
+    goal: "AC 8: Broad docs consistency, all Issue-to-PR references, prose truth judgments, new CLI observability, generated docs, and new dependencies are out of scope."
+    files:
+      - "runbooks/issue-to-pr-v2/contract-drift.ts"
+    depends_on:
+      - "orchestrator-and-stale-doc-test"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 8 holds: the delivered check covers only the four scoped docs and the contract-token kinds named in AC1-AC4, adds no dependency to package.json, adds no new CLI command or emitted fact, generates no docs, and does not validate decompose.ts flags, route precedence, enum prose, template filenames, or role-ish workflow words outside explicit cli.ts packet <role> command positions."
+    ac_mapping:
+      - 8
+    rationale: "out-of-scope: investigation-required"
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
 ```
 
 ## Findings data
@@ -102,13 +219,40 @@ patch-NNN`. Duplicate findings are identified by
 non-superseded row with the same batch id and signature.
 
 ```yaml
-findings: []
+findings:
+  - id: F1
+    batch_id: stage-3
+    signature: ac3-deep-nested-path-derivation-may-exceed-finite-flatten
+    persona: contract-reviewer
+    severity: P2
+    status: open
+    summary: "first-run-gotchas.md quotes data.drift.digest_drift.{...}, a two-level nest whose leaf set is only derivable by resolving the help payload 'same shape as state_response_shape.digest_drift' cross-reference; the comparator must resolve it or fall back to nearest-known-parent per Key Decision 5, else real doc claims become false-positive drift."
+    resolution: null
+  - id: F2
+    batch_id: stage-3
+    signature: readme-command-list-section-does-not-exist
+    persona: contract-reviewer
+    severity: P3
+    status: open
+    summary: "doc-claim-extractor U2 prose references 'the README cli.ts command-list section' but the README has no enumerated command-name list; the primary cli.ts <command> mechanism still satisfies AC2, so this is stale approach prose, not a coverage gap."
+    resolution: null
+  - id: F3
+    batch_id: stage-3
+    signature: u1-approach-text-says-route_ids-but-cli-emits-data-values
+    persona: contract-reviewer
+    severity: P3
+    status: open
+    summary: "contract-fact-loader approach prose says collect 'route_ids (from contract route_ids --json)' but the live slice emits data.values not data.route_ids; the unit test scenario has the correct anchor, but the prose could mislead."
+    resolution: null
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+| F1 | stage-3 | ac3-deep-nested-path-derivation-may-exceed-finite-flatten | contract-reviewer | P2 | open | first-run-gotchas.md quotes data.drift.digest_drift.{...}, a two-level nest whose leaf set is only derivable by resolving the help payload 'same shape as state_response_shape.digest_drift' cross-reference; the comparator must resolve it or fall back to nearest-known-parent per Key Decision 5, else real doc claims become false-positive drift. |  |
+| F2 | stage-3 | readme-command-list-section-does-not-exist | contract-reviewer | P3 | open | doc-claim-extractor U2 prose references 'the README cli.ts command-list section' but the README has no enumerated command-name list; the primary cli.ts <command> mechanism still satisfies AC2, so this is stale approach prose, not a coverage gap. |  |
+| F3 | stage-3 | u1-approach-text-says-route_ids-but-cli-emits-data-values | contract-reviewer | P3 | open | contract-fact-loader approach prose says collect 'route_ids (from contract route_ids --json)' but the live slice emits data.values not data.route_ids; the unit test scenario has the correct anchor, but the prose could mislead. |  |
 
 ## Notes
 
