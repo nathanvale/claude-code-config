@@ -202,11 +202,33 @@ batches:
       - 3
       - 4
     rationale: null
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - c70acdb5b6f00c118011c7448108e4234b59802f
+      - 50a3b8f36a85cede7ce246da29846874611fe4a2
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: c70acdb5b6f00c118011c7448108e4234b59802f
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "validators on claim-fact-comparator"
+        blockers: []
+        probe_results: ["live clean-pass: 0 findings across 4 docs; gotchas relationship []"]
+        notes: "compareClaimsToFacts + scoped-link/gotchas-relationship check; 90 tests green."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 50a3b8f36a85cede7ce246da29846874611fe4a2
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "converge claim-fact-comparator"
+        blockers: []
+        probe_results: ["step-7b-only deletion now produces a finding (was 0); over-tightening ruled out; 4 live docs still 0 findings"]
+        notes: "Repaired F17 (P1, anchor gotchas check on orchestration step-7b construct) + F18 (P2 signal robustness) + F19/F20 (P3) in one combined commit; 95 tests green."
+    iterations: 2
+    final_verdict: converged
   - id: "orchestrator-and-stale-doc-test"
     name: "Orchestrator, runnable entry, and the fake-stale-doc failing test"
     goal: "The check runs read-only over the four scoped docs and ships a test with at least one fake stale-doc claim proving the drift check fails for a real mismatch."
@@ -408,33 +430,33 @@ findings:
     signature: ac4-relationship-check-passes-when-step-7b-load-removed
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "checkGotchasRelationship signal (a) is a whole-doc co-occurrence of the guide path AND a blocked- substring; three reviewers proved by mutation that deleting SKILL.md's step-7b deterministic-load block leaves the check returning 0 findings because blocked- and the guide path still appear in the route catalog and policy table. The check fails AC4's core promise: step 7b can be removed/broken without detection. The existing break-mode test wipes the whole doc so it never exercises this window."
-    resolution: null
+    resolution: "commit 50a3b8f36a85cede7ce246da29846874611fe4a2"
   - id: F18
     batch_id: claim-fact-comparator
     signature: gotchas-signal-robustness-substring-basename-section
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "Gotchas-relationship signals are lexically fragile: /blocked-/ matches substrings like unblocked-; signal (a) requires the full repo-relative guide path so a legitimate basename-only reference produces a false 'missing 7b' finding; signal (b) for ledger-and-helper.md does not verify the guide link lives in the blocked-route section, and its heading regex assumes spaced 'Blocked route ids' (a hyphenated heading would false-positive). Tighten to anchor on the actual load construct and accept basename/section-scoped forms."
-    resolution: null
+    resolution: "commit 50a3b8f36a85cede7ce246da29846874611fe4a2"
   - id: F19
     batch_id: claim-fact-comparator
     signature: live-clean-pass-no-non-empty-claim-floor
     persona: ce-testing-reviewer
     severity: P3
-    status: open
+    status: fixed
     summary: "The live clean-pass test asserts findings.length === 0 for the 4 real docs but pins no non-empty claim floor for command/field-path/scoped-link kinds, so a future extractor regression that silently returns empty claim arrays would keep the test green while disarming drift detection. Add a per-doc total-claims > 0 assertion."
-    resolution: null
+    resolution: "commit 50a3b8f36a85cede7ce246da29846874611fe4a2"
   - id: F20
     batch_id: claim-fact-comparator
     signature: comparator-dynamic-fs-import-and-line-zero-sentinel
     persona: ce-maintainability-reviewer
     severity: P3
-    status: open
+    status: fixed
     summary: "pathExists uses inline await import('node:fs/promises') for the dir-stat fallback while sibling modules use top-level node:fs imports; and relationship findings use line: 0 as a doc-level sentinel while line is JSDoc'd as 1-based, which batch-4 operator output may render as a misleading 'line 0'. Both are stylistic nits."
-    resolution: null
+    resolution: "commit 50a3b8f36a85cede7ce246da29846874611fe4a2"
 ```
 
 ## Findings
@@ -457,10 +479,10 @@ findings:
 | F14 | doc-claim-extractor | route-id-and-packet-role-guards-untested | ce-testing-reviewer | P2 | fixed | The route-ID bullet-position guard and the packet-role command gate (command equals packet) both have happy-path tests but no mutation-proof negative case; weakening either keeps all tests green. Add negative tests: a non-blocked kebab token in prose is NOT a route id, and a non-packet cli.ts command argument (cli.ts state X) is NOT a packet role. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
 | F15 | doc-claim-extractor | bulletre-jsdoc-misdescribes-extraction-scope | ce-maintainability-reviewer | P2 | fixed | contract-drift.ts bulletRe JSDoc claims it only matches tokens leading a route-catalog bullet followed by ':' or ' and ', but the regex matches any backtick kebab token anywhere in prose; the comment actively misleads the next maintainer about extraction scope (and is the root of F11). bulletPairRe is also dead code subsumed by bulletRe. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
 | F16 | doc-claim-extractor | scoped-link-title-and-image-mis-parse | ce-adversarial-reviewer | P3 | fixed | linkRe captures '[t](y.md "title")' target as 'y.md "title"' (title not stripped) and matches the [alt](img.png) portion of an image '![alt](img.png)'; both would resolve to nonexistent paths and produce false-positive link-misses. Not reachable in the current 4 scoped docs but latent for future edits. | commit cb005bc3a33e432234efb40dd865cf86956565c9 |
-| F17 | claim-fact-comparator | ac4-relationship-check-passes-when-step-7b-load-removed | ce-adversarial-reviewer | P1 | open | checkGotchasRelationship signal (a) is a whole-doc co-occurrence of the guide path AND a blocked- substring; three reviewers proved by mutation that deleting SKILL.md's step-7b deterministic-load block leaves the check returning 0 findings because blocked- and the guide path still appear in the route catalog and policy table. The check fails AC4's core promise: step 7b can be removed/broken without detection. The existing break-mode test wipes the whole doc so it never exercises this window. |  |
-| F18 | claim-fact-comparator | gotchas-signal-robustness-substring-basename-section | ce-adversarial-reviewer | P2 | open | Gotchas-relationship signals are lexically fragile: /blocked-/ matches substrings like unblocked-; signal (a) requires the full repo-relative guide path so a legitimate basename-only reference produces a false 'missing 7b' finding; signal (b) for ledger-and-helper.md does not verify the guide link lives in the blocked-route section, and its heading regex assumes spaced 'Blocked route ids' (a hyphenated heading would false-positive). Tighten to anchor on the actual load construct and accept basename/section-scoped forms. |  |
-| F19 | claim-fact-comparator | live-clean-pass-no-non-empty-claim-floor | ce-testing-reviewer | P3 | open | The live clean-pass test asserts findings.length === 0 for the 4 real docs but pins no non-empty claim floor for command/field-path/scoped-link kinds, so a future extractor regression that silently returns empty claim arrays would keep the test green while disarming drift detection. Add a per-doc total-claims > 0 assertion. |  |
-| F20 | claim-fact-comparator | comparator-dynamic-fs-import-and-line-zero-sentinel | ce-maintainability-reviewer | P3 | open | pathExists uses inline await import('node:fs/promises') for the dir-stat fallback while sibling modules use top-level node:fs imports; and relationship findings use line: 0 as a doc-level sentinel while line is JSDoc'd as 1-based, which batch-4 operator output may render as a misleading 'line 0'. Both are stylistic nits. |  |
+| F17 | claim-fact-comparator | ac4-relationship-check-passes-when-step-7b-load-removed | ce-adversarial-reviewer | P1 | fixed | checkGotchasRelationship signal (a) is a whole-doc co-occurrence of the guide path AND a blocked- substring; three reviewers proved by mutation that deleting SKILL.md's step-7b deterministic-load block leaves the check returning 0 findings because blocked- and the guide path still appear in the route catalog and policy table. The check fails AC4's core promise: step 7b can be removed/broken without detection. The existing break-mode test wipes the whole doc so it never exercises this window. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
+| F18 | claim-fact-comparator | gotchas-signal-robustness-substring-basename-section | ce-adversarial-reviewer | P2 | fixed | Gotchas-relationship signals are lexically fragile: /blocked-/ matches substrings like unblocked-; signal (a) requires the full repo-relative guide path so a legitimate basename-only reference produces a false 'missing 7b' finding; signal (b) for ledger-and-helper.md does not verify the guide link lives in the blocked-route section, and its heading regex assumes spaced 'Blocked route ids' (a hyphenated heading would false-positive). Tighten to anchor on the actual load construct and accept basename/section-scoped forms. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
+| F19 | claim-fact-comparator | live-clean-pass-no-non-empty-claim-floor | ce-testing-reviewer | P3 | fixed | The live clean-pass test asserts findings.length === 0 for the 4 real docs but pins no non-empty claim floor for command/field-path/scoped-link kinds, so a future extractor regression that silently returns empty claim arrays would keep the test green while disarming drift detection. Add a per-doc total-claims > 0 assertion. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
+| F20 | claim-fact-comparator | comparator-dynamic-fs-import-and-line-zero-sentinel | ce-maintainability-reviewer | P3 | fixed | pathExists uses inline await import('node:fs/promises') for the dir-stat fallback while sibling modules use top-level node:fs imports; and relationship findings use line: 0 as a doc-level sentinel while line is JSDoc'd as 1-based, which batch-4 operator output may render as a misleading 'line 0'. Both are stylistic nits. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
 
 ## Notes
 
