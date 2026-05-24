@@ -20,10 +20,26 @@ after a patch-batch has converged. See also:
 Stage 5 is read-only: this reference owns the final-review gate but never the
 remediation mutation. Final-review findings that need code or contract changes
 route back through Stage 4 patch-batch flow ([stage-4-batch-loop.md](stage-4-batch-loop.md))
-via Proposer + confirmed Stage 4 patch batches. Stage 5 may mutate only the
+via Proposer + confirmed Stage 4 patch batches only when they are open P0/P1
+blockers. Stage 5 may mutate only the
 ledger (writing `## Findings data`, updating the rendered table, setting
 `final_reviewed_at`, closing P2/P3 rows) and may not edit source files,
 acceptance criteria, batch contracts, or any non-ledger artifact.
+
+### P2/P3 follow-up policy
+
+Stage 5 patch-batch authority is reserved for open P0/P1 final-review
+blockers. P2/P3 final-review findings are non-blocking deferred follow-up
+work, not in-stage patch-batch work. If the operator wants to fix a genuine P2
+promptly, create and drive a follow-up issue/PR, then reference that follow-up
+from the ledger closure notes rather than widening Stage 5 patch-batch
+authority.
+
+Explicit lower-priority follow-up deferrals:
+
+- `fr5-001` binding.
+- `fr5-004` reachability.
+- `fr5-005` shared-reader extraction.
 
 ### Blocked-by-doc-defect carve-out
 
@@ -95,6 +111,9 @@ with conversation memory, route from the envelope.
      Stage 5 hands the finding row to the Proposer; Stage 5 does not author
      edits. After all patch-batches converge, re-invoke `/ce-code-review` from
      the top of Stage 5.
+   - P2/P3 final-review findings never enter the final-review inner loop.
+     Close them as deferred follow-up work in step 5 unless a separate
+     follow-up issue/PR has been created to own them.
 
 5. **Final P2/P3 closure.** When `/ce-code-review` returns zero open P0/P1,
    run `decompose.ts --assert-no-open-p0p1 <ledger-path>`. Then close

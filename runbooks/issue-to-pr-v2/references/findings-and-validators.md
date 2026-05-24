@@ -174,7 +174,14 @@ transient Validator focus, not orchestrator-authored findings.
 8. Severities (P0/P1/P2/P3) come from the persona's own rubric. The runbook
    does not re-rank.
 9. P2 and P3 findings are auto-closed at batch convergence as `deferred-P2` /
-   `deferred-P3`. They do NOT block the inner loop.
+   `deferred-P3`. They do NOT block the inner loop. At Stage 5 final review,
+   this also means P2/P3 findings are deferred follow-up work rather than
+   in-stage patch-batch work; the final-review patch-batch path is reserved
+   for open P0/P1 blockers. If the operator wants to fix a genuine P2 promptly,
+   create and drive a follow-up issue/PR rather than widening Stage 5
+   patch-batch authority. Explicit lower-priority final-review follow-up
+   deferrals include `fr5-001` binding, `fr5-004` reachability, and `fr5-005`
+   shared-reader extraction.
 
 ## Ledger findings tables (v1 ledger template L63-93)
 
@@ -245,7 +252,11 @@ blocks, not whether the run is blocked.
 P2 and P3 findings do NOT trigger fixes inside the inner loop. P2 findings
 are auto-closed at batch convergence with status `deferred-P2` and surfaced
 in the final PR body. P3 findings are auto-closed as `deferred-P3` and stay
-in the ledger only (not surfaced in the PR body unless count > 5).
+in the ledger only (not surfaced in the PR body unless count > 5). Stage 5
+uses the same policy: P2/P3 final-review findings are deferred follow-up work,
+not Proposer/patch-batch work. The named lower-priority final-review deferrals
+are `fr5-001` binding, `fr5-004` reachability, and `fr5-005` shared-reader
+extraction.
 
 ## Risk classification (v1 README L281-300)
 
