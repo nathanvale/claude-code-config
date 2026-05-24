@@ -30,7 +30,7 @@ The deliverable is the `issue-to-pr` v2 runbook and its `lib/` code under
 
 This is the recursion the issue is about: the workflow healing its own runbook
 produces findings the workflow cannot honestly close. The finding-closure
-contract (`runbooks/issue-to-pr-v2/lib/ledger.ts` `validateFinalFindingResolution`,
+contract (`runbooks/issue-to-pr-v2/lib/ledger.ts` `validateFindingResolution`,
 `validateLedgerOwnedFixedCommit`) was designed assuming every `fixed` finding
 is closed by a Builder commit inside a confirmed batch. A runbook self-heal
 commit is reachable but lives in no batch, so the only statuses the validator
@@ -82,7 +82,7 @@ Out of scope:
 | 1 | runbook-heal finding closeable as `fixed` with agreeing status+resolution | U1 |
 | 2 | Closure form rejects a commit whose diff touches deliverable files | U1 (abuse guard) |
 | 3 | Stage 5 ledger checkpoint touches only the ledger path; violations surfaced | U2 |
-| 4 | Blocked-by-doc-defect carve-out documented | U4 |
+| 4 | Blocked-by-doc-defect carve-out documented | U3 |
 | 5 | Tests pin accept / deliverable-reject / Stage-5-read-only-violation | U1 + U2 (test-first) |
 | 6 | Decide + execute disposition of historical fr-001..fr-004 rows | U5 (Stage 3 user gate) |
 
@@ -219,7 +219,7 @@ non-zero-exit-on-violation contract; `touchedFilesForCommit`.
 
 **Test scenarios:**
 - Happy path: a checkpoint commit touching only the ledger path passes.
-- Violation: a checkpoint commit touching the ledger PLUS a runbook reference file fails with the offending path named (this is exactly the 8be31d4 case from issue #68).
+- Violation: a synthetic checkpoint commit touching the ledger PLUS an extra non-ledger path fails with the offending path named. (This is the class of violation issue #68's 8be31d4 would have been caught by had the gate existed — though 8be31d4 itself was a separate control-plane-only commit, not a ledger+runbook mixed commit; use a synthetic fixture, do not conflate the test with the real heal commit.)
 - Edge: an empty/no-op diff passes (no violation).
 
 **Verification:** `bun_runTests` over the gate's test file passes;
@@ -347,7 +347,7 @@ rationale: "change_first ledger doc edit; AC6 is a decision criterion surfaced a
 
 ## System-Wide Impact
 
-- `lib/ledger.ts` `validateFinalFindingResolution` is consumed by
+- `lib/ledger.ts` `validateFindingResolution` is consumed by
   `decompose.ts --validate-findings`, which every stage's findings checkpoint
   runs. The new arm is additive (a new accepted grammar); existing closures must
   keep validating identically (non-regression test in U1).
