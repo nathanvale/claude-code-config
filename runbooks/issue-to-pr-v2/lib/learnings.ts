@@ -183,17 +183,166 @@ export function validateRegistry(registry: Registry): string[] {
       );
     }
 
-    for (const { field, allowed } of ENUM_FIELDS) {
-      const value = entry[field];
-      // A non-string/missing value is already reported by the required-field
-      // pass above; only flag the enum violation when a string is present.
-      if (typeof value === "string" && !allowed.includes(value)) {
-        errors.push(
-          `${label}: field "${field}" has invalid value "${value}"; allowed values are ${allowed.join(", ")}`,
-        );
-      }
-    }
+    // A non-string/missing enum value is already reported by the required-field
+    // pass above; the shared helper only flags violations when a string present.
+    checkEnumFields(entry, errors, label);
   });
+
+  return errors;
+}
+
+/**
+ * Push an enum-violation error for `field` onto `errors` when `value` is a
+ * present string outside `allowed`. A missing/non-string value is the caller's
+ * required-field concern, so this stays silent in that case. `label` prefixes
+ * the message ("" for a top-level candidate; `learning #N`/`learning "sig"` for
+ * a registry entry) so both validators read identically.
+ *
+ * Shared by `validateRegistry` and `validateCandidate` because the four closed
+ * enums (owner/disposition/status/confidence) are identical across the registry
+ * entry and the candidate shape.
+ */
+function checkEnumFields(
+  entry: Record<string, unknown>,
+  errors: string[],
+  label: string,
+): void {
+  const prefix = label ? `${label}: ` : "";
+  for (const { field, allowed } of ENUM_FIELDS) {
+    const value = entry[field];
+    if (typeof value === "string" && !allowed.includes(value)) {
+      errors.push(
+        `${prefix}field "${field}" has invalid value "${value}"; allowed values are ${allowed.join(", ")}`,
+      );
+    }
+  }
+}
+
+/**
+ * Read a candidate learning file at `path` and return its parsed (unvalidated)
+ * shape. A candidate is one incoming learning observation destined for upsert
+ * (the upsert-op batch); this batch only ingests and shape-checks it.
+ *
+ * The parser is selected by file extension:
+ *
+ * - `.json` → `JSON.parse`
+ * - `.yaml` / `.yml` → `Bun.YAML.parse`
+ * - any other extension → throw an actionable `Error` naming the file and the
+ *   unsupported extension.
+ *
+ * Read + parse failures are caught and re-thrown as an actionable `Error` that
+ * NAMES THE FILE and carries the underlying message, mirroring how
+ * `parseRegistry` wraps its read/parse errors so a raw `SyntaxError` never
+ * escapes. Throwing (rather than `fail()`/`process.exit`) keeps this importable
+ * and testable; a later dispatcher maps the throw to an exit code.
+ */
+export function loadCandidate(path: string): unknown {
+  const lowerPath = path.toLowerCase();
+  const isJson = lowerPath.endsWith(".json");
+  const isYaml = lowerPath.endsWith(".yaml") || lowerPath.endsWith(".yml");
+  if (!isJson && !isYaml) {
+    const dot = path.lastIndexOf(".");
+    const ext = dot >= 0 ? path.slice(dot) : "(none)";
+    throw new Error(
+      `candidate ${path} has unsupported extension "${ext}"; expected .json, .yaml, or .yml`,
+    );
+  }
+
+  let src: string;
+  try {
+    src = readFileSync(path, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`cannot read candidate ${path}: ${message}`);
+  }
+
+  try {
+    return isJson ? JSON.parse(src) : Bun.YAML.parse(src);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`candidate ${path} did not parse: ${message}`);
+  }
+}
+
+/**
+ * Validate the SHAPE of one ingested candidate and return a list of actionable
+ * error strings (empty = valid). A candidate mirrors a registry entry but
+ * carries the SINGLE run's evidence as one `evidence` record object (the
+ * upsert-op batch appends that record to the entry's append-only `evidence`
+ * list), and adds an optional per-candidate `canonical_update` directive.
+ *
+ * Rules:
+ *
+ * - The candidate must be a non-null, non-array object.
+ * - The required string fields `summary`, `owner`, `retirement_condition`,
+ *   `disposition`, `status`, and `confidence` must be present non-empty strings.
+ *   (`signature` is intentionally NOT required here.)
+ * - `evidence` must be present as a single record object (not an array).
+ * - Each closed-enum field must be a member of its allowed set.
+ * - `signature` is OPTIONAL (derivation is the upsert-op batch); if present it
+ *   must be a non-empty string.
+ * - `canonical_update` is OPTIONAL; if present it must be a boolean.
+ *
+ * Enum and required-field messages match `validateRegistry`'s style so callers
+ * present one consistent error vocabulary. Out of scope for this batch:
+ * signature derivation, per-evidence-field validation, and upsert/dedupe.
+ */
+export function validateCandidate(candidate: unknown): string[] {
+  const errors: string[] = [];
+
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    return ["candidate must be a mapping of fields"];
+  }
+  const entry = candidate as Record<string, unknown>;
+
+  // `signature` is required on a stored registry entry but OPTIONAL on a
+  // candidate (it may be derived later), so it is excluded from this list.
+  const requiredCandidateStrings = REQUIRED_STRING_FIELDS.filter(
+    (field) => field !== "signature",
+  );
+  for (const field of requiredCandidateStrings) {
+    const value = entry[field];
+    if (typeof value !== "string" || value.length === 0) {
+      errors.push(
+        `candidate: missing required field "${field}" (expected a non-empty string)`,
+      );
+    }
+  }
+
+  // The candidate carries one run's evidence as a single record object; upsert
+  // appends it to the entry's `evidence` list.
+  const evidence = entry.evidence;
+  if (
+    typeof evidence !== "object" ||
+    evidence === null ||
+    Array.isArray(evidence)
+  ) {
+    errors.push(
+      `candidate: missing required field "evidence" (expected a single evidence record object)`,
+    );
+  }
+
+  checkEnumFields(entry, errors, "candidate");
+
+  if (entry.signature !== undefined) {
+    if (typeof entry.signature !== "string" || entry.signature.length === 0) {
+      errors.push(
+        `candidate: optional field "signature" must be a non-empty string when present`,
+      );
+    }
+  }
+
+  if (entry.canonical_update !== undefined) {
+    if (typeof entry.canonical_update !== "boolean") {
+      errors.push(
+        `candidate: optional field "canonical_update" must be a boolean when present`,
+      );
+    }
+  }
 
   return errors;
 }

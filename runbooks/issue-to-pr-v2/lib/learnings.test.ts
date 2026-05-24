@@ -9,7 +9,9 @@ import {
   DISPOSITIONS,
   OWNERS,
   STATUSES,
+  loadCandidate,
   parseRegistry,
+  validateCandidate,
   validateRegistry,
 } from "./learnings";
 
@@ -283,5 +285,197 @@ describe("learnings-registry.ts --validate", () => {
     const result = await runValidate(["--validate"]);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/usage/i);
+  });
+});
+
+/**
+ * Candidate-file ingestion + candidate-shape validation (issue #90, AC4).
+ *
+ * A candidate is one incoming learning observation to be upserted later. Its
+ * shape mirrors a registry entry plus an OPTIONAL `canonical_update` marker,
+ * but it carries the SINGLE run's evidence as one `evidence` record object
+ * (the upsert-op batch appends that record to the entry's `evidence` list).
+ * `signature` is optional on a candidate (derivation lands in upsert-op).
+ */
+
+/** Write a candidate file with the given extension and contents to a temp dir. */
+function writeCandidate(filename: string, content: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "issue-90-candidate-test-"));
+  tempDirs.push(dir);
+  const path = join(dir, filename);
+  writeFileSync(path, content);
+  return path;
+}
+
+/** A fully-valid candidate object (used to build JSON and YAML fixtures). */
+function validCandidateObject(): Record<string, unknown> {
+  return {
+    summary: "a one-line learning statement",
+    owner: "runbook-reference",
+    retirement_condition: "retired when the reference documents the gate",
+    signature: "sha256:abc123",
+    disposition: "needs-evidence",
+    status: "open",
+    confidence: "medium",
+    follow_up: null,
+    canonical_update: false,
+    evidence: {
+      run: "issue-90",
+      affected_surface: "the reference",
+      what_was_wrong: "missing gate",
+      discovery_method: "observed during run",
+      root_cause: "doc gap",
+      scope: "single reference",
+      proposed_fix: "document the gate",
+      verification_idea: "re-read the reference",
+    },
+  };
+}
+
+/** Render a candidate object as a YAML document body. */
+function candidateYaml(candidate: Record<string, unknown>): string {
+  const ev = candidate.evidence as Record<string, unknown>;
+  return [
+    `summary: ${JSON.stringify(candidate.summary)}`,
+    `owner: ${candidate.owner}`,
+    `retirement_condition: ${JSON.stringify(candidate.retirement_condition)}`,
+    `signature: ${JSON.stringify(candidate.signature)}`,
+    `disposition: ${candidate.disposition}`,
+    `status: ${candidate.status}`,
+    `confidence: ${candidate.confidence}`,
+    `follow_up: ${candidate.follow_up === null ? "null" : JSON.stringify(candidate.follow_up)}`,
+    `canonical_update: ${candidate.canonical_update}`,
+    "evidence:",
+    `  run: ${ev.run}`,
+    `  affected_surface: ${JSON.stringify(ev.affected_surface)}`,
+    `  what_was_wrong: ${JSON.stringify(ev.what_was_wrong)}`,
+    `  discovery_method: ${JSON.stringify(ev.discovery_method)}`,
+    `  root_cause: ${JSON.stringify(ev.root_cause)}`,
+    `  scope: ${JSON.stringify(ev.scope)}`,
+    `  proposed_fix: ${JSON.stringify(ev.proposed_fix)}`,
+    `  verification_idea: ${JSON.stringify(ev.verification_idea)}`,
+    "",
+  ].join("\n");
+}
+
+describe("loadCandidate", () => {
+  test("loads a valid JSON candidate and validateCandidate returns no errors", () => {
+    const candidate = validCandidateObject();
+    const path = writeCandidate(
+      "candidate.json",
+      JSON.stringify(candidate, null, 2),
+    );
+    const loaded = loadCandidate(path);
+    expect(loaded).toEqual(candidate);
+    expect(validateCandidate(loaded)).toEqual([]);
+  });
+
+  test("loads an equivalent YAML candidate to the SAME structure as JSON (AC4 parity)", () => {
+    const candidate = validCandidateObject();
+    const jsonPath = writeCandidate(
+      "candidate.json",
+      JSON.stringify(candidate, null, 2),
+    );
+    const yamlPath = writeCandidate("candidate.yaml", candidateYaml(candidate));
+    const fromJson = loadCandidate(jsonPath);
+    const fromYaml = loadCandidate(yamlPath);
+    expect(fromYaml).toEqual(fromJson);
+    expect(validateCandidate(fromYaml)).toEqual([]);
+  });
+
+  test("accepts a .yml extension", () => {
+    const candidate = validCandidateObject();
+    const path = writeCandidate("candidate.yml", candidateYaml(candidate));
+    const loaded = loadCandidate(path);
+    expect(validateCandidate(loaded)).toEqual([]);
+  });
+
+  test("throws an actionable error naming the file when JSON is malformed", () => {
+    const path = writeCandidate("candidate.json", '{ "summary": "x", }');
+    expect(() => loadCandidate(path)).toThrow(/candidate\.json/);
+  });
+
+  test("throws an actionable error naming the file when YAML is malformed", () => {
+    // Bad indentation / broken mapping that YAML cannot parse.
+    const path = writeCandidate(
+      "candidate.yaml",
+      "summary: x\n  owner: : : bad\n\t- nope\n",
+    );
+    expect(() => loadCandidate(path)).toThrow(/candidate\.yaml/);
+  });
+
+  test("throws an actionable error naming the file when it cannot be read", () => {
+    const missing = join(
+      mkdtempSync(join(tmpdir(), "issue-90-candidate-missing-")),
+      "nope.json",
+    );
+    tempDirs.push(missing);
+    expect(() => loadCandidate(missing)).toThrow(/nope\.json/);
+  });
+
+  test("throws an actionable error for an unrecognized extension", () => {
+    const path = writeCandidate("candidate.txt", "summary: x\n");
+    expect(() => loadCandidate(path)).toThrow(/candidate\.txt/);
+    expect(() => loadCandidate(path)).toThrow(/\.txt/);
+  });
+});
+
+describe("validateCandidate", () => {
+  test("rejects a candidate with a bad enum value, naming the field and allowed set", () => {
+    const candidate = validCandidateObject();
+    candidate.disposition = "totally-bogus";
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /disposition/.test(e))).toBe(true);
+    const dispositionError = errors.find((e) => /disposition/.test(e));
+    expect(dispositionError).toMatch(/totally-bogus/);
+    for (const allowed of DISPOSITIONS) {
+      expect(dispositionError).toContain(allowed);
+    }
+  });
+
+  test("rejects a candidate missing a required field, naming the field", () => {
+    const candidate = validCandidateObject();
+    delete candidate.summary;
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /summary/.test(e))).toBe(true);
+  });
+
+  test("rejects a candidate missing the evidence record, naming the field", () => {
+    const candidate = validCandidateObject();
+    delete candidate.evidence;
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /evidence/.test(e))).toBe(true);
+  });
+
+  test("accepts a candidate without a signature (derivation is upsert-op)", () => {
+    const candidate = validCandidateObject();
+    delete candidate.signature;
+    expect(validateCandidate(candidate)).toEqual([]);
+  });
+
+  test("rejects an empty-string signature when present", () => {
+    const candidate = validCandidateObject();
+    candidate.signature = "";
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /signature/.test(e))).toBe(true);
+  });
+
+  test("accepts a candidate without canonical_update", () => {
+    const candidate = validCandidateObject();
+    delete candidate.canonical_update;
+    expect(validateCandidate(candidate)).toEqual([]);
+  });
+
+  test("rejects a non-boolean canonical_update", () => {
+    const candidate = validCandidateObject();
+    candidate.canonical_update = "yes";
+    const errors = validateCandidate(candidate);
+    expect(errors.some((e) => /canonical_update/.test(e))).toBe(true);
+  });
+
+  test("rejects a candidate that is not an object (null / array / string)", () => {
+    expect(validateCandidate(null).length).toBeGreaterThan(0);
+    expect(validateCandidate([]).length).toBeGreaterThan(0);
+    expect(validateCandidate("nope").length).toBeGreaterThan(0);
   });
 });
