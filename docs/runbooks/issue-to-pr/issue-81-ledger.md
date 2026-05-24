@@ -97,7 +97,7 @@ batches:
       - 5
       - 6
     rationale: null
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
