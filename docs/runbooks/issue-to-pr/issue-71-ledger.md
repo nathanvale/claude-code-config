@@ -236,9 +236,22 @@ batches:
       - 4
     rationale: "docs-only change_first; documents the behavior runbook-heal-resolution and stage5-readonly-gate implement."
     status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
+    iterations: 1
+    builder_commits:
+      - "a55b841af84e61a5dd46a70fd9339247c6341a65"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "a55b841af84e61a5dd46a70fd9339247c6341a65"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/findings-and-validators.md"
+          - "runbooks/issue-to-pr-v2/references/stage-5-final-review.md"
+          - "runbooks/issue-to-pr-v2/issue-N-ledger.template.md"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "Closure table: runbook-heal <sha> row added (batch_id final only, control-plane allowlist, merge+content-empty rejected) verified against the lib/ledger.ts arm. Stage 5: --assert-stage5-readonly wired into step 5 (closes s5-002) + blocked-by-doc-defect carve-out (AC4). Template enumeration updated. Both ledgers validate exit 0."
+        notes: "AC4 docs + wires s5-002 (Stage 5 gate invocation instruction) + documents runbook-heal closing hr-001's drift. Orchestrator re-verified: doc matches validator code, both ledgers validate, only 3 files changed."
     final_verdict: null
 ```
 
