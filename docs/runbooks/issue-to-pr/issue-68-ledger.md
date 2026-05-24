@@ -89,9 +89,19 @@ batches:
       - 3
     rationale: "docs-only change_first; AC2/AC3 are ship-stage outcomes mapped here so every AC index is covered without inventing non-implementation units."
     status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
+    iterations: 1
+    builder_commits:
+      - "915f666d0b26e7ad383c8030af2fa4f8459b6e38"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "915f666d0b26e7ad383c8030af2fa4f8459b6e38"
+        files_touched:
+          - "docs/scratch/hello-world.md"
+        route_hint: validator-wave
+        blockers: []
+        probe_results: []
+        notes: "Single-file docs change; content verified byte-for-byte (99 bytes, single trailing newline). Only docs/scratch/hello-world.md committed; tree clean."
     final_verdict: null
 ```
 
