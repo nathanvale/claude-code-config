@@ -186,6 +186,13 @@ dirty/staged path summaries>
 - 2026-05-24T15:22+10:00 — Stage 1: AC confirmed by Nathan (source: variant-heading, medium confidence). Tree cleaned by committing unrelated parity-audit changes (f0262d9); feature branch feat/issue-68-pending created from origin/main.
 - 2026-05-24T16:02+10:00 — Stage 4 hello-world-file: Builder implementation attempt committed 915f666 (docs/scratch/hello-world.md, byte-exact, 99 bytes). Envelope validated against git.
 - 2026-05-24T16:03+10:00 — Stage 4 hello-world-file: Validator wave dispatched 5 always-on personas (correctness, testing, maintainability, project-standards, adversarial); no conditional personas fired (single docs-only file). All returned empty findings. 0 open P0/P1.
+- 2026-05-24T16:18+10:00 — Stage 5 final review: /ce-code-review report-only over main...HEAD (2 parallel finders). Deliverable clean. 4 final findings (fr-001..fr-004), all in the ac_digest heal, not the deliverable. Fixed all 4 in runbook commit 8be31d4, re-verified clean against lib/ledger.ts and lib/route.ts.
+- 2026-05-24T16:22+10:00 — Stage 6 local checks (ship_mode: standard, active harness repo):
+  - biome lint (MCP biome_lintCheck, response_format json) over docs/scratch/hello-world.md → exit 0, 0 errors, 0 warnings.
+  - biome lint (MCP biome_lintCheck) over runbooks/issue-to-pr-v2 → exit 0, 0 errors, 2 warnings (noNonNullAssertion, noPrototypeBuiltins) in pre-existing .ts lib code NOT touched by this branch (0 .ts files in diff); repo lint gate is --diagnostic-level=error, so warnings do not fail.
+  - CI: no .github/workflows/ in repo → AC3 satisfied (nothing triggers CI).
+  - prompt-system render/check not triggered: no changed files under prompt-fragments/, rules/, or context/.
+  - tsc/bun tests: not applicable, diff is markdown/YAML only (no .ts or test changes).
 
 ### runbook_version skew continuation evidence (U6)
 
