@@ -242,8 +242,9 @@ required references before taking the one visible action.
   `ledger-and-helper.md` when writing ledger state.
 - One visible action: create or resume the ledger and get user-confirmed
   acceptance criteria.
-- Exit condition: ledger exists, ACs are confirmed and committed, tree
-  is clean, next state routes to `plan`.
+- Exit condition: ledger exists, ACs are confirmed and committed, the
+  issue feature branch is in place, tree is clean, next state routes to
+  `plan`.
 - Stop conditions: closed or blocked issue without override, user
   abort, unsafe branch, or unresolved AC ambiguity.
 
@@ -323,7 +324,8 @@ a patch-batch candidate.
   non-blocking findings, or route one open P0/P1 through the
   Proposer/patch-batch handoff back to Stage 4.
 - Exit condition: final findings are terminal, `final_reviewed_at` is
-  set and committed, next state routes to `ship`.
+  set and committed, the working tree is clean, next state routes to
+  `ship`.
 - Stop conditions: reviewer coverage cannot cover correctness and
   testing, final review needs replan, or patch-batch confirmation is
   required.
@@ -356,6 +358,8 @@ and name the resume condition.
 | Partial v2 install | Missing installed roots | Install or symlink repaired and state envelope reports all present |
 | Stage 1 issue or branch unsafe | Closed/blocked issue, open blocker, abort, or default-branch evidence | Override flag supplied, blocker cleared, user resumes instead of aborting, or work moves to a feature branch; see `stage-1-pick-issue.md` |
 | Stale or blocked ACs | Digest drift or AC block reason | User re-confirms ACs in Stage 1 |
+| Stage 2 plan missing or empty | No plan output after the retry, or zero implementation units | Planning produces a plan with at least one unit, or the user reframes the request; see `stage-2-plan.md` |
+| Stage 3 plan parse or DAG invalid | Verbatim parse error, or the offending dependency cycle | User revises the plan so parsing and DAG validation pass, then Stage 3 re-runs; see `stage-3-decompose.md` |
 | Stage 3 open P0/P1 | Contract-review finding summary | Plan or batch contract revision closes the finding |
 | Stage 3 contract-review cycle cap | Cap reached without convergence and last finding summary | User replans, narrows the contract, or accepts surfaced advisories; see `stage-3-decompose.md` |
 | Stale batch contract or digests | Recomputed drift evidence | Stage 3 recompute and user confirmation |
