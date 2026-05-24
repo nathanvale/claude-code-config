@@ -2189,6 +2189,16 @@ function validateReachableCommit(ref: string, context: string): string {
   return resolved.stdout.trim();
 }
 
+function parentCountForCommit(ref: string, context: string): number {
+  const parents = spawnSync("git", ["rev-list", "--parents", "-n", "1", ref], {
+    encoding: "utf8",
+  });
+  if (parents.status !== 0) fail(`${context} "${ref}" parents could not be read from git`);
+  const parts = parents.stdout.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) fail(`${context} "${ref}" parents could not be read from git`);
+  return parts.length - 1;
+}
+
 function parseLedgerBatchRows(block: string): Record<string, unknown>[] {
   const meaningfulLines = block
     .split("\n")
@@ -2638,6 +2648,10 @@ function rawDiffForCommit(ref: string, context: string): string {
  * path `docs/runbooks/issue-to-pr/` (which is NOT control plane) — fails,
  * naming the first offending path.
  *
+ * Merge commits are rejected before diff inspection. A merge commit can emit an
+ * empty default diff against its first parent, so accepting or rejecting it via
+ * touched-file side effects would make the proof ambiguous.
+ *
  * A commit whose ONLY change is a mode-bit flip (chmod) proves no content
  * change and is rejected as the same vacuous-proof class the empty-commit guard
  * targets, narrowed to the per-file level. Renames, deletes, adds, copies, and
@@ -2645,6 +2659,9 @@ function rawDiffForCommit(ref: string, context: string): string {
  */
 function validateControlPlaneOnlyCommit(ref: string, resolvedRef: string, context: string): void {
   const allowedPrefixes = ["runbooks/issue-to-pr-v2/", "skills/issue-to-pr/"];
+  if (parentCountForCommit(resolvedRef, `${context} runbook-heal commit`) > 1) {
+    fail(`${context} runbook-heal commit "${ref}" is a merge commit; a runbook-heal must cite a single-parent control-plane commit`);
+  }
   const touched = touchedFilesForCommit(resolvedRef, `${context} runbook-heal commit`);
   if (touched.length === 0) {
     fail(`${context} runbook-heal commit "${ref}" changed no files; a runbook-heal must touch a control-plane path`);
