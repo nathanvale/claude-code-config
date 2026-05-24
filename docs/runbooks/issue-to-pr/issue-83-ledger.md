@@ -5,7 +5,7 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/83"
 target_repo: "nathanvale/claude-code-config"
 plan_path: null
 started_at: "2026-05-25T07:03:00+10:00"
-status: "in-progress"
+status: "shipped"
 runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
@@ -13,7 +13,7 @@ ac_confirmed_at: "2026-05-25T07:03:00+10:00"
 batch_contract_confirmation_status: "pending"
 batch_contract_confirmed_at: null
 blocked_reason: null
-pr_url: null
+pr_url: "https://github.com/nathanvale/claude-code-config/pull/86"
 ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: null
