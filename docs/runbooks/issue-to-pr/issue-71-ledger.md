@@ -162,9 +162,21 @@ batches:
       - 5
     rationale: null
     status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
+    iterations: 1
+    builder_commits:
+      - "85cefeb14d9a7cb5fbccf242ad44af1632e93e4e"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "85cefeb14d9a7cb5fbccf242ad44af1632e93e4e"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/decompose.ts"
+          - "runbooks/issue-to-pr-v2/lib/stage5-readonly.test.ts"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "Flag --assert-stage5-readonly <ledger-path> <commit-ref>. touchedFilesForCommit private, so local touchedFilesForRef git diff-tree read in decompose.ts (documented dup). Fixtures: 8be31d4 non-ledger VIOLATION; 1315477 ledger-only PASS. Empty commit = vacuous PASS."
+        notes: "TDD red-first (3/4 fail before flag). Gate exercised live by orchestrator: 1315477 PASS exit 0, 8be31d4 FAIL exit 1 naming the offending path. 4/4 gate tests, 76/76 ledger, 78/78 decompose, tsc clean."
     final_verdict: null
   - id: "historical-rows-disposition"
     name: "Historical fr-001..fr-004 disposition"
