@@ -12,6 +12,10 @@ _Avoid_: helper invocation contract, command contract, runner path, package-runn
 A workflow-guide pattern that pairs a confusing operator state with the observable CLI facts that identify it and the recovery meaning of those facts. Use this for Issue-to-PR gotchas where the operator needs evidence from the CLI, not memory or inference.
 _Avoid_: evidence proof, proof recipe, CLI proof
 
+**Runtime contract drift check**:
+A focused Issue-to-PR validation that keeps prose claims about CLI-owned facts aligned with the runtime contract the helper emits. It covers mechanically checkable facts and the control-plane links needed for operator recovery, not broad documentation quality.
+_Avoid_: public docs drift check, general docs audit, markdown link crawler, gotchas-only safeguard
+
 **Capability**:
 A registry-managed skill or agent, together with the files owned by that skill or agent. In v1, runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins are not capabilities.
 _Avoid_: imported thing, tool, plugin, runbook capability
@@ -84,6 +88,9 @@ _Avoid_: secret source, canonical env file, synced secrets file
 
 Dev: "Does changing the helper command contract mean the helper validates different ledger fields?"
 Domain expert: "No. The helper command contract is only about how the helper is started. Ledger validation behaviour belongs to the helper semantics."
+
+Dev: "Should a runtime contract drift check scan every Issue-to-PR markdown link?"
+Domain expert: "No. A runtime contract drift check compares prose claims with CLI-owned facts and only checks recovery links that affect the control plane."
 
 Dev: "Should `one-password` include the exact npm token item name?"
 Domain expert: "No. `one-password` defines the safe `op` workflow. The npm-owning skill supplies the exact item and field names."
