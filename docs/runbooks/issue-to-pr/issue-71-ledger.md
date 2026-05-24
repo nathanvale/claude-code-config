@@ -254,6 +254,54 @@ findings:
     status: fixed
     summary: "Cycle-2: two stale validateFinalFindingResolution references survived at plan Problem Frame and System-Wide Impact; corrected to validateFindingResolution. Completes cr-002."
     resolution: "plan-revision 55f4357"
+  - id: vw-001
+    batch_id: runbook-heal-resolution
+    signature: runbook-heal-arm-not-scoped-to-final
+    persona: ce-correctness-reviewer
+    severity: P1
+    status: open
+    summary: "The runbook-heal arm fires for any non-stage-3 fixed finding, not just batch_id final as the confirmed contract requires; a batch-loop finding can be closed by runbook-heal with no terminal-batch ownership check (the commit arm enforces that), weakening per-batch closure provenance."
+    resolution: null
+  - id: vw-002
+    batch_id: runbook-heal-resolution
+    signature: runbook-heal-empty-commit-vacuous-pass
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "validateControlPlaneOnlyCommit accepts a zero-file (empty) commit vacuously: the allowlist loop never executes so no path is checked, letting runbook-heal <empty-sha> close a finding while proving nothing changed. The guard needs touched.length > 0 plus at least one allowlist match."
+    resolution: null
+  - id: vw-003
+    batch_id: runbook-heal-resolution
+    signature: test-fixtures-pinned-to-live-branch-shas
+    persona: ce-maintainability-reviewer
+    severity: P2
+    status: open
+    summary: "New tests pin four real branch shas plus a transcribed control-plane file list; a rebase/squash/amend would rot the reachable and non-regression assertions. Branch-history coupling is partly inherent to a git-reachability validator but the manual file-list transcription is fragile."
+    resolution: null
+  - id: vw-004
+    batch_id: runbook-heal-resolution
+    signature: runbook-heal-skill-artifact-allowlisted-backdoor
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "skills/issue-to-pr/ is allowlisted, but skills/issue-to-pr/SKILL.md is a shippable artifact; for an issue whose deliverable IS the skill, a runbook-heal citing a SKILL.md-only commit passes despite mutating a deliverable. Allowlist conflates control-plane tooling with shipped skill content."
+    resolution: null
+  - id: vw-005
+    batch_id: runbook-heal-resolution
+    signature: stale-fixed-resolution-catch-all-message
+    persona: ce-kieran-typescript-reviewer
+    severity: P3
+    status: open
+    summary: "The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form."
+    resolution: null
+  - id: vw-006
+    batch_id: runbook-heal-resolution
+    signature: inline-control-plane-allowlist-vs-named-constant
+    persona: ce-kieran-typescript-reviewer
+    severity: P3
+    status: open
+    summary: "The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it)."
+    resolution: null
 ```
 
 ## Findings
@@ -268,6 +316,12 @@ findings:
 | cr-006 | stage-3 | traceability-table-cites-nonexistent-u4 | contract-reviewer | P3 | fixed | Cycle-2: Requirements Traceability table mapped AC4 to U4 (no such unit; AC4 is covered by U3 runbook-heal-docs). Cosmetic label typo; binding batch YAML correct. | plan-revision 55f4357 |
 | cr-007 | stage-3 | u2-test-scenario-mislabels-8be31d4 | contract-reviewer | P3 | fixed | Cycle-2: U2 violation test scenario labeled 8be31d4 as a ledger+runbook mixed commit, but 8be31d4 touched only control-plane paths. Reworded to use a synthetic fixture; behavior unaffected. | plan-revision 55f4357 |
 | cr-008 | stage-3 | stale-old-function-name-in-plan-prose | contract-reviewer | P3 | fixed | Cycle-2: two stale validateFinalFindingResolution references survived at plan Problem Frame and System-Wide Impact; corrected to validateFindingResolution. Completes cr-002. | plan-revision 55f4357 |
+| vw-001 | runbook-heal-resolution | runbook-heal-arm-not-scoped-to-final | ce-correctness-reviewer | P1 | open | The runbook-heal arm fires for any non-stage-3 fixed finding, not just batch_id final as the confirmed contract requires; a batch-loop finding can be closed by runbook-heal with no terminal-batch ownership check (the commit arm enforces that), weakening per-batch closure provenance. |  |
+| vw-002 | runbook-heal-resolution | runbook-heal-empty-commit-vacuous-pass | ce-adversarial-reviewer | P1 | open | validateControlPlaneOnlyCommit accepts a zero-file (empty) commit vacuously: the allowlist loop never executes so no path is checked, letting runbook-heal <empty-sha> close a finding while proving nothing changed. The guard needs touched.length > 0 plus at least one allowlist match. |  |
+| vw-003 | runbook-heal-resolution | test-fixtures-pinned-to-live-branch-shas | ce-maintainability-reviewer | P2 | open | New tests pin four real branch shas plus a transcribed control-plane file list; a rebase/squash/amend would rot the reachable and non-regression assertions. Branch-history coupling is partly inherent to a git-reachability validator but the manual file-list transcription is fragile. |  |
+| vw-004 | runbook-heal-resolution | runbook-heal-skill-artifact-allowlisted-backdoor | ce-adversarial-reviewer | P2 | open | skills/issue-to-pr/ is allowlisted, but skills/issue-to-pr/SKILL.md is a shippable artifact; for an issue whose deliverable IS the skill, a runbook-heal citing a SKILL.md-only commit passes despite mutating a deliverable. Allowlist conflates control-plane tooling with shipped skill content. |  |
+| vw-005 | runbook-heal-resolution | stale-fixed-resolution-catch-all-message | ce-kieran-typescript-reviewer | P3 | open | The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form. |  |
+| vw-006 | runbook-heal-resolution | inline-control-plane-allowlist-vs-named-constant | ce-kieran-typescript-reviewer | P3 | open | The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it). |  |
 
 ## Notes
 
