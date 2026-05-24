@@ -95,7 +95,11 @@ transition after Stage 3, recompute the current `plan_digest`,
 stored frontmatter values. If any digest command exits non-zero, any stored
 digest is null while `## Batches` is populated, or any current digest
 differs from its stored value, fail-stop and return to Stage 3 confirmation
-before Builder or ship work continues.
+before Builder or ship work continues. For the recovery sequence once that
+fail-stop fires, this recheck is the *what*; the symptom-first CLI evidence
+recipe that proves which digest drifted and walks the recompute-and-re-confirm
+steps is [first-run-gotchas.md](first-run-gotchas.md) recipe 2.3
+(`blocked-digests-stale`).
 
 **Immutable batch contract fields covered by `batch_contract_digest`.** The
 digest is recomputed over the confirmed batch contract: `id`, `name`, `goal`,
