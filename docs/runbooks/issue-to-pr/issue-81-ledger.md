@@ -3,7 +3,7 @@ issue_number: 81
 issue_title: "issue-to-pr: add runtime contract drift check for operator-facing docs"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/81"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-24-008-feat-runtime-contract-drift-check-plan.md"
 started_at: "2026-05-24T22:27:00+10:00"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:03e1dee39a58f9420656fd751e87d6495ef0b51db38753f93dc32dd75d928508"
 batch_contract_digest: null
 ac_digest: "sha256:390f5294990c12765d2b0e1d5e057074b9a874f20350ca97a86656f1e10a20cf"
 ---
