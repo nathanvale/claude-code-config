@@ -1929,4 +1929,94 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
       expect(statSync(abs).mtimeMs).toBe(snap.mtimeMs);
     }
   });
+
+  // F21 (runtime claim floor): a doc the SCOPE marks `expectsClaims: true` that
+  // yields ZERO contract claims is drift, not a silent clean pass. This guards
+  // against a future extractor regression (or a doc rewrite stripping
+  // structural markers) silently disarming a token-carrying doc's validation.
+  // The F19 floor lived only in the TEST suite; this proves the RUNTIME check
+  // now carries it.
+  test("F21: a claim-free token-doc (expectsClaims:true) makes the check fail, not silently pass", async () => {
+    const dir = await stageFixtureRepo();
+    // Replace the (token-carrying) SKILL.md with claim-free prose: no route
+    // ids, no `cli.ts` commands, no `data.*` paths, no scoped links. Extraction
+    // yields zero contract claims, which previously still reported ok:true.
+    const skill = join(dir, "skills/issue-to-pr/SKILL.md");
+    await Bun.write(
+      skill,
+      "# Issue to PR\n\nThis is claim-free prose with no contract tokens at all.\nNothing here references the live CLI surface.\n",
+    );
+    // The default SCOPED_DOCS scope marks SKILL.md as expectsClaims:true, so the
+    // default scope must be used (pass no scopedDocs override).
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      const floorFinding = result.findings.find(
+        (f) =>
+          f.kind === "claim-floor" && f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(floorFinding).toBeDefined();
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F21 (positive control): the real token-carrying docs DO extract claims, so
+  // the claim floor must NOT fire for them — the live clean pass is preserved.
+  test("F21: the real 4 docs still pass clean — no claim-floor finding fires", async () => {
+    const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    expect(result.ok).toBe(true);
+    expect(
+      result.findings.some((f) => f.kind === "claim-floor"),
+    ).toBe(false);
+  });
+
+  // F22 (empty-scope guard): an explicitly-passed EMPTY scopedDocs array is a
+  // caller mis-wiring, not a clean result. Previously it returned ok:true having
+  // checked zero docs (the per-doc loop never ran). It must now THROW.
+  test("F22: an empty scopedDocs array throws (a caller error, not a clean pass)", async () => {
+    await expect(
+      checkContractDrift({ repoRoot: realRepoRoot, scopedDocs: [] }),
+    ).rejects.toThrow(/scopedDocs|empty|scope/i);
+  });
+
+  // F22 (default preserved): passing no opts must still use the real four
+  // SCOPED_DOCS and pass clean — the empty-scope guard must not break defaults.
+  test("F22: the default (no scopedDocs) still uses the real 4 docs and passes", async () => {
+    const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    expect(result.ok).toBe(true);
+  });
+});
+
+/**
+ * Issue #81 — batch-4 repair F24: the runnable entry's exit-code contract.
+ *
+ * The `import.meta.main` entry is the CI gate: it must exit 0 when the real
+ * scoped docs are in sync and print an "OK" report. Spawning the file as a
+ * script pins that contract so a regression flipping the exit code (or the
+ * report) is caught. The entry takes no args/opts, so it always runs against
+ * the live repo; a drift-case exit-1 path is exercised by the orchestrator
+ * unit tests above via fixture repoRoots, which the no-arg entry cannot drive.
+ */
+describe("F24: runnable entry exit code + report", () => {
+  const scriptPath = join(import.meta.dir, "contract-drift.ts");
+
+  test("exits 0 with an OK report on the clean real repo", async () => {
+    const proc = Bun.spawn([execPath, scriptPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(
+        `expected exit 0, got ${exitCode}.\nstdout=${stdout}\nstderr=${stderr}`,
+      );
+    }
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("OK");
+  });
 });

@@ -891,7 +891,12 @@ export type DriftKind =
   | "slice"
   | "packet-role"
   | "field-path"
-  | "scoped-link";
+  | "scoped-link"
+  // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
+  // contract claims (F21): a likely extractor regression or a doc rewrite that
+  // stripped structural markers, which would otherwise silently disarm that
+  // doc's validation. Not tied to a single token, so no claim VALUE is hardcoded.
+  | "claim-floor";
 
 /**
  * A single structured drift finding. `doc` is the source doc the claim came
@@ -1167,16 +1172,27 @@ function blockedRouteSection(ledgerText: string): string | null {
 }
 
 /**
- * Read a protected scoped doc the relationship check NEEDS. A missing doc is a
- * HARD ERROR (throw), per Key Decision 8: the check was asked to read it, so
- * its absence is an environment failure, not doc drift. (A missing LINK TARGET
- * inside a doc that DOES exist is a finding, handled separately.)
+ * Read a scoped doc the check is asked to READ, throwing a clear,
+ * doc-naming error when it is absent. A missing scoped doc is a HARD ERROR
+ * (throw), per Key Decision 8 / AC1: the check was told this doc is in scope,
+ * so its absence is an environment/scope failure, NOT doc drift and NOT a clean
+ * result. (A missing LINK TARGET inside a doc that DOES exist is a finding,
+ * handled separately.)
+ *
+ * `context` lets the two call sites carry slightly different prose (the gotchas
+ * relationship check vs. the orchestrator's per-doc loop) while sharing one
+ * existence-check + read implementation, so the missing-doc-throws behavior can
+ * never drift between them.
  */
-async function readProtectedDoc(absPath: string, relLabel: string): Promise<string> {
+async function readScopedDocOrThrow(
+  absPath: string,
+  relLabel: string,
+  context: string,
+): Promise<string> {
   const file = Bun.file(absPath);
   if (!(await file.exists())) {
     throw new Error(
-      `contract-drift gotchas check: required scoped doc "${relLabel}" is missing at ${absPath}.`,
+      `${context}: required scoped doc "${relLabel}" is missing at ${absPath} — a missing scoped doc is a hard error, not a clean result.`,
     );
   }
   return file.text();
@@ -1219,13 +1235,15 @@ export async function checkGotchasRelationship(
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
   const findings: DriftFinding[] = [];
 
-  const skillText = await readProtectedDoc(
+  const skillText = await readScopedDocOrThrow(
     join(repoRoot, SKILL_DOC_REL),
     SKILL_DOC_REL,
+    "contract-drift gotchas check",
   );
-  const ledgerText = await readProtectedDoc(
+  const ledgerText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_DOC_REL),
     LEDGER_DOC_REL,
+    "contract-drift gotchas check",
   );
 
   // (a) Deterministic control-plane load in SKILL.md for blocked- routes,
@@ -1296,20 +1314,48 @@ export async function checkGotchasRelationship(
 // ---------------------------------------------------------------------------
 
 /**
+ * One scoped doc in the check's SCOPE. `path` is the repo-relative doc to
+ * validate; `expectsClaims` says whether the doc is KNOWN to carry contract
+ * tokens, so an extractor that yields zero contract claims for it is a drift
+ * finding (F21) rather than a silent clean pass.
+ *
+ * `expectsClaims` is SCOPE config (which docs carry tokens), NOT a contract
+ * VALUE (AC5): it never names a route id, slice, role, or field path, and it
+ * never asserts HOW MANY claims a doc has — only that SOME exist.
+ */
+export type ScopedDoc = {
+  path: string;
+  expectsClaims: boolean;
+};
+
+/**
  * The four operator-facing docs the drift check is scoped to. These are
  * structural file COORDINATES (the check's SCOPE), not contract VALUES (AC5):
  * they say WHICH docs to validate, never WHAT the contract is. The contract
  * facts themselves still come exclusively from `loadContractFacts()`.
  *
+ * `expectsClaims` marks the two docs the workflow relies on to carry contract
+ * tokens (SKILL.md and first-run-gotchas.md): if their extraction yields ZERO
+ * contract claims, that is a drift finding (F21), not a silent pass. README.md
+ * legitimately carries no route ids / field paths (only scoped links and a
+ * couple of `cli.ts` command mentions), and ledger-and-helper.md is covered by
+ * the gotchas relationship check, so neither is marked `expectsClaims`.
+ *
  * Repo-relative so the orchestrator can resolve them against any `repoRoot`
  * (tests point at a fixture repo; production resolves against the real root)
  * AND so `extractDocClaims` attributes claims back to the canonical path.
  */
-export const SCOPED_DOCS: readonly string[] = [
-  "skills/issue-to-pr/SKILL.md",
-  "runbooks/issue-to-pr-v2/README.md",
-  "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-  "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+export const SCOPED_DOCS: readonly ScopedDoc[] = [
+  { path: "skills/issue-to-pr/SKILL.md", expectsClaims: true },
+  { path: "runbooks/issue-to-pr-v2/README.md", expectsClaims: false },
+  {
+    path: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    expectsClaims: false,
+  },
+  {
+    path: "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    expectsClaims: true,
+  },
 ];
 
 /**
@@ -1322,8 +1368,14 @@ export const SCOPED_DOCS: readonly string[] = [
 export type CheckContractDriftOptions = {
   /** Repo root that scoped-doc paths and link targets resolve against. */
   repoRoot?: string;
-  /** Repo-relative scoped doc paths. Defaults to the four `SCOPED_DOCS`. */
-  scopedDocs?: readonly string[];
+  /**
+   * Scoped docs to validate. Defaults to the four `SCOPED_DOCS`. Accepts either
+   * bare repo-relative path strings (legacy callers / tests; treated as
+   * `expectsClaims: false`) or full `ScopedDoc` entries. An explicitly-passed
+   * EMPTY array is a caller error (F22): it would check zero docs and silently
+   * pass, so the orchestrator throws.
+   */
+  scopedDocs?: readonly (string | ScopedDoc)[];
   /** CLI path forwarded to `loadContractFacts`. Defaults to sibling cli.ts. */
   cliPath?: string;
 };
@@ -1334,23 +1386,28 @@ export type ContractDriftResult = {
   findings: DriftFinding[];
 };
 
+/** Normalize a scoped-doc entry (string or object) to a `ScopedDoc`. */
+function toScopedDoc(entry: string | ScopedDoc): ScopedDoc {
+  return typeof entry === "string"
+    ? { path: entry, expectsClaims: false }
+    : entry;
+}
+
 /**
- * Read a scoped doc the check is asked to validate. A MISSING scoped doc is a
- * HARD ERROR (throw, naming the doc), not a clean result (AC1, Key Decision
- * 8): the check was told this doc is in scope, so its absence is an
- * environment/scope failure that must not be silently reported as "in sync".
+ * Count the CONTRACT-token claims a doc made (route ids, commands, slices,
+ * packet roles, field paths). Scoped LINKS are deliberately excluded: the F21
+ * floor protects the contract-token extractors, and README legitimately emits
+ * only scoped links, so counting links would defeat the per-doc `expectsClaims`
+ * distinction.
  */
-async function readScopedDocOrThrow(
-  absPath: string,
-  relLabel: string,
-): Promise<string> {
-  const file = Bun.file(absPath);
-  if (!(await file.exists())) {
-    throw new Error(
-      `contract-drift orchestrator: required scoped doc "${relLabel}" is missing at ${absPath} — a missing scoped doc is a hard error, not a clean result.`,
-    );
-  }
-  return file.text();
+function contractClaimCount(claims: DocClaims): number {
+  return (
+    claims.routeIds.length +
+    claims.commands.length +
+    claims.slices.length +
+    claims.packetRoles.length +
+    claims.fieldPaths.length
+  );
 }
 
 /**
@@ -1379,7 +1436,17 @@ export async function checkContractDrift(
   opts: CheckContractDriftOptions = {},
 ): Promise<ContractDriftResult> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
-  const scopedDocs = opts.scopedDocs ?? SCOPED_DOCS;
+  // The DEFAULT (no scopedDocs) uses the real four SCOPED_DOCS. An EXPLICITLY
+  // passed empty array is a caller mis-wiring (F22): it would run the per-doc
+  // loop zero times and report ok:true having validated nothing, silently
+  // disarming the whole check. An empty scope is a hard error, not a clean
+  // result — same boundary as a missing scoped doc (Key Decision 8 / AC1).
+  if (opts.scopedDocs !== undefined && opts.scopedDocs.length === 0) {
+    throw new Error(
+      "contract-drift orchestrator: scopedDocs resolved to an empty array — an empty scope checks zero docs and would silently pass, so it is a caller error, not a clean result.",
+    );
+  }
+  const scopedDocs = (opts.scopedDocs ?? SCOPED_DOCS).map(toScopedDoc);
 
   // Load facts once — a CLI failure throws here and aborts the whole check.
   const facts = await loadContractFacts({ cliPath: opts.cliPath });
@@ -1388,9 +1455,30 @@ export async function checkContractDrift(
 
   // Per-doc claim extraction + comparison. Collect every doc's findings; a
   // missing scoped doc throws (never a clean pass).
-  for (const rel of scopedDocs) {
-    const text = await readScopedDocOrThrow(join(repoRoot, rel), rel);
+  for (const { path: rel, expectsClaims } of scopedDocs) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, rel),
+      rel,
+      "contract-drift orchestrator",
+    );
     const claims = extractDocClaims(text, rel);
+
+    // F21 runtime claim floor: a doc the SCOPE knows carries contract tokens
+    // (expectsClaims) that extracted ZERO contract claims is drift, not a clean
+    // pass. This catches an extractor regression (or a doc rewrite stripping
+    // structural markers) that would otherwise silently disarm this doc's
+    // contract validation while still reporting ok:true. It checks only THAT
+    // claims exist, never WHICH or HOW MANY (AC5).
+    if (expectsClaims && contractClaimCount(claims) === 0) {
+      findings.push({
+        doc: rel,
+        kind: "claim-floor",
+        claim: rel,
+        reason:
+          "doc is expected to carry contract claims (route ids / commands / slices / packet roles / field paths) but extraction yielded none — a likely extractor regression or a doc rewrite that stripped contract tokens, which would silently disarm this doc's drift validation.",
+      });
+    }
+
     findings.push(...(await compareClaimsToFacts(claims, facts, { repoRoot })));
   }
 
