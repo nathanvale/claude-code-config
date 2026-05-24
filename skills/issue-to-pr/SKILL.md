@@ -364,10 +364,12 @@ and name the resume condition.
 | No eligible batch | Pending batch dependencies | Dependencies converge or user reframes the DAG |
 | Escape hatch or iteration cap | Hatch name and current batch/finding evidence | User accepts risk, authorizes replacement, or replans |
 | Stage 5 reviewer coverage gap | Reviewer cap with no fallback covering correctness and testing | A fallback reviewer set covers correctness and testing; see `findings-and-validators.md` |
+| Patch-batch confirmation required | Validated patch-batch proposal awaiting user decision | User confirms the patch batch (returns to Stage 4) or declines and replans; see `stage-4-batch-loop.md` |
 | Final review needs replan | Finding that exceeds patch-batch scope | User replans or narrows the contract |
 | Local check failure | Check name and failing summary | Synthetic P0 routes through Stage 5 and is closed |
 | Unsafe final ledger commit | Non-ledger path in final ledger commit | Commit is repaired so only the ledger checkpoint is included |
 | Unsupported smoke-direct request | Requested `smoke-direct` on a non-disposable repo | Target repo and checkout are disposable, or the standard ship path is used; see `stage-6-ship.md` |
+| PR creation failure | Failing `gh pr create` / push evidence | Operator resolves the failure and the PR URL is recorded; see `stage-6-ship.md` |
 
 Detailed hatch semantics and closure rules live in
 `runbooks/issue-to-pr-v2/references/findings-and-validators.md`.
