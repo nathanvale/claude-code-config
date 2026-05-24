@@ -203,7 +203,7 @@ batches:
     ac_mapping:
       - 6
     rationale: "change_first ledger doc edit; AC6 is a decision criterion surfaced at the Stage 3 user gate (amend vs leave)."
-    status: in-progress
+    status: converged
     iterations: 1
     builder_commits:
       - "71a4a9f9e73d8f77413999b20d09be33ab5affef"
@@ -218,7 +218,7 @@ batches:
         probe_results:
           - "8be31d4 confirmed control-plane-only (5 files all under runbooks/issue-to-pr-v2/). issue-68 ledger validate-findings exit 0 after amend (runbook-heal grammar accepts batch_id:final + control-plane commit)."
         notes: "AC6 amend (user decision). fr-001..fr-004 in issue-68 ledger changed from out-of-scope-for-this-issue to status:fixed / resolution:runbook-heal 8be31d4, resolving the self-contradiction. cr-001 untouched. Orchestrator re-verified issue-68 ledger validates clean."
-    final_verdict: null
+    final_verdict: converged
   - id: "runbook-heal-docs"
     name: "Closure table, Stage 5 cross-ref, blocked-by-doc-defect carve-out"
     goal: "Document the runbook-heal closure form, the Stage 5 read-only gate, and the blocked-by-doc-defect carve-out."
@@ -429,6 +429,14 @@ findings:
     status: deferred-P3
     summary: "normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass)."
     resolution: deferred-P3
+  - id: hr-001
+    batch_id: historical-rows-disposition
+    signature: runbook-heal-form-undocumented-at-amend-time
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "The amend records runbook-heal 8be31d4 (validator-accepted), but the canonical closure-vocabulary table in findings-and-validators.md does not yet list runbook-heal <sha> because its documenting batch runbook-heal-docs (U3) is still pending. Transient batch-ordering drift: U3 documents the form and closes the divergence; the amend consumed the vocabulary before its doc batch landed."
+    resolution: deferred-P2
 ```
 
 ## Findings
@@ -456,6 +464,7 @@ findings:
 | s5-004 | stage5-readonly-gate | stage5-gate-mixed-and-rename-status-untested | ce-testing-reviewer | P2 | deferred-P2 | The violation fixture (8be31d4) is a pure non-ledger commit; no test covers a mixed ledger+non-ledger commit (the skip-ledger-then-flag-nonledger branch) or the rename/copy/delete (R/C/D) status-parsing branch in touchedFilesForRef, both of which are live behavior. | deferred-P2 |
 | s5-005 | stage5-readonly-gate | stage5-gate-duplicates-private-touchedfiles-helper | ce-kieran-typescript-reviewer | P3 | deferred-P3 | touchedFilesForRef near-verbatim duplicates the private touchedFilesForCommit in lib/ledger.ts (two copies of diff-tree parsing that can drift); the local copy also drops validateRepoRelativePath and the ref reachability check. Documented inline; lib helper is private so a shared export is a follow-up (out of this batch's scope, which cannot edit lib/ledger.ts). | deferred-P3 |
 | s5-006 | stage5-readonly-gate | stage5-gate-case-sensitive-ledger-path-compare | ce-adversarial-reviewer | P3 | deferred-P3 | normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass). | deferred-P3 |
+| hr-001 | historical-rows-disposition | runbook-heal-form-undocumented-at-amend-time | ce-adversarial-reviewer | P2 | deferred-P2 | The amend records runbook-heal 8be31d4 (validator-accepted), but the canonical closure-vocabulary table in findings-and-validators.md does not yet list runbook-heal <sha> because its documenting batch runbook-heal-docs (U3) is still pending. Transient batch-ordering drift: U3 documents the form and closes the divergence; the amend consumed the vocabulary before its doc batch landed. | deferred-P2 |
 
 ## Notes
 
