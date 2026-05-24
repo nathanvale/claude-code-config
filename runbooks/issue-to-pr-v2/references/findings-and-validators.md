@@ -199,11 +199,37 @@ Allowed statuses and resolutions:
 | `ADR-contradicts-<id>` | `ADR-contradicts-<id>` | Finding would violate an ADR. Closed without fix. |
 | `superseded` | `superseded-by-<finding-id>` | Duplicate finding kept for audit trail. The referenced finding id must exist, be the canonical non-superseded row, share the same batch id and signature, have equal-or-higher severity, and must not be itself. |
 
+**Closing a `commit <sha>` finding is atomic with convergence.** A non-`final`
+batch finding closed by `resolution: commit <sha>` can only be marked `fixed`
+once its batch is terminal: `validateLedgerOwnedFixedCommit` requires the cited
+commit be recorded in a terminal batch's `builder_commits`, and a batch's
+commits enter that set only when its status is `converged` or `accepted-risk`.
+But the batch cannot converge while the finding is `open`. Resolve the
+chicken-and-egg by flipping the finding to `fixed` and the batch to `converged`
+in the **same** converge checkpoint, never before — closing the finding while
+the batch is still `in-progress` fails `--validate-findings` with "fixed commit
+must be recorded in a terminal ledger batch". This is the same
+atomic-at-convergence pattern the P2/P3 auto-close uses.
+
 ## Fix protocol (v1 README L260-279)
 
 Fixes happen inside `batch-loop`'s **inner loop** (see
 [stage-4-batch-loop.md](stage-4-batch-loop.md#inner-loop-v1-l1017-1035)). They
 are NOT cross-batch. Each batch's inner loop:
+
+**A finding whose fix belongs to a different batch.** When a validator wave on
+batch X raises a finding whose fix lands in files owned by a *different,
+already-confirmed* batch Y (Y's `files` already cover the fix), re-key the
+finding to `batch_id: Y` so it blocks Y's convergence rather than X's, and Y
+closes it with a `commit <sha>` from its own terminal batch. Re-key ONLY when Y
+already owns the fixing files; if the fix needs files in no confirmed batch, use
+the patch-batch path (the blessed cross-batch remediation route in
+[stage-4-batch-loop.md](stage-4-batch-loop.md)) instead of re-keying. Caveat:
+the per-batch open-P0/P1 convergence gate is enforced by the orchestrator
+reading `## Findings data` scoped to the batch, but `--assert-no-open-p0p1` is
+global — so a re-keyed open finding still blocks the whole run from advancing to
+`final-review` until Y closes it; re-keying changes *which batch* the finding
+blocks, not whether the run is blocked.
 
 1. Builder commits one implementation or repair attempt scoped to the batch's
    `files`.
