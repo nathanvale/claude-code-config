@@ -254,8 +254,9 @@ required references before taking the one visible action.
   `ce-plan-addendum.md` when preparing the planning packet.
 - One visible action: render the planning addendum, invoke planning, or
   persist the resulting `plan_path` checkpoint.
-- Exit condition: `plan_path` is set, the plan exists, tree is clean,
-  next state routes to `decompose`.
+- Exit condition: `plan_path` is set, the plan exists, the feature
+  branch is renamed off its `-pending` placeholder, tree is clean, next
+  state routes to `decompose`.
 - Stop conditions: planning asks the user a question, no plan output
   after one retry, or the plan has no implementation units.
 
