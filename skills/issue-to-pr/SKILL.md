@@ -271,8 +271,8 @@ required references before taking the one visible action.
   pending, coverage and digests are confirmed, tree is clean, next state
   routes to `batch-loop`.
 - Stop conditions: parse error, cyclic DAG, uncovered AC, missing batch
-  contract field, open Stage 3 P0/P1, stale digest, or confirmation
-  refusal.
+  contract field, open Stage 3 P0/P1, contract-review cycle cap reached
+  without convergence, stale digest, or confirmation refusal.
 
 **Stage 4: batch loop**
 
