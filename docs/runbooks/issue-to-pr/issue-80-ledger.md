@@ -148,13 +148,40 @@ patch-NNN`. Duplicate findings are identified by
 non-superseded row with the same batch id and signature.
 
 ```yaml
-findings: []
+findings:
+  - id: b2-001
+    batch_id: batch-2-guide-and-verify
+    signature: "annotation-step7b-block-mislabel"
+    persona: ce-correctness-reviewer
+    severity: P2
+    status: open
+    summary: "2.4 retire-when annotation calls step 7b a `<route_catalog>` load; step 7b lives in `<orchestration_loop>`."
+    resolution: ""
+  - id: b2-002
+    batch_id: batch-2-guide-and-verify
+    signature: "annotations-lengthen-retire-when-block"
+    persona: ce-project-standards-reviewer
+    severity: P3
+    status: open
+    summary: "2026-05 re-evaluation parentheticals lengthen each Retire-when block; stacking future notes could erode the no-junk-drawer intent."
+    resolution: ""
+  - id: b2-003
+    batch_id: batch-2-guide-and-verify
+    signature: "split-trigger-prose-drift-four-surfaces"
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them."
+    resolution: ""
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+| b2-001 | batch-2-guide-and-verify | annotation-step7b-block-mislabel | ce-correctness-reviewer | P2 | open | 2.4 retire-when annotation calls step 7b a `<route_catalog>` load; step 7b lives in `<orchestration_loop>`. |  |
+| b2-002 | batch-2-guide-and-verify | annotations-lengthen-retire-when-block | ce-project-standards-reviewer | P3 | open | 2026-05 re-evaluation parentheticals lengthen each Retire-when block; stacking future notes could erode the no-junk-drawer intent. |  |
+| b2-003 | batch-2-guide-and-verify | split-trigger-prose-drift-four-surfaces | ce-adversarial-reviewer | P3 | open | Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them. |  |
 
 ## Notes
 
