@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-24T19:17:33+10:00"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-24T19:22:06+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
 plan_digest: "sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95"
-batch_contract_digest: null
+batch_contract_digest: "sha256:0ab4f02c55fa216e380f4426dd04c536fd5bf74bb478dea40b3208dfdfcc9f77"
 ac_digest: "sha256:4a1d14bb0a7e06950920439c60ff0a548d5ad544dc6a76b76ae647ab57470983"
 ---
 
@@ -73,7 +73,48 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "runbook-heal-merge-guard"
+    name: "Explicit runbook-heal merge guard"
+    goal: "validateControlPlaneOnlyCommit explicitly rejects merge commits and the runbook-heal test fixture labels the merge honestly."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+      - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+    depends_on: []
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 1 holds: a batch_id-final finding fixed by runbook-heal dc6868a is rejected by an explicit merge-commit guard, not only by an empty touched-files side effect."
+      - "AC 2 holds: the runbook-heal fixture commentary and test name describe dc6868a as a merge commit, consistent with the new guard."
+    ac_mapping:
+      - 1
+      - 2
+    rationale: "replacement-contract: AC1 and AC2 are inseparable because the same runbook-heal validation test fixture proves the merge guard and fixes the misleading empty-commit label."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "stage5-p2-policy"
+    name: "Stage 5 P2 policy decision and deferrals"
+    goal: "Record the Stage 5 P2-fix-path decision and explicitly defer lower-priority follow-up findings."
+    files:
+      - "runbooks/issue-to-pr-v2/references/stage-5-final-review.md"
+      - "runbooks/issue-to-pr-v2/references/findings-and-validators.md"
+    depends_on:
+      - "runbook-heal-merge-guard"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 3 holds: the Stage 5 reference records that P2/P3 final-review findings are follow-up work rather than in-stage patch batches."
+      - "AC 4 holds: fr5-001 binding, fr5-004 reachability, and fr5-005 shared-reader extraction are explicitly deferred as lower-priority follow-ups."
+    ac_mapping:
+      - 3
+      - 4
+    rationale: "docs-only policy recording; no red test would add signal beyond grep-visible documentation checks."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
 ```
 
 ## Findings data
@@ -110,6 +151,7 @@ findings: []
 
 - 2026-05-24T19:17:33+10:00 - Stage 1 AC confirmation: extracted from issue `## Acceptance criteria` checkbox list (`gold-standard`, high confidence). Nathan invoked the issue-to-pr skill inline for issue 72, so these issue-authored ACs are the confirmed run contract.
 - 2026-05-24T19:20:05+10:00 - Stage 2 planning: rendered the `ce-plan` addendum packet with `cli.ts packet ce-plan --json`, wrote plan `docs/plans/2026-05-24-006-fix-issue-to-pr-runbook-heal-merge-guard-plan.md`, and persisted plan digest `sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95`.
+- 2026-05-24T19:22:06+10:00 - Stage 3 batch contract confirmation: plan decomposed to 2 batches; AC coverage helper reported 4/4 covered; inline Contract Review found no P0/P1 blockers and no nonblocking findings. Nathan's inline run request is treated as confirmation of the exact AC text, DAG, execution modes, rationales, and digest triple.
 
 ### runbook_version skew continuation evidence (U6)
 
