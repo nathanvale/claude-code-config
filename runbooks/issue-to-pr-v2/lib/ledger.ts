@@ -2519,7 +2519,7 @@ function validateFindingResolution(finding: Finding, context: string, batchConte
       validateLedgerOwnedFixedCommit(finding, ref, resolved, context, batchContext);
       return;
     }
-    if (runbookHealMatch) {
+    if (runbookHealMatch && finding.batch_id === "final") {
       const ref = resolution.slice("runbook-heal ".length);
       const resolved = validateReachableCommit(ref, `${context} runbook-heal commit`);
       validateControlPlaneOnlyCommit(ref, resolved, context);

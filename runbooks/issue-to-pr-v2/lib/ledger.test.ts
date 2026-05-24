@@ -1373,6 +1373,21 @@ describe("validateFindingResolution: runbook-heal closure form", () => {
     ).toThrow(/Stage 3 fixed resolution must be "plan-revision <sha>"/);
   });
 
+  test("REJECT batch-loop scope: a batch-loop (non-final) finding with runbook-heal falls through to the catch-all reject", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          batch_id: "b1",
+          resolution: `runbook-heal ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+        terminalBatchRecording(
+          RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+          RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+        ),
+      ),
+    ).toThrow(/fixed resolution must be/);
+  });
+
   test("NON-REGRESSION: a terminal-batch commit closure still validates", () => {
     expect(() =>
       runFindingsFixture(
