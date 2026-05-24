@@ -93,7 +93,7 @@ batches:
       - 2
       - 5
     rationale: "replacement-contract r1: merge AC1+AC2 (form and abuse guard live in the same validateFindingResolution function with inseparable tests); narrowed to batch_id final only (CR-003); allowlist excludes the ledger path (CR-004)."
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
