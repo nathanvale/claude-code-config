@@ -289,11 +289,21 @@ batches:
     ac_mapping:
       - 8
     rationale: "out-of-scope: investigation-required"
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - f5eb60f8877f24a04cdcd36b6c0b8422042b0f45
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: f5eb60f8877f24a04cdcd36b6c0b8422042b0f45
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+        route_hint: "converge out-of-scope-guard"
+        blockers: []
+        probe_results: ["AC8 boundary audit PASS across all clauses: git diff main...HEAD touches only contract-drift.ts/.test.ts + ledger/plan/CONTEXT.md; cli.ts/lib/decompose.ts/package.json UNCHANGED; extractor probes confirm decompose.ts flags/route-precedence/enum prose/template filenames/prose role words excluded"]
+        notes: "change_first investigation batch: scope-boundary audit for AC8. Recorded a 'Scope boundary (AC8)' doc-comment in contract-drift.ts; no behavior change; 109 tests still green. AC8 holds."
+    iterations: 1
+    final_verdict: converged
 ```
 
 ## Findings data
