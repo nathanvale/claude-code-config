@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-24T17:11:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-24T18:37:00+10:00"
 plan_digest: "sha256:d86c6a18c2eb82b81266b966e04fa91bb95f15b590ac4b850d0df9493427d972"
 batch_contract_digest: "sha256:d1e6c9a1f380d50763f7fe335004fc07a1bbaaf2a39ab85904dfce65fbdf44fd"
 ac_digest: "sha256:b424d7bd4f91af17b31d4122a02728760d76765dc5cd4b496a84f4f7e47b0ed2"
@@ -463,41 +463,41 @@ findings:
     signature: runbook-heal-arm-no-finding-to-commit-binding
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "The runbook-heal arm validates only that the cited commit is reachable and touches control-plane content; unlike the commit arm (terminalBuilderCommits.has), it does not bind the commit to the finding or the run. Any reachable control-plane commit (even an unrelated old one) can close any batch_id:final finding. Documented design choice (plan L45) but a posture gap."
-    resolution: null
+    resolution: deferred-P2
   - id: fr5-002
     batch_id: final
     signature: empty-commit-fixture-is-actually-a-merge
     persona: ce-maintainability-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "The runbook-heal empty-commit reject test labels dc6868a as a zero-file no-op, but dc6868a is the PR-70 2-parent merge; the test passes because diff-tree without -m emits zero rows for a merge, not because the commit is a genuine no-op. Sibling stage5-readonly.test.ts correctly labels the same sha as a merge. A rebase turning dc6868a non-merge would silently change what the test proves."
-    resolution: null
+    resolution: deferred-P2
   - id: fr5-003
     batch_id: final
     signature: runbook-heal-doc-claims-merge-guard-code-lacks
     persona: ce-maintainability-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "Doc/code drift: the findings-and-validators.md closure-table runbook-heal row states merge commits are rejected as vacuous-proof, but validateControlPlaneOnlyCommit has NO merge guard (only the Stage 5 gate got isMergeCommit). The runbook-heal arm rejects a merge only incidentally when its first-parent diff is empty; a merge whose first-parent diff touches control-plane content would NOT be rejected, contradicting the doc. Latent today."
-    resolution: null
+    resolution: deferred-P2
   - id: fr5-004
     batch_id: final
     signature: stage5-gate-skips-reachability-binding
     persona: ce-maintainability-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "assertStage5ReadOnly resolves the ref via raw git but never calls validateReachableCommit (the runbook-heal arm does, enforcing is-ancestor of HEAD). The gate accepts any resolvable ref (tag, other-branch commit) provided it touches only the ledger; fails closed on garbage but proves less provenance than its sibling."
-    resolution: null
+    resolution: deferred-P3
   - id: fr5-005
     batch_id: final
     signature: third-git-difftree-reader-duplication
     persona: ce-maintainability-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "rawDiffForCommit (ledger.ts --raw) is a third near-identical git diff-tree reader alongside the private touchedFilesForCommit (ledger.ts --name-status) and touchedFilesForRef (decompose.ts --name-status). The deferred s5-005 recorded the two-copy duplication; this is three across two files. A future fix (e.g. -m/--cc, -z, maxBuffer) must be replicated thrice."
-    resolution: null
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -527,11 +527,11 @@ findings:
 | s5-006 | stage5-readonly-gate | stage5-gate-case-sensitive-ledger-path-compare | ce-adversarial-reviewer | P3 | deferred-P3 | normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass). | deferred-P3 |
 | hr-001 | historical-rows-disposition | runbook-heal-form-undocumented-at-amend-time | ce-adversarial-reviewer | P2 | deferred-P2 | The amend records runbook-heal 8be31d4 (validator-accepted), but the canonical closure-vocabulary table in findings-and-validators.md does not yet list runbook-heal <sha> because its documenting batch runbook-heal-docs (U3) is still pending. Transient batch-ordering drift: U3 documents the form and closes the divergence; the amend consumed the vocabulary before its doc batch landed. | deferred-P2 |
 | rd-001 | runbook-heal-docs | stage5-gate-instruction-after-advance-clause-clarity | ce-adversarial-reviewer | P3 | deferred-P3 | Clarity nit: the wired --assert-stage5-readonly gate instruction sits textually after step 5's commit-then-advance-to-Stage-6 clause; a careless reader could advance before running the gate. The AFTER-committing framing mitigates it and the instruction is load-bearing, so s5-002 stays closed; presentational ordering only. | deferred-P3 |
-| fr5-001 | final | runbook-heal-arm-no-finding-to-commit-binding | ce-adversarial-reviewer | P2 | open | The runbook-heal arm validates only that the cited commit is reachable and touches control-plane content; unlike the commit arm (terminalBuilderCommits.has), it does not bind the commit to the finding or the run. Any reachable control-plane commit (even an unrelated old one) can close any batch_id:final finding. Documented design choice (plan L45) but a posture gap. |  |
-| fr5-002 | final | empty-commit-fixture-is-actually-a-merge | ce-maintainability-reviewer | P2 | open | The runbook-heal empty-commit reject test labels dc6868a as a zero-file no-op, but dc6868a is the PR-70 2-parent merge; the test passes because diff-tree without -m emits zero rows for a merge, not because the commit is a genuine no-op. Sibling stage5-readonly.test.ts correctly labels the same sha as a merge. A rebase turning dc6868a non-merge would silently change what the test proves. |  |
-| fr5-003 | final | runbook-heal-doc-claims-merge-guard-code-lacks | ce-maintainability-reviewer | P2 | open | Doc/code drift: the findings-and-validators.md closure-table runbook-heal row states merge commits are rejected as vacuous-proof, but validateControlPlaneOnlyCommit has NO merge guard (only the Stage 5 gate got isMergeCommit). The runbook-heal arm rejects a merge only incidentally when its first-parent diff is empty; a merge whose first-parent diff touches control-plane content would NOT be rejected, contradicting the doc. Latent today. |  |
-| fr5-004 | final | stage5-gate-skips-reachability-binding | ce-maintainability-reviewer | P3 | open | assertStage5ReadOnly resolves the ref via raw git but never calls validateReachableCommit (the runbook-heal arm does, enforcing is-ancestor of HEAD). The gate accepts any resolvable ref (tag, other-branch commit) provided it touches only the ledger; fails closed on garbage but proves less provenance than its sibling. |  |
-| fr5-005 | final | third-git-difftree-reader-duplication | ce-maintainability-reviewer | P3 | open | rawDiffForCommit (ledger.ts --raw) is a third near-identical git diff-tree reader alongside the private touchedFilesForCommit (ledger.ts --name-status) and touchedFilesForRef (decompose.ts --name-status). The deferred s5-005 recorded the two-copy duplication; this is three across two files. A future fix (e.g. -m/--cc, -z, maxBuffer) must be replicated thrice. |  |
+| fr5-001 | final | runbook-heal-arm-no-finding-to-commit-binding | ce-adversarial-reviewer | P2 | deferred-P2 | The runbook-heal arm validates only that the cited commit is reachable and touches control-plane content; unlike the commit arm (terminalBuilderCommits.has), it does not bind the commit to the finding or the run. Any reachable control-plane commit (even an unrelated old one) can close any batch_id:final finding. Documented design choice (plan L45) but a posture gap. | deferred-P2 |
+| fr5-002 | final | empty-commit-fixture-is-actually-a-merge | ce-maintainability-reviewer | P2 | deferred-P2 | The runbook-heal empty-commit reject test labels dc6868a as a zero-file no-op, but dc6868a is the PR-70 2-parent merge; the test passes because diff-tree without -m emits zero rows for a merge, not because the commit is a genuine no-op. Sibling stage5-readonly.test.ts correctly labels the same sha as a merge. A rebase turning dc6868a non-merge would silently change what the test proves. | deferred-P2 |
+| fr5-003 | final | runbook-heal-doc-claims-merge-guard-code-lacks | ce-maintainability-reviewer | P2 | deferred-P2 | Doc/code drift: the findings-and-validators.md closure-table runbook-heal row states merge commits are rejected as vacuous-proof, but validateControlPlaneOnlyCommit has NO merge guard (only the Stage 5 gate got isMergeCommit). The runbook-heal arm rejects a merge only incidentally when its first-parent diff is empty; a merge whose first-parent diff touches control-plane content would NOT be rejected, contradicting the doc. Latent today. | deferred-P2 |
+| fr5-004 | final | stage5-gate-skips-reachability-binding | ce-maintainability-reviewer | P3 | deferred-P3 | assertStage5ReadOnly resolves the ref via raw git but never calls validateReachableCommit (the runbook-heal arm does, enforcing is-ancestor of HEAD). The gate accepts any resolvable ref (tag, other-branch commit) provided it touches only the ledger; fails closed on garbage but proves less provenance than its sibling. | deferred-P3 |
+| fr5-005 | final | third-git-difftree-reader-duplication | ce-maintainability-reviewer | P3 | deferred-P3 | rawDiffForCommit (ledger.ts --raw) is a third near-identical git diff-tree reader alongside the private touchedFilesForCommit (ledger.ts --name-status) and touchedFilesForRef (decompose.ts --name-status). The deferred s5-005 recorded the two-copy duplication; this is three across two files. A future fix (e.g. -m/--cc, -z, maxBuffer) must be replicated thrice. | deferred-P3 |
 
 ## Notes
 
