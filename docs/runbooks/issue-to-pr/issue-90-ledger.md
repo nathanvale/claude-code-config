@@ -259,6 +259,46 @@ findings:
     status: deferred-P3
     summary: "Sibling references place the Read trigger callout in the header block; this file places it after three intro paragraphs (callout exists, position deviates)"
     resolution: deferred-P3
+  - id: F7
+    batch_id: validate-op
+    signature: roundtrip-backtick-in-value-truncates-block
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "parseRegistry lazy fenced-yaml regex closes at the first code-fence sequence anywhere in the block, so any registry value containing a backtick-fence sequence truncates the YAML and parse throws; latent round-trip trap for upsert-op when real entries hold fence references"
+    resolution: null
+  - id: F8
+    batch_id: validate-op
+    signature: case-insensitive-fence-accepts-uppercase-YAML
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "The case-insensitive flag accepts an uppercase or suffixed yaml fence as the data block, weaker than the doc single-block wording (mirrors ledger.ts, so consistent)"
+    resolution: null
+  - id: F9
+    batch_id: validate-op
+    signature: empty-string-enum-double-report
+    persona: ce-correctness-reviewer
+    severity: P3
+    status: open
+    summary: "An empty-string enum field emits two error lines (missing-required AND invalid-value); still rejects correctly but double-reports"
+    resolution: null
+  - id: F10
+    batch_id: validate-op
+    signature: validate-op-secondary-error-branches-untested
+    persona: ce-testing-reviewer
+    severity: P3
+    status: open
+    summary: "Secondary error branches untested: non-object/null entry, evidence-not-array, malformed-yaml parse failure, index-fallback label, and multi-entry error aggregation; AC2 core enum/required behaviors are covered with strong assertions"
+    resolution: null
+  - id: F11
+    batch_id: validate-op
+    signature: readme-file-map-omits-learnings-modules
+    persona: ce-project-standards-reviewer
+    severity: P3
+    status: open
+    summary: "README File map enumerates lib/ modules and root helpers by name but is not updated for new lib/learnings.ts or root learnings-registry.ts; README is outside this batch's files list"
+    resolution: null
 ```
 
 ## Findings
@@ -271,6 +311,11 @@ findings:
 | F4 | registry-file | registry-single-yaml-block-no-committed-regression-guard | ce-testing-reviewer | P3 | deferred-P3 | Single-fenced-yaml-block invariant verified by a one-off parse check, not a committed regression test; later helper batches own the durable scan test | deferred-P3 |
 | F5 | registry-file | invariant-claim-mismatches-cited-helper-scope | ce-maintainability-reviewer | P3 | deferred-P3 | Prose claims the future helper uses the same fenced-yaml scan as the ledger helper, but the ledger helper is section-scoped not whole-file; registry's stricter whole-file invariant is safe but the precedent description is imprecise | deferred-P3 |
 | F6 | registry-file | read-trigger-callout-not-near-top | ce-project-standards-reviewer | P3 | deferred-P3 | Sibling references place the Read trigger callout in the header block; this file places it after three intro paragraphs (callout exists, position deviates) | deferred-P3 |
+| F7 | validate-op | roundtrip-backtick-in-value-truncates-block | ce-adversarial-reviewer | P1 | open | parseRegistry lazy fenced-yaml regex closes at the first code-fence sequence anywhere in the block, so any registry value containing a backtick-fence sequence truncates the YAML and parse throws; latent round-trip trap for upsert-op when real entries hold fence references | |
+| F8 | validate-op | case-insensitive-fence-accepts-uppercase-YAML | ce-adversarial-reviewer | P3 | open | The case-insensitive flag accepts an uppercase or suffixed yaml fence as the data block, weaker than the doc single-block wording (mirrors ledger.ts, so consistent) | |
+| F9 | validate-op | empty-string-enum-double-report | ce-correctness-reviewer | P3 | open | An empty-string enum field emits two error lines (missing-required AND invalid-value); still rejects correctly but double-reports | |
+| F10 | validate-op | validate-op-secondary-error-branches-untested | ce-testing-reviewer | P3 | open | Secondary error branches untested: non-object/null entry, evidence-not-array, malformed-yaml parse failure, index-fallback label, and multi-entry error aggregation; AC2 core enum/required behaviors are covered with strong assertions | |
+| F11 | validate-op | readme-file-map-omits-learnings-modules | ce-project-standards-reviewer | P3 | open | README File map enumerates lib/ modules and root helpers by name but is not updated for new lib/learnings.ts or root learnings-registry.ts; README is outside this batch's files list | |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
