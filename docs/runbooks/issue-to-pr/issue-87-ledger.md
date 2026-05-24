@@ -150,7 +150,7 @@ batches:
       - 5
       - 6
     rationale: "merge: ACs 4 (no .ts change), 5 (suites green), and 6 (cross-surface consistency) are invariants verified over the cumulative diff at the final coordinated edit; they have no source change of their own and are mapped onto the unit that lands last and runs the governing suite."
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
