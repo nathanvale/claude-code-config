@@ -123,11 +123,24 @@ batches:
       - 3
       - 4
     rationale: "docs-only policy recording; no red test would add signal beyond grep-visible documentation checks."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "395a8aad8a5ff0aec4c654e2b206b705bc6a74ee"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "395a8aad8a5ff0aec4c654e2b206b705bc6a74ee"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/stage-5-final-review.md"
+          - "runbooks/issue-to-pr-v2/references/findings-and-validators.md"
+        route_hint: validator
+        blockers: []
+        probe_results:
+          - "git diff --check passed for both reference files."
+          - "rg checks found P2/P3 follow-up policy wording, in-stage patch-batch exclusion, and fr5-001/fr5-004/fr5-005 deferrals."
+        notes: "Builder recorded that Stage 5 P2/P3 findings are follow-up work, reserved patch-batches for P0/P1, and explicitly deferred fr5-001/fr5-004/fr5-005."
+    iterations: 1
+    final_verdict: converged
 ```
 
 ## Findings data
@@ -168,6 +181,7 @@ findings: []
 - 2026-05-24T19:24:26+10:00 - Stage 4 lifecycle: started `runbook-heal-merge-guard` batch after host readiness check passed (Builder/Validator agents available, scoped files editable, checks available).
 - 2026-05-24T19:34:05+10:00 - Stage 4 validator wave for `runbook-heal-merge-guard`: Builder commit `e4f0b342a614d62740e4abf3c34b836d430fa4bd` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`, and `ce-kieran-typescript-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
 - 2026-05-24T19:35:04+10:00 - Stage 4 lifecycle: started `stage5-p2-policy` batch after dependency `runbook-heal-merge-guard` converged and host readiness check passed.
+- 2026-05-24T19:41:58+10:00 - Stage 4 validator wave for `stage5-p2-policy`: Builder commit `395a8aad8a5ff0aec4c654e2b206b705bc6a74ee` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, and `ce-adversarial-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
 
 ### runbook_version skew continuation evidence (U6)
 
