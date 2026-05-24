@@ -97,11 +97,44 @@ batches:
       - 5
       - 6
     rationale: null
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - e6bf9f87317fc6daeddb63542a22ddb43c473212
+      - 8643d1007872b887089e82f924e7b2b1b418de7e
+      - fbf72d0e2da7911628554ae17e1cb7c6f5a788df
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: e6bf9f87317fc6daeddb63542a22ddb43c473212
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "validators on contract-fact-loader"
+        blockers: []
+        probe_results: ["live CLI confirmed contract route_ids emits data.values not data.route_ids"]
+        notes: "Initial loadContractFacts + helpers; 13 tests green."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 8643d1007872b887089e82f924e7b2b1b418de7e
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "re-validate repair wave"
+        blockers: []
+        probe_results: ["installed_artifact_presence yields 5 children; blocking_gates none"]
+        notes: "Repair wave 1: fixed F4/F5/F6 (P1) + F7 (P2); 24 tests green. Squashed from 4 per-finding commits."
+      - attempt_type: repair
+        status: committed
+        commit_sha: fbf72d0e2da7911628554ae17e1cb7c6f5a788df
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "converge contract-fact-loader"
+        blockers: []
+        probe_results: ["F9 test proven load-bearing via mutation; F10 over-correction guarded"]
+        notes: "Repair wave 2: fixed F9 (P2) and F10 (P3); 27 tests green. F8 left advisory. Squashed from 2 commits."
+    iterations: 3
+    final_verdict: converged
   - id: "doc-claim-extractor"
     name: "Doc-claim extractor (bounded contract-token patterns)"
     goal: "The check extracts quoted route IDs, cli.ts command/slice names, packet roles in explicit cli.ts packet <role> positions, and explicit data.* response-field paths from the scoped docs using bounded patterns over prose and fenced code blocks, skipping placeholders and expanding brace-set shorthand."
@@ -249,41 +282,57 @@ findings:
     signature: ac6-empty-facts-not-hard-errored
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "loadContractFacts returns a silently empty/partial fact set when the CLI emits well-formed ok envelopes with empty arrays/objects (e.g. route_ids data.values:[] or empty commands/slices/shapes), violating the AC6 promise to hard-error on empty facts; expectStringArray checks element type but never non-emptiness."
-    resolution: null
+    resolution: "commit 8643d1007872b887089e82f924e7b2b1b418de7e"
   - id: F5
     batch_id: contract-fact-loader
     signature: ac6-unparseable-stdout-path-untested
     persona: ce-testing-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "AC6 requires proving the unparseable-stdout and no-data-object failure paths, but no test feeds non-JSON stdout from an exit-0 process; the JSON.parse catch branch and the 'emitted no parseable envelope' / 'ok envelope with no data object' branches are never exercised."
-    resolution: null
+    resolution: "commit 8643d1007872b887089e82f924e7b2b1b418de7e"
   - id: F6
     batch_id: contract-fact-loader
     signature: ac5-source-scan-omits-field-paths
     persona: ce-testing-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "AC5's source-scan test only forbids routeIds/packetRoles/slices literals; it never adds response-shape field-path keys (e.g. digest_drift, acceptance_criteria), so a future hardcoded field-path literal would pass undetected despite AC5 explicitly covering field paths."
-    resolution: null
+    resolution: "commit 8643d1007872b887089e82f924e7b2b1b418de7e"
   - id: F7
     batch_id: contract-fact-loader
     signature: finite-child-keys-array-marker-reject-too-broad
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "finiteChildKeys rejects any description containing [] anywhere via the global /\\[\\]/ test, so the genuinely-finite installed_artifact_presence shape loses its child paths because the trailing missing:(...)[] suffix trips the array-element guard; real future doc claims like data.installed_artifact_presence.all_present would later read as false-positive drift (same class as F1)."
-    resolution: null
+    resolution: "commit 8643d1007872b887089e82f924e7b2b1b418de7e"
   - id: F8
     batch_id: contract-fact-loader
     signature: finite-child-keys-or-word-and-multi-crossref-fragility
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Latent finiteChildKeys/deriveFieldPaths fragilities: the /\\bor\\b/ guard drops all finite children from any description containing the standalone word 'or'; only the first 'same shape as' cross-reference per description is resolved; firstLine envelope parsing would reject a pretty-printed multi-line envelope. Currently unreachable with the compact-emitting CLI."
-    resolution: null
+    resolution: "deferred-P3"
+  - id: F9
+    batch_id: contract-fact-loader
+    signature: ac6-no-data-branch-regex-not-load-bearing
+    persona: ce-testing-reviewer
+    severity: P2
+    status: fixed
+    summary: "F5 test (c) matcher for the ok-envelope-with-no-data branch is too loose (its alternation includes a bare 'data' alternative): deleting the no-data throw leaves all tests green because that bare alternative matches the downstream 'data.commands is not an array' error, so the test does not pin branch (c). Impl branch is correct and fires in production; only test load-bearingness is weak."
+    resolution: "commit fbf72d0e2da7911628554ae17e1cb7c6f5a788df"
+  - id: F10
+    batch_id: contract-fact-loader
+    signature: finite-child-keys-single-brace-array-union-over-correction
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: fixed
+    summary: "F7 over-corrected: scoping the []/union rejection to the brace inner means a single-brace array-of-objects ('{ a, b, c }[]') or single-brace union ('string or { a, b }') now has children invented; not reachable against the current CLI surface but latent if a future shape adds one."
+    resolution: "commit fbf72d0e2da7911628554ae17e1cb7c6f5a788df"
 ```
 
 ## Findings
@@ -293,11 +342,13 @@ findings:
 | F1 | stage-3 | ac3-deep-nested-path-derivation-may-exceed-finite-flatten | contract-reviewer | P2 | open | first-run-gotchas.md quotes data.drift.digest_drift.{...}, a two-level nest whose leaf set is only derivable by resolving the help payload 'same shape as state_response_shape.digest_drift' cross-reference; the comparator must resolve it or fall back to nearest-known-parent per Key Decision 5, else real doc claims become false-positive drift. |  |
 | F2 | stage-3 | readme-command-list-section-does-not-exist | contract-reviewer | P3 | open | doc-claim-extractor U2 prose references 'the README cli.ts command-list section' but the README has no enumerated command-name list; the primary cli.ts <command> mechanism still satisfies AC2, so this is stale approach prose, not a coverage gap. |  |
 | F3 | stage-3 | u1-approach-text-says-route_ids-but-cli-emits-data-values | contract-reviewer | P3 | open | contract-fact-loader approach prose says collect 'route_ids (from contract route_ids --json)' but the live slice emits data.values not data.route_ids; the unit test scenario has the correct anchor, but the prose could mislead. |  |
-| F4 | contract-fact-loader | ac6-empty-facts-not-hard-errored | ce-adversarial-reviewer | P1 | open | loadContractFacts returns a silently empty/partial fact set when the CLI emits well-formed ok envelopes with empty arrays/objects (e.g. route_ids data.values:[] or empty commands/slices/shapes), violating the AC6 promise to hard-error on empty facts; expectStringArray checks element type but never non-emptiness. |  |
-| F5 | contract-fact-loader | ac6-unparseable-stdout-path-untested | ce-testing-reviewer | P1 | open | AC6 requires proving the unparseable-stdout and no-data-object failure paths, but no test feeds non-JSON stdout from an exit-0 process; the JSON.parse catch branch and the 'emitted no parseable envelope' / 'ok envelope with no data object' branches are never exercised. |  |
-| F6 | contract-fact-loader | ac5-source-scan-omits-field-paths | ce-testing-reviewer | P1 | open | AC5's source-scan test only forbids routeIds/packetRoles/slices literals; it never adds response-shape field-path keys (e.g. digest_drift, acceptance_criteria), so a future hardcoded field-path literal would pass undetected despite AC5 explicitly covering field paths. |  |
-| F7 | contract-fact-loader | finite-child-keys-array-marker-reject-too-broad | ce-adversarial-reviewer | P2 | open | finiteChildKeys rejects any description containing [] anywhere via the global /\[\]/ test, so the genuinely-finite installed_artifact_presence shape loses its child paths because the trailing missing:(...)[] suffix trips the array-element guard; real future doc claims like data.installed_artifact_presence.all_present would later read as false-positive drift (same class as F1). |  |
-| F8 | contract-fact-loader | finite-child-keys-or-word-and-multi-crossref-fragility | ce-adversarial-reviewer | P3 | open | Latent finiteChildKeys/deriveFieldPaths fragilities: the /\bor\b/ guard drops all finite children from any description containing the standalone word 'or'; only the first 'same shape as' cross-reference per description is resolved; firstLine envelope parsing would reject a pretty-printed multi-line envelope. Currently unreachable with the compact-emitting CLI. |  |
+| F4 | contract-fact-loader | ac6-empty-facts-not-hard-errored | ce-adversarial-reviewer | P1 | fixed | loadContractFacts returns a silently empty/partial fact set when the CLI emits well-formed ok envelopes with empty arrays/objects (e.g. route_ids data.values:[] or empty commands/slices/shapes), violating the AC6 promise to hard-error on empty facts; expectStringArray checks element type but never non-emptiness. | commit 8643d1007872b887089e82f924e7b2b1b418de7e |
+| F5 | contract-fact-loader | ac6-unparseable-stdout-path-untested | ce-testing-reviewer | P1 | fixed | AC6 requires proving the unparseable-stdout and no-data-object failure paths, but no test feeds non-JSON stdout from an exit-0 process; the JSON.parse catch branch and the 'emitted no parseable envelope' / 'ok envelope with no data object' branches are never exercised. | commit 8643d1007872b887089e82f924e7b2b1b418de7e |
+| F6 | contract-fact-loader | ac5-source-scan-omits-field-paths | ce-testing-reviewer | P1 | fixed | AC5's source-scan test only forbids routeIds/packetRoles/slices literals; it never adds response-shape field-path keys (e.g. digest_drift, acceptance_criteria), so a future hardcoded field-path literal would pass undetected despite AC5 explicitly covering field paths. | commit 8643d1007872b887089e82f924e7b2b1b418de7e |
+| F7 | contract-fact-loader | finite-child-keys-array-marker-reject-too-broad | ce-adversarial-reviewer | P2 | fixed | finiteChildKeys rejects any description containing [] anywhere via the global /\[\]/ test, so the genuinely-finite installed_artifact_presence shape loses its child paths because the trailing missing:(...)[] suffix trips the array-element guard; real future doc claims like data.installed_artifact_presence.all_present would later read as false-positive drift (same class as F1). | commit 8643d1007872b887089e82f924e7b2b1b418de7e |
+| F8 | contract-fact-loader | finite-child-keys-or-word-and-multi-crossref-fragility | ce-adversarial-reviewer | P3 | deferred-P3 | Latent finiteChildKeys/deriveFieldPaths fragilities: the /\bor\b/ guard drops all finite children from any description containing the standalone word 'or'; only the first 'same shape as' cross-reference per description is resolved; firstLine envelope parsing would reject a pretty-printed multi-line envelope. Currently unreachable with the compact-emitting CLI. | deferred-P3 |
+| F9 | contract-fact-loader | ac6-no-data-branch-regex-not-load-bearing | ce-testing-reviewer | P2 | fixed | F5 test (c) matcher for the ok-envelope-with-no-data branch is too loose (its alternation includes a bare 'data' alternative): deleting the no-data throw leaves all tests green because that bare alternative matches the downstream 'data.commands is not an array' error, so the test does not pin branch (c). Impl branch is correct and fires in production; only test load-bearingness is weak. | commit fbf72d0e2da7911628554ae17e1cb7c6f5a788df |
+| F10 | contract-fact-loader | finite-child-keys-single-brace-array-union-over-correction | ce-adversarial-reviewer | P3 | fixed | F7 over-corrected: scoping the []/union rejection to the brace inner means a single-brace array-of-objects ('{ a, b, c }[]') or single-brace union ('string or { a, b }') now has children invented; not reachable against the current CLI surface but latent if a future shape adds one. | commit fbf72d0e2da7911628554ae17e1cb7c6f5a788df |
 
 ## Notes
 
