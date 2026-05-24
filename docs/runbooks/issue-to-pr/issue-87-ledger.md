@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-25T07:40:00+10:00"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-25T07:52:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: "sha256:801326ee1088da8fe8e1c3c59ee0e473bf190ad989306c2bf0a37e28210d62c0"
-batch_contract_digest: null
+plan_digest: "sha256:7e6c309be55faefb3491635a5bccb4f3ef85fdb9278be8be39958c34e8c9f6c7"
+batch_contract_digest: "sha256:1ce7bc105a3c6c25af830ecd42b01a014fe5356a4b0fdc51557b4f75a6b4e637"
 ac_digest: "sha256:91d190d541ba670ae0ccc2e8b6df99f5ad2b946427be4202c2edf4be188ce30e"
 ---
 
@@ -75,7 +75,66 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "u1-ledger-helper-link"
+    name: "Add the ledger-and-helper.md recovery-sequence link to recipe 2.3"
+    goal: "The \"Stage-transition digest recheck\" paragraph in ledger-and-helper.md links to first-run-gotchas.md recipe 2.3 (blocked-digests-stale) by name, for the recovery sequence."
+    files:
+      - "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds: the digest-recheck paragraph in ledger-and-helper.md names recipe 2.3 (blocked-digests-stale) and frames it for the recovery sequence, not a bare see-also."
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
+  - id: "u2-skill-route-catalog-link"
+    name: "Add the SKILL.md route_catalog named link to recipe 2.3"
+    goal: "The route_catalog blocked-batch-contract-stale and blocked-digests-stale bullet in SKILL.md links to first-run-gotchas.md recipe 2.3 by name, alongside the existing recipe 2.2 link."
+    files:
+      - "skills/issue-to-pr/SKILL.md"
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 2 holds: the shared route_catalog bullet names recipe 2.3 for blocked-digests-stale while retaining the recipe 2.2 link for blocked-batch-contract-stale."
+    ac_mapping:
+      - 2
+    rationale: null
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
+  - id: "u3-retire-recipe-2-3"
+    name: "Retire recipe 2.3 retire-when bar and verify no contradiction"
+    goal: "Recipe 2.3's retire-when bar in first-run-gotchas.md is retired (marked retired per the entry-governance contract, recipe body retained), recording that the ledger-and-helper.md link satisfies the literal retire-when bar and the SKILL.md link closes the companion route-catalog targeting gap, with no contradiction across the three edited surfaces and both test suites green."
+    files:
+      - "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"
+    depends_on:
+      - "u1-ledger-helper-link"
+      - "u2-skill-route-catalog-link"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 3 holds: recipe 2.3 ends with an Owner line and a retirement record in the #83 pattern naming both the ledger-and-helper.md and SKILL.md links; the recipe body is retained."
+      - "AC 4 holds: no change to lib/route.ts, requiredReferenceIdsFor, or CLI runtime behavior across the cumulative diff."
+      - "AC 5 holds: route.test.ts stays green (77/77) and contract-drift.test.ts stays green (109/109)."
+      - "AC 6 holds: the SKILL.md route_catalog bullet, the ledger-and-helper digest-recheck paragraph, and the recipe 2.3 retirement record contain no contradictory claims about which links exist or what they satisfy."
+    ac_mapping:
+      - 3
+      - 4
+      - 5
+      - 6
+    rationale: "merge: ACs 4 (no .ts change), 5 (suites green), and 6 (cross-surface consistency) are invariants verified over the cumulative diff at the final coordinated edit; they have no source change of their own and are mapped onto the unit that lands last and runs the governing suite."
+    status: pending
+    iterations: 0
+    builder_commits: []
+    builder_attempts: []
+    final_verdict: null
 ```
 
 ## Findings data
@@ -100,17 +159,37 @@ patch-NNN`. Duplicate findings are identified by
 non-superseded row with the same batch id and signature.
 
 ```yaml
-findings: []
+findings:
+  - id: F1
+    batch_id: stage-3
+    signature: wrong-test-file-paths
+    persona: system-architecture-contract-reviewer
+    severity: P3
+    status: open
+    summary: "Real test paths are runbooks/issue-to-pr-v2/contract-drift.test.ts (not under lib/) and runbooks/issue-to-pr-v2/lib/route.test.ts; combined run reports 186 pass. Builder must use correct paths."
+    resolution: ""
+  - id: F2
+    batch_id: stage-3
+    signature: ac6-ac3-manual-verification-only
+    persona: system-architecture-contract-reviewer
+    severity: P3
+    status: open
+    summary: "Neither contract-drift.test.ts nor route.test.ts asserts AC6 cross-surface consistency or AC3 body-retention; both rest on the U3 git-diff re-read gate, which the Builder must treat as a hard, non-skippable check."
+    resolution: ""
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+| F1 | stage-3 | wrong-test-file-paths | system-architecture-contract-reviewer | P3 | open | Real test paths are runbooks/issue-to-pr-v2/contract-drift.test.ts (not under lib/) and runbooks/issue-to-pr-v2/lib/route.test.ts; combined run reports 186 pass. Builder must use correct paths. |  |
+| F2 | stage-3 | ac6-ac3-manual-verification-only | system-architecture-contract-reviewer | P3 | open | Neither contract-drift.test.ts nor route.test.ts asserts AC6 cross-surface consistency or AC3 body-retention; both rest on the U3 git-diff re-read gate, which the Builder must treat as a hard, non-skippable check. |  |
 
 ## Notes
 
 - 2026-05-25: Stage 1 started. ACs extracted from issue #87 `## Acceptance criteria` heading (gold-standard, high confidence), confirmed as-is by Nathan. No `## Blocked by` section; issue open; no override needed. Branch `feat/issue-87-pending` created from clean `main` HEAD before ledger mutation.
+- 2026-05-25: Stage 2 plan written and refined (U3 goal tightened to distinguish the literal retire-when bar from the companion route-catalog gap; added Bun MCP runner note). plan_digest recomputed after refinement. Branch renamed to `feat/issue-87-retire-recipe-2-3-targeting-gaps`.
+- 2026-05-25: Stage 3 Contract Review (1 reviewer, no escalation triggers): no P0/P1 blockers. Two P3 advisories recorded as F1/F2. Key reviewer findings to carry into Builder/verification: (a) correct test paths are `runbooks/issue-to-pr-v2/contract-drift.test.ts` and `runbooks/issue-to-pr-v2/lib/route.test.ts`, combined run = 186 pass; (b) AC6 cross-surface consistency and AC3 body-retention are NOT asserted by either suite (no token/phrasing pin on recipe 2.3 retirement), so the U3 git-diff re-read is the hard gate; (c) U1's new link is additive and safe (the existing `### Blocked route ids` link at line ~299 already satisfies the gotchas-relationship check). Batch contract confirmed by Nathan: 3-batch DAG, all change_first, AC coverage 6/6. Confirmed digest triple persisted.
 
 ### runbook_version skew continuation evidence (U6)
 

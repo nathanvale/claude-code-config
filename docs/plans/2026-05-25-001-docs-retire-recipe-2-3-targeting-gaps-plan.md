@@ -27,13 +27,16 @@ two different files:
 
 Once both links exist, recipe 2.3's retire-when bar is converted to a
 retirement record using the same "Retired 2026-05, not deleted" treatment #83
-applied to its siblings (recipe body retained as the recovery reference the
-links point at).
+applied to its siblings. The `ledger-and-helper.md` link satisfies the literal
+retire-when bar; the `SKILL.md` link closes the companion route-catalog
+targeting gap. The recipe body stays in place as the recovery reference those
+named links point at.
 
 Docs-only. No `.ts` change (ADR 0002 keeps the CLI read-only). The governing
 verification is `contract-drift.test.ts` (109 tests), which reads the real docs
 and checks them against the live contract; `route.test.ts` (77 tests) must also
-stay green.
+stay green. Use the Bun MCP runner for the two focused test files, falling back
+to the repo CLI only if the runner is unavailable.
 
 ---
 
@@ -42,9 +45,9 @@ stay green.
 Three coordinated edits across three markdown files, with a strict ordering
 constraint: the two links (Gap A and Gap B) must both be in place *before*
 recipe 2.3's retire-when bar is converted to a retirement record, because the
-retirement record asserts that both links now satisfy the bar. Writing the
-retirement record before the links exist would make the record's claim false
-and would create the exact cross-file contradiction AC6 forbids.
+retirement record names both completed targeting gaps. Writing the retirement
+record before the links exist would make the record's claim false and would
+create the exact cross-file contradiction AC6 forbids.
 
 The work mirrors a known-good precedent: recipes 2.1, 2.2, and 2.4 were retired
 in #83 with an established phrasing pattern. This plan reuses that pattern
@@ -75,7 +78,7 @@ specification.*
 
 ```
 U1 (add ledger-and-helper.md -> 2.3 link)  ─┐
-                                            ├─> U3 (retire 2.3 bar; assert both links satisfy it)
+                                            ├─> U3 (retire 2.3 bar; record both targeting gaps closed)
 U2 (add SKILL.md -> 2.3 link)              ─┘
 ```
 
@@ -173,14 +176,15 @@ text changed.
 
 **Goal:** Recipe 2.3's retire-when bar in `first-run-gotchas.md` is converted to
 a retirement record (marked retired per the entry-governance contract, recipe
-body retained), recording that both links from U1 and U2 now satisfy it (AC3),
-with no contradiction across the three edited surfaces (AC6) and both test
-suites green (AC5).
+body retained), recording that the U1 `ledger-and-helper.md` link satisfies the
+literal retire-when bar and the U2 `SKILL.md` link closes the companion
+route-catalog targeting gap (AC3), with no contradiction across the three edited
+surfaces (AC6) and both test suites green (AC5).
 
 **Requirements:** AC3, AC4, AC5, AC6.
 
-**Dependencies:** U1, U2 (the retirement record asserts both links exist; both
-must land first).
+**Dependencies:** U1, U2 (the retirement record names both links; both must land
+first).
 
 **Files:**
 - `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`
@@ -188,41 +192,42 @@ must land first).
 **Approach:** Convert recipe 2.3's retire-when bar (lines 385-388) using the
 exact pattern #83 applied to 2.1, 2.2, and 2.4: keep the original "**Retire
 when**" sentence, then append a "**Retired 2026-05 (issue #87):**" sentence
-recording what now satisfies the bar, closing with "The recipe content is kept
-as the recovery reference the named link points at; this entry is retired from
-the 'open follow-up' sense, not deleted." Because recipe 2.3 is satisfied by
-*two* links (Gap A in `ledger-and-helper.md` and Gap B in `SKILL.md`), the
-retirement sentence must reference both: the `ledger-and-helper.md`
-digest-recheck recovery-sequence link (which is the literal bar) and, for
-parity, the `SKILL.md` route_catalog named link. Keep the **Owner:** line and
-the full recipe body (Symptom / Command / JSON fields / What the fields prove /
-Recovery / Model note) unchanged. After editing, run the two test suites and
-re-read all three edited surfaces to confirm AC6 (no contradiction): the
-SKILL.md bullet, the ledger-and-helper digest-recheck paragraph, and the recipe
-2.3 retirement record must agree on what links exist and what they satisfy.
+recording what now closes the open follow-up, closing with "The recipe content
+is kept as the recovery reference the named link points at; this entry is
+retired from the 'open follow-up' sense, not deleted." The retirement sentence
+must reference both completed targeting gaps while distinguishing their roles:
+the `ledger-and-helper.md` digest-recheck recovery-sequence link satisfies the
+literal retire-when bar, and the `SKILL.md` route_catalog named link closes the
+companion per-route targeting gap. Keep the **Owner:** line and the full recipe
+body (Symptom / Command / JSON fields / What the fields prove / Recovery / Model
+note) unchanged. After editing, run the two test suites and re-read all three
+edited surfaces to confirm AC6 (no contradiction): the SKILL.md bullet, the
+ledger-and-helper digest-recheck paragraph, and the recipe 2.3 retirement record
+must agree on what links exist and what each link closes.
 
 **Execution note:** Apply this unit's edit last within the batch — after U1 and
-U2 are in the working tree — so the retirement record's assertion that both
-links exist is true at the moment it is written.
+U2 are in the working tree — so the retirement record's claims about both links
+are true at the moment it is written.
 
 **Patterns to follow:** Recipe 2.1 retirement record (lines 297-306), 2.2
 (336-344), 2.4 (425-433); the entry-governance contract (lines 56-64) requiring
 each entry to end with Owner and Retire when lines.
 
 **Test scenarios:**
-- `route.test.ts` stays green at 77/77 (AC5) — no route contract touched.
-- `contract-drift.test.ts` stays green at 109/109 (AC5) — the governing suite
-  reads the real docs against the live contract; it must accept the new links
-  and the retired-bar phrasing.
+- `route.test.ts` stays green at 77/77 (AC5) via the Bun MCP runner's focused
+  file test — no route contract touched.
+- `contract-drift.test.ts` stays green at 109/109 (AC5) via the Bun MCP runner's
+  focused file test — the governing suite reads the real docs against the live
+  contract; it must accept the new links and the retired-bar phrasing.
 - Cross-surface consistency (AC6): after the edit, the SKILL.md route_catalog
   bullet, the ledger-and-helper digest-recheck paragraph, and the recipe 2.3
   retirement record contain no contradictory claims about which links exist or
-  what they satisfy.
+  what each link closes.
 
 **Verification:** Recipe 2.3 ends with an Owner line and a retirement record in
 the #83 pattern naming both the `ledger-and-helper.md` and `SKILL.md` links; the
-recipe body is unchanged; `bun test` on both suites passes (77/77, 109/109); a
-re-read of the three surfaces shows mutual agreement.
+recipe body is unchanged; the Bun MCP runner passes both focused test files
+(77/77, 109/109); a re-read of the three surfaces shows mutual agreement.
 
 ---
 
@@ -253,7 +258,7 @@ re-read of the three surfaces shows mutual agreement.
 
 Machine-readable batch contract for the issue-to-pr decompose helper. One batch
 per implementation unit. U3 depends on U1 and U2 because its retirement record
-asserts both links exist.
+names both links.
 
 ```yaml
 id: u1-ledger-helper-link
@@ -288,7 +293,7 @@ rationale: null
 ```yaml
 id: u3-retire-recipe-2-3
 name: Retire recipe 2.3 retire-when bar and verify no contradiction
-goal: Recipe 2.3's retire-when bar in first-run-gotchas.md is retired (marked retired per the entry-governance contract, recipe body retained), recording that both links satisfy it, with no contradiction across the three edited surfaces and both test suites green.
+goal: Recipe 2.3's retire-when bar in first-run-gotchas.md is retired (marked retired per the entry-governance contract, recipe body retained), recording that the ledger-and-helper.md link satisfies the literal retire-when bar and the SKILL.md link closes the companion route-catalog targeting gap, with no contradiction across the three edited surfaces and both test suites green.
 files:
   - runbooks/issue-to-pr-v2/references/first-run-gotchas.md
 depends_on:
@@ -299,7 +304,7 @@ acceptance_tests:
   - "AC 3 holds: recipe 2.3 ends with an Owner line and a retirement record in the #83 pattern naming both the ledger-and-helper.md and SKILL.md links; the recipe body is retained."
   - "AC 4 holds: no change to lib/route.ts, requiredReferenceIdsFor, or CLI runtime behavior across the cumulative diff."
   - "AC 5 holds: route.test.ts stays green (77/77) and contract-drift.test.ts stays green (109/109)."
-  - "AC 6 holds: the SKILL.md route_catalog bullet, the ledger-and-helper digest-recheck paragraph, and the recipe 2.3 retirement record contain no contradictory claims about which links exist or what they satisfy."
+  - "AC 6 holds: the SKILL.md route_catalog bullet, the ledger-and-helper digest-recheck paragraph, and the recipe 2.3 retirement record contain no contradictory claims about which links exist or what each link closes."
 ac_mapping:
   - 3
   - 4
