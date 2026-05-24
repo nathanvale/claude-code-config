@@ -14,6 +14,10 @@ import { execPath } from "node:process";
 import { join } from "node:path";
 
 import {
+  type DocClaims,
+  type DriftFinding,
+  checkGotchasRelationship,
+  compareClaimsToFacts,
   extractDocClaims,
   finiteChildKeys,
   loadContractFacts,
@@ -1061,5 +1065,430 @@ describe("F16: scoped-link title and image mis-parse", () => {
     );
     const readme = claims.scopedLinks.find((l) => l.token === "README");
     expect(readme?.resolvedTarget).toBe("runbooks/issue-to-pr-v2/README.md");
+  });
+});
+
+/**
+ * Issue #81 — batch 3 (claim-fact comparator).
+ *
+ * `compareClaimsToFacts(claims, facts, opts?)` membership-tests each extracted
+ * claim against the corresponding live fact set and returns structured
+ * `DriftFinding[]` — never throws on a missing CLAIM target (that is drift
+ * DATA), exact-match only (no case normalization, Key Decision 6).
+ * `checkGotchasRelationship(opts?)` verifies the deterministic control-plane
+ * relationship the workflow relies on (Key Decision 7).
+ *
+ * The "must-not-drift" anchors here come from the LIVE CLI facts and the real
+ * docs, never a hardcoded contract list (AC5). Synthetic drift fixtures use
+ * tokens that provably are NOT contract values (e.g. `frobnicate`).
+ */
+
+/** Build a minimal claims object with only the fields a test cares about. */
+function claimsFrom(partial: Partial<DocClaims>): DocClaims {
+  return {
+    docPath: partial.docPath ?? "doc.md",
+    routeIds: partial.routeIds ?? [],
+    commands: partial.commands ?? [],
+    slices: partial.slices ?? [],
+    packetRoles: partial.packetRoles ?? [],
+    fieldPaths: partial.fieldPaths ?? [],
+    scopedLinks: partial.scopedLinks ?? [],
+  };
+}
+
+/** A bare DocClaim with a fixed line/context for synthetic fixtures. */
+function claim(token: string): { token: string; line: number; context: string } {
+  return { token, line: 1, context: token };
+}
+
+/** Findings of one kind, terse. */
+function findingsOfKind(
+  findings: DriftFinding[],
+  kind: DriftFinding["kind"],
+): DriftFinding[] {
+  return findings.filter((f) => f.kind === kind);
+}
+
+describe("AC1: route-ID claim membership against facts.routeIds", () => {
+  test("a route-ID claim absent from facts.routeIds produces exactly one route-id finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim("blocked-nonexistent-route")] }),
+      facts,
+    );
+    const routeFindings = findingsOfKind(findings, "route-id");
+    expect(routeFindings.length).toBe(1);
+    expect(routeFindings[0].claim).toBe("blocked-nonexistent-route");
+  });
+
+  test("a route-ID claim present in facts.routeIds produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const live = facts.routeIds[0];
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim(live)] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "route-id").length).toBe(0);
+  });
+});
+
+describe("AC2: command / slice / packet-role claim membership", () => {
+  test("an unknown command claim produces one command finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ commands: [claim("frobnicate")] }),
+      facts,
+    );
+    const commandFindings = findingsOfKind(findings, "command");
+    expect(commandFindings.length).toBe(1);
+    expect(commandFindings[0].claim).toBe("frobnicate");
+  });
+
+  test("an unknown slice claim produces one slice finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ slices: [claim("not_a_slice")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "slice").length).toBe(1);
+    expect(findingsOfKind(findings, "slice")[0].claim).toBe("not_a_slice");
+  });
+
+  test("an unknown packet-role claim produces one packet-role finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ packetRoles: [claim("buildmaster")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "packet-role").length).toBe(1);
+    expect(findingsOfKind(findings, "packet-role")[0].claim).toBe("buildmaster");
+  });
+
+  test("a live command / slice / packet-role claim produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        commands: [claim(facts.commandNames[0])],
+        slices: [claim(facts.contractSlices[0])],
+        packetRoles: [claim(facts.packetRoles[0])],
+      }),
+      facts,
+    );
+    expect(findings.length).toBe(0);
+  });
+});
+
+describe("AC3: data.* field-path claim membership against response shapes", () => {
+  test("an unknown field-path claim produces one field-path finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ fieldPaths: [claim("data.totally_made_up")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "field-path").length).toBe(1);
+    expect(findingsOfKind(findings, "field-path")[0].claim).toBe(
+      "data.totally_made_up",
+    );
+  });
+
+  test("a field-path that exists in EITHER state or diagnose shape is not drift", async () => {
+    const facts = await loadContractFacts();
+    // Pick a state-only and a diagnose-only path to prove the union semantics.
+    const stateOnly = facts.responseFieldPaths.state[0];
+    const diagnoseOnly = facts.responseFieldPaths.diagnose.find(
+      (p) => !facts.responseFieldPaths.state.includes(p),
+    );
+    const claims = [claim(stateOnly)];
+    if (diagnoseOnly) claims.push(claim(diagnoseOnly));
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ fieldPaths: claims }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "field-path").length).toBe(0);
+  });
+});
+
+describe("Key Decision 6: exact-match comparison, no case normalization", () => {
+  test("a wrong-case route id `Blocked-Stage-3` is drift; the exact form is not", async () => {
+    const facts = await loadContractFacts();
+    // Use a known live blocked route in its exact lowercase form, then mangle
+    // the case. The facts are sourced live, so this never hardcodes a value.
+    const exact = facts.routeIds.find((id) => id.startsWith("blocked-"));
+    expect(exact).toBeDefined();
+    const exactId = exact as string;
+    const mangled = exactId
+      .split("-")
+      .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
+      .join("-");
+
+    const driftFindings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim(mangled)] }),
+      facts,
+    );
+    expect(findingsOfKind(driftFindings, "route-id").length).toBe(1);
+
+    const cleanFindings = await compareClaimsToFacts(
+      claimsFrom({ routeIds: [claim(exactId)] }),
+      facts,
+    );
+    expect(findingsOfKind(cleanFindings, "route-id").length).toBe(0);
+  });
+
+  test("a wrong-case field path `data.Route_ID` is drift", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ fieldPaths: [claim("data.Route_ID")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "field-path").length).toBe(1);
+  });
+});
+
+describe("AC4: scoped-link existence checking", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+
+  test("a scoped link to a missing recovery doc produces one scoped-link finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+        scopedLinks: [
+          {
+            ...claim("missing recipe"),
+            rawTarget: "no-such-recovery-doc.md",
+            resolvedTarget:
+              "runbooks/issue-to-pr-v2/references/no-such-recovery-doc.md",
+          },
+        ],
+      }),
+      facts,
+      { repoRoot },
+    );
+    const linkFindings = findingsOfKind(findings, "scoped-link");
+    expect(linkFindings.length).toBe(1);
+    expect(linkFindings[0].claim).toBe(
+      "runbooks/issue-to-pr-v2/references/no-such-recovery-doc.md",
+    );
+  });
+
+  test("a scoped link to an existing file produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+        scopedLinks: [
+          {
+            ...claim("first-run-gotchas.md"),
+            rawTarget: "first-run-gotchas.md",
+            resolvedTarget:
+              "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+          },
+        ],
+      }),
+      facts,
+      { repoRoot },
+    );
+    expect(findingsOfKind(findings, "scoped-link").length).toBe(0);
+  });
+
+  test("a directory target that exists produces no finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath: "runbooks/issue-to-pr-v2/references/some-doc.md",
+        scopedLinks: [
+          {
+            ...claim("issue-to-pr"),
+            rawTarget: "../../issue-to-pr/",
+            // Resolves to an existing directory.
+            resolvedTarget: "skills/issue-to-pr",
+          },
+        ],
+      }),
+      facts,
+      { repoRoot },
+    );
+    expect(findingsOfKind(findings, "scoped-link").length).toBe(0);
+  });
+});
+
+describe("AC4: first-run-gotchas relationship check", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+
+  test("the real SKILL.md + ledger-and-helper.md relationship produces no finding", async () => {
+    const findings = await checkGotchasRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("a missing 7b control-plane load in SKILL.md produces one relationship finding", async () => {
+    // Mock SKILL.md without the deterministic 7b first-run-gotchas load.
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-skill-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
+    const ledgerPath = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const gotchasPath = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    await Bun.write(skillPath, "# Skill\n\nNo deterministic gotchas load here.\n");
+    await Bun.write(
+      ledgerPath,
+      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
+    );
+    await Bun.write(gotchasPath, "# First run gotchas\n");
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findingsOfKind(findings, "scoped-link").length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a missing ledger-and-helper link to first-run-gotchas.md produces one finding", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-ledger-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
+    const ledgerPath = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    const gotchasPath = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+    );
+    await Bun.write(
+      skillPath,
+      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
+    );
+    // ledger doc has the blocked section but NO link to the gotchas guide.
+    await Bun.write(
+      ledgerPath,
+      "### Blocked route ids\n\nNo recovery link here.\n",
+    );
+    await Bun.write(gotchasPath, "# First run gotchas\n");
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a link to a first-run-gotchas.md that does not exist on disk produces a finding", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-target-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
+    const ledgerPath = join(
+      dir,
+      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    );
+    await Bun.write(
+      skillPath,
+      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
+    );
+    await Bun.write(
+      ledgerPath,
+      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
+    );
+    // Deliberately DO NOT write first-run-gotchas.md — the link target is broken.
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findings.length).toBeGreaterThanOrEqual(1);
+      expect(findings.some((f) => f.kind === "scoped-link")).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a MISSING protected scoped doc is a hard error, not a finding", async () => {
+    // checkGotchasRelationship must read SKILL.md and ledger-and-helper.md;
+    // if a doc it is asked to read is absent, that is a hard error (throw),
+    // distinct from a missing LINK target which is a finding (Key Decision 8).
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-hard-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    // Empty dir: SKILL.md does not exist.
+    await Bun.$`mkdir -p ${dir}`.quiet();
+    try {
+      await expect(checkGotchasRelationship({ repoRoot: dir })).rejects.toThrow();
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+});
+
+describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+  const liveDocs = [
+    "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/README.md",
+    "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+    "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ];
+
+  test("each of the 4 scoped docs reconciles cleanly against live facts", async () => {
+    const facts = await loadContractFacts();
+    for (const rel of liveDocs) {
+      const text = await Bun.file(join(repoRoot, rel)).text();
+      const claims = extractDocClaims(text, rel);
+      const findings = await compareClaimsToFacts(claims, facts, { repoRoot });
+      // The clean-pass invariant batch 4 depends on: zero drift per real doc.
+      if (findings.length > 0) {
+        throw new Error(
+          `clean-pass violated for ${rel}: ${JSON.stringify(findings, null, 2)}`,
+        );
+      }
+      expect(findings.length).toBe(0);
+    }
+  });
+
+  test("the live gotchas relationship check returns zero findings", async () => {
+    const findings = await checkGotchasRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("comparator returns findings as DATA, never throws on claim drift", () => {
+  test("multiple drift kinds in one claims set are all reported together", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        routeIds: [claim("blocked-nope")],
+        commands: [claim("frobnicate")],
+        slices: [claim("not_a_slice")],
+        packetRoles: [claim("buildmaster")],
+        fieldPaths: [claim("data.nope")],
+      }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "route-id").length).toBe(1);
+    expect(findingsOfKind(findings, "command").length).toBe(1);
+    expect(findingsOfKind(findings, "slice").length).toBe(1);
+    expect(findingsOfKind(findings, "packet-role").length).toBe(1);
+    expect(findingsOfKind(findings, "field-path").length).toBe(1);
+  });
+
+  test("each finding carries doc, kind, claim, and a human reason", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ docPath: "some/doc.md", routeIds: [claim("blocked-nope")] }),
+      facts,
+    );
+    const f = findings[0] as DriftFinding;
+    expect(f.doc).toBe("some/doc.md");
+    expect(f.kind).toBe("route-id");
+    expect(f.claim).toBe("blocked-nope");
+    expect(typeof f.reason).toBe("string");
+    expect(f.reason.length).toBeGreaterThan(0);
   });
 });

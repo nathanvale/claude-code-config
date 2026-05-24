@@ -878,3 +878,288 @@ export function extractDocClaims(docText: string, docPath: string): DocClaims {
     scopedLinks: extractScopedLinks(docText, docPath),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Batch 3: claim-fact comparator + first-run-gotchas relationship check
+// ---------------------------------------------------------------------------
+
+/** The kind of contract token a drift finding is about. */
+export type DriftKind =
+  | "route-id"
+  | "command"
+  | "slice"
+  | "packet-role"
+  | "field-path"
+  | "scoped-link";
+
+/**
+ * A single structured drift finding. `doc` is the source doc the claim came
+ * from, `kind` is which fact set the claim failed to match, `claim` is the
+ * offending token (the route id / command / slice / role / dotted path, or
+ * the resolved link target for `scoped-link`), and `reason` is a short
+ * human-readable explanation for an operator. Findings are DATA — the
+ * comparator returns them, it never throws on a claim that fails to match.
+ */
+export type DriftFinding = {
+  doc: string;
+  kind: DriftKind;
+  claim: string;
+  reason: string;
+  /** 1-based source line of the claim, for operator pointing. */
+  line: number;
+};
+
+/**
+ * Options shared by the comparator and the relationship check. `repoRoot` is
+ * the directory that scoped-link `resolvedTarget`s and the relationship
+ * doc paths resolve against. It defaults to the repo root two levels above
+ * this module (`runbooks/issue-to-pr-v2/` → repo root), matching how
+ * `extractDocClaims` emits repo-relative resolved targets when given
+ * repo-relative doc paths.
+ */
+export type CompareOptions = {
+  repoRoot?: string;
+};
+
+/** Default repo root: two levels up from `runbooks/issue-to-pr-v2/`. */
+function defaultRepoRoot(): string {
+  return join(import.meta.dir, "..", "..");
+}
+
+/**
+ * Test whether a filesystem path exists (file OR directory). Directory link
+ * targets like `../issue-to-pr/` are legitimate scoped links, so existence —
+ * not file-ness — is the check (a batch-2 reviewer flagged directory targets).
+ */
+async function pathExists(absPath: string): Promise<boolean> {
+  // Bun.file().exists() is true only for regular files; stat covers dirs too.
+  const file = Bun.file(absPath);
+  if (await file.exists()) return true;
+  try {
+    const stat = await import("node:fs/promises").then((fs) =>
+      fs.stat(absPath),
+    );
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Membership-test every extracted claim against the live contract facts and
+ * return structured drift findings. Comparison is EXACT after the extractor's
+ * wrapper trimming — no lowercasing or normalization (Key Decision 6), so a
+ * wrong-case token (`Blocked-Stage-3`, `data.Route_ID`) is drift. A claim that
+ * is NOT a member of its corresponding fact set yields exactly one finding;
+ * matching claims yield none.
+ *
+ * Field-path claims are tested against the UNION of the state and diagnose
+ * response field paths, because a doc may legitimately reference a path that
+ * exists in only one of the two shapes.
+ *
+ * Scoped-link claims are checked for target EXISTENCE on disk (file or
+ * directory) relative to `opts.repoRoot`; a missing target is one
+ * `scoped-link` finding, a present one is none. A missing LINK TARGET is drift
+ * (DATA), distinct from a missing protected DOC that the relationship check is
+ * asked to read (a hard error — see `checkGotchasRelationship`).
+ *
+ * Pure (aside from the read-only `fs.exists` checks for scoped links); never
+ * throws on a claim that fails to match, never mutates anything (AC6).
+ */
+export async function compareClaimsToFacts(
+  claims: DocClaims,
+  facts: ContractFacts,
+  opts: CompareOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = [];
+  const doc = claims.docPath;
+
+  /** Push a finding for any claim whose token is not in `valid`. */
+  const checkSet = (
+    items: DocClaim[],
+    valid: Set<string>,
+    kind: DriftKind,
+    label: string,
+  ): void => {
+    for (const c of items) {
+      if (!valid.has(c.token)) {
+        findings.push({
+          doc,
+          kind,
+          claim: c.token,
+          line: c.line,
+          reason: `doc claims ${label} \`${c.token}\` but it is not in the live CLI ${label} set.`,
+        });
+      }
+    }
+  };
+
+  checkSet(claims.routeIds, new Set(facts.routeIds), "route-id", "route id");
+  checkSet(claims.commands, new Set(facts.commandNames), "command", "command");
+  checkSet(claims.slices, new Set(facts.contractSlices), "slice", "slice");
+  checkSet(
+    claims.packetRoles,
+    new Set(facts.packetRoles),
+    "packet-role",
+    "packet role",
+  );
+  checkSet(
+    claims.fieldPaths,
+    new Set([
+      ...facts.responseFieldPaths.state,
+      ...facts.responseFieldPaths.diagnose,
+    ]),
+    "field-path",
+    "field path",
+  );
+
+  // Scoped-link existence: resolve each link target against the repo root and
+  // verify it exists on disk. Missing target → one scoped-link finding.
+  for (const link of claims.scopedLinks) {
+    const abs = join(repoRoot, link.resolvedTarget);
+    if (!(await pathExists(abs))) {
+      findings.push({
+        doc,
+        kind: "scoped-link",
+        claim: link.resolvedTarget,
+        line: link.line,
+        reason: `scoped link \`[${link.token}](${link.rawTarget})\` resolves to \`${link.resolvedTarget}\`, which does not exist on disk.`,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Options for the first-run-gotchas relationship check. Paths are structural
+ * constants (the SCOPE of the relationship the workflow relies on, allowed by
+ * AC5 — they are not contract VALUES like route ids), resolved against
+ * `repoRoot`.
+ */
+export type GotchasRelationshipOptions = {
+  repoRoot?: string;
+};
+
+/**
+ * The control-plane scope the gotchas-relationship check inspects. These are
+ * structural file coordinates (Key Decision 7), not contract values.
+ */
+const GOTCHAS_GUIDE_REL = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
+const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
+const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
+/** Just the guide's basename, for matching markdown links to it. */
+const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
+
+/**
+ * Read a protected scoped doc the relationship check NEEDS. A missing doc is a
+ * HARD ERROR (throw), per Key Decision 8: the check was asked to read it, so
+ * its absence is an environment failure, not doc drift. (A missing LINK TARGET
+ * inside a doc that DOES exist is a finding, handled separately.)
+ */
+async function readProtectedDoc(absPath: string, relLabel: string): Promise<string> {
+  const file = Bun.file(absPath);
+  if (!(await file.exists())) {
+    throw new Error(
+      `contract-drift gotchas check: required scoped doc "${relLabel}" is missing at ${absPath}.`,
+    );
+  }
+  return file.text();
+}
+
+/**
+ * Verify the deterministic control-plane relationship the Issue-to-PR v2
+ * workflow relies on for the first-run-gotchas guide (Key Decision 7). Returns
+ * structured drift findings (DATA); a present, intact relationship yields an
+ * empty array. Three relationship facts are checked:
+ *
+ *  (a) `skills/issue-to-pr/SKILL.md` carries the deterministic control-plane
+ *      load of the guide for `blocked-` routes (orchestration step 7b): the
+ *      doc must mention BOTH the guide path AND a `blocked-` route trigger.
+ *  (b) `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` links from its
+ *      route-id / blocked-route section to the guide: the doc must contain a
+ *      blocked-route-ids section AND a markdown link to `first-run-gotchas.md`.
+ *  (c) every markdown link to `first-run-gotchas.md` in those scoped docs
+ *      resolves to an existing file on disk.
+ *
+ * The check does NOT require per-route deep links, and does NOT require or
+ * forbid the guide in CLI `required_reference_ids` (Key Decision 7).
+ *
+ * Hard-error boundary (Key Decision 8): SKILL.md and ledger-and-helper.md are
+ * docs the check is asked to READ, so their absence throws. A missing LINK
+ * TARGET (the guide file a doc links to) is a finding, not a throw.
+ */
+export async function checkGotchasRelationship(
+  opts: GotchasRelationshipOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = [];
+
+  const skillText = await readProtectedDoc(
+    join(repoRoot, SKILL_DOC_REL),
+    SKILL_DOC_REL,
+  );
+  const ledgerText = await readProtectedDoc(
+    join(repoRoot, LEDGER_DOC_REL),
+    LEDGER_DOC_REL,
+  );
+
+  // (a) Deterministic control-plane load in SKILL.md for blocked- routes. The
+  // load is structural: the doc references the guide PATH near a `blocked-`
+  // trigger. We require both signals to be present (not a per-route deep link).
+  const skillMentionsGuide = skillText.includes(GOTCHAS_GUIDE_REL);
+  const skillMentionsBlocked = /blocked-/.test(skillText);
+  if (!(skillMentionsGuide && skillMentionsBlocked)) {
+    findings.push({
+      doc: SKILL_DOC_REL,
+      kind: "scoped-link",
+      claim: GOTCHAS_GUIDE_REL,
+      line: 0,
+      reason:
+        "SKILL.md is missing the deterministic control-plane load of first-run-gotchas.md for `blocked-` routes (orchestration step 7b).",
+    });
+  }
+
+  // (b) ledger-and-helper.md links from its blocked-route-ids section to the
+  // guide. Require a blocked-route section heading AND a markdown link to the
+  // guide basename somewhere in the doc.
+  const ledgerHasBlockedSection = /blocked\s+route\s+ids/i.test(ledgerText);
+  const ledgerLinksGuide = new RegExp(
+    `\\]\\(\\s*${GOTCHAS_GUIDE_BASENAME.replace(/\./g, "\\.")}`,
+  ).test(ledgerText);
+  if (!(ledgerHasBlockedSection && ledgerLinksGuide)) {
+    findings.push({
+      doc: LEDGER_DOC_REL,
+      kind: "scoped-link",
+      claim: GOTCHAS_GUIDE_BASENAME,
+      line: 0,
+      reason:
+        "ledger-and-helper.md is missing the link from its blocked-route-ids section to first-run-gotchas.md.",
+    });
+  }
+
+  // (c) every markdown link to first-run-gotchas.md in the two scoped docs
+  // resolves to an existing file. A broken target is a finding (Key Decision
+  // 8), not a hard error.
+  for (const [relDoc, text] of [
+    [SKILL_DOC_REL, skillText],
+    [LEDGER_DOC_REL, ledgerText],
+  ] as const) {
+    for (const link of extractScopedLinks(text, relDoc)) {
+      if (!link.resolvedTarget.endsWith(GOTCHAS_GUIDE_BASENAME)) continue;
+      const abs = join(repoRoot, link.resolvedTarget);
+      if (!(await pathExists(abs))) {
+        findings.push({
+          doc: relDoc,
+          kind: "scoped-link",
+          claim: link.resolvedTarget,
+          line: link.line,
+          reason: `link to first-run-gotchas.md resolves to \`${link.resolvedTarget}\`, which does not exist on disk.`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
