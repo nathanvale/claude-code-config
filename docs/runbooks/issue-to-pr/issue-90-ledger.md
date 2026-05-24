@@ -162,11 +162,22 @@ batches:
     ac_mapping:
       - 4
     rationale: null
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - 8521ec3c5aac3ed0e15a4b053ef36a5a774330b8
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: 8521ec3c5aac3ed0e15a4b053ef36a5a774330b8
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+          - "runbooks/issue-to-pr-v2/lib/learnings.test.ts"
+        route_hint: "upsert-op batch (signature derivation + upsert + serializeRegistry + --upsert wiring)"
+        blockers: []
+        probe_results: []
+        notes: "loadCandidate (JSON/YAML by extension, actionable file-naming errors) + validateCandidate (shape + reused enums); shared checkEnumFields refactor; candidate evidence is a single record object (upsert-op appends to entry list); 34/34 tests green, tsc/biome clean."
+    iterations: 1
+    final_verdict: converged
   - id: "upsert-op"
     name: "Signature dedupe, evidence append, lifecycle update, and canonical-overwrite protection"
     goal: "Upsert appends run evidence and updates lifecycle fields without silently overwriting canonical fields such as summary, owner, or retirement condition unless the candidate explicitly marks a canonical update."
