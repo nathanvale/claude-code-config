@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-24T19:22:06+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-24T19:49:30+10:00"
 plan_digest: "sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95"
 batch_contract_digest: "sha256:0ab4f02c55fa216e380f4426dd04c536fd5bf74bb478dea40b3208dfdfcc9f77"
 ac_digest: "sha256:4a1d14bb0a7e06950920439c60ff0a548d5ad544dc6a76b76ae647ab57470983"
@@ -182,6 +182,7 @@ findings: []
 - 2026-05-24T19:34:05+10:00 - Stage 4 validator wave for `runbook-heal-merge-guard`: Builder commit `e4f0b342a614d62740e4abf3c34b836d430fa4bd` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`, and `ce-kieran-typescript-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
 - 2026-05-24T19:35:04+10:00 - Stage 4 lifecycle: started `stage5-p2-policy` batch after dependency `runbook-heal-merge-guard` converged and host readiness check passed.
 - 2026-05-24T19:41:58+10:00 - Stage 4 validator wave for `stage5-p2-policy`: Builder commit `395a8aad8a5ff0aec4c654e2b206b705bc6a74ee` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, and `ce-adversarial-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
+- 2026-05-24T19:49:30+10:00 - Stage 5 final review: cumulative `main...HEAD` review dispatched to `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`, and `ce-kieran-typescript-reviewer`; all returned zero findings, zero residual risks, and zero testing gaps. Local checks already run: `bun_testFile runbooks/issue-to-pr-v2/lib/ledger.test.ts` passed 76/76, `tsc_check runbooks/issue-to-pr-v2/lib/ledger.ts` passed, and `biome_lintCheck runbooks/issue-to-pr-v2` reported 0 errors with 2 existing runner warnings lacking file locations.
 
 ### runbook_version skew continuation evidence (U6)
 
