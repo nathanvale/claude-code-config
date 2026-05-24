@@ -55,8 +55,9 @@ Recommended rationale format: `replacement-contract: <reason>`.
 `builder_attempts` is the compact persisted audit trail for well-formed Builder
 envelopes. Each attempt row contains `attempt_type`, `status`, `commit_sha`,
 `files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
-Persisted `blockers` and `probe_results` are compact string summaries, not raw
-Builder envelope object arrays. Rich Builder evidence stays transient for
+Persisted `blockers` and `probe_results` are YAML lists of compact string
+summaries (use `[]` when empty), not raw Builder envelope object arrays;
+`notes` is a single string. Rich Builder evidence stays transient for
 Validator handoff or summarized in Notes.
 Well-formed Builder fail-stops count as Builder attempts and increment
 `iterations`; fail-stop attempts use `commit_sha: null` and do not append to

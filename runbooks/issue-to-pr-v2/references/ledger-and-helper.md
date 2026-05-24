@@ -176,7 +176,9 @@ Stage 4 mutates batch entries at runtime to add:
   this batch.
 - `builder_attempts`: compact records, one per well-formed Builder envelope,
   each with `attempt_type`, `status`, `commit_sha`, `files_touched`,
-  `route_hint`, `blockers`, `probe_results`, `notes`. Rich envelope evidence
+  `route_hint`, `blockers`, `probe_results`, `notes`. `blockers` and
+  `probe_results` are YAML lists of compact strings (`[]` when empty);
+  `notes` is a single string. Rich envelope evidence
   (implementation steps, tests run, assumptions, risks, deferred, suggested
   Validator focus) is **not** persisted here; it lives in Notes or is passed to
   Validators.
