@@ -39,8 +39,8 @@ row in `## Notes` (see the evidence shape below).
 
 ## Acceptance criteria
 
-- [ ] A decision is recorded (either "keep always-on wave in Stage 4" with rationale, or a designed reduced-wave gate)
-- [ ] If a reduced-wave path is added: the gate is conservative, the reduction is logged in Notes, and tests pin both the gated-in and gated-out cases
+- [x] A decision is recorded (either "keep always-on wave in Stage 4" with rationale, or a designed reduced-wave gate) — recorded in `docs/adr/0003-stage-4-keeps-always-on-validator-wave.md` (keep the wave).
+- [x] If a reduced-wave path is added: the gate is conservative, the reduction is logged in Notes, and tests pin both the gated-in and gated-out cases — precondition false; no reduced-wave path was added, so this AC is vacuously satisfied.
 
 ## Batches
 
