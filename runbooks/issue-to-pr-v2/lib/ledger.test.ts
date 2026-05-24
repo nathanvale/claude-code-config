@@ -1156,10 +1156,17 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
 //   915f666 — deliverable docs/scratch/hello-world.md                    REJECT
 //   7c6b569 — mixed: docs/.../parity-audit + skills/issue-to-pr/SKILL.md REJECT
 //   67f2163 — ledger path docs/runbooks/issue-to-pr/issue-71-ledger.md   REJECT
+//   dc6868a — empty: touches zero files (no-op commit)                   REJECT
 const RUNBOOK_HEAL_CONTROL_PLANE_SHA = "8be31d4";
 const RUNBOOK_HEAL_DELIVERABLE_SHA = "915f666";
 const RUNBOOK_HEAL_MIXED_SHA = "7c6b569";
 const RUNBOOK_HEAL_LEDGER_PATH_SHA = "67f2163";
+// A real, reachable-from-HEAD commit whose `touchedFilesForCommit` returns an
+// empty list (the #70 merge commit recorded no file changes against its first
+// parent). Used to exercise the empty-commit / no-op vacuous-pass guard path
+// hermetically: no git object is created and no ref is advanced, so the
+// working tree and branch history stay clean across the test run.
+const RUNBOOK_HEAL_EMPTY_COMMIT_SHA = "dc6868a";
 
 /**
  * Build a complete ledger (frontmatter + AC + optional `## Batches` + matching
@@ -1337,6 +1344,16 @@ describe("validateFindingResolution: runbook-heal closure form", () => {
         }),
       ),
     ).toThrow(/docs\/runbooks\/issue-to-pr\/issue-71-ledger\.md/);
+  });
+
+  test("AC2 REJECT empty commit: runbook-heal on a commit touching zero files fails (no vacuous pass)", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `runbook-heal ${RUNBOOK_HEAL_EMPTY_COMMIT_SHA}`,
+        }),
+      ),
+    ).toThrow(/changed no files|touches no files/);
   });
 
   test("REJECT unreachable: runbook-heal on a nonexistent 40-hex sha fails", () => {

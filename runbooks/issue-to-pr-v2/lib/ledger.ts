@@ -2590,6 +2590,9 @@ function validateLedgerOwnedFixedCommit(
 function validateControlPlaneOnlyCommit(ref: string, resolvedRef: string, context: string): void {
   const allowedPrefixes = ["runbooks/issue-to-pr-v2/", "skills/issue-to-pr/"];
   const touched = touchedFilesForCommit(resolvedRef, `${context} runbook-heal commit`);
+  if (touched.length === 0) {
+    fail(`${context} runbook-heal commit "${ref}" changed no files; a runbook-heal must touch a control-plane path`);
+  }
   for (const file of touched) {
     if (!allowedPrefixes.some((prefix) => file.startsWith(prefix))) {
       fail(`${context} runbook-heal commit "${ref}" touches non-control-plane path: ${file}`);
