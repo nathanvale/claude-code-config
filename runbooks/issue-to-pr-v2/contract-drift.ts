@@ -34,8 +34,9 @@
  * drift or make every doc claim look like drift, so we throw instead.
  */
 
-import { execPath } from "node:process";
+import { statSync } from "node:fs";
 import { join, posix } from "node:path";
+import { execPath } from "node:process";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -905,8 +906,15 @@ export type DriftFinding = {
   kind: DriftKind;
   claim: string;
   reason: string;
-  /** 1-based source line of the claim, for operator pointing. */
-  line: number;
+  /**
+   * 1-based source line of the claim, for operator pointing. OMITTED for
+   * doc-level relationship findings that are not tied to a single line (e.g.
+   * "SKILL.md is missing the 7b control-plane load"): those point at the doc as
+   * a whole, so there is no meaningful 1-based line and `line` is left undefined
+   * rather than carrying a `0` sentinel that would contradict the 1-based
+   * contract and confuse batch-4 operator output.
+   */
+  line?: number;
 };
 
 /**
@@ -932,14 +940,13 @@ function defaultRepoRoot(): string {
  * not file-ness — is the check (a batch-2 reviewer flagged directory targets).
  */
 async function pathExists(absPath: string): Promise<boolean> {
-  // Bun.file().exists() is true only for regular files; stat covers dirs too.
+  // Bun.file().exists() is true only for regular files; statSync covers dirs
+  // too. Top-level `node:fs` import matches sibling-module house style (no
+  // inline dynamic import); node:fs is stdlib, so no new dependency.
   const file = Bun.file(absPath);
   if (await file.exists()) return true;
   try {
-    const stat = await import("node:fs/promises").then((fs) =>
-      fs.stat(absPath),
-    );
-    return stat.isDirectory();
+    return statSync(absPath).isDirectory();
   } catch {
     return false;
   }
@@ -1053,6 +1060,113 @@ const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
 
 /**
+ * A `blocked-` route TRIGGER. Matched as the literal `blocked-` prefix with a
+ * LEFT word boundary: not preceded by a word char or hyphen. The left-boundary
+ * anchor is what stops `unblocked-state` from counting (a batch-3 reviewer
+ * mutation): the `n` before `blocked` fails `(?<![\w-])`. We deliberately do
+ * NOT require a trailing kebab segment, because the canonical step-7b construct
+ * uses the BARE prefix ("`data.route_id` begins with `blocked-`"), where the
+ * inline-code backtick immediately follows `blocked-`. This is a structural
+ * shape, not a route-id list (AC5): it never enumerates which blocked routes
+ * exist.
+ */
+const BLOCKED_ROUTE_TRIGGER = /(?<![\w-])blocked-/;
+
+/** A load/loads verb near the trigger — the construct must EXPRESS loading. */
+const LOAD_VERB = /\bload(?:s|ed|ing)?\b/i;
+
+/**
+ * Does a bounded region reference the guide, by full repo-relative path OR by
+ * its (unambiguous-in-scope) basename? Accepting the basename keeps a
+ * legitimate `first-run-gotchas.md` link from reading as a missing-7b finding
+ * (a batch-3 reviewer false positive).
+ */
+function regionMentionsGuide(region: string): boolean {
+  return (
+    region.includes(GOTCHAS_GUIDE_REL) || region.includes(GOTCHAS_GUIDE_BASENAME)
+  );
+}
+
+/**
+ * True when SOME numbered orchestration step expresses the deterministic
+ * blocked-route load of the guide. We split the text into step blocks (a line
+ * starting with a numbered/lettered step marker like `7b.` or `8.`, its body
+ * running until the next step marker or a blank line) and require ONE block to
+ * carry all three signals together: a `blocked-` route trigger, a load verb,
+ * and a guide reference (path or basename).
+ *
+ * Anchoring on the STEP construct — not whole-doc co-occurrence and not loose
+ * proximity — is what lets the check detect deletion of step 7b. The route
+ * catalog and the reference-loading-policy table mention `blocked-` and the
+ * guide too, but they are prose/table that merely CITE step 7b; neither begins
+ * with a numbered step marker, so removing the real step makes this return
+ * false even though those citations remain. The check tolerates harmless
+ * rewording inside the step (any load verb, path or basename, any blocked-
+ * route id) and is not pinned to the literal "7b" or exact prose.
+ */
+function skillHasBlockedLoadStep(skillText: string): boolean {
+  const lines = skillText.split("\n");
+  const stepMarker = /^\s*\d+[a-z]?\.\s/;
+  let i = 0;
+  while (i < lines.length) {
+    if (!stepMarker.test(lines[i] ?? "")) {
+      i += 1;
+      continue;
+    }
+    // Collect this step block: the marker line plus continuation lines, up to
+    // the next step marker or a blank line (paragraph / list-item boundary).
+    const block: string[] = [lines[i] ?? ""];
+    let j = i + 1;
+    while (j < lines.length) {
+      const next = lines[j] ?? "";
+      if (next.trim() === "" || stepMarker.test(next)) break;
+      block.push(next);
+      j += 1;
+    }
+    const body = block.join("\n");
+    if (
+      BLOCKED_ROUTE_TRIGGER.test(body) &&
+      LOAD_VERB.test(body) &&
+      regionMentionsGuide(body)
+    ) {
+      return true;
+    }
+    i = j;
+  }
+  return false;
+}
+
+/**
+ * The body of ledger-and-helper.md's blocked-route section: the text from the
+ * `Blocked route ids` heading up to the next same-or-higher markdown heading.
+ * Returns null when no such heading exists. The heading match tolerates
+ * reasonable casing/spacing variants of "blocked route ids" (the live heading
+ * is "### Blocked route ids") without over-engineering.
+ */
+function blockedRouteSection(ledgerText: string): string | null {
+  const lines = ledgerText.split("\n");
+  const headingRe = /^(#{1,6})\s+blocked\s+route\s+ids\b/i;
+  let start = -1;
+  let level = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = headingRe.exec(lines[i] ?? "");
+    if (m) {
+      start = i;
+      level = m[1]?.length ?? 0;
+      break;
+    }
+  }
+  if (start === -1) return null;
+  const closingRe = new RegExp(`^#{1,${level}}\\s`);
+  const body: string[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (closingRe.test(lines[i] ?? "")) break;
+    body.push(lines[i] ?? "");
+  }
+  return body.join("\n");
+}
+
+/**
  * Read a protected scoped doc the relationship check NEEDS. A missing doc is a
  * HARD ERROR (throw), per Key Decision 8: the check was asked to read it, so
  * its absence is an environment failure, not doc drift. (A missing LINK TARGET
@@ -1075,11 +1189,20 @@ async function readProtectedDoc(absPath: string, relLabel: string): Promise<stri
  * empty array. Three relationship facts are checked:
  *
  *  (a) `skills/issue-to-pr/SKILL.md` carries the deterministic control-plane
- *      load of the guide for `blocked-` routes (orchestration step 7b): the
- *      doc must mention BOTH the guide path AND a `blocked-` route trigger.
+ *      load of the guide for `blocked-` routes (orchestration step 7b). This is
+ *      anchored STRUCTURALLY, not by whole-doc co-occurrence: SOME numbered
+ *      orchestration step must, within its own bounded body, tie a `blocked-`
+ *      route trigger to LOADING the guide (a load verb + the guide path or its
+ *      basename). Whole-doc co-occurrence is deliberately NOT enough — the
+ *      route catalog and the reference-loading-policy table both mention
+ *      `blocked-` and the guide elsewhere, so a co-occurrence check could not
+ *      detect deletion of the very step-7b load it exists to protect.
  *  (b) `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` links from its
- *      route-id / blocked-route section to the guide: the doc must contain a
- *      blocked-route-ids section AND a markdown link to `first-run-gotchas.md`.
+ *      route-id / blocked-route section to the guide: the doc's blocked-route
+ *      section region (the heading through the next same-or-higher heading)
+ *      must itself contain a markdown link to `first-run-gotchas.md`. A guide
+ *      link that lives only in some OTHER section (e.g. a cross-references
+ *      footer) does not satisfy the relationship.
  *  (c) every markdown link to `first-run-gotchas.md` in those scoped docs
  *      resolves to an existing file on disk.
  *
@@ -1105,37 +1228,41 @@ export async function checkGotchasRelationship(
     LEDGER_DOC_REL,
   );
 
-  // (a) Deterministic control-plane load in SKILL.md for blocked- routes. The
-  // load is structural: the doc references the guide PATH near a `blocked-`
-  // trigger. We require both signals to be present (not a per-route deep link).
-  const skillMentionsGuide = skillText.includes(GOTCHAS_GUIDE_REL);
-  const skillMentionsBlocked = /blocked-/.test(skillText);
-  if (!(skillMentionsGuide && skillMentionsBlocked)) {
+  // (a) Deterministic control-plane load in SKILL.md for blocked- routes,
+  // anchored on the orchestration STEP construct (step 7b): some numbered step
+  // must, within its own bounded body, tie a `blocked-` trigger to LOADING the
+  // guide. Not whole-doc co-occurrence — see `skillHasBlockedLoadStep`. This is
+  // a doc-level finding: it points at the doc, not a single line, so `line` is
+  // omitted (Key Decision: no `0` sentinel against a 1-based contract).
+  if (!skillHasBlockedLoadStep(skillText)) {
     findings.push({
       doc: SKILL_DOC_REL,
       kind: "scoped-link",
       claim: GOTCHAS_GUIDE_REL,
-      line: 0,
       reason:
-        "SKILL.md is missing the deterministic control-plane load of first-run-gotchas.md for `blocked-` routes (orchestration step 7b).",
+        "SKILL.md is missing the deterministic control-plane load of first-run-gotchas.md for `blocked-` routes: no numbered orchestration step ties a `blocked-` route trigger to loading the guide (orchestration step 7b).",
     });
   }
 
   // (b) ledger-and-helper.md links from its blocked-route-ids section to the
-  // guide. Require a blocked-route section heading AND a markdown link to the
-  // guide basename somewhere in the doc.
-  const ledgerHasBlockedSection = /blocked\s+route\s+ids/i.test(ledgerText);
-  const ledgerLinksGuide = new RegExp(
+  // guide. The guide link must live INSIDE the blocked-route section's region
+  // (heading through the next same-or-higher heading), not merely somewhere in
+  // the doc — a link in a cross-references footer does not satisfy Key Decision
+  // 7's "links from its blocked-route section" requirement. Doc-level finding,
+  // so `line` is omitted.
+  const ledgerBlockedSection = blockedRouteSection(ledgerText);
+  const guideLinkRe = new RegExp(
     `\\]\\(\\s*${GOTCHAS_GUIDE_BASENAME.replace(/\./g, "\\.")}`,
-  ).test(ledgerText);
-  if (!(ledgerHasBlockedSection && ledgerLinksGuide)) {
+  );
+  const ledgerSectionLinksGuide =
+    ledgerBlockedSection !== null && guideLinkRe.test(ledgerBlockedSection);
+  if (!ledgerSectionLinksGuide) {
     findings.push({
       doc: LEDGER_DOC_REL,
       kind: "scoped-link",
       claim: GOTCHAS_GUIDE_BASENAME,
-      line: 0,
       reason:
-        "ledger-and-helper.md is missing the link from its blocked-route-ids section to first-run-gotchas.md.",
+        "ledger-and-helper.md is missing the link from its blocked-route-ids section to first-run-gotchas.md (the section region itself must contain the guide link, not just the doc).",
     });
   }
 

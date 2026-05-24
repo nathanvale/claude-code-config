@@ -1320,6 +1320,72 @@ describe("AC4: first-run-gotchas relationship check", () => {
     expect(findings).toEqual([]);
   });
 
+  // F17 (load-bearing): deleting ONLY the step-7b orchestration block — while
+  // leaving the route catalog and reference-loading-policy table intact — must
+  // make signal (a) fire. This is the regression a whole-doc co-occurrence
+  // check could NOT catch: `blocked-` and the guide path both still appear
+  // elsewhere in the doc after the deletion, so the old logic returned 0
+  // findings. The structural orchestration-step anchor returns a finding.
+  test("deleting ONLY the step-7b load block (catalog + policy table intact) produces a finding", async () => {
+    const realSkill = await Bun.file(
+      join(repoRoot, "skills/issue-to-pr/SKILL.md"),
+    ).text();
+    const lines = realSkill.split("\n");
+    const stepMarker = /^\s*\d+[a-z]?\.\s/;
+    // Locate the `7b.` orchestration step block: marker line + continuation
+    // lines up to the next step marker or a blank line.
+    const start = lines.findIndex((l) => /^7b\.\s/.test(l));
+    expect(start).toBeGreaterThanOrEqual(0);
+    let end = start + 1;
+    while (
+      end < lines.length &&
+      lines[end]?.trim() !== "" &&
+      !stepMarker.test(lines[end] ?? "")
+    ) {
+      end += 1;
+    }
+    const mutated = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+
+    // Sanity-check the mutation is surgical: the route catalog and the
+    // reference-loading-policy table (which co-locate `blocked-` and the guide)
+    // survive, so whole-doc co-occurrence would still hold.
+    expect(mutated.includes("<route_catalog>")).toBe(true);
+    expect(mutated.includes("<reference_loading_policy>")).toBe(true);
+    expect(
+      mutated.includes(
+        "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+      ),
+    ).toBe(true);
+    expect(/blocked-/.test(mutated)).toBe(true);
+    // But the operative `7b.` orchestration step is gone.
+    expect(/^7b\.\s/m.test(mutated)).toBe(false);
+
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-7b-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(join(dir, "skills/issue-to-pr/SKILL.md"), mutated);
+    // A valid ledger + present guide so ONLY signal (a) can fire.
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+      "# First run gotchas\n",
+    );
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+      expect(skillFindings[0]?.kind).toBe("scoped-link");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
   test("a missing 7b control-plane load in SKILL.md produces one relationship finding", async () => {
     // Mock SKILL.md without the deterministic 7b first-run-gotchas load.
     const dir = join(
@@ -1425,6 +1491,130 @@ describe("AC4: first-run-gotchas relationship check", () => {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
   });
+
+  // F18.1: a SKILL.md whose only `blocked` token is `unblocked-...` does NOT
+  // satisfy the blocked-route trigger, so signal (a) must still fire (no real
+  // blocked-route load step exists). `unblocked-state` is a substring trap the
+  // old `/blocked-/` regex would have wrongly accepted.
+  test("an `unblocked-` token does not satisfy the blocked-route trigger", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-unblocked-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      "7b. On an `unblocked-state` route, load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+      "# First run gotchas\n",
+    );
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.2: a basename-only guide reference in the step-7b construct is a
+  // legitimate load — it must NOT produce a false 'missing 7b' finding. The
+  // basename is unambiguous in this scope, so signal (a) accepts it.
+  test("a basename-only guide reference in step 7b does not produce a false finding", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-basename-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      "7b. When `data.route_id` begins with `blocked-`, this loop also loads `first-run-gotchas.md` deterministically.\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+      "# First run gotchas\n",
+    );
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(0);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.3: a ledger whose guide link lives OUTSIDE the blocked-route section
+  // (e.g. in a cross-references footer) does NOT satisfy the relationship —
+  // Key Decision 7 requires the link to come FROM the blocked-route section.
+  test("a ledger guide-link outside the blocked-route section produces a finding", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-ledger-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
+    );
+    // The blocked-route section has NO guide link; the link only appears under
+    // a later, unrelated heading.
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\n### Cross references\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recipes.\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+      "# First run gotchas\n",
+    );
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const ledgerFindings = findings.filter(
+        (f) =>
+          f.doc === "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
+      );
+      expect(ledgerFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  // F18.3 (positive control): a guide link INSIDE the blocked-route section
+  // satisfies the relationship — no finding. Mirrors the live ledger layout.
+  test("a ledger guide-link inside the blocked-route section produces no finding", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-ledger-in-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recovery recipes.\n\n### Special route ids\n\nnothing here.\n",
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+      "# First run gotchas\n",
+    );
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      expect(findings).toEqual([]);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
 });
 
 describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => {
@@ -1436,11 +1626,34 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
     "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
   ];
 
+  // F19: docs known to carry contract tokens. Their clean pass must be EARNED
+  // by real claims being extracted and matched, not vacuously satisfied by an
+  // extractor regression that returns empty claims (which would also yield 0
+  // findings). We pin a non-empty claim floor for these.
+  const tokenCarryingDocs = new Set([
+    "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ]);
+
+  /** Total claims extracted across all kinds, for the non-empty floor. */
+  const totalClaims = (c: DocClaims): number =>
+    c.routeIds.length +
+    c.commands.length +
+    c.slices.length +
+    c.packetRoles.length +
+    c.fieldPaths.length +
+    c.scopedLinks.length;
+
   test("each of the 4 scoped docs reconciles cleanly against live facts", async () => {
     const facts = await loadContractFacts();
     for (const rel of liveDocs) {
       const text = await Bun.file(join(repoRoot, rel)).text();
       const claims = extractDocClaims(text, rel);
+      // F19: token-carrying docs must extract at least one claim, so the
+      // "zero findings" assertion below proves real matching, not an empty set.
+      if (tokenCarryingDocs.has(rel)) {
+        expect(totalClaims(claims)).toBeGreaterThan(0);
+      }
       const findings = await compareClaimsToFacts(claims, facts, { repoRoot });
       // The clean-pass invariant batch 4 depends on: zero drift per real doc.
       if (findings.length > 0) {
