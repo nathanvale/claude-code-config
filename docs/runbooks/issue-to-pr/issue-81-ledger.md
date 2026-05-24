@@ -249,7 +249,7 @@ batches:
       - 6
       - 7
     rationale: "Merges orchestration and the AC7 proof test into one unit because the fake-stale-doc test exercises the full checkContractDrift path; they live in the same file and share inseparable test scaffolding."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
