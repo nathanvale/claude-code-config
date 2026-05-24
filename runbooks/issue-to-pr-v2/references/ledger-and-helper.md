@@ -275,7 +275,7 @@ the U4 audit prompt.
 
 | Route id | When the CLI emits it |
 | --- | --- |
-| `pick-issue` | Ledger exists but the derived `confirmation_state.acceptance_criteria` is not `confirmed` — either `ac_confirmation_status` is not `confirmed`, or `ac_digest` is null/mismatched, so Stage 1 has not yet committed a digest-anchored AC checkpoint. |
+| `pick-issue` | Ledger exists but the derived `confirmation_state.acceptance_criteria` is not `confirmed` — either `ac_confirmation_status` is not `confirmed`, or it is `confirmed` with a null `ac_digest`, so Stage 1 has not yet committed a digest-anchored AC checkpoint. A non-null but mismatched `ac_digest` is `stale`, which routes to `blocked-acceptance-criteria-stale` (see the blocked-route table below), not `pick-issue`. |
 | `plan` | AC is confirmed but `frontmatter.plan_path` is null; Stage 2 has not yet recorded a plan file. |
 | `decompose` | Plan path present but `batch_contract_confirmation_status` is not `confirmed`, or no batches have been written to `## Batches`. |
 | `batch-loop` | Batch contract confirmed and at least one batch exists, but not every batch is in a terminal status (`converged` or `accepted-risk`). |

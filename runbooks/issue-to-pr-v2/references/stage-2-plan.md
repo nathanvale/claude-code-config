@@ -38,16 +38,26 @@ Stage 1).
    reported success but no file is present, re-invoke once. If still no file,
    fail-stop with `blocked_reason: ce-plan-no-output`.
 4. Record the plan path in ledger frontmatter as `plan_path`.
-5. Rename the feature branch from `feat/issue-{issue-number}-pending` to
+5. Compute and persist `plan_digest`: run
+   `decompose.ts --plan-digest <plan-path>` and write the returned value to
+   frontmatter in this same checkpoint. This is the Stage 2 digest the Stage 1
+   reference defers here (`batch_contract_digest` stays null until Stage 3).
+   Persisting `plan_digest` now while `batch_contract_digest` is still null is
+   safe: the derived `digests` confirmation axis stays `pending` until all
+   three digests are non-null, so it does not flip to `stale` or block routing
+   to `decompose`. The CLI is read-only per ADR 0002; the orchestrator writes
+   the digest field.
+6. Rename the feature branch from `feat/issue-{issue-number}-pending` to
    `feat/issue-{issue-number}-<slug-from-plan-title>`.
-6. Commit the ledger (plan path recorded) and the plan file before
-   transitioning to Stage 3:
+7. Commit the ledger (plan path and `plan_digest` recorded) and the plan file
+   before transitioning to Stage 3:
    `chore(issue-{issue-number}): record plan path`.
 
 ## Exit condition
 
-Plan file exists at the path recorded in `frontmatter.plan_path`; branch
-renamed; ledger and plan file committed; working tree clean.
+Plan file exists at the path recorded in `frontmatter.plan_path`; `plan_digest`
+is set and matches the plan file; branch renamed; ledger and plan file
+committed; working tree clean.
 
 ## Failure modes
 

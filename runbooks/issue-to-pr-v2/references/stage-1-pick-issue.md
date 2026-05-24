@@ -100,9 +100,13 @@ ledger creation, before branch preflight). See also:
    `confirmation_state.acceptance_criteria` only reaches `confirmed` when
    `ac_confirmation_status: confirmed` AND a stored `ac_digest` matches the
    ledger AC content (see `lib/ledger.ts` `readAcceptanceCriteriaState`,
-   which returns `pending` for a null `ac_digest` regardless of the status
-   string). A null `ac_digest` therefore keeps the route at `pick-issue`
-   and Stage 1 can never advance to `plan`. The `plan_digest` and
+   which checks `ac_confirmation_status` first: a `blocked`, `stale`, or
+   `pending` status short-circuits to that state, and only a `confirmed`
+   status with a null `ac_digest` falls through to `pending`). So at Stage 1,
+   when `ac_confirmation_status: confirmed` is set but `ac_digest` is still
+   null, the derived state is `pending`, which keeps the route at
+   `pick-issue` and Stage 1 can never advance to `plan`. The `plan_digest`
+   and
    `batch_contract_digest` fields stay null at Stage 1 because their source
    content (the plan, the batch contract) does not exist yet; they are
    populated at Stage 2 and Stage 3 confirmation respectively. The
