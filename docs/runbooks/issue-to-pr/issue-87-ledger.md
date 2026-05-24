@@ -150,11 +150,23 @@ batches:
       - 5
       - 6
     rationale: "merge: ACs 4 (no .ts change), 5 (suites green), and 6 (cross-surface consistency) are invariants verified over the cumulative diff at the final coordinated edit; they have no source change of their own and are mapped onto the unit that lands last and runs the governing suite."
-    status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
-    final_verdict: null
+    status: converged
+    iterations: 1
+    builder_commits:
+      - "5268706ddea24ec31870311b8c57735542e35323"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "5268706ddea24ec31870311b8c57735542e35323"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"
+        route_hint: "Recipe 2.3 retire-when bar converted to a retirement record naming both satisfying links; recipe body retained; both suites green (77/77, 109/109); AC6 three-surface re-read passed."
+        blockers: []
+        probe_results:
+          - "u1 link present in ledger-and-helper.md recovery-sequence paragraph; u2 link present in SKILL.md route_catalog bullet"
+          - "diff is single .md file, zero .ts touched (AC4); recipe 2.3 body unchanged (AC3)"
+        notes: "Retired recipe 2.3 per the #83 sibling pattern (issue #87 tag), recording the ledger-and-helper.md link as the literal bar and the SKILL.md link as the route-catalog parity gap. Builder ran 109/109 contract-drift + 77/77 route; orchestrator independently re-ran both green and confirmed no .ts in the cumulative diff."
+    final_verdict: converged
 ```
 
 ## Findings data
