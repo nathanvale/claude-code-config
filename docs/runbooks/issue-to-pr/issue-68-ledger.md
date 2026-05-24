@@ -148,6 +148,8 @@ evidence, Validator findings checkpoint evidence, reachable commit refs,
 dirty/staged path summaries>
 
 - 2026-05-24T15:22+10:00 — Stage 1: AC confirmed by Nathan (source: variant-heading, medium confidence). Tree cleaned by committing unrelated parity-audit changes (f0262d9); feature branch feat/issue-68-pending created from origin/main.
+- 2026-05-24T16:02+10:00 — Stage 4 hello-world-file: Builder implementation attempt committed 915f666 (docs/scratch/hello-world.md, byte-exact, 99 bytes). Envelope validated against git.
+- 2026-05-24T16:03+10:00 — Stage 4 hello-world-file: Validator wave dispatched 5 always-on personas (correctness, testing, maintainability, project-standards, adversarial); no conditional personas fired (single docs-only file). All returned empty findings. 0 open P0/P1.
 
 ### runbook_version skew continuation evidence (U6)
 
