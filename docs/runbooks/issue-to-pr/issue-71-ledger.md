@@ -161,7 +161,7 @@ batches:
       - 3
       - 5
     rationale: null
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
