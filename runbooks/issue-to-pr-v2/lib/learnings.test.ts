@@ -780,6 +780,98 @@ describe("serializeRegistry", () => {
   });
 });
 
+describe("validateRegistry (evidence-key whitelist, F23-extended: registry-side symmetry)", () => {
+  test("rejects a stored entry whose evidence record carries an unknown key, naming the entry and the bad key", () => {
+    // A hand-edited (or future-tool-seeded) registry with an unknown evidence
+    // key must be rejected at validateRegistry — symmetric with the candidate-
+    // side whitelist — so the F24 re-validate gate never has to fire as the
+    // primary defence. The error must name the entry and the offending key.
+    const seededBody =
+      "learnings:\n" +
+      "  - summary: \"existing\"\n" +
+      "    owner: runbook-reference\n" +
+      "    retirement_condition: \"existing\"\n" +
+      "    signature: \"sha256:registry-bogus\"\n" +
+      "    disposition: needs-evidence\n" +
+      "    status: open\n" +
+      "    confidence: medium\n" +
+      "    evidence:\n" +
+      "      - run: issue-90\n" +
+      "        affected_surface: \"x\"\n" +
+      "        what_was_wrong: \"y\"\n" +
+      "        bogus_key: \"not allowed\"\n";
+    const path = writeRegistry(registryDoc(seededBody));
+    const errors = validateRegistry(parseRegistry(path));
+    expect(errors.some((e) => /bogus_key/.test(e))).toBe(true);
+    const evidenceError = errors.find((e) => /bogus_key/.test(e));
+    // Must name the offending entry (by signature) so the operator knows what to fix.
+    expect(evidenceError).toContain("sha256:registry-bogus");
+    // Must list the allowed keys so the message is self-correcting.
+    expect(evidenceError).toMatch(/run/);
+    expect(evidenceError).toMatch(/affected_surface/);
+    expect(evidenceError).toMatch(/verification_idea/);
+  });
+
+  test("accepts a stored entry whose evidence records carry only documented keys (any subset)", () => {
+    // The PRD lets a run capture only what is known; the whitelist must
+    // tolerate documented keys being absent on a stored entry.
+    const seededBody =
+      "learnings:\n" +
+      "  - summary: \"existing\"\n" +
+      "    owner: runbook-reference\n" +
+      "    retirement_condition: \"existing\"\n" +
+      "    signature: \"sha256:registry-subset\"\n" +
+      "    disposition: needs-evidence\n" +
+      "    status: open\n" +
+      "    confidence: medium\n" +
+      "    evidence:\n" +
+      "      - run: issue-90\n" +
+      "        affected_surface: \"x\"\n" +
+      "        what_was_wrong: \"y\"\n" +
+      "      - run: issue-91\n" +
+      "        proposed_fix: \"document the gate\"\n";
+    const path = writeRegistry(registryDoc(seededBody));
+    expect(validateRegistry(parseRegistry(path))).toEqual([]);
+  });
+
+  test("--upsert rejects a hand-edited registry with a poisoned evidence key BEFORE the upsert runs, leaving the file unchanged", async () => {
+    // Integration test: the dispatcher's existing validateRegistry call (run
+    // AFTER parseRegistry, BEFORE upsert) must block the DoS pathway end-to-end
+    // and leave the on-disk file byte-identical. The error must name the
+    // offending entry and the offending key so the operator can fix it.
+    const seededBody =
+      "learnings:\n" +
+      "  - summary: \"existing\"\n" +
+      "    owner: runbook-reference\n" +
+      "    retirement_condition: \"existing\"\n" +
+      "    signature: \"sha256:dispatcher-bogus\"\n" +
+      "    disposition: needs-evidence\n" +
+      "    status: open\n" +
+      "    confidence: medium\n" +
+      "    evidence:\n" +
+      "      - run: issue-90\n" +
+      "        affected_surface: \"x\"\n" +
+      "        what_was_wrong: \"y\"\n" +
+      "        bogus_key: \"not allowed\"\n";
+    const path = writeRegistry(registryDoc(seededBody));
+    const before = readFileSync(path, "utf8");
+
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:fresh-dispatch";
+    const candidatePath = writeCandidate(
+      "candidate.json",
+      JSON.stringify(candidate, null, 2),
+    );
+
+    const result = await runRegistry(["--upsert", path, candidatePath]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/bogus_key/);
+    expect(result.stderr).toContain("sha256:dispatcher-bogus");
+    // Defence-in-depth: the registry must be byte-identical.
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+});
+
 describe("validateCandidate (evidence-key whitelist, F23: emit-yaml-unescaped-mapping-keys-corrupt-file)", () => {
   test("rejects a candidate whose evidence record carries an unknown key", () => {
     const candidate = validCandidateObject();
@@ -927,15 +1019,18 @@ describe("learnings-registry.ts --upsert", () => {
     expect(result.stdout).toMatch(/ok/i);
   });
 
-  test("re-validates the serialized bytes before writing and leaves the registry unchanged on failure (F24: dispatcher-writes-without-reparse-validate)", async () => {
-    // Stand up a valid registry whose pre-existing entry carries an evidence
-    // key that the emitter will write verbatim and that re-parse will reject
-    // (a newline embedded in the key). The candidate is valid (the new
-    // whitelist runs on the candidate, not on the pre-existing entry), but
-    // serializeRegistry will faithfully emit the poisoned key from the
-    // pre-existing entry, and the dispatcher's pre-write re-validate gate
-    // must catch the round-trip failure and refuse to write. The on-disk
-    // file must be byte-identical afterwards.
+  test("refuses to write and leaves the registry unchanged when a pre-existing entry has a poisoned evidence key (F24: defence-in-depth around bad serialized output; F23-extended makes the early gate the primary defence)", async () => {
+    // Stand up a registry whose pre-existing entry carries an evidence key
+    // outside the documented whitelist. The candidate is valid. The
+    // dispatcher must refuse to write and leave the on-disk file
+    // byte-identical, with an actionable error that names the poisoned
+    // entry and key so the operator knows exactly what to fix.
+    //
+    // With the F23-extended fix, `validateRegistry` rejects the poisoned
+    // entry EARLY (at parse time) — that is the primary defence and the
+    // path this fixture now exercises. The F24 re-validate gate (after
+    // `emitYaml`) remains in place as defence-in-depth for any future
+    // emit-side regression that produces yaml the parser would reject.
     const seededBody =
       "learnings:\n" +
       "  - summary: \"existing\"\n" +
@@ -962,10 +1057,11 @@ describe("learnings-registry.ts --upsert", () => {
 
     const result = await runRegistry(["--upsert", path, candidatePath]);
     expect(result.exitCode).not.toBe(0);
-    // The dispatcher must name the failure as a serialization / re-validate
-    // problem so an operator can fix the registry, not the candidate.
-    expect(result.stderr).toMatch(/serialize|re-?validate|round-?trip|refusing/i);
-    // The file must be byte-identical: defense-in-depth prevents silent corruption.
+    // The error must name the poisoned entry and the offending key so the
+    // operator can fix the registry, not the candidate.
+    expect(result.stderr).toContain("sha256:existing");
+    expect(result.stderr).toMatch(/rogue/);
+    // The file must be byte-identical: defence-in-depth prevents silent corruption.
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 });

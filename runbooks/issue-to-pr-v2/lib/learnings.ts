@@ -222,6 +222,30 @@ export function validateRegistry(registry: Registry): string[] {
       errors.push(
         `${label}: missing required field "evidence" (expected a list of evidence records)`,
       );
+    } else {
+      // Whitelist evidence-record keys symmetrically with `validateCandidate`.
+      // Without this, a hand-edited registry with a YAML-special evidence key
+      // would parse cleanly, then `emitYaml` would write the bad key verbatim,
+      // then the F24 re-validate gate would refuse the write, permanently
+      // DoS-ing future `--upsert` calls until an operator hand-fixed the
+      // registry. Rejecting EARLY (at parse time) names the bad entry and key
+      // so the operator knows exactly what to fix.
+      (entry.evidence as unknown[]).forEach((record) => {
+        if (
+          typeof record !== "object" ||
+          record === null ||
+          Array.isArray(record)
+        ) {
+          return;
+        }
+        for (const key of Object.keys(record as Record<string, unknown>)) {
+          if (!(ALLOWED_EVIDENCE_KEYS as readonly string[]).includes(key)) {
+            errors.push(
+              `${label}: evidence record has unknown field "${key}"; allowed fields are ${ALLOWED_EVIDENCE_KEYS.join(", ")}`,
+            );
+          }
+        }
+      });
     }
 
     // A non-string/missing enum value is already reported by the required-field
