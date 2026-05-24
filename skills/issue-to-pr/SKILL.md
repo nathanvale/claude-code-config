@@ -124,6 +124,12 @@ Start every turn in this order:
    prose route.
 7. Load every reference listed in `data.required_reference_ids`. Load
    action-specific templates only when preparing that packet or handoff.
+7b. When `data.route_id` begins with `blocked-`, this skill loop also
+   loads `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`, in
+   addition to the route's `data.required_reference_ids`. This is a
+   control-plane load layered on top of the CLI's required set: the CLI
+   does not emit the guide in `data.required_reference_ids` (by design),
+   so the loop adds it deterministically on every `blocked-` route.
 8. Execute exactly one visible workflow action for the turn: advance a
    stage, commit one lifecycle checkpoint, dispatch one Builder
    attempt, run one Validator wave, converge one batch, or fail-stop
@@ -179,7 +185,7 @@ preparing that packet or handoff.
 | Stage 2 planning | `runbooks/issue-to-pr-v2/references/stage-2-plan.md`; `runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md` |
 | Stage 3 decomposition and contract review | `runbooks/issue-to-pr-v2/references/stage-3-decompose.md` |
 | Blocked Stage 3, stale AC, stale batch contract, or stale digests | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/stage-3-decompose.md` |
-| First-run gotchas or confusing blocked-state recovery (discretionary; see note below) | `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` |
+| First-run gotchas or confusing first-run-state recovery (deterministic on `blocked-` routes, discretionary on non-blocked cryptic states; see note below) | `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` |
 | Frontmatter blocked reason | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/findings-and-validators.md` |
 | Stage 4 batch loop | `runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md` |
 | Stage 4 Builder dispatch | `runbooks/issue-to-pr-v2/references/builder-dispatch.md`; `runbooks/issue-to-pr-v2/templates/builder-work-packet.md` |
@@ -196,11 +202,15 @@ hatch semantics into this skill. If a route needs a reference that
 `data.required_reference_ids` does not name, file the drift against
 `runbooks/issue-to-pr-v2/lib/route.ts` or the packet renderer.
 
-`first-run-gotchas.md` is the one discretionary exception: it is a
-recovery overlay the operator loads when a state is confusing, not a
-CLI-required reference. `requiredReferenceIdsFor` does not return it for any
-route, and that is intentional, not a route.ts drift to file. Load it on
-operator judgment from the blocked-route path below, not because
+`first-run-gotchas.md` has a split trigger. On `blocked-` routes it is
+**deterministically loaded by this skill's loop** (orchestration step 7b)
+while **remaining absent from `data.required_reference_ids` by design**:
+`requiredReferenceIdsFor` does not return it for any route, and that is
+intentional, not a route.ts drift to file. Adding it to
+`requiredReferenceIdsFor` would still be wrong. On non-blocked but
+cryptic first-run states it stays **discretionary**: a recovery overlay
+the operator loads on judgment when a valid state is confusing. Either
+way, the load is a skill-loop decision, not because
 `data.required_reference_ids` named it.
 
 </reference_loading_policy>
@@ -232,9 +242,12 @@ plane.
 - `blocked-batch-contract-stale` and `blocked-digests-stale`: return
   to Stage 3 recompute and user confirmation.
 
-When a blocked route or a valid-but-cryptic first-run state needs a
-symptom-first CLI evidence recipe (the exact command, JSON fields, what
-they prove, and the recovery action), load
+`first-run-gotchas.md` gives a symptom-first CLI evidence recipe (the
+exact command, JSON fields, what they prove, and the recovery action).
+On any `blocked-` route the loop loads it deterministically (orchestration
+step 7b), so it is already in context for the blocked-route recovery
+above. On a valid-but-cryptic non-blocked first-run state, load it on
+operator judgment when recovery is not obvious:
 `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.
 
 Unknown route IDs are blocking findings against the runtime route
