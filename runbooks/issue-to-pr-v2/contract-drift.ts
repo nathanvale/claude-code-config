@@ -21,9 +21,10 @@
  *
  * Design law (AC6): read-only. The loader only invokes the read-only CLI
  * commands (`--help`, `contract <slice>`). It never writes files, touches
- * git, or mutates ledger state. A failed subprocess or a non-ok envelope is
- * a hard error: an empty / partial fact set would mask drift or make every
- * doc claim look like drift, so we throw instead.
+ * git, or mutates ledger state. A failed subprocess, a non-ok envelope, OR a
+ * well-formed `ok` envelope carrying an EMPTY fact set (empty arrays / empty
+ * response shapes) is a hard error: an empty / partial fact set would mask
+ * drift or make every doc claim look like drift, so we throw instead.
  */
 
 import { execPath } from "node:process";
@@ -142,7 +143,13 @@ async function readCliData(
   return envelope.data;
 }
 
-/** Read a string[] from a help/slice field, throwing when the shape is wrong. */
+/**
+ * Read a NON-EMPTY string[] from a help/slice field, throwing when the shape
+ * is wrong OR the array is empty. An empty-but-well-formed fact set (e.g. an
+ * `ok` envelope carrying `data.values: []`) is a hard error (AC6): an empty
+ * fact set masks drift or makes every doc claim look like drift, so we never
+ * return it.
+ */
 function expectStringArray(
   value: unknown,
   context: string,
@@ -150,6 +157,11 @@ function expectStringArray(
   if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
     throw new Error(
       `contract-fact loader: expected a string array for ${context}, got ${typeof value}`,
+    );
+  }
+  if (value.length === 0) {
+    throw new Error(
+      `contract-fact loader: ${context} is empty — an empty fact set would mask drift, so it is a hard error.`,
     );
   }
   return value as string[];
@@ -168,14 +180,17 @@ function expectStringArray(
  * quoted literal members) are deliberately rejected: they describe an
  * element shape, not a fixed set of `data.K.child` paths, so we must not
  * invent children for them.
+ *
+ * The array-marker / union-marker rejections are scoped to the BRACE GROUP
+ * being parsed, never the whole description string. A genuinely finite shape
+ * like `installed_artifact_presence` advertises a single boolean brace set
+ * followed by a trailing `missing: (...)[]` array SIBLING. That array marker
+ * lives outside the brace group, so it must not suppress the brace set's real
+ * children. Multi-variant unions (`blocking_gates`) are still caught
+ * structurally: they carry more than one brace group, and each variant's
+ * brace inner carries `;` / quoted-literal members that disqualify it.
  */
 function finiteChildKeys(description: string): string[] | null {
-  // Reject array-of / discriminated-union element shapes outright: their
-  // braces describe one variant, not a finite field set.
-  if (/\[\]/.test(description) || /discriminated union|\bor\b/.test(description)) {
-    return null;
-  }
-
   const braceGroups = description.match(/\{[^{}]*\}/g);
   if (!braceGroups || braceGroups.length !== 1) {
     return null;
@@ -183,6 +198,15 @@ function finiteChildKeys(description: string): string[] | null {
 
   const inner = braceGroups[0].slice(1, -1).trim();
   if (inner.length === 0) {
+    return null;
+  }
+
+  // Reject array-element / discriminated-union element shapes when the marker
+  // lives INSIDE the brace group itself (e.g. a variant that nests `[]` or
+  // spells out a union). Markers in sibling text outside the braces (a
+  // trailing `missing: (...)[]` field, a leading `Foo[]:` type annotation)
+  // describe other fields, not this finite set, so they are ignored here.
+  if (/\[\]/.test(inner) || /discriminated union|\bor\b/.test(inner)) {
     return null;
   }
 
@@ -195,7 +219,8 @@ function finiteChildKeys(description: string): string[] | null {
   for (const part of inner.split(",")) {
     // Each member is either `name` or `name: <value desc>`; take the name.
     const name = part.trim().split(":")[0]?.trim() ?? "";
-    // Quoted literals (e.g. 'route_id') are union tag values, not field keys.
+    // Quoted-literal members are union tag values, not field keys, so a
+    // member that is not a bare identifier disqualifies the whole group.
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
       return null;
     }
@@ -315,6 +340,11 @@ export async function loadContractFacts(
       "contract-fact loader: --help data.commands is not an array",
     );
   }
+  if (commands.length === 0) {
+    throw new Error(
+      "contract-fact loader: --help data.commands is empty — an empty fact set would mask drift, so it is a hard error.",
+    );
+  }
   const commandNames = commands.map((c) => {
     const name = (c as { name?: unknown }).name;
     if (typeof name !== "string") {
@@ -356,14 +386,33 @@ export async function loadContractFacts(
     diagnose_response_shape: diagnoseShape as Record<string, unknown>,
   };
 
+  const stateFieldPaths = deriveFieldPaths(shapes.state_response_shape, shapes);
+  const diagnoseFieldPaths = deriveFieldPaths(
+    shapes.diagnose_response_shape,
+    shapes,
+  );
+  // An empty response shape derives no paths. Like the other facts, an empty
+  // path set would make every `data.*` doc claim look like drift, so each
+  // shape must derive at least its top-level paths (AC6).
+  if (stateFieldPaths.length === 0) {
+    throw new Error(
+      "contract-fact loader: --help state_response_shape derived no field paths — an empty fact set would mask drift, so it is a hard error.",
+    );
+  }
+  if (diagnoseFieldPaths.length === 0) {
+    throw new Error(
+      "contract-fact loader: --help diagnose_response_shape derived no field paths — an empty fact set would mask drift, so it is a hard error.",
+    );
+  }
+
   return {
     routeIds,
     commandNames,
     contractSlices,
     packetRoles,
     responseFieldPaths: {
-      state: deriveFieldPaths(shapes.state_response_shape, shapes),
-      diagnose: deriveFieldPaths(shapes.diagnose_response_shape, shapes),
+      state: stateFieldPaths,
+      diagnose: diagnoseFieldPaths,
     },
   };
 }
