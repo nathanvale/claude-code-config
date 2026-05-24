@@ -88,11 +88,21 @@ batches:
     ac_mapping:
       - 1
     rationale: null
-    status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
-    final_verdict: null
+    status: converged
+    iterations: 1
+    builder_commits:
+      - "8f18d325e0b7d98e51788c9cdc4992a7cd4e7331"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "8f18d325e0b7d98e51788c9cdc4992a7cd4e7331"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
+        route_hint: "Hand to Validator, then orchestrator runs the suite at U3."
+        blockers: []
+        probe_results: []
+        notes: "Appended one recovery-sequence pointer sentence to the digest-recheck paragraph naming first-run-gotchas.md recipe 2.3 (blocked-digests-stale); pure 5-line addition, existing recheck instructions untouched."
+    final_verdict: converged
   - id: "u2-skill-route-catalog-link"
     name: "Add the SKILL.md route_catalog named link to recipe 2.3"
     goal: "The route_catalog blocked-batch-contract-stale and blocked-digests-stale bullet in SKILL.md links to first-run-gotchas.md recipe 2.3 by name, alongside the existing recipe 2.2 link."
@@ -176,6 +186,22 @@ findings:
     status: open
     summary: "Neither contract-drift.test.ts nor route.test.ts asserts AC6 cross-surface consistency or AC3 body-retention; both rest on the U3 git-diff re-read gate, which the Builder must treat as a hard, non-skippable check."
     resolution: ""
+  - id: F3
+    batch_id: u1-ledger-helper-link
+    signature: recovery-link-omits-recipe-2-3-fragment
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "New recovery link targets bare first-run-gotchas.md with no #23-blocked-digests-stale fragment; a reader lands at file top, not recipe 2.3. Prose names recipe 2.3 (blocked-digests-stale) and the bar only says 'links here', so the bar is satisfied; consistent with the doc's two other bare guide links. Advisory only."
+    resolution: "deferred-P3"
+  - id: F4
+    batch_id: u1-ledger-helper-link
+    signature: recovery-link-prose-density
+    persona: ce-maintainability-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "The added recovery-sequence sentence is accurate and the deep link is genuinely additive (not a duplicate of the two existing general pointers), but packs the what-vs-recipe contrast plus a long appositive into one dense clause. Splitting would lower cognitive load. Advisory only."
+    resolution: "deferred-P3"
 ```
 
 ## Findings
@@ -184,6 +210,8 @@ findings:
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 | F1 | stage-3 | wrong-test-file-paths | system-architecture-contract-reviewer | P3 | open | Real test paths are runbooks/issue-to-pr-v2/contract-drift.test.ts (not under lib/) and runbooks/issue-to-pr-v2/lib/route.test.ts; combined run reports 186 pass. Builder must use correct paths. |  |
 | F2 | stage-3 | ac6-ac3-manual-verification-only | system-architecture-contract-reviewer | P3 | open | Neither contract-drift.test.ts nor route.test.ts asserts AC6 cross-surface consistency or AC3 body-retention; both rest on the U3 git-diff re-read gate, which the Builder must treat as a hard, non-skippable check. |  |
+| F3 | u1-ledger-helper-link | recovery-link-omits-recipe-2-3-fragment | ce-adversarial-reviewer | P3 | deferred-P3 | New recovery link targets bare first-run-gotchas.md with no #23-blocked-digests-stale fragment; a reader lands at file top, not recipe 2.3. Prose names recipe 2.3 (blocked-digests-stale) and the bar only says 'links here', so the bar is satisfied; consistent with the doc's two other bare guide links. Advisory only. | deferred-P3 |
+| F4 | u1-ledger-helper-link | recovery-link-prose-density | ce-maintainability-reviewer | P3 | deferred-P3 | The added recovery-sequence sentence is accurate and the deep link is genuinely additive (not a duplicate of the two existing general pointers), but packs the what-vs-recipe contrast plus a long appositive into one dense clause. Splitting would lower cognitive load. Advisory only. | deferred-P3 |
 
 ## Notes
 
