@@ -1,8 +1,9 @@
 ---
 name: issue-to-pr
-description: Drive one GitHub issue to a PR using the v2 hot router. Use when the user says "ship issue #N", "drive issue-to-pr for #N", "open a PR for issue #N", "/issue-to-pr <N>", or any request to take a specific GitHub issue end-to-end through plan, build, validate, and ship via the per-issue ledger workflow. Defers all workflow prose, ledger schema, route ids, and Builder/Validator contracts to the v2 hot router and references; this skill is a thin entrypoint only.
+description: Drives one GitHub issue to a PR using the v2 hot router. Use when the user says "ship issue #N", "drive issue-to-pr for #N", "open a PR for issue #N", "/issue-to-pr <N>", or any request to take a specific GitHub issue end-to-end through plan, build, validate, and ship via the per-issue ledger workflow. Defers all workflow prose, ledger schema, route ids, and Builder/Validator contracts to the v2 hot router and references; this skill is a thin entrypoint only.
 argument-hint: <issue-number> [target-repo]
 user-invocable: true
+disable-model-invocation: true
 ---
 
 # /issue-to-pr
