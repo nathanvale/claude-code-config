@@ -91,10 +91,11 @@ kind, not by convenience:
 - **Mandatory gates — always stop, even under a goal.** These are the
   workflow's designed human checkpoints and safety stops: Stage 1
   acceptance-criteria confirmation, the Stage 3 batch-contract
-  confirmation (DAG, execution modes, digests), every `change_first`
-  investigation-required / `accepted-risk` decision gate, and any
-  fail-stop in `<fail_stops>`. Auto-confirming these would defeat the
-  workflow's purpose, so an active goal never skips them.
+  confirmation (DAG, execution modes, digests), both kinds of Stage 4
+  decision gate (the `change_first` investigation-required gate and the
+  `accepted-risk` gate), and any fail-stop in `<fail_stops>`.
+  Auto-confirming these would defeat the workflow's purpose, so an
+  active goal never skips them.
 - **Discretionary pauses — never stop under a goal; just proceed.** Do
   NOT ask "shall I proceed to Stage N?", "want me to run the next
   batch?", or "how should I drive the remaining batches?" between
@@ -103,10 +104,13 @@ kind, not by convenience:
   inline. Surface a checkpoint only when it is a mandatory gate above.
 - **Avoid self-inflicted permission prompts.** Prefer tool calls and
   git forms that do not trip permission/hook stops mid-run. In
-  particular, reconstruct file content with `git diff <ref> | git
-  apply` rather than `git checkout <ref> -- <path>` or `git restore
-  --source=<ref>` (both are commonly hook-blocked), and never use
-  inline interpreter `-c`/`-e` one-liners. A permission prompt for a
+  particular, reconstruct a specific file's content with
+  `git diff <ref> -- <path> | git apply` (scoping the diff to that path)
+  rather than `git checkout <ref> -- <path>` or
+  `git restore --source=<ref> <path>` (both are commonly hook-blocked),
+  and never use inline script-execution flags (Python's `-c`, Node's or
+  Ruby's `-e`, or `sh -c '...'` / `bash -c '...'` one-liners) that may
+  trip a permission or security prompt. A permission prompt for a
   genuinely-needed write is a harness-settings concern, not a reason to
   stop the goal; note it and continue once cleared.
 
