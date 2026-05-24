@@ -111,9 +111,9 @@ The artifacts a maintainer needs to find, in this order:
    The public API of each module lives in the module itself; this
    README does not restate it.
 6. **`references/`** - per-stage prose. The read trigger for each file
-   lives in its own header; the skill's reference-loading policy and the
-   support hot router name which file to open for each route id. Files
-   in this directory:
+   lives in its own header. The skill's reference-loading policy and the
+   support hot router name the file to open for each route id. Files in
+   this directory:
    `stage-1-pick-issue.md`, `stage-2-plan.md`, `stage-3-decompose.md`,
    `stage-4-batch-loop.md`, `stage-5-final-review.md`,
    `stage-6-ship.md`, `builder-dispatch.md`,
@@ -144,8 +144,9 @@ directory validates against the wrong git repository — lives in
 ## Compatibility notes
 
 - **v1 frozen on disk.** `~/.claude/runbooks/issue-to-pr/` stays
-  available as the behavior baseline the v2 refactor preserves. v2
-  is the active public runbook.
+  available as the behavior baseline the v2 refactor preserves. The
+  `issue-to-pr` skill is the active public entrypoint for the v2 asset
+  set.
 - **Ledger path is shared with v1.** See [Per-issue
   ledger](#per-issue-ledger) above. The v1-vs-v2 skew rules live in
   [`references/ledger-and-helper.md`](references/ledger-and-helper.md).
