@@ -90,7 +90,7 @@ batches:
       - 2
       - 3
     rationale: "merge: U1/U2/U3 are inseparable coordinated edits to the single file skills/issue-to-pr/SKILL.md (orchestration-loop step plus the two reconciliations it forces); splitting would create three sequential single-file batches with overlapping ownership."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
