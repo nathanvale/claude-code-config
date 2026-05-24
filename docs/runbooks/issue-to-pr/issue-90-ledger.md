@@ -88,11 +88,22 @@ batches:
     ac_mapping:
       - 1
     rationale: "proof_first: greenfield scaffold file; the right first move is a target-state parse check (Bun.YAML.parse yields { learnings: [] }) before/with creating it, as a red test would be artificial for a static doc."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - 3c523726d94866396b9894543d0663d300e6e3c2
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: 3c523726d94866396b9894543d0663d300e6e3c2
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md"
+        route_hint: "validate registry-file batch (AC1); proceed to next batch"
+        blockers: []
+        probe_results:
+          - "bun -e '...' is a silent no-op in this sandbox; proof must run from a script file"
+        notes: "Created workflow-learnings-registry.md with documented schema and a single seeded learnings: [] yaml block; proof passes (caught and fixed an inline-prose phantom second yaml block)."
+    iterations: 1
+    final_verdict: converged
   - id: "validate-op"
     name: "Registry parse, schema validation, and the --validate operation"
     goal: "A focused helper validates required fields, allowed dispositions, allowed lifecycle statuses, owner classifications, and confidence values."
@@ -221,33 +232,33 @@ findings:
     signature: readme-file-map-missing-registry-entry
     persona: ce-project-standards-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "New references/workflow-learnings-registry.md is not added to the README 'File map' item 6 which enumerates every references/*.md file by name; index is now stale"
-    resolution: null
+    resolution: deferred-P2
   - id: F4
     batch_id: registry-file
     signature: registry-single-yaml-block-no-committed-regression-guard
     persona: ce-testing-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Single-fenced-yaml-block invariant verified by a one-off parse check, not a committed regression test; later helper batches own the durable scan test"
-    resolution: null
+    resolution: deferred-P3
   - id: F5
     batch_id: registry-file
     signature: invariant-claim-mismatches-cited-helper-scope
     persona: ce-maintainability-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Prose claims the future helper uses the same fenced-yaml scan as the ledger helper, but the ledger helper is section-scoped not whole-file; registry's stricter whole-file invariant is safe but the precedent description is imprecise"
-    resolution: null
+    resolution: deferred-P3
   - id: F6
     batch_id: registry-file
     signature: read-trigger-callout-not-near-top
     persona: ce-project-standards-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Sibling references place the Read trigger callout in the header block; this file places it after three intro paragraphs (callout exists, position deviates)"
-    resolution: null
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -256,10 +267,10 @@ findings:
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 | F1 | stage-3 | u4-forward-references-u5-write-guard | correctness | P2 | open | U4 approach text forward-references the U5 write-scope guard; advisory sequencing note | |
 | F2 | stage-3 | ac6-coverage-anchored-only-on-write-scope | correctness | P2 | open | AC6 cross-cutting test coverage is machine-mapped only to U5; per-unit test scenarios cover the behaviors | |
-| F3 | registry-file | readme-file-map-missing-registry-entry | ce-project-standards-reviewer | P2 | open | New references/workflow-learnings-registry.md is not added to the README 'File map' item 6 which enumerates every references/*.md file by name; index is now stale | |
-| F4 | registry-file | registry-single-yaml-block-no-committed-regression-guard | ce-testing-reviewer | P3 | open | Single-fenced-yaml-block invariant verified by a one-off parse check, not a committed regression test; later helper batches own the durable scan test | |
-| F5 | registry-file | invariant-claim-mismatches-cited-helper-scope | ce-maintainability-reviewer | P3 | open | Prose claims the future helper uses the same fenced-yaml scan as the ledger helper, but the ledger helper is section-scoped not whole-file; registry's stricter whole-file invariant is safe but the precedent description is imprecise | |
-| F6 | registry-file | read-trigger-callout-not-near-top | ce-project-standards-reviewer | P3 | open | Sibling references place the Read trigger callout in the header block; this file places it after three intro paragraphs (callout exists, position deviates) | |
+| F3 | registry-file | readme-file-map-missing-registry-entry | ce-project-standards-reviewer | P2 | deferred-P2 | New references/workflow-learnings-registry.md is not added to the README 'File map' item 6 which enumerates every references/*.md file by name; index is now stale | deferred-P2 |
+| F4 | registry-file | registry-single-yaml-block-no-committed-regression-guard | ce-testing-reviewer | P3 | deferred-P3 | Single-fenced-yaml-block invariant verified by a one-off parse check, not a committed regression test; later helper batches own the durable scan test | deferred-P3 |
+| F5 | registry-file | invariant-claim-mismatches-cited-helper-scope | ce-maintainability-reviewer | P3 | deferred-P3 | Prose claims the future helper uses the same fenced-yaml scan as the ledger helper, but the ledger helper is section-scoped not whole-file; registry's stricter whole-file invariant is safe but the precedent description is imprecise | deferred-P3 |
+| F6 | registry-file | read-trigger-callout-not-near-top | ce-project-standards-reviewer | P3 | deferred-P3 | Sibling references place the Read trigger callout in the header block; this file places it after three intro paragraphs (callout exists, position deviates) | deferred-P3 |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
