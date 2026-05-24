@@ -502,6 +502,46 @@ findings:
     status: open
     summary: "The fenced-yaml regex is duplicated (slightly differently) in parseRegistry and serializeRegistry; the two patterns can drift silently since neither references a shared constant"
     resolution: null
+  - id: F33
+    batch_id: upsert-op
+    signature: f23-whitelist-only-covers-candidate-evidence-keys-not-registry-keys
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "F23 whitelist guards candidate evidence keys only; existing-registry entries with arbitrary or YAML-special evidence keys flow through validateRegistry, get emitted verbatim by emitYaml, and would DoS every future upsert via the F24 gate"
+    resolution: null
+  - id: F34
+    batch_id: upsert-op
+    signature: f23-evidence-value-types-not-validated-nested-shape-drifts-silently
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "validateCandidate enforces evidence KEYS but not VALUE types; an evidence value of nested object or array is upserted and emitted via JSON.stringify fallback, round-trips cleanly, and silently drifts the stored shape away from the documented string-scalar schema"
+    resolution: null
+  - id: F35
+    batch_id: upsert-op
+    signature: f24-dispatcher-write-is-non-atomic-and-races-serializeregistry-second-read
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "Dispatcher writeFileSync is not atomic and serializeRegistry performs a second readFileSync on the same path; a concurrent upsert or mid-write process kill produces lost-update or truncated registry"
+    resolution: null
+  - id: F36
+    batch_id: upsert-op
+    signature: f22-lone-utf16-surrogate-silently-replaced-with-u-fffd-on-roundtrip
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "A string containing an unpaired UTF-16 surrogate (e.g. U+D800) survives emitScalar unchanged but Bun.YAML.parse replaces it with U+FFFD on re-read; the re-validate gate passes and the value is silently mutated"
+    resolution: null
+  - id: F37
+    batch_id: upsert-op
+    signature: validateregistry-allows-evidence-list-items-that-are-not-mappings
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "validateRegistry only checks Array.isArray on evidence and does not enforce per-item shape; a hand-edited registry whose evidence list contains a scalar item passes validation but makes the next serializeRegistry throw in emitYaml, blocking all subsequent upserts"
+    resolution: null
 ```
 
 ## Findings
@@ -540,6 +580,11 @@ findings:
 | F30 | upsert-op | validate-candidate-skips-evidence-record-shape | ce-adversarial-reviewer | P2 | open | validateCandidate accepts any object as the evidence record without checking key shape or value types; adversarial keys and non-string values flow into emitYaml which assumes safe input | |
 | F31 | upsert-op | serialize-reads-file-second-time-tocttou | ce-adversarial-reviewer | P2 | open | serializeRegistry re-reads the registry from disk to capture surrounding prose, so between the dispatcher's parseRegistry call and this second read the file may have changed; produces a hybrid file. Combined with no file lock, concurrent runs silently last-write-wins | |
 | F32 | upsert-op | regex-parity-parseRegistry-serializeRegistry | ce-maintainability-reviewer | P2 | open | The fenced-yaml regex is duplicated (slightly differently) in parseRegistry and serializeRegistry; the two patterns can drift silently since neither references a shared constant | |
+| F33 | upsert-op | f23-whitelist-only-covers-candidate-evidence-keys-not-registry-keys | ce-adversarial-reviewer | P1 | open | F23 whitelist guards candidate evidence keys only; existing-registry entries with arbitrary or YAML-special evidence keys flow through validateRegistry, get emitted verbatim by emitYaml, and would DoS every future upsert via the F24 gate | |
+| F34 | upsert-op | f23-evidence-value-types-not-validated-nested-shape-drifts-silently | ce-adversarial-reviewer | P2 | open | validateCandidate enforces evidence KEYS but not VALUE types; an evidence value of nested object or array is upserted and emitted via JSON.stringify fallback, round-trips cleanly, and silently drifts the stored shape away from the documented string-scalar schema | |
+| F35 | upsert-op | f24-dispatcher-write-is-non-atomic-and-races-serializeregistry-second-read | ce-adversarial-reviewer | P2 | open | Dispatcher writeFileSync is not atomic and serializeRegistry performs a second readFileSync on the same path; a concurrent upsert or mid-write process kill produces lost-update or truncated registry | |
+| F36 | upsert-op | f22-lone-utf16-surrogate-silently-replaced-with-u-fffd-on-roundtrip | ce-adversarial-reviewer | P3 | open | A string containing an unpaired UTF-16 surrogate (e.g. U+D800) survives emitScalar unchanged but Bun.YAML.parse replaces it with U+FFFD on re-read; the re-validate gate passes and the value is silently mutated | |
+| F37 | upsert-op | validateregistry-allows-evidence-list-items-that-are-not-mappings | ce-adversarial-reviewer | P3 | open | validateRegistry only checks Array.isArray on evidence and does not enforce per-item shape; a hand-edited registry whose evidence list contains a scalar item passes validation but makes the next serializeRegistry throw in emitYaml, blocking all subsequent upserts | |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
