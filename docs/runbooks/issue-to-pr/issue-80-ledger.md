@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-24T21:45:00+10:00"
-batch_contract_confirmation_status: "pending"
-batch_contract_confirmed_at: null
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-24T21:45:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: "sha256:285da3a3724859a4047af25e29399a14c2733ba1fa21b59f6c093101ad69cb74"
-batch_contract_digest: null
+plan_digest: "sha256:2ee41531149675bbcbca7d9cd70e62183c8d52213ca081dd085da409ded5651f"
+batch_contract_digest: "sha256:2cba9f3af989eb209813bab81e4a90853dc51afcb7d1460c02e5399e876cbde8"
 ac_digest: "sha256:0b74444e5bdf8647763a3a27e40e805591b43c3d0a5544bcfbc78be05c5203e1"
 ---
 
@@ -73,7 +73,47 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "batch-1-skill-reconcile"
+    name: "Reconcile SKILL.md control-plane sections (U1+U2+U3)"
+    goal: "SKILL.md deterministically loads first-run-gotchas.md on blocked-* routes with no contradiction across orchestration-loop, reference-loading-policy, and route-catalog, and no CLI/route.ts change."
+    files:
+      - "skills/issue-to-pr/SKILL.md"
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds: <orchestration_loop> has a step that loads runbooks/issue-to-pr-v2/references/first-run-gotchas.md whenever data.route_id begins with blocked-, worded as a skill-loop load layered on the CLI required set."
+      - "AC 2 holds: git diff touches no .ts file; route.test.ts stays green; requiredReferenceIdsFor unchanged."
+      - "AC 3 holds: <reference_loading_policy> and <route_catalog> read consistently with the new step (deterministic on blocked routes, discretionary on non-blocked cryptic states); no unqualified discretionary against the blocked path; the guide stays absent from data.required_reference_ids by design."
+    ac_mapping:
+      - 1
+      - 2
+      - 3
+    rationale: "merge: U1/U2/U3 are inseparable coordinated edits to the single file skills/issue-to-pr/SKILL.md (orchestration-loop step plus the two reconciliations it forces); splitting would create three sequential single-file batches with overlapping ownership."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "batch-2-guide-and-verify"
+    name: "Reconcile first-run-gotchas.md and verify whole change (U4)"
+    goal: "The affected first-run-gotchas.md retirement triggers (2.1, 2.2, 2.4) are re-evaluated and the guide's read-trigger is reconciled, then whole-change consistency and green tests are verified."
+    files:
+      - "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"
+    depends_on:
+      - "batch-1-skill-reconcile"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 4 holds: triggers 2.1/2.2/2.4 re-evaluated against the deterministic blocked-route load; conclusion (remain open) recorded as an in-guide annotation folded into each Retire-when line; bar text left verbatim."
+      - "AC 3 holds (guide half): the guide's read-trigger (lines 3-8) is qualified to the D3 split so it no longer frames blocked-route loading as a reader's choice, matching the new deterministic load."
+    ac_mapping:
+      - 4
+    rationale: "split: U4 edits a different file (first-run-gotchas.md) from batch-1 and owns the whole-change verification gate; depends on batch-1 so the guide reconciliation matches the landed SKILL.md behavior."
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
 ```
 
 ## Findings data
