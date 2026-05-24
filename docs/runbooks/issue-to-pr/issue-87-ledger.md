@@ -88,7 +88,7 @@ batches:
     ac_mapping:
       - 1
     rationale: null
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
