@@ -249,11 +249,33 @@ batches:
       - 6
       - 7
     rationale: "Merges orchestration and the AC7 proof test into one unit because the fake-stale-doc test exercises the full checkContractDrift path; they live in the same file and share inseparable test scaffolding."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - adf73e8272b62a5669e91fdeef303f3151bba9c5
+      - 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: adf73e8272b62a5669e91fdeef303f3151bba9c5
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "validators on orchestrator-and-stale-doc-test"
+        blockers: []
+        probe_results: ["AC7 stale-doc test fails the check (load-bearing); live 4-doc clean pass ok:true; missing doc throws; entry exits 0 clean"]
+        notes: "checkContractDrift orchestrator + import.meta.main entry + AC7 fake-stale-doc test; 104 tests green."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e
+        files_touched:
+          - runbooks/issue-to-pr-v2/contract-drift.ts
+          - runbooks/issue-to-pr-v2/contract-drift.test.ts
+        route_hint: "converge orchestrator-and-stale-doc-test"
+        blockers: []
+        probe_results: ["claim-free token-doc now not clean (F21); empty scopedDocs throws (F22); real 4 docs still ok:true; entry exits 0 clean"]
+        notes: "Repaired F21/F22 (P2 silent-false-clean guards) + F23 (P3 helper dedup) + F24 (P3 entry exit-code test) in one combined commit; 109 tests green."
+    iterations: 2
+    final_verdict: converged
   - id: "out-of-scope-guard"
     name: "Out-of-scope boundary (no broad audit, no new deps, no generated docs)"
     goal: "AC 8: Broad docs consistency, all Issue-to-PR references, prose truth judgments, new CLI observability, generated docs, and new dependencies are out of scope."
@@ -462,33 +484,33 @@ findings:
     signature: orchestrator-missing-claim-floor-silent-clean-on-extractor-regression
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "checkContractDrift has no non-empty claim floor (the F19 floor lives only in the test suite); a future extractor regression or a doc rewrite that strips structural markers would yield zero claims for a token-carrying doc and the live gate would still report ok:true for it, silently disarming that doc's contract validation. Add a runtime claim-floor guard for docs known to carry contract tokens."
-    resolution: null
+    resolution: "commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e"
   - id: F22
     batch_id: orchestrator-and-stale-doc-test
     signature: empty-scopeddocs-array-returns-ok-true-checking-no-docs
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "checkContractDrift({scopedDocs: []}) returns ok:true having validated zero scoped docs (only the gotchas relationship check runs); per-doc validation is entirely bypassed with no guard against an empty scope. Test-only override so not production-reachable by default, but a caller mis-wiring scopedDocs would get a silent pass; guard against an empty scope."
-    resolution: null
+    resolution: "commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e"
   - id: F23
     batch_id: orchestrator-and-stale-doc-test
     signature: duplicate-read-protected-doc-helper
     persona: ce-maintainability-reviewer
     severity: P3
-    status: open
+    status: fixed
     summary: "Batch 4's readScopedDocOrThrow duplicates batch 3's readProtectedDoc almost exactly: both do Bun.file(absPath).exists() then throw-naming-the-doc then return file.text(), differing only in error prose; one shared helper would avoid the near-identical pair."
-    resolution: null
+    resolution: "commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e"
   - id: F24
     batch_id: orchestrator-and-stale-doc-test
     signature: runnable-entry-exit-code-untested
     persona: ce-correctness-reviewer
     severity: P3
-    status: open
+    status: fixed
     summary: "The import.meta.main runnable entry (formatFinding + console output + process.exit) is not exercised by any automated test; exit-0-on-clean / exit-1-on-drift and the report formatting are only verified manually. A regression flipping the exit code (e.g. always exit 0) would not be caught. Verified manually this run: clean exits 0, drift exits 1."
-    resolution: null
+    resolution: "commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e"
 ```
 
 ## Findings
@@ -515,10 +537,10 @@ findings:
 | F18 | claim-fact-comparator | gotchas-signal-robustness-substring-basename-section | ce-adversarial-reviewer | P2 | fixed | Gotchas-relationship signals are lexically fragile: /blocked-/ matches substrings like unblocked-; signal (a) requires the full repo-relative guide path so a legitimate basename-only reference produces a false 'missing 7b' finding; signal (b) for ledger-and-helper.md does not verify the guide link lives in the blocked-route section, and its heading regex assumes spaced 'Blocked route ids' (a hyphenated heading would false-positive). Tighten to anchor on the actual load construct and accept basename/section-scoped forms. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
 | F19 | claim-fact-comparator | live-clean-pass-no-non-empty-claim-floor | ce-testing-reviewer | P3 | fixed | The live clean-pass test asserts findings.length === 0 for the 4 real docs but pins no non-empty claim floor for command/field-path/scoped-link kinds, so a future extractor regression that silently returns empty claim arrays would keep the test green while disarming drift detection. Add a per-doc total-claims > 0 assertion. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
 | F20 | claim-fact-comparator | comparator-dynamic-fs-import-and-line-zero-sentinel | ce-maintainability-reviewer | P3 | fixed | pathExists uses inline await import('node:fs/promises') for the dir-stat fallback while sibling modules use top-level node:fs imports; and relationship findings use line: 0 as a doc-level sentinel while line is JSDoc'd as 1-based, which batch-4 operator output may render as a misleading 'line 0'. Both are stylistic nits. | commit 50a3b8f36a85cede7ce246da29846874611fe4a2 |
-| F21 | orchestrator-and-stale-doc-test | orchestrator-missing-claim-floor-silent-clean-on-extractor-regression | ce-adversarial-reviewer | P2 | open | checkContractDrift has no non-empty claim floor (the F19 floor lives only in the test suite); a future extractor regression or a doc rewrite that strips structural markers would yield zero claims for a token-carrying doc and the live gate would still report ok:true for it, silently disarming that doc's contract validation. Add a runtime claim-floor guard for docs known to carry contract tokens. |  |
-| F22 | orchestrator-and-stale-doc-test | empty-scopeddocs-array-returns-ok-true-checking-no-docs | ce-adversarial-reviewer | P2 | open | checkContractDrift({scopedDocs: []}) returns ok:true having validated zero scoped docs (only the gotchas relationship check runs); per-doc validation is entirely bypassed with no guard against an empty scope. Test-only override so not production-reachable by default, but a caller mis-wiring scopedDocs would get a silent pass; guard against an empty scope. |  |
-| F23 | orchestrator-and-stale-doc-test | duplicate-read-protected-doc-helper | ce-maintainability-reviewer | P3 | open | Batch 4's readScopedDocOrThrow duplicates batch 3's readProtectedDoc almost exactly: both do Bun.file(absPath).exists() then throw-naming-the-doc then return file.text(), differing only in error prose; one shared helper would avoid the near-identical pair. |  |
-| F24 | orchestrator-and-stale-doc-test | runnable-entry-exit-code-untested | ce-correctness-reviewer | P3 | open | The import.meta.main runnable entry (formatFinding + console output + process.exit) is not exercised by any automated test; exit-0-on-clean / exit-1-on-drift and the report formatting are only verified manually. A regression flipping the exit code (e.g. always exit 0) would not be caught. Verified manually this run: clean exits 0, drift exits 1. |  |
+| F21 | orchestrator-and-stale-doc-test | orchestrator-missing-claim-floor-silent-clean-on-extractor-regression | ce-adversarial-reviewer | P2 | fixed | checkContractDrift has no non-empty claim floor (the F19 floor lives only in the test suite); a future extractor regression or a doc rewrite that strips structural markers would yield zero claims for a token-carrying doc and the live gate would still report ok:true for it, silently disarming that doc's contract validation. Add a runtime claim-floor guard for docs known to carry contract tokens. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
+| F22 | orchestrator-and-stale-doc-test | empty-scopeddocs-array-returns-ok-true-checking-no-docs | ce-adversarial-reviewer | P2 | fixed | checkContractDrift({scopedDocs: []}) returns ok:true having validated zero scoped docs (only the gotchas relationship check runs); per-doc validation is entirely bypassed with no guard against an empty scope. Test-only override so not production-reachable by default, but a caller mis-wiring scopedDocs would get a silent pass; guard against an empty scope. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
+| F23 | orchestrator-and-stale-doc-test | duplicate-read-protected-doc-helper | ce-maintainability-reviewer | P3 | fixed | Batch 4's readScopedDocOrThrow duplicates batch 3's readProtectedDoc almost exactly: both do Bun.file(absPath).exists() then throw-naming-the-doc then return file.text(), differing only in error prose; one shared helper would avoid the near-identical pair. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
+| F24 | orchestrator-and-stale-doc-test | runnable-entry-exit-code-untested | ce-correctness-reviewer | P3 | fixed | The import.meta.main runnable entry (formatFinding + console output + process.exit) is not exercised by any automated test; exit-0-on-clean / exit-1-on-drift and the report formatting are only verified manually. A regression flipping the exit code (e.g. always exit 0) would not be caught. Verified manually this run: clean exits 0, drift exits 1. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
 
 ## Notes
 
