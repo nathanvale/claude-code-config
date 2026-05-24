@@ -298,11 +298,12 @@ commits more work against criteria that moved.
 **Retire when** the `blocked-acceptance-criteria-stale` bullet in the
 `SKILL.md` `<route_catalog>` block points to this recipe by name (a
 per-route link, not the generic blocked-route paragraph that already exists
-below those bullets). (Re-evaluated 2026-05 against the deterministic
-blocked-route load, issue #80: still open. Step 7b loads the whole guide on
-every `blocked-` route, which improves *loading*, not *per-recipe
-targeting* — it does not point the agent at this recipe by name, so the
-per-route `<route_catalog>` link this bar requires is still absent.)
+below those bullets). **Retired 2026-05 (issue #83):** the
+`blocked-acceptance-criteria-stale` bullet in the `SKILL.md`
+`<route_catalog>` block now links to this recipe (2.1) by name, satisfying
+the bar. The recipe content is kept as the recovery reference the named
+link points at; this entry is retired from the "open follow-up" sense, not
+deleted.
 
 ### 2.2 `blocked-batch-contract-stale`
 
@@ -336,11 +337,11 @@ human confirmation before Builders run against it.
 **Retire when** the `blocked-batch-contract-stale` bullet in the `SKILL.md`
 `<route_catalog>` block points to this recipe by name (a per-route link, not
 the generic blocked-route paragraph that already exists below those
-bullets). (Re-evaluated 2026-05 against the deterministic blocked-route
-load, issue #80: still open. Step 7b loads the whole guide on every
-`blocked-` route, which improves *loading*, not *per-recipe targeting* — it
-does not point the agent at this recipe by name, so the per-route
-`<route_catalog>` link this bar requires is still absent.)
+bullets). **Retired 2026-05 (issue #83):** the
+`blocked-batch-contract-stale` bullet in the `SKILL.md` `<route_catalog>`
+block now links to this recipe (2.2) by name, satisfying the bar. The
+recipe content is kept as the recovery reference the named link points at;
+this entry is retired from the "open follow-up" sense, not deleted.
 
 ### 2.3 `blocked-digests-stale`
 
@@ -424,13 +425,12 @@ runbook no longer honors, until a human records the carry-forward decision.
 **Owner:** `gotchas guide`.
 **Retire when** the version-skew entry in the `SKILL.md` `<pre_route_gates>`
 block points to this recipe by name (it currently links only to
-`ledger-and-helper.md` for the continuation-evidence shape). (Re-evaluated
-2026-05 against the deterministic blocked-route load, issue #80: still open.
-Step 7b loads the whole guide on every `blocked-` route, which improves
-*loading*, not *per-recipe targeting* — and it is an `<orchestration_loop>`
-step (7b) keyed on the `blocked-` prefix, a different mechanism from the
-`<pre_route_gates>` version-skew link this bar requires, so that link is
-still absent.)
+`ledger-and-helper.md` for the continuation-evidence shape). **Retired
+2026-05 (issue #83):** the version-skew entry in the `SKILL.md`
+`<pre_route_gates>` block now links to this recipe (2.4) by name, in
+addition to its existing `ledger-and-helper.md` link, satisfying the bar.
+The recipe content is kept as the recovery reference the named link points
+at; this entry is retired from the "open follow-up" sense, not deleted.
 
 ### 2.5 Install-presence block: `installed_artifact_presence.all_present: false`
 
