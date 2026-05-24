@@ -153,6 +153,30 @@ host-builder-tools-unavailable evidence, builder-infrastructure-failure
 evidence, Validator findings checkpoint evidence, reachable commit refs,
 dirty/staged path summaries>
 
+- 2026-05-24: Stage 1 dirty-tree decision (Nathan): stashed an unrelated
+  CONTEXT.md "Runtime contract drift check" glossary edit (stash@{0}) so it
+  stays out of issue #80's PR; the untracked plan file (007-...) was carried
+  onto the feature branch. Restore the stash separately after this run.
+- 2026-05-24: Stage 2 plan decision (Nathan via skill): adopted the existing
+  plan docs/plans/2026-05-24-007-feat-blocked-route-gotchas-load-plan.md
+  rather than regenerating via /ce-plan; appended the structured batch
+  contract (2 batches) to the plan so decompose.ts could parse it.
+- 2026-05-24: Stage 3 decomposition decision (Nathan): 2 change_first batches
+  (batch-1 merges U1+U2+U3 SKILL.md edits AC 1/2/3; batch-2 is U4
+  first-run-gotchas.md + whole-change verify AC 4). Contract Review: 1
+  reviewer (ce-architecture-strategist), no findings; advisories only.
+- 2026-05-24: batch-1-skill-reconcile Validator wave on commit
+  f8e189f7cfd0a913482f210590d12a89383ff8aa. Personas dispatched (always-on
+  set, no conditional reviewers fired for a markdown-only diff):
+  ce-correctness-reviewer, ce-project-standards-reviewer,
+  ce-maintainability-reviewer, ce-adversarial-reviewer. All returned empty
+  findings (0 P0/P1/P2/P3). Recurring non-blocking residual risks: the `7b`
+  list marker is non-standard markdown (style nit, not a defect); the
+  `blocked-` prefix is an unguarded prose-to-route.ts coupling (testing gap,
+  deferred follow-up); first-run-gotchas.md read-trigger still says
+  "discretionary" and contradicts step 7b until batch-2 reconciles it
+  (correctly scoped to batch-2, which owns that file).
+
 ### runbook_version skew continuation evidence (U6)
 
 When the v2 runtime detects `runbook_version` skew (a missing or mismatched
