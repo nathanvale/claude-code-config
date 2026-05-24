@@ -132,6 +132,38 @@ findings:
     status: deferred-P3
     summary: "Candidate acceptance_tests describe AC1 as exact specified content but do not restate the two literal lines or carry the plan byte-for-byte guard; contract digest binds it to the plan and content is trivial."
     resolution: deferred-P3
+  - id: fr-001
+    batch_id: final
+    signature: mismatched-ac-digest-routes-to-blocked-not-pick-issue
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table."
+    resolution: ""
+  - id: fr-002
+    batch_id: final
+    signature: readacceptancecriteriastate-pending-claim-overstated
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent."
+    resolution: ""
+  - id: fr-003
+    batch_id: final
+    signature: stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing
+    persona: ce-correctness-reviewer
+    severity: P3
+    status: open
+    summary: "Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed."
+    resolution: ""
+  - id: fr-004
+    batch_id: final
+    signature: plan-digest-at-stage-2-claim-has-no-stage-2-doc-support
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2."
+    resolution: ""
 ```
 
 ## Findings
@@ -139,6 +171,10 @@ findings:
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 | cr-001 | stage-3 | acceptance-test-looser-than-plan-byte-for-byte | contract-reviewer | P3 | deferred-P3 | Candidate acceptance_tests describe AC1 as exact specified content but do not restate the two literal lines or carry the plan byte-for-byte guard; contract digest binds it to the plan and content is trivial. | deferred-P3 |
+| fr-001 | final | mismatched-ac-digest-routes-to-blocked-not-pick-issue | ce-adversarial-reviewer | P2 | open | Heal 1 prose (issue-to-pr.md, ledger-and-helper.md route table) says pick-issue fires when ac_digest is null/mismatched, but a mismatched digest routes to blocked-acceptance-criteria-stale per the code; the ledger-and-helper edit also self-contradicts its own unchanged blocked-route table. |  |
+| fr-002 | final | readacceptancecriteriastate-pending-claim-overstated | ce-adversarial-reviewer | P3 | open | Heal 1 (stage-1-pick-issue.md) says readAcceptanceCriteriaState returns pending for a null ac_digest regardless of the status string, but the function checks status first (blocked/stale/pending) and only falls through to the null-digest pending branch when status is confirmed/absent. |  |
+| fr-003 | final | stage-3-doc-not-reconciled-with-stage-1-ac-digest-timing | ce-correctness-reviewer | P3 | open | Heal 1 moved ac_digest to Stage 1 and plan_digest to Stage 2, but stage-3-decompose.md still frames all three digests as first-stored at the Stage 3 confirmation checkpoint rather than re-confirmed. |  |
+| fr-004 | final | plan-digest-at-stage-2-claim-has-no-stage-2-doc-support | ce-adversarial-reviewer | P3 | open | Heal 1 asserts plan_digest is populated at Stage 2, but stage-2-plan.md contains no digest step, so nothing instructs computing/persisting plan_digest at Stage 2. |  |
 
 ## Notes
 
