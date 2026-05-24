@@ -194,7 +194,7 @@ batches:
       - 3
       - 2
     rationale: "ac_mapping includes 2 because this unit also satisfies AC2's dedupe/upsert-behavior clause; AC2's enum-validation clause is covered by U2."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
