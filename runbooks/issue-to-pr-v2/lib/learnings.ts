@@ -19,6 +19,8 @@
 
 import { readFileSync } from "node:fs";
 
+import { sha256Digest } from "./digest";
+
 /** Workflow surface that owns the fix for a learning. */
 export const OWNERS = [
   "skill-link",
@@ -360,4 +362,305 @@ function entryLabel(rawEntry: unknown, index: number): string {
     }
   }
   return `learning #${index + 1}`;
+}
+
+/** Canonical fields protected on upsert unless the candidate sets canonical_update. */
+const CANONICAL_FIELDS = ["summary", "owner", "retirement_condition"] as const;
+
+/** Lifecycle fields that always overwrite from the candidate on a match. */
+const LIFECYCLE_FIELDS = [
+  "disposition",
+  "status",
+  "confidence",
+  "follow_up",
+] as const;
+
+/**
+ * Return the candidate's dedupe signature.
+ *
+ * If the candidate carries an explicit non-empty `signature` string, that wins
+ * (operators may pin a learning to a stable slug or pre-derived hash). Otherwise
+ * a `sha256:<hex>` is derived deterministically from the three identifying
+ * fields fixed by the plan's KTD4: `affected_surface` and `what_was_wrong`
+ * from the candidate's `evidence` record, plus the candidate's `owner`. The
+ * payload is canonical JSON (`JSON.stringify` of an object with keys in a fixed
+ * order) so the same observation across runs always collides on one entry.
+ *
+ * Lifecycle fields (`status`, `disposition`, `confidence`, `follow_up`) are
+ * intentionally excluded from the derivation: a learning is the same learning
+ * whether it is `open` or `filed`. Likewise `summary` and `retirement_condition`
+ * are excluded because two runs may phrase them differently while describing
+ * the same observation.
+ */
+export function signatureFor(candidate: unknown): string {
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    throw new Error("signatureFor: candidate must be a mapping of fields");
+  }
+  const entry = candidate as Record<string, unknown>;
+  const explicit = entry.signature;
+  if (typeof explicit === "string" && explicit.length > 0) {
+    return explicit;
+  }
+  const evidence = entry.evidence;
+  if (
+    typeof evidence !== "object" ||
+    evidence === null ||
+    Array.isArray(evidence)
+  ) {
+    throw new Error(
+      `signatureFor: candidate is missing an evidence record needed to derive a signature`,
+    );
+  }
+  const ev = evidence as Record<string, unknown>;
+  const payload = JSON.stringify({
+    affected_surface: typeof ev.affected_surface === "string" ? ev.affected_surface : "",
+    what_was_wrong: typeof ev.what_was_wrong === "string" ? ev.what_was_wrong : "",
+    owner: typeof entry.owner === "string" ? entry.owner : "",
+  });
+  return sha256Digest(payload);
+}
+
+/**
+ * Pure-function upsert: merge one candidate observation into a registry and
+ * return a NEW `Registry` (the input is not mutated).
+ *
+ * The candidate is validated FIRST (`validateCandidate`); an invalid candidate
+ * throws an actionable `Error` with the joined error messages, so a bad input
+ * can never corrupt the registry.
+ *
+ * Then `signatureFor(candidate)` resolves the dedupe key. If no existing entry
+ * has that signature, a NEW entry is appended built from the candidate's fields
+ * (lifecycle + canonical + signature) with its single `evidence` record wrapped
+ * to an `evidence: [record]` list, because the registry stores evidence as an
+ * append-only array but candidates carry one run's evidence as a single object.
+ * The per-candidate `canonical_update` directive is NEVER stored on the entry.
+ *
+ * If an entry matches, three things happen:
+ *
+ * 1. The candidate's evidence record is APPENDED to the entry's `evidence`
+ *    list (prior records retained in order).
+ * 2. Lifecycle fields (`disposition`, `status`, `confidence`, `follow_up`)
+ *    OVERWRITE from the candidate.
+ * 3. Canonical fields (`summary`, `owner`, `retirement_condition`) are
+ *    PRESERVED by default. Only when the candidate sets `canonical_update: true`
+ *    are they replaced from the candidate. Divergence without the marker is
+ *    silent (no error, no append outside the evidence list).
+ */
+export function upsert(registry: Registry, candidate: unknown): Registry {
+  const validationErrors = validateCandidate(candidate);
+  if (validationErrors.length > 0) {
+    throw new Error(`upsert: candidate is invalid: ${validationErrors.join("; ")}`);
+  }
+  const cand = candidate as Record<string, unknown>;
+  const sig = signatureFor(cand);
+  const evidenceRecord = cand.evidence as Record<string, unknown>;
+  const canonicalUpdate = cand.canonical_update === true;
+
+  const next: unknown[] = [];
+  let matched = false;
+  for (const rawEntry of registry.learnings) {
+    if (
+      typeof rawEntry === "object" &&
+      rawEntry !== null &&
+      !Array.isArray(rawEntry) &&
+      (rawEntry as Record<string, unknown>).signature === sig
+    ) {
+      matched = true;
+      const existing = rawEntry as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...existing };
+
+      // Append-only evidence: preserve prior order, append the new record.
+      const priorEvidence = Array.isArray(existing.evidence)
+        ? (existing.evidence as unknown[])
+        : [];
+      merged.evidence = [...priorEvidence, evidenceRecord];
+
+      // Lifecycle fields always overwrite from the candidate.
+      for (const field of LIFECYCLE_FIELDS) {
+        if (field in cand) merged[field] = cand[field];
+      }
+
+      // Canonical fields: replace only when the candidate explicitly opts in.
+      if (canonicalUpdate) {
+        for (const field of CANONICAL_FIELDS) {
+          if (field in cand) merged[field] = cand[field];
+        }
+      }
+
+      // The per-candidate directive must never become a stored field.
+      delete merged.canonical_update;
+      next.push(merged);
+    } else {
+      next.push(rawEntry);
+    }
+  }
+
+  if (!matched) {
+    const created: Record<string, unknown> = {
+      summary: cand.summary,
+      owner: cand.owner,
+      retirement_condition: cand.retirement_condition,
+      signature: sig,
+      disposition: cand.disposition,
+      status: cand.status,
+      confidence: cand.confidence,
+    };
+    // Preserve an explicit follow_up (including null) when present.
+    if ("follow_up" in cand) created.follow_up = cand.follow_up;
+    created.evidence = [evidenceRecord];
+    next.push(created);
+  }
+
+  return { learnings: next };
+}
+
+/**
+ * Read the registry Markdown at `registryPath` and return a NEW Markdown string
+ * with ONLY the fenced yaml block's body replaced by the serialized `registry`.
+ *
+ * All surrounding prose (the document header, the schema description, the
+ * canonical-overwrite rule, illustrative non-yaml fences) is preserved
+ * verbatim, byte-for-byte, including the existing opening yaml fence info
+ * string and the existing trailing characters. The yaml body is emitted in
+ * block style by a constrained hand-emitter (`emitYaml`) whose output is
+ * guaranteed to round-trip through `parseRegistry` + `validateRegistry`.
+ *
+ * The closing fence is required to be a triple-backtick at column 0 of its own
+ * line (the validate-op fix anchors the parser to that), so any string value
+ * containing a `` ``` `` sequence is emitted under a YAML scalar with a
+ * column-1+ indent: the column-0 close anchor stays unambiguous and the parser
+ * cannot truncate mid-block.
+ *
+ * This function does NOT write to disk; the caller is responsible for the write
+ * so dispatch-level concerns (write-scope guard, atomic write) can be added in
+ * a later batch without touching this serializer.
+ */
+export function serializeRegistry(
+  registryPath: string,
+  registry: Registry,
+): string {
+  let src: string;
+  try {
+    src = readFileSync(registryPath, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`cannot read registry ${registryPath}: ${message}`);
+  }
+
+  // Match the same fenced-yaml shape parseRegistry accepts: opening fence at
+  // column 0, closing triple-backtick at column 0 on its own line. We capture
+  // the opening fence line in full so its info string (e.g. "```yaml") is
+  // preserved verbatim, replacing ONLY the body.
+  const re = /(^```yaml[^\n]*\n)([\s\S]*?)(\n^```[ \t]*$)/gim;
+  const matches = [...src.matchAll(re)];
+  if (matches.length === 0) {
+    throw new Error(`no fenced yaml block found in registry ${registryPath}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `registry ${registryPath} must contain a single fenced yaml block, found ${matches.length}`,
+    );
+  }
+  const match = matches[0];
+  const opening = match[1];
+  const closing = match[3];
+  const body = emitYaml(registry);
+  const before = src.slice(0, match.index ?? 0);
+  const after = src.slice((match.index ?? 0) + match[0].length);
+  return `${before}${opening}${body}${closing}${after}`;
+}
+
+/**
+ * Emit a Registry as block-style YAML whose output `parseRegistry` re-parses
+ * losslessly. Constrained to the shapes the schema permits: a top-level
+ * `learnings` list of mapping entries whose values are strings, numbers,
+ * booleans, null, or (for `evidence`) a list of string-keyed mappings.
+ *
+ * Strings are emitted as double-quoted scalars with `\`, `"`, newline, tab,
+ * and carriage-return escapes so a value containing a `` ``` `` sequence
+ * appears at column 1+ of its parent line, never at column 0.
+ */
+function emitYaml(registry: Registry): string {
+  const lines: string[] = [];
+  if (registry.learnings.length === 0) {
+    lines.push("learnings: []");
+  } else {
+    lines.push("learnings:");
+    for (const rawEntry of registry.learnings) {
+      if (
+        typeof rawEntry !== "object" ||
+        rawEntry === null ||
+        Array.isArray(rawEntry)
+      ) {
+        throw new Error("emitYaml: every learning must be a mapping of fields");
+      }
+      const entry = rawEntry as Record<string, unknown>;
+      const keys = Object.keys(entry);
+      let first = true;
+      for (const key of keys) {
+        const value = entry[key];
+        const indent = first ? "  - " : "    ";
+        first = false;
+        if (key === "evidence") {
+          if (!Array.isArray(value)) {
+            throw new Error(
+              `emitYaml: "evidence" must be a list; got ${typeof value}`,
+            );
+          }
+          lines.push(`${indent}evidence:`);
+          for (const record of value as unknown[]) {
+            if (
+              typeof record !== "object" ||
+              record === null ||
+              Array.isArray(record)
+            ) {
+              throw new Error(
+                `emitYaml: every evidence entry must be a mapping of fields`,
+              );
+            }
+            const recEntries = Object.entries(record as Record<string, unknown>);
+            let recFirst = true;
+            for (const [rk, rv] of recEntries) {
+              const recIndent = recFirst ? "      - " : "        ";
+              recFirst = false;
+              lines.push(`${recIndent}${rk}: ${emitScalar(rv)}`);
+            }
+          }
+        } else {
+          lines.push(`${indent}${key}: ${emitScalar(value)}`);
+        }
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Render one YAML scalar. `null` becomes `null`; booleans render as `true`
+ * or `false`; numbers render via `String`. Strings always render as a
+ * double-quoted scalar so they cannot collide with YAML's special tokens
+ * (yes/no/on/off, bare colons, leading dashes) and their backticks stay
+ * indented under the parent line.
+ */
+function emitScalar(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
+  if (typeof value === "string") {
+    const escaped = value
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t");
+    return `"${escaped}"`;
+  }
+  // Fallback: stringify any unexpected shape so the failure is visible rather
+  // than silently emitting an invalid YAML token. Upstream validation should
+  // already have rejected anything that lands here.
+  return JSON.stringify(value);
 }

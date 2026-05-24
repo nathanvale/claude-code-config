@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
@@ -11,6 +11,9 @@ import {
   STATUSES,
   loadCandidate,
   parseRegistry,
+  serializeRegistry,
+  signatureFor,
+  upsert,
   validateCandidate,
   validateRegistry,
 } from "./learnings";
@@ -477,5 +480,340 @@ describe("validateCandidate", () => {
     expect(validateCandidate(null).length).toBeGreaterThan(0);
     expect(validateCandidate([]).length).toBeGreaterThan(0);
     expect(validateCandidate("nope").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Signature derivation + upsert + serialize tests (issue #90, AC3, AC2).
+ *
+ * `signatureFor` returns the candidate's explicit `signature` when present,
+ * otherwise it derives one deterministically from the candidate's identifying
+ * fields (`affected_surface`, `what_was_wrong`, `owner`). `upsert` is a pure
+ * function: it appends a new entry for a non-matching signature, or merges
+ * evidence + lifecycle into the matched entry while protecting canonical
+ * fields unless the candidate sets `canonical_update: true`.
+ * `serializeRegistry` replaces ONLY the fenced yaml block of the existing
+ * registry Markdown and preserves the surrounding prose verbatim, so the
+ * doc round-trips through parseRegistry/validateRegistry without loss.
+ */
+
+describe("signatureFor", () => {
+  test("returns the explicit signature when present", () => {
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:explicit";
+    expect(signatureFor(candidate)).toBe("sha256:explicit");
+  });
+
+  test("derives a stable sha256 signature when none is provided", () => {
+    const candidate = validCandidateObject();
+    delete candidate.signature;
+    const sig = signatureFor(candidate);
+    expect(sig).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("derives the same signature for two candidates with identical identifying fields", () => {
+    const a = validCandidateObject();
+    const b = validCandidateObject();
+    delete a.signature;
+    delete b.signature;
+    // Lifecycle differences must not affect the derived signature.
+    b.status = "filed";
+    b.disposition = "small-fix";
+    expect(signatureFor(a)).toBe(signatureFor(b));
+  });
+
+  test("derives different signatures when an identifying field differs", () => {
+    const a = validCandidateObject();
+    const b = validCandidateObject();
+    delete a.signature;
+    delete b.signature;
+    (b.evidence as Record<string, unknown>).what_was_wrong = "different gap";
+    expect(signatureFor(a)).not.toBe(signatureFor(b));
+  });
+
+  test("treats an empty-string signature as missing and derives one", () => {
+    const candidate = validCandidateObject();
+    candidate.signature = "";
+    const sig = signatureFor(candidate);
+    expect(sig).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+});
+
+describe("upsert", () => {
+  test("appends a new entry when no existing signature matches", () => {
+    const registry = { learnings: [] };
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:new-entry";
+    const next = upsert(registry, candidate);
+    expect(next.learnings).toHaveLength(1);
+    const entry = next.learnings[0] as Record<string, unknown>;
+    expect(entry.signature).toBe("sha256:new-entry");
+    expect(entry.summary).toBe(candidate.summary);
+    expect(entry.owner).toBe(candidate.owner);
+    // Candidate's evidence record is wrapped to a single-item evidence list.
+    expect(Array.isArray(entry.evidence)).toBe(true);
+    expect((entry.evidence as unknown[])[0]).toEqual(
+      candidate.evidence as Record<string, unknown>,
+    );
+    // The candidate's per-upsert directive must NOT be stored on the entry.
+    expect(entry.canonical_update).toBeUndefined();
+  });
+
+  test("does not mutate the input registry (immutable-style)", () => {
+    const registry = { learnings: [] as unknown[] };
+    const candidate = validCandidateObject();
+    upsert(registry, candidate);
+    expect(registry.learnings).toHaveLength(0);
+  });
+
+  test("appends evidence to the matched entry when signature matches (dedupe)", () => {
+    const first = validCandidateObject();
+    first.signature = "sha256:dedupe";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:dedupe";
+    (second.evidence as Record<string, unknown>).run = "issue-91";
+    (second.evidence as Record<string, unknown>).what_was_wrong = "still missing";
+    registry = upsert(registry, second);
+
+    expect(registry.learnings).toHaveLength(1);
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    const evidence = entry.evidence as Array<Record<string, unknown>>;
+    expect(evidence).toHaveLength(2);
+    // Order preserved: first observation first.
+    expect(evidence[0].run).toBe("issue-90");
+    expect(evidence[1].run).toBe("issue-91");
+  });
+
+  test("updates lifecycle fields on a matched entry", () => {
+    const first = validCandidateObject();
+    first.signature = "sha256:lifecycle";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:lifecycle";
+    second.status = "filed";
+    second.disposition = "file-follow-up";
+    second.confidence = "high";
+    second.follow_up = "https://example.test/issue/123";
+    registry = upsert(registry, second);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect(entry.status).toBe("filed");
+    expect(entry.disposition).toBe("file-follow-up");
+    expect(entry.confidence).toBe("high");
+    expect(entry.follow_up).toBe("https://example.test/issue/123");
+  });
+
+  test("protects canonical fields by default (no canonical_update marker)", () => {
+    const first = validCandidateObject();
+    first.signature = "sha256:canonical";
+    first.summary = "original summary";
+    first.owner = "runbook-reference";
+    first.retirement_condition = "original condition";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:canonical";
+    second.summary = "DIFFERENT summary";
+    second.owner = "cli-observability";
+    second.retirement_condition = "DIFFERENT condition";
+    second.status = "filed";
+    // No canonical_update marker (or explicitly false).
+    second.canonical_update = false;
+    registry = upsert(registry, second);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    // Canonical fields UNCHANGED.
+    expect(entry.summary).toBe("original summary");
+    expect(entry.owner).toBe("runbook-reference");
+    expect(entry.retirement_condition).toBe("original condition");
+    // Lifecycle still updated and evidence still appended.
+    expect(entry.status).toBe("filed");
+    expect((entry.evidence as unknown[]).length).toBe(2);
+  });
+
+  test("replaces canonical fields when candidate sets canonical_update: true", () => {
+    const first = validCandidateObject();
+    first.signature = "sha256:canonical-update";
+    first.summary = "original summary";
+    first.owner = "runbook-reference";
+    first.retirement_condition = "original condition";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:canonical-update";
+    second.summary = "NEW summary";
+    second.owner = "cli-observability";
+    second.retirement_condition = "NEW condition";
+    second.canonical_update = true;
+    registry = upsert(registry, second);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect(entry.summary).toBe("NEW summary");
+    expect(entry.owner).toBe("cli-observability");
+    expect(entry.retirement_condition).toBe("NEW condition");
+    // The per-upsert directive is NOT stored on the entry.
+    expect(entry.canonical_update).toBeUndefined();
+  });
+
+  test("collides on derived signature when two candidates share identifying fields", () => {
+    const a = validCandidateObject();
+    delete a.signature;
+    const b = validCandidateObject();
+    delete b.signature;
+    (b.evidence as Record<string, unknown>).run = "issue-91";
+
+    let registry = upsert({ learnings: [] }, a);
+    registry = upsert(registry, b);
+    expect(registry.learnings).toHaveLength(1);
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect((entry.evidence as unknown[]).length).toBe(2);
+  });
+
+  test("throws an actionable error when the candidate is invalid", () => {
+    const candidate = validCandidateObject();
+    candidate.disposition = "totally-bogus";
+    expect(() => upsert({ learnings: [] }, candidate)).toThrow(/disposition/);
+  });
+});
+
+describe("serializeRegistry", () => {
+  test("round-trips: serialize + write + parse + validate produces the same learnings", () => {
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const first = validCandidateObject();
+    first.signature = "sha256:round-trip";
+    const registry = upsert(parseRegistry(path), first);
+    const updated = serializeRegistry(path, registry);
+    writeFileSync(path, updated);
+    const reparsed = parseRegistry(path);
+    expect(validateRegistry(reparsed)).toEqual([]);
+    expect(reparsed.learnings).toHaveLength(1);
+    const entry = reparsed.learnings[0] as Record<string, unknown>;
+    expect(entry.signature).toBe("sha256:round-trip");
+    expect(entry.summary).toBe(first.summary);
+    expect((entry.evidence as unknown[]).length).toBe(1);
+  });
+
+  test("preserves surrounding prose verbatim (only the yaml block is replaced)", () => {
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:prose";
+    const registry = upsert(parseRegistry(path), candidate);
+    const updated = serializeRegistry(path, registry);
+    // Sentinel prose from registryDoc() must survive intact.
+    expect(updated).toContain("Prose describing the schema.");
+    expect(updated).toContain("# Workflow Learnings registry");
+  });
+
+  test("preserves prose around the real seeded registry doc when upserting", () => {
+    // The committed reference doc has extensive prose, a non-yaml `text` fence,
+    // and exactly one fenced yaml block. Serialization must touch only the yaml
+    // block and leave the rest byte-identical.
+    const src = readFileSync(realRegistryPath, "utf8");
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:real-doc";
+    const registry = upsert(parseRegistry(realRegistryPath), candidate);
+    const updated = serializeRegistry(realRegistryPath, registry);
+    // Prose sentinels from the real doc.
+    expect(updated).toContain("# Workflow Learnings registry");
+    expect(updated).toContain("Canonical-overwrite rule");
+    expect(updated).toContain("```text");
+    // The illustrative `text` fence must not have been touched.
+    expect(updated).toContain("affected_surface: \"<surface>\"");
+    // Sanity: still parseable + valid.
+    const tmpPath = writeRegistry(updated);
+    expect(validateRegistry(parseRegistry(tmpPath))).toEqual([]);
+    // The original file must NOT have been mutated by serializeRegistry.
+    expect(readFileSync(realRegistryPath, "utf8")).toBe(src);
+  });
+
+  test("round-trips a value that contains an inline triple-backtick fence (validate-op guard)", () => {
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:fence";
+    candidate.summary =
+      "Parser truncated on ```yaml fences (repro: ```yaml\\nlearnings: []\\n```)";
+    const registry = upsert(parseRegistry(path), candidate);
+    const updated = serializeRegistry(path, registry);
+    writeFileSync(path, updated);
+    const reparsed = parseRegistry(path);
+    expect(reparsed.learnings).toHaveLength(1);
+    const entry = reparsed.learnings[0] as Record<string, unknown>;
+    expect(entry.summary).toBe(candidate.summary);
+    expect(validateRegistry(reparsed)).toEqual([]);
+  });
+});
+
+const scriptPathRoot = join(import.meta.dir, "..", "learnings-registry.ts");
+
+async function runRegistry(args: string[]) {
+  const proc = Bun.spawn([bunExecutable, scriptPathRoot, ...args], {
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stderr, stdout };
+}
+
+describe("learnings-registry.ts --upsert", () => {
+  test("appends a new entry into a seeded registry and exits 0", async () => {
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:dispatcher";
+    const candidatePath = writeCandidate(
+      "candidate.json",
+      JSON.stringify(candidate, null, 2),
+    );
+
+    const result = await runRegistry(["--upsert", path, candidatePath]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/sha256:dispatcher/);
+
+    const reparsed = parseRegistry(path);
+    expect(reparsed.learnings).toHaveLength(1);
+    expect(validateRegistry(reparsed)).toEqual([]);
+  });
+
+  test("rejects an invalid candidate and leaves the registry untouched", async () => {
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const before = readFileSync(path, "utf8");
+    const candidate = validCandidateObject();
+    candidate.disposition = "totally-bogus";
+    const candidatePath = writeCandidate(
+      "bad-candidate.json",
+      JSON.stringify(candidate, null, 2),
+    );
+
+    const result = await runRegistry(["--upsert", path, candidatePath]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/bad-candidate\.json/);
+    expect(result.stderr).toMatch(/disposition/);
+
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("fails with a usage error when --upsert is missing arguments", async () => {
+    const result = await runRegistry(["--upsert"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/usage/i);
+  });
+
+  test("fails with a usage error when --upsert is missing the candidate", async () => {
+    const path = writeRegistry(registryDoc("learnings: []"));
+    const result = await runRegistry(["--upsert", path]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/usage/i);
+  });
+
+  test("still supports the --validate flag after --upsert wiring lands", async () => {
+    const result = await runRegistry(["--validate", realRegistryPath]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/ok/i);
   });
 });
