@@ -283,7 +283,8 @@ plane.
 - `blocked-batch-contract-stale` and `blocked-digests-stale`: return
   to Stage 3 recompute and user confirmation. See
   `first-run-gotchas.md` recipe 2.2 (`blocked-batch-contract-stale`)
-  for the symptom-first evidence recipe.
+  and recipe 2.3 (`blocked-digests-stale`) for the symptom-first
+  evidence recipe.
 
 `first-run-gotchas.md` gives a symptom-first CLI evidence recipe (the
 exact command, JSON fields, what they prove, and the recovery action).
