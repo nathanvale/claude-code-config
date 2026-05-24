@@ -235,7 +235,7 @@ batches:
     ac_mapping:
       - 4
     rationale: "docs-only change_first; documents the behavior runbook-heal-resolution and stage5-readonly-gate implement."
-    status: in-progress
+    status: converged
     iterations: 1
     builder_commits:
       - "a55b841af84e61a5dd46a70fd9339247c6341a65"
@@ -252,7 +252,7 @@ batches:
         probe_results:
           - "Closure table: runbook-heal <sha> row added (batch_id final only, control-plane allowlist, merge+content-empty rejected) verified against the lib/ledger.ts arm. Stage 5: --assert-stage5-readonly wired into step 5 (closes s5-002) + blocked-by-doc-defect carve-out (AC4). Template enumeration updated. Both ledgers validate exit 0."
         notes: "AC4 docs + wires s5-002 (Stage 5 gate invocation instruction) + documents runbook-heal closing hr-001's drift. Orchestrator re-verified: doc matches validator code, both ledgers validate, only 3 files changed."
-    final_verdict: null
+    final_verdict: converged
 ```
 
 ## Findings data
@@ -407,9 +407,9 @@ findings:
     signature: stage5-readonly-gate-never-invoked-by-protected-flow
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Re-keyed to runbook-heal-docs (U3): the wiring lives in stage-5-final-review.md, which is U3's file; U3 must add an explicit orchestrator instruction to run --assert-stage5-readonly against the final-review checkpoint and close this finding."
-    resolution: null
+    resolution: "commit a55b841af84e61a5dd46a70fd9339247c6341a65"
   - id: s5-003
     batch_id: stage5-readonly-gate
     signature: unvalidated-ref-tree-ish-and-range-vacuous-pass
@@ -450,6 +450,14 @@ findings:
     status: deferred-P2
     summary: "The amend records runbook-heal 8be31d4 (validator-accepted), but the canonical closure-vocabulary table in findings-and-validators.md does not yet list runbook-heal <sha> because its documenting batch runbook-heal-docs (U3) is still pending. Transient batch-ordering drift: U3 documents the form and closes the divergence; the amend consumed the vocabulary before its doc batch landed."
     resolution: deferred-P2
+  - id: rd-001
+    batch_id: runbook-heal-docs
+    signature: stage5-gate-instruction-after-advance-clause-clarity
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "Clarity nit: the wired --assert-stage5-readonly gate instruction sits textually after step 5's commit-then-advance-to-Stage-6 clause; a careless reader could advance before running the gate. The AFTER-committing framing mitigates it and the instruction is load-bearing, so s5-002 stays closed; presentational ordering only."
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -472,12 +480,13 @@ findings:
 | vw-006 | runbook-heal-resolution | inline-control-plane-allowlist-vs-named-constant | ce-kieran-typescript-reviewer | P3 | deferred-P3 | The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it). | deferred-P3 |
 | vw-007 | runbook-heal-resolution | runbook-heal-mode-only-commit-vacuous-pass | ce-adversarial-reviewer | P2 | fixed | Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed. | commit c3b6cb3cf2d555cc58da021a209442b049163918 |
 | s5-001 | stage5-readonly-gate | merge-commit-bypasses-stage5-readonly-gate | ce-adversarial-reviewer | P1 | fixed | The gate's git diff-tree omits -m/-c, so a merge commit that pulls non-ledger files into the branch reports zero touched files and PASSES as a vacuous read-only checkpoint (proven live). This is the exact non-ledger-touched-but-passes class the gate exists to catch; a merge Stage 5 checkpoint defeats it silently. | commit 22912cef8139f0d4b4d4b04a2d6a30a82c48a021 |
-| s5-002 | runbook-heal-docs | stage5-readonly-gate-never-invoked-by-protected-flow | ce-adversarial-reviewer | P1 | open | The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Re-keyed to runbook-heal-docs (U3): the wiring lives in stage-5-final-review.md, which is U3's file; U3 must add an explicit orchestrator instruction to run --assert-stage5-readonly against the final-review checkpoint and close this finding. |  |
+| s5-002 | runbook-heal-docs | stage5-readonly-gate-never-invoked-by-protected-flow | ce-adversarial-reviewer | P1 | fixed | The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Re-keyed to runbook-heal-docs (U3): the wiring lives in stage-5-final-review.md, which is U3's file; U3 must add an explicit orchestrator instruction to run --assert-stage5-readonly against the final-review checkpoint and close this finding. | commit a55b841af84e61a5dd46a70fd9339247c6341a65 |
 | s5-003 | stage5-readonly-gate | unvalidated-ref-tree-ish-and-range-vacuous-pass | ce-adversarial-reviewer | P2 | deferred-P2 | touchedFilesForRef does no ref validation (unlike lib validateReachableCommit); a tree-ish (HEAD^{tree}) or range (A..B) makes git diff-tree exit 0 with empty stdout, so the gate sees zero files = vacuous PASS. A non-commit ref gets a false green instead of an error. | deferred-P2 |
 | s5-004 | stage5-readonly-gate | stage5-gate-mixed-and-rename-status-untested | ce-testing-reviewer | P2 | deferred-P2 | The violation fixture (8be31d4) is a pure non-ledger commit; no test covers a mixed ledger+non-ledger commit (the skip-ledger-then-flag-nonledger branch) or the rename/copy/delete (R/C/D) status-parsing branch in touchedFilesForRef, both of which are live behavior. | deferred-P2 |
 | s5-005 | stage5-readonly-gate | stage5-gate-duplicates-private-touchedfiles-helper | ce-kieran-typescript-reviewer | P3 | deferred-P3 | touchedFilesForRef near-verbatim duplicates the private touchedFilesForCommit in lib/ledger.ts (two copies of diff-tree parsing that can drift); the local copy also drops validateRepoRelativePath and the ref reachability check. Documented inline; lib helper is private so a shared export is a follow-up (out of this batch's scope, which cannot edit lib/ledger.ts). | deferred-P3 |
 | s5-006 | stage5-readonly-gate | stage5-gate-case-sensitive-ledger-path-compare | ce-adversarial-reviewer | P3 | deferred-P3 | normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass). | deferred-P3 |
 | hr-001 | historical-rows-disposition | runbook-heal-form-undocumented-at-amend-time | ce-adversarial-reviewer | P2 | deferred-P2 | The amend records runbook-heal 8be31d4 (validator-accepted), but the canonical closure-vocabulary table in findings-and-validators.md does not yet list runbook-heal <sha> because its documenting batch runbook-heal-docs (U3) is still pending. Transient batch-ordering drift: U3 documents the form and closes the divergence; the amend consumed the vocabulary before its doc batch landed. | deferred-P2 |
+| rd-001 | runbook-heal-docs | stage5-gate-instruction-after-advance-clause-clarity | ce-adversarial-reviewer | P3 | deferred-P3 | Clarity nit: the wired --assert-stage5-readonly gate instruction sits textually after step 5's commit-then-advance-to-Stage-6 clause; a careless reader could advance before running the gate. The AFTER-committing framing mitigates it and the instruction is load-bearing, so s5-002 stays closed; presentational ordering only. | deferred-P3 |
 
 ## Notes
 
