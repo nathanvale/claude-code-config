@@ -203,7 +203,7 @@ batches:
     ac_mapping:
       - 6
     rationale: "change_first ledger doc edit; AC6 is a decision criterion surfaced at the Stage 3 user gate (amend vs leave)."
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
