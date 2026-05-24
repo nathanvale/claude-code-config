@@ -93,3 +93,8 @@ Re-read the runbook and the ledger at the start of every turn. Extract
 one claim per turn, classify it, verify presence in the skill with a
 file:line citation, then file one finding row to the ledger and stop.
 ```
+
+Convergence is the README's [Convergence
+protocol](README.md#convergence-protocol): two consecutive independent
+clean passes from different angles, not zero-open after one pass. A
+pass that files or fixes a finding resets the counter.

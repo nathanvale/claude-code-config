@@ -143,6 +143,35 @@ apply to every fix made in this audit area:
 - No new ADR unless the audit surfaces a durable new boundary not
   already covered by ADR 0001 or 0002.
 
+## Convergence protocol
+
+A seam is converged when **two consecutive independent passes each
+surface zero new findings** — not when the ledger first shows zero open
+findings. Zero-open after a single pass means only that filing stopped,
+not that nothing is left; the moment you stop looking, the count is
+trivially clean.
+
+Each pass must:
+
+1. **Re-extract from scratch.** Re-read the source-of-truth section and
+   the ledger, then re-derive the claim inventory from the text. Do not
+   reuse the prior pass's mental list — that is how a missed claim stays
+   missed.
+2. **Attack from a different angle than the last pass.** Rotate the lens
+   so a clean result is earned, not an echo of the previous pass. Useful
+   angles: widen the source surfaces (sibling sections, cross-referenced
+   tables), exhaustive enumeration (grep every directive, not just the
+   ones named in the seam prompt), and quality/freshness audit (are
+   resume conditions explicit, do ledger line citations still resolve).
+3. **Reset the counter on any fix.** A pass that files or fixes a finding
+   is not clean. Convergence requires two clean passes *in a row* after
+   the last change lands.
+
+Record the pass count in the ledger (e.g. a closed bookkeeping row, or
+the resolution note) so a re-run can see how many clean passes preceded
+the last stop. A seam re-launched via `/goal` or `/loop` re-enters this
+protocol from pass one.
+
 ## Invocation
 
 Each seam has its own `/goal` invocation block below. The
@@ -160,7 +189,8 @@ Audited artifact: skills/issue-to-pr/SKILL.md.
 Re-read the runbook and the ledger at the start of every turn.
 Extract claims, classify, verify presence in the skill with line
 citations, file findings into invariants-and-gates-ledger.md, then
-converge to zero open P0/P1.
+converge per the Convergence protocol (two consecutive independent
+clean passes from different angles, not zero-open after one pass).
 ```
 
 ### Reference loading and routing
@@ -174,8 +204,9 @@ route id catalog).
 Audited artifact: skills/issue-to-pr/SKILL.md.
 Re-read the runbook and the ledger at the start of every turn.
 Extract claims, classify, verify presence in the skill, file findings
-into reference-loading-and-routing-ledger.md, converge to zero open
-P0/P1.
+into reference-loading-and-routing-ledger.md, converge per the
+Convergence protocol (two consecutive independent clean passes from
+different angles, not zero-open after one pass).
 ```
 
 ### Stage shells
@@ -190,8 +221,9 @@ Re-read the runbook and the ledger at the start of every turn.
 Extract claims, classify, verify each stage shell carries inputs,
 required references, one visible action, exit condition, and stop
 conditions in the skill. Stage 4 subroutes must be enumerated.
-File findings into stage-shells-ledger.md, converge to zero open
-P0/P1.
+File findings into stage-shells-ledger.md, converge per the
+Convergence protocol (two consecutive independent clean passes from
+different angles, not zero-open after one pass).
 ```
 
 ### Stop conditions
@@ -206,7 +238,9 @@ table).
 Re-read the runbook and the ledger at the start of every turn.
 Extract claims, classify, verify every load-bearing stop condition has
 a row in the <fail_stops> table with a resume condition. File
-findings into stop-conditions-ledger.md, converge to zero open P0/P1.
+findings into stop-conditions-ledger.md, converge per the Convergence
+protocol (two consecutive independent clean passes from different
+angles, not zero-open after one pass).
 ```
 
 ### Placement and ADRs
@@ -222,8 +256,9 @@ runbooks/issue-to-pr-v2/README.md.
 Re-read the prior four ledgers at the start of every turn. Confirm
 every claim closed as false-positive cites the correct ADR clause and
 that the skill / hot router / README cross-link contract is intact.
-File findings into placement-and-adrs-ledger.md, converge to zero
-open P0/P1.
+File findings into placement-and-adrs-ledger.md, converge per the
+Convergence protocol (two consecutive independent clean passes from
+different angles, not zero-open after one pass).
 ```
 
 ## /loop fallback
