@@ -88,7 +88,7 @@ batches:
       - 2
       - 3
     rationale: "docs-only change_first; AC2/AC3 are ship-stage outcomes mapped here so every AC index is covered without inventing non-implementation units."
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
