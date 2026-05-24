@@ -5,7 +5,7 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/68"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-05-24-004-test-hello-world-smoke-test-plan.md"
 started_at: "2026-05-24T15:22:00+10:00"
-status: "in-progress"
+status: "shipped"
 runbook_version: "2"
 ac_source: "variant-heading"
 ac_confirmation_status: "confirmed"
@@ -13,7 +13,7 @@ ac_confirmed_at: "2026-05-24T15:22:00+10:00"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-05-24T15:57:00+10:00"
 blocked_reason: null
-pr_url: null
+pr_url: "https://github.com/nathanvale/claude-code-config/pull/70"
 ship_mode: "standard"
 final_reviewed_at: "2026-05-24T16:18:00+10:00"
 plan_digest: "sha256:770958ac3561f12644deee1e00a00ba6b9e952a53f5badc1439c5809b3d8ce8e"
@@ -193,6 +193,7 @@ dirty/staged path summaries>
   - CI: no .github/workflows/ in repo → AC3 satisfied (nothing triggers CI).
   - prompt-system render/check not triggered: no changed files under prompt-fragments/, rules/, or context/.
   - tsc/bun tests: not applicable, diff is markdown/YAML only (no .ts or test changes).
+- 2026-05-24T16:22+10:00 — Stage 6 ship (standard mode): branch feat/issue-68-hello-world-smoke-test pushed; PR #70 created via /ce-commit-push-pr (https://github.com/nathanvale/claude-code-config/pull/70), Closes #68, with ## Residual Review Findings (0 deferred-P2, 1 deferred-P3 cr-001). status: shipped.
 
 ### runbook_version skew continuation evidence (U6)
 
