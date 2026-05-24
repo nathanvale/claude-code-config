@@ -3,7 +3,7 @@ issue_number: 90
 issue_title: "Add the workflow learnings registry helper"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/90"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-25-002-feat-workflow-learnings-registry-helper-plan.md"
 started_at: "2026-05-25T08:25:02+1000"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:6779b6bdfaa1313953bdae74420718fd6f54dc72300dd9a6499b7f489d121b77"
 batch_contract_digest: null
 ac_digest: "sha256:17e9d98826395a5c32a2439fe846e176880adcd0af5e4d768d376476d59eb6f9"
 ---
