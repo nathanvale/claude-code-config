@@ -235,7 +235,7 @@ batches:
     ac_mapping:
       - 4
     rationale: "docs-only change_first; documents the behavior runbook-heal-resolution and stage5-readonly-gate implement."
-    status: pending
+    status: in-progress
     iterations: 0
     builder_commits: []
     builder_attempts: []
