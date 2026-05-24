@@ -204,9 +204,20 @@ batches:
       - 6
     rationale: "change_first ledger doc edit; AC6 is a decision criterion surfaced at the Stage 3 user gate (amend vs leave)."
     status: in-progress
-    iterations: 0
-    builder_commits: []
-    builder_attempts: []
+    iterations: 1
+    builder_commits:
+      - "71a4a9f9e73d8f77413999b20d09be33ab5affef"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "71a4a9f9e73d8f77413999b20d09be33ab5affef"
+        files_touched:
+          - "docs/runbooks/issue-to-pr/issue-68-ledger.md"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "8be31d4 confirmed control-plane-only (5 files all under runbooks/issue-to-pr-v2/). issue-68 ledger validate-findings exit 0 after amend (runbook-heal grammar accepts batch_id:final + control-plane commit)."
+        notes: "AC6 amend (user decision). fr-001..fr-004 in issue-68 ledger changed from out-of-scope-for-this-issue to status:fixed / resolution:runbook-heal 8be31d4, resolving the self-contradiction. cr-001 untouched. Orchestrator re-verified issue-68 ledger validates clean."
     final_verdict: null
   - id: "runbook-heal-docs"
     name: "Closure table, Stage 5 cross-ref, blocked-by-doc-defect carve-out"
