@@ -93,12 +93,13 @@ batches:
       - 2
       - 5
     rationale: "replacement-contract r1: merge AC1+AC2 (form and abuse guard live in the same validateFindingResolution function with inseparable tests); narrowed to batch_id final only (CR-003); allowlist excludes the ledger path (CR-004)."
-    status: in-progress
-    iterations: 3
+    status: converged
+    iterations: 4
     builder_commits:
       - "a83bbd1c86f2f31caf7a47b0016f2ff187f601b2"
       - "c93f5a0c3e77a24020cf08a2dad6d48bb20a9fa2"
       - "fd1839c9fd40e5fe78d6a016ee67e03cffa3f2d8"
+      - "c3b6cb3cf2d555cc58da021a209442b049163918"
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -133,7 +134,18 @@ batches:
         probe_results:
           - "Hermetic empty-commit fixture: PR-70 merge dc6868a is reachable from HEAD and touchedFilesForCommit returns [] (merge records zero changes vs first parent); no git object created, no ref advanced."
         notes: "Repair of vw-002. Added touched.length === 0 reject before the allowlist loop. RED empty-commit test (dc6868a) red before fix, green after. 66/66 ledger tests, tsc clean (orchestrator re-verified)."
-    final_verdict: null
+      - attempt_type: repair
+        status: committed
+        commit_sha: "c3b6cb3cf2d555cc58da021a209442b049163918"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+          - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "Mode-only detection via git diff-tree --raw: pure chmod is status M with oldSha===newSha. New exported rawDiffHasContentBearingChange rejects when every entry is mode-only; renames/deletes/binary modifies stay accepted. No reachable mode-only commit on branch, so reject pinned at parser seam (sanctioned)."
+        notes: "Repair of vw-007 (P2). 10 new mode-only guard tests; 76/76 ledger tests, 78/78 decompose, tsc clean (orchestrator re-verified)."
+    final_verdict: converged
   - id: "stage5-readonly-gate"
     name: "Stage 5 read-only enforcement gate"
     goal: "A Stage 5 ledger checkpoint touching any non-ledger path is surfaced as a failure rather than silently accepted."
@@ -283,57 +295,57 @@ findings:
     signature: runbook-heal-arm-not-scoped-to-final
     persona: ce-correctness-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "The runbook-heal arm fires for any non-stage-3 fixed finding, not just batch_id final as the confirmed contract requires; a batch-loop finding can be closed by runbook-heal with no terminal-batch ownership check (the commit arm enforces that), weakening per-batch closure provenance."
-    resolution: null
+    resolution: "commit c93f5a0c3e77a24020cf08a2dad6d48bb20a9fa2"
   - id: vw-002
     batch_id: runbook-heal-resolution
     signature: runbook-heal-empty-commit-vacuous-pass
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "validateControlPlaneOnlyCommit accepts a zero-file (empty) commit vacuously: the allowlist loop never executes so no path is checked, letting runbook-heal <empty-sha> close a finding while proving nothing changed. The guard needs touched.length > 0 plus at least one allowlist match."
-    resolution: null
+    resolution: "commit fd1839c9fd40e5fe78d6a016ee67e03cffa3f2d8"
   - id: vw-003
     batch_id: runbook-heal-resolution
     signature: test-fixtures-pinned-to-live-branch-shas
     persona: ce-maintainability-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "New tests pin four real branch shas plus a transcribed control-plane file list; a rebase/squash/amend would rot the reachable and non-regression assertions. Branch-history coupling is partly inherent to a git-reachability validator but the manual file-list transcription is fragile."
-    resolution: null
+    resolution: deferred-P2
   - id: vw-004
     batch_id: runbook-heal-resolution
     signature: runbook-heal-skill-artifact-allowlisted-backdoor
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "skills/issue-to-pr/ is allowlisted, but skills/issue-to-pr/SKILL.md is a shippable artifact; for an issue whose deliverable IS the skill, a runbook-heal citing a SKILL.md-only commit passes despite mutating a deliverable. Allowlist conflates control-plane tooling with shipped skill content."
-    resolution: null
+    resolution: deferred-P2
   - id: vw-005
     batch_id: runbook-heal-resolution
     signature: stale-fixed-resolution-catch-all-message
     persona: ce-kieran-typescript-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form."
-    resolution: null
+    resolution: deferred-P3
   - id: vw-006
     batch_id: runbook-heal-resolution
     signature: inline-control-plane-allowlist-vs-named-constant
     persona: ce-kieran-typescript-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it)."
-    resolution: null
+    resolution: deferred-P3
   - id: vw-007
     batch_id: runbook-heal-resolution
     signature: runbook-heal-mode-only-commit-vacuous-pass
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed."
-    resolution: null
+    resolution: "commit c3b6cb3cf2d555cc58da021a209442b049163918"
 ```
 
 ## Findings
@@ -348,13 +360,13 @@ findings:
 | cr-006 | stage-3 | traceability-table-cites-nonexistent-u4 | contract-reviewer | P3 | fixed | Cycle-2: Requirements Traceability table mapped AC4 to U4 (no such unit; AC4 is covered by U3 runbook-heal-docs). Cosmetic label typo; binding batch YAML correct. | plan-revision 55f4357 |
 | cr-007 | stage-3 | u2-test-scenario-mislabels-8be31d4 | contract-reviewer | P3 | fixed | Cycle-2: U2 violation test scenario labeled 8be31d4 as a ledger+runbook mixed commit, but 8be31d4 touched only control-plane paths. Reworded to use a synthetic fixture; behavior unaffected. | plan-revision 55f4357 |
 | cr-008 | stage-3 | stale-old-function-name-in-plan-prose | contract-reviewer | P3 | fixed | Cycle-2: two stale validateFinalFindingResolution references survived at plan Problem Frame and System-Wide Impact; corrected to validateFindingResolution. Completes cr-002. | plan-revision 55f4357 |
-| vw-001 | runbook-heal-resolution | runbook-heal-arm-not-scoped-to-final | ce-correctness-reviewer | P1 | open | The runbook-heal arm fires for any non-stage-3 fixed finding, not just batch_id final as the confirmed contract requires; a batch-loop finding can be closed by runbook-heal with no terminal-batch ownership check (the commit arm enforces that), weakening per-batch closure provenance. |  |
-| vw-002 | runbook-heal-resolution | runbook-heal-empty-commit-vacuous-pass | ce-adversarial-reviewer | P1 | open | validateControlPlaneOnlyCommit accepts a zero-file (empty) commit vacuously: the allowlist loop never executes so no path is checked, letting runbook-heal <empty-sha> close a finding while proving nothing changed. The guard needs touched.length > 0 plus at least one allowlist match. |  |
-| vw-003 | runbook-heal-resolution | test-fixtures-pinned-to-live-branch-shas | ce-maintainability-reviewer | P2 | open | New tests pin four real branch shas plus a transcribed control-plane file list; a rebase/squash/amend would rot the reachable and non-regression assertions. Branch-history coupling is partly inherent to a git-reachability validator but the manual file-list transcription is fragile. |  |
-| vw-004 | runbook-heal-resolution | runbook-heal-skill-artifact-allowlisted-backdoor | ce-adversarial-reviewer | P2 | open | skills/issue-to-pr/ is allowlisted, but skills/issue-to-pr/SKILL.md is a shippable artifact; for an issue whose deliverable IS the skill, a runbook-heal citing a SKILL.md-only commit passes despite mutating a deliverable. Allowlist conflates control-plane tooling with shipped skill content. |  |
-| vw-005 | runbook-heal-resolution | stale-fixed-resolution-catch-all-message | ce-kieran-typescript-reviewer | P3 | open | The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form. |  |
-| vw-006 | runbook-heal-resolution | inline-control-plane-allowlist-vs-named-constant | ce-kieran-typescript-reviewer | P3 | open | The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it). |  |
-| vw-007 | runbook-heal-resolution | runbook-heal-mode-only-commit-vacuous-pass | ce-adversarial-reviewer | P2 | open | Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed. |  |
+| vw-001 | runbook-heal-resolution | runbook-heal-arm-not-scoped-to-final | ce-correctness-reviewer | P1 | fixed | The runbook-heal arm fires for any non-stage-3 fixed finding, not just batch_id final as the confirmed contract requires; a batch-loop finding can be closed by runbook-heal with no terminal-batch ownership check (the commit arm enforces that), weakening per-batch closure provenance. | commit c93f5a0c3e77a24020cf08a2dad6d48bb20a9fa2 |
+| vw-002 | runbook-heal-resolution | runbook-heal-empty-commit-vacuous-pass | ce-adversarial-reviewer | P1 | fixed | validateControlPlaneOnlyCommit accepts a zero-file (empty) commit vacuously: the allowlist loop never executes so no path is checked, letting runbook-heal <empty-sha> close a finding while proving nothing changed. The guard needs touched.length > 0 plus at least one allowlist match. | commit fd1839c9fd40e5fe78d6a016ee67e03cffa3f2d8 |
+| vw-003 | runbook-heal-resolution | test-fixtures-pinned-to-live-branch-shas | ce-maintainability-reviewer | P2 | deferred-P2 | New tests pin four real branch shas plus a transcribed control-plane file list; a rebase/squash/amend would rot the reachable and non-regression assertions. Branch-history coupling is partly inherent to a git-reachability validator but the manual file-list transcription is fragile. | deferred-P2 |
+| vw-004 | runbook-heal-resolution | runbook-heal-skill-artifact-allowlisted-backdoor | ce-adversarial-reviewer | P2 | deferred-P2 | skills/issue-to-pr/ is allowlisted, but skills/issue-to-pr/SKILL.md is a shippable artifact; for an issue whose deliverable IS the skill, a runbook-heal citing a SKILL.md-only commit passes despite mutating a deliverable. Allowlist conflates control-plane tooling with shipped skill content. | deferred-P2 |
+| vw-005 | runbook-heal-resolution | stale-fixed-resolution-catch-all-message | ce-kieran-typescript-reviewer | P3 | deferred-P3 | The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form. | deferred-P3 |
+| vw-006 | runbook-heal-resolution | inline-control-plane-allowlist-vs-named-constant | ce-kieran-typescript-reviewer | P3 | deferred-P3 | The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it). | deferred-P3 |
+| vw-007 | runbook-heal-resolution | runbook-heal-mode-only-commit-vacuous-pass | ce-adversarial-reviewer | P2 | fixed | Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed. | commit c3b6cb3cf2d555cc58da021a209442b049163918 |
 
 ## Notes
 
