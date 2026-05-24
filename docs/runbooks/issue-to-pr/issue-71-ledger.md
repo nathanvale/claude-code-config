@@ -10,7 +10,7 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-24T16:47:00+10:00"
-batch_contract_confirmation_status: "pending"
+batch_contract_confirmation_status: "blocked"
 batch_contract_confirmed_at: null
 blocked_reason: null
 pr_url: null
@@ -96,13 +96,58 @@ reachable plan/DAG revision that closed them. Other fixed findings must use
 non-superseded row with the same batch id and signature.
 
 ```yaml
-findings: []
+findings:
+  - id: cr-001
+    batch_id: stage-3
+    signature: shared-test-file-no-dependency-edge
+    persona: contract-reviewer
+    severity: P1
+    status: open
+    summary: "Both runbook-heal-resolution and stage5-readonly-gate list lib/ledger.test.ts with depends_on []; no ordering constraint means the second Builder can clobber the first's test additions to the shared file."
+    resolution: null
+  - id: cr-003
+    batch_id: stage-3
+    signature: stage-3-batch-id-collides-with-plan-revision-requirement
+    persona: contract-reviewer
+    severity: P1
+    status: open
+    summary: "Plan scopes runbook-heal to batch_id stage-3 too, but validateFindingResolution short-circuits stage-3 findings to plan-revision only, so the new arm is unreachable for stage-3; behavior is unspecified and untested."
+    resolution: null
+  - id: cr-004
+    batch_id: stage-3
+    signature: deliverable-path-definition-undefined-plan-wide
+    persona: contract-reviewer
+    severity: P1
+    status: open
+    summary: "The abuse guard's deliverable-path/control-plane-allowlist concept is new and plan-wide but leaves edges undefined: mixed control-plane+deliverable commits, and crucially whether the per-issue ledger path docs/runbooks/issue-to-pr/ is in the allowlist (U5 amend and Stage 5 checkpoints touch it)."
+    resolution: null
+  - id: cr-002
+    batch_id: stage-3
+    signature: cited-function-name-does-not-exist
+    persona: contract-reviewer
+    severity: P2
+    status: open
+    summary: "Plan cites validateFinalFindingResolution; the real function is validateFindingResolution (the cited line range is correct). Mild plan/DAG drift."
+    resolution: null
+  - id: cr-005
+    batch_id: stage-3
+    signature: stage5-gate-wiring-choice-bounded
+    persona: contract-reviewer
+    severity: P3
+    status: open
+    summary: "Stage 5 gate wiring choice (decompose.ts flag vs in-validator) is a legitimately bounded implementation choice pinned by acceptance tests; no change required. Advisory only."
+    resolution: null
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+| cr-001 | stage-3 | shared-test-file-no-dependency-edge | contract-reviewer | P1 | open | Both runbook-heal-resolution and stage5-readonly-gate list lib/ledger.test.ts with depends_on []; no ordering constraint means the second Builder can clobber the first's test additions to the shared file. |  |
+| cr-003 | stage-3 | stage-3-batch-id-collides-with-plan-revision-requirement | contract-reviewer | P1 | open | Plan scopes runbook-heal to batch_id stage-3 too, but validateFindingResolution short-circuits stage-3 findings to plan-revision only, so the new arm is unreachable for stage-3; behavior is unspecified and untested. |  |
+| cr-004 | stage-3 | deliverable-path-definition-undefined-plan-wide | contract-reviewer | P1 | open | The abuse guard's deliverable-path/control-plane-allowlist concept is new and plan-wide but leaves edges undefined: mixed control-plane+deliverable commits, and crucially whether the per-issue ledger path docs/runbooks/issue-to-pr/ is in the allowlist (U5 amend and Stage 5 checkpoints touch it). |  |
+| cr-002 | stage-3 | cited-function-name-does-not-exist | contract-reviewer | P2 | open | Plan cites validateFinalFindingResolution; the real function is validateFindingResolution (the cited line range is correct). Mild plan/DAG drift. |  |
+| cr-005 | stage-3 | stage5-gate-wiring-choice-bounded | contract-reviewer | P3 | open | Stage 5 gate wiring choice (decompose.ts flag vs in-validator) is a legitimately bounded implementation choice pinned by acceptance tests; no change required. Advisory only. |  |
 
 ## Notes
 
