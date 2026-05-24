@@ -119,11 +119,31 @@ batches:
     ac_mapping:
       - 4
     rationale: "split: U4 edits a different file (first-run-gotchas.md) from batch-1 and owns the whole-change verification gate; depends on batch-1 so the guide reconciliation matches the landed SKILL.md behavior."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "caf086c40caae714cda5438f8635a32b60635025"
+      - "363cd4f2c13b6b1c84d3c3811c9836645ede962c"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "caf086c40caae714cda5438f8635a32b60635025"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"
+        route_hint: "validator-wave"
+        blockers: []
+        probe_results: []
+        notes: "Read-trigger reconciled to D3 split; 2.1/2.2/2.4 retire-when bars verbatim with folded re-evaluation annotations. Whole-change verify: biome 0/0, runbook tests 503/0, no .ts diff."
+      - attempt_type: repair
+        status: committed
+        commit_sha: "363cd4f2c13b6b1c84d3c3811c9836645ede962c"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"
+        route_hint: "validator-wave"
+        blockers: []
+        probe_results: []
+        notes: "Fixed b2-001 (annotation-step7b-block-mislabel): 2.4 annotation now attributes step 7b to <orchestration_loop>, not <route_catalog>. Re-check correctness pass clean."
+    iterations: 2
+    final_verdict: converged
 ```
 
 ## Findings data
@@ -154,34 +174,34 @@ findings:
     signature: "annotation-step7b-block-mislabel"
     persona: ce-correctness-reviewer
     severity: P2
-    status: open
+    status: fixed
     summary: "2.4 retire-when annotation calls step 7b a `<route_catalog>` load; step 7b lives in `<orchestration_loop>`."
-    resolution: ""
+    resolution: "commit 363cd4f2c13b6b1c84d3c3811c9836645ede962c"
   - id: b2-002
     batch_id: batch-2-guide-and-verify
     signature: "annotations-lengthen-retire-when-block"
     persona: ce-project-standards-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "2026-05 re-evaluation parentheticals lengthen each Retire-when block; stacking future notes could erode the no-junk-drawer intent."
-    resolution: ""
+    resolution: "deferred-P3"
   - id: b2-003
     batch_id: batch-2-guide-and-verify
     signature: "split-trigger-prose-drift-four-surfaces"
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them."
-    resolution: ""
+    resolution: "deferred-P3"
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
-| b2-001 | batch-2-guide-and-verify | annotation-step7b-block-mislabel | ce-correctness-reviewer | P2 | open | 2.4 retire-when annotation calls step 7b a `<route_catalog>` load; step 7b lives in `<orchestration_loop>`. |  |
-| b2-002 | batch-2-guide-and-verify | annotations-lengthen-retire-when-block | ce-project-standards-reviewer | P3 | open | 2026-05 re-evaluation parentheticals lengthen each Retire-when block; stacking future notes could erode the no-junk-drawer intent. |  |
-| b2-003 | batch-2-guide-and-verify | split-trigger-prose-drift-four-surfaces | ce-adversarial-reviewer | P3 | open | Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them. |  |
+| b2-001 | batch-2-guide-and-verify | annotation-step7b-block-mislabel | ce-correctness-reviewer | P2 | fixed | 2.4 retire-when annotation calls step 7b a `<route_catalog>` load; step 7b lives in `<orchestration_loop>`. | commit 363cd4f2c13b6b1c84d3c3811c9836645ede962c |
+| b2-002 | batch-2-guide-and-verify | annotations-lengthen-retire-when-block | ce-project-standards-reviewer | P3 | deferred-P3 | 2026-05 re-evaluation parentheticals lengthen each Retire-when block; stacking future notes could erode the no-junk-drawer intent. | deferred-P3 |
+| b2-003 | batch-2-guide-and-verify | split-trigger-prose-drift-four-surfaces | ce-adversarial-reviewer | P3 | deferred-P3 | Split-trigger rationale duplicated as prose across four surfaces (guide read-trigger, step 7b, reference-loading-policy, route-catalog); nothing mechanically binds them. | deferred-P3 |
 
 ## Notes
 
