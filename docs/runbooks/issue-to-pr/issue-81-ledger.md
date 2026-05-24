@@ -586,6 +586,17 @@ host-builder-tools-unavailable evidence, builder-infrastructure-failure
 evidence, Validator findings checkpoint evidence, reachable commit refs,
 dirty/staged path summaries>
 
+### Stage 6 local check evidence (2026-05-25)
+
+- `bun_runTests` (MCP bun-runner, full suite): exit 0 — 1213 passed / 0 failed.
+- `tsc_check` (MCP tsc-runner, repo tsconfig): exit 0 — 0 errors.
+- `biome_lintCheck` (MCP biome-runner) on `contract-drift.ts`: exit 0 — 0 errors / 0 warnings.
+- `biome_lintCheck` on `contract-drift.test.ts`: exit 0 — 0 errors / 0 warnings.
+- `biome_formatCheck` on `contract-drift.ts`: clean — no unformatted files.
+- `biome_formatCheck` on `contract-drift.test.ts`: clean — no unformatted files.
+
+All Stage 6 local checks passed; no `local-check-failure-*` finding raised. Ship mode: standard (real repo).
+
 ### runbook_version skew continuation evidence (U6)
 
 When the v2 runtime detects `runbook_version` skew (a missing or mismatched
