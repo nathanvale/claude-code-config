@@ -347,6 +347,62 @@ findings:
     status: deferred-P3
     summary: "The fix relies on the assumption that a column-0 fence cannot appear inside a yaml scalar value (not producible by a real serializer); this residual limitation is asserted only in a source comment, not pinned by a test"
     resolution: deferred-P3
+  - id: F15
+    batch_id: candidate-ingest
+    signature: ac4-json-valid-non-object-edge-untested
+    persona: ce-testing-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "No test for a .json file containing valid JSON that is not an object (e.g. 42 or a bare string); load->validate boundary for valid-but-non-object JSON is unpinned (code path verified correct)"
+    resolution: deferred-P2
+  - id: F16
+    batch_id: candidate-ingest
+    signature: yaml-numeric-string-coercion-vs-json-parity
+    persona: ce-correctness-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "JSON/YAML parity is exact for string/null/boolean scalars but an unquoted numeric-looking value parses to number in YAML vs string in JSON; contained because validateCandidate rejects non-strings (fails loud rather than diverging silently)"
+    resolution: deferred-P3
+  - id: F17
+    batch_id: candidate-ingest
+    signature: ac4-empty-file-edges-untested
+    persona: ce-testing-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "Empty-file edges unpinned: an empty .yaml parses to null (no throw) and an empty .json throws; neither path has a regression guard"
+    resolution: deferred-P3
+  - id: F18
+    batch_id: candidate-ingest
+    signature: unrecognized-ext-msg-incomplete-assertion
+    persona: ce-testing-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "Unrecognized-extension test asserts the message names the file and the bad ext but does not assert it lists the supported extensions; part of the actionable message is unverified"
+    resolution: deferred-P3
+  - id: F19
+    batch_id: candidate-ingest
+    signature: checkenumfields-label-empty-branch-unreachable
+    persona: ce-maintainability-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "checkEnumFields documents an empty-string label as the top-level/candidate convention, but neither caller passes empty; the label-empty branch is unreachable and the doc comment misdescribes actual usage"
+    resolution: deferred-P3
+  - id: F20
+    batch_id: candidate-ingest
+    signature: candidate-required-strings-implicit-coupling-to-registry
+    persona: ce-maintainability-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "validateCandidate derives required fields as REQUIRED_STRING_FIELDS minus signature; a future addition to the registry required list silently becomes required on candidates too, an implicit coupling"
+    resolution: deferred-P3
+  - id: F21
+    batch_id: candidate-ingest
+    signature: candidate-missing-test-pushes-file-not-dir-to-cleanup
+    persona: ce-correctness-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "In the unreadable-candidate test the file path is pushed to tempDirs instead of the parent temp dir, so afterEach rmSync best-effort-skips it and the created temp dir leaks; test correctness unaffected"
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -367,6 +423,13 @@ findings:
 | F12 | validate-op | parseregistry-jsdoc-claims-ledger-parity-now-false | ce-adversarial-reviewer | P3 | deferred-P3 | parseRegistry JSDoc still claims it mirrors ledger.ts with the same fenced-yaml regex, but the repair diverged them; ledger.ts keeps the old regex while learnings.ts is now column-0 anchored, so the documented parity is stale | deferred-P3 |
 | F13 | validate-op | closing-fence-trailing-whitespace-tolerance-untested | ce-testing-reviewer | P3 | deferred-P3 | New regex adds trailing-whitespace tolerance on the closing fence but no test exercises a closing fence with trailing spaces, so that branch is unguarded | deferred-P3 |
 | F14 | validate-op | column-0-fence-inside-value-still-truncates-undocumented-in-tests | ce-testing-reviewer | P3 | deferred-P3 | The fix relies on the assumption that a column-0 fence cannot appear inside a yaml scalar value (not producible by a real serializer); this residual limitation is asserted only in a source comment, not pinned by a test | deferred-P3 |
+| F15 | candidate-ingest | ac4-json-valid-non-object-edge-untested | ce-testing-reviewer | P2 | deferred-P2 | No test for a .json file containing valid JSON that is not an object (e.g. 42 or a bare string); load->validate boundary for valid-but-non-object JSON is unpinned (code path verified correct) | deferred-P2 |
+| F16 | candidate-ingest | yaml-numeric-string-coercion-vs-json-parity | ce-correctness-reviewer | P3 | deferred-P3 | JSON/YAML parity is exact for string/null/boolean scalars but an unquoted numeric-looking value parses to number in YAML vs string in JSON; contained because validateCandidate rejects non-strings (fails loud rather than diverging silently) | deferred-P3 |
+| F17 | candidate-ingest | ac4-empty-file-edges-untested | ce-testing-reviewer | P3 | deferred-P3 | Empty-file edges unpinned: an empty .yaml parses to null (no throw) and an empty .json throws; neither path has a regression guard | deferred-P3 |
+| F18 | candidate-ingest | unrecognized-ext-msg-incomplete-assertion | ce-testing-reviewer | P3 | deferred-P3 | Unrecognized-extension test asserts the message names the file and the bad ext but does not assert it lists the supported extensions; part of the actionable message is unverified | deferred-P3 |
+| F19 | candidate-ingest | checkenumfields-label-empty-branch-unreachable | ce-maintainability-reviewer | P3 | deferred-P3 | checkEnumFields documents an empty-string label as the top-level/candidate convention, but neither caller passes empty; the label-empty branch is unreachable and the doc comment misdescribes actual usage | deferred-P3 |
+| F20 | candidate-ingest | candidate-required-strings-implicit-coupling-to-registry | ce-maintainability-reviewer | P3 | deferred-P3 | validateCandidate derives required fields as REQUIRED_STRING_FIELDS minus signature; a future addition to the registry required list silently becomes required on candidates too, an implicit coupling | deferred-P3 |
+| F21 | candidate-ingest | candidate-missing-test-pushes-file-not-dir-to-cleanup | ce-correctness-reviewer | P3 | deferred-P3 | In the unreadable-candidate test the file path is pushed to tempDirs instead of the parent temp dir, so afterEach rmSync best-effort-skips it and the created temp dir leaks; test correctness unaffected | deferred-P3 |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
