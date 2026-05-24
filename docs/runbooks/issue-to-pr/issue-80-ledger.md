@@ -3,7 +3,7 @@ issue_number: 80
 issue_title: "issue-to-pr: deterministically load first-run-gotchas.md on blocked routes"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/80"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-24-007-feat-blocked-route-gotchas-load-plan.md"
 started_at: "2026-05-24T21:45:00+10:00"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:285da3a3724859a4047af25e29399a14c2733ba1fa21b59f6c093101ad69cb74"
 batch_contract_digest: null
 ac_digest: "sha256:0b74444e5bdf8647763a3a27e40e805591b43c3d0a5544bcfbc78be05c5203e1"
 ---
