@@ -90,11 +90,21 @@ batches:
       - 2
       - 3
     rationale: "merge: U1/U2/U3 are inseparable coordinated edits to the single file skills/issue-to-pr/SKILL.md (orchestration-loop step plus the two reconciliations it forces); splitting would create three sequential single-file batches with overlapping ownership."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "f8e189f7cfd0a913482f210590d12a89383ff8aa"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "f8e189f7cfd0a913482f210590d12a89383ff8aa"
+        files_touched:
+          - "skills/issue-to-pr/SKILL.md"
+        route_hint: "validator-wave"
+        blockers: []
+        probe_results: []
+        notes: "Three coordinated docs-only edits: U1 orchestration-loop step 7b (deterministic blocked-route load), U2 reference-loading-policy split-trigger reconciliation, U3 route-catalog reconciliation. biome clean."
+    iterations: 1
+    final_verdict: converged
   - id: "batch-2-guide-and-verify"
     name: "Reconcile first-run-gotchas.md and verify whole change (U4)"
     goal: "The affected first-run-gotchas.md retirement triggers (2.1, 2.2, 2.4) are re-evaluated and the guide's read-trigger is reconciled, then whole-change consistency and green tests are verified."
