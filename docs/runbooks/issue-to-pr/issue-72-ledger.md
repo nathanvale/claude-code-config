@@ -3,7 +3,7 @@ issue_number: 72
 issue_title: "issue-to-pr: runbook-heal merge guard, mislabeled empty-commit fixture, and no P2-fix path at Stage 5"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/72"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-24-006-fix-issue-to-pr-runbook-heal-merge-guard-plan.md"
 started_at: "2026-05-24T19:17:33+10:00"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95"
 batch_contract_digest: null
 ac_digest: "sha256:4a1d14bb0a7e06950920439c60ff0a548d5ad544dc6a76b76ae647ab57470983"
 ---
@@ -109,6 +109,7 @@ findings: []
 ## Notes
 
 - 2026-05-24T19:17:33+10:00 - Stage 1 AC confirmation: extracted from issue `## Acceptance criteria` checkbox list (`gold-standard`, high confidence). Nathan invoked the issue-to-pr skill inline for issue 72, so these issue-authored ACs are the confirmed run contract.
+- 2026-05-24T19:20:05+10:00 - Stage 2 planning: rendered the `ce-plan` addendum packet with `cli.ts packet ce-plan --json`, wrote plan `docs/plans/2026-05-24-006-fix-issue-to-pr-runbook-heal-merge-guard-plan.md`, and persisted plan digest `sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95`.
 
 ### runbook_version skew continuation evidence (U6)
 
