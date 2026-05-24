@@ -89,11 +89,24 @@ batches:
       - 1
       - 2
     rationale: "replacement-contract: AC1 and AC2 are inseparable because the same runbook-heal validation test fixture proves the merge guard and fixes the misleading empty-commit label."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "e4f0b342a614d62740e4abf3c34b836d430fa4bd"
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: "e4f0b342a614d62740e4abf3c34b836d430fa4bd"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+          - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "dc6868a is a reachable merge commit with two parents."
+          - "git diff-tree default output for dc6868a reports no touched files, confirming the old rejection path was a side effect."
+        notes: "Builder added explicit parent-count merge guard, renamed the dc6868a fixture/commentary to merge semantics, and verified focused ledger tests red then green."
+    iterations: 1
+    final_verdict: converged
   - id: "stage5-p2-policy"
     name: "Stage 5 P2 policy decision and deferrals"
     goal: "Record the Stage 5 P2-fix-path decision and explicitly defer lower-priority follow-up findings."
@@ -153,6 +166,7 @@ findings: []
 - 2026-05-24T19:20:05+10:00 - Stage 2 planning: rendered the `ce-plan` addendum packet with `cli.ts packet ce-plan --json`, wrote plan `docs/plans/2026-05-24-006-fix-issue-to-pr-runbook-heal-merge-guard-plan.md`, and persisted plan digest `sha256:6cba8ce7c073aa485cb34caf19bac8990e304ad4c42f4a3d8aebae79d0775b95`.
 - 2026-05-24T19:22:06+10:00 - Stage 3 batch contract confirmation: plan decomposed to 2 batches; AC coverage helper reported 4/4 covered; inline Contract Review found no P0/P1 blockers and no nonblocking findings. Nathan's inline run request is treated as confirmation of the exact AC text, DAG, execution modes, rationales, and digest triple.
 - 2026-05-24T19:24:26+10:00 - Stage 4 lifecycle: started `runbook-heal-merge-guard` batch after host readiness check passed (Builder/Validator agents available, scoped files editable, checks available).
+- 2026-05-24T19:34:05+10:00 - Stage 4 validator wave for `runbook-heal-merge-guard`: Builder commit `e4f0b342a614d62740e4abf3c34b836d430fa4bd` touched only confirmed batch files. Validators `ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`, and `ce-kieran-typescript-reviewer` all returned zero findings, zero residual risks, and zero testing gaps. Batch converged with no open P0/P1 and no P2/P3 to auto-defer.
 
 ### runbook_version skew continuation evidence (U6)
 
