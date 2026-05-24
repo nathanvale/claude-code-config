@@ -161,10 +161,11 @@ batches:
       - 3
       - 5
     rationale: null
-    status: in-progress
-    iterations: 1
+    status: converged
+    iterations: 2
     builder_commits:
       - "85cefeb14d9a7cb5fbccf242ad44af1632e93e4e"
+      - "22912cef8139f0d4b4d4b04a2d6a30a82c48a021"
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -177,7 +178,18 @@ batches:
         probe_results:
           - "Flag --assert-stage5-readonly <ledger-path> <commit-ref>. touchedFilesForCommit private, so local touchedFilesForRef git diff-tree read in decompose.ts (documented dup). Fixtures: 8be31d4 non-ledger VIOLATION; 1315477 ledger-only PASS. Empty commit = vacuous PASS."
         notes: "TDD red-first (3/4 fail before flag). Gate exercised live by orchestrator: 1315477 PASS exit 0, 8be31d4 FAIL exit 1 naming the offending path. 4/4 gate tests, 76/76 ledger, 78/78 decompose, tsc clean."
-    final_verdict: null
+      - attempt_type: repair
+        status: committed
+        commit_sha: "22912cef8139f0d4b4d4b04a2d6a30a82c48a021"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/decompose.ts"
+          - "runbooks/issue-to-pr-v2/lib/stage5-readonly.test.ts"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "Merge detection via git rev-list --parents -n 1 (>=3 tokens = 2+ parents = merge); fails fast before touched-files check. dc6868a confirmed 2-parent merge."
+        notes: "Repair of s5-001. RED merge-reject test (dc6868a) red before fix, green after. Gate exercised live by orchestrator: dc6868a REJECTS exit 1 as merge, 1315477 still PASS exit 0. 5/5 gate, 76/76 ledger, 78/78 decompose, tsc clean."
+    final_verdict: converged
   - id: "historical-rows-disposition"
     name: "Historical fr-001..fr-004 disposition"
     goal: "Decide and execute whether to amend the self-contradictory fr-001..fr-004 rows in the issue-68 ledger to the runbook-heal form or leave them as audit precedent."
@@ -363,49 +375,49 @@ findings:
     signature: merge-commit-bypasses-stage5-readonly-gate
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "The gate's git diff-tree omits -m/-c, so a merge commit that pulls non-ledger files into the branch reports zero touched files and PASSES as a vacuous read-only checkpoint (proven live). This is the exact non-ledger-touched-but-passes class the gate exists to catch; a merge Stage 5 checkpoint defeats it silently."
-    resolution: null
+    resolution: "commit 22912cef8139f0d4b4d4b04a2d6a30a82c48a021"
   - id: s5-002
-    batch_id: stage5-readonly-gate
+    batch_id: runbook-heal-docs
     signature: stage5-readonly-gate-never-invoked-by-protected-flow
     persona: ce-adversarial-reviewer
     severity: P1
     status: open
-    summary: "The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Wiring it into the Stage 5 flow is needed (U3 docs batch currently only adds a cross-reference)."
+    summary: "The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Re-keyed to runbook-heal-docs (U3): the wiring lives in stage-5-final-review.md, which is U3's file; U3 must add an explicit orchestrator instruction to run --assert-stage5-readonly against the final-review checkpoint and close this finding."
     resolution: null
   - id: s5-003
     batch_id: stage5-readonly-gate
     signature: unvalidated-ref-tree-ish-and-range-vacuous-pass
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "touchedFilesForRef does no ref validation (unlike lib validateReachableCommit); a tree-ish (HEAD^{tree}) or range (A..B) makes git diff-tree exit 0 with empty stdout, so the gate sees zero files = vacuous PASS. A non-commit ref gets a false green instead of an error."
-    resolution: null
+    resolution: deferred-P2
   - id: s5-004
     batch_id: stage5-readonly-gate
     signature: stage5-gate-mixed-and-rename-status-untested
     persona: ce-testing-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "The violation fixture (8be31d4) is a pure non-ledger commit; no test covers a mixed ledger+non-ledger commit (the skip-ledger-then-flag-nonledger branch) or the rename/copy/delete (R/C/D) status-parsing branch in touchedFilesForRef, both of which are live behavior."
-    resolution: null
+    resolution: deferred-P2
   - id: s5-005
     batch_id: stage5-readonly-gate
     signature: stage5-gate-duplicates-private-touchedfiles-helper
     persona: ce-kieran-typescript-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "touchedFilesForRef near-verbatim duplicates the private touchedFilesForCommit in lib/ledger.ts (two copies of diff-tree parsing that can drift); the local copy also drops validateRepoRelativePath and the ref reachability check. Documented inline; lib helper is private so a shared export is a follow-up (out of this batch's scope, which cannot edit lib/ledger.ts)."
-    resolution: null
+    resolution: deferred-P3
   - id: s5-006
     batch_id: stage5-readonly-gate
     signature: stage5-gate-case-sensitive-ledger-path-compare
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass)."
-    resolution: null
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -427,12 +439,12 @@ findings:
 | vw-005 | runbook-heal-resolution | stale-fixed-resolution-catch-all-message | ce-kieran-typescript-reviewer | P3 | deferred-P3 | The fixed-resolution catch-all message still lists only commit <sha> and patch-batch patch-NNN, omitting the new runbook-heal <sha> form; a malformed runbook-heal falls through to a message that never names the intended form. | deferred-P3 |
 | vw-006 | runbook-heal-resolution | inline-control-plane-allowlist-vs-named-constant | ce-kieran-typescript-reviewer | P3 | deferred-P3 | The control-plane allowlist is an inline literal array in validateControlPlaneOnlyCommit; the file idiom puts policy literals in contract.ts named constants. Defensible single-use, but a named constant would make the control-plane boundary the single source of truth (relevant once stage5-readonly-gate also needs it). | deferred-P3 |
 | vw-007 | runbook-heal-resolution | runbook-heal-mode-only-commit-vacuous-pass | ce-adversarial-reviewer | P2 | fixed | Re-validation residual: vw-002's literal empty-commit case is closed, but the guard requires at least one touched path, not a real content change. A mode-only (chmod) or delete-only control-plane commit emits a path and passes, the same vacuous-proof class. Edge case (requires a deliberately crafted mode-only commit); common no-op accident is closed. | commit c3b6cb3cf2d555cc58da021a209442b049163918 |
-| s5-001 | stage5-readonly-gate | merge-commit-bypasses-stage5-readonly-gate | ce-adversarial-reviewer | P1 | open | The gate's git diff-tree omits -m/-c, so a merge commit that pulls non-ledger files into the branch reports zero touched files and PASSES as a vacuous read-only checkpoint (proven live). This is the exact non-ledger-touched-but-passes class the gate exists to catch; a merge Stage 5 checkpoint defeats it silently. |  |
-| s5-002 | stage5-readonly-gate | stage5-readonly-gate-never-invoked-by-protected-flow | ce-adversarial-reviewer | P1 | open | The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Wiring it into the Stage 5 flow is needed (U3 docs batch currently only adds a cross-reference). |  |
-| s5-003 | stage5-readonly-gate | unvalidated-ref-tree-ish-and-range-vacuous-pass | ce-adversarial-reviewer | P2 | open | touchedFilesForRef does no ref validation (unlike lib validateReachableCommit); a tree-ish (HEAD^{tree}) or range (A..B) makes git diff-tree exit 0 with empty stdout, so the gate sees zero files = vacuous PASS. A non-commit ref gets a false green instead of an error. |  |
-| s5-004 | stage5-readonly-gate | stage5-gate-mixed-and-rename-status-untested | ce-testing-reviewer | P2 | open | The violation fixture (8be31d4) is a pure non-ledger commit; no test covers a mixed ledger+non-ledger commit (the skip-ledger-then-flag-nonledger branch) or the rename/copy/delete (R/C/D) status-parsing branch in touchedFilesForRef, both of which are live behavior. |  |
-| s5-005 | stage5-readonly-gate | stage5-gate-duplicates-private-touchedfiles-helper | ce-kieran-typescript-reviewer | P3 | open | touchedFilesForRef near-verbatim duplicates the private touchedFilesForCommit in lib/ledger.ts (two copies of diff-tree parsing that can drift); the local copy also drops validateRepoRelativePath and the ref reachability check. Documented inline; lib helper is private so a shared export is a follow-up (out of this batch's scope, which cannot edit lib/ledger.ts). |  |
-| s5-006 | stage5-readonly-gate | stage5-gate-case-sensitive-ledger-path-compare | ce-adversarial-reviewer | P3 | open | normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass). |  |
+| s5-001 | stage5-readonly-gate | merge-commit-bypasses-stage5-readonly-gate | ce-adversarial-reviewer | P1 | fixed | The gate's git diff-tree omits -m/-c, so a merge commit that pulls non-ledger files into the branch reports zero touched files and PASSES as a vacuous read-only checkpoint (proven live). This is the exact non-ledger-touched-but-passes class the gate exists to catch; a merge Stage 5 checkpoint defeats it silently. | commit 22912cef8139f0d4b4d4b04a2d6a30a82c48a021 |
+| s5-002 | runbook-heal-docs | stage5-readonly-gate-never-invoked-by-protected-flow | ce-adversarial-reviewer | P1 | open | The gate is opt-in: the only references to --assert-stage5-readonly are the implementation, its test, and a ledger note. stage-5-final-review.md commits the final-review checkpoint but never runs the gate against it, so AC3's in-run-non-ledger-edit-is-surfaced is not satisfied at runtime. Re-keyed to runbook-heal-docs (U3): the wiring lives in stage-5-final-review.md, which is U3's file; U3 must add an explicit orchestrator instruction to run --assert-stage5-readonly against the final-review checkpoint and close this finding. |  |
+| s5-003 | stage5-readonly-gate | unvalidated-ref-tree-ish-and-range-vacuous-pass | ce-adversarial-reviewer | P2 | deferred-P2 | touchedFilesForRef does no ref validation (unlike lib validateReachableCommit); a tree-ish (HEAD^{tree}) or range (A..B) makes git diff-tree exit 0 with empty stdout, so the gate sees zero files = vacuous PASS. A non-commit ref gets a false green instead of an error. | deferred-P2 |
+| s5-004 | stage5-readonly-gate | stage5-gate-mixed-and-rename-status-untested | ce-testing-reviewer | P2 | deferred-P2 | The violation fixture (8be31d4) is a pure non-ledger commit; no test covers a mixed ledger+non-ledger commit (the skip-ledger-then-flag-nonledger branch) or the rename/copy/delete (R/C/D) status-parsing branch in touchedFilesForRef, both of which are live behavior. | deferred-P2 |
+| s5-005 | stage5-readonly-gate | stage5-gate-duplicates-private-touchedfiles-helper | ce-kieran-typescript-reviewer | P3 | deferred-P3 | touchedFilesForRef near-verbatim duplicates the private touchedFilesForCommit in lib/ledger.ts (two copies of diff-tree parsing that can drift); the local copy also drops validateRepoRelativePath and the ref reachability check. Documented inline; lib helper is private so a shared export is a follow-up (out of this batch's scope, which cannot edit lib/ledger.ts). | deferred-P3 |
+| s5-006 | stage5-readonly-gate | stage5-gate-case-sensitive-ledger-path-compare | ce-adversarial-reviewer | P3 | deferred-P3 | normalizePath compares case-sensitively on a core.ignorecase=true repo; a wrong-case ledger arg makes the gate REJECT a legitimate ledger-only checkpoint (fail-safe false positive that blocks convergence, not a bypass). | deferred-P3 |
 
 ## Notes
 
