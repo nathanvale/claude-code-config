@@ -119,7 +119,7 @@ batches:
     ac_mapping:
       - 4
     rationale: "split: U4 edits a different file (first-run-gotchas.md) from batch-1 and owns the whole-change verification gate; depends on batch-1 so the guide reconciliation matches the landed SKILL.md behavior."
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
