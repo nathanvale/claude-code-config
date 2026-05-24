@@ -3,7 +3,7 @@ issue_number: 71
 issue_title: "issue-to-pr: no honest closure for final-review findings fixed by in-run runbook heals (+ Stage 5 read-only gate gap)"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/71"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-24-005-feat-issue-to-pr-runbook-heal-closure-plan.md"
 started_at: "2026-05-24T16:47:00+10:00"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:75ad02fa6c12b21c92af9831270be275150836f08c693372f068d220897aab24"
 batch_contract_digest: null
 ac_digest: "sha256:b424d7bd4f91af17b31d4122a02728760d76765dc5cd4b496a84f4f7e47b0ed2"
 ---
