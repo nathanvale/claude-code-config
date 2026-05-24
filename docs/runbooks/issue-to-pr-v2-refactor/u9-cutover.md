@@ -392,7 +392,7 @@ Stop when ALL of the following hold:
    is excluded — it legitimately cites v1 by design).
 6. The v1 legacy-pointer block and the v2 README caveat trim are in
    place and match the exact shapes specified.
-7. The most recent `/ce-code-review` pass returns zero new findings.
+7. Two consecutive independent `/ce-code-review` passes each return zero new findings (see the README Convergence protocol).
 8. Every ledger row is `fixed` or `closed`.
 
 ## /loop fallback
@@ -403,3 +403,8 @@ Re-read the runbook and u9-cutover-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every
 turn.
 ```
+
+Convergence is the README's [Convergence
+protocol](README.md#convergence-protocol): two consecutive independent
+clean passes from different angles, not zero-open after one pass. A
+pass that files or fixes a finding resets the counter.

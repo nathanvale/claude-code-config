@@ -373,3 +373,8 @@ Seam-specific close reasons (in addition to the shared
 Re-read the runbook and u5-packet-rendering-ledger.md at the start of every
 turn. Echo the full ledger status table inline at the end of every turn.
 ```
+
+Convergence is the README's [Convergence
+protocol](README.md#convergence-protocol): two consecutive independent
+clean passes from different angles, not zero-open after one pass. A
+pass that files or fixes a finding resets the counter.

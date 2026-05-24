@@ -7,7 +7,8 @@ test failures in `runbooks/issue-to-pr/decompose.test.ts` (v1) and
 refactor (#48 / #59) merged through unchanged.
 
 Each seam pins one slice of the test/contract surface and converges via repeated
-sweeps until the seam's audit produces zero new findings. This area has exactly
+sweeps per the [Convergence protocol](#convergence-protocol): two consecutive
+independent passes that each produce zero new findings. This area has exactly
 one seam.
 
 ## Why this seam
@@ -45,9 +46,11 @@ runbook.
 ```text
 /goal Follow docs/runbooks/decompose-regression-fix/u1-decompose-validator-order.md.
 Re-read the runbook and u1-decompose-validator-order-ledger.md at the start of every
-turn. Drive every ledger row to status fixed or closed and the most recent
-/ce-code-review pass to zero new findings. Echo the full ledger status table
-inline at the end of every turn. Stop after 30 turns.
+turn. Drive every ledger row to status fixed or closed, then converge per
+the README Convergence protocol (two consecutive independent /ce-code-review
+passes that each return zero new findings, not zero-open after one pass).
+Echo the full ledger status table inline at the end of every turn. Stop
+after 30 turns.
 ```
 
 ## Driver: /goal vs /loop
@@ -84,8 +87,9 @@ The shared protocol every turn follows:
 8. Re-run `/ce-code-review` and repeat dedupe
 9. Echo the full ledger status table inline at the end of every turn
 
-Stop condition: every ledger row is `fixed` or `closed`, and the most recent
-`/ce-code-review` pass reports zero new findings.
+Stop condition: every ledger row is `fixed` or `closed`, and the seam meets
+the [Convergence protocol](#convergence-protocol) — two consecutive
+independent `/ce-code-review` passes that each report zero new findings.
 
 ## Fix protocol (shared)
 
@@ -102,8 +106,35 @@ For each open finding:
    byte-for-byte parity for the modified `currentCommitFiles` block per U3's
    contract.
 6. Re-run the focused test commands. New findings get new stable signatures;
-   repeat until every row is `fixed` or `closed` and the most recent review
-   pass reports zero new findings.
+   repeat until every row is `fixed` or `closed` and the seam meets the
+   [Convergence protocol](#convergence-protocol) below.
+
+## Convergence protocol
+
+A seam is converged when **two consecutive independent review passes each
+return zero new findings** — not when the ledger first shows every row
+`fixed` or `closed`. Zero-open after a single pass means only that filing
+stopped, not that nothing is left; the moment you stop looking, the count
+is trivially clean.
+
+Each pass must:
+
+1. **Re-extract from scratch.** Re-read the seam's source-of-truth surface
+   and the ledger, then re-derive the claim/test inventory from the text.
+   Do not reuse the prior pass's mental list — that is how a missed claim
+   stays missed.
+2. **Attack from a different angle than the last pass.** Rotate the lens so
+   a clean result is earned, not an echo of the previous pass. Useful
+   angles: widen the source surfaces, exhaustive enumeration (grep every
+   test anchor / fixture row, not just the ones named in the seam prompt),
+   and quality/freshness audit (do resolutions still match the source, do
+   ledger citations still resolve).
+3. **Reset the counter on any fix.** A pass that files or fixes a finding is
+   not clean. Convergence requires two clean passes *in a row* after the
+   last change lands.
+
+A seam re-launched via `/runbook-orchestrator launch` or `/loop` re-enters
+this protocol from pass one.
 
 ## Risk classification (auto-fix gate)
 
