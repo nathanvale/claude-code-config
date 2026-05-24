@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-24T22:47:00+10:00"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-25T06:35:00+10:00"
 plan_digest: "sha256:03e1dee39a58f9420656fd751e87d6495ef0b51db38753f93dc32dd75d928508"
 batch_contract_digest: "sha256:874d57c1f5f7b053f1bd2646228c67309bac4e048316367483c681f6e3dc2177"
 ac_digest: "sha256:390f5294990c12765d2b0e1d5e057074b9a874f20350ca97a86656f1e10a20cf"
@@ -521,6 +521,30 @@ findings:
     status: fixed
     summary: "The import.meta.main runnable entry (formatFinding + console output + process.exit) is not exercised by any automated test; exit-0-on-clean / exit-1-on-drift and the report formatting are only verified manually. A regression flipping the exit code (e.g. always exit 0) would not be caught. Verified manually this run: clean exits 0, drift exits 1."
     resolution: "commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e"
+  - id: F25
+    batch_id: final
+    signature: subprocess-spawn-no-timeout-hangs-ci-gate
+    persona: ce-reliability-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "readCliData spawns cli.ts via Bun.spawn and awaits proc.exited with no upper time bound. Every other failure mode throws loud, but a HANG is not handled: if the spawned cli.ts deadlocks or blocks, proc.exited never resolves and the runnable hangs indefinitely rather than failing the gate. Add a bounded timeout that kills the child and throws. Non-blocking: the live CLI does not hang and the check passes clean; latent CI-robustness hardening."
+    resolution: "deferred-P2"
+  - id: F26
+    batch_id: final
+    signature: step-7b-anchor-accepts-any-numbered-line-not-orchestration-step
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "skillHasBlockedLoadStep treats every line matching the numbered-step regex as an orchestration step, so deleting the real step 7b while a stray numbered note (changelog/FAQ) co-locates the three signals (blocked- trigger, load verb, guide reference) would pass clean. On the live SKILL.md only the real step 7b satisfies it, so the deliverable is safe and the prior P1 stays closed; this is a latent regression-detection gap. Consider anchoring on the orchestration-step region rather than any numbered marker doc-wide."
+    resolution: "deferred-P2"
+  - id: F27
+    batch_id: final
+    signature: loader-extractor-asymmetry-on-non-finite-data-fields
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "extractFieldPaths expands any data.X.{a,b,c} brace into child claims, but deriveFieldPaths/finiteChildKeys deliberately stops at the nearest parent for non-finite (union/array) shapes like data.blocking_gates, so a doc that legitimately documented children of a union/array field would be flagged as false drift. No live doc writes such a brace today, so the deliverable is unaffected; latent false-drift trap for future doc edits. Consider matching data.K.child when the loader knows data.K and K is a known non-finite parent."
+    resolution: "deferred-P2"
 ```
 
 ## Findings
@@ -551,6 +575,9 @@ findings:
 | F22 | orchestrator-and-stale-doc-test | empty-scopeddocs-array-returns-ok-true-checking-no-docs | ce-adversarial-reviewer | P2 | fixed | checkContractDrift({scopedDocs: []}) returns ok:true having validated zero scoped docs (only the gotchas relationship check runs); per-doc validation is entirely bypassed with no guard against an empty scope. Test-only override so not production-reachable by default, but a caller mis-wiring scopedDocs would get a silent pass; guard against an empty scope. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
 | F23 | orchestrator-and-stale-doc-test | duplicate-read-protected-doc-helper | ce-maintainability-reviewer | P3 | fixed | Batch 4's readScopedDocOrThrow duplicates batch 3's readProtectedDoc almost exactly: both do Bun.file(absPath).exists() then throw-naming-the-doc then return file.text(), differing only in error prose; one shared helper would avoid the near-identical pair. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
 | F24 | orchestrator-and-stale-doc-test | runnable-entry-exit-code-untested | ce-correctness-reviewer | P3 | fixed | The import.meta.main runnable entry (formatFinding + console output + process.exit) is not exercised by any automated test; exit-0-on-clean / exit-1-on-drift and the report formatting are only verified manually. A regression flipping the exit code (e.g. always exit 0) would not be caught. Verified manually this run: clean exits 0, drift exits 1. | commit 71c4c118c4ef27e48a38725aad8c2e1c7123ac0e |
+| F25 | final | subprocess-spawn-no-timeout-hangs-ci-gate | ce-reliability-reviewer | P2 | deferred-P2 | readCliData spawns cli.ts via Bun.spawn and awaits proc.exited with no upper time bound. Every other failure mode throws loud, but a HANG is not handled: if the spawned cli.ts deadlocks or blocks, proc.exited never resolves and the runnable hangs indefinitely rather than failing the gate. Add a bounded timeout that kills the child and throws. Non-blocking: the live CLI does not hang and the check passes clean; latent CI-robustness hardening. | deferred-P2 |
+| F26 | final | step-7b-anchor-accepts-any-numbered-line-not-orchestration-step | ce-adversarial-reviewer | P2 | deferred-P2 | skillHasBlockedLoadStep treats every line matching the numbered-step regex as an orchestration step, so deleting the real step 7b while a stray numbered note (changelog/FAQ) co-locates the three signals (blocked- trigger, load verb, guide reference) would pass clean. On the live SKILL.md only the real step 7b satisfies it, so the deliverable is safe and the prior P1 stays closed; this is a latent regression-detection gap. Consider anchoring on the orchestration-step region rather than any numbered marker doc-wide. | deferred-P2 |
+| F27 | final | loader-extractor-asymmetry-on-non-finite-data-fields | ce-adversarial-reviewer | P2 | deferred-P2 | extractFieldPaths expands any data.X.{a,b,c} brace into child claims, but deriveFieldPaths/finiteChildKeys deliberately stops at the nearest parent for non-finite (union/array) shapes like data.blocking_gates, so a doc that legitimately documented children of a union/array field would be flagged as false drift. No live doc writes such a brace today, so the deliverable is unaffected; latent false-drift trap for future doc edits. Consider matching data.K.child when the loader knows data.K and K is a known non-finite parent. | deferred-P2 |
 
 ## Notes
 
