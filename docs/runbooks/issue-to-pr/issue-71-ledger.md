@@ -94,9 +94,10 @@ batches:
       - 5
     rationale: "replacement-contract r1: merge AC1+AC2 (form and abuse guard live in the same validateFindingResolution function with inseparable tests); narrowed to batch_id final only (CR-003); allowlist excludes the ledger path (CR-004)."
     status: in-progress
-    iterations: 1
+    iterations: 2
     builder_commits:
       - "a83bbd1c86f2f31caf7a47b0016f2ff187f601b2"
+      - "c93f5a0c3e77a24020cf08a2dad6d48bb20a9fa2"
     builder_attempts:
       - attempt_type: implementation
         status: committed
@@ -109,6 +110,17 @@ batches:
         probe_results:
           - "Fixtures (reachable branch commits): 8be31d4 control-plane-only ACCEPT; 915f666 deliverable REJECT; 7c6b569 mixed REJECT names docs path; 67f2163 ledger-path REJECT."
         notes: "TDD red-first: 4 new-arm cases (incl. 3 abuse-guard rejects) red before guard, green after. Arm placed after stage-3 short-circuit; startsWith prefix-match allowlist. 64/64 ledger tests, tsc clean (orchestrator re-verified)."
+      - attempt_type: repair
+        status: committed
+        commit_sha: "c93f5a0c3e77a24020cf08a2dad6d48bb20a9fa2"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+          - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+        route_hint: validator-wave
+        blockers: []
+        probe_results:
+          - "No FINAL_BATCH_ID constant; code uses bare \"final\" literal (ledger.ts 2407/2475/2570). Gated runbook-heal arm on finding.batch_id === final."
+        notes: "Repair of vw-001. RED batch-loop-reject test (batch_id b1) red before gate, green after. 65/65 ledger tests, tsc clean (orchestrator re-verified). vw-002 empty-commit left for separate repair."
     final_verdict: null
   - id: "stage5-readonly-gate"
     name: "Stage 5 read-only enforcement gate"
