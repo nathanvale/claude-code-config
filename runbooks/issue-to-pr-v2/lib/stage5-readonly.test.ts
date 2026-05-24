@@ -23,6 +23,12 @@ import { join } from "node:path";
  *     repo, see below) touches zero files. Per the gate's intent ("touches
  *     ONLY the ledger"), a no-op checkpoint satisfies the constraint
  *     vacuously and PASSES (exit 0).
+ *   - MERGE: dc6868a is the PR-70 merge commit (2 parents, reachable from
+ *     HEAD, confirmed via `git show --no-patch --format=%P dc6868a`). A merge
+ *     commit must be REJECTED outright: a Stage 5 final-review checkpoint is a
+ *     single non-merge ledger-only commit, and `git diff-tree` (without -m/-c)
+ *     emits zero rows for a merge, which would otherwise let a merge that
+ *     pulled non-ledger files into the branch vacuously bypass the gate.
  */
 
 const scriptPath = join(import.meta.dir, "..", "decompose.ts");
@@ -31,6 +37,7 @@ const bunExecutable = execPath || "bun";
 const ISSUE_71_LEDGER = "docs/runbooks/issue-to-pr/issue-71-ledger.md";
 const VIOLATION_COMMIT = "8be31d4";
 const LEDGER_ONLY_COMMIT = "1315477";
+const MERGE_COMMIT = "dc6868a";
 
 async function runDecompose(args: string[], options: { cwd?: string } = {}) {
 	const proc = Bun.spawn([bunExecutable, scriptPath, ...args], {
@@ -71,6 +78,22 @@ describe("decompose.ts --assert-stage5-readonly", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	test("rejects a merge commit as an invalid Stage 5 checkpoint", async () => {
+		// dc6868a is the PR-70 merge commit (2 parents). `git diff-tree` without
+		// -m/-c emits zero file rows for a merge, so the touched-file set is empty
+		// and the gate would vacuously PASS even though the merge pulled non-ledger
+		// files into the branch. A Stage 5 final-review checkpoint must be a single
+		// non-merge ledger-only commit, so a merge must be REJECTED outright.
+		const result = await runDecompose([
+			"--assert-stage5-readonly",
+			ISSUE_71_LEDGER,
+			MERGE_COMMIT,
+		]);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("merge commit");
 	});
 
 	test("passes a no-op (empty) checkpoint commit as a vacuous read-only pass", async () => {

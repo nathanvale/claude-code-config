@@ -133,9 +133,21 @@ if (candidateContractDigest) {
  * argument is the per-issue ledger path, normalized repo-relative for
  * comparison. An empty/no-op commit touches no non-ledger file, so it
  * satisfies the "touches ONLY the ledger" constraint vacuously and passes.
+ *
+ * A merge commit (2+ parents) is rejected outright before the touched-files
+ * check: `git diff-tree` without `-m`/`-c` emits zero rows for a merge, so the
+ * touched-file set would be empty and the gate would vacuously PASS even when
+ * the merge pulled non-ledger files into the branch. A Stage 5 final-review
+ * checkpoint is by contract a single non-merge ledger-only commit, so a merge
+ * is never a valid checkpoint and must fail fast.
  */
 function assertStage5ReadOnly(ledgerPath: string, ref: string): void {
   const context = "stage-5 read-only gate";
+  if (isMergeCommit(ref, context)) {
+    fail(
+      `${context}: "${ref}" is a merge commit; a final-review checkpoint must be a single non-merge commit touching only the ledger "${ledgerPath}"`,
+    );
+  }
   const expected = normalizePath(ledgerPath);
   const touched = touchedFilesForRef(ref, context);
   for (const file of touched) {
@@ -150,6 +162,22 @@ function assertStage5ReadOnly(ledgerPath: string, ref: string): void {
 /** Normalize a path to repo-relative POSIX form for equality comparison. */
 function normalizePath(file: string): string {
   return file.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+/**
+ * Return true when `ref` resolves to a merge commit (2+ parents). Uses
+ * `git rev-list --parents -n 1 <ref>`, which prints `<sha> <parent1>
+ * <parent2> ...`; three or more tokens means the commit has 2+ parents.
+ * Mirrors `touchedFilesForRef`'s git invocation style (spawnSync, args array,
+ * no shell). Fails the gate if the parent list cannot be read.
+ */
+function isMergeCommit(ref: string, context: string): boolean {
+  const out = spawnSync("git", ["rev-list", "--parents", "-n", "1", ref], {
+    encoding: "utf8",
+  });
+  if (out.status !== 0) fail(`${context}: commit "${ref}" parents could not be read from git`);
+  const tokens = out.stdout.trim().split(/\s+/).filter((token) => token.length > 0);
+  return tokens.length >= 3;
 }
 
 /**
