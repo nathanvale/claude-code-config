@@ -13,7 +13,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execPath } from "node:process";
 import { join } from "node:path";
 
-import { loadContractFacts } from "./contract-drift";
+import { finiteChildKeys, loadContractFacts } from "./contract-drift";
 
 const cliPath = join(import.meta.dir, "cli.ts");
 
@@ -178,6 +178,57 @@ describe("AC3: response field paths derived from the live help payload", () => {
   });
 });
 
+describe("AC3 (F10): finiteChildKeys rejects single-brace array / union shapes", () => {
+  test("single-brace array-of-objects `{ a, b, c }[]` returns null", () => {
+    // The `[]` sits OUTSIDE the brace group, so the inner-scoped guard misses
+    // it. The whole thing is an element shape, not a fixed data.K.child set:
+    // children must NOT be invented.
+    expect(finiteChildKeys("{ a, b, c }[]")).toBeNull();
+  });
+
+  test("single-brace union `string or { a, b }` returns null", () => {
+    // The `or` marks a description-level union; the brace is only one arm, so
+    // its keys are not guaranteed `data.K.child` paths.
+    expect(finiteChildKeys("string or { a, b }")).toBeNull();
+    expect(finiteChildKeys("{ a, b } or string")).toBeNull();
+  });
+
+  test("genuine finite CLI shapes still resolve (regression)", async () => {
+    // Re-assert against the LIVE shapes: the F10 guard must not over-correct
+    // and strip children from genuinely finite sets.
+    const help = await runCli(["--help", "--json"]);
+    const state = help.data.state_response_shape as Record<string, string>;
+
+    // installed_artifact_presence: 5 boolean children + a trailing
+    // `missing: (...)[]` array SIBLING whose `[]` is NOT right after the brace.
+    expect(finiteChildKeys(state.installed_artifact_presence)).toEqual([
+      "references",
+      "templates",
+      "cli_ts",
+      "lib_dir",
+      "all_present",
+    ]);
+
+    // digest_drift: 4 boolean children, no array/union markers.
+    expect(finiteChildKeys(state.digest_drift)).toEqual([
+      "acceptance_criteria",
+      "batch_contract",
+      "digests",
+      "any",
+    ]);
+
+    // confirmation_state: 3 children, "one of" must NOT trip the `\bor\b` guard.
+    expect(finiteChildKeys(state.confirmation_state)).toEqual([
+      "acceptance_criteria",
+      "batch_contract",
+      "digests",
+    ]);
+
+    // blocking_gates: union with two brace groups → still null.
+    expect(finiteChildKeys(state.blocking_gates)).toBeNull();
+  });
+});
+
 describe("AC5: the loader holds no duplicate source-of-truth lists", () => {
   test("source file contains no literal route id, slice name, packet role, or field path", async () => {
     const source = await Bun.file(join(import.meta.dir, "contract-drift.ts")).text();
@@ -305,7 +356,11 @@ describe("AC6: exit-0 processes with unusable stdout are hard errors", () => {
   test("(c) exit-0 ok envelope with NO data object throws", async () => {
     const okNoData = JSON.stringify({ status: "ok" });
     const rejects = await loadWithScript(`console.log(${JSON.stringify(okNoData)});`);
-    await rejects.toThrow(/no data object|data/i);
+    // Pin the distinctive no-data-object message only. A loose `/data/i`
+    // alternative also matched the downstream "--help data.commands is not an
+    // array" throw, so deleting the no-data-object branch left this test green
+    // (passing for the wrong reason). Match the exact branch message instead.
+    await rejects.toThrow(/no data object/i);
   });
 });
 

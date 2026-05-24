@@ -190,14 +190,36 @@ function expectStringArray(
  * structurally: they carry more than one brace group, and each variant's
  * brace inner carries `;` / quoted-literal members that disqualify it.
  */
-function finiteChildKeys(description: string): string[] | null {
+export function finiteChildKeys(description: string): string[] | null {
   const braceGroups = description.match(/\{[^{}]*\}/g);
   if (!braceGroups || braceGroups.length !== 1) {
     return null;
   }
 
-  const inner = braceGroups[0].slice(1, -1).trim();
+  const brace = braceGroups[0];
+  const inner = brace.slice(1, -1).trim();
   if (inner.length === 0) {
+    return null;
+  }
+
+  // Reject when the SURROUNDING description marks the whole thing as an array
+  // element or union variant, even though the marker sits OUTSIDE the brace
+  // group (so the inner-scoped guards below miss it):
+  //   - array-of-objects: the brace is immediately followed by `[]`
+  //     (e.g. `{ a, b, c }[]`) — that's an element shape, not a fixed set of
+  //     `data.K.child` paths.
+  //   - union variant: the brace is one arm of a description-level `... or ...`
+  //     (e.g. `string or { a, b }`) — children would belong to only one arm.
+  // The `\bor\b` test must not fire on the unrelated "one of" phrase used by
+  // genuine finite shapes (`confirmation_state`'s "each one of ...").
+  const afterBrace = description.slice(
+    description.indexOf(brace) + brace.length,
+  );
+  if (/^\s*\[\]/.test(afterBrace)) {
+    return null;
+  }
+  const descWithoutBrace = description.replace(brace, " ");
+  if (/\bor\b/.test(descWithoutBrace)) {
     return null;
   }
 
