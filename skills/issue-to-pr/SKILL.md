@@ -354,16 +354,20 @@ and name the resume condition.
 | Unknown `data.route_id` | Raw state envelope and route ID | Runtime route contract fixed or clarified |
 | Runbook version skew | Ledger version evidence and `ledger-and-helper.md` pointer | State envelope reports matched or continuation evidence present |
 | Partial v2 install | Missing installed roots | Install or symlink repaired and state envelope reports all present |
+| Stage 1 issue or branch unsafe | Closed/blocked issue, open blocker, abort, or default-branch evidence | Override flag supplied, blocker cleared, user resumes instead of aborting, or work moves to a feature branch; see `stage-1-pick-issue.md` |
 | Stale or blocked ACs | Digest drift or AC block reason | User re-confirms ACs in Stage 1 |
 | Stage 3 open P0/P1 | Contract-review finding summary | Plan or batch contract revision closes the finding |
+| Stage 3 contract-review cycle cap | Cap reached without convergence and last finding summary | User replans, narrows the contract, or accepts surfaced advisories; see `stage-3-decompose.md` |
 | Stale batch contract or digests | Recomputed drift evidence | Stage 3 recompute and user confirmation |
 | Host Builder tools unavailable | Host readiness failure | Required host tools are available |
 | Builder infrastructure failure | Malformed/missing Builder envelope and side effects | User decides whether to retry, repair, or reframe |
 | No eligible batch | Pending batch dependencies | Dependencies converge or user reframes the DAG |
 | Escape hatch or iteration cap | Hatch name and current batch/finding evidence | User accepts risk, authorizes replacement, or replans |
+| Stage 5 reviewer coverage gap | Reviewer cap with no fallback covering correctness and testing | A fallback reviewer set covers correctness and testing; see `findings-and-validators.md` |
 | Final review needs replan | Finding that exceeds patch-batch scope | User replans or narrows the contract |
 | Local check failure | Check name and failing summary | Synthetic P0 routes through Stage 5 and is closed |
 | Unsafe final ledger commit | Non-ledger path in final ledger commit | Commit is repaired so only the ledger checkpoint is included |
+| Unsupported smoke-direct request | Requested `smoke-direct` on a non-disposable repo | Target repo and checkout are disposable, or the standard ship path is used; see `stage-6-ship.md` |
 
 Detailed hatch semantics and closure rules live in
 `runbooks/issue-to-pr-v2/references/findings-and-validators.md`.
