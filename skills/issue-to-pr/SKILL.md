@@ -1,6 +1,6 @@
 ---
 name: issue-to-pr
-description: Drives one GitHub issue to a PR through the host-neutral Issue-to-PR v2 ledger workflow. Use when the user says "ship issue #N", "drive issue-to-pr for #N", "open a PR for issue #N", "/issue-to-pr <N>", or asks to take a specific GitHub issue end-to-end through plan, build, validate, and ship. The skill is the control plane; deterministic facts come from the v2 CLI, repeated packets from templates, and deep stage mechanics from one-level references.
+description: Drives one GitHub issue to a PR through the host-neutral Issue-to-PR v2 ledger workflow. Use when the user says "ship issue #N", "drive issue-to-pr for #N", "open a PR for issue #N", "/issue-to-pr <N>", or asks to take a specific GitHub issue end-to-end through plan, build, validate, and ship. Sized for issues with a code deliverable; for decision-only or doc-only issues (for example a standalone ADR), prefer a direct commit and PR. The skill is the control plane; deterministic facts come from the v2 CLI, repeated packets from templates, and deep stage mechanics from one-level references.
 argument-hint: <issue-number> [target-repo]
 user-invocable: true
 disable-model-invocation: true
