@@ -130,8 +130,11 @@ for that batch, exactly one committed open P0/P1 target finding signature for
 repair attempts, compact prior `builder_attempts`, non-authoritative Notes
 summaries for that batch, local-law instructions, authority boundaries,
 preflight rules, and the return envelope contract. It excludes the full plan,
-full ledger, unrelated batch state, raw Validator envelopes, and rich Builder
-evidence fields that are not persisted wholesale in the ledger.
+full ledger, unrelated batch state, raw Validator envelopes,
+`orchestrator_inline_attempts` as prior Builder attempts, and rich Builder
+evidence fields that are not persisted wholesale in the ledger. Inline attempt
+rows are not Builder envelopes; at most, relevant inline history may be
+summarized as non-authoritative Notes context for repair routing.
 
 When Builder Preflight blocks a stale or unsafe batch contract, Orchestrator
 repairs through a replacement batch with `supersedes: <blocked-batch-id>`.

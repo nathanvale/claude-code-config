@@ -115,6 +115,26 @@ function pendingBatchYaml(id: string, files: string[], ac: number[]): string {
   ].join("\n");
 }
 
+function committedBuilderAttemptYaml(opts: {
+  commitSha?: string;
+  filesTouched?: string[];
+  notes?: string;
+  extraLines?: string[];
+} = {}): string {
+  return [
+    "      - attempt_type: implementation",
+    "        status: committed",
+    `        commit_sha: ${opts.commitSha ?? "abc123"}`,
+    "        files_touched:",
+    ...(opts.filesTouched ?? ["app/foo.ts"]).map((f) => `          - ${f}`),
+    "        route_hint: null",
+    "        blockers: []",
+    "        probe_results: []",
+    `        notes: "${opts.notes ?? "previous Builder attempt"}"`,
+    ...(opts.extraLines ?? []),
+  ].join("\n");
+}
+
 function tempDirsCleanup(paths: string[]): void {
   for (const p of paths) {
     try {
@@ -306,6 +326,148 @@ describe("Builder packet", () => {
       );
       tempDirsCleanup([ledgerPath]);
     });
+
+    test("does not render Orchestrator-inline attempts as prior Builder attempts", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: [
+            "batches:",
+            "  - id: target",
+            "    name: \"Batch target\"",
+            "    goal: \"implement target\"",
+            "    files:",
+            "      - app/foo.ts",
+            "    depends_on: []",
+            "    execution_mode: tdd",
+            "    acceptance_tests:",
+            "      - \"AC 1 holds: behavior 1\"",
+            "    ac_mapping:",
+            "      - 1",
+            "    rationale: null",
+            "    status: pending",
+            "    builder_commits:",
+            "      - abc123",
+            "    builder_attempts:",
+            committedBuilderAttemptYaml({
+              commitSha: "abc123",
+              notes: "real Builder evidence",
+            }),
+            "    orchestrator_inline_attempts:",
+            "      - commit_sha: inline123",
+            "        files_touched:",
+            "          - app/foo.ts",
+            "        notes: \"INLINE-BAIT-DO-NOT-RENDER\"",
+            "    iterations: 1",
+            "    final_verdict: null",
+          ].join("\n"),
+        }),
+      );
+      const packet = renderBuilderPacket({
+        ledgerPath,
+        batchId: "target",
+        attemptType: "implementation",
+        now: FROZEN_TIME,
+      });
+      expect(packet.data.prior_builder_attempts).toHaveLength(1);
+      expect(packet.data.prior_builder_attempts[0].commit_sha).toBe("abc123");
+      const blob = JSON.stringify(packet.data) + packet.packet_markdown;
+      expect(blob).not.toContain("inline123");
+      expect(blob).not.toContain("INLINE-BAIT-DO-NOT-RENDER");
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("repair packets include only the targeted open P0/P1 finding", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches:
+            "batches:\n" + pendingBatchYaml("target", ["app/foo.ts"], [1]),
+          findingsTable: [
+            "| f001 | target | sig-p1 | reviewer | P1 | open | repair this blocker | |",
+            "| f002 | target | sig-p2 | reviewer | P2 | open | P2-DEBT-BAIT | |",
+            "| f003 | target | sig-fixed | reviewer | P1 | fixed | FIXED-BAIT | commit abc123 |",
+          ].join("\n"),
+        }),
+      );
+      const packet = renderBuilderPacket({
+        ledgerPath,
+        batchId: "target",
+        attemptType: "repair",
+        targetFindingSignature: "sig-p1",
+        now: FROZEN_TIME,
+      });
+      expect(packet.data.findings_data_for_this_batch.map((f) => f.id)).toEqual([
+        "f001",
+      ]);
+      const blob = JSON.stringify(packet.data) + packet.packet_markdown;
+      expect(blob).toContain("repair this blocker");
+      expect(blob).not.toContain("P2-DEBT-BAIT");
+      expect(blob).not.toContain("FIXED-BAIT");
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("rejects repair packets for non-blocking findings", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches:
+            "batches:\n" + pendingBatchYaml("target", ["app/foo.ts"], [1]),
+          findingsTable:
+            "| f002 | target | sig-p2 | reviewer | P2 | open | p2 debt | |",
+        }),
+      );
+      expect(() =>
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "repair",
+          targetFindingSignature: "sig-p2",
+          now: FROZEN_TIME,
+        }),
+      ).toThrow(PacketRenderError);
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("rejects malformed prior Builder attempt rows instead of compacting them", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: [
+            "batches:",
+            "  - id: target",
+            "    name: \"Batch target\"",
+            "    goal: \"implement target\"",
+            "    files:",
+            "      - app/foo.ts",
+            "    depends_on: []",
+            "    execution_mode: tdd",
+            "    acceptance_tests:",
+            "      - \"AC 1 holds: behavior 1\"",
+            "    ac_mapping:",
+            "      - 1",
+            "    rationale: null",
+            "    status: pending",
+            "    builder_commits:",
+            "      - abc123",
+            "    builder_attempts:",
+            committedBuilderAttemptYaml({
+              extraLines: [
+                "        implementation_steps:",
+                "          - BAIT-RICH-EVIDENCE-DO-NOT-SILENTLY-DROP",
+              ],
+            }),
+            "    iterations: 1",
+            "    final_verdict: null",
+          ].join("\n"),
+        }),
+      );
+      expect(() =>
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "implementation",
+          now: FROZEN_TIME,
+        }),
+      ).toThrow(PacketRenderError);
+      tempDirsCleanup([ledgerPath]);
+    });
   });
 
   // ---- ALLOW-LIST ----
@@ -336,6 +498,8 @@ describe("Builder packet", () => {
         builderLedger({
           batches:
             "batches:\n" + pendingBatchYaml("b1", ["app/foo.ts"], [1]),
+          findingsTable:
+            "| f001 | b1 | repair-target-sig | reviewer | P1 | open | target blocker | |",
         }),
       );
       const packet = renderBuilderPacket({
@@ -371,7 +535,7 @@ describe("Builder packet", () => {
       });
     });
 
-    test("includes the four prose framing slots", () => {
+    test("includes the prose framing slots", () => {
       const ledgerPath = writeLedger(
         builderLedger({
           batches:
@@ -387,13 +551,20 @@ describe("Builder packet", () => {
       expect(packet.data.local_law_read_order).toContain(
         "target repo root agent instructions",
       );
+      expect(packet.data.authority_boundary).toContain(
+        "Builder may edit only files in batch_contract.files",
+      );
       expect(packet.data.preflight_checklist).toContain("acceptance criteria");
       expect(packet.data.allowed_probes).toContain("rename path probe");
       expect(packet.data.output_contract).toContain("builder-dispatch.md");
       expect(packet.packet_markdown).toContain("<local_law_read_order>");
+      expect(packet.packet_markdown).toContain("<authority_boundary>");
       expect(packet.packet_markdown).toContain("<preflight_checklist>");
       expect(packet.packet_markdown).toContain("<allowed_probes>");
       expect(packet.packet_markdown).toContain("<output_contract>");
+      expect(packet.packet_markdown).not.toContain(
+        "Orchestrator-inline attempts are Builder attempts",
+      );
     });
   });
 

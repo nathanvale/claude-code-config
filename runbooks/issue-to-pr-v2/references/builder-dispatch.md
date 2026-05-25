@@ -75,8 +75,11 @@ The Orchestrator sends Builder one batch-only Work Packet:
   Preflight Checklist, and return envelope contract.
 
 The Work Packet must not include the full plan, full ledger, raw Validator
-envelopes, unrelated batch state, or rich Builder evidence that was not
-persisted in compact `builder_attempts`. When present, `supersedes` is
+envelopes, unrelated batch state, `orchestrator_inline_attempts` as prior
+Builder attempts, or rich Builder evidence that was not persisted in compact
+`builder_attempts`. Inline attempt records are not Builder envelopes. They may
+appear only as non-authoritative Notes context when relevant to a repair
+route, never under `prior_builder_attempts`. When present, `supersedes` is
 read-only audit context for Builder. It does not change Builder Preflight
 rules, authority boundaries, or return-envelope shape.
 
@@ -183,7 +186,9 @@ The envelope includes `attempt_type`, optional target finding signature,
 `tests_run`, `assumptions`, `risks`, `deferred`, `suggested_validator_focus`,
 and `notes`. Required array fields may be empty; missing
 `suggested_validator_focus` is malformed. Status owns workflow transition;
-`route_hint` is only next-owner guidance.
+`route_hint` is only next-owner guidance. The Builder envelope has no
+inline-only fields; Orchestrator-inline attempt evidence is recorded through
+the separate ledger lane owned by the Stage 4 batch-loop contract.
 
 Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger
@@ -309,7 +314,11 @@ ledger state.
 The renderer scopes inputs to the target batch only: findings, prior
 attempts, and Notes are filtered by `batch_id` before render, so the
 context-leak invariant in `docs/runbooks/issue-to-pr-v2-refactor/
-u5-packet-rendering.md` is enforced at the render boundary.
+u5-packet-rendering.md` is enforced at the render boundary. Repair packets
+render exactly one open P0/P1 target finding by signature and reject P2/P3 or
+already-fixed targets. Malformed compact `builder_attempts` rows are rejected
+instead of silently compacted, because accepting malformed rows risks leaking
+raw ledger state or treating inline evidence as Builder evidence.
 
 ## See also
 

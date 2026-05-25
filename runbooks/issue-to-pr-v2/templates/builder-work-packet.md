@@ -30,17 +30,19 @@ in `runbooks/issue-to-pr-v2/lib/packets.ts`; invoke
 plus the dispatch evidence shape.
 
 The packet body uses fenced YAML for helper-validated fields plus selective
-XML framing tags (`<local_law_read_order>`, `<preflight_checklist>`,
-`<allowed_probes>`, `<output_contract>`) for prose framing only, per the U2
-approach. The XML tags **never** wrap helper-validated YAML or JSON; they
-only frame the prose payload the Builder sub-agent reads on entry.
+XML framing tags (`<local_law_read_order>`, `<authority_boundary>`,
+`<preflight_checklist>`, `<allowed_probes>`, `<output_contract>`) for prose
+framing only, per the U2 approach. The XML tags **never** wrap
+helper-validated YAML or JSON; they only frame the prose payload the Builder
+sub-agent reads on entry.
 
 The rendered packet **MUST** include exactly the fields below and **MUST
 NOT** include the full plan file, raw Validator envelopes, unrelated batch
 state, rich Builder evidence (implementation_steps, existing_seams_used,
 tests_run, assumptions, risks, deferred, suggested_validator_focus) from
-prior envelopes, ACs not in the target batch's `ac_mapping`, or findings
-from other batches or stage-3 findings.
+prior envelopes, `orchestrator_inline_attempts` as prior Builder attempts,
+ACs not in the target batch's `ac_mapping`, or findings from other batches
+or stage-3 findings.
 
 ```yaml
 issue_number: <int>
@@ -71,6 +73,10 @@ findings_data_for_this_batch: []   # rows from ## Findings data, this batch only
 notes_summary_for_this_batch: ""   # non-authoritative summary lines, this batch only
 ```
 
+`prior_builder_attempts` is Builder-only. Orchestrator-inline attempt rows are
+not Builder envelopes and must not appear there; they may only be summarized in
+`notes_summary_for_this_batch` when relevant to the current repair route.
+
 ### `<local_law_read_order>` framing
 
 Fill the tag with the six-step Local Law Read Order from
@@ -88,6 +94,24 @@ rule body still lives in the reference.
 5. every file in batch_contract.files;
 6. nearby tests and implementation needed to understand the existing seam.
 </local_law_read_order>
+```
+
+### `<authority_boundary>` framing
+
+Fill the tag with the Builder-only authority summary from
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law-v1-l106-131).
+The tag exists so Builder can see the edit boundary without reading unrelated
+ledger or plan state.
+
+```text
+<authority_boundary>
+Builder may edit only files in batch_contract.files.
+Builder may create a missing path only when that path is already listed in batch_contract.files.
+Builder may make exactly one commit when preflight passes.
+Builder must not change acceptance criteria, dependencies, execution mode, durable domain language, public contracts, governance docs, or files outside batch_contract.files unless the confirmed batch contract explicitly authorizes that change.
+Builder must not append or edit prior builder_attempts rows, edit findings, record Orchestrator-inline evidence, or perform Validator work.
+Repair attempts target exactly one open P0/P1 finding by signature; Builder fixes only that target signature.
+</authority_boundary>
 ```
 
 ### `<preflight_checklist>` framing

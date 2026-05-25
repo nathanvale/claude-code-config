@@ -114,8 +114,11 @@ The Orchestrator sends Builder one batch-only Work Packet:
   Preflight Checklist, and return envelope contract.
 
 The Work Packet must not include the full plan, full ledger, raw Validator
-envelopes, unrelated batch state, or rich Builder evidence that was not
-persisted in compact `builder_attempts`. Replacement-batch mechanics are
+envelopes, unrelated batch state, `orchestrator_inline_attempts` as prior
+Builder attempts, or rich Builder evidence that was not persisted in compact
+`builder_attempts`. Inline attempt records are not Builder envelopes. They may
+appear only as non-authoritative Notes context when relevant to a repair
+route, never under `prior_builder_attempts`. Replacement-batch mechanics are
 sourced from
 `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
 When present, `supersedes` is read-only audit context for Builder. It does not
@@ -218,7 +221,9 @@ The envelope includes `attempt_type`, optional target finding signature,
 `tests_run`, `assumptions`, `risks`, `deferred`,
 `suggested_validator_focus`, and `notes`. Required array fields may be empty;
 missing `suggested_validator_focus` is malformed. Status owns workflow
-transition; `route_hint` is only next-owner guidance.
+transition; `route_hint` is only next-owner guidance. The Builder return
+envelope has no inline-only fields; Orchestrator-inline attempt evidence is
+recorded in the separate inline audit lane.
 
 Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger

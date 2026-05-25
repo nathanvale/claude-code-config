@@ -26,6 +26,9 @@ The schema, the `status` enum (`committed`, `fail-stop-preflight`,
 `fail-stop-read-failed`, `fail-stop-other`), and the rule that
 `suggested_validator_focus` is required live in
 [`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope-v1-l184-213).
+This envelope is Builder-only. It does not carry Orchestrator-inline attempt
+fields; inline evidence is recorded through the separate ledger lane owned by
+the Stage 4 batch-loop contract.
 
 ## Envelope shape (mirror of the canonical schema)
 
@@ -60,7 +63,9 @@ into the next Validator packet via the
 [validator-envelope.md](validator-envelope.md) `builder_evidence` slot.
 They do **not** flow back into a subsequent Builder packet (the U5
 Builder packet's `prior_builder_attempts` only carries the compact
-ledger-persisted shape).
+ledger-persisted Builder shape). Orchestrator-inline attempt rows are not
+Builder prior attempts and must not be copied into this envelope or the next
+Builder packet.
 
 ## See also
 

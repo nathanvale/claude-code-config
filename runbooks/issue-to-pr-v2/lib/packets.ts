@@ -105,6 +105,7 @@ export type BuilderPacketData = {
   findings_data_for_this_batch: FindingRow[];
   notes_summary_for_this_batch: string;
   local_law_read_order: string;
+  authority_boundary: string;
   preflight_checklist: string;
   allowed_probes: string;
   output_contract: string;
@@ -306,14 +307,17 @@ export function renderBuilderPacket(input: BuilderRenderInput): BuilderPacket {
   const builderCommits = requireRowArray(row, "builder_commits", input.batchId).map(
     (c) => c.trim(),
   );
-  const priorAttempts = compactPriorAttempts(row.builder_attempts);
+  const priorAttempts = compactPriorAttempts(row.builder_attempts, input.batchId);
   const allFindings = parseFindingsTableRowsFromSource(
     ledgerSrc,
     input.ledgerPath,
   );
-  const findingsForBatch = allFindings.filter(
-    (f) => f.batch_id === input.batchId,
-  );
+  const findingsForBatch = selectBuilderPacketFindings({
+    allFindings,
+    batchId: input.batchId,
+    attemptType: input.attemptType,
+    targetFindingSignature: input.targetFindingSignature ?? null,
+  });
   const notesForBatch = extractNotesForBatch(ledgerSrc, input.batchId);
 
   const issueNumber = input.issueNumber ?? readFrontmatterIssueNumber(ledgerSrc);
@@ -321,6 +325,7 @@ export function renderBuilderPacket(input: BuilderRenderInput): BuilderPacket {
     input.targetRepo ?? readFrontmatterScalar(ledgerSrc, "target_repo") ?? "";
 
   const localLaw = BUILDER_LOCAL_LAW_TEXT;
+  const authorityBoundary = BUILDER_AUTHORITY_BOUNDARY_TEXT;
   const preflight = BUILDER_PREFLIGHT_TEXT;
   const allowedProbes = BUILDER_PROBE_TEXT;
   const outputContract = BUILDER_OUTPUT_CONTRACT_TEXT;
@@ -337,6 +342,7 @@ export function renderBuilderPacket(input: BuilderRenderInput): BuilderPacket {
     findings_data_for_this_batch: findingsForBatch,
     notes_summary_for_this_batch: notesForBatch,
     local_law_read_order: localLaw,
+    authority_boundary: authorityBoundary,
     preflight_checklist: preflight,
     allowed_probes: allowedProbes,
     output_contract: outputContract,
@@ -1064,25 +1070,151 @@ function parseInlineArray(s: string): string[] {
   return inner.split(",").map((item) => unquoteScalar(item.trim()));
 }
 
-function compactPriorAttempts(value: unknown): CompactBuilderAttempt[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((raw) => {
+function compactPriorAttempts(
+  value: unknown,
+  batchId: string,
+): CompactBuilderAttempt[] {
+  if (!Array.isArray(value)) {
+    throw new PacketRenderError(
+      "malformed-builder-attempts",
+      `ledger batch "${batchId}" is missing required array field "builder_attempts"`,
+    );
+  }
+  return value.map((raw, index) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new PacketRenderError(
+        "malformed-builder-attempt",
+        `ledger batch "${batchId}" builder_attempts[${index}] must be an object`,
+      );
+    }
     const r = raw as Record<string, unknown>;
+    validateCompactBuilderAttemptKeys(r, batchId, index);
     return {
-      attempt_type: String(r.attempt_type ?? ""),
-      status: String(r.status ?? ""),
-      commit_sha: r.commit_sha === null || r.commit_sha === undefined ? null : String(r.commit_sha),
-      files_touched: Array.isArray(r.files_touched)
-        ? (r.files_touched as unknown[]).map((v) => String(v))
-        : [],
-      route_hint: r.route_hint === null || r.route_hint === undefined ? null : String(r.route_hint),
-      blockers: Array.isArray(r.blockers) ? (r.blockers as unknown[]).map((v) => String(v)) : [],
-      probe_results: Array.isArray(r.probe_results)
-        ? (r.probe_results as unknown[]).map((v) => String(v))
-        : [],
-      notes: String(r.notes ?? ""),
+      attempt_type: requireAttemptScalar(r, "attempt_type", batchId, index),
+      status: requireAttemptScalar(r, "status", batchId, index),
+      commit_sha: nullableAttemptScalar(r, "commit_sha", batchId, index),
+      files_touched: requireAttemptArray(r, "files_touched", batchId, index),
+      route_hint: nullableAttemptScalar(r, "route_hint", batchId, index),
+      blockers: requireAttemptArray(r, "blockers", batchId, index),
+      probe_results: requireAttemptArray(r, "probe_results", batchId, index),
+      notes: requireAttemptScalar(r, "notes", batchId, index),
     };
   });
+}
+
+const COMPACT_BUILDER_ATTEMPT_KEYS = new Set([
+  "attempt_type",
+  "status",
+  "commit_sha",
+  "files_touched",
+  "route_hint",
+  "blockers",
+  "probe_results",
+  "notes",
+]);
+
+function validateCompactBuilderAttemptKeys(
+  attempt: Record<string, unknown>,
+  batchId: string,
+  index: number,
+): void {
+  for (const key of Object.keys(attempt)) {
+    if (!COMPACT_BUILDER_ATTEMPT_KEYS.has(key)) {
+      throw new PacketRenderError(
+        "malformed-builder-attempt",
+        `ledger batch "${batchId}" builder_attempts[${index}] contains unexpected field "${key}"`,
+      );
+    }
+  }
+  for (const key of COMPACT_BUILDER_ATTEMPT_KEYS) {
+    if (!(key in attempt)) {
+      throw new PacketRenderError(
+        "malformed-builder-attempt",
+        `ledger batch "${batchId}" builder_attempts[${index}] is missing required field "${key}"`,
+      );
+    }
+  }
+}
+
+function requireAttemptScalar(
+  attempt: Record<string, unknown>,
+  key: string,
+  batchId: string,
+  index: number,
+): string {
+  const value = attempt[key];
+  if (
+    value === null ||
+    value === undefined ||
+    Array.isArray(value) ||
+    typeof value === "object"
+  ) {
+    throw new PacketRenderError(
+      "malformed-builder-attempt",
+      `ledger batch "${batchId}" builder_attempts[${index}].${key} must be a scalar string`,
+    );
+  }
+  return String(value);
+}
+
+function nullableAttemptScalar(
+  attempt: Record<string, unknown>,
+  key: string,
+  batchId: string,
+  index: number,
+): string | null {
+  const value = attempt[key];
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value) || typeof value === "object") {
+    throw new PacketRenderError(
+      "malformed-builder-attempt",
+      `ledger batch "${batchId}" builder_attempts[${index}].${key} must be a scalar string or null`,
+    );
+  }
+  const scalar = String(value).trim();
+  return scalar === "null" || scalar === "~" ? null : String(value);
+}
+
+function requireAttemptArray(
+  attempt: Record<string, unknown>,
+  key: string,
+  batchId: string,
+  index: number,
+): string[] {
+  const value = attempt[key];
+  if (!Array.isArray(value)) {
+    throw new PacketRenderError(
+      "malformed-builder-attempt",
+      `ledger batch "${batchId}" builder_attempts[${index}].${key} must be an array`,
+    );
+  }
+  return value.map((v) => String(v));
+}
+
+function selectBuilderPacketFindings(input: {
+  allFindings: FindingRow[];
+  batchId: string;
+  attemptType: "implementation" | "repair";
+  targetFindingSignature: string | null;
+}): FindingRow[] {
+  const batchFindings = input.allFindings.filter(
+    (f) => f.batch_id === input.batchId,
+  );
+  if (input.attemptType === "implementation") return batchFindings;
+
+  const target = batchFindings.filter(
+    (f) =>
+      f.signature === input.targetFindingSignature &&
+      f.status === "open" &&
+      (f.severity === "P0" || f.severity === "P1"),
+  );
+  if (target.length !== 1) {
+    throw new PacketRenderError(
+      "invalid-target-finding-signature",
+      `builder repair packet for batch "${input.batchId}" requires exactly one open P0/P1 finding with signature "${input.targetFindingSignature}"`,
+    );
+  }
+  return target;
 }
 
 function parseFindingsTableRowsFromSource(
@@ -1251,6 +1383,10 @@ function renderBuilderMarkdown(data: BuilderPacketData): string {
     "<local_law_read_order>",
     data.local_law_read_order,
     "</local_law_read_order>",
+    "",
+    "<authority_boundary>",
+    data.authority_boundary,
+    "</authority_boundary>",
     "",
     "<preflight_checklist>",
     data.preflight_checklist,
@@ -1554,6 +1690,15 @@ const BUILDER_LOCAL_LAW_TEXT = [
   "6. nearby tests and implementation needed to understand the existing seam.",
 ].join("\n");
 
+const BUILDER_AUTHORITY_BOUNDARY_TEXT = [
+  "Builder may edit only files in batch_contract.files.",
+  "Builder may create a missing path only when that path is already listed in batch_contract.files.",
+  "Builder may make exactly one commit when preflight passes.",
+  "Builder must not change acceptance criteria, dependencies, execution mode, durable domain language, public contracts, governance docs, or files outside batch_contract.files unless the confirmed batch contract explicitly authorizes that change.",
+  "Builder must not append or edit prior builder_attempts rows, edit findings, record Orchestrator-inline evidence, or perform Validator work.",
+  "Repair attempts target exactly one open P0/P1 finding by signature; Builder fixes only that target signature.",
+].join("\n");
+
 const BUILDER_PREFLIGHT_TEXT = [
   "- task and attempt type are understood;",
   "- acceptance criteria are present;",
@@ -1616,4 +1761,3 @@ function readCePlanAddendumBody(templatesDir?: string): string {
   }
   return block[1].replace(/\n+$/, "\n");
 }
-
