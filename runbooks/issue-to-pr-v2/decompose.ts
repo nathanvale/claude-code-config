@@ -15,6 +15,7 @@
  *   decompose.ts --validate-ledger-batches <ledger-path>
  *   decompose.ts --batch-contract-digest <ledger-path>
  *   decompose.ts --validate-findings <ledger-path>
+ *   decompose.ts --validate-workflow-learnings <ledger-path>
  *   decompose.ts --assert-no-open-p0p1 <ledger-path>
  *   decompose.ts <plan-path>
  *   decompose.ts <plan-path> --candidate-contract-digest
@@ -41,6 +42,7 @@ import {
   validateAcCoverage,
   validateFindingsData,
   validateLedgerBatches,
+  validateWorkflowLearnings,
 } from "./lib/ledger";
 
 const args = argv.slice(2);
@@ -74,6 +76,11 @@ if (args[0] === "--validate-findings") {
   validateFindingsData(args[1]);
   exit(0);
 }
+if (args[0] === "--validate-workflow-learnings") {
+  if (args.length !== 2) fail("usage: decompose.ts --validate-workflow-learnings <ledger-path>");
+  validateWorkflowLearnings(args[1]);
+  exit(0);
+}
 if (args[0] === "--assert-no-open-p0p1") {
   if (args.length !== 2) fail("usage: decompose.ts --assert-no-open-p0p1 <ledger-path>");
   validateFindingsData(args[1], { assertNoOpenP0P1: true });
@@ -94,7 +101,7 @@ if (
   (args.length !== 1 && !patchProposalMode && !validateCoverage && !candidateContractDigest)
 ) {
   fail(
-    "usage: decompose.ts <plan-path> [--candidate-contract-digest | --validate-ac-coverage <ledger-path> | --patch-proposal <ledger-path>] | --plan-digest <plan-path> | --ac-digest <ledger-path> | --confirmation-state <ledger-path> | --validate-ledger-batches <ledger-path> | --batch-contract-digest <ledger-path> | --validate-findings <ledger-path> | --assert-no-open-p0p1 <ledger-path> | --assert-stage5-readonly <ledger-path> <commit-ref>",
+    "usage: decompose.ts <plan-path> [--candidate-contract-digest | --validate-ac-coverage <ledger-path> | --patch-proposal <ledger-path>] | --plan-digest <plan-path> | --ac-digest <ledger-path> | --confirmation-state <ledger-path> | --validate-ledger-batches <ledger-path> | --batch-contract-digest <ledger-path> | --validate-findings <ledger-path> | --validate-workflow-learnings <ledger-path> | --assert-no-open-p0p1 <ledger-path> | --assert-stage5-readonly <ledger-path> <commit-ref>",
   );
 }
 

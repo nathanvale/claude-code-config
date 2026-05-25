@@ -2814,3 +2814,134 @@ export function validateAcCoverage(batches: Batch[], ledgerPath: string): void {
   }
   stdout.write(`AC coverage OK: ${acCount}/${acCount} covered across ${batches.length} batches\n`);
 }
+
+/**
+ * Closed whitelist of allowed entry keys in a ledger `## Workflow Learnings`
+ * fenced yaml block. This set is intentionally symmetric with the registry
+ * helper's `ALLOWED_EVIDENCE_KEYS` in `lib/learnings.ts`, MINUS the `run` key
+ * (the ledger IS the run, so it carries no `run` field) PLUS `signature`
+ * (the cross-reference into the canonical registry entry).
+ *
+ * Canonical fields (`summary`, `owner`, `retirement_condition`) and lifecycle
+ * fields (`disposition`, `status`, `confidence`, `follow_up`) are
+ * intentionally absent: those live exclusively in the registry per PRD #88
+ * and `references/workflow-learnings-registry.md`. Any of them appearing on
+ * a ledger entry is a validator error.
+ */
+const WORKFLOW_LEARNINGS_ALLOWED_KEYS = [
+  "signature",
+  "affected_surface",
+  "what_was_wrong",
+  "discovery_method",
+  "root_cause",
+  "scope",
+  "proposed_fix",
+  "verification_idea",
+] as const;
+
+/**
+ * Pick the human-readable label for a workflow_learnings entry in an error
+ * message: when `signature` is a non-empty string we identify by it (operators
+ * recognize a sha256 prefix or stable slug faster than an index); otherwise
+ * we fall back to the 1-based position so the message still points at a row.
+ */
+function workflowLearningEntryLabel(entry: Record<string, unknown>, index: number): string {
+  const signature = entry.signature;
+  if (typeof signature === "string" && signature.length > 0) {
+    return `entry "${signature}"`;
+  }
+  return `entry #${index + 1}`;
+}
+
+/**
+ * Validate the ledger's `## Workflow Learnings` section: the section must
+ * exist, contain exactly one fenced ```yaml``` block, parse to a mapping
+ * with a `workflow_learnings` array at the top level, and each entry must
+ * be a mapping carrying non-empty string `signature`, `affected_surface`,
+ * and `what_was_wrong` plus only keys in `WORKFLOW_LEARNINGS_ALLOWED_KEYS`.
+ *
+ * Writes `Workflow Learnings OK: N entries\n` to stdout on success. Backs
+ * the `--validate-workflow-learnings <ledger-path>` CLI flag on
+ * `decompose.ts`. `workflow_learnings: []` is the valid empty case: a run
+ * with no observed workflow learnings is the common path and must not throw.
+ */
+export function validateWorkflowLearnings(ledgerPath: string): void {
+  // Existence + readability are gated up front so a missing/unreadable file
+  // is the first failure surface; mirrors the readOptionalFencedSectionBlock
+  // pattern used by validateFindingsData.
+  let src: string;
+  try {
+    src = readFileSync(ledgerPath, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(`cannot read ledger ${ledgerPath}: ${message}`);
+  }
+  const sectionName = "Workflow Learnings";
+  const escaped = sectionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sectionPattern = new RegExp(`##\\s+${escaped}\\s*\\n`, "g");
+  const sectionMatches = [...src.matchAll(sectionPattern)];
+  if (sectionMatches.length > 1) {
+    fail(`ledger ${ledgerPath} has duplicate '## ${sectionName}' sections`);
+  }
+  const section = src.match(new RegExp(`##\\s+${escaped}\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)`));
+  if (!section) {
+    fail(`ledger ${ledgerPath} has no '## ${sectionName}' section`);
+  }
+  const blocks = [...section[1].matchAll(/```yaml[^\n]*\n([\s\S]*?)```/gi)];
+  if (blocks.length === 0) {
+    fail(`ledger ${ledgerPath} '## ${sectionName}' section has no fenced yaml block`);
+  }
+  if (blocks.length > 1) {
+    fail(`ledger ${ledgerPath} '## ${sectionName}' section has multiple fenced yaml blocks`);
+  }
+  const blockBody = blocks[0][1];
+
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(blockBody);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(`ledger ${ledgerPath} '## ${sectionName}' yaml block did not parse: ${message}`);
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    fail(`ledger ${ledgerPath} '## ${sectionName}' yaml block has no "workflow_learnings" array at the top level`);
+  }
+  const root = parsed as Record<string, unknown>;
+  if (!hasKey(root, "workflow_learnings")) {
+    fail(`ledger ${ledgerPath} '## ${sectionName}' yaml block has no "workflow_learnings" array at the top level`);
+  }
+  const entries = root.workflow_learnings;
+  if (!Array.isArray(entries)) {
+    fail(`ledger ${ledgerPath} '## ${sectionName}' field "workflow_learnings" must be an array`);
+  }
+
+  const allowedFieldList = WORKFLOW_LEARNINGS_ALLOWED_KEYS.join(", ");
+  for (const [index, rawEntry] of entries.entries()) {
+    if (typeof rawEntry !== "object" || rawEntry === null || Array.isArray(rawEntry)) {
+      // Fallback label uses the 1-based index because no mapping means no signature.
+      fail(`ledger ${ledgerPath} '## ${sectionName}' entry #${index + 1} must be a mapping of fields`);
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    const label = workflowLearningEntryLabel(entry, index);
+
+    for (const key of Object.keys(entry)) {
+      if (!(WORKFLOW_LEARNINGS_ALLOWED_KEYS as readonly string[]).includes(key)) {
+        fail(
+          `ledger ${ledgerPath} '## ${sectionName}' ${label} has unknown field "${key}" (allowed: ${allowedFieldList})`,
+        );
+      }
+    }
+
+    for (const required of ["signature", "affected_surface", "what_was_wrong"] as const) {
+      const value = entry[required];
+      if (typeof value !== "string" || value.length === 0) {
+        fail(
+          `ledger ${ledgerPath} '## ${sectionName}' ${label} is missing required string field "${required}"`,
+        );
+      }
+    }
+  }
+
+  stdout.write(`Workflow Learnings OK: ${entries.length} entries\n`);
+}
