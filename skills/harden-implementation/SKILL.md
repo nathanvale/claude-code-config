@@ -80,17 +80,25 @@ Before Round 1: derive run-id; if an in-progress findings ledger exists,
 
 Round N:
   1. Dispatch the review angles IN PARALLEL (one Agent per angle, one message).
-  2. Collect findings. Merge duplicates across angles. Drop non-actionable noise.
-  3. If zero new actionable in-scope findings -> CONVERGED (go to scoring).
-  4. Triage: classify each finding (blocking / should-fix / note-only /
-     out-of-scope). Out-of-scope findings are recorded as gates, not fixed here.
-  5. Apply fixes for blocking and should-fix findings (edit the implementation).
-  6. Re-verify each fix actually addresses the finding (re-read, re-run checks).
-  7. Write this round to ledgers/runs/<run-id>.md (findings, classes, fixes,
-     status, last_round). This is the crash-recovery point.
+  2. Collect findings. Merge duplicates across angles (by signature). Drop
+     non-actionable noise.
+  3. If zero new in-scope findings of ANY severity (P0/P1/P2/P3) -> CONVERGED
+     (go to scoring). A round that surfaced only new P2/P3 is NOT converged: you
+     still defer them (step 5) and run another round to confirm nothing new.
+  4. Triage: give each finding a severity (P0 | P1 | P2 | P3) and a status
+     (fixed | deferred-P2 | deferred-P3 | out-of-scope | open). Out-of-scope
+     findings are recorded as gates, not fixed here.
+  5. Apply fixes for P0 and P1 findings (edit the implementation). P2/P3
+     findings are recorded as deferred (status deferred-P2 / deferred-P3) into
+     the audit backlog and carried forward, NOT fixed in this loop. Severity
+     decides fix-vs-defer; it does NOT decide when the loop stops.
+  6. Re-verify each P0/P1 fix actually addresses the finding (re-read, re-run
+     checks).
+  7. Write this round to ledgers/runs/<run-id>.md (findings with signature,
+     severity, status, fixes, last_round). This is the crash-recovery point.
   8. Go to Round N+1 (re-review the FIXED implementation, not the original).
 
-Stop when: a full round produces zero new actionable in-scope findings
+Stop when: a full round produces zero new in-scope findings of any severity
              (out-of-scope findings, recorded as gates, do not block
              convergence of the slice under review),
            OR round == 5 (report remaining findings honestly as not-yet-clean),
@@ -100,8 +108,11 @@ After stopping (any outcome): dispatch the scoring agent (see Ledgers), then
 report.
 ```
 
-Convergence is "a full round found nothing new," not "I ran out of rounds."
-Always say which one happened.
+Convergence is "a full round found nothing new at all," not "I ran out of
+rounds" and not "P0/P1 are clean." Always say which one happened. P2/P3 are
+*fixed-vs-deferred* differently from P0/P1 (deferred to the audit backlog, not
+fixed), but a newly-surfaced P2/P3 still costs another round: the loop only
+converges when a full round finds nothing new at any level.
 
 ### Why parallel angles
 
@@ -127,9 +138,9 @@ change types to angles). For each reviewer, pass:
   issues),
 - an instruction to return the structured reviewer envelope
   ([references/reviewer-envelope.md](references/reviewer-envelope.md)) — only
-  actionable findings, each with severity, location (`file:symbol`, not line
-  numbers), a concrete failure scenario, and a stable `signature` for cross-angle
-  dedup; not praise.
+  actionable findings, each with a `severity` (`P0|P1|P2|P3`), location
+  (`file:symbol`, not line numbers), a concrete failure scenario, and a stable
+  `signature` for cross-angle dedup; not praise.
 
 Prefer the specialized `ce-*` reviewer agents where they fit (they encode strong
 review personas). Use `general-purpose` only for angles no `ce-*` agent covers.
@@ -142,22 +153,28 @@ After each round:
    is one finding, recorded once.
 2. **Drop** non-actionable findings: style nits with no behavioral impact,
    speculative "could one day," anything already covered by an accepted note.
-3. **Classify** each survivor:
-   - `blocking`: violates an acceptance criterion or breaks correctness/safety
-     *of the slice under review*.
-   - `should-fix`: real weakness, no acceptance-criterion violation.
-   - `note-only`: worth recording, not worth fixing now.
-   - `out-of-scope`: a real finding whose fix lives outside this slice (a
-     sibling/later slice, a different repo, or work the plan deliberately
-     defers). Do not edit the subject to chase it. Record it as a gate (see
-     below).
-4. **Fix** blocking + should-fix. **Re-verify** each fix against the finding.
-5. `note-only` and `out-of-scope` findings do not block this slice's
-   convergence, but both are reported. An `out-of-scope` finding that is
+3. **Rate** each survivor with a `severity` and a `status` (shared vocabulary
+   with the issue-to-pr Validator findings):
+   - `severity`: `P0` violates an acceptance criterion or breaks
+     correctness/safety *of the slice under review*; `P1` serious weakness to
+     fix this slice; `P2` real but deferrable; `P3` minor. This is the
+     filterable lens — `grep '| P0 \|| P1 '` is the fix list, `grep deferred`
+     the audit backlog.
+   - `status`: `fixed` (a P0/P1 fixed this round), `deferred-P2` / `deferred-P3`
+     (recorded to the audit backlog, not fixed here), `out-of-scope` (fix lives
+     outside this slice — record as a gate, do not edit the subject to chase
+     it), or `open` (a P0/P1 not yet fixed, e.g. when paused or capped).
+4. **Fix** P0 + P1 (set `status: fixed`). **Re-verify** each fix against the
+   finding. **Defer** P2 + P3 to the audit backlog (`deferred-P2` /
+   `deferred-P3`) — do not fix them in this loop.
+5. Deferred P2/P3 and `out-of-scope` findings do not block this slice's
+   convergence, but all are reported. An `out-of-scope` finding that is
    *blocking for shipping* (e.g. the slice ships a contract ahead of its
    enforcement in a later slice) must be recorded as an explicit gate: name
    what must land before the work is safe to ship, and never silently treat it
    as fixed. Hardening a slice does not authorize implementing a different one.
+   Deferred-P2/P3 rows are carried forward across runs as a standing audit
+   backlog future-you can pick up.
 
 ## Ledgers
 
@@ -204,12 +221,18 @@ After the loop stops, dispatch the scoring agent (see Ledgers) so the
 reviewer scorecard captures this run before you report. Then end with a
 **Convergence Report**:
 
-- **Outcome**: converged (zero new findings in the final round) OR capped
-  (hit round 5 with N findings open) OR paused (needs a user decision).
-- **Rounds run** and findings per round (the trend should fall toward zero).
+- **Outcome**: converged (zero new findings of any severity in the final round)
+  OR capped (hit round 5 with findings still open) OR paused (needs a user
+  decision).
+- **Rounds run** and findings per round, by severity (the trend should fall
+  toward zero new findings at every level).
 - **Acceptance criteria**: each one, met / not-met, with evidence.
-- **Findings fixed**: what was wrong, what changed, how it was re-verified.
-- **Note-only findings**: recorded, not fixed.
+- **P0/P1 fixed**: what was wrong, what changed, how it was re-verified.
+- **Deferred audit backlog (P2/P3)**: each `deferred-P2` / `deferred-P3`
+  finding, recorded for a later audit pass, not fixed this loop. They are
+  deferred (not fixed) but still had to be *found* — the loop only converges
+  once a round surfaces no new P2/P3 either. List them so future-you can pick
+  them up.
 - **Out-of-scope gates**: real findings fixable only outside this slice, with
   the named work that must land before the slice is safe to ship.
 - **Edit attribution** (when the implementation repo had a dirty tree at

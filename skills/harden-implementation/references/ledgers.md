@@ -45,16 +45,28 @@ acceptance_criteria: [R4, R6, R8]
 ---
 
 ## Findings
-| id | round | angle(s) | class | summary | fix | reverified |
-|----|-------|----------|-------|---------|-----|------------|
+| id | signature | round | angle(s) | severity | status | summary | fix | reverified |
+|----|-----------|-------|----------|----------|--------|---------|-----|------------|
+
+## Deferred audit backlog (P2/P3)
+<carried forward across rounds/runs; status deferred-P2 / deferred-P3>
 
 ## Resume hint
 Next round re-runs: <angles>. Resolved finding ids to suppress: <ids>.
 ```
 
-`class` is one of `blocking | should-fix | note-only | out-of-scope`, optionally
+`severity` is `P0 | P1 | P2 | P3` (shared with the issue-to-pr Validator
+finding scale). It governs fix-vs-defer: the loop fixes P0/P1 in-round and
+defers P2/P3 to the audit backlog. It does NOT govern convergence — the loop
+runs until a round finds nothing new at any level. `grep '| P0 \|| P1 '` is the
+fix list; `grep deferred` is the audit backlog.
+
+`status` is `fixed | deferred-P2 | deferred-P3 | out-of-scope | open`, optionally
 suffixed `(regression)` when the finding was introduced by a hardening fix in a
-prior round (high-signal: the loop caught its own mistake).
+prior round (high-signal: the loop caught its own mistake). `signature` is the
+stable kebab-case root-cause slug from the reviewer envelope
+([reviewer-envelope.md](reviewer-envelope.md)); the same root issue raised by
+multiple angles shares one signature, recorded once.
 
 ## Ledger 2 — cross-run reviewer scorecard (`reviewer-scorecard.md`)
 

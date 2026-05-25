@@ -16,9 +16,9 @@ guesswork.
 A dispatched reviewer:
 
 - **does not** fix code or write commits (the orchestrating loop applies fixes);
-- **does not** decide a finding's final triage class (it proposes `severity`;
-  the loop classifies `blocking` / `should-fix` / `note-only` / `out-of-scope`
-  during merge);
+- **does not** decide a finding's final disposition (it proposes a `severity`
+  P-level; the loop sets `status` — fixed / deferred-P2 / deferred-P3 /
+  out-of-scope / open — during merge and triage);
 - **returns** the envelope below as its final message; the loop merges, dedups
   by `signature`, and records the round in the findings ledger.
 
@@ -43,7 +43,7 @@ angle toward convergence honestly.
 
 ```yaml
 problem: "<one-line description of what breaks>"
-severity: <blocking | should-fix | note-only | out-of-scope>   # the reviewer's proposed class; the loop makes the final call at triage
+severity: <P0 | P1 | P2 | P3>   # the reviewer's proposed priority; the loop sets status at triage
 location: "<file:symbol | file:section>"   # NEVER a bare line number — line numbers drift
 failure_scenario: "<a concrete way it breaks, OR the acceptance criterion it violates>"
 signature: <stable kebab-case slug; the SAME root issue raised by two angles MUST share a signature so the loop dedups instead of double-counting>
@@ -51,15 +51,28 @@ acceptance_criterion: <the AC id this violates, e.g. R5 | null>   # null when it
 regression: <true | false>   # true only when this was introduced by a hardening fix in a prior round (high signal)
 ```
 
-Severity meanings (the reviewer proposes; the loop confirms at triage):
+Severity meanings (the reviewer proposes the P-level; the loop sets the final
+`status` at triage). This is the same P0–P3 scale the issue-to-pr Validator
+findings use:
 
-- `blocking` — violates an acceptance criterion, or breaks correctness/safety of
-  the slice under review.
-- `should-fix` — a real weakness with no acceptance-criterion violation.
-- `note-only` — worth recording, not worth fixing now.
-- `out-of-scope` — a real finding whose fix lives outside this slice (a
-  sibling/later slice, a different repo, or deliberately deferred work). Name
-  where it belongs in `failure_scenario`.
+- `P0` — violates an acceptance criterion, or breaks correctness/safety of the
+  slice under review. The loop fixes it this round.
+- `P1` — a serious weakness to fix this slice. The loop fixes it this round.
+- `P2` — a real but deferrable weakness. The loop records it to the audit
+  backlog (`status: deferred-P2`), does not fix it now.
+- `P3` — minor; record and defer (`status: deferred-P3`).
+
+A finding whose fix lives outside this slice (a sibling/later slice, a different
+repo, deliberately deferred work) keeps its P-level but the loop sets
+`status: out-of-scope` and names where it belongs in `failure_scenario`.
+
+Severity decides **fix-vs-defer**, not when the loop stops. The loop fixes
+P0/P1 and defers P2/P3, but it keeps running until a full round surfaces no new
+findings of ANY severity — a newly-found P2 still costs another round. So rate
+honestly: inflating a P2 to P1 forces a fix the loop would otherwise defer;
+sandbagging a real P0 to P2 lets a correctness break ship as backlog; but
+either way the finding must be reported, because an unreported P3 is the one
+thing that can fake convergence.
 
 No praise. No summary of what the code does well. Return only actionable
 findings plus the residual-risk and testing-gap context.

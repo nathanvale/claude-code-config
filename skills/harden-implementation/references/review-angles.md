@@ -58,14 +58,14 @@ Each dispatched agent must receive:
 5. **Output contract**: return the structured reviewer envelope defined in
    [reviewer-envelope.md](reviewer-envelope.md) (a `reviewer` / `findings` /
    `residual_risks` / `testing_gaps` shape) as the final message. Each finding
-   row carries a one-line `problem`, a `severity` (`blocking` / `should-fix` /
-   `note-only` / `out-of-scope`), a `location` as `file:symbol` or
-   `file:section` (never a bare line number — line numbers drift), a concrete
-   `failure_scenario` (or the acceptance criterion it violates), and a stable
-   kebab-case `signature` so the loop dedups the same root issue across angles.
-   `findings: []` means the angle found nothing actionable. No praise, no
-   summary of what the code does well. The fixed shape is what lets the loop
-   merge, triage, and score deterministically.
+   row carries a one-line `problem`, a `severity` (`P0` / `P1` / `P2` / `P3` —
+   the loop fixes P0/P1 and defers P2/P3 to an audit backlog), a `location` as
+   `file:symbol` or `file:section` (never a bare line number — line numbers
+   drift), a concrete `failure_scenario` (or the acceptance criterion it
+   violates), and a stable kebab-case `signature` so the loop dedups the same
+   root issue across angles. `findings: []` means the angle found nothing
+   actionable. No praise, no summary of what the code does well. The fixed shape
+   is what lets the loop merge, triage, and score deterministically.
 
 ## Picking the round's angle set
 
@@ -79,7 +79,10 @@ Each dispatched agent must receive:
 
 ## Convergence honesty
 
-A round is only "clean" if every angle you dispatched returned zero actionable
-findings AND the acceptance-criteria angle reports every criterion met with
-evidence. Hitting the round cap is not convergence; report it as capped with the
-open findings listed.
+A round is "clean" (converged) when every angle you dispatched returned zero new
+findings of **any severity** (P0/P1/P2/P3) AND the acceptance-criteria angle
+reports every criterion met with evidence. P-level governs fix-vs-defer (the
+loop fixes P0/P1 and defers P2/P3 to the audit backlog), NOT when the loop
+stops: a round that surfaced only new P2/P3 is not converged — defer them and
+run another round. Hitting the round cap with anything still open is not
+convergence; report it as capped with the open findings listed.
