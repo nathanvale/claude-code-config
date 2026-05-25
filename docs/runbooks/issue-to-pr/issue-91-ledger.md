@@ -10,14 +10,14 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-25T01:24:29Z"
-batch_contract_confirmation_status: "blocked"
-batch_contract_confirmed_at: null
-blocked_reason: "stage-3-open-blocker"
+batch_contract_confirmation_status: "confirmed"
+batch_contract_confirmed_at: "2026-05-25T01:43:09Z"
+blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: "sha256:3e1d3222ac393f9e6a7181e89ced8dcea8b5a14c7c2b9202a050806443afc505"
-batch_contract_digest: null
+plan_digest: "sha256:6e2796d8e896d08b9746fc934c8219bfb8ff7fe66c85dd46ed25a75c07c80d01"
+batch_contract_digest: "sha256:b3f06b4deacf12bbc8bc205b99baabee96272ba5adafd38593660d16ab6f9395"
 ac_digest: "sha256:44a0cb3a65a607696f9955f8b8f1b20cc804e3ea28c59c737b226e73d27e8f1d"
 ---
 
@@ -74,7 +74,73 @@ record reachable commit refs plus dirty/staged path summaries in Notes without
 adding a `builder_attempts` row or incrementing `iterations`.
 
 ```yaml
-batches: []
+batches:
+  - id: "ledger-template-section"
+    name: "Ledger template + schema"
+    goal: "AC 1 holds: The ledger template includes a required Workflow Learnings section in a stable location and with a clear run-specific evidence shape."
+    files:
+      - "runbooks/issue-to-pr-v2/issue-N-ledger.template.md"
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds: the template file contains a ## Workflow Learnings section at the tail of the body, with a prose preamble, with exactly one fenced yaml block at column 0, and the block body is `workflow_learnings: []`"
+      - "AC 4 holds: the prose explains entries use signature to point at registry canonical entries without duplicating canonical fields"
+    ac_mapping:
+      - 1
+      - 4
+    rationale: "change_first-exception: pure docs/template change; behaviour is verified by U3 (validator + tests)"
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "reference-prose"
+    name: "Reference prose updates"
+    goal: "AC 2 holds: Ledger/reference prose explains that the per-issue ledger records what this run observed, while the registry owns canonical lifecycle metadata and dedupe."
+    files:
+      - "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
+      - "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md"
+    depends_on:
+      - "ledger-template-section"
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 2 holds: ledger-and-helper.md body-sections list includes ## Workflow Learnings and a Workflow Learnings entry fields subsection names the required keys and the canonical-fields-live-in-registry boundary"
+      - "AC 2 holds: workflow-learnings-registry.md prose points at the new ledger section as the per-run evidence home and states which fields the ledger does NOT carry"
+      - "AC 4 holds: both files name the signature cross-reference rule"
+    ac_mapping:
+      - 2
+      - 4
+    rationale: "change_first-exception: pure docs change to reference files; behaviour is the documented split, verified by reading"
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
+  - id: "ledger-validator"
+    name: "Ledger validator, CLI dispatch, and tests (tdd)"
+    goal: "AC 3 + AC 5 hold: helper validation rejects ledgers missing the required Workflow Learnings section, and the full test suite (happy paths + every documented failure mode) is authored alongside the validator in tdd order."
+    files:
+      - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+      - "runbooks/issue-to-pr-v2/decompose.ts"
+      - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+    depends_on:
+      - "ledger-template-section"
+    execution_mode: tdd
+    acceptance_tests:
+      - "AC 3 holds: validateWorkflowLearnings throws on a ledger missing the ## Workflow Learnings section"
+      - "AC 3 holds: validateWorkflowLearnings accepts an empty workflow_learnings: [] block"
+      - "AC 3 holds: validateWorkflowLearnings rejects entries missing signature, affected_surface, or what_was_wrong"
+      - "AC 3 holds: --validate-workflow-learnings flag dispatches to the new validator and exits non-zero on failure"
+      - "AC 5 holds: tests cover happy path (empty + populated), missing section, no fenced block, multiple blocks, yaml parse error, missing workflow_learnings key, non-array, entry-not-mapping, missing required fields, empty-string required fields, unknown keys (including canonical/lifecycle field rejection), and entry-labeling-by-signature-vs-index"
+    ac_mapping:
+      - 3
+      - 5
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    iterations: 0
+    final_verdict: null
 ```
 
 ## Findings data
@@ -105,16 +171,16 @@ findings:
     signature: "tdd-mode-split-across-impl-and-test-batches"
     persona: "ce-correctness-reviewer"
     severity: "P1"
-    status: "open"
+    status: "fixed"
     summary: "Candidate U3 (ledger-validator) was tdd-mode but contained only impl files; U4 (validator-tests) was tdd-mode but contained only the test file. The DAG forced impl-then-tests, contradicting the per-batch tdd contract."
-    resolution: null
+    resolution: "plan-revision 34f61b9"
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
-| f-stage3-001 | stage-3 | tdd-mode-split-across-impl-and-test-batches | ce-correctness-reviewer | P1 | open | Candidate U3 (ledger-validator) was tdd-mode but contained only impl files; U4 (validator-tests) was tdd-mode but contained only the test file. The DAG forced impl-then-tests, contradicting the per-batch tdd contract. |  |
+| f-stage3-001 | stage-3 | tdd-mode-split-across-impl-and-test-batches | ce-correctness-reviewer | P1 | fixed | Candidate U3 (ledger-validator) was tdd-mode but contained only impl files; U4 (validator-tests) was tdd-mode but contained only the test file. The DAG forced impl-then-tests, contradicting the per-batch tdd contract. | plan-revision 34f61b9 |
 
 ## Notes
 

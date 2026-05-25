@@ -156,7 +156,7 @@ This illustrates the intended approach and is directional guidance for review, n
 - `## Batches` and `## Findings data` sections in the same template — same prose-then-fenced-yaml pattern, same column-0 fence placement.
 - `references/workflow-learnings-registry.md` — its "Append-only evidence" subsection wording for the evidence fields; reuse the phrasing where it fits.
 
-**Test scenarios:** none for this unit by itself — it is a docs/template change; behavior is verified by U3 (the validator that consumes it) and U4 (tests).
+**Test scenarios:** none for this unit by itself — it is a docs/template change; behavior is verified by U3 (the validator + tests batch that consumes it).
 
 **Verification:** the template file contains `## Workflow Learnings` followed by prose, followed by exactly one ```yaml ... ``` block with `workflow_learnings: []` at column 0. The section is the last section in the file.
 
@@ -293,7 +293,7 @@ acceptance_tests:
 ac_mapping:
   - 1
   - 4
-rationale: "change_first-exception: pure docs/template change; behaviour is verified by U3 validator and U4 tests"
+rationale: "change_first-exception: pure docs/template change; behaviour is verified by U3 (validator + tests)"
 ```
 
 ```yaml
