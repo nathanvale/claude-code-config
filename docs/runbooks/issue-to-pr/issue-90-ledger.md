@@ -928,6 +928,12 @@ host-builder-tools-unavailable evidence, builder-infrastructure-failure
 evidence, Validator findings checkpoint evidence, reachable commit refs,
 dirty/staged path summaries>
 
+### Stage 6 local checks (2026-05-25T10:39:45+1000)
+
+- tests: bun test runbooks/issue-to-pr-v2/ (mcp__bun-runner__bun_runTests rejected as SPAWN_FAILURE: Not inside a git repository — sandbox quirk; fell back to direct shell bun test per AGENTS.md ladder). exit 0; 721 pass / 0 fail / 2905 expect() calls across 15 files.
+- types: mcp__tsc-runner__tsc_check on tsconfig.json. exit 0; 0 errors.
+- lint: mcp__biome-runner__biome_lintCheck on runbooks/issue-to-pr-v2/. exit code from MCP runner clean for this PR's files (verified per-file during Stage 4 batches); MCP returned 2 unrelated repo-wide warnings (lint/style/noNonNullAssertion, lint/suspicious/noPrototypeBuiltins) with file: "unknown" line: 0, not attributable to this PR's diff.
+
 ### runbook_version skew continuation evidence (U6)
 
 When the v2 runtime detects `runbook_version` skew (a missing or mismatched
