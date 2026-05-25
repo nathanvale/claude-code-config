@@ -53,60 +53,59 @@ Clarity beats terseness. If a rule fights the reader, flag it.
 - **Visual learner** → Clear structure, whitespace, formatting help me process.
 - **Exploratory** → I want to learn from what you do. Explain the "why."
 
-## Working Boundaries
+## Always Do
 
-### Always Do
+- Read relevant files before acting.
+- Plan explicitly for complex tasks before implementation.
+- Execute in small, reviewable steps.
+- Test each meaningful change with appropriate checks.
+- Explain what changed and why.
+- Document exported functions with JSDoc or comments when the why isn't obvious.
 
-- Read relevant files before acting
-- Plan explicitly for complex tasks before implementation
-- Execute in small, reviewable steps
-- Test each meaningful change with the appropriate checks
-- Explain what you changed and why
-- Document exported functions with JSDoc or comments when the why is not obvious
+## Ask First
 
-### Ask First
+- Before implementing after an analysis-only or brainstorming request.
+- Before refactors that change structure beyond the requested fix.
+- Before commits, branch changes, or actions with non-obvious consequences.
+- Before defaulting to the current repo when ownership is unclear.
+- Before adding new dependencies — check if an existing dep or stdlib solves it.
 
-- Before implementing after an analysis-only or brainstorming request
-- Before refactors that change structure beyond the requested fix
-- Before commits, branch changes, or actions with non-obvious consequences
-- Before defaulting to the current repo when ownership is unclear
-- Before adding new dependencies — check if an existing dep or stdlib solves it
+## Never Do
 
-### Never Do
-
-- Delete untracked git changes
-- Implement without confirmation
-- Use destructive git commands like `reset --hard`, `clean -f`, or force push
-- Hardcode secrets, tokens, or API keys in source files
-- Create nested `biome.json` files in monorepos
-- Use generic write or edit flows for Obsidian vault content
+- Delete untracked git changes.
+- Implement without confirmation.
+- Use destructive git commands like `reset --hard`, `clean -f`, or force push.
+- Hardcode secrets, tokens, or API keys in source files.
+- Create nested `biome.json` files in monorepos.
+- Use generic write or edit flows for Obsidian vault content.
 
 ## Workflow
 
-Follow Plan → Confirm → Execute → Test:
+Plan → Confirm → Execute → Test:
 
-1. Read the relevant code and docs first
-2. Make a clear plan when the task is non-trivial
-3. Confirm with Nathan before implementation
-4. Execute incrementally in small chunks
-5. Verify with the right checks as you go
-6. Explain the result and the reasoning behind it
+1. Read relevant code and docs first.
+2. Make a clear plan when the task is non-trivial.
+3. Confirm with Nathan before implementation.
+4. Execute incrementally in small chunks.
+5. Verify with the right checks as you go.
+6. Explain the result and the reasoning.
 
 ## Working Preferences
 
-- For tests, lint, and type checks: **prefer the MCP runners** (bun-runner, biome-runner, tsc-runner) first. Fall back to the repo's dedicated CLI (via package.json scripts or a repo-provided wrapper) only when an MCP runner isn't available or doesn't fit the project. Use raw Bash only as the last resort.
-- Prefer machine-readable output for tool-to-tool interfaces
-- Prefer `bunx` over `npx` when package execution is needed
-- Prefer the bun ecosystem and TypeScript over Python or other languages
+- Tests, lint, type checks: prefer MCP runners (bun-runner, biome-runner, tsc-runner). Fall back to repo CLI (package.json scripts or repo wrapper) when no runner fits. Raw Bash last resort.
+- Prefer machine-readable output for tool-to-tool interfaces.
+- Prefer `bunx` over `npx` for package execution.
+- Prefer bun ecosystem and TypeScript over Python or other languages.
+- Reference docs: list `context/` and load by filename on demand.
 
 ## Library Docs
 
 When working with libraries, frameworks, or APIs:
 
-1. Fetch current official documentation with context7 before answering from memory
-2. Prefer exact library matches and version-specific docs when available
-3. Prefer primary docs over third-party summaries
-4. Cite the relevant version when it matters
+1. Fetch current official docs via context7 before answering from memory.
+2. Prefer exact library matches and version-specific docs.
+3. Prefer primary docs over third-party summaries.
+4. Cite the relevant version when it matters.
 
 ## Skill Authoring
 
@@ -119,68 +118,64 @@ Hard rules for authoring skills and editing `SKILL.md` files.
 
 ## Code Quality Runners
 
-Three MCP runners handle all code-quality checks. Always prefer them over running the underlying CLIs directly — they filter output for token efficiency and return structured results.
+Three MCP runners handle code-quality checks. Prefer them over raw CLIs; they filter output for token efficiency and return structured results.
 
-**Always pass `response_format: "json"`.**
+Always pass `response_format: "json"`.
 
-| Runner | Tool | Use when |
-|--------|------|----------|
-| bun-runner | `bun_runTests` | Suite-level test run (all or filtered by pattern) |
-| bun-runner | `bun_testFile` | Focused debugging — one exact file path |
-| bun-runner | `bun_testCoverage` | Coverage summary (slower than `bun_runTests`) |
-| biome-runner | `biome_lintCheck` | Read-only lint + format diagnostics after edits |
-| biome-runner | `biome_lintFix` | Auto-fix with `--write`, returns remaining issues |
-| biome-runner | `biome_formatCheck` | Format compliance only (CI / pre-commit gates) |
-| tsc-runner | `tsc_check` | `tsc --noEmit` using nearest tsconfig — after edits |
+- `bun_runTests`: suite-level test run (all or filtered by pattern).
+- `bun_testFile`: focused debugging on one exact file path.
+- `bun_testCoverage`: coverage summary (slower than `bun_runTests`).
+- `biome_lintCheck`: read-only lint + format diagnostics after edits.
+- `biome_lintFix`: auto-fix with `--write`; returns remaining issues.
+- `biome_formatCheck`: format compliance only (CI / pre-commit gates).
+- `tsc_check`: `tsc --noEmit` using nearest tsconfig.
 
 Do not invoke `bun test`, `biome`, or `tsc` directly via shell when these runners are available.
 
-Exit codes: `0` = success, `2` = blocking error (must fix before proceeding).
+Exit codes: `0` success, `2` blocking error (fix before proceeding).
 
 ## Connector Dispatch
 
 When Nathan asks about calendar events, email, or contacts, use the productivity connector system — not built-in MCP tools.
 
-1. Read `.productivity.yml` in the current project root for the declared connector and account
-2. Read `productivity-connectors` skill for the routing table and dispatch protocol
-3. Dispatch via Bash CLI (e.g., `gog` with `--account <email> --json`) or MCP tool as the routing table specifies
-4. If `.productivity.yml` doesn't exist, ask which account to use
+1. Read `.productivity.yml` in current project root for connector and account.
+2. Read `productivity-connectors` skill for routing table and dispatch protocol.
+3. Dispatch via Bash CLI (e.g., `gog` with `--account <email> --json`) or MCP tool as routing table specifies.
+4. If `.productivity.yml` doesn't exist, ask which account to use.
 
 Do not call `gcal_list_events`, `gcal_get_event`, `gmail_search_messages`, or other Google MCP tools directly.
 
 ## Email Reading
 
-When surfacing emails during sync or triage, always read the full email body and extract details (products, amounts, actions, dates). Never ask the user what's in an email you have access to. Decode base64 HTML bodies and parse the contents before presenting.
+- When surfacing emails during sync or triage, read the full body and extract details (products, amounts, actions, dates).
+- Never ask the user what's in an email you have access to.
+- Decode base64 HTML bodies and parse contents before presenting.
 
-## Governance
+## Memory OS
 
-### Memory OS
+- Shared user-scope memory contract: `~/.config/memory/AGENTS.md`.
+- Canonical docs: `~/.config/memory/docs/`.
+- Canonical source in this repo: `~/code/claude-code-config/memory/`.
+- `~/.config/memory` is the stable runtime path; resolves to this repo via `./install.sh`.
+- `CLAUDE.md` is hot memory only — broadly relevant, high-frequency cues. Not durable storage.
+- `memory/` for compact durable recall; `docs/` for full authored documents.
+- Repos own operational truth; `my-second-brain` owns synthesis and promoted durable knowledge.
+- Preserve provenance for imported external material when it aids retrieval or auditing.
+- Prefer QMD for broad federated recall; NotebookLM for curated synthesis packs.
 
-- Shared user-scope memory contract lives at `~/.config/memory/AGENTS.md`
-- Canonical docs live under `~/.config/memory/docs/`
-- Canonical source lives in this repo at `~/code/claude-code-config/memory/`
-- `~/.config/memory` is the stable runtime path and should resolve to this repo via `./install.sh`
-- `CLAUDE.md` is hot memory only — broadly relevant, high-frequency cues, not durable storage
-- `memory/` is for compact durable recall; `docs/` is for full authored documents
-- Repos own operational truth; `my-second-brain` owns synthesis and promoted durable knowledge
-- Preserve provenance for imported external material when it helps future retrieval or auditing
-- Prefer QMD for broad federated recall and NotebookLM for curated synthesis packs
+## Git Safety
 
-### Git Safety
+- Never force push, hard reset, `clean -f`, or `checkout/restore .`.
+- Never use `git add .` or `git add -A`; stage specific files.
+- Never skip hooks except for explicit WIP checkpoint workflows.
+- Use conventional commits: `type(scope): subject`.
+- Check branch policy before committing; never commit directly to protected branches.
+- Protected branches: `main`, `master`, any repo-configured protected branches.
+- Feature branch: commit freely once Nathan has approved.
+- Protected branch with branching support: create a feature branch first.
+- Protected branch without branching support: stop and ask.
 
-- Never force push, hard reset, clean -f, or checkout/restore `.`
-- Never use `git add .` or `git add -A`; stage specific files
-- Never skip hooks except for explicit WIP checkpoint workflows
-- Use conventional commits: `type(scope): subject`
-- Check branch policy before committing; do not commit directly to protected branches
-
-Protected branches include `main`, `master`, and any repo-configured protected branches.
-
-- If on a feature branch, commit freely once Nathan has approved
-- If on a protected branch and the harness supports branching, create a feature branch first
-- If on a protected branch and branching is not supported, stop and ask the user
-
-For detailed git procedures, read:
+Git procedure docs:
 
 - `docs/git/conventions.md`
 - `docs/git/workflows.md`
@@ -202,21 +197,17 @@ For detailed git procedures, read:
 
 ## Agent skills
 
-These settings apply when working in the `claude-code-config` repo at
-`/Users/nathanvale/code/claude-code-config`. For other repos, prefer their
-repo-local `docs/agents/` configuration when present.
+Applies in `claude-code-config` repo at `/Users/nathanvale/code/claude-code-config`. Other repos: prefer repo-local `docs/agents/` when present.
 
-### Issue tracker
+## Issue tracker
 
-Issues and PRDs for `nathanvale/claude-code-config` live in GitHub Issues. See
-`docs/agents/issue-tracker.md`.
+Issues and PRDs for `nathanvale/claude-code-config` live in GitHub Issues. See `docs/agents/issue-tracker.md`.
 
-### Triage labels
+## Triage labels
 
-Triage uses the canonical mattpocock/skills label vocabulary. See
-`docs/agents/triage-labels.md`.
+Triage uses canonical mattpocock/skills label vocabulary. See `docs/agents/triage-labels.md`.
 
-### Domain docs
+## Domain docs
 
-This repo uses a single-context domain doc layout. See `docs/agents/domain.md`.
+Repo uses single-context domain doc layout. See `docs/agents/domain.md`.
 

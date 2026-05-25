@@ -1,16 +1,17 @@
 ## Compound Codex Tool Mapping (Claude Compatibility)
 
 Tool mapping:
-- Read: use `rg`, `sed`, `cat`, or repo-aware retrieval tools when appropriate
-- Write: use `apply_patch` for manual edits
-- Edit/MultiEdit: use apply_patch
-- Shell: use `exec_command` — but for tests / lint / type-check, prefer the MCP runners (`bun_runTests`, `biome_lintCheck`, `tsc_check`, etc.) over running `bun test`, `biome`, or `tsc` through `exec_command`
-- Grep: use `rg` (fallback: `grep`)
-- Glob: use `rg --files` or `find`
-- LS: use `ls` via `exec_command`
-- Web/docs research: use Context7 for library docs and web tools only when needed
-- AskUserQuestion/Question: ask the user in chat
-- Parallel reads/checks: use `multi_tool_use.parallel` when tasks are independent
-- TodoWrite/TodoRead: use file-based todos in todos/ with file-todos skill
-- Skill: open the referenced SKILL.md and follow it
-- ExitPlanMode: ignore
+
+- Read: `rg`, `sed`, `cat`, or repo-aware retrieval when appropriate.
+- Write: `apply_patch` for manual edits.
+- Edit/MultiEdit: `apply_patch`.
+- Shell: `exec_command`. For tests/lint/type-check, prefer MCP runners (`bun_runTests`, `biome_lintCheck`, `tsc_check`) over `bun test`, `biome`, `tsc` through `exec_command`.
+- Grep: `rg` (fallback: `grep`).
+- Glob: `rg --files` or `find`.
+- LS: `ls` via `exec_command`.
+- Web/docs research: Context7 for library docs; web tools only when needed.
+- AskUserQuestion/Question: ask the user in chat.
+- Parallel reads/checks: `multi_tool_use.parallel` when tasks are independent.
+- TodoWrite/TodoRead: file-based todos in `todos/` with file-todos skill.
+- Skill: open the referenced SKILL.md and follow it.
+- ExitPlanMode: ignore.
