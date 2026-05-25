@@ -1281,6 +1281,37 @@ function terminalBatchRecording(sha: string, files: string[]): string[] {
     "        blockers: []",
     "        probe_results: []",
     '        notes: "terminal batch fixture"',
+    "    orchestrator_inline_attempts: []",
+    "    iterations: 1",
+    "    final_verdict: converged",
+    "```",
+  ];
+}
+
+function terminalInlineBatchRecording(sha: string, files: string[]): string[] {
+  return [
+    "```yaml",
+    "batches:",
+    '  - id: "b1"',
+    '    name: "B1"',
+    '    goal: "AC 1"',
+    "    files:",
+    ...files.map((file) => `      - "${file}"`),
+    "    depends_on: []",
+    "    execution_mode: change_first",
+    "    acceptance_tests:",
+    '      - "AC 1 holds"',
+    "    ac_mapping:",
+    "      - 1",
+    "    rationale: null",
+    "    status: converged",
+    "    builder_commits: []",
+    "    builder_attempts: []",
+    "    orchestrator_inline_attempts:",
+    `      - commit_sha: "${sha}"`,
+    "        files_touched:",
+    ...files.map((file) => `          - "${file}"`),
+    '        notes: "terminal inline fixture"',
     "    iterations: 1",
     "    final_verdict: converged",
     "```",
@@ -1418,6 +1449,20 @@ describe("validateFindingResolution: runbook-heal closure form", () => {
           resolution: `commit ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
         }),
         terminalBatchRecording(
+          RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+          RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+        ),
+      ),
+    ).not.toThrow();
+  });
+
+  test("accepts terminal inline-attempt commits as fixed finding resolutions", () => {
+    expect(() =>
+      runFindingsFixture(
+        baseRunbookHealFinding({
+          resolution: `commit ${RUNBOOK_HEAL_CONTROL_PLANE_SHA}`,
+        }),
+        terminalInlineBatchRecording(
           RUNBOOK_HEAL_CONTROL_PLANE_SHA,
           RUNBOOK_HEAL_CONTROL_PLANE_FILES,
         ),

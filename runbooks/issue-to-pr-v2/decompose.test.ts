@@ -156,6 +156,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null`;
 }
@@ -262,6 +263,26 @@ ${listPadding}probe_results: []
 ${listPadding}notes: "${notes}"`;
 }
 
+function currentInlineAttemptYaml(
+	indent = 4,
+	options: { commitSha?: string; files?: string[]; notes?: string } = {},
+): string {
+	const commitSha = options.commitSha ?? currentCommit;
+	const files = options.files ?? currentCommitTouchedFiles;
+	const notes = options.notes ?? "Implemented inline after host readiness passed.";
+	const padding = " ".repeat(indent);
+	const itemPadding = " ".repeat(indent + 2);
+	const listPadding = " ".repeat(indent + 4);
+	const filesTouchedYaml =
+		files.length === 0
+			? `${listPadding}files_touched: []`
+			: `${listPadding}files_touched:\n${yamlList(files, indent + 6)}`;
+	return `${padding}orchestrator_inline_attempts:
+${itemPadding}- commit_sha: "${commitSha}"
+${filesTouchedYaml}
+${listPadding}notes: "${notes}"`;
+}
+
 function failStopAttemptItemYaml(indent = 6, notes = "Builder stopped before editing."): string {
 	const padding = " ".repeat(indent);
 	const fieldPadding = " ".repeat(indent + 2);
@@ -323,6 +344,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -2311,6 +2333,7 @@ findings: []
 
 		expect(emitted.exitCode).toBe(0);
 		expect(emitted.stdout).toContain("    builder_attempts: []");
+		expect(emitted.stdout).toContain("    orchestrator_inline_attempts: []");
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("Ledger batches OK: 1 batches");
 	});
@@ -2339,6 +2362,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -2376,6 +2400,7 @@ ${currentCommitFilesYaml(6)}
         probe_results:
           - "Preflight detected an out-of-scope file."
         notes: "Builder stopped before editing."
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
 \`\`\`
@@ -2393,6 +2418,258 @@ ${currentCommitFilesYaml(6)}
 
 		expect(committedResult.exitCode).toBe(0);
 		expect(failStopResult.exitCode).toBe(0);
+	});
+
+	test("accepts committed orchestrator inline attempts as implementation attempts", async () => {
+		const pendingLedger = writeFixture(
+			"pending-inline-empty.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+		const terminalInlineContents = `${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: converged
+    builder_commits: []
+    builder_attempts: []
+${currentInlineAttemptYaml(4)}
+    iterations: 1
+    final_verdict: converged
+\`\`\`
+`;
+		const terminalInlineLedger = writeFixture(
+			"terminal-inline-attempt.md",
+			terminalInlineContents,
+		);
+		const builderFailStopPlusInline = writeFixture(
+			"builder-fail-stop-plus-inline.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: converged
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+${currentInlineAttemptYaml(4)}
+    iterations: 2
+    final_verdict: converged
+\`\`\`
+`,
+		);
+		const wrongIterations = writeFixture(
+			"inline-wrong-iterations.md",
+			terminalInlineContents.replace("iterations: 1", "iterations: 2"),
+		);
+
+		const pendingResult = await runDecompose([
+			"--validate-ledger-batches",
+			pendingLedger,
+		]);
+		const terminalResult = await runDecompose([
+			"--validate-ledger-batches",
+			terminalInlineLedger,
+		]);
+		const mixedResult = await runDecompose([
+			"--validate-ledger-batches",
+			builderFailStopPlusInline,
+		]);
+		const wrongIterationsResult = await runDecompose([
+			"--validate-ledger-batches",
+			wrongIterations,
+		]);
+
+		expect(pendingResult.exitCode).toBe(0);
+		expect(terminalResult.exitCode).toBe(0);
+		expect(mixedResult.exitCode).toBe(0);
+		expect(wrongIterationsResult.exitCode).toBe(1);
+		expect(wrongIterationsResult.stderr).toContain(
+			"iterations must equal total implementation attempts count (1)",
+		);
+	});
+
+	test("rejects malformed orchestrator inline attempt records", async () => {
+		const terminalInlineContents = `${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "one"
+    name: "One"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: change_first
+    acceptance_tests:
+      - "AC 1 holds"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: converged
+    builder_commits: []
+    builder_attempts: []
+${currentInlineAttemptYaml(4)}
+    iterations: 1
+    final_verdict: converged
+\`\`\`
+`;
+		const inlineCommitInBuilderCommits = writeFixture(
+			"inline-commit-in-builder-commits.md",
+			terminalInlineContents.replace(
+				"builder_commits: []",
+				`builder_commits:
+      - "${currentCommit}"`,
+			),
+		);
+		const unknownInlineField = writeFixture(
+			"unknown-inline-field.md",
+			terminalInlineContents.replace(
+				'        notes: "Implemented inline after host readiness passed."',
+				`        attempt_type: implementation
+        notes: "Implemented inline after host readiness passed."`,
+			),
+		);
+		const duplicateInlineFilesYaml =
+			currentCommitTouchedFiles.length === 0
+				? "        files_touched: []"
+				: `        files_touched:\n${yamlList(currentCommitTouchedFiles, 10)}`;
+		const duplicateInlineCommits = writeFixture(
+			"duplicate-inline-commits.md",
+			terminalInlineContents.replace(
+				`${currentInlineAttemptYaml(4)}
+    iterations: 1`,
+				`${currentInlineAttemptYaml(4)}
+      - commit_sha: "${currentCommitFull}"
+${duplicateInlineFilesYaml}
+        notes: "Repeated the inline commit."
+    iterations: 2`,
+			),
+		);
+		const mismatchedFiles =
+			currentCommitTouchedFiles.length === 0 ? [currentCommitFile] : [];
+		const mismatchedInlineFiles = writeFixture(
+			"mismatched-inline-files.md",
+			terminalInlineContents.replace(
+				currentInlineAttemptYaml(4),
+				currentInlineAttemptYaml(4, {
+					files: mismatchedFiles,
+					notes: "Recorded the wrong inline files.",
+				}),
+			),
+		);
+		const outsideBatchFiles = writeFixture(
+			"outside-inline-batch-files.md",
+			terminalInlineContents
+				.replace(
+					`files:
+${currentCommitFilesYaml(6)}`,
+					`files:
+      - "README.md"`,
+				)
+				.replace(
+					currentInlineAttemptYaml(4),
+					currentInlineAttemptYaml(4, { files: [currentCommitFile] }),
+				),
+		);
+
+		const inlineCommitInBuilderCommitsResult = await runDecompose([
+			"--validate-ledger-batches",
+			inlineCommitInBuilderCommits,
+		]);
+		const unknownInlineFieldResult = await runDecompose([
+			"--validate-ledger-batches",
+			unknownInlineField,
+		]);
+		const duplicateInlineCommitsResult = await runDecompose([
+			"--validate-ledger-batches",
+			duplicateInlineCommits,
+		]);
+		const mismatchedInlineFilesResult = await runDecompose([
+			"--validate-ledger-batches",
+			mismatchedInlineFiles,
+		]);
+		const outsideBatchResult = await runDecompose([
+			"--validate-ledger-batches",
+			outsideBatchFiles,
+		]);
+
+		expect(inlineCommitInBuilderCommitsResult.exitCode).toBe(1);
+		expect(inlineCommitInBuilderCommitsResult.stderr).toContain(
+			"is recorded in builder_commits",
+		);
+		expect(unknownInlineFieldResult.exitCode).toBe(1);
+		expect(unknownInlineFieldResult.stderr).toContain(
+			'unknown orchestrator_inline_attempts field "attempt_type"',
+		);
+		expect(duplicateInlineCommitsResult.exitCode).toBe(1);
+		expect(duplicateInlineCommitsResult.stderr).toContain(
+			"duplicate orchestrator_inline_attempts",
+		);
+		expect(mismatchedInlineFilesResult.exitCode).toBe(1);
+		expect(mismatchedInlineFilesResult.stderr).toContain(
+			"orchestrator_inline_attempts commit",
+		);
+		expect(mismatchedInlineFilesResult.stderr).toContain(
+			"files_touched does not match git diff",
+		);
+		expect(outsideBatchResult.exitCode).toBe(1);
+		expect(outsideBatchResult.stderr).toContain(
+			"orchestrator_inline_attempts commit",
+		);
+		expect(outsideBatchResult.stderr).toContain(
+			"touches files outside confirmed batch files",
+		);
 	});
 
 	test("rejects malformed compact builder attempt records", async () => {
@@ -2427,6 +2704,7 @@ ${currentCommitFilesYaml(6)}
         probe_results: []
         transcript: "raw envelope data"
         notes: "Builder stopped before editing."
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
 \`\`\`
@@ -2463,6 +2741,7 @@ ${currentCommitFilesYaml(6)}
           - code: raw-object
         probe_results: []
         notes: "Builder stopped before editing."
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
 \`\`\`
@@ -2489,6 +2768,7 @@ ${currentCommitFilesYaml(6)}
     rationale: null
     status: pending
     builder_commits: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -2540,6 +2820,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommitFull}"
 ${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -2562,6 +2843,7 @@ ${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
 			"duplicate-committed-attempts.md",
 			fullBuilderCommitContents.replace(
 				`${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+    orchestrator_inline_attempts: []
     iterations: 1`,
 				`${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
       - attempt_type: repair
@@ -2573,6 +2855,7 @@ ${currentCommitFilesYaml(10)}
         blockers: []
         probe_results: []
         notes: "Repeated the same commit."
+    orchestrator_inline_attempts: []
     iterations: 2`,
 			),
 		);
@@ -2591,6 +2874,7 @@ ${currentCommitFilesYaml(10)}
 			"commit-missing-attempt.md",
 			fullBuilderCommitContents.replace(
 				`${currentCommittedAttemptYaml(4, { commitSha: currentCommit })}
+    orchestrator_inline_attempts: []
     iterations: 1`,
 				`    builder_attempts:
       - attempt_type: implementation
@@ -2602,6 +2886,7 @@ ${currentCommitFilesYaml(10)}
           - "Could not prove scope."
         probe_results: []
         notes: "Stopped before editing."
+    orchestrator_inline_attempts: []
     iterations: 1`,
 			),
 		);
@@ -2643,6 +2928,7 @@ ${currentCommitFilesYaml(6)}
           - "Could not prove scope."
         probe_results: []
         notes: "Stopped before editing."
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
 \`\`\`
@@ -2772,6 +3058,7 @@ batches:
     status: in-progress
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -2802,6 +3089,7 @@ batches:
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: null
 \`\`\`
@@ -2833,7 +3121,6 @@ ${failStopAttemptItemYaml(6)}
 			"terminal-fail-stops-only.md",
 			inProgressAfterAttemptContents
 				.replace("status: in-progress", "status: accepted-risk")
-				.replace("builder_commits: []", `builder_commits:\n      - "${currentCommit}"`)
 				.replace("final_verdict: null", "final_verdict: accepted-risk"),
 		);
 
@@ -2865,13 +3152,13 @@ ${failStopAttemptItemYaml(6)}
 		expect(infrastructureResult.exitCode).toBe(0);
 		expect(inProgressResult.exitCode).toBe(0);
 		expect(lowResult.exitCode).toBe(1);
-		expect(lowResult.stderr).toContain("iterations must equal builder_attempts count");
+		expect(lowResult.stderr).toContain("iterations must equal total implementation attempts count");
 		expect(highResult.exitCode).toBe(1);
-		expect(highResult.stderr).toContain("iterations must equal builder_attempts count");
+		expect(highResult.stderr).toContain("iterations must equal total implementation attempts count");
 		expect(sixResult.exitCode).toBe(1);
-		expect(sixResult.stderr).toContain("must not have more than 5 builder_attempts");
+		expect(sixResult.stderr).toContain("must not have more than 5 total implementation attempts");
 		expect(terminalFailStopsResult.exitCode).toBe(1);
-		expect(terminalFailStopsResult.stderr).toContain("has no committed builder_attempts item");
+		expect(terminalFailStopsResult.stderr).toContain("must include at least one committed implementation attempt");
 	});
 
 	test("ledger batch validation rejects lifecycle drift and AC coverage drift", async () => {
@@ -2896,6 +3183,7 @@ ${currentCommitFilesYaml(6)}
     rationale: null
     status: converged
     builder_commits: not-a-list
+    orchestrator_inline_attempts: []
     iterations: banana
     final_verdict: converged
 \`\`\`
@@ -2923,6 +3211,7 @@ ${currentCommitFilesYaml(6)}
     status: converged
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: converged
 \`\`\`
@@ -2950,6 +3239,7 @@ batches:
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: converged
 \`\`\`
@@ -2977,6 +3267,7 @@ batches:
     status: converged
     builder_commits:
       - "not-a-sha"
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -3005,6 +3296,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -3049,6 +3341,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: accepted-risk
 \`\`\`
@@ -3077,6 +3370,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -3104,6 +3398,7 @@ batches:
     status: blocked
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: converged
 \`\`\`
@@ -3131,6 +3426,7 @@ batches:
     status: in-progress
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: accepted-risk
 \`\`\`
@@ -3184,7 +3480,7 @@ batches:
 		);
 		expect(forgedTerminalResult.exitCode).toBe(1);
 		expect(forgedTerminalResult.stderr).toContain(
-			"must include at least one builder commit",
+			"must have iterations greater than zero",
 		);
 		expect(pendingWithVerdictResult.exitCode).toBe(1);
 		expect(pendingWithVerdictResult.stderr).toContain(
@@ -3297,6 +3593,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3316,6 +3613,7 @@ ${failStopAttemptItemYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
   - id: "dependent"
@@ -3334,6 +3632,7 @@ ${failStopAttemptItemYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3361,6 +3660,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
   - id: "replacement"
@@ -3379,6 +3679,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3408,6 +3709,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3426,6 +3728,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3454,6 +3757,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3472,6 +3776,7 @@ ${failStopAttemptItemYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3500,6 +3805,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3518,6 +3824,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3546,6 +3853,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3564,6 +3872,7 @@ ${failStopAttemptItemYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3637,6 +3946,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3655,6 +3965,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
   - id: "dependent"
@@ -3673,6 +3984,7 @@ ${yamlList(options.dependentDependsOn, 6)}
     status: ${options.dependentStatus ?? "pending"}
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: ${options.dependentVerdict ?? "null"}
 \`\`\`
@@ -3785,6 +4097,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
 \`\`\`
@@ -3813,6 +4126,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3832,6 +4146,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3860,6 +4175,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement-a"
@@ -3878,6 +4194,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
   - id: "replacement-b"
@@ -3896,6 +4213,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -3925,6 +4243,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "b"
@@ -3944,6 +4263,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6, "Builder stopped before editing again.")}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
 \`\`\`
@@ -3971,6 +4291,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -3989,6 +4310,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -4058,6 +4380,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -4086,6 +4409,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -4113,6 +4437,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -4141,6 +4466,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -4159,6 +4485,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -4187,6 +4514,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits: []
     builder_attempts:
 ${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: blocked-for-user
   - id: "replacement"
@@ -4204,6 +4532,7 @@ ${currentCommitFilesYaml(6)}
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -4488,6 +4817,7 @@ ${currentCommitFilesYaml(6)}
     builder_commits:
       - "${currentCommit}"
 ${currentCommittedAttemptYaml(4)}
+    orchestrator_inline_attempts: []
     iterations: 1
     final_verdict: converged
 \`\`\`
@@ -4694,6 +5024,7 @@ batches:
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
   - id: "two"
@@ -4711,6 +5042,7 @@ batches:
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -4860,6 +5192,7 @@ batches:
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
@@ -5207,6 +5540,7 @@ batches:
     status: pending
     builder_commits: []
     builder_attempts: []
+    orchestrator_inline_attempts: []
     iterations: 0
     final_verdict: null
 \`\`\`
