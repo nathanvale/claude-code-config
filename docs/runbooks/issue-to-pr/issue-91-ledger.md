@@ -89,11 +89,21 @@ batches:
       - 1
       - 4
     rationale: "change_first-exception: pure docs/template change; behaviour is verified by U3 (validator + tests)"
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "fb06b53"
+    builder_attempts:
+      - attempt_type: "implementation"
+        status: "committed"
+        commit_sha: "fb06b53"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/issue-N-ledger.template.md"
+        route_hint: null
+        blockers: []
+        probe_results: []
+        notes: "Appended ## Workflow Learnings section at tail of template with workflow_learnings: [] seed; ce-correctness-reviewer validator wave returned zero findings."
+    iterations: 1
+    final_verdict: converged
   - id: "reference-prose"
     name: "Reference prose updates"
     goal: "AC 2 holds: Ledger/reference prose explains that the per-issue ledger records what this run observed, while the registry owns canonical lifecycle metadata and dedupe."
