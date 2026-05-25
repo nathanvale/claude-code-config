@@ -253,11 +253,47 @@ batches:
       - 5
       - 6
     rationale: "ac_mapping includes 6 because AC6 is a cross-cutting test-coverage requirement satisfied by the co-located test suites across U2-U5, not by a standalone unit; it is anchored here on the final test-bearing unit (which also delivers AC6's explicitly-named write-scope-limits tests)."
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - f08f72e3965d6bc98874bdf30add916f20c0c56a
+      - b6bbeb03c953852f5832b05fa6c99420e1ab9ad2
+      - 5d56aa7d579023ad9377ea30aae7ea4e2ac92794
+    builder_attempts:
+      - attempt_type: implementation
+        status: committed
+        commit_sha: f08f72e3965d6bc98874bdf30add916f20c0c56a
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+          - "runbooks/issue-to-pr-v2/learnings-registry.ts"
+          - "runbooks/issue-to-pr-v2/learnings-registry.test.ts"
+        route_hint: "ready for validator"
+        blockers: []
+        probe_results: []
+        notes: "assertRegistryWriteTarget initial implementation (denylist approach); 16 new tests, 696/696 v2 suite green."
+      - attempt_type: repair
+        status: committed
+        commit_sha: b6bbeb03c953852f5832b05fa6c99420e1ab9ad2
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+          - "runbooks/issue-to-pr-v2/learnings-registry.test.ts"
+        route_hint: "wave repair closing F40+F41+F42"
+        blockers: []
+        probe_results:
+          - "33/33 ws + 68/68 lib + 713/713 v2"
+        notes: "Switched from denylist to tail-match allowlist + os.tmpdir() escape; case-insensitive comparisons; SOURCE_EXTENSIONS covers .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs."
+      - attempt_type: repair
+        status: committed
+        commit_sha: 5d56aa7d579023ad9377ea30aae7ea4e2ac92794
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/learnings.ts"
+          - "runbooks/issue-to-pr-v2/learnings-registry.test.ts"
+        route_hint: "wave repair closing F48+F49"
+        blockers: []
+        probe_results:
+          - "41/41 ws + 68/68 lib + 721/721 v2"
+        notes: "Repo-root anchoring via git rev-parse + package.json fallback; production accept rule requires resolved candidate path equals canonical absolute path; tightened tmpdir-escape to only allow registry.md or workflow-learnings-registry.md leaves with no bare .md and no control chars."
+    iterations: 3
+    final_verdict: converged
 ```
 
 ## Findings data
@@ -600,97 +636,97 @@ findings:
     signature: write-scope-case-insensitive-fs-bypass
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "All denylist checks are case-sensitive but macOS default APFS is case-insensitive; paths like Skills/, References/, or Issue-90-Ledger.md bypass the guard and overwrite the real lowercase files on macOS"
-    resolution: null
+    resolution: "commit b6bbeb03c953852f5832b05fa6c99420e1ab9ad2"
   - id: F41
     batch_id: write-scope
     signature: write-scope-non-ts-source-extension-bypass
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "Source-file denylist only matches .ts extension; legitimate TypeScript/JS source files with .mts, .cts, .tsx, .js, .jsx, .mjs, .cjs extensions slip through and can be overwritten with registry markdown"
-    resolution: null
+    resolution: "commit b6bbeb03c953852f5832b05fa6c99420e1ab9ad2"
   - id: F42
     batch_id: write-scope
     signature: write-scope-denylist-vs-allowlist-foreign-path
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "Denylist accepts arbitrary unrelated paths (e.g. /tmp/random.md, README.md, package.json); AC5 spirit (cannot write any surface outside the registry it owns) materially violated; correct fix is a tail-match allowlist that keeps prior-batch tmp-path tests green"
-    resolution: null
+    resolution: "commit b6bbeb03c953852f5832b05fa6c99420e1ab9ad2"
   - id: F43
     batch_id: write-scope
     signature: write-scope-symlink-bypass
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "Guard does no realpath/lstat resolution; a symlink at a non-canonical path is refused but a symlink at the canonical path could still trick the guard; narrow attack surface, mitigation requires realpathSync"
-    resolution: null
+    resolution: deferred-P2
   - id: F44
     batch_id: write-scope
     signature: write-scope-references-deep-nesting-bypass
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "The sibling-reference check only fires when parentDir is literally references; nested paths like references/subfolder/other.md bypass; tail-match allowlist would close this"
-    resolution: null
+    resolution: deferred-P2
   - id: F45
     batch_id: write-scope
     signature: write-scope-references-non-md-bypass
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "The references-sibling check requires filename.endsWith(.md); references/schema.json or references/notes.txt bypass the check"
-    resolution: null
+    resolution: deferred-P2
   - id: F46
     batch_id: write-scope
     signature: write-scope-ledger-filename-prefix-bypass
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "The per-issue ledger regex is filename-prefix-anchored; filenames with any prefix before issue- (e.g. preview-issue-90-ledger.md) bypass the check"
-    resolution: null
+    resolution: deferred-P2
   - id: F47
     batch_id: write-scope
     signature: ws-tests-unrelated-tmp-path-acceptance-unpinned
     persona: ce-testing-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test"
-    resolution: null
+    resolution: deferred-P2
   - id: F48
     batch_id: write-scope
     signature: f42-tmpdir-escape-still-accepts-arbitrary-md-files
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "F42 only partially closed: tmpdir-escape accepts ANY .md filename under os.tmpdir() (including /tmp/i_just_pwned_you.md) so long as no tripwire fires; AC5 spirit still violated for tmpdir-rooted paths"
-    resolution: null
+    resolution: "commit 5d56aa7d579023ad9377ea30aae7ea4e2ac92794"
   - id: F49
     batch_id: write-scope
     signature: foreign-tail-match-no-repo-containment
     persona: ce-adversarial-reviewer
     severity: P1
-    status: open
+    status: fixed
     summary: "Tail-match allowlist has no repo-root anchor; any absolute path that ends with the canonical relative path (e.g. /Users/attacker/runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md) is accepted; a caller in a wrong cwd, worktree, or attacker-staged decoy directory writes outside the real repo"
-    resolution: null
+    resolution: "commit 5d56aa7d579023ad9377ea30aae7ea4e2ac92794"
   - id: F50
     batch_id: write-scope
     signature: tmpdir-escape-inconsistent-with-non-tmpdir-branch
     persona: ce-adversarial-reviewer
     severity: P2
-    status: open
+    status: deferred-P2
     summary: "Inconsistent contract: references/*.md is refused outside tmpdir but accepted under tmpdir; tmpdir tripwires only catch skills/, issue-*-ledger.md, source extensions; foreign reference markdown is not gated under tmpdir"
-    resolution: null
+    resolution: deferred-P2
   - id: F51
     batch_id: write-scope
     signature: control-chars-and-bare-dotmd-accepted-under-tmpdir
     persona: ce-adversarial-reviewer
     severity: P3
-    status: open
+    status: deferred-P3
     summary: "Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir"
-    resolution: null
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -736,18 +772,18 @@ findings:
 | F37 | upsert-op | validateregistry-allows-evidence-list-items-that-are-not-mappings | ce-adversarial-reviewer | P3 | deferred-P3 | validateRegistry only checks Array.isArray on evidence and does not enforce per-item shape; a hand-edited registry whose evidence list contains a scalar item passes validation but makes the next serializeRegistry throw in emitYaml, blocking all subsequent upserts | deferred-P3 |
 | F38 | upsert-op | f24-late-gate-no-longer-has-test-coverage | ce-adversarial-reviewer | P2 | deferred-P2 | The F24 re-validate gate code still exists in the dispatcher but no test exercises it after the F33 repair repurposed its fixture to the earlier gate; an emitYaml regression that produces parser-rejectable bytes would be undetectable by the suite (gate still catches at runtime) | deferred-P2 |
 | F39 | upsert-op | validateregistry-silently-skips-malformed-evidence-records | ce-adversarial-reviewer | P3 | deferred-P3 | validateRegistry's new whitelist loop skips evidence records that are null, scalar, or array via early return without recording an error; a hand-edited registry trips emitYaml with a generic message rather than an actionable validateRegistry error naming the entry | deferred-P3 |
-| F40 | write-scope | write-scope-case-insensitive-fs-bypass | ce-adversarial-reviewer | P1 | open | All denylist checks are case-sensitive but macOS default APFS is case-insensitive; paths like Skills/, References/, or Issue-90-Ledger.md bypass the guard and overwrite the real lowercase files on macOS | |
-| F41 | write-scope | write-scope-non-ts-source-extension-bypass | ce-adversarial-reviewer | P1 | open | Source-file denylist only matches .ts extension; legitimate TypeScript/JS source files with .mts, .cts, .tsx, .js, .jsx, .mjs, .cjs extensions slip through and can be overwritten with registry markdown | |
-| F42 | write-scope | write-scope-denylist-vs-allowlist-foreign-path | ce-adversarial-reviewer | P1 | open | Denylist accepts arbitrary unrelated paths (e.g. /tmp/random.md, README.md, package.json); AC5 spirit (cannot write any surface outside the registry it owns) materially violated; correct fix is a tail-match allowlist that keeps prior-batch tmp-path tests green | |
-| F43 | write-scope | write-scope-symlink-bypass | ce-adversarial-reviewer | P2 | open | Guard does no realpath/lstat resolution; a symlink at a non-canonical path is refused but a symlink at the canonical path could still trick the guard; narrow attack surface, mitigation requires realpathSync | |
-| F44 | write-scope | write-scope-references-deep-nesting-bypass | ce-adversarial-reviewer | P2 | open | The sibling-reference check only fires when parentDir is literally references; nested paths like references/subfolder/other.md bypass; tail-match allowlist would close this | |
-| F45 | write-scope | write-scope-references-non-md-bypass | ce-adversarial-reviewer | P2 | open | The references-sibling check requires filename.endsWith(.md); references/schema.json or references/notes.txt bypass the check | |
-| F46 | write-scope | write-scope-ledger-filename-prefix-bypass | ce-adversarial-reviewer | P2 | open | The per-issue ledger regex is filename-prefix-anchored; filenames with any prefix before issue- (e.g. preview-issue-90-ledger.md) bypass the check | |
-| F47 | write-scope | ws-tests-unrelated-tmp-path-acceptance-unpinned | ce-testing-reviewer | P2 | open | No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test | |
-| F48 | write-scope | f42-tmpdir-escape-still-accepts-arbitrary-md-files | ce-adversarial-reviewer | P1 | open | F42 only partially closed: tmpdir-escape accepts ANY .md filename under os.tmpdir() (including /tmp/i_just_pwned_you.md) so long as no tripwire fires; AC5 spirit still violated for tmpdir-rooted paths | |
-| F49 | write-scope | foreign-tail-match-no-repo-containment | ce-adversarial-reviewer | P1 | open | Tail-match allowlist has no repo-root anchor; any absolute path that ends with the canonical relative path (e.g. /Users/attacker/runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md) is accepted; a caller in a wrong cwd, worktree, or attacker-staged decoy directory writes outside the real repo | |
-| F50 | write-scope | tmpdir-escape-inconsistent-with-non-tmpdir-branch | ce-adversarial-reviewer | P2 | open | Inconsistent contract: references/*.md is refused outside tmpdir but accepted under tmpdir; tmpdir tripwires only catch skills/, issue-*-ledger.md, source extensions; foreign reference markdown is not gated under tmpdir | |
-| F51 | write-scope | control-chars-and-bare-dotmd-accepted-under-tmpdir | ce-adversarial-reviewer | P3 | open | Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir | |
+| F40 | write-scope | write-scope-case-insensitive-fs-bypass | ce-adversarial-reviewer | P1 | fixed | All denylist checks are case-sensitive but macOS default APFS is case-insensitive; paths like Skills/, References/, or Issue-90-Ledger.md bypass the guard and overwrite the real lowercase files on macOS | commit b6bbeb03c953852f5832b05fa6c99420e1ab9ad2 |
+| F41 | write-scope | write-scope-non-ts-source-extension-bypass | ce-adversarial-reviewer | P1 | fixed | Source-file denylist only matches .ts extension; legitimate TypeScript/JS source files with .mts, .cts, .tsx, .js, .jsx, .mjs, .cjs extensions slip through and can be overwritten with registry markdown | commit b6bbeb03c953852f5832b05fa6c99420e1ab9ad2 |
+| F42 | write-scope | write-scope-denylist-vs-allowlist-foreign-path | ce-adversarial-reviewer | P1 | fixed | Denylist accepts arbitrary unrelated paths (e.g. /tmp/random.md, README.md, package.json); AC5 spirit (cannot write any surface outside the registry it owns) materially violated; correct fix is a tail-match allowlist that keeps prior-batch tmp-path tests green | commit b6bbeb03c953852f5832b05fa6c99420e1ab9ad2 |
+| F43 | write-scope | write-scope-symlink-bypass | ce-adversarial-reviewer | P2 | deferred-P2 | Guard does no realpath/lstat resolution; a symlink at a non-canonical path is refused but a symlink at the canonical path could still trick the guard; narrow attack surface, mitigation requires realpathSync | deferred-P2 |
+| F44 | write-scope | write-scope-references-deep-nesting-bypass | ce-adversarial-reviewer | P2 | deferred-P2 | The sibling-reference check only fires when parentDir is literally references; nested paths like references/subfolder/other.md bypass; tail-match allowlist would close this | deferred-P2 |
+| F45 | write-scope | write-scope-references-non-md-bypass | ce-adversarial-reviewer | P2 | deferred-P2 | The references-sibling check requires filename.endsWith(.md); references/schema.json or references/notes.txt bypass the check | deferred-P2 |
+| F46 | write-scope | write-scope-ledger-filename-prefix-bypass | ce-adversarial-reviewer | P2 | deferred-P2 | The per-issue ledger regex is filename-prefix-anchored; filenames with any prefix before issue- (e.g. preview-issue-90-ledger.md) bypass the check | deferred-P2 |
+| F47 | write-scope | ws-tests-unrelated-tmp-path-acceptance-unpinned | ce-testing-reviewer | P2 | deferred-P2 | No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test | deferred-P2 |
+| F48 | write-scope | f42-tmpdir-escape-still-accepts-arbitrary-md-files | ce-adversarial-reviewer | P1 | fixed | F42 only partially closed: tmpdir-escape accepts ANY .md filename under os.tmpdir() (including /tmp/i_just_pwned_you.md) so long as no tripwire fires; AC5 spirit still violated for tmpdir-rooted paths | commit 5d56aa7d579023ad9377ea30aae7ea4e2ac92794 |
+| F49 | write-scope | foreign-tail-match-no-repo-containment | ce-adversarial-reviewer | P1 | fixed | Tail-match allowlist has no repo-root anchor; any absolute path that ends with the canonical relative path (e.g. /Users/attacker/runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md) is accepted; a caller in a wrong cwd, worktree, or attacker-staged decoy directory writes outside the real repo | commit 5d56aa7d579023ad9377ea30aae7ea4e2ac92794 |
+| F50 | write-scope | tmpdir-escape-inconsistent-with-non-tmpdir-branch | ce-adversarial-reviewer | P2 | deferred-P2 | Inconsistent contract: references/*.md is refused outside tmpdir but accepted under tmpdir; tmpdir tripwires only catch skills/, issue-*-ledger.md, source extensions; foreign reference markdown is not gated under tmpdir | deferred-P2 |
+| F51 | write-scope | control-chars-and-bare-dotmd-accepted-under-tmpdir | ce-adversarial-reviewer | P3 | deferred-P3 | Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir | deferred-P3 |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
