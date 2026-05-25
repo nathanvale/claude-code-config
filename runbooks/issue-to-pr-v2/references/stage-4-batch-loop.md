@@ -110,9 +110,7 @@ invocation, and findings normalization live in
 
 Orchestrator-inline attempts honour the same `batch.files` authority
 boundary as Builder and are recorded in their own audit lane on the
-ledger, separate from Builder attempt evidence (see
-[ledger-and-helper.md](ledger-and-helper.md) for the inline-attempt
-shape).
+ledger, separate from Builder attempt evidence.
 For the Builder Work Packet, authority boundary, Preflight Checklist, and
 return envelope, see [builder-dispatch.md](builder-dispatch.md).
 
