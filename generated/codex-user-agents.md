@@ -1,6 +1,52 @@
 <!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
 
-# Nathan's Agent Preferences
+# Work Style
+
+Applies when editing AGENTS.md, CLAUDE.md, `prompt-fragments/`, `rules/`, `context/`, SKILL.md, skill references.
+
+- Telegraph; noun-phrases ok; drop grammar; min tokens.
+- Codex CLI: avoid tables; render poorly. Use bullets or `key: value`. Tables only on request.
+- One idea per bullet. No sub-bullets unless meaning fragments.
+- Imperative voice. Active. Contractions fine. Drop articles when meaning survives.
+- Don't restate the heading in the first line.
+- No trailing summaries.
+- Bullets > prose for any list.
+- Skills canonical for tool workflows. Keep AGENTS.md / CLAUDE.md to hard rules only.
+
+## XML tags
+
+- Default: plain markdown in rule/fragment/skill/policy bodies. No XML.
+- Use XML only when it earns parsing payoff: few-shot `<example>` / `<examples>`, long docs `<document>` / `<document_content>` / `<source>`, output routing `<thinking>` / `<answer>` / `<quotes>`.
+- Use Anthropic's conventional tag names; lowercase_with_underscores; nest only on real hierarchy.
+- No decorative wrapping (`<rule>`, `<note>`) when markdown headings or bullets work.
+
+## Banned filler
+
+"in order to", "you should", "make sure to", "please", "please note", "note that", "it is important to", "importantly", "as mentioned above", "the following" before lists, "this is a X that Y".
+
+## Line budgets
+
+- Rule: soft 20, hard 30.
+- Shared fragment: soft 25, hard 40.
+- Harness fragment: soft 15, hard 25.
+- AGENTS.md rendered: soft 200, hard 250.
+- CLAUDE.md rendered: soft 30, hard 50.
+- Skill `description`: soft 240ch, hard 320ch.
+- Over soft fine. Over hard justify in commit.
+
+## Skill descriptions
+
+- Trigger phrase, not summary.
+- No personal names. No long paths. No workflow narration.
+- Quote the value. YAML-parse before commit.
+- Bad: `description: Helps Nathan draft professional messages for Slack, Teams, or email by following a tone checklist...`
+- Good: `description: "Draft Slack, Teams, or email messages. Triggers on 'draft a message', 'email X'."`
+
+## When to break
+
+Clarity beats terseness. If a rule fights the reader, flag it.
+
+## Nathan's Preferences
 
 - **Location** → Melbourne, Australia (AEST/AEDT)
 - **ADHD** → Cognitive load is my enemy. DX matters enormously.
@@ -61,6 +107,15 @@ When working with libraries, frameworks, or APIs:
 2. Prefer exact library matches and version-specific docs when available
 3. Prefer primary docs over third-party summaries
 4. Cite the relevant version when it matters
+
+## Skill Authoring
+
+Hard rules for authoring skills and editing `SKILL.md` files.
+
+- Skills are canonical for tool workflows. Keep CLAUDE.md / AGENTS.md to hard rules only.
+- Editing AGENTS.md, CLAUDE.md, skills, or skill references: token-efficient, relaxed grammar, terse descriptions. See `work-style.md` shared fragment for the bar.
+- Skill descriptions: short generic trigger phrase, not a summary. No personal names, long paths, or workflow narration unless required for routing.
+- Skill frontmatter: quote the `description` value. After editing a `SKILL.md`, YAML-parse the frontmatter before commit.
 
 ## Code Quality Runners
 
@@ -133,75 +188,17 @@ For detailed git procedures, read:
 
 ## Communication Style
 
-- Clear visual structure: break complex info into chunks, use whitespace and formatting
-- Use Mermaid diagrams more often to explain concepts, flows, relationships, trade-offs, and implementation ideas when a compact visual would reduce cognitive load
-- Celebrate wins. ADHD thrives on dopamine hits (emojis ok here)
+- Clear visual structure: chunks, whitespace, formatting.
+- Use Mermaid for concepts, flows, trade-offs when a compact visual reduces cognitive load.
+- Celebrate wins. ADHD thrives on dopamine hits (emojis ok here).
 - It's ok to say "Sorry Nathan, I don't know."
-
-### Punctuation in outbound communication
-
-This rule is **scoped to outbound human communication channels only**, where reads land in front of a colleague, customer, or family member. It is **not** a global stylistic rule. Em-dashes inside code, code comments, repo docs, commit messages, PR descriptions, skill specs, internal markdown, and chat replies to Nathan in Claude Code are all fine.
-
-**In scope (zero tolerance):**
-
-- Slack messages and drafts
-- Microsoft Teams messages and drafts
-- Email drafts and sends (work and personal)
-- SMS / iMessage drafts authored on Nathan's behalf
-- Confluence pages, Notion pages, or any wiki surface published to other people
-- Any other artifact whose purpose is to deliver prose to a specific human reader
-
-**Out of scope (no rule applies):**
-
-- Source code and code comments
-- Repository markdown, READMEs, skill specs, internal docs
-- Commit messages, PR descriptions, changelog entries
-- Chat responses in Claude Code (Nathan is reading them but they are session-internal)
-- Logs, error messages, structured output
-
-**The rule (only when in-scope):**
-
-- **Never use em-dashes (`—`, U+2014) or en-dashes (`–`, U+2013)**. Nathan hates them in messages he sends.
-- Replace with whichever fits the sentence:
-  - **Colon** (`:`) when introducing or expanding
-  - **Comma** (`,`) when adding a parenthetical or aside
-  - **Parentheses** (`(...)`) when the aside is a tangent
-  - **Period + new sentence** when the dash was hiding two complete thoughts
-  - **Plain hyphen with spaces** (` - `) only when nothing else fits naturally
-- Applies to **number/letter ranges** in the same surfaces: write `v1-v8` and `S1-S6`, not `v1–v8` / `S1–S6`.
-- If editing a comms draft Nathan wrote and it contains em-dashes, leave his alone unless he asks for a scrub. The rule is about what I produce on his behalf, not what he produced.
-
-**Skill-level enforcement:** the `draft-message` and `work-message-drafter` skills should treat this as a hard pre-send gate. Other skills (writing code, editing docs, drafting commits) have no obligation to apply it.
+- Outbound comms (Slack, Teams, email, SMS, wiki): no em/en-dashes. See `context/comms-style.md`.
 
 ## Key People
 
 - **Melanie** → Partner ("Bestie" / "Sweetheart")
 - **Levi** → Son (age 9), sole parent
 - **Mum** → Lives in Sydney
-
-### On-Demand Context Docs
-
-Consult additional context docs when the task needs repo-specific guidance.
-
-- `code-style.md` → TypeScript, testing, JSDoc
-- `search-tools.md` → Kit plugin tool selection
-- `bun-runner.md` → Test/lint MCP tools
-- `atuin.md` → Shell history search
-- `personal.md` → Birthdays, hobbies, details
-- `personal-projects.md` → Side projects and active builds
-- `learning-goals.md` → Currently learning, study goals
-- `obsidian-setup.md` → PARA method, vault commands
-- `hardware.md` → Monitor, Mac specs, SSH details
-- `known-issues.md` → Bunx cache, git-safety hook, VS Code
-- `git-workflow.md` → tombstone, content moved to docs/git/ and the always-on git-workflow rule
-- `contract-conflict-processing.md` → Conflict reflection output contract
-- `contract-email-interpretation.md` → Email interpretation output contract
-- `contract-people-note.md` → People-note output contract (rewrite mode)
-- `contract-people-note-create.md` → People-note creation contract
-- `contract-people-note-review.md` → People-note review contract
-- `contract-perel-baldwin-context.md` → Perel-Baldwin input contract, ContextBundle assembly
-- `contract-text-message.md` → Text message output contract
-- `template-perel-baldwin-bundle.md` → ContextBundle fill-in template for Perel-Baldwin dispatch
 
 ## Agent skills
 

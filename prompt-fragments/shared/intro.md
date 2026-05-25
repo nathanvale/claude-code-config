@@ -1,6 +1,4 @@
-<!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
-
-# Nathan's Agent Preferences
+## Nathan's Preferences
 
 - **Location** → Melbourne, Australia (AEST/AEDT)
 - **ADHD** → Cognitive load is my enemy. DX matters enormously.

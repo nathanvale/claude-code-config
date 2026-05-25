@@ -13,16 +13,17 @@ FRAGMENTS="${SCRIPT_DIR}/prompt-fragments"
 
 # Fragment ordering for AGENTS.md (shared core)
 SHARED_FRAGMENTS=(
+  "shared/work-style.md"
   "shared/intro.md"
   "shared/boundaries.md"
   "shared/workflow.md"
+  "shared/skill-authoring.md"
   "shared/code-quality-runners.md"
   "shared/connector-dispatch.md"
   "shared/email-read-fully.md"
   "shared/governance.md"
   "shared/communication-style.md"
   "shared/key-people.md"
-  "shared/context-index.md"
   "shared/agent-skills.md"
 )
 
