@@ -121,11 +121,22 @@ batches:
       - 2
       - 4
     rationale: "change_first-exception: pure docs change to reference files; behaviour is the documented split, verified by reading"
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "09bdac7"
+    builder_attempts:
+      - attempt_type: "implementation"
+        status: "committed"
+        commit_sha: "09bdac7"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
+          - "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md"
+        route_hint: null
+        blockers: []
+        probe_results: []
+        notes: "Added body-sections item 7 plus entry-fields subsection in ledger-and-helper.md; tightened per-issue-vs-registry split prose in workflow-learnings-registry.md; ce-correctness-reviewer validator wave confirmed schema consistency across template + both references and returned zero findings."
+    iterations: 1
+    final_verdict: converged
   - id: "ledger-validator"
     name: "Ledger validator, CLI dispatch, and tests (tdd)"
     goal: "AC 3 + AC 5 hold: helper validation rejects ledgers missing the required Workflow Learnings section, and the full test suite (happy paths + every documented failure mode) is authored alongside the validator in tdd order."
