@@ -879,12 +879,21 @@ gh search prs --review-requested "@me" --state open \
   --json number,title,repository,author,updatedAt --limit 20
 ```
 
+**Mandatory post-cursor verification — TASKS.md-tracked PRs:**
+
+Before drift-bucket classification, extract every PR number explicitly tracked in TASKS.md's `🔥 Now`, `🎯 Ordered queue`, or `🔗 Dependencies → I'm waiting on` sections (grep for `#NNN` adjacent to a repo identifier or `gh pr` URL). For each, run `gh pr view <N> --repo <owner/repo> --json number,state,mergedAt,closedAt,reviewDecision,mergeStateStatus,updatedAt` regardless of cursor window. Use this fresh snapshot — not the cursor-windowed `pr list` result — for drift-bucket classification of these PRs.
+
+**Why:** the cursor-windowed query can miss merges that fire minutes before sync runs (`gh pr list --search "updated:>YYYY-MM-DD"` is date-resolution, not timestamp-resolution, and edge-cases at the boundary). PRs that TASKS.md treats as in-flight are load-bearing for the report — a stale-PR drift bucket fires only because the truth wasn't checked.
+
+**Branch-prefix drift detection:** if the PR's `headRefName` does NOT contain the ticket key extracted from the PR title (e.g. PR titled `feat(POS-4058)` but branch is `feature/FERNS-4058-...`), surface a "branch prefix mismatch" warning in the drift report. Jira's PR auto-transition typically keys off branch prefix, not title — a mismatch means the Jira ticket will NOT auto-transition on merge, and a manual transition + merge comment is required.
+
 **Drift buckets — surface only items in these buckets, never the full PR list:**
 
 | Bucket | Trigger | Action |
 |---|---|---|
 | **Open PR, ticket not in TASKS.md** | PR `state=OPEN`, ticket key not in any active section | "Add to 🔥 Now or 🎯 Queue?" |
 | **Merged PR, ticket still in-flight in TASKS.md** | PR `state=MERGED`, ticket appears in 🔥 Now / 🎯 Queue | "Move to ✅ Done table + transition Jira?" |
+| **Branch-prefix mismatch on merged PR** | PR `state=MERGED` AND `headRefName` lacks the PR title's ticket key | "Manual Jira transition + merge comment needed — auto-link missed" |
 | **PR blocked on `REVIEW_REQUIRED`** | `reviewDecision=REVIEW_REQUIRED` for >24h | "Tag a reviewer?" |
 | **PR with failed CI** | Any `statusCheckRollup[].conclusion=FAILURE` | "Re-run failed checks?" (offer the `gh run rerun --failed` command) |
 | **PR with merge conflicts** | `mergeStateStatus=DIRTY` | "Rebase needed" |
@@ -925,6 +934,9 @@ Drift bucket logic is **unchanged from today** — same buckets, same triggers, 
 - ❌ Interpolating any token / env-var value / response body into cursor `error` or report text — use the sanitised messages enumerated in the token-scrubbing rule above
 - ❌ Path-resolving or `.git/config`-sniffing repos — `repos:` entries are forge-native identifiers, declared explicitly
 - ❌ Auto-detecting forge type from a remote URL — `type:` is declared, never inferred
+- ❌ Trusting only the cursor-windowed `gh pr list` snapshot for PRs explicitly tracked in TASKS.md `🔥 Now` — always run `gh pr view <N>` on those PRs even when the cursor window is empty. Merges that fire minutes before sync are otherwise invisible.
+- ❌ Treating "PR is open in cursor-windowed query result" as equivalent to "PR is open right now" — the result is a snapshot of the moment the query ran, not a guarantee of current state.
+- ❌ Reporting a PR as `STALE N days` without first running `gh pr view <N>` to confirm it's still open. The stale-PR drift bucket is the most embarrassing one to get wrong.
 
 If no sources are configured or available (no `git:` block, or all forges failed pre-flight), note "No external sources connected -- skipping sync" and continue to Step 3.
 
