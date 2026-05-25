@@ -326,8 +326,9 @@ needs them.
 - **Builder attempt**: one Builder dispatch that returns a well-formed
   Builder envelope, whether it commits or Builder-authored fail-stops.
 - **Host Builder readiness failure**: an Orchestrator-owned block before
-  Builder exists because the host cannot provide the required fresh
-  sub-agent capabilities. Recorded as `host-builder-tools-unavailable`.
+  any Stage 4 implementation attempt because the host cannot provide the
+  required fresh sub-agent capabilities for Builder dispatch or later repair.
+  Recorded as `host-builder-tools-unavailable`.
   Rule body lives in [host-adapters.md](host-adapters.md).
 - **Builder infrastructure failure**: a post-dispatch host, tool, permission,
   dispatch, serialization, schema, or malformed-envelope failure before a

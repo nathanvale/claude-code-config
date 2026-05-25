@@ -740,9 +740,9 @@ immediately before the next implementation attempt.
    envelope, and classify timeout/failure. If any capability is unavailable,
    record frontmatter `status: blocked` and
    `blocked_reason: host-builder-tools-unavailable`, append Notes evidence,
-   leave every batch status unchanged, do not append `builder_attempts`, do
-   not increment `iterations`, do not dispatch Validators, and do not fall
-   back to Orchestrator-inline implementation as a workaround for host
+   leave every batch status unchanged, append no implementation attempt
+   evidence, do not increment `iterations`, do not dispatch Validators, and do
+   not fall back to Orchestrator-inline implementation as a workaround for host
    unavailability (the inline path is gated on the same host readiness; a
    missing Builder capability means repairs cannot dispatch later, so no
    implementation attempt may begin).
@@ -1080,10 +1080,12 @@ committed Orchestrator-inline attempts), stop and ask the user.
 
 Before every Stage 4 implementation attempt (Builder dispatch or bounded
 Orchestrator-inline), including resumed implementation and repair attempts,
-verify host Builder readiness against the current in-progress batch. If readiness is unavailable, record frontmatter `status: blocked` and
+verify host Builder readiness against the current in-progress batch. If
+readiness is unavailable, record frontmatter `status: blocked` and
 `blocked_reason: host-builder-tools-unavailable`, append Notes evidence, leave
-the current batch status unchanged, do not increment `iterations`, do not
-dispatch Validators, and ask the user to retry or abandon.
+the current batch status unchanged, append no implementation attempt evidence,
+do not increment `iterations`, do not dispatch Validators, and ask the user to
+retry or abandon.
 
 If Builder dispatch begins but timeout, permission, tool, serialization,
 schema, or malformed-envelope failure prevents a well-formed Builder envelope,

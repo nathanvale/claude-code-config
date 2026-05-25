@@ -218,12 +218,14 @@ their own route ids — the route id stays the stage the workflow is
 in, plus `frontmatter.status: blocked` flipping the next turn's
 classification to `blocked-frontmatter-blocked-reason`.
 
-- `host-builder-tools-unavailable` — pre-Stage-4 host-readiness
-  failure; see [`references/host-adapters.md`](references/host-adapters.md).
+- `host-builder-tools-unavailable` — pre-implementation host-readiness
+  failure before any Stage 4 implementation attempt, including bounded
+  Orchestrator-inline work; see
+  [`references/host-adapters.md`](references/host-adapters.md).
 - `builder-infrastructure-failure` — Builder dispatch reached the
   remote runner but the runner returned a malformed envelope or no
   envelope. Stage 4 leaves the batch `in-progress`; do not append a
-  `builder_attempts` row, do not increment `iterations`.
+  `builder_attempts` row, increment `iterations`, or dispatch Validators.
 - `no-eligible-batch` — pending batches exist but their `depends_on`
   set is not satisfied; print the blocked dependencies and ask the
   user.

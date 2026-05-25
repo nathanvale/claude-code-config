@@ -225,7 +225,7 @@ preparing that packet or handoff.
 | Stage 3 decomposition and contract review | `runbooks/issue-to-pr-v2/references/stage-3-decompose.md` |
 | Blocked Stage 3, stale AC, stale batch contract, or stale digests | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/stage-3-decompose.md` |
 | First-run gotchas or confusing first-run-state recovery (deterministic on `blocked-` routes, discretionary on non-blocked cryptic states; see note below) | `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` |
-| Frontmatter blocked reason | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/findings-and-validators.md` |
+| Frontmatter blocked reason | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md`; `runbooks/issue-to-pr-v2/references/findings-and-validators.md`; `runbooks/issue-to-pr-v2/references/host-adapters.md` |
 | Stage 4 batch loop | `runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md` |
 | Stage 4 Builder dispatch | `runbooks/issue-to-pr-v2/references/builder-dispatch.md`; `runbooks/issue-to-pr-v2/templates/builder-work-packet.md` |
 | Stage 4 Validator wave or findings write | `runbooks/issue-to-pr-v2/references/findings-and-validators.md`; `runbooks/issue-to-pr-v2/templates/validator-envelope.md` |
@@ -463,7 +463,7 @@ and name the resume condition.
 | Stage 3 open P0/P1 | Contract-review finding summary | Plan or batch contract revision closes the finding |
 | Stage 3 contract-review cycle cap | Cap reached without convergence and last finding summary | User replans, narrows the contract, or accepts surfaced advisories; see `stage-3-decompose.md` |
 | Stale batch contract or digests | Recomputed drift evidence | Stage 3 recompute and user confirmation |
-| Host Builder tools unavailable | Host readiness failure (pre-implementation gate; applies before every Stage 4 implementation attempt, Builder dispatch or inline) | Required host tools are available |
+| Host Builder tools unavailable | Host readiness failure before any Stage 4 implementation attempt, including Builder dispatch and bounded inline work; no attempt evidence, iteration increment, or Validator wave is recorded | Required host tools are available |
 | Builder infrastructure failure | Malformed/missing Builder envelope and side effects | User decides whether to retry, repair, or reframe |
 | No eligible batch | Pending batch dependencies | Dependencies converge or user reframes the DAG |
 | Escape hatch or iteration cap | Hatch name and current batch/finding evidence | User accepts risk, authorizes replacement, or replans |

@@ -935,6 +935,7 @@ describe("requiredReferenceIdsFor: per-route value mapping pin", () => {
     "blocked-frontmatter-blocked-reason": [
       "ledger-and-helper.md",
       "findings-and-validators.md",
+      "host-adapters.md",
     ],
   };
 

@@ -261,7 +261,11 @@ export function requiredReferenceIdsFor(route: RouteId): readonly string[] {
     case "blocked-runbook-version-skew":
       return ["ledger-and-helper.md"];
     case "blocked-frontmatter-blocked-reason":
-      return ["ledger-and-helper.md", "findings-and-validators.md"];
+      return [
+        "ledger-and-helper.md",
+        "findings-and-validators.md",
+        "host-adapters.md",
+      ];
     default: {
       // Exhaustiveness guard: every RouteId branch above is covered. If a
       // future enum member is added to ROUTE_IDS, TypeScript flags this

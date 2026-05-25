@@ -164,13 +164,14 @@ contract by itself.
 If host readiness fails before a Stage 4 implementation attempt, record
 frontmatter `status: blocked` and
 `blocked_reason: host-builder-tools-unavailable`, append Notes evidence, leave
-batch statuses unchanged, and do not fall back to Orchestrator-inline
-implementation as a workaround. If dispatch, timeout, permission,
-serialization, schema, or malformed-envelope failure happens after Builder
-dispatch, record `blocked_reason: builder-infrastructure-failure`, leave the
-current batch `in-progress`, append no `builder_attempts` row, do not
-increment `iterations`, and surface any reachable commit refs or dirty/staged
-path summaries for user choice.
+batch statuses unchanged, append no implementation attempt evidence, do not
+increment `iterations`, dispatch no Validators, and do not fall back to
+Orchestrator-inline implementation as a workaround. If dispatch, timeout,
+permission, serialization, schema, or malformed-envelope failure happens after
+Builder dispatch, record `blocked_reason: builder-infrastructure-failure`,
+leave the current batch `in-progress`, append no `builder_attempts` row, do
+not increment `iterations`, dispatch no Validators, and surface any reachable
+commit refs or dirty/staged path summaries for user choice.
 
 ## Why these seams
 

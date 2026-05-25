@@ -431,8 +431,8 @@ responsible for authoring this row through normal ledger editing.
 ## See also
 
 - [host-adapters.md](host-adapters.md) for the host-readiness boundary that
-  guards Builder dispatch and the `--confirmation-state` interpretation rules
-  during resumed runs.
+  gates every Stage 4 implementation attempt and the
+  `--confirmation-state` interpretation rules during resumed runs.
 - [findings-and-validators.md](findings-and-validators.md) for ledger findings
   shape and helper validation of `## Findings data`.
 - [stage-3-decompose.md](stage-3-decompose.md) for the batches contract author

@@ -50,11 +50,14 @@ Well-formed Builder fail-stops count as Builder attempts and increment
 `iterations`; fail-stop attempts use `commit_sha: null` and do not append to
 `builder_commits`.
 Host readiness failures use frontmatter `blocked_reason:
-host-builder-tools-unavailable` before any batch status change. Post-dispatch
-host/schema/envelope failures use `blocked_reason:
-builder-infrastructure-failure`, leave the current batch `in-progress`, and
-record reachable commit refs plus dirty/staged path summaries in Notes without
-adding a `builder_attempts` row or incrementing `iterations`.
+host-builder-tools-unavailable` before any Stage 4 implementation attempt,
+including bounded Orchestrator-inline work. They leave every batch status
+unchanged, append no implementation attempt evidence, do not increment
+`iterations`, and dispatch no Validators. Post-dispatch host/schema/envelope
+failures use `blocked_reason: builder-infrastructure-failure`, leave the
+current batch `in-progress`, and record reachable commit refs plus dirty/staged
+path summaries in Notes without adding a `builder_attempts` row, incrementing
+`iterations`, or dispatching Validators.
 
 ```yaml
 batches: []

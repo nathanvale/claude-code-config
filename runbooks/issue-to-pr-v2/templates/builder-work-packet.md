@@ -175,8 +175,8 @@ Open these references before any edit. Read order:
    Probe Catalog, return envelope schema, replacement-batch mechanics, Builder
    execution rules (every iteration).
 2. [`references/host-adapters.md`](../references/host-adapters.md) —
-   `host-readiness-vs-infra-failure` boundary (the pre-dispatch readiness
-   check already passed before this packet arrived).
+   `host-readiness-vs-infra-failure` boundary (the pre-implementation host
+   readiness gate already passed before this packet arrived).
 3. [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md) —
    inner-loop iteration cap (5), escape hatches, and lifecycle checkpoints
    the Orchestrator owns around this dispatch.
