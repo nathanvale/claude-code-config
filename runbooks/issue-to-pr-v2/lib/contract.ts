@@ -1,13 +1,12 @@
 /**
  * Runtime contract values for the Issue-to-PR v2 helper.
  *
- * Lifted from v1 `runbooks/issue-to-pr/decompose.ts` lines 99-181 (U3 slice S1).
- * These are the load-bearing string sets, key sets, prefix constants, and the
- * numeric `MAX_BUILDER_ATTEMPTS` cap that the rest of the helper validates
- * against. Keeping them in executable code (not just erased TypeScript types
- * or prose) is acceptance criterion AC2 of issue #51.
- *
- * No behavior changes: every value is byte-identical to v1.
+ * Initially lifted from v1 `runbooks/issue-to-pr/decompose.ts` lines 99-181
+ * (U3 slice S1), then evolved as v2 added durable lifecycle lanes. These are
+ * the load-bearing string sets, key sets, prefix constants, and the numeric
+ * `MAX_BUILDER_ATTEMPTS` cap that the rest of the helper validates against.
+ * Keeping them in executable code (not just erased TypeScript types or prose)
+ * is acceptance criterion AC2 of issue #51.
  *
  * **U6 addition:** `RUNBOOK_VERSION` is the single source of truth for the
  * v2 workflow-contract version. Compared as a string against the ledger
@@ -20,11 +19,11 @@
  * packet semantics change — not for documentation edits, reference
  * reshuffles, source commits, or added tests.
  *
- * Plain string by design so future major versions ("3", "4") can stay
+ * Plain string by design so future major versions ("4", "5") can stay
  * comparable without semver tooling. Bumping this value is a deliberate
  * U6+ contract decision.
  */
-export const RUNBOOK_VERSION = "2" as const;
+export const RUNBOOK_VERSION = "3" as const;
 export type RunbookVersion = typeof RUNBOOK_VERSION;
 
 /**
@@ -61,9 +60,18 @@ export type ExecutionMode = "tdd" | "proof_first" | "change_first";
  *
  * Matches `BATCH_KEYS` below: id, name, goal, files, depends_on, supersedes,
  * execution_mode, acceptance_tests, ac_mapping, rationale. This is the
- * "candidate execution contract" Stage 3 confirms; the 5 runtime lifecycle
+ * "candidate execution contract" Stage 3 confirms; the 6 runtime lifecycle
  * fields (status, iterations, builder_commits, builder_attempts,
- * final_verdict) are added by the ledger parser in `lib/ledger.ts`.
+ * orchestrator_inline_attempts, final_verdict) are added by the ledger parser
+ * in `lib/ledger.ts`.
+ *
+ * `orchestrator_inline_attempts` is the newest lifecycle field. This module
+ * owns its key set (`ORCHESTRATOR_INLINE_ATTEMPT_KEYS`) and its membership in
+ * `LEDGER_BATCH_KEYS`. Read this key set as the field shape only; its runtime
+ * invariants (committed-only rows, parser/emitter handling, and how the
+ * runbook-version skew gate protects legacy ledgers) are owned by
+ * `references/ledger-and-helper.md` and enforced by `lib/ledger.ts` in the U5
+ * helper-validation slice.
  *
  * `contractDigest` in `lib/digest.ts` hashes exactly these fields, which is
  * why a lifecycle-only ledger change does not change the digest (issue #51
@@ -118,6 +126,7 @@ export const LEDGER_BATCH_KEYS = new Set([
   "status",
   "builder_commits",
   "builder_attempts",
+  "orchestrator_inline_attempts",
   "iterations",
   "final_verdict",
 ]);
@@ -130,6 +139,12 @@ export const BUILDER_ATTEMPT_KEYS = new Set([
   "route_hint",
   "blockers",
   "probe_results",
+  "notes",
+]);
+
+export const ORCHESTRATOR_INLINE_ATTEMPT_KEYS = new Set([
+  "commit_sha",
+  "files_touched",
   "notes",
 ]);
 

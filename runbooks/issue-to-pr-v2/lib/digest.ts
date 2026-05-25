@@ -10,7 +10,7 @@
  * Why this is its own slice: AC3 of issue #51 requires that lifecycle-only
  * ledger changes do not change the digest. `contractDigest` enforces that
  * by hashing only the 10 candidate-contract fields (the `Batch` type from
- * `lib/contract.ts`), never the 5 runtime lifecycle fields.
+ * `lib/contract.ts`), never the runtime lifecycle fields.
  */
 
 import { createHash } from "node:crypto";

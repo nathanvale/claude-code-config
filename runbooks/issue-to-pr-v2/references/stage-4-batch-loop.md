@@ -120,8 +120,13 @@ invocation, and findings normalization live in
 [findings-and-validators.md](findings-and-validators.md).
 
 Orchestrator-inline attempts honour the same `batch.files` authority
-boundary as Builder and are recorded in their own audit lane on the
-ledger, separate from Builder attempt evidence.
+boundary as Builder and are recorded in `orchestrator_inline_attempts`,
+separate from Builder attempt evidence. This lane is committed-only and
+compact: `commit_sha`, `files_touched`, and `notes`. If any dispatch trigger
+appears before the inline implementation commit, append no inline row and
+route the work to Builder dispatch. Inline commits are never copied into
+`builder_commits` or `builder_attempts`.
+
 For the Builder Work Packet, authority boundary, Preflight Checklist, and
 return envelope, see [builder-dispatch.md](builder-dispatch.md).
 
@@ -153,10 +158,10 @@ return envelope, see [builder-dispatch.md](builder-dispatch.md).
 6. **On inner-loop success.** Set `status: converged`, preserve path-specific
    attempt evidence (Builder commit refs in `builder_commits`, compact
    Builder envelope records in `builder_attempts`, and Orchestrator-inline
-   evidence in its separate audit lane), set `iterations` to the number of
-   well-formed implementation attempts for that batch (committed Builder
-   attempts, Builder-authored fail-stops, and committed Orchestrator-inline
-   attempts, excluding Validator persona waves), and set
+   evidence in `orchestrator_inline_attempts`), set `iterations` to the
+   number of well-formed implementation attempts for that batch (committed
+   Builder attempts, Builder-authored fail-stops, and committed
+   Orchestrator-inline attempts, excluding Validator persona waves), and set
    `final_verdict: converged`. Auto-close batch P2/P3 findings as
    `deferred-P2` / `deferred-P3`, update the rendered findings table, run
    `--validate-findings`, and commit a ledger-only lifecycle checkpoint:

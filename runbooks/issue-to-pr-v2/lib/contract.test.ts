@@ -22,6 +22,8 @@ import {
   LEGACY_EXECUTION_MODE_HINTS,
   MAX_BUILDER_ATTEMPTS,
   NEW_FILE_PATCH_EXCEPTION_PREFIX,
+  ORCHESTRATOR_INLINE_ATTEMPT_KEYS,
+  RUNBOOK_VERSION,
   STAGE_3_BATCH_ID,
   TERMINAL_BATCH_STATUSES,
 } from "./contract";
@@ -68,7 +70,7 @@ describe("contract: batch keys", () => {
     );
   });
 
-  test("LEDGER_BATCH_KEYS extends BATCH_KEYS with the 5 runtime lifecycle fields", () => {
+  test("LEDGER_BATCH_KEYS extends BATCH_KEYS with the 6 runtime lifecycle fields", () => {
     const lifecycleOnly = [...LEDGER_BATCH_KEYS].filter(
       (key) => !BATCH_KEYS.has(key),
     );
@@ -77,11 +79,12 @@ describe("contract: batch keys", () => {
         "status",
         "builder_commits",
         "builder_attempts",
+        "orchestrator_inline_attempts",
         "iterations",
         "final_verdict",
       ]),
     );
-    expect(LEDGER_BATCH_KEYS.size).toBe(BATCH_KEYS.size + 5);
+    expect(LEDGER_BATCH_KEYS.size).toBe(BATCH_KEYS.size + 6);
   });
 });
 
@@ -131,6 +134,39 @@ describe("contract: builder attempt fields", () => {
 
   test("MAX_BUILDER_ATTEMPTS is 5 (inner-loop iteration cap)", () => {
     expect(MAX_BUILDER_ATTEMPTS).toBe(5);
+  });
+});
+
+describe("contract: orchestrator inline attempt fields", () => {
+  test("ORCHESTRATOR_INLINE_ATTEMPT_KEYS enumerates the 3 compact-record fields", () => {
+    expect(ORCHESTRATOR_INLINE_ATTEMPT_KEYS).toEqual(
+      new Set(["commit_sha", "files_touched", "notes"]),
+    );
+  });
+
+  test("ORCHESTRATOR_INLINE_ATTEMPT_KEYS excludes every Builder-only field", () => {
+    // Derive the exclusion list from BUILDER_ATTEMPT_KEYS rather than
+    // hardcoding it, so the guard tracks the real Builder contract: if a new
+    // Builder-only field is ever added and accidentally allowed into the inline
+    // set, this test fails. The three compact fields are the intentional
+    // overlap between the two lanes.
+    const sharedCompactFields = new Set(["commit_sha", "files_touched", "notes"]);
+    const builderOnlyFields = [...BUILDER_ATTEMPT_KEYS].filter(
+      (key) => !sharedCompactFields.has(key),
+    );
+    expect(builderOnlyFields.length).toBeGreaterThan(0);
+    for (const builderOnlyKey of builderOnlyFields) {
+      expect(ORCHESTRATOR_INLINE_ATTEMPT_KEYS.has(builderOnlyKey)).toBe(false);
+    }
+  });
+
+  test("ORCHESTRATOR_INLINE_ATTEMPT_KEYS is exactly the shared compact subset of BUILDER_ATTEMPT_KEYS", () => {
+    // The two lanes deliberately share only commit_sha, files_touched, notes.
+    // Asserting the subset relationship catches a rename of a shared field in
+    // BUILDER_ATTEMPT_KEYS that would silently desynchronize the lanes.
+    for (const inlineKey of ORCHESTRATOR_INLINE_ATTEMPT_KEYS) {
+      expect(BUILDER_ATTEMPT_KEYS.has(inlineKey)).toBe(true);
+    }
   });
 });
 
@@ -242,15 +278,13 @@ describe("contract: file-name special cases", () => {
   });
 });
 
-import { RUNBOOK_VERSION } from "./contract";
-
 describe("contract: U6 runbook version", () => {
-  test("RUNBOOK_VERSION is the literal string '2'", () => {
+  test("RUNBOOK_VERSION is the literal string '3'", () => {
     // The value is intentionally a plain string so future major versions
-    // (3, 4...) stay comparable without semver tooling. A regression
+    // (4, 5...) stay comparable without semver tooling. A regression
     // bumping this silently is a workflow-contract change that requires
     // explicit operator continuation evidence per U6.
-    expect(RUNBOOK_VERSION).toBe("2");
+    expect(RUNBOOK_VERSION).toBe("3");
     expect(typeof RUNBOOK_VERSION).toBe("string");
   });
 });

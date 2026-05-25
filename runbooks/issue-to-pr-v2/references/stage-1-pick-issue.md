@@ -87,10 +87,10 @@ ledger creation, before branch preflight). See also:
    - Re-run guard: if `status == shipped`, ask the user re-run or abandon.
    - First-run: copy from
      `~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md` (U6
-     template; declares `runbook_version: "2"`).
+     template; declares `runbook_version: "3"`).
    Populate frontmatter: `issue_number`, `issue_title`, `issue_url`,
    `target_repo`, `started_at` (ISO 8601 with timezone), `status: in-progress`,
-   `runbook_version: "2"`, `ac_source`,
+   `runbook_version: "3"`, `ac_source`,
    `ac_confirmation_status: confirmed`, `ac_confirmed_at`,
    `batch_contract_confirmation_status: pending`,
    `batch_contract_confirmed_at: null`, `ship_mode: standard`,

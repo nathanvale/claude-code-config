@@ -10,7 +10,7 @@ conversation memory.
 **Ledger:** `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`
 in the target repo. Template at
 `~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.
-Frontmatter declares `runbook_version: "2"`.
+Frontmatter declares `runbook_version: "3"`.
 
 The public host-neutral control plane lives at
 `skills/issue-to-pr/SKILL.md`. This file remains the installed v2
@@ -262,7 +262,7 @@ reference, then walk the steps.
   `confirmation_state.digests: "pending"`, and `route_id: "plan"`.
 - **Action summary:** Read the issue, check blockers, branch
   preflight, extract + confirm AC, create ledger with
-  `runbook_version: "2"`, write confirmed AC list, commit.
+  `runbook_version: "3"`, write confirmed AC list, commit.
 - **Exit condition:** Ledger exists; AC list confirmed and committed;
   feature branch in place; tree clean. Next turn's
   `cli.ts state --json` reports `route_id: "plan"`.

@@ -67,8 +67,9 @@ The role language is executable contract language:
 - Builder implements exactly one batch attempt under the confirmed ledger
   contract, or fail-stops if that contract is unsafe or stale after reading
   the files. An Orchestrator-inline `change_first` attempt honours the same
-  `batch.files` authority boundary as Builder and is recorded in its own
-  audit lane on the ledger, separate from Builder attempt evidence.
+  `batch.files` authority boundary as Builder and is recorded in the
+  `orchestrator_inline_attempts` audit lane on the ledger, separate from
+  Builder attempt evidence.
 - Validator personas are read-only reviewers. They do not fix, choose modes, or
   re-rank severity.
 
@@ -86,8 +87,8 @@ behavioural / public-contract / governance surface, broad discovery,
 uncertainty, heavy Orchestrator context load, or the repeated-inline
 threshold). Bounded inline-eligible `change_first` attempts run
 Orchestrator-inline under the same `batch.files` authority boundary and
-record their evidence in the Orchestrator-inline audit lane on the ledger,
-separate from Builder attempt evidence; they do not use this dispatch
+record their evidence in the `orchestrator_inline_attempts` audit lane on the
+ledger, separate from Builder attempt evidence; they do not use this dispatch
 contract.
 
 Stage 4 dispatches Builder as a fresh sub-agent per Builder attempt. The
@@ -223,7 +224,7 @@ The envelope includes `attempt_type`, optional target finding signature,
 missing `suggested_validator_focus` is malformed. Status owns workflow
 transition; `route_hint` is only next-owner guidance. The Builder return
 envelope has no inline-only fields; Orchestrator-inline attempt evidence is
-recorded in the separate inline audit lane.
+recorded in `orchestrator_inline_attempts`.
 
 Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger
@@ -233,6 +234,14 @@ Persisted `blockers` and `probe_results` are compact string summaries, not raw
 envelope object arrays. Rich evidence such as implementation steps, tests run,
 assumptions, risks, deferred items, and suggested Validator focus is passed to
 Validators or summarized in Notes rather than persisted wholesale.
+Committed Orchestrator-inline `change_first` attempts append one compact
+ledger `orchestrator_inline_attempts` record with exactly `commit_sha`,
+`files_touched`, and `notes`. Inline attempt records are committed-only: if a
+dispatch trigger appears before the inline implementation commit, append no
+inline row and route the work to Builder dispatch. Inline rows never include
+Builder-only fields such as `attempt_type`, `status`, `route_hint`,
+`blockers`, or `probe_results`, and inline commits are never copied into
+`builder_commits` or `builder_attempts`.
 
 On a well-formed `fail-stop-preflight`, do not dispatch Validators. Append the
 blockers, probe results, and route hint to Notes, set the current batch
@@ -352,8 +361,8 @@ routing remains mandatory even when `--confirmation-state` has already reported
 the stale state. `batch_contract_digest` covers only immutable batch contract
 fields: id, name, goal, files, depends_on, supersedes, execution_mode,
 acceptance_tests, ac_mapping, and rationale. It does not cover mutable
-lifecycle fields such as status, builder_commits, iterations, or
-builder_attempts, or final_verdict.
+lifecycle fields such as status, builder_commits, iterations,
+builder_attempts, orchestrator_inline_attempts, or final_verdict.
 Compute the three current digests with:
 
 - `bun ~/.claude/runbooks/issue-to-pr/decompose.ts --plan-digest <plan-path>`
@@ -758,10 +767,10 @@ immediately before the next implementation attempt.
 6. On inner-loop success: set `status: converged`, preserve path-specific
    attempt evidence (Builder commit refs in `builder_commits`, compact Builder
    envelope records in `builder_attempts`, and Orchestrator-inline evidence in
-   its separate audit lane), set `iterations` to the number of well-formed
-   implementation attempts for that batch (committed Builder attempts,
-   Builder-authored fail-stops, and committed Orchestrator-inline attempts,
-   excluding Validator persona waves), and set
+   `orchestrator_inline_attempts`), set `iterations` to the number of
+   well-formed implementation attempts for that batch (committed Builder
+   attempts, Builder-authored fail-stops, and committed Orchestrator-inline
+   attempts, excluding Validator persona waves), and set
    `final_verdict: converged`.
    Auto-close batch P2/P3 findings as `deferred-P2` / `deferred-P3`, update
    the rendered findings table, run `--validate-findings`, and commit a

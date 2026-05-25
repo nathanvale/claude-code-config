@@ -349,7 +349,7 @@ function ledgerPendingAc(): string {
       status: "in-progress",
       ac_confirmation_status: "pending",
       batch_contract_confirmation_status: "pending",
-      runbook_version: '"2"',
+      runbook_version: '"3"',
     },
   });
 }
@@ -362,7 +362,7 @@ function ledgerBlockedFrontmatter(): string {
       blocked_reason: "host-builder-tools-unavailable",
       ac_confirmation_status: "confirmed",
       batch_contract_confirmation_status: "confirmed",
-      runbook_version: '"2"',
+      runbook_version: '"3"',
     },
   });
 }

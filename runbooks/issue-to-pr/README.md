@@ -110,8 +110,8 @@ public-contract / governance surface, broad discovery, uncertainty, heavy
 Orchestrator context load, or the repeated-inline threshold), the attempt
 must dispatch Builder. Inline
 attempts honour the same `batch.files` authority boundary as Builder and are
-recorded as Orchestrator-inline evidence in their own audit lane on the
-ledger, separate from Builder attempt evidence. The full always-on Validator
+recorded in the `orchestrator_inline_attempts` audit lane on the ledger,
+separate from Builder attempt evidence. The full always-on Validator
 wave runs on every committed implementation attempt, regardless of path.
 
 The shared Builder dispatch contract is host-neutral: hosts must provide an
@@ -416,8 +416,8 @@ Three sections plus frontmatter:
    AC list. The source of truth for stage 2 and stage 3.
 3. **`## Batches`** - one fenced YAML block listing every batch (id, name,
    goal, files, depends_on, execution_mode, acceptance_tests, ac_mapping,
-   rationale, status, builder_commits, builder_attempts, iterations,
-   final_verdict).
+   rationale, status, builder_commits, builder_attempts,
+   orchestrator_inline_attempts, iterations, final_verdict).
    `execution_mode` is one of `tdd`, `proof_first`, or `change_first`.
    `builder_commits` entries must be reachable git commit refs.
    `builder_attempts` entries are compact persisted records with
@@ -427,6 +427,17 @@ Three sections plus frontmatter:
    implementation steps, tests run, assumptions, risks, deferred items, and
    suggested Validator focus is passed to Validators or summarized in Notes
    rather than copied into `builder_attempts`.
+   `orchestrator_inline_attempts` entries are compact persisted records for
+   committed Orchestrator-inline `change_first` attempts with exactly
+   `commit_sha`, `files_touched`, and `notes`. They are initialized to `[]`
+   for current batch rows, never include Builder-only fields such as
+   `attempt_type`, `status`, `route_hint`, `blockers`, or `probe_results`,
+   and are not copied into `builder_commits` or `builder_attempts`. Inline
+   records are committed-only evidence: if a dispatch trigger appears before
+   the inline implementation commit, append no inline row and route to Builder
+   dispatch instead. `iterations` counts Builder attempts plus committed
+   inline attempts; Builder infrastructure failures remain outside both
+   attempt lanes and outside the iteration cap.
 4. **`## Findings data`** - one fenced YAML block listing every finding with
    strict fields: id, batch_id, signature, persona, severity, status, summary,
    and resolution. Finding ids must be unique. `batch_id` must be `stage-3`,

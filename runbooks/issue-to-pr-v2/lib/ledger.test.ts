@@ -601,7 +601,7 @@ describe("readLedgerSnapshot: U6 runbook_version", () => {
   });
 
   test("string comparison only — no semver / numeric coercion", () => {
-    // "2.0" must NOT equal "2"; the contract is exact string equality.
+    // Version strings must match exactly; no semver coercion is allowed.
     const ledgerPath = writeLedgerWithFrontmatter([
       'runbook_version: "2.0"',
     ]);
@@ -672,10 +672,10 @@ describe("readLedgerSnapshot: runbook_version_skew continuation evidence", () =>
   });
 
   test("evidence with mismatched runtime_version field is rejected", () => {
-    // Evidence row recorded under v3 runtime is not honored by v2 runtime.
+    // Evidence row recorded under a future runtime is not honored here.
     const ledgerPath = writeLedgerWithFrontmatter(
       [],
-      completeEvidenceBlock({ runtime_version: "3" }),
+      completeEvidenceBlock({ runtime_version: "4" }),
     );
     const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
     expect(snapshot.runbook_version_skew).toBe("missing");
@@ -727,7 +727,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       '  ledger_version: "1"',
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan @ 2026-05-22T19:00"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -739,7 +739,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
     const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
     expect(evidence).toEqual({
       ledger_version: "1",
-      runtime_version: "2",
+      runtime_version: RUNBOOK_VERSION,
       operator_decision: "Nathan @ 2026-05-22T19:00",
       timestamp: "2026-05-22T19:00:00+10:00",
       route_context: "batch-loop",
@@ -754,7 +754,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan @ 2026-05-22T19:00"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -765,13 +765,13 @@ describe("parseRunbookVersionContinuationEvidence", () => {
     ]);
     const evidence = parseRunbookVersionContinuationEvidence(ledgerPath);
     expect(evidence?.ledger_version).toBe(null);
-    expect(evidence?.runtime_version).toBe("2");
+    expect(evidence?.runtime_version).toBe(RUNBOOK_VERSION);
   });
 
   test("returns null when any of the seven required fields is missing", () => {
     const required = [
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -798,7 +798,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       "  operator_decision: ",
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -818,7 +818,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -836,7 +836,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -855,8 +855,8 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
-      '  runtime_version: "3"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
+      '  runtime_version: "4"',
       '  operator_decision: "Nathan"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -873,7 +873,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "<!-- runbook-version-skew-continuation -->",
       "```yaml",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       "```",
       "",
     ]);
@@ -886,7 +886,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "First operator"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -898,7 +898,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Stale operator"',
       '  timestamp: "2026-05-22T20:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -924,7 +924,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Hostile"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -953,7 +953,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
         "```yaml",
         "runbook_version_skew_continuation:",
         "  ledger_version: null",
-        '  runtime_version: "2"',
+        `  runtime_version: "${RUNBOOK_VERSION}"`,
         '  operator_decision: "Hostile"',
         '  timestamp: "2026-05-22T19:00:00+10:00"',
         '  route_context: "batch-loop"',
@@ -975,7 +975,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       `  operator_decision: "before\x00after"`,
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -997,7 +997,12 @@ describe("readLedgerSnapshot: U6 runbook_version hardening", () => {
       writeLedgerWithFrontmatter([
         `runbook_version: "${paddedVersion}"`,
       ]);
-    for (const padded of [" 2", "2​", "﻿2﻿", " 2 "]) {
+    for (const padded of [
+      ` ${RUNBOOK_VERSION}`,
+      `${RUNBOOK_VERSION}​`,
+      `﻿${RUNBOOK_VERSION}﻿`,
+      ` ${RUNBOOK_VERSION} `,
+    ]) {
       const path = writer(padded);
       const snapshot = withFailMode("throw", () => readLedgerSnapshot(path));
       expect(snapshot.runbook_version_skew).toBe("matched");
@@ -1006,7 +1011,7 @@ describe("readLedgerSnapshot: U6 runbook_version hardening", () => {
 
   test("F-U6-SEC-005: runbook_version containing a control byte is rejected (treated as missing)", () => {
     const path = writeLedgerWithFrontmatter([
-      `runbook_version: "2\x00x"`,
+      `runbook_version: "${RUNBOOK_VERSION}\x00x"`,
     ]);
     const snapshot = withFailMode("throw", () => readLedgerSnapshot(path));
     expect(snapshot.runbook_version).toBe(null);
@@ -1034,7 +1039,7 @@ describe("readLedgerSnapshot: U6 runbook_version hardening", () => {
       // whole value.
       const char = String.fromCharCode(codePoint);
       const path = writeLedgerWithFrontmatter([
-        `runbook_version: "${char}2"`,
+        `runbook_version: "${char}${RUNBOOK_VERSION}"`,
       ]);
       const snapshot = withFailMode("throw", () =>
         readLedgerSnapshot(path),
@@ -1073,7 +1078,7 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       "  operator_decision: ",
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -1085,7 +1090,7 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan @ 2026-05-22T19:00"',
       '  timestamp: "2026-05-22T20:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -1104,7 +1109,7 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -1131,7 +1136,7 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       "  ledger_version: null",
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan @ 2026-05-22T19:00"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',

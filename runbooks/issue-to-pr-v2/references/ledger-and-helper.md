@@ -106,8 +106,8 @@ digest is recomputed over the confirmed batch contract: `id`, `name`, `goal`,
 `files`, `depends_on`, optional `supersedes`, `execution_mode`,
 `acceptance_tests`, `ac_mapping`, and optional `rationale`. Runtime
 lifecycle fields (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `final_verdict`) are mutated by Stage 4 and are **not**
-part of the digest.
+`builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`) are
+mutated by Stage 4 and are **not** part of the digest.
 
 ## Ledger schema overview (v1 README L348-414)
 
@@ -181,8 +181,9 @@ Each batch entry must include:
 Stage 4 mutates batch entries at runtime to add:
 
 - `status`: `pending | in-progress | converged | accepted-risk | blocked`.
-- `iterations`: number of well-formed Builder envelopes (committed or
-  Builder-authored fail-stop) seen so far.
+- `iterations`: number of well-formed Builder attempts plus committed
+  Orchestrator-inline attempts seen so far. Builder infrastructure failures
+  are outside both attempt lanes and outside the iteration cap.
 - `builder_commits`: list of commit SHAs from successful Builder attempts on
   this batch.
 - `builder_attempts`: compact records, one per well-formed Builder envelope,
@@ -193,6 +194,23 @@ Stage 4 mutates batch entries at runtime to add:
   (implementation steps, tests run, assumptions, risks, deferred, suggested
   Validator focus) is **not** persisted here; it lives in Notes or is passed to
   Validators.
+- `orchestrator_inline_attempts`: compact records, one per committed
+  Orchestrator-inline `change_first` attempt, initialized to `[]` on current
+  batch rows. Each record contains exactly `commit_sha`, `files_touched`, and
+  `notes`; Builder-only fields such as `attempt_type`, `status`,
+  `route_hint`, `blockers`, and `probe_results` are not allowed. Inline rows
+  are committed-only evidence: if a dispatch trigger appears before the inline
+  implementation commit, append no inline row and route the work to Builder
+  dispatch. Inline commits are found through this lane, not through
+  `builder_commits`. Every batch row a `"3"` runtime emits carries this field,
+  so a field-lacking row originates from a pre-`"3"` runtime. The
+  runbook-version skew gate (not per-batch tolerance of the absent field) is
+  what protects such legacy ledgers from being silently reinterpreted under
+  the inline-lane meaning: it keys on frontmatter `runbook_version`, so a
+  ledger still declaring an old version classifies as `missing` or
+  `mismatched` and only proceeds once an operator supplies continuation
+  evidence. Migrating historical ledgers to the inline-lane meaning is out of
+  scope; the gate keeps the old and new meanings from mixing.
 - `final_verdict`: `converged | accepted-risk | blocked-for-user`.
 
 ### `## Findings data` field requirements
@@ -271,7 +289,7 @@ batch. Each entry includes `id`, `name`, `goal`, `files`, `depends_on`,
 optional `supersedes`, `execution_mode` (`tdd | proof_first | change_first`),
 `acceptance_tests`, `ac_mapping`, optional `rationale`, plus run-time fields
 populated by Stage 4 (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `final_verdict`).
+`builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`).
 
 The acceptance criteria list and batches block jointly drive
 `decompose.ts --validate-ac-coverage`: every AC index must appear in at least
@@ -385,7 +403,7 @@ four states:
 | --- | --- |
 | `matched` | Frontmatter `runbook_version` equals `RUNBOOK_VERSION`. |
 | `missing` | Frontmatter has no `runbook_version` field (legacy v1 ledger). |
-| `mismatched` | Frontmatter has a value but it does NOT equal `RUNBOOK_VERSION` (legacy v0, future v3, or a typo). |
+| `mismatched` | Frontmatter has a value but it does NOT equal `RUNBOOK_VERSION` (a prior contract such as `"2"` authored before the inline-attempt lane, legacy v0, future v4, or a typo). Since the live version is `"3"`, every ledger created before that bump classifies here. |
 | `continuation-evidence-present` | Skew detected (missing or mismatched) BUT a complete continuation evidence row exists in `## Notes` for the current runtime version. |
 
 When the skew is `missing` or `mismatched` and no continuation evidence

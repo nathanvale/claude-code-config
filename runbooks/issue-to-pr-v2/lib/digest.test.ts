@@ -66,7 +66,6 @@ describe("contractDigest", () => {
 
   test("AC3: digest does NOT change when lifecycle fields change", () => {
     // The Batch type only declares the 10 contract fields. Lifecycle fields
-    // (status, iterations, builder_commits, builder_attempts, final_verdict)
     // are added to the row in lib/ledger.ts; contractDigest must never see
     // them. Use a structural cast to simulate a future regression where a
     // lifecycle field leaks into the digest input.
@@ -77,6 +76,7 @@ describe("contractDigest", () => {
       iterations: 3,
       builder_commits: ["abc123"],
       builder_attempts: [{ status: "committed" }],
+      orchestrator_inline_attempts: [{ commit_sha: "def456" }],
       final_verdict: "converged",
     } as unknown as Batch;
     expect(contractDigest([withLifecycle])).toBe(contractDigest([base]));

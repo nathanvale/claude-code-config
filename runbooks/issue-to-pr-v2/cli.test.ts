@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BufferWriter } from "./lib/cli-envelope";
+import { RUNBOOK_VERSION } from "./lib/contract";
 import { ROUTE_IDS } from "./lib/route";
 import { run } from "./cli";
 
@@ -95,7 +96,7 @@ function minimalConfirmedLedger(extra: { final_reviewed_at?: string; pr_url?: st
     "ac_confirmation_status: confirmed",
     "batch_contract_confirmation_status: confirmed",
     "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
-    'runbook_version: "2"',
+    'runbook_version: "3"',
   ];
   if (extra.final_reviewed_at) {
     frontmatterLines.push(`final_reviewed_at: ${extra.final_reviewed_at}`);
@@ -535,7 +536,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
         "ac_confirmation_status: stale",
         "batch_contract_confirmation_status: confirmed",
         "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
-        'runbook_version: "2"',
+        'runbook_version: "3"',
         "---",
         "",
         "# Issue 1",
@@ -567,7 +568,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
         "ac_confirmation_status: confirmed",
         "batch_contract_confirmation_status: stale",
         "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
-        'runbook_version: "2"',
+        'runbook_version: "3"',
         "---",
         "",
         "# Issue 1",
@@ -598,7 +599,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
         "status: in-progress",
         "ac_confirmation_status: confirmed",
         "batch_contract_confirmation_status: pending",
-        'runbook_version: "2"',
+        'runbook_version: "3"',
         "---",
         "",
         "# Issue 1",
@@ -1352,14 +1353,14 @@ describe("U6: runbook_version surfaced on state command", () => {
   }
 
   test("matched skew surfaces runbook_version + runbook_version_skew on state", () => {
-    const path = ledger({ runbookVersion: "2" });
+    const path = ledger({ runbookVersion: RUNBOOK_VERSION });
     const { envelope } = invoke(["state", path, "--json"]);
     const data = envelope.data as {
       runbook_version: string | null;
       runbook_version_skew: string | null;
       version_skew: string;
     };
-    expect(data.runbook_version).toBe("2");
+    expect(data.runbook_version).toBe(RUNBOOK_VERSION);
     expect(data.runbook_version_skew).toBe("matched");
     expect(data.version_skew).toBe("matched");
   });
@@ -1414,7 +1415,7 @@ describe("U6: runbook_version surfaced on state command", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       '  ledger_version: "1"',
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan @ 2026-05-22T19:00"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -1447,7 +1448,7 @@ describe("U6: runbook_version surfaced on state command", () => {
       "```yaml",
       "runbook_version_skew_continuation:",
       '  ledger_version: "1"',
-      '  runtime_version: "2"',
+      `  runtime_version: "${RUNBOOK_VERSION}"`,
       '  operator_decision: "Nathan"',
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
@@ -1477,7 +1478,7 @@ describe("U6: runbook_version surfaced on diagnose command", () => {
         "ac_confirmation_status: confirmed",
         "batch_contract_confirmation_status: confirmed",
         "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
-        'runbook_version: "2"',
+        'runbook_version: "3"',
         "---",
         "",
         "# Issue 1",
@@ -1495,7 +1496,7 @@ describe("U6: runbook_version surfaced on diagnose command", () => {
       installed_artifact_presence: { all_present: boolean };
       blocking_gates: unknown[];
     };
-    expect(data.runbook_version).toBe("2");
+    expect(data.runbook_version).toBe(RUNBOOK_VERSION);
     expect(data.runbook_version_skew).toBe("matched");
     expect(data.installed_artifact_presence.all_present).toBe(true);
     expect(data.blocking_gates).toEqual([]);
@@ -1542,7 +1543,7 @@ describe("U6: U4 envelope shape preserved (additive only)", () => {
       [
         "---",
         "issue_number: 1",
-        'runbook_version: "2"',
+        'runbook_version: "3"',
         "---",
         "",
         "# Issue 1",
@@ -1606,7 +1607,7 @@ describe("U6: verbatim runbook_version + skew determinism", () => {
         "```yaml",
         "runbook_version_skew_continuation:",
         '  ledger_version: "1"',
-        '  runtime_version: "2"',
+        `  runtime_version: "${RUNBOOK_VERSION}"`,
         '  operator_decision: "Nathan @ 2026-05-22T19:00"',
         '  timestamp: "2026-05-22T19:00:00+10:00"',
         '  route_context: "batch-loop"',
@@ -1655,7 +1656,7 @@ describe("U6: verbatim runbook_version + skew determinism", () => {
         "```yaml",
         "runbook_version_skew_continuation:",
         '  ledger_version: "1"',
-        '  runtime_version: "2"',
+        `  runtime_version: "${RUNBOOK_VERSION}"`,
         '  operator_decision: "Hostile"',
         '  timestamp: "2026-05-22T19:00:00+10:00"',
         '  route_context: "batch-loop"',

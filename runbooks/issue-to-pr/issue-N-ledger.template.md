@@ -46,9 +46,20 @@ envelopes. Each attempt row contains `attempt_type`, `status`, `commit_sha`,
 Persisted `blockers` and `probe_results` are compact string summaries, not raw
 Builder envelope object arrays. Rich Builder evidence stays transient for
 Validator handoff or summarized in Notes.
+`orchestrator_inline_attempts` is the compact persisted audit trail for
+committed Orchestrator-inline `change_first` attempts. It is initialized to
+`[]` on each current batch row. Each inline attempt row contains exactly
+`commit_sha`, `files_touched`, and `notes`; it never carries Builder-only
+fields such as `attempt_type`, `status`, `route_hint`, `blockers`, or
+`probe_results`. Inline rows are committed-only evidence: if a dispatch trigger
+appears before the inline implementation commit, append no inline row and
+route the work to Builder dispatch instead. Inline commits are found through
+this lane, not through `builder_commits`.
 Well-formed Builder fail-stops count as Builder attempts and increment
-`iterations`; fail-stop attempts use `commit_sha: null` and do not append to
-`builder_commits`.
+`iterations`; committed Orchestrator-inline attempts also increment
+`iterations`. Builder infrastructure failures stay outside both attempt lanes
+and outside the iteration cap. Fail-stop attempts use `commit_sha: null` and
+do not append to `builder_commits`.
 Host readiness failures use frontmatter `blocked_reason:
 host-builder-tools-unavailable` before any Stage 4 implementation attempt,
 including bounded Orchestrator-inline work. They leave every batch status
@@ -56,8 +67,9 @@ unchanged, append no implementation attempt evidence, do not increment
 `iterations`, and dispatch no Validators. Post-dispatch host/schema/envelope
 failures use `blocked_reason: builder-infrastructure-failure`, leave the
 current batch `in-progress`, and record reachable commit refs plus dirty/staged
-path summaries in Notes without adding a `builder_attempts` row, incrementing
-`iterations`, or dispatching Validators.
+path summaries in Notes without adding a `builder_attempts` or
+`orchestrator_inline_attempts` row, incrementing `iterations`, or dispatching
+Validators.
 
 ```yaml
 batches: []
