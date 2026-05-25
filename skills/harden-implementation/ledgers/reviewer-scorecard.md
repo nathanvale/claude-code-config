@@ -51,22 +51,33 @@ the same `change_type` — not merely an angle that confirmed without new findin
 | 2026-05-25-builder-dispatch-u6 | behavioral-code | data-integrity | 1 | 3 | 0 | 2 | 0 |
 | 2026-05-25-builder-dispatch-u6 | behavioral-code | reliability | 1 | 6 | 0 | 0 | 0 |
 | 2026-05-25-builder-dispatch-u6 | behavioral-code | scope-guard | 1 | 1 | 0 | 0 | 0 |
+| 2026-05-25-builder-dispatch-u7 | mixed | adversarial | 3 | 6 | 2 | 0 | 1 |
+| 2026-05-25-builder-dispatch-u7 | mixed | correctness | 3 | 3 | 1 | 2 | 1 |
+| 2026-05-25-builder-dispatch-u7 | mixed | acceptance-criteria | 3 | 0 | 0 | 0 | 3 |
+| 2026-05-25-builder-dispatch-u7 | mixed | maintainability | 3 | 17 | 4 | 1 | 1 |
+| 2026-05-25-builder-dispatch-u7 | mixed | testing | 3 | 6 | 0 | 2 | 2 |
+| 2026-05-25-builder-dispatch-u7 | mixed | api-contract | 2 | 2 | 0 | 1 | 1 |
+| 2026-05-25-builder-dispatch-u7 | mixed | scope-guard | 1 | 1 | 0 | 0 | 0 |
+| 2026-05-25-builder-dispatch-u7 | mixed | simplicity | 1 | 5 | 0 | 2 | 0 |
 
 ## Aggregate scorecard (regenerated each run)
 
-**Runs recorded:** 5 &nbsp;|&nbsp; **change_types seen:** docs/contract (3), behavioral-code (2)
+**Runs recorded:** 6 &nbsp;|&nbsp; **change_types seen:** docs/contract (3), behavioral-code (2), mixed (1)
 
-> 3 docs/contract runs and 2 behavioral-code runs now exist. Verdicts are
-> firmer than at n=1 but still below the ~5-run threshold, so treat the
-> scorecard as advisory and keep casting the wide default net. Where a verdict
-> flipped on new evidence, the change is noted.
+> 3 docs/contract runs, 2 behavioral-code runs, and 1 mixed run now exist.
+> Verdicts are firmer than at n=1 for docs/contract and behavioral-code but
+> still below the ~5-run threshold, so treat the scorecard as advisory and keep
+> casting the wide default net. Where a verdict flipped on new evidence, the
+> change is noted.
 >
-> The behavioral-code aggregate is NOT folded into the docs/contract numbers:
-> the two change types break differently (behavioral-code has runtime logic to
-> exercise; docs/contract does not), so cross-type aggregation would corrupt
-> both. At n=2 for behavioral-code, the multi-run drop bar is structurally
-> meetable for the first time. Any drop-candidate call still requires
-> `new_breaks: 0` AND nonzero `merged_into` across BOTH runs of that change_type.
+> The behavioral-code aggregate is NOT folded into the docs/contract numbers,
+> and the mixed aggregate is NOT folded into either: the three change types
+> break differently (behavioral-code has runtime logic to exercise;
+> docs/contract does not; mixed has both), so cross-type aggregation would
+> corrupt all three. At n=2 for behavioral-code, the multi-run drop bar is
+> structurally meetable; at n=1 for mixed, NOTHING qualifies as a drop
+> candidate yet. Any drop-candidate call still requires `new_breaks: 0` AND
+> nonzero `merged_into` across MULTIPLE runs of that change_type.
 
 ### docs/contract (n=3, advisory)
 
@@ -173,3 +184,48 @@ caught by maintainability across two runs of behavioral-code is the highest
 signal in the entire scorecard: the loop caught its own mistake. Keep the wide
 default net for the next behavioral-code run; revisit verdicts once ~5
 behavioral-code runs accumulate.
+
+### mixed (n=1, advisory)
+
+Aggregated across `2026-05-25-builder-dispatch-u7` only. U7 spanned both
+docs/contract surfaces (SKILL.md telegraph rewrite, regression-matrix rows,
+ledger-and-helper turn protocol, README, ledger template) AND behavioral code
+(new `checkLedgerLifecycleFieldDrift` + section-missing finding logic), so it
+folds into its own bucket. At n=1, the multi-run drop bar is structurally NOT
+meetable; every verdict is provisional. `avg new_breaks` is `total /
+rounds_dispatched` for the single run. `merged_into rate` = `merged_into /
+(new_breaks + merged_into)` for the single run.
+
+| angle | runs | avg new_breaks | regressions_caught | merged_into rate | verdict |
+|-------|------|----------------|--------------------|--------------------|---------|
+| maintainability | 1 | 17.0 (17/1) | 4 | 6% (1/18) | **earned keep (provisional, 1 run)** (highest regressions_caught tally in any single run on the entire scorecard: F38 + F39 fixed regressions plus F41 + F42 deferred regressions; 13 R1 breaks spanning F6+F7 fixed plus F9-F15 + F27-F30 deferred clusters; merged only into F1 once) |
+| adversarial | 1 | 6.0 (6/1) | 2 | 0% (0/6) | **earned keep (provisional, 1 run)** (first raiser of F1 P1 with working repro, sole on F4 + F26, first on F5 with simplicity merged; R2 first raiser of F37 regression and sole on F40 deferred regression; 0 redundancy across the whole run) |
+| testing | 1 | 6.0 (6/1) | 0 | 25% (2/8) | **earned keep (provisional, 1 run)** (sole raiser of F2 + F3 P1 orchestrator/anchor-integrity gaps in R1; 4 sole-raised deferred items F19-F21 + F23; merged into F1 and F22; returned `findings: []` in R2 and R3 protecting convergence honesty) |
+| simplicity | 1 | 5.0 (5/1) | 0 | 29% (2/7) | **earned keep (provisional, 1 run)** (R1-only dispatch raised 5 sole P3 deferred items F31-F35; merged into F5 and F9 — but new_breaks is well above 0, so not a drop candidate; dropped after R1 by design because every finding was deferred-P3) |
+| correctness | 1 | 3.0 (3/1) | 1 | 40% (2/5) | **earned keep (provisional, 1 run)** (R1: F22 first-raise + F24 sole deferred; R2: F36 sole regression caught (off-by-one cite); merged into F1 R1 and F37 R2; the 40% merge rate is corroboration, not redundancy — new_breaks is 3, not 0) |
+| api-contract | 1 | 1.0 (2/2) | 0 | 33% (1/3) | **confirmer (provisional, 1 run)** (R1: F16 + F25 deferred-P3 sole-raised + merged into F1; R2: `findings: []` confirming the lifecycle-field surface still held; dropped before R3 after R2 returned empty; new_breaks above 0 keeps it off the drop list) |
+| scope-guard | 1 | 1.0 (1/1) | 0 | 0% (0/1) | **earned keep (provisional, 1 run)** (R1-only dispatch raised the F8 ledger-template-outside-u7-file-list GATE — out-of-scope but actionable per metric contract; recorded as a legitimate U4-era backlog correction; one independent break, no merges) |
+| acceptance-criteria | 1 | 0.0 (0/3) | 0 | 0% (0/0) | **confirmer (provisional, 1 run)** (returned `findings: []` all 3 rounds with file:symbol evidence for R1/R2/R5/R8 each round; new_breaks:0 AND merged_into:0 — pure convergence-honesty confirmer; explicitly NOT a drop candidate because merged_into is also 0) |
+
+**Read after 1 mixed run:** U7 is the highest regression-catch run on the
+scorecard. Maintainability caught FOUR loop-introduced regressions (F38
+vocabulary half-rename, F39 fixture duplication, F41 narrow regex, F42 numeric
+anchor brittleness) — more than any single-run total in any prior run (the
+previous high was 2, by adversarial in u4 and again in u7 itself). Adversarial
+caught two regressions (F37 anchor-regex miss, F40 heading-level not pinned).
+The combined six regressions caught in a single run signal the loop is most
+valuable on `mixed` change types, where doc edits and code edits can each
+break each other in non-obvious ways.
+
+No angle qualifies as a drop candidate at n=1: the multi-run bar is
+structurally unmeetable. acceptance-criteria looks like a confirmer-only on
+this single run, but the docs/contract aggregate (3 runs) and behavioral-code
+aggregate (2 runs) both treat it as either confirmer-or-earned-keep — so
+nothing here changes the broader read. Keep the wide default net for the next
+mixed run; revisit verdicts once ~5 mixed runs accumulate.
+
+Cross-type observation: maintainability has now caught regressions in 2 of 6
+runs on the scorecard (u6 F42, u7 F38+F39+F41+F42), the highest
+regressions_caught tally of any angle across the entire scorecard. The signal
+is consistent: maintainability earns its slot whenever the change touches
+duplicated surfaces or shared vocabulary.
