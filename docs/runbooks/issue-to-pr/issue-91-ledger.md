@@ -121,7 +121,7 @@ batches:
       - 2
       - 4
     rationale: "change_first-exception: pure docs change to reference files; behaviour is the documented split, verified by reading"
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
