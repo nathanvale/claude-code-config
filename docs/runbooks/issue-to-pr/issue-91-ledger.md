@@ -3,7 +3,7 @@ issue_number: 91
 issue_title: "Add run-specific Workflow Learnings to the per-issue ledger"
 issue_url: "https://github.com/nathanvale/claude-code-config/issues/91"
 target_repo: "nathanvale/claude-code-config"
-plan_path: null
+plan_path: "docs/plans/2026-05-25-003-feat-ledger-workflow-learnings-section-plan.md"
 started_at: "2026-05-25T01:24:29Z"
 status: "in-progress"
 runbook_version: "2"
@@ -16,7 +16,7 @@ blocked_reason: null
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
-plan_digest: null
+plan_digest: "sha256:3e1d3222ac393f9e6a7181e89ced8dcea8b5a14c7c2b9202a050806443afc505"
 batch_contract_digest: null
 ac_digest: "sha256:44a0cb3a65a607696f9955f8b8f1b20cc804e3ea28c59c737b226e73d27e8f1d"
 ---
