@@ -79,7 +79,10 @@ instead:
 - no substantial Orchestrator context load is required to make the change
   safely;
 - this is not the third consecutive inline-eligible `change_first` attempt
-  in the batch without an explicit user-confirmed exception recorded.
+  in the active batch without an explicit user-confirmed exception recorded
+  (consecutive means consecutive committed inline attempts in this batch with
+  no intervening Builder dispatch; a Builder dispatch in the same batch
+  resets the count).
 
 **`change_first` dispatch triggers** (any one forces Builder dispatch even
 for `change_first`):
@@ -106,7 +109,10 @@ invocation, and findings normalization live in
 [findings-and-validators.md](findings-and-validators.md).
 
 Orchestrator-inline attempts honour the same `batch.files` authority
-boundary as Builder and are recorded in their own audit lane (defined by U4).
+boundary as Builder and are recorded in their own audit lane on the
+ledger, separate from Builder attempt evidence (see
+[ledger-and-helper.md](ledger-and-helper.md) for the inline-attempt
+shape).
 For the Builder Work Packet, authority boundary, Preflight Checklist, and
 return envelope, see [builder-dispatch.md](builder-dispatch.md).
 
@@ -126,11 +132,13 @@ return envelope, see [builder-dispatch.md](builder-dispatch.md).
    list and the `blocked_reason: host-builder-tools-unavailable` outcome
    live in [host-adapters.md](host-adapters.md).
 4. **Lifecycle checkpoint: start batch.** Mark `status: in-progress` and
-   commit a ledger-only lifecycle checkpoint before Builder starts:
-   `chore(issue-{issue-number}): start <batch-id> batch`. This is a
-   stage-visible `batch-loop` turn. It does not count toward `iterations`,
-   and it is outside Builder scope discipline because the orchestrator owns
-   ledger lifecycle state. Stage only the per-issue ledger path and verify
+   commit a ledger-only lifecycle checkpoint before the implementation
+   attempt starts: `chore(issue-{issue-number}): start <batch-id> batch`.
+   This is a stage-visible `batch-loop` turn. It does not count toward
+   `iterations`, and it is outside implementation scope discipline because
+   the orchestrator owns ledger lifecycle state (this applies to both
+   Builder dispatch and Orchestrator-inline implementation paths). Stage
+   only the per-issue ledger path and verify
    the working tree is clean after the commit.
 5. **Run the inner loop** (see Inner loop section below).
 6. **On inner-loop success.** Set `status: converged`, append the Builder

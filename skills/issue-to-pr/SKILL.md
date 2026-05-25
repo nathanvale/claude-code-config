@@ -378,7 +378,9 @@ Stage 4 subroutes:
   work.
 - `implementation-attempt`: run exactly one implementation attempt
   against the confirmed `batch.files` for the active batch. The umbrella
-  has two paths and the dispatch policy above selects between them:
+  has two paths; the dispatch policy above determines which path is
+  legal for the active batch (it does not arbitrate between them on
+  every turn):
   - `implementation-attempt-builder`: mandatory for `tdd`,
     `proof_first`, and any repair; required for `change_first` once a
     dispatch trigger fires. Render the Builder Work Packet and dispatch
@@ -387,7 +389,8 @@ Stage 4 subroutes:
     inline-eligible `change_first` attempts. The Orchestrator edits
     inline within the same authority boundary as Builder (edits only
     confirmed `batch.files`) and records the attempt as
-    Orchestrator-inline evidence in its own audit lane (defined by U4).
+    Orchestrator-inline evidence in its own audit lane on the ledger,
+    separate from Builder attempt evidence.
 - `validator-wave`: hand Validators the committed implementation
   evidence and touched files. Validators own correctness findings; the
   Orchestrator records and normalizes them. The full always-on wave
@@ -487,8 +490,8 @@ Stage 4 uses an implementation/Validator convergence loop:
    authority boundary, but only while inline eligibility holds (see
    the Stage 4 dispatch policy above); as soon as a dispatch trigger
    fires the attempt must dispatch Builder. Inline attempts record
-   their own evidence in the Orchestrator-inline audit lane (defined
-   by U4).
+   their own evidence in the Orchestrator-inline audit lane on the
+   ledger, separate from Builder attempt evidence.
 3. Validators review the committed attempt and own correctness
    findings. The full always-on wave runs regardless of path.
 4. Orchestrator records normalized findings in the ledger.

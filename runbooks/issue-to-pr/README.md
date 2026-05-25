@@ -104,9 +104,9 @@ non-doc or high-risk paths, behavioural / public-contract / governance
 surface, broad discovery, uncertainty, heavy Orchestrator context load, or
 the repeated-inline threshold), the attempt must dispatch Builder. Inline
 attempts honour the same `batch.files` authority boundary as Builder and are
-recorded as Orchestrator-inline evidence in their own audit lane (defined by
-U4). The full always-on Validator wave runs on every committed implementation
-attempt, regardless of path.
+recorded as Orchestrator-inline evidence in their own audit lane on the
+ledger, separate from Builder attempt evidence. The full always-on Validator
+wave runs on every committed implementation attempt, regardless of path.
 
 The shared Builder dispatch contract is host-neutral: hosts must provide an
 isolated Builder dispatch with the required Builder tool set and authority

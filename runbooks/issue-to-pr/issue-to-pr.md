@@ -64,7 +64,7 @@ The role language is executable contract language:
   contract, or fail-stops if that contract is unsafe or stale after reading
   the files. An Orchestrator-inline `change_first` attempt honours the same
   `batch.files` authority boundary as Builder and is recorded in its own
-  audit lane (defined by U4).
+  audit lane on the ledger, separate from Builder attempt evidence.
 - Validator personas are read-only reviewers. They do not fix, choose modes, or
   re-rank severity.
 
@@ -80,8 +80,9 @@ behavioural / public-contract / governance surface, broad discovery,
 uncertainty, heavy Orchestrator context load, or the repeated-inline
 threshold). Bounded inline-eligible `change_first` attempts run
 Orchestrator-inline under the same `batch.files` authority boundary and
-record their evidence in the Orchestrator-inline audit lane (defined by U4);
-they do not use this dispatch contract.
+record their evidence in the Orchestrator-inline audit lane on the ledger,
+separate from Builder attempt evidence; they do not use this dispatch
+contract.
 
 Stage 4 dispatches Builder as a fresh sub-agent per Builder attempt. The
 dispatch is host-neutral: the runbook defines the Work Packet, authority
