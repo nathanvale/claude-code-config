@@ -89,7 +89,7 @@ batches:
       - 1
       - 4
     rationale: "change_first-exception: pure docs/template change; behaviour is verified by U3 (validator + tests)"
-    status: pending
+    status: in-progress
     builder_commits: []
     builder_attempts: []
     iterations: 0
