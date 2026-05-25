@@ -3,10 +3,14 @@ title: "Issue-to-PR Builder sub-agent dispatch (cross-harness)"
 type: requirements
 status: draft
 date: 2026-05-21
+updated: 2026-05-25
 origin:
   - https://github.com/nathanvale/side-quest-engineering/pull/35
   - /Users/nathanvale/Library/Messages/Attachments/45/05/2D9408CF-A331-424D-9B8A-9405701BC92E/builder-agent-comprehensive-guide.md
 related:
+  - https://github.com/nathanvale/claude-code-config/issues/99
+  - https://github.com/nathanvale/claude-code-config/issues/100
+  - https://github.com/nathanvale/claude-code-config/issues/101
   - runbooks/issue-to-pr/README.md
   - runbooks/issue-to-pr/issue-to-pr.md
   - runbooks/issue-to-pr/decompose.ts
@@ -30,13 +34,24 @@ ledger multiple times, the plan multiple times, and several Validator returns.
 Builder work should be self-contained per attempt, not spread across the whole
 run.
 
-The fix is two-part:
+The issue #91 run later exposed a second version of the same boundary problem:
+two `change_first` documentation/template batches were edited inline by the
+Orchestrator but recorded as if Builder evidence existed, while a later `tdd`
+batch was attempted inline before the user caught the contract violation. That
+run showed that Stage 4 needs both a dispatch policy and an honest audit model.
+
+The fix is three-part:
 
 1. Add a Stage 3 **Contract Review** gate so plan/DAG drift is caught before
    candidate batches become ledger law.
-2. Mirror the Validator pattern on the Builder side: dispatch a fresh Builder
-   sub-agent per attempt, accept a structured envelope back, and keep
-   implementation context out of the Orchestrator.
+2. Mirror the Validator pattern on the Builder side for proof-bearing modes:
+   `tdd` and `proof_first` dispatch a fresh Builder sub-agent per attempt,
+   accept a structured envelope back, and keep implementation context out of
+   the Orchestrator.
+3. Keep `change_first` lightweight only when it remains small and obvious:
+   Orchestrator-inline work is allowed for low-risk non-behavioural edits, but
+   it must be recorded in `orchestrator_inline_attempts` and must dispatch
+   Builder when scope, risk, uncertainty, or context load rises.
 
 The runbook is harness-portable. Builder dispatch must work on both Claude
 Code and Codex, the same way Validator dispatch already does. The runbook must
@@ -64,11 +79,13 @@ The v1 Builder is a **bounded batch implementation mechanic**:
 The Builder does not act as Planner, Orchestrator, Contract Reviewer, Validator
 persona, Architect, product owner, or final judge of correctness.
 
-V1 must preserve a compact common-case operator path: dispatch Builder for the
-confirmed batch, receive one committed envelope, validate the commit, run
-Validator personas, and advance. Advanced routing for fail-stops, replacement
-batches, support-role hints, or host/tool problems should surface only when
-those conditions are actually hit.
+V1 must preserve a compact common-case operator path: select the confirmed
+batch, choose the required Stage 4 implementation path from `execution_mode`,
+record either a Builder envelope or an Orchestrator-inline attempt honestly,
+validate the commit, run Validator personas, and advance. Advanced routing for
+fail-stops, replacement batches, support-role hints, host/tool problems, or
+`change_first` dispatch triggers should surface only when those conditions are
+actually hit.
 
 ### V1 scope decision
 
@@ -99,18 +116,46 @@ Builder Preflight owns residual readiness and scoped implementation risk.
 - **Builder attempt**: one Builder sub-agent dispatch that returns a
   well-formed Builder envelope, whether it commits or Builder-authored
   fail-stops. Every Builder attempt appends one compact `builder_attempts`
-  record and increments the batch iteration counter.
+  record. `builder_attempts` must never describe Orchestrator-inline work.
+- **Orchestrator-inline attempt**: one deliberately inline `change_first`
+  implementation attempt by the Orchestrator, recorded in the separate compact
+  `orchestrator_inline_attempts` audit lane. It is not a Builder attempt and
+  does not produce a Builder envelope.
+- **Dispatch-required modes**: `tdd` and `proof_first`. These modes must use an
+  isolated Builder sub-agent because the red/green or proof discipline is part
+  of the authority contract.
+- **Inline-eligible mode**: `change_first`, only while the work remains small,
+  low-risk, non-behavioural, and obvious. Inline eligibility is lost when the
+  dispatch triggers fire.
+- **Dispatch trigger**: a condition that forces `change_first` through Builder
+  dispatch anyway, such as exceeding the inline file-count cap, non-doc or
+  high-risk paths, broad search/local-law archaeology, uncertainty about the
+  edit, heavy Orchestrator context load, or the repeated-inline threshold.
+- **Inline file-count cap**: an Orchestrator-inline `change_first`
+  implementation attempt may touch at most two files. If the expected edit or
+  in-progress diff needs more than two files, inline eligibility is lost and
+  the batch routes through Builder dispatch.
+- **Repeated-inline threshold**: at most two consecutive Orchestrator-inline
+  `change_first` implementation attempts are allowed in Stage 4. A third
+  consecutive inline-eligible `change_first` attempt must route through Builder
+  dispatch unless the user explicitly confirms a one-off inline exception,
+  which the inline attempt note must record.
 - **Host Builder readiness failure**: an Orchestrator-owned block before
   Builder exists because the host cannot provide the required fresh sub-agent
-  capabilities. It is recorded as `host-builder-tools-unavailable`.
+  capabilities. It is recorded as `host-builder-tools-unavailable`. In v1 this
+  gate applies before any Stage 4 implementation attempt, including
+  Orchestrator-inline `change_first`, because any committed attempt can later
+  require Builder-only P0/P1 repair.
 - **Builder infrastructure failure**: a post-dispatch host, tool, permission,
   dispatch, serialization, or schema failure before a well-formed Builder
   envelope exists. Infrastructure failures block the workflow outside the
   batch iteration cap and are not persisted as `builder_attempts`.
-- **Implementation attempt**: the first Builder attempt for a batch, aimed at
-  satisfying the confirmed batch goal.
+- **Implementation attempt**: any first attempt to satisfy the confirmed batch
+  goal, either a Builder implementation attempt or an Orchestrator-inline
+  `change_first` attempt.
 - **Repair attempt**: a later Builder attempt aimed at closing exactly one
-  open P0/P1 finding signature.
+  open P0/P1 finding signature. Repairs are never Orchestrator-inline; the
+  open P0/P1 finding proves the next edit needs Builder isolation.
 - **Mechanic Discipline**: the Builder-specific behaviour rules that keep
   implementation local, reviewable, and non-architectural.
 - **Route hint**: a non-authoritative next-owner hint in fail-stop envelopes.
@@ -148,6 +193,12 @@ P0/P1-gated Validator persona loop already owns that concept.
   only when a term is not yet owned.
 - Enriched Builder return envelope.
 - Compact persisted `builder_attempts` records in the ledger.
+- A separate compact `orchestrator_inline_attempts` audit lane for
+  Orchestrator-inline `change_first` implementation attempts.
+- Stage 4 Builder dispatch policy:
+  - `tdd` and `proof_first` always require Builder dispatch,
+  - `change_first` may be Orchestrator-inline only while bounded and obvious,
+  - `change_first` dispatches Builder when dispatch triggers fire.
 - Rich Builder evidence passed to Validator personas without dumping the full
   report into the ledger.
 - `attempt_type: implementation | repair`.
@@ -163,7 +214,8 @@ P0/P1-gated Validator persona loop already owns that concept.
   the later `supersedes` flow.
 - A one-way `supersedes` batch field for replacement batches created after a
   blocked batch exposes a stale or unsafe contract.
-- Iteration-counter semantics: Builder attempts count toward the 5-cap;
+- Iteration-counter semantics: total implementation attempts count toward the
+  5-cap, whether they are Builder attempts or Orchestrator-inline attempts;
   Builder infrastructure failures block outside the batch cap.
 - Runbook prose updates to:
   - `## Role boundaries`,
@@ -171,6 +223,7 @@ P0/P1-gated Validator persona loop already owns that concept.
   - `### Stage 4: batch-loop`,
   - `## Inner loop`,
   - `## Escape hatches`,
+  - Stage 4 Builder dispatch policy,
   - Builder/Validator prompt handoff text.
 - Helper/schema updates in `decompose.ts`.
 - Ledger template updates.
@@ -202,8 +255,10 @@ P0/P1-gated Validator persona loop already owns that concept.
 ## Actors
 
 - **A1: Orchestrator.** Walks the six Issue-to-PR stages. Owns the ledger.
-  Dispatches Contract Reviewer, Builder, and Validator personas. Does not
-  read or edit batch implementation files during stage 4.
+  Dispatches Contract Reviewer, Builder, and Validator personas. During Stage
+  4, it implements only inline-eligible `change_first` batches and records
+  those attempts honestly; otherwise it dispatches Builder instead of playing
+  Builder itself.
 - **A2: Contract Reviewer.** Read-only Stage 3 reviewer. Reviews the authored
   plan and parsed candidate DAG before batches are written to the ledger.
   Returns the same finding envelope shape as Validator personas.
@@ -220,6 +275,71 @@ P0/P1-gated Validator persona loop already owns that concept.
 Support roles such as `architect`, `context-scout`, `test-scout`, and
 `fixture-builder` are route hints only in v1. They do not become first-class
 Issue-to-PR actors until separate contracts exist.
+
+## Stage 4 dispatch policy
+
+Stage 4 chooses the implementation path from the confirmed `execution_mode`.
+The policy is intentionally asymmetric: proof-bearing modes require isolation,
+while `change_first` stays lightweight only while it is genuinely low-risk.
+
+```mermaid
+flowchart TB
+  B["Confirmed Stage 4 batch"] --> M{"execution_mode"}
+
+  M -->|"tdd"| D["Builder dispatch required"]
+  M -->|"proof_first"| D
+  M -->|"change_first"| G{"Small and obvious?"}
+
+  G -->|"yes"| O["Orchestrator inline allowed"]
+  G -->|"no / risky / context-heavy"| D
+
+  D --> BA["builder_attempts<br/>real Builder envelope"]
+  O --> IA["inline attempt record<br/>honest Orchestrator evidence"]
+
+  BA --> V["full Validator wave<br/>after committed attempts"]
+  IA --> V
+
+  V --> I["iterations = all implementation attempts"]
+```
+
+| Mode | Stage 4 path | Audit lane |
+| --- | --- | --- |
+| `tdd` | Builder dispatch required | `builder_attempts` |
+| `proof_first` | Builder dispatch required | `builder_attempts` |
+| `change_first` | Orchestrator-inline allowed only while small and obvious; dispatch Builder when triggers fire | `orchestrator_inline_attempts`, or `builder_attempts` if dispatched |
+
+The Orchestrator must dispatch Builder for a `change_first` batch when any
+dispatch trigger fires:
+
+- the expected edit or in-progress diff touches more than two files,
+- the batch touches non-doc, behavioural, public-contract, governance, or
+  high-risk paths,
+- the edit requires broad search, local-law archaeology, or substantial
+  discovery,
+- the Orchestrator is uncertain about the correct edit,
+- the Orchestrator has already accumulated substantial run context,
+- the repeated-inline threshold would be exceeded: after two consecutive
+  Orchestrator-inline `change_first` implementation attempts, the next
+  inline-eligible `change_first` attempt routes through Builder unless the
+  user explicitly confirms a one-off inline exception.
+
+`builder_attempts` means exactly one thing: an isolated Builder sub-agent was
+dispatched and returned a well-formed Builder envelope. If the Orchestrator
+edits `batch.files` inline, the ledger must record a separate inline attempt
+in `orchestrator_inline_attempts` with the implementation commit evidence
+instead of widening `builder_attempts` or relying only on lifecycle notes.
+
+Every committed implementation attempt, whether Builder-dispatched or
+Orchestrator-inline, must have its own implementation commit, its own compact
+attempt record, a ledger-only attempt checkpoint committed before Validator
+dispatch, and a subsequent Validator dispatch. Inline work changes the evidence
+source, not the validation requirement. Validator dispatch here means the same
+full Stage 4 always-on Validator wave used for Builder commits; inline
+docs/template commits do not get a reduced or skipped review path.
+Validator audit evidence should reuse the existing packet `dispatch_evidence`
+concept, but packet rendering alone is not completion evidence: the durable
+record must also show the completed wave outcome, including clean
+`findings: []` waves.
 
 ## Builder contract
 
@@ -299,10 +419,15 @@ V1 does not require every host to enforce identical per-file sandboxing.
 Orchestrator must independently validate Builder's returned commit by deriving
 touched files from the commit diff and checking them against `batch.files`.
 
-If the current host cannot provide a fresh sub-agent with the required
-capabilities and authority boundary for a selected eligible batch,
-Orchestrator records `host-builder-tools-unavailable` before marking the batch
-`in-progress` and does not fall back to Orchestrator-direct implementation.
+Before any Stage 4 implementation attempt, including Orchestrator-inline
+`change_first`, Orchestrator verifies host Builder readiness or uses a
+still-valid readiness result emitted by the host adapter. If the current host
+cannot provide a fresh sub-agent with the required capabilities and authority
+boundary, Orchestrator records `host-builder-tools-unavailable` before marking
+the batch `in-progress` and does not fall back to Orchestrator-direct
+implementation. This keeps the v1 invariant simple: Stage 4 does not create an
+implementation commit unless it can also dispatch Builder for any required
+P0/P1 repair.
 
 ### Local Law Read Order
 
@@ -404,26 +529,59 @@ Builder fail-stops with `route_hint: "context-scout"` or
 11. P2/P3 findings are surfaced in the confirmation prompt but do not block
     ledger write.
 
-### F1: Initial implementation attempt
+### F0.5: Stage 4 implementation path selection
 
 1. Orchestrator selects the next pending batch in topological order.
-2. Before every Builder dispatch for the selected eligible batch, Orchestrator
-   verifies that the current host can instantiate Builder with the required
-   tool set. If not, Orchestrator records the host-level fail-stop
+2. Orchestrator verifies host Builder readiness, or uses a still-valid
+   readiness result emitted by the host adapter, before marking the batch
+   `in-progress` or editing implementation files. If readiness fails, record
+   `host-builder-tools-unavailable` and stop without incrementing
+   `iterations`.
+3. Orchestrator reads the confirmed batch `execution_mode`.
+4. If `execution_mode` is `tdd` or `proof_first`, Orchestrator must route to
+   Builder dispatch before any implementation-file edit.
+5. If `execution_mode` is `change_first`, Orchestrator checks whether the work
+   remains inline-eligible: small, obvious, low-risk, non-behavioural, and not
+   context-heavy. The repeated-inline threshold is part of this check.
+6. If any dispatch trigger is present, Orchestrator routes the `change_first`
+   batch to Builder dispatch.
+7. If no dispatch trigger is present, Orchestrator may run the bounded inline
+   path and must record the resulting implementation commit in the inline
+   `orchestrator_inline_attempts` audit lane.
+8. After any committed implementation attempt, Orchestrator validates the
+   implementation commit, writes the compact attempt record, increments
+   `iterations`, and commits a ledger-only attempt checkpoint before rendering
+   Validator packets.
+9. Every committed implementation attempt, from either path, routes to the full
+   Stage 4 always-on Validator wave from durable attempt-checkpoint state, with
+   the relevant commit diff and attempt evidence.
+10. Once a P0/P1 Validator finding exists, repair attempts route through
+   Builder dispatch. The finding itself proves the next change is no longer an
+   obvious inline-only edit. There is no docs-only or tiny-fix inline repair
+   exception for P0/P1 findings.
+
+### F1: Builder implementation attempt
+
+This flow applies to `tdd`, `proof_first`, and any `change_first` batch whose
+dispatch triggers fire.
+
+1. Orchestrator reuses the host Builder readiness result from F0.5 if it is
+   still valid; otherwise it rechecks readiness before dispatch. If readiness
+   fails, Orchestrator records the host-level fail-stop
    `host-builder-tools-unavailable` and does not mark any batch in progress.
    This is a host Builder readiness failure, not a Builder attempt or Builder
    infrastructure failure, and it does not increment `iterations`.
-3. Orchestrator marks `status: in-progress` in the ledger and commits the
+2. Orchestrator marks `status: in-progress` in the ledger and commits the
    lifecycle checkpoint. This is an Orchestrator-owned ledger commit, separate
    from Builder.
-4. Orchestrator dispatches a Builder sub-agent with a Builder Work Packet
+3. Orchestrator dispatches a Builder sub-agent with a Builder Work Packet
    using `attempt_type: implementation`.
-5. Builder runs the Builder Preflight Checklist.
-6. If preflight fails, Builder returns a fail-stop envelope without editing or
+4. Builder runs the Builder Preflight Checklist.
+5. If preflight fails, Builder returns a fail-stop envelope without editing or
    committing.
-7. If preflight passes, Builder reads authorized files, implements the batch,
+6. If preflight passes, Builder reads authorized files, implements the batch,
    makes exactly one commit, and returns the envelope.
-8. Orchestrator verifies:
+7. Orchestrator verifies:
    - `commit_sha` exists when `status: committed`,
    - touched files are independently derived from the commit diff and
      authorized by `batch.files`,
@@ -437,19 +595,52 @@ Builder fail-stops with `route_hint: "context-scout"` or
      malformed envelopes,
    - the envelope is well-formed,
    - the compact attempt record can be appended to `builder_attempts`.
-9. If the envelope is well-formed, Orchestrator records the attempt, appends
-   the SHA to `builder_commits` for committed attempts, and increments
-   `iterations`. If the envelope is malformed or cannot be validated because
-   of host/tool/schema drift, Orchestrator records a Builder infrastructure
-   failure outside the batch cap.
-10. For committed attempts, Orchestrator dispatches Validator personas with
-    rich Builder evidence. For fail-stop attempts, Orchestrator routes according
-    to F5 without dispatching Validators.
+8. If the envelope is well-formed, Orchestrator records the attempt, appends
+   the SHA to `builder_commits` for committed attempts, increments
+   `iterations`, and commits a ledger-only attempt checkpoint. For committed
+   attempts, this checkpoint happens after Orchestrator validates the
+   implementation commit and before Validator packet rendering. For
+   Builder-authored fail-stops, this checkpoint records the fail-stop attempt
+   before routing according to F5. If the envelope is malformed or cannot be
+   validated because of host/tool/schema drift, Orchestrator records a Builder
+   infrastructure failure outside the batch cap.
+9. For committed attempts, Orchestrator dispatches the full Stage 4 always-on
+   Validator wave with rich Builder evidence. For fail-stop attempts,
+   Orchestrator routes according to F5 without dispatching Validators.
 
-### F2: Repair attempt
+### F1b: Orchestrator-inline `change_first` implementation attempt
+
+This flow applies only when `execution_mode: change_first` remains
+inline-eligible after F0.5.
+
+1. Orchestrator marks `status: in-progress` in the ledger and commits the
+   lifecycle checkpoint.
+2. Orchestrator reads only the local law and target files needed for the
+   bounded non-behavioural edit.
+3. If a dispatch trigger appears before or during the edit, Orchestrator stops
+   the inline path before committing implementation work and routes to Builder
+   dispatch instead. This includes discovering that the edit needs more than
+   two touched files.
+4. If the edit remains inline-eligible, Orchestrator edits only `batch.files`
+   and creates one implementation commit.
+5. Orchestrator records a compact `orchestrator_inline_attempts` item with the
+   commit SHA, touched files, and a short note. `builder_attempts` and
+   `builder_commits` remain empty for this attempt.
+6. The inline attempt increments `iterations`, counts toward the same batch cap
+   as Builder attempts, and is committed in a ledger-only attempt checkpoint
+   after Orchestrator validates the implementation commit and before Validator
+   packet rendering.
+7. Orchestrator dispatches the full Stage 4 always-on Validator wave with the
+   commit diff and compact inline evidence, not a fabricated Builder envelope.
+
+### F2: Builder repair attempt
+
+This flow applies after any committed implementation attempt, whether the
+attempt was Builder-dispatched or Orchestrator-inline.
 
 1. After Validator personas return open P0/P1 findings, Orchestrator
-   dispatches a fresh Builder sub-agent with `attempt_type: repair`.
+   dispatches a fresh Builder sub-agent with `attempt_type: repair`. The
+   Orchestrator must not repair P0/P1 findings inline.
 2. The Work Packet includes exactly one target finding signature.
 3. Builder reruns preflight.
 4. Builder fixes exactly one open P0/P1 finding by signature, makes one commit,
@@ -458,13 +649,17 @@ Builder fail-stops with `route_hint: "context-scout"` or
    refactors, or additional findings during a repair attempt.
 6. If the repair requires broader scope, Builder fail-stops with an appropriate
    `route_hint`.
-7. If the envelope is well-formed, Orchestrator records the attempt and
-   increments `iterations`. If the envelope is malformed or cannot be
-   validated because of host/tool/schema drift, Orchestrator records a Builder
-   infrastructure failure outside the batch cap.
-8. For committed repair attempts, Orchestrator dispatches Validator personas
-   again. For fail-stop repair attempts, Orchestrator routes according to F5
-   without dispatching Validators.
+7. If the envelope is well-formed, Orchestrator records the attempt, increments
+   `iterations`, and commits a ledger-only attempt checkpoint. For committed
+   repair attempts, this checkpoint happens after Orchestrator validates the
+   repair commit and before Validator packet rendering. For Builder-authored
+   fail-stops, this checkpoint records the fail-stop attempt before routing
+   according to F5. If the envelope is malformed or cannot be validated because
+   of host/tool/schema drift, Orchestrator records a Builder infrastructure
+   failure outside the batch cap.
+8. For committed repair attempts, Orchestrator dispatches the full Stage 4
+   always-on Validator wave again. For fail-stop repair attempts, Orchestrator
+   routes according to F5 without dispatching Validators.
 
 ### F3: Builder Preflight Checklist
 
@@ -605,7 +800,8 @@ Orchestrator validation on receipt:
 - `fail-stop-other`: surface the notes, blockers, and route hint to the user.
 
 All well-formed Builder envelopes, including Builder-authored fail-stops,
-count as Builder attempts and increment `iterations`.
+count as Builder attempts and implementation attempts. They increment
+`iterations`.
 
 Malformed envelopes, missing required fields, dispatch failures,
 tool-permission mismatches, host serialization failures, and schema parse
@@ -615,7 +811,7 @@ Validators. Orchestrator surfaces the infrastructure failure, any reachable
 commit or working-tree change, and the host/schema evidence to the user before
 continuing.
 
-### F6: Compact `builder_attempts`
+### F6: Compact implementation audit lanes
 
 Every Builder attempt appends one compact attempt record to the batch's
 `builder_attempts`. Builder infrastructure failures are recorded outside the
@@ -632,12 +828,48 @@ Persisted attempt records contain:
 - `probe_results`,
 - `notes`.
 
-Committed attempts also append their SHA to `builder_commits`. Fail-stop
-attempts use `commit_sha: null` and do not append to `builder_commits`.
+Committed Builder attempts also append their SHA to `builder_commits`.
+Fail-stop attempts use `commit_sha: null` and do not append to
+`builder_commits`. `builder_commits` remains Builder-only; Orchestrator-inline
+commits are identified through `orchestrator_inline_attempts`.
 
 Rich evidence fields from the envelope are passed to Validator personas and
 may be summarized in ledger Notes, but are not persisted wholesale in
 `builder_attempts`.
+
+Every Orchestrator-inline `change_first` implementation attempt appends one
+compact record to `orchestrator_inline_attempts`. The record must identify the
+implementation commit, the files touched, and a short note explaining why the
+inline path was valid. It must not reuse `builder_attempts` or
+`builder_commits` because no Builder envelope exists.
+
+`orchestrator_inline_attempts` is committed-only and uses exactly this compact
+shape:
+
+```yaml
+orchestrator_inline_attempts:
+  - commit_sha: <sha>
+    files_touched: []
+    notes: "<why inline was valid, including any user-confirmed exception>"
+```
+
+It does not include `attempt_type`, `status`, `route_hint`, `blockers`, or
+`probe_results`. If a dispatch trigger appears before an inline implementation
+commit, Orchestrator routes to Builder dispatch and appends no
+`orchestrator_inline_attempts` item.
+
+Any implementation attempt that changes `batch.files` must produce exactly one
+implementation commit with an honest commit message identifying the batch and
+attempt path. The matching compact attempt record is the ledger evidence for
+that commit. The compact attempt record must be committed in a ledger-only
+attempt checkpoint after Orchestrator validates the implementation commit and
+before Validator packet rendering. The attempt checkpoint may touch only the
+per-issue ledger and must leave the working tree clean. A committed attempt is
+not complete until the full Stage 4 always-on Validator wave has received the
+commit diff plus the relevant Builder or inline evidence, and the ledger has
+durable compact evidence for both the Validator packet `dispatch_evidence` and
+the completed wave outcome. The absence of `## Findings data` rows is not
+sufficient by itself to prove that a clean Validator wave ran.
 
 `decompose.ts` must validate:
 
@@ -645,10 +877,26 @@ may be summarized in ledger Notes, but are not persisted wholesale in
   `builder_commits`,
 - every `builder_commits` SHA appears in exactly one committed
   `builder_attempts` item,
-- `iterations` equals the number of Builder attempts for terminal batches,
-- Builder-authored fail-stop attempts are counted toward the 5-cap,
+- every `orchestrator_inline_attempts` item has exactly `commit_sha`,
+  `files_touched`, and `notes`,
+- every `orchestrator_inline_attempts[*].commit_sha` exists, is unique within
+  the inline lane, and touches only confirmed `batch.files`,
+- every `orchestrator_inline_attempts[*].files_touched` matches its commit
+  diff,
+- every committed Builder or Orchestrator-inline attempt is recorded in a
+  ledger-only attempt checkpoint before any Validator packet is rendered for
+  that attempt,
+- `iterations` equals the number of Builder attempts plus inline attempts for
+  terminal batches,
+- Builder-authored fail-stop attempts and Orchestrator-inline attempts are
+  counted toward the 5-cap,
 - Builder infrastructure failures are not counted toward the 5-cap,
-- terminal committed batches have at least one committed attempt.
+- terminal committed batches have at least one committed Builder attempt or
+  committed inline attempt,
+- every committed implementation attempt has durable completed Validator wave
+  evidence, reusing the existing packet `dispatch_evidence` shape plus a
+  compact completion outcome rather than introducing a new first-class
+  `validator_waves` field up front.
 
 ### F7: Replacement batches and `supersedes`
 
@@ -736,15 +984,53 @@ instead of proposing a contract.
   instantiate the runbook's Builder dispatch contract. The runbook does not
   name Codex's primitive directly.
 - **AE8:** On a host that cannot grant the required Builder tool set,
-  Orchestrator selects the eligible batch, then records an Orchestrator-owned
-  `host-builder-tools-unavailable` fail-stop before marking it `in-progress`
-  or dispatching Builder. There is no fallback to Orchestrator-direct Builder,
-  and the batch iteration counter is not incremented.
+  Orchestrator selects a Stage 4 batch, including an inline-eligible
+  `change_first` batch, then records an Orchestrator-owned
+  `host-builder-tools-unavailable` fail-stop before marking it `in-progress`,
+  editing implementation files, or dispatching Builder. There is no fallback
+  to Orchestrator-direct Builder, and the batch iteration counter is not
+  incremented.
 - **AE9:** Builder dispatch reaches the host but returns a malformed envelope
   because of schema or serialization drift. Orchestrator records a Builder
   infrastructure failure, surfaces any reachable commit or working-tree change
   to the user, does not append `builder_attempts`, does not increment
   `iterations`, and does not dispatch Validators.
+- **AE10:** A `tdd` batch is selected. Orchestrator must dispatch Builder
+  before any implementation-file edit. If it starts editing inline, the
+  workflow has violated the Stage 4 dispatch policy and must reset or repair
+  that partial work before continuing.
+- **AE11:** A one-file docs/template `change_first` batch is small, obvious,
+  and low-risk. Orchestrator edits it inline, creates one implementation
+  commit, records a compact `orchestrator_inline_attempts` item, leaves
+  `builder_attempts` and `builder_commits` empty for that attempt, increments
+  `iterations`, and dispatches the full Stage 4 always-on Validator wave with
+  the diff plus inline evidence.
+- **AE12:** A committed implementation attempt exists without a matching
+  compact attempt record, without a committed ledger-only attempt checkpoint,
+  or without a full post-commit Validator wave. The batch cannot converge until
+  the attempt checkpoint and Validator wave are completed.
+- **AE12b:** A committed implementation attempt has `findings: []` after the
+  Validator wave, but no durable completed-wave evidence tied to the reviewed
+  commit and personas. The batch cannot converge because absence of findings is
+  not proof that the Validator wave completed.
+- **AE13:** A `change_first` batch starts as docs work but requires broad
+  search, touches three files, or reaches high-risk paths. Orchestrator must
+  stop the inline path and dispatch Builder; the committed result is recorded
+  as `builder_attempts`, not as inline work.
+- **AE14:** Two consecutive `change_first` batches have already been handled
+  Orchestrator-inline. The next `change_first` batch looks small and obvious,
+  but Orchestrator must dispatch Builder unless the user explicitly confirms a
+  one-off inline exception. If the user confirms the exception, the
+  `orchestrator_inline_attempts` note records the exception rationale.
+- **AE15:** A docs-only Orchestrator-inline attempt receives an open P1
+  Validator finding. Even if the fix appears to be a one-line docs tweak,
+  Orchestrator must dispatch Builder with `attempt_type: repair`; it must not
+  repair the finding inline.
+- **AE16:** A Builder or Orchestrator-inline implementation commit exists, but
+  the compact attempt record has not been committed to the ledger yet.
+  Orchestrator must commit the ledger-only attempt checkpoint before rendering
+  Validator packets; Validator dispatch from uncommitted in-memory attempt
+  evidence is invalid.
 
 ## Success criteria
 
@@ -758,6 +1044,24 @@ instead of proposing a contract.
   context.
 - Builder dispatch is identical in contract shape across Claude Code and
   Codex, even if each host maps it to a different primitive.
+- Stage 4 host Builder readiness is verified, or a still-valid host-adapter
+  readiness result is reused, before any implementation attempt can start.
+  Readiness failure stops before the batch is marked `in-progress` or any
+  implementation file is edited, including inline-eligible `change_first`.
+- Stage 4 dispatch policy is visible before the inner loop: `tdd` and
+  `proof_first` require Builder dispatch, and `change_first` is inline-only
+  while bounded, obvious, and low-risk.
+- `change_first` repeated-inline routing is deterministic: at most two
+  consecutive Orchestrator-inline implementation attempts are allowed before
+  Builder dispatch or an explicit user-confirmed inline exception.
+- `change_first` inline file-count routing is deterministic:
+  Orchestrator-inline implementation attempts may touch at most two files.
+  More than two expected or actual touched files routes through Builder.
+- The full Stage 4 always-on Validator wave runs after every committed
+  implementation attempt, including docs-only Orchestrator-inline attempts; no
+  reduced or skipped Validator path exists for inline work.
+- P0/P1 repair routing is deterministic: every open P0/P1 Validator finding
+  routes to Builder repair dispatch, with no Orchestrator-inline repair path.
 - Stage 3 Contract Review catches plan/DAG drift before the batch contract is
   written to the ledger.
 - Builder Preflight catches residual rename/identity/path/API/governance scope
@@ -767,10 +1071,22 @@ instead of proposing a contract.
   scope decisions.
 - Replacement batches use `supersedes` to preserve an audit trail from blocked
   stale contract to replacement contract.
-- `iterations` increments on every well-formed Builder attempt, committed or
-  Builder-authored fail-stop.
+- `iterations` increments on every implementation attempt: well-formed Builder
+  attempts and Orchestrator-inline attempts both count toward the batch cap.
 - `builder_attempts` records every well-formed Builder attempt in compact
-  form.
+  form and never records Orchestrator-inline work.
+- Orchestrator-inline `change_first` commits are recorded in
+  `orchestrator_inline_attempts` with enough evidence for Validators and later
+  operators to see why no Builder envelope exists. The lane is committed-only
+  and each item has exactly `commit_sha`, `files_touched`, and `notes`.
+- Every committed implementation attempt has one implementation commit, one
+  matching compact attempt record committed in a ledger-only attempt
+  checkpoint before Validator packet rendering, and a full post-commit
+  Validator wave with durable compact evidence. The evidence reuses the
+  existing Validator packet `dispatch_evidence` concept and adds completed-wave
+  outcome evidence, including clean `findings: []` waves; the requirements do
+  not introduce a new first-class `validator_waves` field unless implementation
+  proves Notes-based evidence too weak.
 - Builder infrastructure failures block outside the batch iteration cap and do
   not append `builder_attempts`.
 - `builder_attempts` and `builder_commits` are cross-validated.
@@ -782,10 +1098,41 @@ instead of proposing a contract.
 The current system evidence does not yet implement several v1 requirements.
 This is expected; the requirements doc is ahead of the implementation.
 
+### Decision-record gaps
+
+- `docs/adr/0001-stage-4-context-isolation.md` says Orchestrator does not
+  implement Stage 4 batches directly and checks host readiness before every
+  Builder dispatch. This requirements update intentionally narrows that rule:
+  Orchestrator may implement only inline-eligible `change_first`, and host
+  Builder readiness becomes a Stage 4 pre-implementation safety floor. Update
+  or supersede the ADR when this policy is accepted.
+- `docs/adr/0003-stage-4-keeps-always-on-validator-wave.md` says the full
+  always-on Validator wave runs on every committed Builder envelope. This
+  requirements update extends the same validation floor to every committed
+  implementation attempt, including Orchestrator-inline attempts. Update or
+  supersede the ADR when this policy is accepted.
+
 ### Runbook prose gaps
 
+- `stage-4-batch-loop.md` lacks a Builder dispatch policy that names `tdd` and
+  `proof_first` as dispatch-required modes, and `change_first` as bounded
+  inline-eligible work.
+- `stage-4-batch-loop.md` currently frames host Builder readiness as
+  pre-dispatch only. It must require readiness, or a still-valid host-adapter
+  readiness result, before any Stage 4 implementation attempt, including
+  Orchestrator-inline `change_first`.
+- `builder-dispatch.md` lacks an Applies To header that says the reference is
+  mandatory for `tdd`, `proof_first`, and `change_first` only when dispatch
+  triggers fire.
+- `skills/issue-to-pr/SKILL.md` lacks the Stage 4 dispatch policy in the
+  top-level shell, so the Orchestrator can enter the inner loop without seeing
+  the mode boundary.
+- `stage-4-batch-loop.md` still describes appending `builder_attempts`,
+  appending `builder_commits`, and setting `iterations` on inner-loop success.
+  It must instead route committed attempts through a ledger-only attempt
+  checkpoint before Validator packet rendering.
 - `issue-to-pr.md` still describes Builder as an in-session role rather than a
-  required sub-agent dispatch.
+  required sub-agent dispatch for proof-bearing modes.
 - `issue-to-pr.md` lacks Builder Work Packet wording.
 - `issue-to-pr.md` lacks Local Law Read Order for Builder attempts.
 - `issue-to-pr.md` lacks the enriched return envelope schema.
@@ -797,9 +1144,16 @@ This is expected; the requirements doc is ahead of the implementation.
 ### Ledger/template gaps
 
 - `issue-N-ledger.template.md` lacks `builder_attempts`.
+- Ledger contract lacks the separate compact `orchestrator_inline_attempts`
+  audit lane for Orchestrator-inline `change_first` implementation attempts,
+  using the committed-only `commit_sha`, `files_touched`, `notes` shape.
+- Ledger/Notes contract lacks a durable completed Validator-wave evidence shape
+  that records clean `findings: []` waves as completed, not merely absent.
 - `issue-N-ledger.template.md` lacks optional batch `supersedes`.
 - The ledger prose does not yet distinguish compact persisted attempt records
   from rich Builder evidence passed to Validators.
+- Ledger prose lacks the ledger-only attempt checkpoint as a distinct durable
+  checkpoint between implementation commits and Validator dispatch.
 
 ### Helper/schema gaps
 
@@ -807,7 +1161,19 @@ This is expected; the requirements doc is ahead of the implementation.
 - `decompose.ts` does not allow ledger batch field `supersedes`.
 - `decompose.ts` does not validate the `builder_attempts` /
   `builder_commits` relationship.
-- `decompose.ts` does not validate `iterations` against attempt count.
+- `decompose.ts` does not allow ledger batch field
+  `orchestrator_inline_attempts`.
+- `decompose.ts` does not validate the exact `orchestrator_inline_attempts`
+  item shape, inline attempt commits, `files_touched` parity, Builder-only
+  `builder_commits`, or protect `builder_attempts` from Orchestrator-inline
+  rows.
+- `decompose.ts` does not validate `iterations` against total implementation
+  attempt count.
+- `decompose.ts` does not validate that every committed implementation attempt
+  has durable Validator packet `dispatch_evidence` plus completed-wave outcome
+  evidence.
+- `decompose.ts` does not validate that committed implementation attempts have
+  been recorded in a ledger-only attempt checkpoint before Validator dispatch.
 - `decompose.ts` does not allow `batch_id: stage-3` findings.
 - `decompose.ts` does not allow Stage 3 `fixed` resolution
   `plan-revision <sha>`.
@@ -832,6 +1198,9 @@ file-count bounds, new-file rationale, high-risk new-file rationale, and
 | Rich Builder evidence drifts across hosts. | Define envelope schema in runbook; treat missing required fields as Builder infrastructure failures. |
 | Iteration cap is consumed by Builder-authored fail-stops. | This is a correct signal that the batch contract is stale or unsafe. |
 | Iteration cap is consumed by host/tool/schema drift. | Treat infrastructure failures outside the batch cap; block until the dispatch path or schema bridge is fixed. |
+| `change_first` inline work recreates Orchestrator context blowout. | Keep inline eligibility narrow and dispatch Builder when scope, risk, discovery, context load, or the repeated-inline threshold fires. |
+| Inline work is recorded as Builder evidence again. | Keep `builder_attempts` exclusive to real Builder envelopes and persist Orchestrator-inline work in `orchestrator_inline_attempts`. |
+| Clean Validator waves disappear from the audit trail. | Reuse Validator packet `dispatch_evidence`, but require durable completed-wave outcome evidence; `findings: []` alone is not proof that the wave ran. |
 | Ledger grows noisy. | Persist compact attempts only; keep rich evidence transient. |
 
 ## Open questions
