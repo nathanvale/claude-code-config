@@ -8,7 +8,13 @@
   },
   "permissions": {
     "allow": [
-      "Bash"
+      "Bash",
+      "Bash(rm -rf /tmp/**)",
+      "Bash(rm -rf /private/tmp/**)",
+      "Bash(rm -rf /var/folders/**)",
+      "Bash(rm -fr /tmp/**)",
+      "Bash(rm -fr /private/tmp/**)",
+      "Bash(rm -fr /var/folders/**)"
     ],
     "deny": [],
     "ask": [
