@@ -7,14 +7,26 @@ across individual issue runs. It exists per PRD #88 and is scaffolded by issue
 #90.
 
 The registry is deliberately distinct from the per-issue ledger
-(`issue-N-ledger.template.md`). The ledger holds **run-specific evidence** for a
-single issue: acceptance criteria, batches, findings, and notes scoped to that
-run. The registry holds the **cross-run lifecycle and dedupe layer**: each
-learning is recorded once, deduped by a stable signature, carries a disposition
-and status through its life, and accumulates one append-only evidence record per
-run that re-observed it. A learning first noticed during `issue-90` and seen
-again during a later run is the *same* registry entry with two evidence records,
+(`issue-N-ledger.template.md`). The ledger's required `## Workflow Learnings`
+section holds **what this run observed** — per-run evidence references with
+a `signature` cross-reference that points at the canonical registry row. The
+registry holds the **cross-run lifecycle and dedupe layer**: each learning is
+recorded once, deduped by stable `signature`, carries a disposition and status
+through its life, and accumulates one append-only evidence record per run that
+re-observed it. A learning first noticed during `issue-90` and seen again
+during a later run is the *same* registry entry with two evidence records,
 not two entries.
+
+The ledger **never** duplicates the registry's canonical fields (`summary`,
+`owner`, `retirement_condition`) or lifecycle fields (`disposition`, `status`,
+`confidence`, `follow_up`). Those live exclusively here. A ledger
+`## Workflow Learnings` entry carries only the `signature` cross-reference
+plus run-scoped evidence keys (`affected_surface`, `what_was_wrong`,
+`discovery_method`, `root_cause`, `scope`, `proposed_fix`,
+`verification_idea`) — the same keys the registry's `evidence` records use,
+minus the implicit `run` (the ledger IS the run). The ledger-side validator
+(`decompose.ts --validate-workflow-learnings`) rejects any canonical or
+lifecycle field that leaks into a ledger entry.
 
 **Read trigger:** open this reference when a run surfaces a workflow-level
 learning (something wrong with or worth improving about the Issue-to-PR workflow

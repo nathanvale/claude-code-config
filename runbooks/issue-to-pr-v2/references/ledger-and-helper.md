@@ -125,6 +125,13 @@ order:
    findings; consumed by `decompose.ts --validate-findings`.
 5. `## Findings` — rendered table mirroring `## Findings data`.
 6. `## Notes` — non-authoritative evidence log.
+7. `## Workflow Learnings` — required section carrying **what this run
+   observed** about the Issue-to-PR workflow itself. Validated by
+   `decompose.ts --validate-workflow-learnings`. Each entry is a per-run
+   reference into the cross-run registry at
+   [`workflow-learnings-registry.md`](workflow-learnings-registry.md);
+   the ledger records run-scoped evidence and the registry owns the
+   canonical lifecycle and dedupe layer.
 
 Helper validation rejects any drift between `## Findings data` and `## Findings`.
 Frontmatter digest fields (`plan_digest`, `ac_digest`, `batch_contract_digest`)
@@ -218,6 +225,39 @@ finding order) wins. Non-canonical rows in the group are
 referenced canonical id must exist in the ledger, be the non-superseded row
 of the same `batch_id + signature` group, have equal-or-higher severity, and
 must not be itself.
+
+### `## Workflow Learnings` entry fields
+
+The per-issue ledger records **what this run observed** about the workflow
+itself. The cross-run registry at
+[`workflow-learnings-registry.md`](workflow-learnings-registry.md) owns
+canonical lifecycle metadata and dedupe; the ledger never duplicates the
+registry's canonical or lifecycle fields. Each ledger entry is a per-run
+evidence reference plus a `signature` cross-reference into the registry.
+
+Required entry fields:
+
+- `signature` (string) — `sha256:<hex>` or stable slug. Resolves to the
+  canonical entry in the cross-run registry.
+- `affected_surface` (string) — which workflow surface the learning concerns;
+  matches the registry's evidence key of the same name.
+- `what_was_wrong` (string) — the observation captured during the run.
+
+Optional entry fields (capture what is known; absence is fine):
+
+- `discovery_method` — how the issue was found during the run.
+- `root_cause` — why it happened.
+- `scope` — blast radius or where else this would surface.
+- `proposed_fix` — suggested change at observation time.
+- `verification_idea` — how a later fix would be confirmed.
+
+Canonical and lifecycle fields (`summary`, `owner`, `retirement_condition`,
+`disposition`, `status`, `confidence`, `follow_up`) are registry-only and
+must never appear in a ledger entry. `decompose.ts
+--validate-workflow-learnings` enforces this with a closed-key whitelist
+symmetric with the registry's `ALLOWED_EVIDENCE_KEYS` plus the `signature`
+cross-reference. The valid empty case is `workflow_learnings: []`: a run
+with no observed workflow learnings is the common path and must not block.
 
 ## Acceptance criteria and batches contract (v1 ledger template L28-61)
 
