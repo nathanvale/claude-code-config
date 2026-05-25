@@ -15,7 +15,7 @@ batch_contract_confirmed_at: "2026-05-25T08:37:14+1000"
 blocked_reason: null
 pr_url: null
 ship_mode: "standard"
-final_reviewed_at: null
+final_reviewed_at: "2026-05-25T10:39:45+1000"
 plan_digest: "sha256:9da9ab9f9c9043088d83213851d61f5ae5f1b19234aa6ada735d51c07c29dfd1"
 batch_contract_digest: "sha256:9ce54fc1c34c46a2e3ccf5a08154e793b749e3ed10d0bae4837f65f2aca81a21"
 ac_digest: "sha256:17e9d98826395a5c32a2439fe846e176880adcd0af5e4d768d376476d59eb6f9"
@@ -727,6 +727,126 @@ findings:
     status: deferred-P3
     summary: "Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir"
     resolution: deferred-P3
+  - id: F52
+    batch_id: final
+    signature: helper-zero-discovery-from-runbook-stages
+    persona: ce-agent-native-reviewer
+    severity: P1
+    status: out-of-scope-for-this-issue
+    summary: "Helper has zero discovery surface from any runbook stage or skill; the plan explicitly accepts this (Deferred to Follow-Up Work) since wiring into Stage 5 ship-tail is a separate slice of PRD #88"
+    resolution: "out-of-scope-for-this-issue: wiring into Stage 5 / fail-stops is a separate sibling slice of PRD #88; this issue ships only the helper surface and registry per its scope boundaries"
+  - id: F53
+    batch_id: final
+    signature: candidate-schema-not-documented
+    persona: ce-agent-native-reviewer
+    severity: P1
+    status: out-of-scope-for-this-issue
+    summary: "Candidate-file schema (extensions, evidence-record shape, allowed keys, dedupe rule) is not documented in references/workflow-learnings-registry.md; lives only in JSDoc on lib/learnings.ts"
+    resolution: "out-of-scope-for-this-issue: candidate-schema docs follow-up; the helper IS the source of truth today; track as a follow-up issue to extend the registry doc with the candidate schema and a worked example before the helper is wired into a stage"
+  - id: F54
+    batch_id: final
+    signature: dispatcher-toctou-lost-update-on-concurrent-upsert
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: out-of-scope-for-this-issue
+    summary: "Dispatcher pipeline is non-atomic (parseRegistry reads file, serializeRegistry re-reads); concurrent --upsert invocations can silently drop learnings via lost-update. No file lock or compare-and-swap"
+    resolution: "out-of-scope-for-this-issue: helper is not wired into any stage yet so realistic concurrency is zero today; atomicity hardening (file lock or temp + rename with content-equality check) is a follow-up issue to land before the helper is wired into Stage 5 ship-tail"
+  - id: F55
+    batch_id: final
+    signature: stage5-yaml-dispatcher-test-missing
+    persona: ce-testing-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "AC4 parity (JSON + YAML candidate ingestion) is tested at lib level but no end-to-end --upsert dispatcher test exercises a .yaml candidate"
+    resolution: deferred-P2
+  - id: F56
+    batch_id: final
+    signature: stage5-candidate-factory-drift-across-tests
+    persona: ce-testing-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "Candidate factories duplicated across learnings-registry.test.ts (makeCandidate) and lib/learnings.test.ts (validCandidateObject + writeCandidate); schema evolution requires lockstep updates"
+    resolution: deferred-P3
+  - id: F57
+    batch_id: final
+    signature: stage5-readme-file-map-compounds-three-omissions
+    persona: ce-project-standards-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "README File map drift compounds: new top-level helper learnings-registry.ts AND new references/workflow-learnings-registry.md AND new lib/learnings.ts (F11) absent from maintainer finder; promote follow-up to update all three enumerations"
+    resolution: deferred-P2
+  - id: F58
+    batch_id: final
+    signature: stage5-unknown-top-level-fields-bleed-through-upsert
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "validateRegistry tolerates unknown top-level entry fields; upsert spread copies them through; emitYaml writes them verbatim; unknown fields persist forward (including potential prototype-pollution-shaped keys)"
+    resolution: deferred-P2
+  - id: F59
+    batch_id: final
+    signature: stage5-explicit-signature-collision-silent-merge
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "Candidate with explicit signature matching another entry silently merges unrelated evidence into that entry; signatureFor does not verify explicit vs derived signature consistency"
+    resolution: deferred-P2
+  - id: F60
+    batch_id: final
+    signature: stage5-duplicate-signature-registry-tolerated
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "validateRegistry does not enforce signature uniqueness across learnings; upsert's loop has no break so a duplicate is amplified, not orphaned; tolerated hand-edit corruption"
+    resolution: deferred-P2
+  - id: F61
+    batch_id: final
+    signature: stage5-module-cohesion-write-scope-seam
+    persona: ce-maintainability-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "lib/learnings.ts is 1117 lines mixing schema constants, write-scope guard (~325 lines), parse, validate, upsert, and emit; natural seam at write-scope to extract before the next batch grows it"
+    resolution: deferred-P3
+  - id: F62
+    batch_id: final
+    signature: stage5-constants-split-canonical-fields-stranded
+    persona: ce-maintainability-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "8 of 10 schema constants live in top-of-file block but CANONICAL_FIELDS and LIFECYCLE_FIELDS are stranded mid-file above signatureFor; incremental authorship left them inconsistent"
+    resolution: deferred-P3
+  - id: F63
+    batch_id: final
+    signature: stale-batch-status-jsdoc
+    persona: ce-maintainability-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "lib/learnings.ts header and learnings-registry.ts comments say later-batch features are intentionally absent, but those features have all since landed in the same file; stale comments erode JSDoc trust"
+    resolution: deferred-P3
+  - id: F64
+    batch_id: final
+    signature: stage5-cli-output-unstructured-strings
+    persona: ce-agent-native-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "Dispatcher output is plain text not JSON envelopes; breaks the M2M tool-routing convention and the cli.ts fact-emitter pattern; future agents must regex prose"
+    resolution: deferred-P2
+  - id: F65
+    batch_id: final
+    signature: stage5-readme-inventory-missing-dispatcher
+    persona: ce-agent-native-reviewer
+    severity: P2
+    status: deferred-P2
+    summary: "README helper inventory omits learnings-registry.ts as a peer dispatcher to decompose.ts; orchestrator cannot enumerate the helper surface without source-tree grep"
+    resolution: deferred-P2
+  - id: F66
+    batch_id: final
+    signature: stage5-validation-errors-lack-remediation-hint
+    persona: ce-agent-native-reviewer
+    severity: P3
+    status: deferred-P3
+    summary: "Validation errors name the violation precisely but do not point at the schema doc or remediation; cheap to add a one-line hint for self-correcting agent loops"
+    resolution: deferred-P3
 ```
 
 ## Findings
@@ -784,6 +904,21 @@ findings:
 | F49 | write-scope | foreign-tail-match-no-repo-containment | ce-adversarial-reviewer | P1 | fixed | Tail-match allowlist has no repo-root anchor; any absolute path that ends with the canonical relative path (e.g. /Users/attacker/runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md) is accepted; a caller in a wrong cwd, worktree, or attacker-staged decoy directory writes outside the real repo | commit 5d56aa7d579023ad9377ea30aae7ea4e2ac92794 |
 | F50 | write-scope | tmpdir-escape-inconsistent-with-non-tmpdir-branch | ce-adversarial-reviewer | P2 | deferred-P2 | Inconsistent contract: references/*.md is refused outside tmpdir but accepted under tmpdir; tmpdir tripwires only catch skills/, issue-*-ledger.md, source extensions; foreign reference markdown is not gated under tmpdir | deferred-P2 |
 | F51 | write-scope | control-chars-and-bare-dotmd-accepted-under-tmpdir | ce-adversarial-reviewer | P3 | deferred-P3 | Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir | deferred-P3 |
+| F52 | final | helper-zero-discovery-from-runbook-stages | ce-agent-native-reviewer | P1 | out-of-scope-for-this-issue | Helper has zero discovery surface from any runbook stage or skill; the plan explicitly accepts this (Deferred to Follow-Up Work) since wiring into Stage 5 ship-tail is a separate slice of PRD #88 | out-of-scope-for-this-issue: wiring into Stage 5 / fail-stops is a separate sibling slice of PRD #88; this issue ships only the helper surface and registry per its scope boundaries |
+| F53 | final | candidate-schema-not-documented | ce-agent-native-reviewer | P1 | out-of-scope-for-this-issue | Candidate-file schema (extensions, evidence-record shape, allowed keys, dedupe rule) is not documented in references/workflow-learnings-registry.md; lives only in JSDoc on lib/learnings.ts | out-of-scope-for-this-issue: candidate-schema docs follow-up; the helper IS the source of truth today; track as a follow-up issue to extend the registry doc with the candidate schema and a worked example before the helper is wired into a stage |
+| F54 | final | dispatcher-toctou-lost-update-on-concurrent-upsert | ce-adversarial-reviewer | P1 | out-of-scope-for-this-issue | Dispatcher pipeline is non-atomic (parseRegistry reads file, serializeRegistry re-reads); concurrent --upsert invocations can silently drop learnings via lost-update. No file lock or compare-and-swap | out-of-scope-for-this-issue: helper is not wired into any stage yet so realistic concurrency is zero today; atomicity hardening (file lock or temp + rename with content-equality check) is a follow-up issue to land before the helper is wired into Stage 5 ship-tail |
+| F55 | final | stage5-yaml-dispatcher-test-missing | ce-testing-reviewer | P2 | deferred-P2 | AC4 parity (JSON + YAML candidate ingestion) is tested at lib level but no end-to-end --upsert dispatcher test exercises a .yaml candidate | deferred-P2 |
+| F56 | final | stage5-candidate-factory-drift-across-tests | ce-testing-reviewer | P3 | deferred-P3 | Candidate factories duplicated across learnings-registry.test.ts (makeCandidate) and lib/learnings.test.ts (validCandidateObject + writeCandidate); schema evolution requires lockstep updates | deferred-P3 |
+| F57 | final | stage5-readme-file-map-compounds-three-omissions | ce-project-standards-reviewer | P2 | deferred-P2 | README File map drift compounds: new top-level helper learnings-registry.ts AND new references/workflow-learnings-registry.md AND new lib/learnings.ts (F11) absent from maintainer finder; promote follow-up to update all three enumerations | deferred-P2 |
+| F58 | final | stage5-unknown-top-level-fields-bleed-through-upsert | ce-adversarial-reviewer | P2 | deferred-P2 | validateRegistry tolerates unknown top-level entry fields; upsert spread copies them through; emitYaml writes them verbatim; unknown fields persist forward (including potential prototype-pollution-shaped keys) | deferred-P2 |
+| F59 | final | stage5-explicit-signature-collision-silent-merge | ce-adversarial-reviewer | P2 | deferred-P2 | Candidate with explicit signature matching another entry silently merges unrelated evidence into that entry; signatureFor does not verify explicit vs derived signature consistency | deferred-P2 |
+| F60 | final | stage5-duplicate-signature-registry-tolerated | ce-adversarial-reviewer | P2 | deferred-P2 | validateRegistry does not enforce signature uniqueness across learnings; upsert's loop has no break so a duplicate is amplified, not orphaned; tolerated hand-edit corruption | deferred-P2 |
+| F61 | final | stage5-module-cohesion-write-scope-seam | ce-maintainability-reviewer | P3 | deferred-P3 | lib/learnings.ts is 1117 lines mixing schema constants, write-scope guard (~325 lines), parse, validate, upsert, and emit; natural seam at write-scope to extract before the next batch grows it | deferred-P3 |
+| F62 | final | stage5-constants-split-canonical-fields-stranded | ce-maintainability-reviewer | P3 | deferred-P3 | 8 of 10 schema constants live in top-of-file block but CANONICAL_FIELDS and LIFECYCLE_FIELDS are stranded mid-file above signatureFor; incremental authorship left them inconsistent | deferred-P3 |
+| F63 | final | stale-batch-status-jsdoc | ce-maintainability-reviewer | P3 | deferred-P3 | lib/learnings.ts header and learnings-registry.ts comments say later-batch features are intentionally absent, but those features have all since landed in the same file; stale comments erode JSDoc trust | deferred-P3 |
+| F64 | final | stage5-cli-output-unstructured-strings | ce-agent-native-reviewer | P2 | deferred-P2 | Dispatcher output is plain text not JSON envelopes; breaks the M2M tool-routing convention and the cli.ts fact-emitter pattern; future agents must regex prose | deferred-P2 |
+| F65 | final | stage5-readme-inventory-missing-dispatcher | ce-agent-native-reviewer | P2 | deferred-P2 | README helper inventory omits learnings-registry.ts as a peer dispatcher to decompose.ts; orchestrator cannot enumerate the helper surface without source-tree grep | deferred-P2 |
+| F66 | final | stage5-validation-errors-lack-remediation-hint | ce-agent-native-reviewer | P3 | deferred-P3 | Validation errors name the violation precisely but do not point at the schema doc or remediation; cheap to add a one-line hint for self-correcting agent loops | deferred-P3 |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
