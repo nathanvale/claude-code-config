@@ -55,13 +55,17 @@ Each dispatched agent must receive:
 3. **The angle's charter**: the single lens it owns (from the tables above).
 4. **Resolved findings so far**: the list of findings already fixed in prior
    rounds, with the instruction not to re-raise them.
-5. **Output contract**: return ONLY actionable findings. Each finding needs:
-   - a one-line description of the problem,
-   - severity (`blocking` / `should-fix` / `note-only`),
-   - location as `file:symbol` or `file:section` (never a bare line number,
-     line numbers drift),
-   - a concrete failure scenario or the acceptance criterion it violates.
-   No praise, no summary of what the code does well.
+5. **Output contract**: return the structured reviewer envelope defined in
+   [reviewer-envelope.md](reviewer-envelope.md) (a `reviewer` / `findings` /
+   `residual_risks` / `testing_gaps` shape) as the final message. Each finding
+   row carries a one-line `problem`, a `severity` (`blocking` / `should-fix` /
+   `note-only` / `out-of-scope`), a `location` as `file:symbol` or
+   `file:section` (never a bare line number — line numbers drift), a concrete
+   `failure_scenario` (or the acceptance criterion it violates), and a stable
+   kebab-case `signature` so the loop dedups the same root issue across angles.
+   `findings: []` means the angle found nothing actionable. No praise, no
+   summary of what the code does well. The fixed shape is what lets the loop
+   merge, triage, and score deterministically.
 
 ## Picking the round's angle set
 

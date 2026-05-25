@@ -82,7 +82,9 @@ change:
 - `regressions_caught` — `new_breaks` that were regressions introduced by the
   hardening fixes themselves. Highest signal; weight heavily.
 - `merged_into_count` — times this angle's finding duplicated another angle's
-  same-root finding. High value here = redundancy = drop candidate.
+  same-root finding (matched by the shared `signature` in the reviewer
+  envelope; see [reviewer-envelope.md](reviewer-envelope.md)). High value here =
+  redundancy = drop candidate.
 - `verify_only_rounds` — rounds the angle ran and confirmed-without-new-findings.
   Value, **not** waste: confirmers protect convergence honesty. Counted
   separately so they are never punished as "found nothing."

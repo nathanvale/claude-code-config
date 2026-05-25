@@ -125,8 +125,11 @@ change types to angles). For each reviewer, pass:
 - the angle's specific charter (what to attack),
 - the findings already resolved in prior rounds (so they do not re-raise fixed
   issues),
-- an instruction to return **only actionable findings** with severity, location
-  (`file:symbol`, not line numbers), and a concrete failure scenario, not praise.
+- an instruction to return the structured reviewer envelope
+  ([references/reviewer-envelope.md](references/reviewer-envelope.md)) — only
+  actionable findings, each with severity, location (`file:symbol`, not line
+  numbers), a concrete failure scenario, and a stable `signature` for cross-angle
+  dedup; not praise.
 
 Prefer the specialized `ce-*` reviewer agents where they fit (they encode strong
 review personas). Use `general-purpose` only for angles no `ce-*` agent covers.
