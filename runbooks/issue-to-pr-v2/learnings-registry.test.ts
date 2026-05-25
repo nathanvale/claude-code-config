@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -48,6 +47,15 @@ const CANONICAL_FILENAME = "workflow-learnings-registry.md";
 
 const scriptPath = join(import.meta.dir, "learnings-registry.ts");
 const bunExecutable = execPath || "bun";
+
+/**
+ * Hermetic repo-root lookup: this test file lives at
+ * `runbooks/issue-to-pr-v2/learnings-registry.test.ts`, so the repo root is
+ * two directories up from `import.meta.dir`. Computing it from the file path
+ * avoids shelling out to `git rev-parse --show-toplevel`, which fails in
+ * source tarballs or stripped CI sandboxes that lack `.git` metadata.
+ */
+const repoRoot = join(import.meta.dir, "..", "..");
 
 /** Spawn the dispatcher and return its exit code + captured streams. */
 async function runRegistry(args: string[]) {
@@ -130,13 +138,6 @@ describe("assertRegistryWriteTarget (unit)", () => {
     // repo root: only the canonical absolute path under the real working
     // tree is accepted. Foreign absolute paths with the same tail are
     // covered by the F49-negative tests below.
-    const repoRoot = (() => {
-      const out = spawnSync("git", ["rev-parse", "--show-toplevel"], {
-        encoding: "utf8",
-      });
-      return out.status === 0 ? out.stdout.trim() : "";
-    })();
-    expect(repoRoot.length).toBeGreaterThan(0);
     const absolute = join(repoRoot, CANONICAL_RELATIVE);
     expect(() => assertRegistryWriteTarget(absolute)).not.toThrow();
   });
@@ -283,15 +284,8 @@ describe("assertRegistryWriteTarget (unit)", () => {
   });
 
   test("F49: accepts the canonical absolute path resolved from the real repo root (production rule)", () => {
-    // Resolve the real repo root the same way the production helper does so
-    // the test is robust against where the repo is checked out.
-    const repoRoot = (() => {
-      const out = spawnSync("git", ["rev-parse", "--show-toplevel"], {
-        encoding: "utf8",
-      });
-      return out.status === 0 ? out.stdout.trim() : "";
-    })();
-    expect(repoRoot.length).toBeGreaterThan(0);
+    // Use the hermetic repoRoot constant above so the test is robust against
+    // source tarballs or stripped CI sandboxes without .git metadata.
     const canonicalAbsolute = join(repoRoot, CANONICAL_RELATIVE);
     expect(() => assertRegistryWriteTarget(canonicalAbsolute)).not.toThrow();
   });

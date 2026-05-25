@@ -573,10 +573,15 @@ describe("signatureFor", () => {
   });
 
   test("throws when owner is missing or empty (programmatic-caller guard)", () => {
-    const candidate = validCandidateObject();
-    delete candidate.signature;
-    candidate.owner = "";
-    expect(() => signatureFor(candidate)).toThrow(/non-empty strings/);
+    const missing = validCandidateObject();
+    delete missing.signature;
+    delete missing.owner;
+    expect(() => signatureFor(missing)).toThrow(/non-empty strings/);
+
+    const empty = validCandidateObject();
+    delete empty.signature;
+    empty.owner = "";
+    expect(() => signatureFor(empty)).toThrow(/non-empty strings/);
   });
 });
 

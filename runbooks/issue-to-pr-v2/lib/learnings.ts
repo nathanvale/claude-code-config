@@ -7,14 +7,22 @@
  * validates each learning entry against the closed schema fixed by PRD #88
  * and documented in the registry reference.
  *
- * Scope of THIS batch: `parseRegistry` (single-block extraction + parse) and
- * `validateRegistry` (required fields + the four closed enums). Candidate-file
- * ingestion, upsert/dedupe, canonical-overwrite protection, and write-scope
- * enforcement land in later batches and are intentionally absent here.
+ * This module is the full helper surface for the registry: `parseRegistry`
+ * (single-block extraction + parse), `parseRegistryFromString` (in-memory
+ * variant used by the dispatcher re-validate gate), `validateRegistry`
+ * (required fields + the four closed enums + evidence-key whitelist on stored
+ * entries), `loadCandidate` (JSON / YAML by extension), `validateCandidate`
+ * (candidate shape, enum membership, evidence-key whitelist, identifying-field
+ * presence for stable signature derivation), `signatureFor` (explicit
+ * signature or sha256 over identifying fields), `upsert` (pure-function
+ * signature dedupe, evidence append, lifecycle update, canonical-overwrite
+ * protection), `serializeRegistry` (prose-preserving Markdown writer over a
+ * constrained block-style YAML emitter), and `assertRegistryWriteTarget`
+ * (repo-root-anchored write-scope guard plus a narrow tmpdir-escape for tests).
  *
  * Enum constants follow the `lib/contract.ts` style: an `as const` array as
  * the single source of truth, with a derived union type. They are exported so
- * later batches (and tests) validate against the same closed sets.
+ * the dispatcher and tests validate against the same closed sets.
  */
 
 import { spawnSync } from "node:child_process";
