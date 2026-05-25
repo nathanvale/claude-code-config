@@ -1206,6 +1206,75 @@ describe("packet command (U5)", () => {
     expect(data.dispatch_evidence.cli_route_id).toBe("packet.validator");
   });
 
+  test("validator packet through CLI emits inline evidence source when requested", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "validator",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--persona",
+      "compound-engineering:ce-correctness-reviewer",
+      "--commit",
+      "abc1234",
+      "--touched-file",
+      "app/one.ts",
+      "--evidence-source",
+      "orchestrator_inline",
+      "--inline-validity-note",
+      "bounded one-file inline attempt",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    const data = envelope.data as {
+      packet: {
+        evidence_source: string;
+        inline_evidence: {
+          implementation_commit: string;
+          inline_validity_note: string;
+        };
+        builder_evidence?: unknown;
+      };
+      dispatch_evidence: { cli_route_id: string };
+    };
+    expect(data.packet.evidence_source).toBe("orchestrator_inline");
+    expect(data.packet.inline_evidence.implementation_commit).toBe("abc1234");
+    expect(data.packet.inline_evidence.inline_validity_note).toBe(
+      "bounded one-file inline attempt",
+    );
+    expect(data.packet.builder_evidence).toBeUndefined();
+    expect(data.dispatch_evidence.cli_route_id).toBe("packet.validator");
+  });
+
+  test("validator packet rejects inline-only flags without inline evidence source", () => {
+    const ledgerPath = writePacketLedger();
+    const { envelope, exit_code } = invoke([
+      "packet",
+      "validator",
+      "--ledger",
+      ledgerPath,
+      "--batch",
+      "b1",
+      "--persona",
+      "compound-engineering:ce-correctness-reviewer",
+      "--commit",
+      "abc1234",
+      "--inline-validity-note",
+      "bounded one-file inline attempt",
+      "--json",
+    ]);
+
+    expect(exit_code).toBe(64);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-packet-flag",
+    );
+    expect((envelope.error as { message: string }).message).toContain(
+      "inline evidence flags require --evidence-source orchestrator_inline",
+    );
+  });
+
   test("patch-proposal packet through CLI emits ac_mapping: [] and exactly one patch_batches entry", () => {
     const ledgerPath = writeProposerLedger();
     const { envelope, exit_code } = invoke([

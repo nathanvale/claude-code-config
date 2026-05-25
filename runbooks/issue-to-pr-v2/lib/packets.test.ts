@@ -1339,12 +1339,85 @@ describe("Validator packet", () => {
       const blob = JSON.stringify(packet.data) + packet.packet_markdown;
       expect(blob).not.toContain("I FIXED THE BUG");
       expect(blob).not.toContain("BUILDER WANTS TO EDIT");
+      if (packet.data.evidence_source !== "builder") {
+        throw new Error("expected Builder evidence source");
+      }
       // But the seven typed arrays DO flow:
       expect(packet.data.builder_evidence.implementation_steps).toEqual(["step 1"]);
       expect(packet.data.builder_evidence.tests_run).toEqual(["bun test"]);
       expect(packet.data.builder_evidence.suggested_validator_focus).toEqual([
         "focus area 1",
       ]);
+    });
+
+    test("renders inline attempt evidence without Builder envelope fields", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches:
+            "batches:\n" + pendingBatchYaml("target", ["app/target.ts"], [1]),
+        }),
+      );
+      const packet = renderValidatorPacket({
+        ledgerPath,
+        batchId: "target",
+        persona: "compound-engineering:ce-correctness-reviewer",
+        commitRefOrRange: "inline123",
+        touchedFiles: ["app/target.ts"],
+        evidenceSource: "orchestrator_inline",
+        inlineEvidence: {
+          inlineValidityNote:
+            "change_first remained bounded to one docs/template file",
+          userConfirmedExceptionNote:
+            "Nathan approved one more inline attempt for this batch",
+        },
+        now: FROZEN_TIME,
+      });
+
+      expect(packet.data.evidence_source).toBe("orchestrator_inline");
+      if (packet.data.evidence_source !== "orchestrator_inline") {
+        throw new Error("expected inline evidence source");
+      }
+      expect(packet.data.inline_evidence).toEqual({
+        implementation_commit: "inline123",
+        touched_files: ["app/target.ts"],
+        inline_validity_note:
+          "change_first remained bounded to one docs/template file",
+        user_confirmed_exception_note:
+          "Nathan approved one more inline attempt for this batch",
+      });
+      expect("builder_evidence" in packet.data).toBe(false);
+      const blob = JSON.stringify(packet.data) + packet.packet_markdown;
+      expect(blob).not.toContain("implementation_steps");
+      expect(blob).not.toContain("suggested_validator_focus");
+    });
+
+    test("rejects Builder evidence when rendering an inline Validator packet", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches:
+            "batches:\n" + pendingBatchYaml("target", ["app/target.ts"], [1]),
+        }),
+      );
+
+      expect(() =>
+        renderValidatorPacket({
+          ledgerPath,
+          batchId: "target",
+          persona: "compound-engineering:ce-correctness-reviewer",
+          commitRefOrRange: "inline123",
+          touchedFiles: ["app/target.ts"],
+          evidenceSource: "orchestrator_inline",
+          inlineEvidence: {
+            inlineValidityNote: "bounded inline attempt",
+          },
+          builderEvidence: {
+            implementation_steps: [
+              "fabricated Builder step from Orchestrator notes",
+            ],
+          },
+          now: FROZEN_TIME,
+        }),
+      ).toThrow(/inline Validator packets must not include Builder evidence/);
     });
 
     test("does not contain a commit-write or ledger-write slot", () => {
@@ -1452,6 +1525,10 @@ describe("Validator packet", () => {
       expect(packet.data.execution_mode).toBe("tdd");
       expect(packet.data.acceptance_tests).toHaveLength(1);
       expect(packet.data.ac_mapping).toEqual([1]);
+      expect(packet.data.evidence_source).toBe("builder");
+      if (packet.data.evidence_source !== "builder") {
+        throw new Error("expected Builder evidence source");
+      }
       expect(packet.data.builder_evidence).toEqual({
         implementation_steps: ["a"],
         existing_seams_used: ["b"],

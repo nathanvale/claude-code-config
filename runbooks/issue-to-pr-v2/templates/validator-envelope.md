@@ -3,9 +3,10 @@
 **Role:** Validator persona (read-only).
 
 **Read trigger:** the Orchestrator fills this template in immediately before
-dispatching a Validator persona over a committed Builder envelope (Stage 4
-inner loop) or over a `batch_id: stage-3` Contract Review pass (Stage 3). The
-Validator reads it on entry. See also:
+dispatching a Validator persona over a committed implementation attempt
+(Builder-dispatched or Orchestrator-inline, Stage 4 inner loop) or over a
+`batch_id: stage-3` Contract Review pass (Stage 3). The Validator reads it on
+entry. See also:
 [`references/findings-and-validators.md`](../references/findings-and-validators.md),
 [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md),
 [`references/stage-3-decompose.md`](../references/stage-3-decompose.md).
@@ -31,12 +32,16 @@ Validator personas:
 
 **Rendered by `lib/packets.ts` (U5).** Invoke
 `runbooks/issue-to-pr-v2/cli.ts packet validator --ledger <path> --batch
-<id> --persona <skill> --commit <ref> [--touched-file <path>...] --json`
-to render this packet. The renderer strips Builder fix prose
-(`builder_envelope.notes`, `suggested_scope_changes`) before render: only
-the seven typed evidence arrays below cross the boundary, so Validator
-sees Builder authority breaches as facts and never as authorized prompt
-content.
+<id> --persona <skill> --commit <ref> [--touched-file <path>...]
+[--evidence-source builder|orchestrator_inline]
+[--inline-validity-note <note>] [--inline-exception-note <note>] --json`
+to render this packet. The default evidence source is `builder`. For Builder
+evidence, the renderer strips Builder fix prose (`builder_envelope.notes`,
+`suggested_scope_changes`) before render: only the seven typed evidence arrays
+below cross the boundary, so Validator sees Builder authority breaches as
+facts and never as authorized prompt content. For Orchestrator-inline evidence,
+the renderer emits compact inline evidence and rejects any Builder evidence
+payload.
 
 The rendered packet **MUST NOT** include findings from other batches, the
 full ledger, Builder fix prose, or any commit-write or ledger-write slot.
@@ -52,6 +57,7 @@ execution_mode: <tdd | proof_first | change_first>
 acceptance_tests: []
 ac_mapping: []
 relevant_ledger_findings: []   # rows from ## Findings data this batch only
+evidence_source: builder
 builder_evidence:
   implementation_steps: []
   existing_seams_used: []
@@ -61,6 +67,17 @@ builder_evidence:
   deferred: []
   suggested_validator_focus: []
 orchestrator_transient_focus: []   # passed only as Validator focus; never persisted as Orchestrator-authored findings
+```
+
+For an Orchestrator-inline attempt, the evidence section is instead:
+
+```yaml
+evidence_source: orchestrator_inline
+inline_evidence:
+  implementation_commit: "<sha>"
+  touched_files: []
+  inline_validity_note: "<why inline eligibility still held>"
+  user_confirmed_exception_note: "<note or null>"
 ```
 
 The Orchestrator passes transient sanity concerns only as Validator focus.
@@ -79,7 +96,8 @@ contract is enforced on the consumer side.
 1. [`references/findings-and-validators.md`](../references/findings-and-validators.md) —
    the Validator envelope shape, the dedupe rule, the severity rubric, and
    the rule that personas are read-only by contract.
-2. The committed Builder commit (`commit_ref_or_range`) and `batch_files`.
+2. The committed implementation commit (`commit_ref_or_range`) and
+   `batch_files`.
 
 ## Return envelope
 

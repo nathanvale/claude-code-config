@@ -213,6 +213,26 @@ Stage 4 mutates batch entries at runtime to add:
   scope; the gate keeps the old and new meanings from mixing.
 - `final_verdict`: `converged | accepted-risk | blocked-for-user`.
 
+### `## Notes` implementation evidence
+
+Stage 4 records two structured Notes rows around every committed
+implementation attempt before a current-version batch may be terminal:
+
+- `implementation_attempt_checkpoint` is ledger-only evidence written before
+  Validator packet rendering. It cites `batch_id`, `implementation_commit`,
+  `attempt_lane` (`builder_attempts` or `orchestrator_inline_attempts`), and
+  `timestamp`.
+- `validator_wave_completed` is durable evidence written after the full
+  Validator wave. It cites the same `batch_id`, `implementation_commit`, and
+  `attempt_lane`, plus the `personas` set, packet `dispatch_evidence`
+  (`role: validator`, `target_id: <batch>@<commit>`, and
+  `cli_route_id: packet.validator`), `outcome`, and `findings`.
+
+`findings: []` is the required clean-wave proof. The helper validates
+current-version terminal batches against these Notes rows so a converged or
+accepted-risk batch cannot silently skip Validator evidence after a committed
+Builder or Orchestrator-inline attempt.
+
 ### `## Findings data` field requirements
 
 Each finding row is YAML with `id`, `batch_id`, `signature`, `persona`,

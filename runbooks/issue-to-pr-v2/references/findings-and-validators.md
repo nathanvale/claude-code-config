@@ -143,6 +143,12 @@ transient Validator focus, not orchestrator-authored findings.
    Produce candidate ledger rows only. Do not write `## Findings data` until
    after the dedupe step below. If every persona has empty findings, write
    `findings: []`.
+   After the full persona set returns and normalization finishes, append
+   `validator_wave_completed` evidence to `## Notes`. The row must cite the
+   implementation commit, attempt lane, persona set, packet
+   `dispatch_evidence`, outcome, and finding ids. A clean wave is recorded as
+   `outcome: clean` with `findings: []`; do not infer it later from missing
+   finding rows.
 4. Deduplicate normalized findings by `batch_id + signature` before writing
    the ledger. The group represents one underlying issue even when multiple
    personas report it. Keep one canonical finding row and mark the other rows

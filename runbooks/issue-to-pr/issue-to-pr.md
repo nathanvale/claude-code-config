@@ -1178,6 +1178,12 @@ the user chooses retry, import, or abandon.
    user-confirmed exception note. Include transient Orchestrator sanity
    concerns only as Validator focus; do not persist them as ledger entries or
    Orchestrator-authored findings.
+   Before rendering Validator packets, append a ledger-only
+   `implementation_attempt_checkpoint` Notes record tied to the implementation
+   commit and attempt lane. After the full Validator wave completes, append
+   `validator_wave_completed` Notes evidence tied to the same commit, lane,
+   persona set, packet `dispatch_evidence`, and outcome. Clean waves are
+   durable evidence too: record `outcome: clean` with `findings: []`.
 3. Ask each persona to return this envelope:
    `{"reviewer":"<persona>","findings":[],"residual_risks":[],"testing_gaps":[]}`.
    Before writing the ledger, normalize the response:

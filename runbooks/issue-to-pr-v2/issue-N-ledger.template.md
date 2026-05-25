@@ -122,8 +122,56 @@ findings: []
 
 <append-only log of escape hatch fires, user decisions, blocker overrides,
 host-builder-tools-unavailable evidence, builder-infrastructure-failure
+evidence, implementation attempt checkpoints, completed Validator-wave
 evidence, Validator findings checkpoint evidence, reachable commit refs,
 dirty/staged path summaries>
+
+### Implementation attempt checkpoint evidence (U6)
+
+Before rendering Validator packets for a committed implementation attempt,
+append this ledger-only checkpoint. The checkpoint is tied to the
+implementation commit and the lane that owns it.
+
+```text
+<!-- implementation-attempt-checkpoint -->
+```
+
+```yaml
+implementation_attempt_checkpoint:
+  batch_id: "<batch-id>"
+  implementation_commit: "<sha>"
+  attempt_lane: "<builder_attempts | orchestrator_inline_attempts>"
+  timestamp: "<ISO 8601>"
+```
+
+### Completed Validator-wave evidence (U6)
+
+After the full Validator wave completes, append durable wave evidence tied to
+the same implementation commit and lane. Clean waves are explicit, not
+inferred: use `outcome: clean` and `findings: []`.
+
+```text
+<!-- validator-wave-completed -->
+```
+
+```yaml
+validator_wave_completed:
+  batch_id: "<batch-id>"
+  implementation_commit: "<sha>"
+  attempt_lane: "<builder_attempts | orchestrator_inline_attempts>"
+  personas:
+    - "compound-engineering:ce-correctness-reviewer"
+    - "compound-engineering:ce-testing-reviewer"
+    - "compound-engineering:ce-maintainability-reviewer"
+    - "compound-engineering:ce-project-standards-reviewer"
+    - "compound-engineering:ce-adversarial-reviewer"
+  dispatch_evidence:
+    role: "validator"
+    target_id: "<batch-id>@<sha>"
+    cli_route_id: "packet.validator"
+  outcome: "<clean | findings-recorded>"
+  findings: []
+```
 
 ### runbook_version skew continuation evidence (U6)
 

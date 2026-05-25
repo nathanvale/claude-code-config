@@ -164,7 +164,16 @@ export type BuilderEvidence = {
   suggested_validator_focus: string[];
 };
 
-export type ValidatorPacketData = {
+export type ValidatorEvidenceSource = "builder" | "orchestrator_inline";
+
+export type InlineAttemptEvidence = {
+  implementation_commit: string;
+  touched_files: string[];
+  inline_validity_note: string;
+  user_confirmed_exception_note: string | null;
+};
+
+export type ValidatorPacketDataBase = {
   persona: string;
   commit_ref_or_range: string;
   touched_files: string[];
@@ -175,9 +184,18 @@ export type ValidatorPacketData = {
   acceptance_tests: string[];
   ac_mapping: number[];
   relevant_ledger_findings: FindingRow[];
-  builder_evidence: BuilderEvidence;
   orchestrator_transient_focus: string[];
 };
+
+export type ValidatorPacketData =
+  | (ValidatorPacketDataBase & {
+      evidence_source: "builder";
+      builder_evidence: BuilderEvidence;
+    })
+  | (ValidatorPacketDataBase & {
+      evidence_source: "orchestrator_inline";
+      inline_evidence: InlineAttemptEvidence;
+    });
 
 export type ValidatorPacket = {
   role: "validator";
@@ -489,6 +507,7 @@ export type ValidatorRenderInput = {
   persona: string;
   commitRefOrRange: string;
   touchedFiles: string[];
+  evidenceSource?: ValidatorEvidenceSource;
   builderEvidence?: Partial<BuilderEvidence> & {
     /**
      * Builder envelope `notes` and free prose are not forwarded. The
@@ -497,6 +516,10 @@ export type ValidatorRenderInput = {
      */
     notes?: string;
     suggested_scope_changes?: string[];
+  };
+  inlineEvidence?: {
+    inlineValidityNote: string;
+    userConfirmedExceptionNote?: string | null;
   };
   orchestratorTransientFocus?: string[];
   now?: Date;
@@ -534,22 +557,8 @@ export function renderValidatorPacket(
   );
   const relevant = allFindings.filter((f) => f.batch_id === input.batchId);
 
-  // Strip Builder fix prose: only the seven typed evidence arrays cross
-  // the boundary. notes/suggested_scope_changes are intentionally not
-  // copied — they may carry Builder fix recommendations that the
-  // validator must not see as authorized prompt content.
-  const evidence: BuilderEvidence = {
-    implementation_steps: input.builderEvidence?.implementation_steps ?? [],
-    existing_seams_used: input.builderEvidence?.existing_seams_used ?? [],
-    tests_run: input.builderEvidence?.tests_run ?? [],
-    assumptions: input.builderEvidence?.assumptions ?? [],
-    risks: input.builderEvidence?.risks ?? [],
-    deferred: input.builderEvidence?.deferred ?? [],
-    suggested_validator_focus:
-      input.builderEvidence?.suggested_validator_focus ?? [],
-  };
-
-  const data: ValidatorPacketData = {
+  const evidenceSource = input.evidenceSource ?? "builder";
+  const baseData: ValidatorPacketDataBase = {
     persona: input.persona,
     commit_ref_or_range: input.commitRefOrRange,
     touched_files: input.touchedFiles,
@@ -560,9 +569,55 @@ export function renderValidatorPacket(
     acceptance_tests: batch.acceptance_tests,
     ac_mapping: batch.ac_mapping,
     relevant_ledger_findings: relevant,
-    builder_evidence: evidence,
     orchestrator_transient_focus: input.orchestratorTransientFocus ?? [],
   };
+  let data: ValidatorPacketData;
+
+  if (evidenceSource === "orchestrator_inline") {
+    if (input.builderEvidence !== undefined) {
+      throw new PacketRenderError(
+        "invalid-validator-evidence-source",
+        "inline Validator packets must not include Builder evidence",
+      );
+    }
+    if (!input.inlineEvidence?.inlineValidityNote) {
+      throw new PacketRenderError(
+        "missing-inline-validator-evidence",
+        "inline Validator packets require an inline validity note",
+      );
+    }
+    data = {
+      ...baseData,
+      evidence_source: "orchestrator_inline",
+      inline_evidence: {
+        implementation_commit: input.commitRefOrRange,
+        touched_files: input.touchedFiles,
+        inline_validity_note: input.inlineEvidence.inlineValidityNote,
+        user_confirmed_exception_note:
+          input.inlineEvidence.userConfirmedExceptionNote ?? null,
+      },
+    };
+  } else {
+    // Strip Builder fix prose: only the seven typed evidence arrays cross
+    // the boundary. notes/suggested_scope_changes are intentionally not
+    // copied — they may carry Builder fix recommendations that the
+    // validator must not see as authorized prompt content.
+    const evidence: BuilderEvidence = {
+      implementation_steps: input.builderEvidence?.implementation_steps ?? [],
+      existing_seams_used: input.builderEvidence?.existing_seams_used ?? [],
+      tests_run: input.builderEvidence?.tests_run ?? [],
+      assumptions: input.builderEvidence?.assumptions ?? [],
+      risks: input.builderEvidence?.risks ?? [],
+      deferred: input.builderEvidence?.deferred ?? [],
+      suggested_validator_focus:
+        input.builderEvidence?.suggested_validator_focus ?? [],
+    };
+    data = {
+      ...baseData,
+      evidence_source: "builder",
+      builder_evidence: evidence,
+    };
+  }
 
   return {
     role: "validator",
@@ -1579,20 +1634,41 @@ function yamlFromValidator(data: ValidatorPacketData): string {
       );
     }
   }
-  lines.push("builder_evidence:");
-  lines.push(
-    `  implementation_steps: ${yamlList(data.builder_evidence.implementation_steps)}`,
-  );
-  lines.push(
-    `  existing_seams_used: ${yamlList(data.builder_evidence.existing_seams_used)}`,
-  );
-  lines.push(`  tests_run: ${yamlList(data.builder_evidence.tests_run)}`);
-  lines.push(`  assumptions: ${yamlList(data.builder_evidence.assumptions)}`);
-  lines.push(`  risks: ${yamlList(data.builder_evidence.risks)}`);
-  lines.push(`  deferred: ${yamlList(data.builder_evidence.deferred)}`);
-  lines.push(
-    `  suggested_validator_focus: ${yamlList(data.builder_evidence.suggested_validator_focus)}`,
-  );
+  lines.push(`evidence_source: ${data.evidence_source}`);
+  if (data.evidence_source === "builder") {
+    lines.push("builder_evidence:");
+    lines.push(
+      `  implementation_steps: ${yamlList(data.builder_evidence.implementation_steps)}`,
+    );
+    lines.push(
+      `  existing_seams_used: ${yamlList(data.builder_evidence.existing_seams_used)}`,
+    );
+    lines.push(`  tests_run: ${yamlList(data.builder_evidence.tests_run)}`);
+    lines.push(`  assumptions: ${yamlList(data.builder_evidence.assumptions)}`);
+    lines.push(`  risks: ${yamlList(data.builder_evidence.risks)}`);
+    lines.push(`  deferred: ${yamlList(data.builder_evidence.deferred)}`);
+    lines.push(
+      `  suggested_validator_focus: ${yamlList(data.builder_evidence.suggested_validator_focus)}`,
+    );
+  } else {
+    lines.push("inline_evidence:");
+    lines.push(
+      `  implementation_commit: ${yamlString(data.inline_evidence.implementation_commit)}`,
+    );
+    lines.push(
+      `  touched_files: ${yamlList(data.inline_evidence.touched_files)}`,
+    );
+    lines.push(
+      `  inline_validity_note: ${yamlString(data.inline_evidence.inline_validity_note)}`,
+    );
+    lines.push(
+      `  user_confirmed_exception_note: ${
+        data.inline_evidence.user_confirmed_exception_note === null
+          ? "null"
+          : yamlString(data.inline_evidence.user_confirmed_exception_note)
+      }`,
+    );
+  }
   lines.push(
     `orchestrator_transient_focus: ${yamlList(data.orchestrator_transient_focus)}`,
   );

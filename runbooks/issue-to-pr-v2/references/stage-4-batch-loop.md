@@ -119,6 +119,15 @@ produced the commit (no reduced wave for inline attempts). Persona selection,
 invocation, and findings normalization live in
 [findings-and-validators.md](findings-and-validators.md).
 
+Before rendering Validator packets, append a ledger-only
+`implementation_attempt_checkpoint` Notes record tied to the implementation
+commit and attempt lane (`builder_attempts` or
+`orchestrator_inline_attempts`). After the Validator wave completes, append a
+`validator_wave_completed` Notes record tied to the same commit, lane, persona
+set, packet `dispatch_evidence`, and outcome. Clean waves are durable evidence
+too: record `outcome: clean` with `findings: []` rather than relying on the
+absence of findings rows.
+
 Orchestrator-inline attempts honour the same `batch.files` authority
 boundary as Builder and are recorded in `orchestrator_inline_attempts`,
 separate from Builder attempt evidence. This lane is committed-only and
@@ -236,6 +245,8 @@ carrying both `packet` (machine-readable) and `packet_markdown`
   `cli.ts packet builder --ledger <ledger-path> --batch <batch-id> --attempt-type repair --target-finding-signature <signature> --json`
 - Validator persona:
   `cli.ts packet validator --ledger <ledger-path> --batch <batch-id> --persona <skill-name> --commit <ref> --touched-file <path> [--touched-file <path> ...] --json`
+- Validator persona for Orchestrator-inline attempt evidence:
+  `cli.ts packet validator --ledger <ledger-path> --batch <batch-id> --persona <skill-name> --commit <ref> --touched-file <path> [--touched-file <path> ...] --evidence-source orchestrator_inline --inline-validity-note "<note>" [--inline-exception-note "<note>"] --json`
 - Proposer (final-review finding handoff):
   `cli.ts packet proposer --ledger <ledger-path> --finding <finding-id> --json`
 - Patch-proposal candidate persistence:

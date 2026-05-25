@@ -79,6 +79,37 @@ export interface OrchestratorInlineAttempt {
   notes: string;
 }
 
+type AttemptLane = "builder_attempts" | "orchestrator_inline_attempts";
+
+interface ImplementationAttemptCheckpointEvidence {
+  batch_id: string;
+  implementation_commit: string;
+  attempt_lane: AttemptLane;
+  timestamp: string;
+}
+
+interface ValidatorWaveCompletedEvidence {
+  batch_id: string;
+  implementation_commit: string;
+  attempt_lane: AttemptLane;
+  personas: string[];
+  dispatch_evidence: {
+    role: string;
+    target_id: string;
+    cli_route_id: string;
+  };
+  outcome: string;
+  findings: string[];
+}
+
+const ALWAYS_ON_VALIDATOR_PERSONAS = [
+  "compound-engineering:ce-correctness-reviewer",
+  "compound-engineering:ce-testing-reviewer",
+  "compound-engineering:ce-maintainability-reviewer",
+  "compound-engineering:ce-project-standards-reviewer",
+  "compound-engineering:ce-adversarial-reviewer",
+] as const;
+
 export interface ParseOptions {
   patchProposalMode?: boolean;
   allowPatchBatches?: boolean;
@@ -1248,6 +1279,20 @@ export interface RunbookVersionContinuationEvidence {
 export function parseRunbookVersionContinuationEvidence(
   ledgerPath: string,
 ): RunbookVersionContinuationEvidence | null {
+  const notesBody = readNotesBodyOrNull(ledgerPath);
+  if (notesBody === null) return null;
+
+  for (const body of markedYamlBlocksFromNotes(
+    notesBody,
+    "runbook-version-skew-continuation",
+  )) {
+    const evidence = parseContinuationEvidenceBlock(body);
+    if (evidence !== null) return evidence;
+  }
+  return null;
+}
+
+function readNotesBodyOrNull(ledgerPath: string): string | null {
   let src: string;
   try {
     src = readFileSync(ledgerPath, "utf8");
@@ -1262,8 +1307,13 @@ export function parseRunbookVersionContinuationEvidence(
     /(?:^|\n)##\s+Notes\s*\n([\s\S]*?)(?=\n##\s|$)/,
   );
   if (!notesSection) return null;
-  const notesBody = notesSection[1];
+  return notesSection[1];
+}
 
+function markedYamlBlocksFromNotes(
+  notesBody: string,
+  markerName: string,
+): string[] {
   // Walk the Notes body line by line. The marker line and the opening
   // ```yaml fence must both live OUTSIDE any other column-zero fenced
   // region (F-U6-SEC-002): an attacker who wraps the marker + yaml
@@ -1271,6 +1321,7 @@ export function parseRunbookVersionContinuationEvidence(
   // their evidence honored as if it were operator-authored. The marker
   // and fence must both be column-zero.
   const lines = notesBody.split("\n");
+  const bodies: string[] = [];
   let openFence: string | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -1286,10 +1337,10 @@ export function parseRunbookVersionContinuationEvidence(
         // gap. If the immediate-previous-non-blank line is the marker
         // (and we are not currently inside another fenced region),
         // treat this fence as the evidence opener.
-        const previousMarkerFound = findPrecedingMarker(lines, i);
+        const previousMarkerFound = findPrecedingMarker(lines, i, markerName);
         if (fence === "```" && /^```yaml/.test(line) && previousMarkerFound) {
-          const evidence = consumeEvidenceFence(lines, i);
-          if (evidence !== null) return evidence;
+          const body = consumeMarkedYamlFence(lines, i);
+          if (body !== null) bodies.push(body);
           // Parser rejected this row — keep scanning subsequent lines
           // for the next candidate.
           // Skip past the closing fence we already located, if any.
@@ -1305,7 +1356,7 @@ export function parseRunbookVersionContinuationEvidence(
       }
     }
   }
-  return null;
+  return bodies;
 }
 
 /**
@@ -1319,13 +1370,14 @@ export function parseRunbookVersionContinuationEvidence(
 function findPrecedingMarker(
   lines: readonly string[],
   index: number,
+  markerName: string,
 ): boolean {
+  const escapedMarker = markerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const markerPattern = new RegExp(`^<!--\\s*${escapedMarker}\\s*-->\\s*$`);
   for (let j = index - 1; j >= 0; j--) {
     const candidate = lines[j];
     if (candidate.trim().length === 0) continue;
-    return /^<!--\s*runbook-version-skew-continuation\s*-->\s*$/.test(
-      candidate,
-    );
+    return markerPattern.test(candidate);
   }
   return false;
 }
@@ -1348,14 +1400,13 @@ function findClosingFenceIndex(
   return -1;
 }
 
-function consumeEvidenceFence(
+function consumeMarkedYamlFence(
   lines: readonly string[],
   openIndex: number,
-): RunbookVersionContinuationEvidence | null {
+): string | null {
   const closeIndex = findClosingFenceIndex(lines, openIndex + 1, "```");
   if (closeIndex === -1) return null;
-  const body = lines.slice(openIndex + 1, closeIndex).join("\n");
-  return parseContinuationEvidenceBlock(body);
+  return lines.slice(openIndex + 1, closeIndex).join("\n");
 }
 
 function parseContinuationEvidenceBlock(
@@ -1453,6 +1504,298 @@ function parseContinuationEvidenceBlock(
     reference_context: referenceContext,
     accepted_risk: acceptedRisk,
   };
+}
+
+function parseImplementationAttemptCheckpointEvidence(
+  ledgerPath: string,
+): ImplementationAttemptCheckpointEvidence[] {
+  const notesBody = readNotesBodyOrNull(ledgerPath);
+  if (notesBody === null) return [];
+  return markedYamlBlocksFromNotes(
+    notesBody,
+    "implementation-attempt-checkpoint",
+  ).map(parseImplementationAttemptCheckpointBlock);
+}
+
+function parseImplementationAttemptCheckpointBlock(
+  block: string,
+): ImplementationAttemptCheckpointEvidence {
+  const fields = parseTwoSpaceScalarBlock(
+    block,
+    "implementation_attempt_checkpoint",
+    "implementation attempt checkpoint evidence",
+  );
+  const batchId = evidenceRequiredString(fields, "batch_id", "implementation attempt checkpoint evidence");
+  const implementationCommit = evidenceRequiredString(
+    fields,
+    "implementation_commit",
+    "implementation attempt checkpoint evidence",
+  );
+  const attemptLane = evidenceRequiredAttemptLane(
+    fields,
+    "implementation attempt checkpoint evidence",
+  );
+  const timestamp = evidenceRequiredString(fields, "timestamp", "implementation attempt checkpoint evidence");
+  return {
+    batch_id: batchId,
+    implementation_commit: implementationCommit,
+    attempt_lane: attemptLane,
+    timestamp,
+  };
+}
+
+function parseValidatorWaveCompletedEvidence(
+  ledgerPath: string,
+): ValidatorWaveCompletedEvidence[] {
+  const notesBody = readNotesBodyOrNull(ledgerPath);
+  if (notesBody === null) return [];
+  return markedYamlBlocksFromNotes(notesBody, "validator-wave-completed").map(
+    parseValidatorWaveCompletedBlock,
+  );
+}
+
+function parseValidatorWaveCompletedBlock(
+  block: string,
+): ValidatorWaveCompletedEvidence {
+  const context = "validator wave completed evidence";
+  const lines = block.split("\n");
+  let sawHeader = false;
+  const scalars = new Map<string, string>();
+  const dispatchEvidence = new Map<string, string>();
+  const lists = new Map<string, string[]>();
+  let currentList: "personas" | "findings" | null = null;
+  let inDispatchEvidence = false;
+
+  for (const [index, raw] of lines.entries()) {
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (line.trim().length === 0) continue;
+    if (!sawHeader) {
+      if (!/^validator_wave_completed:\s*$/.test(line.trim())) {
+        fail(`${context} must start with validator_wave_completed:`);
+      }
+      sawHeader = true;
+      continue;
+    }
+
+    const topScalar = line.match(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (topScalar) {
+      const key = topScalar[1];
+      const rest = topScalar[2];
+      currentList = null;
+      inDispatchEvidence = false;
+      if (key === "personas" || key === "findings") {
+        if (lists.has(key)) fail(`${context} has duplicate field "${key}"`);
+        lists.set(key, parseEvidenceListHeader(rest, `${context} ${key}`));
+        currentList = key;
+        continue;
+      }
+      if (key === "dispatch_evidence") {
+        if (dispatchEvidence.size > 0) {
+          fail(`${context} has duplicate field "dispatch_evidence"`);
+        }
+        if (rest.trim().length > 0) {
+          fail(`${context} dispatch_evidence must be a mapping`);
+        }
+        inDispatchEvidence = true;
+        continue;
+      }
+      if (scalars.has(key)) fail(`${context} has duplicate field "${key}"`);
+      scalars.set(key, parseEvidenceScalar(rest, `${context} ${key}`));
+      continue;
+    }
+
+    const listItem = line.match(/^\s{4}-\s+(.*)$/);
+    if (listItem && currentList !== null) {
+      lists.get(currentList)?.push(parseListItemValue(listItem[1], index + 1));
+      continue;
+    }
+
+    const dispatchScalar = line.match(/^\s{4}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (dispatchScalar && inDispatchEvidence) {
+      const key = dispatchScalar[1];
+      if (dispatchEvidence.has(key)) {
+        fail(`${context} dispatch_evidence has duplicate field "${key}"`);
+      }
+      dispatchEvidence.set(
+        key,
+        parseEvidenceScalar(
+          dispatchScalar[2],
+          `${context} dispatch_evidence.${key}`,
+        ),
+      );
+      continue;
+    }
+
+    fail(`${context} line ${index + 1} is not valid evidence YAML`);
+  }
+  if (!sawHeader) fail(`${context} is missing validator_wave_completed:`);
+
+  const result = {
+    batch_id: evidenceRequiredString(scalars, "batch_id", context),
+    implementation_commit: evidenceRequiredString(
+      scalars,
+      "implementation_commit",
+      context,
+    ),
+    attempt_lane: evidenceRequiredAttemptLane(scalars, context),
+    personas: evidenceRequiredList(lists, "personas", context),
+    dispatch_evidence: {
+      role: evidenceRequiredString(dispatchEvidence, "role", `${context} dispatch_evidence`),
+      target_id: evidenceRequiredString(
+        dispatchEvidence,
+        "target_id",
+        `${context} dispatch_evidence`,
+      ),
+      cli_route_id: evidenceRequiredString(
+        dispatchEvidence,
+        "cli_route_id",
+        `${context} dispatch_evidence`,
+      ),
+    },
+    outcome: evidenceRequiredString(scalars, "outcome", context),
+    findings: evidenceRequiredList(lists, "findings", context),
+  };
+
+  for (const key of scalars.keys()) {
+    if (!["batch_id", "implementation_commit", "attempt_lane", "outcome"].includes(key)) {
+      fail(`${context} has unknown field "${key}"`);
+    }
+  }
+  for (const key of lists.keys()) {
+    if (key !== "personas" && key !== "findings") {
+      fail(`${context} has unknown list field "${key}"`);
+    }
+  }
+  for (const key of dispatchEvidence.keys()) {
+    if (!["role", "target_id", "cli_route_id"].includes(key)) {
+      fail(`${context} dispatch_evidence has unknown field "${key}"`);
+    }
+  }
+  validateValidatorWaveEvidenceShape(result);
+  return result;
+}
+
+function parseTwoSpaceScalarBlock(
+  block: string,
+  header: string,
+  context: string,
+): Map<string, string> {
+  const fields = new Map<string, string>();
+  let sawHeader = false;
+  for (const [index, raw] of block.split("\n").entries()) {
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (line.trim().length === 0) continue;
+    if (!sawHeader) {
+      if (line.trim() !== `${header}:`) fail(`${context} must start with ${header}:`);
+      sawHeader = true;
+      continue;
+    }
+    const scalar = line.match(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+    if (!scalar) fail(`${context} line ${index + 1} is not valid evidence YAML`);
+    const key = scalar[1];
+    if (fields.has(key)) fail(`${context} has duplicate field "${key}"`);
+    fields.set(key, parseEvidenceScalar(scalar[2], `${context} ${key}`));
+  }
+  if (!sawHeader) fail(`${context} is missing ${header}:`);
+  for (const key of fields.keys()) {
+    if (!["batch_id", "implementation_commit", "attempt_lane", "timestamp"].includes(key)) {
+      fail(`${context} has unknown field "${key}"`);
+    }
+  }
+  return fields;
+}
+
+function parseEvidenceScalar(rawValue: string, context: string): string {
+  const raw = rawValue.trim();
+  if (raw.length === 0) fail(`${context} must be a non-empty scalar`);
+  const parsed = parseScalarValue(raw);
+  if (parsed === null) fail(`${context} must be a non-empty scalar`);
+  const text = stripBoundaryWhitespace(parsed);
+  if (text.length === 0) fail(`${context} must be a non-empty scalar`);
+  if (containsControlByte(text)) fail(`${context} contains a control byte`);
+  return text;
+}
+
+function parseEvidenceListHeader(rawValue: string, context: string): string[] {
+  const raw = rawValue.trim();
+  if (raw.length === 0) return [];
+  if (raw === "[]") return [];
+  if (raw.startsWith("[") && raw.endsWith("]")) return parseInlineArray(raw);
+  fail(`${context} must be a list`);
+}
+
+function evidenceRequiredString(
+  fields: Map<string, string>,
+  key: string,
+  context: string,
+): string {
+  const value = fields.get(key);
+  if (value === undefined) fail(`${context} is missing required field "${key}"`);
+  return value;
+}
+
+function evidenceRequiredList(
+  lists: Map<string, string[]>,
+  key: string,
+  context: string,
+): string[] {
+  const value = lists.get(key);
+  if (value === undefined) fail(`${context} is missing required field "${key}"`);
+  if (value.some((item) => item.trim().length === 0)) {
+    fail(`${context} field "${key}" must contain non-empty strings`);
+  }
+  return value;
+}
+
+function evidenceRequiredAttemptLane(
+  fields: Map<string, string>,
+  context: string,
+): AttemptLane {
+  const lane = evidenceRequiredString(fields, "attempt_lane", context);
+  if (lane !== "builder_attempts" && lane !== "orchestrator_inline_attempts") {
+    fail(`${context} has invalid attempt_lane "${lane}"`);
+  }
+  return lane;
+}
+
+function validateValidatorWaveEvidenceShape(
+  evidence: ValidatorWaveCompletedEvidence,
+): void {
+  const context = `validator wave completed evidence for batch ${evidence.batch_id}`;
+  if (evidence.dispatch_evidence.role !== "validator") {
+    fail(`${context} dispatch_evidence.role must be validator`);
+  }
+  if (evidence.dispatch_evidence.cli_route_id !== "packet.validator") {
+    fail(`${context} dispatch_evidence.cli_route_id must be packet.validator`);
+  }
+  const target = evidence.dispatch_evidence.target_id.match(/^([^@]+)@(.+)$/);
+  if (!target) fail(`${context} dispatch_evidence.target_id must be <batch>@<commit>`);
+  if (target[1] !== evidence.batch_id) {
+    fail(`${context} dispatch_evidence.target_id batch does not match batch_id`);
+  }
+  const targetCommit = validateReachableCommit(
+    target[2],
+    `${context} dispatch_evidence.target_id commit`,
+  );
+  const implementationCommit = validateReachableCommit(
+    evidence.implementation_commit,
+    `${context} implementation commit`,
+  );
+  if (targetCommit !== implementationCommit) {
+    fail(`${context} dispatch_evidence.target_id commit does not match implementation_commit`);
+  }
+  if (evidence.outcome !== "clean" && evidence.outcome !== "findings-recorded") {
+    fail(`${context} has invalid outcome "${evidence.outcome}"`);
+  }
+  if (evidence.outcome === "clean" && evidence.findings.length > 0) {
+    fail(`${context} with outcome clean must use findings: []`);
+  }
+  const personas = new Set(evidence.personas);
+  for (const persona of ALWAYS_ON_VALIDATOR_PERSONAS) {
+    if (!personas.has(persona)) {
+      fail(`${context} is missing always-on persona "${persona}"`);
+    }
+  }
 }
 
 function readConfirmationState(ledgerPath: string): ConfirmationStateReport {
@@ -1966,6 +2309,7 @@ export function validateLedgerBatches(ledgerPath: string): void {
   for (const [index, row] of parsedRows.entries()) {
     validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   }
+  validateTerminalValidatorWaveEvidence(ledgerPath, parsedRows, batches);
   validateAcCoverage(batches, ledgerPath);
   stdout.write(`Ledger batches OK: ${batches.length} batches\n`);
 }
@@ -1986,6 +2330,7 @@ export function emitLedgerBatchContractDigest(ledgerPath: string): void {
   for (const [index, row] of parsedRows.entries()) {
     validateLedgerBatchAttemptInvariants(row, batches[index], index + 1);
   }
+  validateTerminalValidatorWaveEvidence(ledgerPath, parsedRows, batches);
   emitContractDigest(batches);
 }
 
@@ -2214,6 +2559,131 @@ function validateLedgerBatchAttemptInvariants(row: Record<string, unknown>, batc
   if (TERMINAL_BATCH_STATUSES.has(status) && committedAttemptCommits.size + inlineAttemptCommits.size === 0) {
     fail(`${context} with status ${status} must include at least one committed implementation attempt`);
   }
+}
+
+function validateTerminalValidatorWaveEvidence(
+  ledgerPath: string,
+  rows: Record<string, unknown>[],
+  batches: Batch[],
+): void {
+  if (!ledgerUsesCurrentRunbookVersion(ledgerPath)) return;
+
+  const checkpoints = indexImplementationAttemptCheckpoints(
+    parseImplementationAttemptCheckpointEvidence(ledgerPath),
+  );
+  const completedWaves = indexValidatorWaveCompletedEvidence(
+    parseValidatorWaveCompletedEvidence(ledgerPath),
+  );
+
+  for (const [index, row] of rows.entries()) {
+    const batch = batches[index];
+    const status = requiredString(row, "status", `ledger batch ${index + 1}`);
+    if (!TERMINAL_BATCH_STATUSES.has(status)) continue;
+
+    for (const attempt of requiredBuilderAttempts(row, `ledger batch ${index + 1}`)) {
+      if (attempt.status !== "committed" || attempt.commit_sha === null) continue;
+      validateCommittedAttemptValidatorEvidence({
+        batchId: batch.id,
+        commitRef: attempt.commit_sha,
+        lane: "builder_attempts",
+        checkpoints,
+        completedWaves,
+        context: `ledger batch ${index + 1} builder_attempts commit "${attempt.commit_sha}"`,
+      });
+    }
+
+    for (const attempt of requiredOrchestratorInlineAttempts(row, `ledger batch ${index + 1}`)) {
+      validateCommittedAttemptValidatorEvidence({
+        batchId: batch.id,
+        commitRef: attempt.commit_sha,
+        lane: "orchestrator_inline_attempts",
+        checkpoints,
+        completedWaves,
+        context: `ledger batch ${index + 1} orchestrator_inline_attempts commit "${attempt.commit_sha}"`,
+      });
+    }
+  }
+}
+
+function ledgerUsesCurrentRunbookVersion(ledgerPath: string): boolean {
+  const frontmatter = nonExiting(() => readFrontmatter(ledgerPath));
+  if (frontmatter === null) return false;
+  return readFrontmatterRunbookVersion(frontmatter) === RUNBOOK_VERSION;
+}
+
+function indexImplementationAttemptCheckpoints(
+  evidenceRows: ImplementationAttemptCheckpointEvidence[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const evidence of evidenceRows) {
+    const key = implementationEvidenceKey(
+      evidence.batch_id,
+      evidence.implementation_commit,
+      evidence.attempt_lane,
+      "implementation attempt checkpoint evidence",
+    );
+    if (keys.has(key)) {
+      fail(`duplicate implementation attempt checkpoint evidence for ${humanEvidenceKey(key)}`);
+    }
+    keys.add(key);
+  }
+  return keys;
+}
+
+function indexValidatorWaveCompletedEvidence(
+  evidenceRows: ValidatorWaveCompletedEvidence[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const evidence of evidenceRows) {
+    const key = implementationEvidenceKey(
+      evidence.batch_id,
+      evidence.implementation_commit,
+      evidence.attempt_lane,
+      "validator wave completed evidence",
+    );
+    if (keys.has(key)) {
+      fail(`duplicate completed Validator-wave evidence for ${humanEvidenceKey(key)}`);
+    }
+    keys.add(key);
+  }
+  return keys;
+}
+
+function validateCommittedAttemptValidatorEvidence(input: {
+  batchId: string;
+  commitRef: string;
+  lane: AttemptLane;
+  checkpoints: Set<string>;
+  completedWaves: Set<string>;
+  context: string;
+}): void {
+  const key = implementationEvidenceKey(
+    input.batchId,
+    input.commitRef,
+    input.lane,
+    input.context,
+  );
+  if (!input.checkpoints.has(key)) {
+    fail(`${input.context} is missing implementation attempt checkpoint evidence`);
+  }
+  if (!input.completedWaves.has(key)) {
+    fail(`${input.context} is missing completed Validator-wave evidence`);
+  }
+}
+
+function implementationEvidenceKey(
+  batchId: string,
+  commitRef: string,
+  lane: AttemptLane,
+  context: string,
+): string {
+  const resolved = validateReachableCommit(commitRef, context);
+  return `${batchId}\0${resolved}\0${lane}`;
+}
+
+function humanEvidenceKey(key: string): string {
+  const [batchId, commitRef, lane] = key.split("\0");
+  return `batch ${batchId} ${lane} commit ${commitRef}`;
 }
 
 function requiredArrayLike(value: unknown, key: string, context: string): string[] {

@@ -307,6 +307,9 @@ const HELP_DATA = {
     "--persona": "Validator persona skill name (validator).",
     "--commit": "Commit ref or range (validator).",
     "--touched-file": "Repeatable touched-file path (validator).",
+    "--evidence-source": "builder | orchestrator_inline (validator; defaults to builder).",
+    "--inline-validity-note": "Required when validator --evidence-source orchestrator_inline.",
+    "--inline-exception-note": "Optional user-confirmed exception note for inline validator evidence.",
     "--patch-id": "patch-NNN candidate id (patch-proposal).",
     "--patch-name": "Title (patch-proposal).",
     "--patch-goal": "Goal sentence (patch-proposal).",
@@ -331,9 +334,13 @@ const HELP_DATA = {
     },
     validator: {
       required: ["--ledger", "--batch", "--persona", "--commit"],
-      optional: [],
+      optional: [
+        "--evidence-source",
+        "--inline-validity-note",
+        "--inline-exception-note",
+      ],
       repeatable: ["--touched-file"],
-      enum: {},
+      enum: { "--evidence-source": ["builder", "orchestrator_inline"] },
     },
     "patch-proposal": {
       required: [
@@ -910,6 +917,9 @@ type PacketFlags = {
   persona?: string;
   commit?: string;
   touchedFiles: string[];
+  evidenceSource?: string;
+  inlineValidityNote?: string;
+  inlineExceptionNote?: string;
   patchId?: string;
   patchName?: string;
   patchGoal?: string;
@@ -952,6 +962,12 @@ function parsePacketFlags(args: readonly string[]): PacketFlags {
       case "--commit": flags.commit = consumeValue(arg, i); i++; break;
       case "--touched-file":
         flags.touchedFiles.push(consumeValue(arg, i)); i++; break;
+      case "--evidence-source":
+        flags.evidenceSource = consumeValue(arg, i); i++; break;
+      case "--inline-validity-note":
+        flags.inlineValidityNote = consumeValue(arg, i); i++; break;
+      case "--inline-exception-note":
+        flags.inlineExceptionNote = consumeValue(arg, i); i++; break;
       case "--patch-id": flags.patchId = consumeValue(arg, i); i++; break;
       case "--patch-name": flags.patchName = consumeValue(arg, i); i++; break;
       case "--patch-goal": flags.patchGoal = consumeValue(arg, i); i++; break;
@@ -1006,12 +1022,43 @@ function dispatchPacketRender(role: PacketRoleArg, flags: PacketFlags) {
       requireFlag(flags.batch, "validator", "--batch");
       requireFlag(flags.persona, "validator", "--persona");
       requireFlag(flags.commit, "validator", "--commit");
+      const evidenceSource = flags.evidenceSource ?? "builder";
+      if (
+        evidenceSource !== "builder" &&
+        evidenceSource !== "orchestrator_inline"
+      ) {
+        throw new PacketFlagError(
+          `--evidence-source must be "builder" or "orchestrator_inline"`,
+        );
+      }
+      if (evidenceSource === "orchestrator_inline") {
+        requireFlag(
+          flags.inlineValidityNote,
+          "validator",
+          "--inline-validity-note",
+        );
+      } else if (
+        flags.inlineValidityNote !== undefined ||
+        flags.inlineExceptionNote !== undefined
+      ) {
+        throw new PacketFlagError(
+          `inline evidence flags require --evidence-source orchestrator_inline`,
+        );
+      }
       return renderValidatorPacket({
         ledgerPath: flags.ledger ?? "",
         batchId: flags.batch ?? "",
         persona: flags.persona ?? "",
         commitRefOrRange: flags.commit ?? "",
         touchedFiles: flags.touchedFiles,
+        evidenceSource,
+        inlineEvidence:
+          evidenceSource === "orchestrator_inline"
+            ? {
+                inlineValidityNote: flags.inlineValidityNote ?? "",
+                userConfirmedExceptionNote: flags.inlineExceptionNote ?? null,
+              }
+            : undefined,
       });
     }
     case "patch-proposal": {

@@ -1318,6 +1318,188 @@ function terminalInlineBatchRecording(sha: string, files: string[]): string[] {
   ];
 }
 
+function validatorEvidenceNotes(
+  sha: string,
+  lane: "builder_attempts" | "orchestrator_inline_attempts",
+  overrides: Partial<{ waveCommit: string; findings: string[]; outcome: string }> = {},
+): string[] {
+  const waveCommit = overrides.waveCommit ?? sha;
+  const outcome = overrides.outcome ?? "clean";
+  const findings = overrides.findings ?? [];
+  return [
+    "## Notes",
+    "",
+    "<!-- implementation-attempt-checkpoint -->",
+    "```yaml",
+    "implementation_attempt_checkpoint:",
+    '  batch_id: "b1"',
+    `  implementation_commit: "${sha}"`,
+    `  attempt_lane: "${lane}"`,
+    '  timestamp: "2026-05-25T10:00:00+10:00"',
+    "```",
+    "",
+    "<!-- validator-wave-completed -->",
+    "```yaml",
+    "validator_wave_completed:",
+    '  batch_id: "b1"',
+    `  implementation_commit: "${waveCommit}"`,
+    `  attempt_lane: "${lane}"`,
+    "  personas:",
+    '    - "compound-engineering:ce-correctness-reviewer"',
+    '    - "compound-engineering:ce-testing-reviewer"',
+    '    - "compound-engineering:ce-maintainability-reviewer"',
+    '    - "compound-engineering:ce-project-standards-reviewer"',
+    '    - "compound-engineering:ce-adversarial-reviewer"',
+    "  dispatch_evidence:",
+    '    role: "validator"',
+    `    target_id: "b1@${waveCommit}"`,
+    '    cli_route_id: "packet.validator"',
+    `  outcome: "${outcome}"`,
+    findings.length === 0 ? "  findings: []" : "  findings:",
+    ...findings.map((finding) => `    - "${finding}"`),
+    "```",
+    "",
+  ];
+}
+
+function ledgerWithCurrentRunbookVersion(
+  batchLines: string[],
+  notesLines: string[] = [],
+): string {
+  return writeLedger(
+    [
+      "---",
+      "issue_number: 1",
+      `runbook_version: "${RUNBOOK_VERSION}"`,
+      "---",
+      "",
+      "# Issue 1",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- [ ] AC 1",
+      "",
+      "## Batches",
+      "",
+      ...batchLines,
+      "",
+      ...notesLines,
+    ].join("\n"),
+  );
+}
+
+describe("validateLedgerBatches: Validator-wave evidence", () => {
+  test("accepts a current-version terminal Builder attempt with clean completed-wave evidence", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      validatorEvidenceNotes(RUNBOOK_HEAL_CONTROL_PLANE_SHA, "builder_attempts"),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("accepts a current-version terminal inline attempt with clean completed-wave evidence", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalInlineBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      validatorEvidenceNotes(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        "orchestrator_inline_attempts",
+      ),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("rejects a current-version terminal committed attempt without completed-wave evidence", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "## Notes",
+        "",
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        '  timestamp: "2026-05-25T10:00:00+10:00"',
+        "```",
+        "",
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/missing completed Validator-wave evidence/);
+  });
+
+  test("rejects a current-version terminal committed attempt without checkpoint evidence", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "## Notes",
+        "",
+        "<!-- validator-wave-completed -->",
+        "```yaml",
+        "validator_wave_completed:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        "  personas:",
+        '    - "compound-engineering:ce-correctness-reviewer"',
+        '    - "compound-engineering:ce-testing-reviewer"',
+        '    - "compound-engineering:ce-maintainability-reviewer"',
+        '    - "compound-engineering:ce-project-standards-reviewer"',
+        '    - "compound-engineering:ce-adversarial-reviewer"',
+        "  dispatch_evidence:",
+        '    role: "validator"',
+        `    target_id: "b1@${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '    cli_route_id: "packet.validator"',
+        '  outcome: "clean"',
+        "  findings: []",
+        "```",
+        "",
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/missing implementation attempt checkpoint evidence/);
+  });
+
+  test("rejects completed-wave evidence that cites the wrong implementation commit", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      validatorEvidenceNotes(RUNBOOK_HEAL_CONTROL_PLANE_SHA, "builder_attempts", {
+        waveCommit: RUNBOOK_HEAL_DELIVERABLE_SHA,
+      }),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/missing completed Validator-wave evidence/);
+  });
+});
+
 function baseRunbookHealFinding(
   overrides: Partial<{ batch_id: string; resolution: string }> = {},
 ): {
