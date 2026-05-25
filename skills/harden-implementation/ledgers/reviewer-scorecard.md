@@ -42,23 +42,31 @@ the same `change_type` — not merely an angle that confirmed without new findin
 | 2026-05-25-builder-dispatch-u5 | behavioral-code | maintainability | 2 | 1 | 0 | 1 | 1 |
 | 2026-05-25-builder-dispatch-u5 | behavioral-code | security | 1 | 2 | 0 | 0 | 0 |
 | 2026-05-25-builder-dispatch-u5 | behavioral-code | data-integrity | 1 | 2 | 0 | 0 | 0 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | adversarial | 3 | 5 | 0 | 0 | 2 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | correctness | 3 | 2 | 0 | 3 | 2 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | acceptance-criteria | 3 | 4 | 0 | 0 | 2 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | testing | 3 | 7 | 0 | 2 | 2 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | maintainability | 3 | 11 | 1 | 0 | 1 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | security | 1 | 3 | 0 | 0 | 0 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | data-integrity | 1 | 3 | 0 | 2 | 0 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | reliability | 1 | 6 | 0 | 0 | 0 |
+| 2026-05-25-builder-dispatch-u6 | behavioral-code | scope-guard | 1 | 1 | 0 | 0 | 0 |
 
 ## Aggregate scorecard (regenerated each run)
 
-**Runs recorded:** 4 &nbsp;|&nbsp; **change_types seen:** docs/contract (3), behavioral-code (1)
+**Runs recorded:** 5 &nbsp;|&nbsp; **change_types seen:** docs/contract (3), behavioral-code (2)
 
-> 3 docs/contract runs now exist. Verdicts are firmer than at n=2 but still
-> below the ~5-run threshold, so treat the scorecard as advisory and keep
-> casting the wide default net. Where a verdict flipped on new evidence, the
-> change is noted.
+> 3 docs/contract runs and 2 behavioral-code runs now exist. Verdicts are
+> firmer than at n=1 but still below the ~5-run threshold, so treat the
+> scorecard as advisory and keep casting the wide default net. Where a verdict
+> flipped on new evidence, the change is noted.
 >
-> The first behavioral-code run (`2026-05-25-builder-dispatch-u5`) is recorded
-> in its own aggregate below. It is NOT folded into the docs/contract numbers:
+> The behavioral-code aggregate is NOT folded into the docs/contract numbers:
 > the two change types break differently (behavioral-code has runtime logic to
 > exercise; docs/contract does not), so cross-type aggregation would corrupt
-> both. At n=1, every behavioral-code verdict is provisional and NOTHING can be
-> a drop candidate yet (the rule requires the pattern across multiple runs of
-> the same change_type).
+> both. At n=2 for behavioral-code, the multi-run drop bar is structurally
+> meetable for the first time. Any drop-candidate call still requires
+> `new_breaks: 0` AND nonzero `merged_into` across BOTH runs of that change_type.
 
 ### docs/contract (n=3, advisory)
 
@@ -107,41 +115,61 @@ u3 and its u2 verify-only round confirmed every fix held, so it protects against
 false convergence rather than padding the net. Do not prune below the wide net
 until ~5 runs of docs/contract accumulate.
 
-### behavioral-code (n=1, advisory)
+### behavioral-code (n=2, advisory)
 
-Aggregated across `2026-05-25-builder-dispatch-u5` only. At a single run all
-verdicts are **provisional** and no angle can qualify as a drop candidate (the
-drop rule requires `new_breaks:0` WITH nonzero `merged_into` across *multiple*
-runs of the same change_type). `avg new_breaks` divides by the number of runs
-the angle was dispatched in (1 here). `merged_into rate` = total merged_into /
-(total new_breaks + total merged_into).
+Aggregated across `2026-05-25-builder-dispatch-u5` and
+`2026-05-25-builder-dispatch-u6`. At n=2 the multi-run drop bar is meetable for
+the first time; verdicts remain provisional until ~5 behavioral-code runs
+accumulate. `avg new_breaks` divides by the number of runs the angle was
+dispatched in. `merged_into rate` = total merged_into / (total new_breaks +
+total merged_into) summed across all runs the angle appeared in.
 
-| angle | runs | avg new_breaks | regressions_caught | merged_into rate | verdict (provisional) |
-|-------|------|----------------|--------------------|--------------------|-----------------------|
-| adversarial | 1 | 3.0 (3/1) | 0 | 0% (0/3) | **earned keep (provisional)** (primary raiser of the blocking P0 F1 inline-fixture guardrail; sole raiser of F2 vacuous-proof gate and F9 undefined-masking; R2 verify-only confirmed the fix; zero redundant findings) |
-| security | 1 | 2.0 (2/1) | 0 | 0% (0/2) | **earned keep (provisional)** (sole raiser of F3 control-byte stderr gate and F6 notes-sanitize; only dispatched R1 by design, converged to gates; both findings independent, none redundant) |
-| data-integrity | 1 | 2.0 (2/1) | 0 | 0% (0/2) | **earned keep (provisional)** (sole raiser of F4 skew-gate-vs-validators gate and F7 matched-version hard-fail; only dispatched R1 by design; both findings independent, none redundant) |
-| testing | 1 | 1.0 (1/1) | 0 | 50% (1/2) | **earned keep (provisional)** (sole raiser of F5 cross-lane-cap-untested coverage gap; co-raised F1 (merged); R2 verify-only confirmed coverage holds) |
-| maintainability | 1 | 1.0 (1/1) | 0 | 50% (1/2) | **earned keep (provisional)** (sole raiser of F8 dead-fallback; co-raised F1 (merged); R2 verify-only confirmed fix minimal and intent-clear) |
-| correctness | 1 | 0.0 (0/1) | 0 | 100% (0/1) | **confirmer (provisional)** (co-raised F1 (merged); R2 finding F10 DROPPED as a false positive so it scores no new_break; both rounds effectively verify-only; NOT a drop candidate at n=1, and dropping a false positive is the confirmer working, not failing) |
-| acceptance-criteria | 1 | 0.0 (0/1) | 0 | 100% (0/1) | **confirmer (provisional)** (co-raised F1 (merged); returned findings:[] both rounds verifying R4/R6/R7 MET with named functions + now-passing tests; convergence-honesty confirmer, NOT a drop candidate) |
+| angle | runs | avg new_breaks | regressions_caught | merged_into rate | verdict |
+|-------|------|----------------|--------------------|--------------------|---------|
+| maintainability | 2 | 6.0 (12/2) | 1 | 8% (1/13) | **earned keep** (sole raiser of the only loop-introduced regression F42 in u6 R2; 11 independent breaks in u6 spanning the F26-F35 cluster and the fixture-duplication regression; merge rate dropped from 50% (u5) to 8% (combined) as solo cluster ownership emerged) |
+| adversarial | 2 | 4.0 (8/2) | 0 | 0% (0/8) | **earned keep** (primary raiser on every co-raised signature both runs: u5 F1 P0 inline-fixture, u6 F16 range-commit + F12/F14/F17 backlog; 8 independent breaks, 0 redundant; consistent MVP across both runs) |
+| testing | 2 | 4.0 (8/2) | 0 | 27% (3/11) | **earned keep** (7 sole-raised test-coverage gaps in u6 alone covering cross-lane, persona-membership, duplicate evidence, renderer error, YAML markdown shape; co-raised the P0 in u5 and F1/F2 in u6; never new_breaks:0) |
+| reliability | 1 | 6.0 (6/1) | 0 | 0% (0/6) | **earned keep (provisional, 1 run)** (u6-only dispatch produced the F36-F41 cluster: unmemoized validateReachableCommit, spawnSync no timeout, dedup idempotency, partial-write recovery, rebase flake, misleading section-missing error; all sole-raised, none redundant; not dispatched in u5) |
+| security | 2 | 2.5 (5/2) | 0 | 0% (0/5) | **earned keep** (sole raiser of all 5 security findings across both runs: u5 F3 control-byte stderr + F6 notes-sanitize, u6 F22 CLI control-byte leak + F23 wave-list gap + F24 skew-gate widening GATE; only dispatched R1 by design both runs, converged to gates; zero redundancy) |
+| data-integrity | 2 | 2.5 (5/2) | 0 | 29% (2/7) | **earned keep** (u5: 2 sole-raised gates (F4 skew + F7 matched-version); u6: 3 sole-raised P3 gaps (F15 findings cross-check, F20 ISO timestamp, F21 personas duplicates) plus 2 merged (F14, F24 into adversarial/security); the merge rate stayed below 50% even as security took primary on the widened skew-gate — independent breaks every run) |
+| acceptance-criteria | 2 | 2.0 (4/2) | 0 | 20% (1/5) | **earned keep — upgraded from confirmer** (u5: pure confirmer with new_breaks:0; u6: primary raiser of F1 R6 findings-recorded test, F2 R7 skew-bypass test, F5 target_commit mismatch, F6 inline-lane missing-wave; flipped from "confirmer (provisional)" to earned keep because new_breaks is no longer 0 across runs) |
+| correctness | 2 | 1.0 (2/2) | 0 | 67% (4/6) | **earned keep / confirmer** (u5: new_breaks:0 with one false positive correctly dropped; u6: 2 sole-raised P3 backlog items F18/F19 plus 3 merged into adversarial F12/F16/F17; high merge rate reflects corroboration not redundancy; NOT a drop candidate because u6 independent breaks lifted new_breaks above zero) |
+| scope-guard | 1 | 1.0 (1/1) | 0 | 0% (0/1) | **earned keep (provisional, 1 run)** (u6-only dispatch raised F25 plan-metadata gap for cli.ts; not dispatched in u5; one independent break, no merges) |
 
-**Read after 1 behavioral-code run:** the wide net paid off immediately. The
-single blocking P0 (F1, the inline-fixture change-first guardrail that left all
-R4/R6/R7 invariants shipping untested on a red suite) was caught by five angles
-converging on one signature; adversarial owns the primary credit, the other four
-corroborated. The two security and two data-integrity findings were unique to
-those angles and converged to gates in Round 1, which is exactly why they were
-not re-dispatched in Round 2 (correct dispatch economy, not a coverage gap).
-correctness and acceptance-criteria scored `new_breaks:0`, but both co-raised
-the P0 and acceptance-criteria carried the convergence-honesty proof that all
-three ACs were MET, so neither is a drop candidate. correctness's R2 finding was
-a false positive (F10) correctly dropped with plan-text evidence: catching and
-discarding a false positive is the confirmer protecting against false
-convergence, not padding the net.
+**Read after 2 behavioral-code runs:** the wide net is paying off. U6 stress
+tested the loop with a much larger surface (1087 lines added, 9 R1 angles, 28
+distinct root causes, plus the F26-F35 maintainability cluster and F36-F41
+reliability cluster). Every angle that was dispatched in both runs (the 5
+always-on: adversarial, correctness, acceptance-criteria, testing,
+maintainability) has nonzero `new_breaks` across the combined set, so none
+qualifies as a drop candidate even though the multi-run bar is now meetable for
+the first time.
 
-No angle is a **drop candidate** for behavioral-code: at n=1 the multi-run bar
-is structurally unmeetable. Zero regressions were introduced by the hardening
-fix (test-only edit), so `regressions_caught` is 0 across the board, which is
-expected and not a negative signal. Keep the wide default net for the next
-behavioral-code run; revisit verdicts once ~5 behavioral-code runs accumulate.
+**Verdict flips from the u5-only read:**
+- **acceptance-criteria** flips from `confirmer (provisional)` to **earned keep**.
+  U5 it scored `new_breaks:0` (co-raised the P0, returned findings:[] in R2).
+  U6 it was the primary raiser of 4 independent breaks (F1, F2, F5, F6) directly
+  pinning R6 and R7 test gaps. Cross-run new_breaks is now 4, not 0, so the
+  confirmer-only read is upgraded.
+- **maintainability** holds **earned keep** but the verdict basis hardens: u5
+  flagged 1 break with a co-raise merge; u6 it owned 11 sole-raised findings
+  AND caught the only loop-introduced regression (F42, the Round-1 test
+  fixture-duplication). Regressions_caught:1 weights heavily.
+- **correctness** stays **earned keep / confirmer** but for stronger reasons:
+  u5 it scored 0 with a correctly-dropped false positive; u6 it scored 2
+  independent breaks (F18 evidence-list-header gap, F19 timestamp validation)
+  plus 3 merged-into-adversarial corroborations. The 67% merge rate looks high
+  but adversarial owns the primary credit on every co-raised signature, which
+  is exactly the confirmer role at work.
+
+No angle is a **drop candidate** for behavioral-code: at n=2 the bar is met but
+no angle satisfies `new_breaks:0` WITH nonzero `merged_into` across BOTH runs.
+adversarial, testing, and maintainability are the unambiguous MVPs (high
+new_breaks, zero or near-zero merge rates, consistent independent contribution).
+security and data-integrity continue to converge to single-round gates by
+design (correct dispatch economy, not coverage gaps). reliability and
+scope-guard are 1-run-only so their verdicts remain provisional. One regression
+caught by maintainability across two runs of behavioral-code is the highest
+signal in the entire scorecard: the loop caught its own mistake. Keep the wide
+default net for the next behavioral-code run; revisit verdicts once ~5
+behavioral-code runs accumulate.
