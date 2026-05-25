@@ -49,7 +49,16 @@ Resolve these before starting. Ask only for what you cannot infer:
   implementation may live in different repositories or working trees — resolve
   which repo holds the implementation before reviewing, and run that repo's
   tests, linters, and type checks there (its own runners, not the parent
-  session's, which may be rooted elsewhere).
+  session's, which may be rooted elsewhere). When the implementation is in a
+  different repo than the session's working directory, MCP code-quality
+  runners often **fail silently** — returning zero tests or empty results
+  rather than an error — because they root at the session cwd. Verify a runner
+  actually executed the target repo's suite (a nonzero test count); if it
+  returns nothing, fall back to running the repo's own CLI via the shell `cd`'d
+  into that repo. Also capture the working-tree baseline before editing
+  (`git -C <impl-repo> status --short`): pre-existing uncommitted changes there
+  are not yours, and you must separate them from your hardening edits when
+  reporting and committing.
 - **Acceptance criteria**: extract them from the plan. If the plan has none,
   derive a short checklist from the stated goal and confirm it with the user
   before looping (a loop with no acceptance criteria cannot converge honestly).
@@ -200,6 +209,9 @@ reviewer scorecard captures this run before you report. Then end with a
 - **Note-only findings**: recorded, not fixed.
 - **Out-of-scope gates**: real findings fixable only outside this slice, with
   the named work that must land before the slice is safe to ship.
+- **Edit attribution** (when the implementation repo had a dirty tree at
+  start): which files this loop changed versus pre-existing changes it left
+  untouched. Never imply you authored changes that were already there.
 - **Honest gaps**: anything the loop could not verify, or where evidence was
   weaker than the report implies.
 
