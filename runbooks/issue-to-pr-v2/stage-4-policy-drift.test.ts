@@ -180,11 +180,15 @@ describe("Stage 4 policy drift guards", () => {
     expect(host).toContain(
       "Before any batch status mutation or resumed Stage 4 implementation attempt",
     );
+    // Section anchors are pinned by named v1 section, not line number, so a
+    // reword of the v1 runbook that shifts lines does not silently invalidate
+    // the citation (and a correction here is not punished by this test). See
+    // .claude/rules/code-citations.md.
     expect(host).toContain(
-      "Pre-implementation: host Builder readiness check (v1 L717-748, L1081-1088)",
+      "Pre-implementation: host Builder readiness check (v1 Stage 4 step 3 + inner-loop readiness repeat)",
     );
     expect(host).toContain(
-      "Post-dispatch: builder-infrastructure-failure (v1 L1090-1098)",
+      'Post-dispatch: builder-infrastructure-failure (v1 inner-loop "If Builder dispatch begins" rule)',
     );
     expect(host).toContain(
       "including Builder dispatch, bounded Orchestrator-inline work, and resumed repair dispatches",
@@ -193,6 +197,31 @@ describe("Stage 4 policy drift guards", () => {
       "do not append Builder or Orchestrator-inline attempt evidence",
     );
     expect(host).toContain("do not fall back to Orchestrator-inline");
+    // Post-dispatch builder-infrastructure-failure keeps its own behavioral
+    // consequences pinned (not just the section header), so deleting the
+    // no-Validators / in-progress / no-builder_attempts bullets fails the test.
+    expect(host).toContain("leave the batch `in-progress` (status unchanged)");
+    expect(host).toContain("do not append `builder_attempts`");
+    expect(host).toContain("do not dispatch Validators");
+    // The two blocked_reason values must stay distinguishable by their When
+    // semantics: host-builder-tools-unavailable is pre-implementation (covers
+    // any later repair), builder-infrastructure-failure is post-dispatch.
+    expect(host).toContain(
+      "Pre-implementation: host cannot create the Builder sub-agent or grant required capabilities for the Stage 4 attempt and any later repair",
+    );
+    expect(host).toContain(
+      "Post-dispatch: host began dispatch but timeout/permission/tool/serialization/schema/envelope failure prevented a well-formed Builder envelope",
+    );
+    // Host-readiness failure keeps NEITHER attempt lane out of the audit trail
+    // (inline lane named explicitly, not just builder_attempts).
+    expect(host).toContain(
+      "Neither lane appended",
+    );
+    // Pre-implementation readiness failure freezes EVERY batch (distinct from
+    // post-dispatch, which leaves only "the batch in-progress"). This pins the
+    // all-batches-vs-current-batch distinction the post-dispatch assertion
+    // above does not cover.
+    expect(host).toContain("leave every batch status unchanged");
 
     const downstreamDocs: Array<{
       context: string;
@@ -215,7 +244,11 @@ describe("Stage 4 policy drift guards", () => {
           "Before every Stage 4 implementation attempt",
           "bounded Orchestrator-inline",
           "host-builder-tools-unavailable",
-          "Validators",
+          // U3-co-located tail (occurs once, only in the inner-loop
+          // host-readiness clause): "do not dispatch Validators" alone occurs
+          // 4x in this file, so pin the discriminating run to prove the
+          // no-Validators + no-inline-fallback consequences live on THIS path.
+          "do not dispatch Validators, do not fall back to",
         ],
       },
       {
@@ -225,7 +258,7 @@ describe("Stage 4 policy drift guards", () => {
           "host-builder-tools-unavailable",
           "Stage 4 implementation attempt",
           "bounded Orchestrator-inline",
-          "Validators",
+          "dispatch no Validators",
         ],
       },
       {
@@ -235,7 +268,7 @@ describe("Stage 4 policy drift guards", () => {
           "host-builder-tools-unavailable",
           "Stage 4 implementation attempt",
           "bounded Orchestrator-inline",
-          "Validators",
+          "dispatch no Validators",
         ],
       },
       {

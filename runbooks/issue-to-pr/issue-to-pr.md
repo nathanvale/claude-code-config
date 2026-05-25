@@ -1093,8 +1093,10 @@ verify host Builder readiness against the current in-progress batch. If
 readiness is unavailable, record frontmatter `status: blocked` and
 `blocked_reason: host-builder-tools-unavailable`, append Notes evidence, leave
 the current batch status unchanged, append no implementation attempt evidence,
-do not increment `iterations`, do not dispatch Validators, and ask the user to
-retry or abandon.
+do not increment `iterations`, do not dispatch Validators, do not fall back to
+Orchestrator-inline implementation as a workaround (the inline path is gated on
+the same host readiness; a missing Builder capability means repairs cannot
+dispatch later), and ask the user to retry or abandon.
 
 If Builder dispatch begins but timeout, permission, tool, serialization,
 schema, or malformed-envelope failure prevents a well-formed Builder envelope,

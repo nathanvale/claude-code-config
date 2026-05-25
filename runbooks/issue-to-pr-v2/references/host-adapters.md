@@ -1,13 +1,18 @@
 # Host adapters reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L717-748
-(pre-implementation host-readiness check in Stage 4), L1081-1088
-(pre-implementation repeat inside `## Inner loop` for
-`host-builder-tools-unavailable`), L1090-1098 (post-dispatch
-`builder-infrastructure-failure`); `runbooks/issue-to-pr/README.md` L164-174
-(blocked-reason outcome summary) and L378-384 (glossary entries for Host
-Builder readiness failure and Builder infrastructure failure — definitional
-cross-references that point back to the canonical rules here).
+**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` — the
+"Stage 4: batch-loop" outer-loop step "Verify host Builder readiness for the
+selected eligible batch" (pre-implementation host-readiness check in Stage 4);
+the "Inner loop" "Before every Stage 4 implementation attempt" readiness
+paragraph (pre-implementation repeat for `host-builder-tools-unavailable`); and
+the "If Builder dispatch begins but timeout" paragraph that follows it
+(post-dispatch `builder-infrastructure-failure`). `runbooks/issue-to-pr/README.md`
+— the blocked-reason outcome summary beginning "If host readiness fails before a
+Stage 4 implementation attempt", and the "Host Builder readiness failure" /
+"Builder infrastructure failure" glossary entries (definitional cross-references
+that point back to the canonical rules here). Anchors are cited by named v1
+section, not line number, per `.claude/rules/code-citations.md`: line numbers
+drift silently when the v1 runbook is reworded.
 
 **Read trigger:** open this reference before every Stage 4 implementation
 attempt (Builder dispatch or bounded Orchestrator-inline) and after every
@@ -23,7 +28,7 @@ The v2 hot router treats these two failure modes as distinct routing outcomes.
 The boundary is the canonical rule body; the v1 README glossary keeps a
 two-line pointer to this reference.
 
-### Pre-implementation: host Builder readiness check (v1 L717-748, L1081-1088)
+### Pre-implementation: host Builder readiness check (v1 Stage 4 step 3 + inner-loop readiness repeat)
 
 Before any batch status mutation or resumed Stage 4 implementation attempt,
 verify host Builder readiness for the selected or in-progress batch. The host
@@ -58,10 +63,10 @@ The same check repeats before every Stage 4 implementation attempt inside the
 inner loop, including Builder dispatch, bounded Orchestrator-inline work, and
 resumed repair dispatches. When readiness is unavailable on a resumed inner-loop
 attempt, the Orchestrator records the same `host-builder-tools-unavailable`
-evidence above and additionally asks the user to retry or abandon (v1
-L1087-1088).
+evidence above and additionally asks the user to retry or abandon (per the v1
+inner-loop "ask the user to retry or abandon" clause).
 
-### Post-dispatch: builder-infrastructure-failure (v1 L1090-1098)
+### Post-dispatch: builder-infrastructure-failure (v1 inner-loop "If Builder dispatch begins" rule)
 
 If Builder dispatch begins but timeout, permission, tool, serialization,
 schema, or malformed-envelope failure prevents a well-formed Builder envelope:
@@ -80,17 +85,18 @@ effects before the user chooses retry, import, or abandon.
 
 ## Two blocked_reason values, two distinct paths
 
-| `blocked_reason` | When | Builder attempts row | iterations | Validators |
+| `blocked_reason` | When | Attempt evidence (`builder_attempts` / `orchestrator_inline_attempts`) | iterations | Validators |
 | --- | --- | --- | --- | --- |
-| `host-builder-tools-unavailable` | Pre-implementation: host cannot create the Builder sub-agent or grant required capabilities for the Stage 4 attempt and any later repair | Not appended | Not incremented | Not dispatched |
-| `builder-infrastructure-failure` | Post-dispatch: host began dispatch but timeout/permission/tool/serialization/schema/envelope failure prevented a well-formed Builder envelope | Not appended | Not incremented | Not dispatched |
+| `host-builder-tools-unavailable` | Pre-implementation: host cannot create the Builder sub-agent or grant required capabilities for the Stage 4 attempt and any later repair | Neither lane appended | Not incremented | Not dispatched |
+| `builder-infrastructure-failure` | Post-dispatch: host began dispatch but timeout/permission/tool/serialization/schema/envelope failure prevented a well-formed Builder envelope | Neither lane appended | Not incremented | Not dispatched |
 
 Both values are accepted by helper validation of frontmatter; both keep the
-batch out of the `builder_attempts` audit trail until the next well-formed
-Builder envelope arrives. The v2 Builder dispatch contract enumerates the two
-strings (see [builder-dispatch.md](builder-dispatch.md)).
+batch out of both the `builder_attempts` and `orchestrator_inline_attempts`
+audit trails until the next well-formed Builder envelope or committed
+Orchestrator-inline attempt arrives. The v2 Builder dispatch contract enumerates
+the two strings (see [builder-dispatch.md](builder-dispatch.md)).
 
-## Glossary cross-reference (v1 README L378-384)
+## Glossary cross-reference (v1 README "Host Builder readiness failure" / "Builder infrastructure failure" entries)
 
 The v1 README glossary keeps a two-line entry for each blocked_reason value
 that points back to the rule body above. The v2
