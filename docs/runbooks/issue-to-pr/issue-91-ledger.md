@@ -10,9 +10,9 @@ runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
 ac_confirmed_at: "2026-05-25T01:24:29Z"
-batch_contract_confirmation_status: "pending"
+batch_contract_confirmation_status: "blocked"
 batch_contract_confirmed_at: null
-blocked_reason: null
+blocked_reason: "stage-3-open-blocker"
 pr_url: null
 ship_mode: "standard"
 final_reviewed_at: null
@@ -99,13 +99,22 @@ patch-NNN`. Duplicate findings are identified by
 non-superseded row with the same batch id and signature.
 
 ```yaml
-findings: []
+findings:
+  - id: "f-stage3-001"
+    batch_id: "stage-3"
+    signature: "tdd-mode-split-across-impl-and-test-batches"
+    persona: "ce-correctness-reviewer"
+    severity: "P1"
+    status: "open"
+    summary: "Candidate U3 (ledger-validator) was tdd-mode but contained only impl files; U4 (validator-tests) was tdd-mode but contained only the test file. The DAG forced impl-then-tests, contradicting the per-batch tdd contract."
+    resolution: null
 ```
 
 ## Findings
 
 | id  | batch_id | signature | persona | severity | status | summary | resolution |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
+| f-stage3-001 | stage-3 | tdd-mode-split-across-impl-and-test-batches | ce-correctness-reviewer | P1 | open | Candidate U3 (ledger-validator) was tdd-mode but contained only impl files; U4 (validator-tests) was tdd-mode but contained only the test file. The DAG forced impl-then-tests, contradicting the per-batch tdd contract. |  |
 
 ## Notes
 

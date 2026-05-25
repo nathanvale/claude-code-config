@@ -28,7 +28,7 @@ This plan adds the per-issue ledger section, the prose that explains the split, 
 | AC2 | Ledger / reference prose explains ledger-records-this-run vs registry-owns-canonical-lifecycle split | U2 |
 | AC3 | Helper validation rejects ledgers missing the required Workflow Learnings section | U3 |
 | AC4 | Run-specific learning references can point to registry signatures without duplicating canonical entry | U1 (schema) + U2 (prose) |
-| AC5 | Tests cover required section + run-specific reference/evidence shape | U4 |
+| AC5 | Tests cover required section + run-specific reference/evidence shape | U3 (tdd: tests authored alongside the validator) |
 
 ## Scope boundaries
 
@@ -188,11 +188,11 @@ This illustrates the intended approach and is directional guidance for review, n
 
 **Verification:** Both reference files mention `## Workflow Learnings` and the signature-cross-reference rule; `ledger-and-helper.md` lists the new section under the body-sections enumeration; `workflow-learnings-registry.md` points at the ledger section as the per-run evidence home.
 
-### U3. Ledger validator + CLI dispatch
+### U3. Ledger validator, CLI dispatch, and tests (tdd)
 
-**Goal:** AC3. Add `validateWorkflowLearnings(ledgerPath)` to `lib/ledger.ts` and dispatch it via `decompose.ts --validate-workflow-learnings`.
+**Goal:** AC3 + AC5. Add `validateWorkflowLearnings(ledgerPath)` to `lib/ledger.ts`, dispatch it via `decompose.ts --validate-workflow-learnings`, and author its full test suite in the same batch in red-then-green order.
 
-**Requirements:** AC3.
+**Requirements:** AC3, AC5.
 
 **Dependencies:** U1.
 
@@ -200,55 +200,35 @@ This illustrates the intended approach and is directional guidance for review, n
 
 - `runbooks/issue-to-pr-v2/lib/ledger.ts` (modify — add exported function near `validateFindingsData`)
 - `runbooks/issue-to-pr-v2/decompose.ts` (modify — add flag dispatch)
-
-**Approach:**
-
-- Implement `validateWorkflowLearnings(ledgerPath: string): void` in `lib/ledger.ts`.
-- Section extraction: reuse whatever section-extractor helper `validateFindingsData` uses (look for the existing private helper that grabs `## Findings data`); apply it to `## Workflow Learnings`. Section missing fires `fail('ledger ${ledgerPath} has no ## Workflow Learnings section')`.
-- Fenced-yaml extraction: reuse the same regex / scan pattern `validateFindingsData` uses for `## Findings data`. No block: `fail('## Workflow Learnings has no fenced yaml block')`. Multiple blocks within the section: `fail('## Workflow Learnings must contain a single fenced yaml block')`.
-- YAML parse via `Bun.YAML.parse`. Missing top-level `workflow_learnings` array: `fail('## Workflow Learnings yaml block has no "workflow_learnings" array at the top level')`.
-- Per-entry checks (entry must be a mapping; required string fields `signature`, `affected_surface`, `what_was_wrong` non-empty; unknown keys rejected against a local whitelist). Empty `workflow_learnings: []` is valid and returns without error.
-- Error messages name the offending entry by `signature` when present, otherwise by 1-based index — match `lib/learnings.ts entryLabel` style.
-- Export the function alongside the other exported validators.
-- In `decompose.ts`: import the new function; add a flag handler `--validate-workflow-learnings <ledger-path>` right after `--validate-findings`; update the usage string.
-
-**Patterns to follow:**
-
-- `validateFindingsData` in `lib/ledger.ts` — same fail-on-missing-section style, same exit-on-error contract via `fail()`.
-- `validateRegistry` and the evidence-key whitelist in `lib/learnings.ts` — same kind of small local-const whitelist + `entryLabel` style.
-- The `--validate-findings` dispatch block in `decompose.ts` — copy the structure verbatim.
-
-**Test scenarios:** covered by U4 to keep that unit's single-purpose test file change clean.
-
-**Verification:** `bun runbooks/issue-to-pr-v2/decompose.ts --validate-workflow-learnings <ledger-path>` exits `0` on a valid ledger (template-shaped or with valid entries) and exits non-zero with an actionable stderr message on any failure mode listed above. The exported function is also callable from the test suite without going through the CLI.
-
-### U4. Tests for ledger section + validator
-
-**Goal:** AC5. Add unit tests for `validateWorkflowLearnings` covering the required section shape, valid empty case, valid populated case, every failure mode, and the unknown-key rejection contract.
-
-**Requirements:** AC5.
-
-**Dependencies:** U1, U3.
-
-**Files:**
-
 - `runbooks/issue-to-pr-v2/lib/ledger.test.ts` (modify — add test block for the new validator)
 
 **Approach:**
 
-- Add a new `describe('validateWorkflowLearnings', ...)` block at the end of the file.
-- Reuse the existing `writeLedgerWithFrontmatter(frontmatter, body)` helper (visible in current tests, e.g., the `## Notes` continuation-evidence tests) to build minimal ledger fixtures that vary only the `## Workflow Learnings` section.
-- Wrap the validator in `withFailMode("throw", () => ...)` so the tests assert on thrown `DecomposeError` messages (matches the existing pattern in `ledger.test.ts`).
-- Use `bun_runTests` (MCP runner, JSON output) to verify — never raw `bun test`.
+- This is one tdd batch: the test file and the implementation files live together so Builder can write the behaviour tests first (red), then add the validator + CLI dispatch (green), then confirm the suite passes — all inside one Builder attempt.
+- Test authoring (red phase):
+  - Add a new `describe('validateWorkflowLearnings', ...)` block at the end of `lib/ledger.test.ts`.
+  - Reuse the existing `writeLedgerWithFrontmatter(frontmatter, body)` helper (visible in current tests, e.g., the `## Notes` continuation-evidence tests) to build minimal ledger fixtures that vary only the `## Workflow Learnings` section.
+  - Wrap the validator in `withFailMode("throw", () => ...)` so the tests assert on thrown `DecomposeError` messages (matches the existing pattern in `ledger.test.ts`).
+- Implementation (green phase):
+  - Implement `validateWorkflowLearnings(ledgerPath: string): void` in `lib/ledger.ts`.
+  - Section extraction: reuse whatever section-extractor helper `validateFindingsData` uses (look for the existing private helper that grabs `## Findings data`); apply it to `## Workflow Learnings`. Section missing fires `fail('ledger ${ledgerPath} has no ## Workflow Learnings section')`.
+  - Fenced-yaml extraction: reuse the same regex / scan pattern `validateFindingsData` uses for `## Findings data`. No block: `fail('## Workflow Learnings has no fenced yaml block')`. Multiple blocks within the section: `fail('## Workflow Learnings must contain a single fenced yaml block')`.
+  - YAML parse via `Bun.YAML.parse`. Missing top-level `workflow_learnings` array: `fail('## Workflow Learnings yaml block has no "workflow_learnings" array at the top level')`.
+  - Per-entry checks (entry must be a mapping; required string fields `signature`, `affected_surface`, `what_was_wrong` non-empty; unknown keys rejected against a local whitelist). Empty `workflow_learnings: []` is valid and returns without error.
+  - Error messages name the offending entry by `signature` when present, otherwise by 1-based index — match `lib/learnings.ts entryLabel` style.
+  - Export the function alongside the other exported validators.
+  - In `decompose.ts`: import the new function; add a flag handler `--validate-workflow-learnings <ledger-path>` right after `--validate-findings`; update the usage string.
+- Verification (suite must pass green at end of batch):
+  - Use `bun_runTests` (MCP runner, JSON output) — never raw `bun test`.
 
-**Execution note:** test-first. The failure modes are enumerable and the function is pure-validation — writing the tests before the implementation will catch off-by-one slip-ups in section extraction and the unknown-key whitelist.
+**Execution note:** test-first. Write the failure-mode tests first, watch them fail with the right errors, then add the validator. The failure modes are enumerable and the function is pure-validation — TDD will catch off-by-one slip-ups in section extraction and the unknown-key whitelist.
 
-**Test scenarios (enumerate the full set):**
+**Test scenarios (enumerate the full set; covers AC5):**
 
 - Covers AC5. **Happy: empty section**. Ledger with `## Workflow Learnings` + fenced yaml `workflow_learnings: []` validates without error.
 - Covers AC5. **Happy: one valid entry**. Ledger with one entry that has `signature`, `affected_surface`, `what_was_wrong` all non-empty validates without error.
 - Covers AC5. **Happy: multiple valid entries**. Two entries, both with required fields, all optional fields present on one and absent on the other — validates.
-- **Missing section**. Ledger built without `## Workflow Learnings` at all -> fails with message naming the ledger path and the missing section header.
+- Covers AC3. **Missing section**. Ledger built without `## Workflow Learnings` at all -> fails with message naming the ledger path and the missing section header.
 - **Section present, no fenced yaml block**. `## Workflow Learnings` heading followed only by prose -> fails with "no fenced yaml block" message.
 - **Multiple fenced yaml blocks in the section**. Two ```yaml ... ``` blocks under the heading -> fails with "must contain a single fenced yaml block".
 - **YAML parse error**. Malformed yaml inside the block -> fails with yaml-parse error including the ledger path.
@@ -264,25 +244,27 @@ This illustrates the intended approach and is directional guidance for review, n
 - **Entry has unknown key `garbage_key`**. Generic unknown-key rejection.
 - **Entry labeled by signature in error message**. When an entry has a valid `signature` but a missing required field, the error message includes that signature string (mirrors `lib/learnings.ts entryLabel`).
 - **Entry labeled by 1-based index when signature absent**. Confirms fallback.
+- **CLI dispatch**. `bun runbooks/issue-to-pr-v2/decompose.ts --validate-workflow-learnings <ledger>` exits `0` on a valid ledger and non-zero with an actionable stderr message on any failure mode.
 
 **Patterns to follow:**
 
-- Existing `validateFindingsData` tests in the same file — same fixture helper, same `withFailMode("throw", ...)` assertion shape.
-- The continuation-evidence tests (`## Notes` block) for fixture-building examples.
+- `validateFindingsData` in `lib/ledger.ts` — same fail-on-missing-section style, same exit-on-error contract via `fail()`.
+- `validateRegistry` and the evidence-key whitelist in `lib/learnings.ts` — same kind of small local-const whitelist + `entryLabel` style.
+- The `--validate-findings` dispatch block in `decompose.ts` — copy the structure verbatim.
+- Existing `validateFindingsData` tests in `lib/ledger.test.ts` — same fixture helper, same `withFailMode("throw", ...)` assertion shape.
 - `lib/learnings.test.ts` for evidence-shape rejection patterns.
 
-**Verification:** `bun_runTests` reports all new tests passing; `tsc_check` shows no type regressions in `lib/ledger.ts` or `decompose.ts`; `biome_lintCheck` is clean for the changed files.
+**Verification:** `bun_runTests` reports all new tests passing; `tsc_check` shows no type regressions in `lib/ledger.ts` or `decompose.ts`; `biome_lintCheck` is clean for the changed files; `bun runbooks/issue-to-pr-v2/decompose.ts --validate-workflow-learnings <ledger-path>` exits `0` on a valid ledger and non-zero with an actionable stderr message on each documented failure mode.
 
 ## Dependencies between units
 
 ```text
 U1 (template + schema)
-  └── U2 (reference prose)
-  └── U3 (validator + CLI dispatch)
-        └── U4 (tests)
+  ├── U2 (reference prose)
+  └── U3 (validator + CLI dispatch + tests, tdd)
 ```
 
-U1 unlocks both U2 and U3 (independent of each other). U4 depends on U3.
+U1 unlocks both U2 and U3 (independent of each other). U3 is a single tdd batch carrying the validator, its CLI dispatch flag, and the full test suite together so Builder can author tests-first within one batch.
 
 ## Risks and mitigations
 
@@ -336,11 +318,12 @@ rationale: "change_first-exception: pure docs change to reference files; behavio
 
 ```yaml
 id: ledger-validator
-name: Ledger validator + CLI dispatch
-goal: "AC 3 holds: Helper validation rejects ledgers missing the required Workflow Learnings section once they are authored against the updated contract."
+name: Ledger validator, CLI dispatch, and tests (tdd)
+goal: "AC 3 + AC 5 hold: helper validation rejects ledgers missing the required Workflow Learnings section, and the full test suite (happy paths + every documented failure mode) is authored alongside the validator in tdd order."
 files:
   - runbooks/issue-to-pr-v2/lib/ledger.ts
   - runbooks/issue-to-pr-v2/decompose.ts
+  - runbooks/issue-to-pr-v2/lib/ledger.test.ts
 depends_on:
   - ledger-template-section
 execution_mode: tdd
@@ -349,23 +332,9 @@ acceptance_tests:
   - "AC 3 holds: validateWorkflowLearnings accepts an empty workflow_learnings: [] block"
   - "AC 3 holds: validateWorkflowLearnings rejects entries missing signature, affected_surface, or what_was_wrong"
   - "AC 3 holds: --validate-workflow-learnings flag dispatches to the new validator and exits non-zero on failure"
-ac_mapping:
-  - 3
-rationale: null
-```
-
-```yaml
-id: validator-tests
-name: Tests for ledger section + validator
-goal: "AC 5 holds: Tests cover the required section and the expected run-specific reference/evidence shape."
-files:
-  - runbooks/issue-to-pr-v2/lib/ledger.test.ts
-depends_on:
-  - ledger-validator
-execution_mode: tdd
-acceptance_tests:
   - "AC 5 holds: tests cover happy path (empty + populated), missing section, no fenced block, multiple blocks, yaml parse error, missing workflow_learnings key, non-array, entry-not-mapping, missing required fields, empty-string required fields, unknown keys (including canonical/lifecycle field rejection), and entry-labeling-by-signature-vs-index"
 ac_mapping:
+  - 3
   - 5
 rationale: null
 ```
