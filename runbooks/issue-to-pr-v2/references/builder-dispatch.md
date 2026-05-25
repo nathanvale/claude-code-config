@@ -77,11 +77,22 @@ The Orchestrator sends Builder one batch-only Work Packet:
 The Work Packet must not include the full plan, full ledger, raw Validator
 envelopes, unrelated batch state, `orchestrator_inline_attempts` as prior
 Builder attempts, or rich Builder evidence that was not persisted in compact
-`builder_attempts`. Inline attempt records are not Builder envelopes. They may
-appear only as non-authoritative Notes context when relevant to a repair
-route, never under `prior_builder_attempts`. When present, `supersedes` is
-read-only audit context for Builder. It does not change Builder Preflight
-rules, authority boundaries, or return-envelope shape.
+`builder_attempts`. Inline attempt records are not Builder envelopes and never
+appear under `prior_builder_attempts`; the renderer enforces this structurally
+by reading only the `builder_attempts` lane.
+
+Inline history is not separately fenced from the Builder packet's
+`notes_summary_for_this_batch`: that slot mechanically surfaces every
+batch-scoped `## Notes` line, because the CLI renders facts and does not
+adjudicate which Notes are repair-relevant (ADR 0002). The Orchestrator
+therefore owns Notes hygiene. When it records inline-attempt context in batch
+Notes, it must keep that context non-authoritative and relevant to the current
+repair route, and must not write raw inline evidence the packet would surface
+to Builder as if it were Builder evidence. The renderer's R5 guarantee is the
+structural one above; the Notes-content guarantee is the Orchestrator's.
+
+When present, `supersedes` is read-only audit context for Builder. It does not
+change Builder Preflight rules, authority boundaries, or return-envelope shape.
 
 When the batch depends on public-contract or domain-language constraints,
 the Orchestrator must materialize the needed authority summary from the
@@ -313,12 +324,20 @@ ledger state.
 
 The renderer scopes inputs to the target batch only: findings, prior
 attempts, and Notes are filtered by `batch_id` before render, so the
-context-leak invariant in `docs/runbooks/issue-to-pr-v2-refactor/
-u5-packet-rendering.md` is enforced at the render boundary. Repair packets
-render exactly one open P0/P1 target finding by signature and reject P2/P3 or
-already-fixed targets. Malformed compact `builder_attempts` rows are rejected
-instead of silently compacted, because accepting malformed rows risks leaking
-raw ledger state or treating inline evidence as Builder evidence.
+batch-isolation half of the context-leak invariant in
+`docs/runbooks/issue-to-pr-v2-refactor/u5-packet-rendering.md` is enforced at
+the render boundary. Batch-id filtering scopes Notes *to* the batch; it does
+not classify a batch-scoped Notes line as inline-evidence versus other
+context, so keeping inline evidence out of the surfaced Notes is the
+Orchestrator's responsibility (see the Work Packet section above), not a
+render-boundary guarantee. The structural R5 guarantee the renderer does own:
+prior attempts are read only from the `builder_attempts` lane, so
+`orchestrator_inline_attempts` can never reach `prior_builder_attempts`.
+Repair packets render exactly one open P0/P1 target finding by signature and
+reject P2/P3 or already-fixed targets. Malformed compact `builder_attempts`
+rows are rejected instead of silently compacted, because accepting malformed
+rows risks leaking raw ledger state or treating inline evidence as Builder
+evidence.
 
 ## See also
 

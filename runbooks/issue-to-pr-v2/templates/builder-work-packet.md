@@ -181,23 +181,15 @@ Open these references before any edit. Read order:
    inner-loop iteration cap (5), escape hatches, and lifecycle checkpoints
    the Orchestrator owns around this dispatch.
 
-## Authority boundary (summary)
+## Authority boundary
 
-Builder may edit only files in `batch_contract.files`. Builder may create a
-missing path only when that path is already listed in `batch_contract.files`.
-Builder may make exactly one commit when preflight passes. Builder may run
-targeted repo-local checks and the deterministic probes named by the Probe
-Catalog plus equivalent literal probes named by the batch goal, rationale, or
-acceptance tests.
-
-Builder must not change acceptance criteria, dependencies, execution mode,
-durable domain language, public contracts, governance docs, or files outside
-`batch_contract.files` unless the confirmed batch contract explicitly
-authorizes that change.
-
-Builder must not append or edit prior `builder_attempts` rows, edit findings,
-or perform Validator work. Repair attempts target exactly one open P0/P1
-finding by signature; Builder fixes only that target signature.
+The authority boundary is rendered into the `<authority_boundary>` framing tag
+above (filled from `BUILDER_AUTHORITY_BOUNDARY_TEXT` in
+[`../lib/packets.ts`](../lib/packets.ts)). The canonical rule body it mirrors
+lives in
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law-v1-l106-131).
+This template does not restate the MUST-NOT list a third time; read the framing
+tag above or the canonical reference.
 
 ## Preflight on entry
 
@@ -216,10 +208,10 @@ for the full schema, the status enum (`committed`, `fail-stop-preflight`,
 `fail-stop-read-failed`, `fail-stop-other`), and the rule that
 `suggested_validator_focus` is required.
 
-(The U2 plan's tree sketch listed `templates/builder-return-envelope.md` as a
-separate file. The schema is folded here to avoid a one-section satellite
-file; the canonical schema still lives in `references/builder-dispatch.md`,
-which is the single source of truth this template defers to.)
+(The sibling [`builder-return-envelope.md`](builder-return-envelope.md) holds
+the same envelope shape for readers who arrive at the return contract directly.
+The canonical schema lives in `references/builder-dispatch.md`, which is the
+single source of truth both this template and the sibling defer to.)
 
 ```yaml
 attempt_type: <implementation | repair>

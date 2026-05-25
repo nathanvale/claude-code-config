@@ -468,6 +468,343 @@ describe("Builder packet", () => {
       ).toThrow(PacketRenderError);
       tempDirsCleanup([ledgerPath]);
     });
+
+    test("rejects an inline-shaped row smuggled INTO builder_attempts (real R5 confusion vector)", () => {
+      // The sibling-key inline test above proves orchestrator_inline_attempts
+      // never reaches the packet because the renderer ignores that key. This
+      // test pins the OTHER confusion vector R5 cares about: an inline-shaped
+      // row (only commit_sha/files_touched/notes — the inline lane's three
+      // fields) written directly into the builder_attempts lane. It is missing
+      // the required Builder keys (attempt_type, status, route_hint, blockers,
+      // probe_results), so the closed-key-set validator must reject it rather
+      // than render inline evidence as a Builder attempt.
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: [
+            "batches:",
+            "  - id: target",
+            "    name: \"Batch target\"",
+            "    goal: \"implement target\"",
+            "    files:",
+            "      - app/foo.ts",
+            "    depends_on: []",
+            "    execution_mode: tdd",
+            "    acceptance_tests:",
+            "      - \"AC 1 holds: behavior 1\"",
+            "    ac_mapping:",
+            "      - 1",
+            "    rationale: null",
+            "    status: pending",
+            "    builder_commits: []",
+            "    builder_attempts:",
+            "      - commit_sha: inline999",
+            "        files_touched:",
+            "          - app/foo.ts",
+            "        notes: \"INLINE-SHAPED-IN-BUILDER-LANE\"",
+            "    iterations: 1",
+            "    final_verdict: null",
+          ].join("\n"),
+        }),
+      );
+      try {
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "implementation",
+          now: FROZEN_TIME,
+        });
+        throw new Error("expected PacketRenderError");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PacketRenderError);
+        expect((err as PacketRenderError).code).toBe("malformed-builder-attempt");
+      }
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("does not leak a sibling batch's builder_attempts into the target packet", () => {
+      // Plan scenario: "Builder implementation packet includes compact prior
+      // Builder attempts AND excludes unrelated batch state." Two pending
+      // batches each carry a committed Builder attempt with a distinct bait
+      // note; the target packet's prior_builder_attempts must contain only the
+      // target's attempt.
+      const targetBatch = [
+        "  - id: target",
+        "    name: \"Batch target\"",
+        "    goal: \"implement target\"",
+        "    files:",
+        "      - app/target.ts",
+        "    depends_on: []",
+        "    execution_mode: tdd",
+        "    acceptance_tests:",
+        "      - \"AC 1 holds: behavior 1\"",
+        "    ac_mapping:",
+        "      - 1",
+        "    rationale: null",
+        "    status: pending",
+        "    builder_commits:",
+        "      - tgt111",
+        "    builder_attempts:",
+        committedBuilderAttemptYaml({
+          commitSha: "tgt111",
+          filesTouched: ["app/target.ts"],
+          notes: "TARGET-ATTEMPT-NOTE",
+        }),
+        "    iterations: 1",
+        "    final_verdict: null",
+      ].join("\n");
+      const siblingBatch = [
+        "  - id: sibling",
+        "    name: \"Batch sibling\"",
+        "    goal: \"implement sibling\"",
+        "    files:",
+        "      - app/sibling.ts",
+        "    depends_on: []",
+        "    execution_mode: tdd",
+        "    acceptance_tests:",
+        "      - \"AC 2 holds: behavior 2\"",
+        "    ac_mapping:",
+        "      - 2",
+        "    rationale: null",
+        "    status: pending",
+        "    builder_commits:",
+        "      - sib222",
+        "    builder_attempts:",
+        committedBuilderAttemptYaml({
+          commitSha: "sib222",
+          filesTouched: ["app/sibling.ts"],
+          notes: "SIBLING-ATTEMPT-BAIT",
+        }),
+        "    iterations: 1",
+        "    final_verdict: null",
+      ].join("\n");
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: "batches:\n" + targetBatch + "\n" + siblingBatch,
+        }),
+      );
+      const packet = renderBuilderPacket({
+        ledgerPath,
+        batchId: "target",
+        attemptType: "implementation",
+        now: FROZEN_TIME,
+      });
+      expect(packet.data.prior_builder_attempts).toHaveLength(1);
+      expect(packet.data.prior_builder_attempts[0].commit_sha).toBe("tgt111");
+      expect(packet.data.builder_commits).toEqual(["tgt111"]);
+      const blob = JSON.stringify(packet.data) + packet.packet_markdown;
+      expect(blob).not.toContain("SIBLING-ATTEMPT-BAIT");
+      expect(blob).not.toContain("sib222");
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("rejects a builder_attempts row missing a required compact key", () => {
+      // Covers the missing-key branch of validateCompactBuilderAttemptKeys
+      // (distinct from the unexpected-key branch the rich-evidence test covers).
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: [
+            "batches:",
+            "  - id: target",
+            "    name: \"Batch target\"",
+            "    goal: \"implement target\"",
+            "    files:",
+            "      - app/foo.ts",
+            "    depends_on: []",
+            "    execution_mode: tdd",
+            "    acceptance_tests:",
+            "      - \"AC 1 holds: behavior 1\"",
+            "    ac_mapping:",
+            "      - 1",
+            "    rationale: null",
+            "    status: pending",
+            "    builder_commits:",
+            "      - abc123",
+            "    builder_attempts:",
+            // No probe_results key.
+            "      - attempt_type: implementation",
+            "        status: committed",
+            "        commit_sha: abc123",
+            "        files_touched:",
+            "          - app/foo.ts",
+            "        route_hint: null",
+            "        blockers: []",
+            "        notes: \"missing probe_results\"",
+            "    iterations: 1",
+            "    final_verdict: null",
+          ].join("\n"),
+        }),
+      );
+      try {
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "implementation",
+          now: FROZEN_TIME,
+        });
+        throw new Error("expected PacketRenderError");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PacketRenderError);
+        expect((err as PacketRenderError).code).toBe("malformed-builder-attempt");
+      }
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("coerces YAML null tokens in nullable attempt scalars to null", () => {
+      // nullableAttemptScalar maps the literal tokens `null` and `~` to null
+      // for commit_sha/route_hint. Without this test the coercion branch is
+      // unexercised and could silently regress to leaking the token string.
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: [
+            "batches:",
+            "  - id: target",
+            "    name: \"Batch target\"",
+            "    goal: \"implement target\"",
+            "    files:",
+            "      - app/foo.ts",
+            "    depends_on: []",
+            "    execution_mode: tdd",
+            "    acceptance_tests:",
+            "      - \"AC 1 holds: behavior 1\"",
+            "    ac_mapping:",
+            "      - 1",
+            "    rationale: null",
+            "    status: pending",
+            "    builder_commits: []",
+            "    builder_attempts:",
+            // fail-stop attempt: commit_sha null token, route_hint tilde token.
+            "      - attempt_type: implementation",
+            "        status: fail-stop-preflight",
+            "        commit_sha: null",
+            "        files_touched: []",
+            "        route_hint: ~",
+            "        blockers: []",
+            "        probe_results: []",
+            "        notes: \"preflight failed\"",
+            "    iterations: 1",
+            "    final_verdict: null",
+          ].join("\n"),
+        }),
+      );
+      const packet = renderBuilderPacket({
+        ledgerPath,
+        batchId: "target",
+        attemptType: "implementation",
+        now: FROZEN_TIME,
+      });
+      expect(packet.data.prior_builder_attempts[0].commit_sha).toBeNull();
+      expect(packet.data.prior_builder_attempts[0].route_hint).toBeNull();
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("repair packet throws a no-match error for an unknown signature", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: "batches:\n" + pendingBatchYaml("target", ["app/foo.ts"], [1]),
+          findingsTable:
+            "| f001 | target | sig-real | reviewer | P1 | open | real blocker | |",
+        }),
+      );
+      try {
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "repair",
+          targetFindingSignature: "sig-does-not-exist",
+          now: FROZEN_TIME,
+        });
+        throw new Error("expected PacketRenderError");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PacketRenderError);
+        expect((err as PacketRenderError).code).toBe(
+          "invalid-target-finding-signature",
+        );
+        expect((err as PacketRenderError).message).toContain("found no");
+      }
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("repair packet rejects a signature that matches only a fixed finding", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: "batches:\n" + pendingBatchYaml("target", ["app/foo.ts"], [1]),
+          findingsTable:
+            "| f003 | target | sig-fixed | reviewer | P1 | fixed | already fixed | commit abc123 |",
+        }),
+      );
+      try {
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "repair",
+          targetFindingSignature: "sig-fixed",
+          now: FROZEN_TIME,
+        });
+        throw new Error("expected PacketRenderError");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PacketRenderError);
+        expect((err as PacketRenderError).code).toBe(
+          "invalid-target-finding-signature",
+        );
+      }
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("repair packet reports a distinguishable error for duplicate signatures", () => {
+      // Two open P0/P1 rows sharing one signature is a ledger dedup-contract
+      // violation. The error must distinguish this from a missing finding so
+      // the operator fixes the ledger, not the repair argument.
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: "batches:\n" + pendingBatchYaml("target", ["app/foo.ts"], [1]),
+          findingsTable: [
+            "| f001 | target | dup-sig | reviewer | P1 | open | first | |",
+            "| f002 | target | dup-sig | reviewer | P1 | open | second | |",
+          ].join("\n"),
+        }),
+      );
+      try {
+        renderBuilderPacket({
+          ledgerPath,
+          batchId: "target",
+          attemptType: "repair",
+          targetFindingSignature: "dup-sig",
+          now: FROZEN_TIME,
+        });
+        throw new Error("expected PacketRenderError");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PacketRenderError);
+        expect((err as PacketRenderError).code).toBe(
+          "invalid-target-finding-signature",
+        );
+        expect((err as PacketRenderError).message).toContain("duplicate signature");
+      }
+      tempDirsCleanup([ledgerPath]);
+    });
+
+    test("rendered Builder packet carries no host-specific primitive names (R8)", () => {
+      // R8: dispatch language stays host-neutral. Determinism alone does not
+      // prove neutrality (a renderer that always emitted "codex" would be
+      // deterministic). Assert the rendered blob names no host primitive.
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: "batches:\n" + pendingBatchYaml("target", ["app/foo.ts"], [1]),
+        }),
+      );
+      const packet = renderBuilderPacket({
+        ledgerPath,
+        batchId: "target",
+        attemptType: "implementation",
+        now: FROZEN_TIME,
+      });
+      const blob = (
+        JSON.stringify(packet.data) + packet.packet_markdown
+      ).toLowerCase();
+      for (const host of ["claude", "codex", "cursor", "subagent_type", "mcp__"]) {
+        expect(blob).not.toContain(host);
+      }
+      tempDirsCleanup([ledgerPath]);
+    });
   });
 
   // ---- ALLOW-LIST ----

@@ -28,6 +28,7 @@ import { dirname, resolve } from "node:path";
 
 import {
   type Batch,
+  BUILDER_ATTEMPT_KEYS,
   EXECUTION_MODES,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
@@ -1102,31 +1103,24 @@ function compactPriorAttempts(
   });
 }
 
-const COMPACT_BUILDER_ATTEMPT_KEYS = new Set([
-  "attempt_type",
-  "status",
-  "commit_sha",
-  "files_touched",
-  "route_hint",
-  "blockers",
-  "probe_results",
-  "notes",
-]);
-
+// The compact prior-attempt shape the renderer accepts is exactly the
+// persisted Builder-attempt key set the ledger validator enforces. Reuse the
+// single exported source (contract.ts) so the renderer and ledger cannot drift:
+// if a future field is added to persistence, both sides move together.
 function validateCompactBuilderAttemptKeys(
   attempt: Record<string, unknown>,
   batchId: string,
   index: number,
 ): void {
   for (const key of Object.keys(attempt)) {
-    if (!COMPACT_BUILDER_ATTEMPT_KEYS.has(key)) {
+    if (!BUILDER_ATTEMPT_KEYS.has(key)) {
       throw new PacketRenderError(
         "malformed-builder-attempt",
         `ledger batch "${batchId}" builder_attempts[${index}] contains unexpected field "${key}"`,
       );
     }
   }
-  for (const key of COMPACT_BUILDER_ATTEMPT_KEYS) {
+  for (const key of BUILDER_ATTEMPT_KEYS) {
     if (!(key in attempt)) {
       throw new PacketRenderError(
         "malformed-builder-attempt",
@@ -1157,6 +1151,16 @@ function requireAttemptScalar(
   return String(value);
 }
 
+// Nullable Builder-attempt scalars (commit_sha, route_hint) accept the YAML
+// null tokens `null` and `~` and collapse them to null. This collapse is
+// load-bearing: the local ledger parser's unquoteScalar only strips quotes, it
+// does not convert null tokens the way readFrontmatterScalar does, so a parsed
+// `null`/`~` arrives here as the literal string. We trim before BOTH the
+// sentinel comparison and the return so a padded value round-trips consistently
+// (no trim/return asymmetry). A genuine value equal to the literal `null`/`~`
+// cannot be preserved through this lane; commit_sha and route_hint never
+// legitimately equal those tokens, and the alternative (a separate quoting
+// convention) would diverge from the ledger validator's own null handling.
 function nullableAttemptScalar(
   attempt: Record<string, unknown>,
   key: string,
@@ -1172,7 +1176,7 @@ function nullableAttemptScalar(
     );
   }
   const scalar = String(value).trim();
-  return scalar === "null" || scalar === "~" ? null : String(value);
+  return scalar === "null" || scalar === "~" ? null : scalar;
 }
 
 function requireAttemptArray(
@@ -1208,10 +1212,21 @@ function selectBuilderPacketFindings(input: {
       f.status === "open" &&
       (f.severity === "P0" || f.severity === "P1"),
   );
-  if (target.length !== 1) {
+  if (target.length === 0) {
     throw new PacketRenderError(
       "invalid-target-finding-signature",
-      `builder repair packet for batch "${input.batchId}" requires exactly one open P0/P1 finding with signature "${input.targetFindingSignature}"`,
+      `builder repair packet for batch "${input.batchId}" found no open P0/P1 finding with signature "${input.targetFindingSignature}"`,
+    );
+  }
+  if (target.length > 1) {
+    // Distinguish the duplicate-signature ledger corruption from the
+    // no-match case: the dedup contract (one non-superseded row per
+    // batch_id+signature) has been violated upstream, so the operator must
+    // fix the ledger, not the repair argument. A generic "exactly one"
+    // message would misdirect them toward a wrong-signature hunt.
+    throw new PacketRenderError(
+      "invalid-target-finding-signature",
+      `builder repair packet for batch "${input.batchId}" found ${target.length} open P0/P1 findings sharing signature "${input.targetFindingSignature}" (duplicate signature without supersede; ledger dedup contract violated)`,
     );
   }
   return target;
