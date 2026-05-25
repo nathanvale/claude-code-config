@@ -14,6 +14,7 @@ import {
   validateAcCoverage,
   validateFindingsData,
   validateLedgerBatches,
+  validateWorkflowLearnings,
   withFailMode,
 } from "./ledger";
 
@@ -1514,5 +1515,313 @@ describe("rawDiffHasContentBearingChange: mode-only vacuous-proof guard", () => 
       `:100644 100644 ${SHA_A} ${SHA_B} M\trunbooks/issue-to-pr-v2/real-edit.md`,
     ].join("\n");
     expect(rawDiffHasContentBearingChange(raw)).toBe(true);
+  });
+});
+
+// ---------------- validateWorkflowLearnings: AC 3 + AC 5 ----------------
+
+/**
+ * Build a minimal ledger that either omits `## Workflow Learnings` entirely
+ * (when `sectionBodyLines` is `null`) or appends it after a minimal
+ * `## Notes` section (when an array is passed). The body lines are written
+ * verbatim, so callers control whether the section contains a fenced yaml
+ * block, multiple blocks, prose only, etc.
+ */
+function writeLedgerWithWorkflowLearnings(
+  sectionBodyLines: string[] | null,
+): string {
+  const body = [
+    "## Notes",
+    "",
+    "<notes here>",
+    "",
+  ];
+  if (sectionBodyLines !== null) {
+    body.push("## Workflow Learnings", "", ...sectionBodyLines, "");
+  }
+  return writeLedgerWithFrontmatter([], body);
+}
+
+describe("validateWorkflowLearnings (in-process via withFailMode)", () => {
+  test("happy path: accepts an empty workflow_learnings: [] block", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings: []",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("happy path: accepts one valid entry with required fields", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:abc123"',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "the gate did not surface the missing field"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("happy path: accepts multiple entries, one fully populated and one minimal", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:full-entry"',
+      '    affected_surface: "runbook-reference"',
+      '    what_was_wrong: "reference was ambiguous"',
+      '    discovery_method: "operator review"',
+      '    root_cause: "missing example"',
+      '    scope: "all stage-3 runs"',
+      '    proposed_fix: "add canonical example"',
+      '    verification_idea: "follow-up run reads cleanly"',
+      '  - signature: "sha256:minimal-entry"',
+      '    affected_surface: "gotchas-guide"',
+      '    what_was_wrong: "noted but not yet diagnosed"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("fails when the ledger has no '## Workflow Learnings' section", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings(null);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/no '## Workflow Learnings' section/);
+  });
+
+  test("fails when the section has no fenced yaml block", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "Only prose lives here, no fenced block at all.",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/no fenced yaml block/);
+  });
+
+  test("fails when the section has multiple fenced yaml blocks", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings: []",
+      "```",
+      "",
+      "Intervening prose.",
+      "",
+      "```yaml",
+      "workflow_learnings: []",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/multiple fenced yaml blocks/);
+  });
+
+  test("fails when the yaml block does not parse", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      "  - signature: : : nope",
+      "    : also bad",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/did not parse|yaml/i);
+  });
+
+  test("fails when the parsed yaml has no workflow_learnings key", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "something_else: []",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/workflow_learnings.*array|no "workflow_learnings"/);
+  });
+
+  test("fails when workflow_learnings is not an array (mapping instead)", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      "  signature: nope",
+      "  affected_surface: nope",
+      "  what_was_wrong: nope",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/workflow_learnings.*array/);
+  });
+
+  test("fails when an entry is a scalar instead of a mapping", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - "not-a-mapping-just-a-string"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/entry.*mapping|#1/);
+  });
+
+  test("fails when an entry is missing signature", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - affected_surface: "cli-observability"',
+      '    what_was_wrong: "missing field surfaced late"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/signature/);
+  });
+
+  test("fails when an entry is missing affected_surface", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:no-surface"',
+      '    what_was_wrong: "missing surface"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/affected_surface/);
+  });
+
+  test("fails when an entry is missing what_was_wrong", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:no-observation"',
+      '    affected_surface: "cli-observability"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/what_was_wrong/);
+  });
+
+  test("fails when signature is an empty string", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: ""',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "blank signature"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/signature/);
+  });
+
+  test("fails when signature is whitespace-only", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "   "',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "whitespace-only signature"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/signature/);
+  });
+
+  test("fails when a canonical field 'summary' is present on a ledger entry", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:has-summary"',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "leaked canonical field"',
+      '    summary: "should not be here"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/unknown field "summary"|summary/);
+  });
+
+  test("fails when a canonical field 'owner' is present on a ledger entry", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:has-owner"',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "leaked canonical field"',
+      '    owner: "runbook-reference"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/unknown field "owner"|owner/);
+  });
+
+  test("fails when a lifecycle field 'disposition' is present on a ledger entry", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:has-disposition"',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "leaked lifecycle field"',
+      '    disposition: "small-fix"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/unknown field "disposition"|disposition/);
+  });
+
+  test("fails on a generic unknown key", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:garbage"',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "garbage key present"',
+      '    garbage_key: "boom"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/unknown field "garbage_key"|garbage_key/);
+  });
+
+  test("entry-labeling: error message includes the signature when present", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "sha256:identified-entry"',
+      '    affected_surface: "cli-observability"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/sha256:identified-entry/);
+  });
+
+  test("entry-labeling: error message includes #1 (1-based index) when signature is absent", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - affected_surface: "cli-observability"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/#1/);
   });
 });
