@@ -8,10 +8,11 @@ reasons and `/loop` fallback); `runbooks/issue-to-pr/README.md` L260-346 (fix
 protocol, risk classification, glossary).
 
 **Read trigger:** open this reference when Stage 4 batch-loop is about to
-dispatch Validator personas after a committed Builder envelope, when Stage 5
-final-review is about to record `ce-code-review` output, when the orchestrator
-needs the broad-reviewer fallback rule, or when closing a finding via one of
-the allowed status/resolution pairs. See also:
+dispatch Validator personas after a committed implementation attempt (Builder
+envelope or Orchestrator-inline), when Stage 5 final-review is about to record
+`ce-code-review` output, when the orchestrator needs the broad-reviewer
+fallback rule, or when closing a finding via one of the allowed
+status/resolution pairs. See also:
 [builder-dispatch.md](builder-dispatch.md),
 [stage-4-batch-loop.md](stage-4-batch-loop.md),
 [stage-5-final-review.md](stage-5-final-review.md).
@@ -20,8 +21,8 @@ the allowed status/resolution pairs. See also:
 
 ### Always-on reviewer set
 
-The always-on reviewers run on every committed Builder envelope, regardless of
-the persona selector signals:
+The always-on reviewers run on every committed implementation attempt (Builder
+envelope or Orchestrator-inline), regardless of the persona selector signals:
 
 - `compound-engineering:ce-correctness-reviewer`
 - `compound-engineering:ce-testing-reviewer`
@@ -63,19 +64,23 @@ surfaces. Record the choice (and the >80% mechanical-line estimate) in Notes.
 
 ## Persona selector (v1 L982-1016)
 
-After every committed Builder envelope, compute the conditional persona list
-from touched file names, the batch contract, and Builder
-`suggested_validator_focus`. Orchestrator may read full commit diff content
-only for Builder authority checks, envelope integrity, and lightweight
-correctness sanity checks; persona selection must not depend on Orchestrator
-implementation analysis. When path/name signals or Builder focus are
-incomplete, dispatch the default broad reviewer set. Existing path,
+After every committed implementation attempt, compute the conditional persona
+list from touched file names, the batch contract, and the real attempt evidence
+source. Builder-dispatched attempts may contribute Builder
+`suggested_validator_focus`; Orchestrator-inline attempts contribute compact
+inline evidence and must not fabricate Builder focus. Orchestrator may read
+full commit diff content only for authority checks, Builder envelope
+integrity, Orchestrator-inline evidence integrity, and lightweight correctness
+sanity checks; persona selection must not depend on Orchestrator implementation
+analysis. When path/name signals or attempt focus are incomplete, dispatch the
+default broad reviewer set. Existing path,
 touched-file, and batch-contract signals that match the table below must
 dispatch their validators regardless of Builder suggestion.
 
-Before Validator dispatch, Orchestrator stops only for Builder authority
-breaches or malformed envelopes; correctness concerns without an
-authority/envelope violation are passed only as transient Validator focus.
+Before Validator dispatch, Orchestrator stops only for authority breaches,
+malformed Builder envelopes, or malformed Orchestrator-inline evidence;
+correctness concerns without an authority/evidence violation are passed only as
+transient Validator focus.
 
 ### Broad-reviewer fallback
 
@@ -89,7 +94,7 @@ would risk false negatives.
 
 Existing path, touched-file, and batch-contract signals must dispatch their
 validators regardless of Builder suggestion; the orchestrator stops only for
-Builder authority breaches or malformed envelopes; correctness concerns become
+authority breaches or malformed attempt evidence; correctness concerns become
 transient Validator focus, not orchestrator-authored findings.
 
 ### Selector table (v1 L1003-1016)
@@ -114,9 +119,12 @@ transient Validator focus, not orchestrator-authored findings.
    before dispatching. Use the exact listed name, including plugin namespace.
 2. Pass each persona commit refs/ranges, touched file names, batch id, goal,
    files, `execution_mode`, acceptance tests, AC mapping, relevant ledger
-   findings, and Builder evidence from the envelope (`implementation_steps`,
+   findings, and the real attempt evidence source. Builder-dispatched attempts
+   include Builder evidence from the envelope (`implementation_steps`,
    `existing_seams_used`, `tests_run`, `assumptions`, `risks`, `deferred`, and
-   `suggested_validator_focus`). Transient Orchestrator sanity concerns are
+   `suggested_validator_focus`). Orchestrator-inline attempts include the
+   implementation commit, touched files, inline-validity note, and any
+   user-confirmed exception note. Transient Orchestrator sanity concerns are
    passed only as Validator focus; they are not persisted as ledger entries or
    Orchestrator-authored findings.
 3. Ask each persona to return this envelope:
@@ -238,8 +246,10 @@ global — so a re-keyed open finding still blocks the whole run from advancing 
 `final-review` until Y closes it; re-keying changes *which batch* the finding
 blocks, not whether the run is blocked.
 
-1. Builder commits one implementation or repair attempt scoped to the batch's
-   `files`.
+1. One implementation attempt lands scoped to the batch's `files`: Builder
+   dispatch for `tdd`, `proof_first`, repairs, or `change_first` after a
+   dispatch trigger; bounded Orchestrator-inline only for eligible
+   `change_first`.
 2. Persona suite re-runs over the new diff.
 3. Orchestrator normalizes and deduplicates Validator findings, writes
    `## Findings data`, renders `## Findings`, runs `--validate-findings`, and

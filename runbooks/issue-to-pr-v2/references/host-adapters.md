@@ -8,10 +8,11 @@ L337-342 (glossary entries for Host Builder readiness failure and Builder
 infrastructure failure — definitional cross-references that point back to the
 canonical rules here).
 
-**Read trigger:** open this reference before every Builder dispatch
-(pre-dispatch readiness check) and after every Builder dispatch that fails to
-return a well-formed envelope (post-dispatch infrastructure failure
-classification). See also: [stage-4-batch-loop.md](stage-4-batch-loop.md),
+**Read trigger:** open this reference before every Stage 4 implementation
+attempt (Builder dispatch or bounded Orchestrator-inline) and after every
+Builder dispatch that fails to return a well-formed envelope (post-dispatch
+infrastructure failure classification). See also:
+[stage-4-batch-loop.md](stage-4-batch-loop.md),
 [builder-dispatch.md](builder-dispatch.md),
 [findings-and-validators.md](findings-and-validators.md).
 
@@ -21,10 +22,11 @@ The v2 hot router treats these two failure modes as distinct routing outcomes.
 The boundary is the canonical rule body; the v1 README glossary keeps a
 two-line pointer to this reference.
 
-### Pre-dispatch: host Builder readiness check (v1 L702-714, L1039-1044)
+### Pre-implementation: host Builder readiness check (v1 L702-714, L1039-1044)
 
-Before any batch status mutation, verify host Builder readiness for the
-selected eligible batch. The host must be able to:
+Before any batch status mutation or resumed Stage 4 implementation attempt,
+verify host Builder readiness for the selected or in-progress batch. The host
+must be able to:
 
 - create a fresh isolated Builder dispatch with the required Builder tool set
   and authority boundary;
@@ -48,13 +50,15 @@ If any capability is unavailable:
 - do not append `builder_attempts`;
 - do not increment `iterations`;
 - do not dispatch Validators;
-- do not fall back to Orchestrator-direct implementation.
+- do not fall back to Orchestrator-inline implementation as a workaround for
+  missing Builder capability.
 
-The same check repeats before every Builder dispatch inside the inner loop,
-including resumed implementation and repair dispatches. When readiness is
-unavailable on a resumed inner-loop dispatch, the Orchestrator records the
-same `host-builder-tools-unavailable` evidence above and additionally asks
-the user to retry or abandon (v1 L1042-1044).
+The same check repeats before every Stage 4 implementation attempt inside the
+inner loop, including Builder dispatch, bounded Orchestrator-inline work, and
+resumed repair dispatches. When readiness is unavailable on a resumed inner-loop
+attempt, the Orchestrator records the same `host-builder-tools-unavailable`
+evidence above and additionally asks the user to retry or abandon (v1
+L1042-1044).
 
 ### Post-dispatch: builder-infrastructure-failure (v1 L1046-1054)
 
@@ -77,7 +81,7 @@ effects before the user chooses retry, import, or abandon.
 
 | `blocked_reason` | When | Builder attempts row | iterations | Validators |
 | --- | --- | --- | --- | --- |
-| `host-builder-tools-unavailable` | Pre-dispatch: host cannot create the Builder sub-agent or grant required capabilities | Not appended | Not incremented | Not dispatched |
+| `host-builder-tools-unavailable` | Pre-implementation: host cannot create the Builder sub-agent or grant required capabilities for the Stage 4 attempt and any later repair | Not appended | Not incremented | Not dispatched |
 | `builder-infrastructure-failure` | Post-dispatch: host began dispatch but timeout/permission/tool/serialization/schema/envelope failure prevented a well-formed Builder envelope | Not appended | Not incremented | Not dispatched |
 
 Both values are accepted by helper validation of frontmatter; both keep the
@@ -132,7 +136,7 @@ broken install.
 ## See also
 
 - [stage-4-batch-loop.md](stage-4-batch-loop.md) for the Stage 4 batch-loop
-  step that performs the pre-dispatch readiness check.
+  step that performs the pre-implementation readiness check.
 - [builder-dispatch.md](builder-dispatch.md) for the Builder authority
   boundary; the two blocked_reason values appear in the Builder dispatch
   contract.

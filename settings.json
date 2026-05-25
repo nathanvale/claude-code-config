@@ -34,6 +34,7 @@
     ],
     "defaultMode": "auto"
   },
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "disabledMcpjsonServers": [],
   "hooks": {
@@ -174,7 +175,7 @@
   },
   "enabledPlugins": {
     "example-skills@anthropic-agent-skills": false,
-    "document-skills@anthropic-agent-skills": false,
+    "document-skills@anthropic-agent-skills": true,
     "frontend-design@claude-code-plugins": true,
     "imessage@side-quest-engineering": false,
     "unifi-admin@side-quest-engineering": false,
@@ -184,7 +185,8 @@
     "bitbucket-pr@side-quest-engineering": true,
     "memory-os@side-quest-engineering": false,
     "playground@claude-plugins-official": false,
-    "explanatory-output-style@claude-code-plugins": false
+    "explanatory-output-style@claude-code-plugins": false,
+    "microsoft-docs@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
@@ -199,6 +201,5 @@
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
   "autoCompactEnabled": false,
-  "skipAutoPermissionPrompt": true,
-  "model": "opus"
+  "skipAutoPermissionPrompt": true
 }
