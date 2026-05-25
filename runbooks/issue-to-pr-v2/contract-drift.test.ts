@@ -868,13 +868,42 @@ describe("AC5: extractor emits claims only, holds no contract values", () => {
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const skillDocPath = "skills/issue-to-pr/SKILL.md";
+const readmeDocPath = "runbooks/issue-to-pr-v2/README.md";
 const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const ledgerTemplatePath = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
+const scopedDocRels = [
+  skillDocPath,
+  readmeDocPath,
+  ledgerDocPath,
+  gotchasDocPath,
+] as const;
+const driftSurfaceRels = [...scopedDocRels, ledgerTemplatePath] as const;
 
 /** Read one scoped doc's text by its repo-relative path. */
 async function readScopedDoc(relPath: string): Promise<string> {
   return Bun.file(join(repoRoot, relPath)).text();
+}
+
+/**
+ * Stage a fixture repo by copying every real drift-surface doc into a temp
+ * dir. The caller may mutate individual docs via `mutations` to inject drift.
+ * Returns the absolute temp-dir path; caller is responsible for cleanup.
+ */
+async function stageDriftSurfaceFixture(
+  mutations: Partial<Record<(typeof driftSurfaceRels)[number], (text: string) => string>> = {},
+): Promise<string> {
+  const dir = join(
+    import.meta.dir,
+    `../../.tmp-cd-fixture-${process.pid}-${Math.random().toString(36).slice(2)}`,
+  );
+  for (const rel of driftSurfaceRels) {
+    const original = await readScopedDoc(rel);
+    const mutate = mutations[rel];
+    const text = mutate ? mutate(original) : original;
+    await Bun.write(join(dir, rel), text);
+  }
+  return dir;
 }
 
 describe("F11/F13: live-doc route-ID claims reconcile with loadContractFacts", () => {
@@ -1090,6 +1119,128 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
           doc: ledgerDocPath,
           kind: "ledger-lifecycle-field",
           claim: "status",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("section-rename in the ledger template surfaces a `## Batches` finding instead of silently scanning the whole doc", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-field-template-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerTemplatePath),
+      (await readScopedDoc(ledgerTemplatePath)).replace(
+        "## Batches",
+        "## Batch entries",
+      ),
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      await readScopedDoc(ledgerDocPath),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "ledger-lifecycle-field",
+          claim: "## Batches",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("section-rename in ledger-and-helper.md surfaces a `## Batches` entry fields finding instead of silently scanning the whole doc", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-field-reference-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerTemplatePath),
+      await readScopedDoc(ledgerTemplatePath),
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      (await readScopedDoc(ledgerDocPath)).replace(
+        "`## Batches` entry fields",
+        "Batch entry fields",
+      ),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-lifecycle-field",
+          claim: "`## Batches` entry fields",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("regression-matrix.md test_anchor citations resolve to real it() descriptions in their named test files", async () => {
+    const matrixRel =
+      "runbooks/issue-to-pr-v2/references/regression-matrix.md";
+    const matrix = await readScopedDoc(matrixRel);
+    // Match every `<repo-relative-test-path>: "name", "name"` citation. The
+    // leading char (backtick OR `;` joiner OR whitespace after a `;`) is NOT
+    // required to be a backtick — multi-file cells chain citations with `; `
+    // and the second/third file refs are inside the cell's single backtick
+    // range, not preceded by a fresh backtick.
+    const anchorRe =
+      /([\w/.-]+\/[\w/.-]+\.test\.ts): ((?:"[^"]+"(?:, *)?)+)/g;
+    const citations: Array<{ file: string; tests: string[] }> = [];
+    for (const m of matrix.matchAll(anchorRe)) {
+      const file = m[1] ?? "";
+      const tests = Array.from(
+        (m[2] ?? "").matchAll(/"([^"]+)"/g),
+        (mm) => mm[1] ?? "",
+      );
+      if (file && tests.length > 0) citations.push({ file, tests });
+    }
+    // Floor: every U7 + prior probe row contributes at least one citation.
+    expect(citations.length).toBeGreaterThanOrEqual(11);
+    const missing: Array<{ file: string; test: string }> = [];
+    const fileTextCache = new Map<string, string>();
+    for (const { file, tests } of citations) {
+      let body = fileTextCache.get(file);
+      if (body === undefined) {
+        body = await Bun.file(join(repoRoot, file)).text();
+        fileTextCache.set(file, body);
+      }
+      for (const t of tests) {
+        if (!body.includes(`"${t}"`)) missing.push({ file, test: t });
+      }
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `regression-matrix.md cites ${missing.length} test name(s) that no longer exist:\n` +
+          missing.map((m) => `  ${m.file}: "${m.test}"`).join("\n"),
+      );
+    }
+  });
+
+  test("checkContractDrift orchestrator surfaces lifecycle-field findings when the template drops a field", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [ledgerTemplatePath]: (text) =>
+        text.replaceAll("orchestrator_inline_attempts", "inline_attempts_missing"),
+    });
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "ledger-lifecycle-field",
+          claim: "orchestrator_inline_attempts",
         }),
       );
     } finally {
@@ -1830,32 +1981,13 @@ describe("comparator returns findings as DATA, never throws on claim drift", () 
  * (e.g. `blocked-nonexistent-route`, `frobnicate`, `data.totally_made_up`).
  */
 describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
-  const realRepoRoot = join(import.meta.dir, "..", "..");
-  const scopedDocRels = [
-    "skills/issue-to-pr/SKILL.md",
-    "runbooks/issue-to-pr-v2/README.md",
-    "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-  ];
-  const driftSurfaceRels = [...scopedDocRels, ledgerTemplatePath];
-
-  /**
-   * Stage a fixture repo by copying the real drift-surface docs into a temp
-   * dir, so gotchas + lifecycle-field clean-pass invariants hold by default.
-   * The caller mutates one doc to inject drift. The CLI is still the real
-   * sibling cli.ts (facts come from the live surface), via the default cliPath.
-   */
-  async function stageFixtureRepo(): Promise<string> {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-cd-orch-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    for (const rel of driftSurfaceRels) {
-      const text = await Bun.file(join(realRepoRoot, rel)).text();
-      await Bun.write(join(dir, rel), text);
-    }
-    return dir;
-  }
+  const realRepoRoot = repoRoot;
+  // Module-level `stageDriftSurfaceFixture` copies every drift-surface doc.
+  // Use the no-mutation form to stage a clean fixture; callers wrapping it
+  // here mutate one doc inline to inject drift. CLI facts come from the
+  // real sibling cli.ts (default cliPath), so the staged repo only needs the
+  // read-target docs.
+  const stageFixtureRepo = (): Promise<string> => stageDriftSurfaceFixture();
 
   test("AC1: over the real drift surfaces the check returns ok:true with no findings", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });

@@ -342,12 +342,10 @@ At the start of every turn:
    table inline at the end of the turn so the `/goal` evaluator can verify
    convergence from the transcript.
 
-Each turn does **one thing visible**: advance a stage, commit one ledger
-lifecycle checkpoint, run one implementation attempt (Builder dispatch or
-bounded Orchestrator-inline), record one implementation-attempt checkpoint,
-run one full Validator wave, commit one Validator findings checkpoint, run
-one convergence/validation pass, or fail-stop with a question. **Never do two
-stages in one turn.**
+Each turn does **one thing visible**. The canonical list of legal visible
+actions lives in `skills/issue-to-pr/SKILL.md` orchestration step 8; helpers
+in this reference must not restate it (one canonical owner per policy).
+**Never do two stages in one turn.**
 
 ## Route ids (v2 `cli.ts`)
 

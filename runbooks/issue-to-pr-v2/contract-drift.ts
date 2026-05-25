@@ -56,6 +56,11 @@
  *    beyond these.
  *  - It adds NO external dependency, NO new CLI command, NO new emitted fact
  *    (it only READS the existing CLI via subprocess), and generates NO docs.
+ *    Sole exception: the U7 lifecycle-field check imports `BATCH_KEYS` and
+ *    `LEDGER_BATCH_KEYS` directly from `lib/contract`, because those constants
+ *    are runtime-owned key sets — not CLI envelope facts — and a subprocess
+ *    call would not surface them. Subprocess-only remains the default for
+ *    every other check.
  *  - It does NOT validate decompose.ts flags
  *    (`decompose.ts --validate-ledger-batches` yields no command claim),
  *    route-precedence ORDER, enum-value prose (`committed`, `needs-revision`),
@@ -1249,14 +1254,15 @@ function lifecycleBatchFields(): string[] {
 }
 
 /**
- * Extract a markdown section body by heading-label pattern. Returns the whole
- * document when the section is absent so a missing section still produces
- * field-level drift findings instead of hiding every missing field.
+ * Extract a markdown section body by heading-label pattern. Returns `null`
+ * when no matching heading exists so callers can emit a section-missing
+ * finding rather than silently scan the whole document (which would let
+ * unrelated mentions of the same tokens hide a structural rename).
  */
 function markdownSectionByHeadingPattern(
   text: string,
   headingPattern: RegExp,
-): string {
+): string | null {
   const lines = text.split("\n");
   let start = -1;
   let level = 0;
@@ -1267,7 +1273,7 @@ function markdownSectionByHeadingPattern(
     level = match[1]?.length ?? 0;
     break;
   }
-  if (start === -1) return text;
+  if (start === -1) return null;
 
   const closingRe = new RegExp(`^#{1,${level}}\\s`);
   const body: string[] = [];
@@ -1278,8 +1284,8 @@ function markdownSectionByHeadingPattern(
   return body.join("\n");
 }
 
-/** Extract a markdown section body by exact heading label. */
-function markdownSection(text: string, headingLabel: string): string {
+/** Extract a markdown section body by exact heading label, or `null`. */
+function markdownSection(text: string, headingLabel: string): string | null {
   return markdownSectionByHeadingPattern(
     text,
     new RegExp(`^${escapeRegExp(headingLabel)}$`, "i"),
@@ -1349,12 +1355,31 @@ export async function checkLedgerLifecycleFieldDrift(
   );
 
   const templateBatchSection = markdownSection(templateText, "Batches");
+  if (templateBatchSection === null) {
+    findings.push({
+      doc: LEDGER_TEMPLATE_REL,
+      kind: "ledger-lifecycle-field",
+      claim: "## Batches",
+      reason: `ledger template is missing the canonical \`## Batches\` section; lifecycle field drift cannot be checked.`,
+    });
+  }
   const ledgerBatchFieldSection = markdownSectionByHeadingPattern(
     ledgerText,
     /`## Batches`\s+entry fields/i,
   );
+  if (ledgerBatchFieldSection === null) {
+    findings.push({
+      doc: LEDGER_DOC_REL,
+      kind: "ledger-lifecycle-field",
+      claim: "`## Batches` entry fields",
+      reason: `ledger-and-helper.md is missing the canonical \`\`## Batches\`\` entry fields section; lifecycle field drift cannot be checked.`,
+    });
+  }
   for (const field of lifecycleFields) {
-    if (!regionMentionsField(templateBatchSection, field)) {
+    if (
+      templateBatchSection !== null &&
+      !regionMentionsField(templateBatchSection, field)
+    ) {
       findings.push({
         doc: LEDGER_TEMPLATE_REL,
         kind: "ledger-lifecycle-field",
@@ -1362,7 +1387,10 @@ export async function checkLedgerLifecycleFieldDrift(
         reason: `ledger template Batches section does not mention helper-owned lifecycle field \`${field}\`.`,
       });
     }
-    if (!regionMentionsFieldBullet(ledgerBatchFieldSection, field)) {
+    if (
+      ledgerBatchFieldSection !== null &&
+      !regionMentionsFieldBullet(ledgerBatchFieldSection, field)
+    ) {
       findings.push({
         doc: LEDGER_DOC_REL,
         kind: "ledger-lifecycle-field",

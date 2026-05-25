@@ -321,7 +321,7 @@ Stage 4 uses an implementation/Validator convergence loop:
 6. Open P0/P1 findings block batch convergence.
 7. Repair attempts continue until no open P0/P1 remains, an accepted-risk decision is recorded, or a fail-stop fires. Repairs are Builder-only: an open P0/P1 after any committed attempt (Builder or inline) routes to Builder repair, never inline.
 
-Each repair dispatch targets exactly one committed open P0/P1 finding signature and may land at most one Builder commit for that target. Run separate Builder repair dispatches for separate signatures; if the attempt cap would be exceeded, fail-stop for user choice instead of batching unrelated finding fixes into one repair packet.
+Each repair dispatch targets exactly one committed open P0/P1 finding signature and may land at most one Builder commit for that target. Run separate Builder repair dispatches for separate signatures; if the iteration cap would be exceeded, fail-stop for user choice instead of batching unrelated finding fixes into one repair packet.
 
 Stage 5 repeats the same P0/P1 rule over the cumulative diff. A final review P0/P1 never becomes an Orchestrator-authored implementation fix: route through Proposer + patch-batch path back into Stage 4, or fail-stop when it needs replan.
 
