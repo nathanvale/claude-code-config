@@ -147,3 +147,53 @@ field must be a quoted scalar string.
 
 The first complete evidence row wins; later rows in the append-only Notes log
 are ignored so a stale row cannot silently override a current one.
+
+## Workflow Learnings
+
+This section records **what this run observed** about the Issue-to-PR workflow
+itself — durable observations about its skills, references, CLI/observability
+surface, contracts, and gotchas that surfaced while shipping this issue.
+
+Each entry is a per-run reference into the cross-run **Workflow Learnings
+registry** at
+[`references/workflow-learnings-registry.md`](references/workflow-learnings-registry.md).
+The registry owns canonical lifecycle metadata and dedupe across runs: each
+learning is recorded there once, keyed by a stable `signature`, with canonical
+fields (`summary`, `owner`, `retirement_condition`) and lifecycle fields
+(`disposition`, `status`, `confidence`, `follow_up`). The ledger never
+duplicates those canonical or lifecycle fields — it carries only the
+run-scoped evidence shape below plus the `signature` cross-reference so a
+future reader can look up the canonical entry.
+
+`workflow_learnings: []` is the valid empty case: a run with no observed
+workflow learnings is the common path and must not block. The helper
+`bun ~/.claude/runbooks/issue-to-pr-v2/decompose.ts --validate-workflow-learnings <ledger-path>`
+validates the section's shape (single fenced yaml block, top-level
+`workflow_learnings` array, every entry a mapping with required string fields
+`signature`, `affected_surface`, `what_was_wrong` non-empty, and unknown keys
+rejected against a closed whitelist symmetric with the registry's
+`ALLOWED_EVIDENCE_KEYS`).
+
+Required entry fields:
+
+- `signature` (string) — `sha256:<hex>` or stable slug. Resolves to the
+  canonical entry in the cross-run registry.
+- `affected_surface` (string) — which workflow surface the learning concerns
+  (matches the registry's evidence key by the same name).
+- `what_was_wrong` (string) — the observation captured during the run.
+
+Optional entry fields (capture what is known; absence is fine):
+
+- `discovery_method` — how the issue was found during the run.
+- `root_cause` — why it happened.
+- `scope` — blast radius / where else this would surface.
+- `proposed_fix` — suggested change at observation time.
+- `verification_idea` — how a later fix would be confirmed.
+
+Canonical and lifecycle fields (`summary`, `owner`, `retirement_condition`,
+`disposition`, `status`, `confidence`, `follow_up`) live exclusively in the
+registry. Including any of them in a ledger entry is a validator error.
+
+```yaml
+workflow_learnings: []
+```
