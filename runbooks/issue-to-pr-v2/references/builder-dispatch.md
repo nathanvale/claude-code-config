@@ -1,5 +1,14 @@
 # Builder dispatch reference
 
+**Applies To:** every `tdd` attempt, every `proof_first` attempt, every
+repair attempt after an open P0/P1, and every `change_first` attempt after a
+dispatch trigger fires. Bounded inline-eligible `change_first` attempts do
+not use this contract; they run Orchestrator-inline under the same
+`batch.files` authority boundary. For the inline-eligibility rule and the
+full list of `change_first` dispatch triggers, see
+[stage-4-batch-loop.md](stage-4-batch-loop.md#builder-dispatch-policy)
+(single source of truth).
+
 **v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L13-20 (file scope),
 L43-65 (role boundaries), L67-265 (Builder dispatch contract), L1056-1109
 (Builder execution rules); `runbooks/issue-to-pr/README.md` L30-139

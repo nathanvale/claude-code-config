@@ -353,6 +353,15 @@ required references before taking the one visible action.
   `builder-dispatch.md`, `host-adapters.md`,
   `findings-and-validators.md`, and `ledger-and-helper.md` for writes.
 - One visible action: exactly one Stage 4 subroute below.
+- Dispatch policy: `tdd`, `proof_first`, and every repair after an
+  open P0/P1 MUST dispatch Builder; `change_first` MAY stay
+  Orchestrator-inline only while bounded (≤2 touched files, low-risk,
+  non-behavioural, non-governance, non-public-contract, no broad
+  discovery, no heavy Orchestrator context load, not the third
+  consecutive inline attempt without a user-confirmed exception), and
+  falls back to Builder dispatch as soon as a dispatch trigger fires.
+  The full always-on Validator wave runs on every committed
+  implementation attempt regardless of path.
 - Exit condition: every batch is `converged` or `accepted-risk`, no
   open P0/P1 blocks the batch loop, tree is clean, next state routes to
   `final-review`.
@@ -365,24 +374,38 @@ Stage 4 subroutes:
 - `select-eligible-batch`: choose one pending batch whose dependencies
   are terminal; if none qualifies, fail-stop with dependency evidence.
 - `start-batch-checkpoint`: after host readiness passes, record the
-  selected batch lifecycle start. This is separate from Builder work.
-- `builder-attempt`: render the Builder Work Packet and dispatch one
-  Builder attempt. Builder edits only the confirmed `batch.files`.
-- `validator-wave`: hand Validators the Builder evidence and touched
-  files. Validators own correctness findings; the Orchestrator records
-  and normalizes them.
-- `finding-repair`: dispatch the smallest scoped repair for open
-  P0/P1 findings in the active batch.
+  selected batch lifecycle start. This is separate from implementation
+  work.
+- `implementation-attempt`: run exactly one implementation attempt
+  against the confirmed `batch.files` for the active batch. The umbrella
+  has two paths and the dispatch policy above selects between them:
+  - `implementation-attempt-builder`: mandatory for `tdd`,
+    `proof_first`, and any repair; required for `change_first` once a
+    dispatch trigger fires. Render the Builder Work Packet and dispatch
+    one Builder attempt.
+  - `implementation-attempt-inline`: allowed only for bounded
+    inline-eligible `change_first` attempts. The Orchestrator edits
+    inline within the same authority boundary as Builder (edits only
+    confirmed `batch.files`) and records the attempt as
+    Orchestrator-inline evidence in its own audit lane (defined by U4).
+- `validator-wave`: hand Validators the committed implementation
+  evidence and touched files. Validators own correctness findings; the
+  Orchestrator records and normalizes them. The full always-on wave
+  runs regardless of which implementation path produced the commit.
+- `finding-repair`: dispatch a Builder repair for open P0/P1 findings
+  in the active batch. Repairs are Builder-only; inline repair is never
+  permitted, even after an inline initial attempt.
 - `converge-batch`: run the no-open-P0/P1 gate and mark the batch
   terminal only when the ledger facts support convergence.
 - `accepted-risk-or-reframe`: record a user-approved accepted risk or
   stop for reframe/replan when hatches or caps prevent convergence.
 
 Only one Stage 4 subroute is the visible action for a turn. The
-Orchestrator routes and records lifecycle state; Builder owns one
-scoped implementation attempt; Validators own correctness findings;
-Proposer only appears when Stage 5 sends a final-review finding back as
-a patch-batch candidate.
+Orchestrator routes and records lifecycle state; the implementation
+path (Builder dispatch or bounded inline) owns one scoped attempt
+against `batch.files`; Validators own correctness findings; Proposer
+only appears when Stage 5 sends a final-review finding back as a
+patch-batch candidate.
 
 **Stage 5: final review**
 
@@ -433,7 +456,7 @@ and name the resume condition.
 | Stage 3 open P0/P1 | Contract-review finding summary | Plan or batch contract revision closes the finding |
 | Stage 3 contract-review cycle cap | Cap reached without convergence and last finding summary | User replans, narrows the contract, or accepts surfaced advisories; see `stage-3-decompose.md` |
 | Stale batch contract or digests | Recomputed drift evidence | Stage 3 recompute and user confirmation |
-| Host Builder tools unavailable | Host readiness failure | Required host tools are available |
+| Host Builder tools unavailable | Host readiness failure (pre-implementation gate; applies before every Stage 4 implementation attempt, Builder dispatch or inline) | Required host tools are available |
 | Builder infrastructure failure | Malformed/missing Builder envelope and side effects | User decides whether to retry, repair, or reframe |
 | No eligible batch | Pending batch dependencies | Dependencies converge or user reframes the DAG |
 | Escape hatch or iteration cap | Hatch name and current batch/finding evidence | User accepts risk, authorizes replacement, or replans |
@@ -452,17 +475,28 @@ Detailed hatch semantics and closure rules live in
 
 <review_loop>
 
-Stage 4 uses a Builder/Validator convergence loop:
+Stage 4 uses an implementation/Validator convergence loop:
 
 1. Orchestrator selects one eligible confirmed batch and records
    lifecycle state.
-2. Builder receives one Work Packet, edits only confirmed
-   `batch.files`, and returns evidence for that attempt.
-3. Validators review the attempt and own correctness findings.
+2. One implementation attempt runs against the confirmed batch. For
+   `tdd` and `proof_first` the attempt is always a Builder dispatch:
+   Builder receives one Work Packet, edits only confirmed
+   `batch.files`, and returns evidence. For `change_first` the
+   Orchestrator may instead edit inline within the same `batch.files`
+   authority boundary, but only while inline eligibility holds (see
+   the Stage 4 dispatch policy above); as soon as a dispatch trigger
+   fires the attempt must dispatch Builder. Inline attempts record
+   their own evidence in the Orchestrator-inline audit lane (defined
+   by U4).
+3. Validators review the committed attempt and own correctness
+   findings. The full always-on wave runs regardless of path.
 4. Orchestrator records normalized findings in the ledger.
 5. Open P0/P1 findings block batch convergence.
-6. Builder repair attempts continue until no open P0/P1 remains, an
-   accepted-risk decision is recorded, or a fail-stop fires.
+6. Repair attempts continue until no open P0/P1 remains, an
+   accepted-risk decision is recorded, or a fail-stop fires. Repairs
+   are Builder-only: an open P0/P1 after any committed attempt
+   (Builder or inline) routes to Builder repair, never inline.
 
 A repair dispatch should land as **one combined commit per dispatch**,
 not one commit per finding. The ledger requires every `builder_commits`

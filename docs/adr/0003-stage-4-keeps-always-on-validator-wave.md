@@ -5,7 +5,7 @@ date: 2026-05-24
 
 # Stage 4 Keeps the Always-On Validator Wave (No Reduced-Wave Gate)
 
-Issue-to-PR Stage 4 dispatches the full always-on Validator set (`ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`) on every committed Builder envelope, plus any conditional personas the selector fires. Issue #69 asked whether Stage 4 should gain a bounded reduced-wave path for trivially-scoped batches, mirroring the Stage 5 mechanical-diff fallback. The decision is **no**: keep the always-on wave unchanged and add no reduced-wave gate.
+Issue-to-PR Stage 4 dispatches the full always-on Validator set (`ce-correctness-reviewer`, `ce-testing-reviewer`, `ce-maintainability-reviewer`, `ce-project-standards-reviewer`, `ce-adversarial-reviewer`) on every committed implementation attempt (Builder envelope or Orchestrator-inline), plus any conditional personas the selector fires. Issue #69 asked whether Stage 4 should gain a bounded reduced-wave path for trivially-scoped batches, mirroring the Stage 5 mechanical-diff fallback. The decision is **no**: keep the always-on wave unchanged and add no reduced-wave gate. The inline path does not get a reduced wave; the always-on floor is path-independent.
 
 ## Context
 
@@ -21,17 +21,17 @@ The decision rests on three points, two of them verified against the runbook sou
 
 ## Decision
 
-Keep the Stage 4 always-on Validator wave as-is. Do not add a reduced-wave gate. The full always-on set runs on every committed Builder envelope; conditional personas continue to layer on top via the selector.
+Keep the Stage 4 always-on Validator wave as-is. Do not add a reduced-wave gate. The full always-on set runs on every committed implementation attempt (Builder envelope or Orchestrator-inline); conditional personas continue to layer on top via the selector. The wave is identical on both paths: Orchestrator-inline `change_first` attempts do not earn a reduced wave by virtue of being inline.
 
 ## Consequences
 
-- Stage 4 review behavior is unchanged; the always-on five remain a non-negotiable floor per committed Builder envelope.
+- Stage 4 review behavior is unchanged; the always-on five remain a non-negotiable floor per committed implementation attempt, regardless of whether the attempt was a Builder envelope or an Orchestrator-inline `change_first` attempt.
 - The cost of the full wave on trivially-scoped batches is accepted as cheap insurance, consistent with issue #69's own note that the cost on a smoke test is negligible.
 - The mechanical-diff fallback stays Stage 5 only, where its "already-closed surfaces" safety property holds.
 
 ## Re-evaluation
 
-If Stage 4 validator cost ever becomes a real pain on large multi-batch runs (the cost compounds per committed Builder envelope: batches x repair attempts x personas), prefer the cheaper levers before reconsidering a gate:
+If Stage 4 validator cost ever becomes a real pain on large multi-batch runs (the cost compounds per committed implementation attempt: batches x repair attempts x personas, across Builder envelopes and Orchestrator-inline attempts alike), prefer the cheaper levers before reconsidering a gate:
 
 - **Batch granularity.** Avoid decomposing trivial work into its own batch; fold it into an adjacent batch so it shares one wave.
 - **Extend the existing Stage 5 fallback** rather than inventing a Stage 4 one, since the Stage 5 mechanism already has the dedupe and already-reviewed safety properties a Stage 4 gate lacks.

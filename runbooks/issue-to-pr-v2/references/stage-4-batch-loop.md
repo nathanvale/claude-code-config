@@ -50,6 +50,66 @@ off the returned envelope, not conversation memory:
 Both gates re-fire on every turn: a resumed run must `cli.ts state` first
 and short-circuit before selecting a batch.
 
+## Builder dispatch policy
+
+Stage 4 has two implementation paths and one routing rule between them.
+
+**Builder dispatch is required** for:
+
+- every `tdd` attempt;
+- every `proof_first` attempt;
+- every repair attempt after any open P0/P1, regardless of whether the
+  prior committed attempt was a Builder envelope or an Orchestrator-inline
+  attempt (repairs are Builder-only);
+- every `change_first` attempt once a dispatch trigger fires (see below).
+
+**`change_first` may stay Orchestrator-inline** only while every bound below
+holds. As soon as any bound fails, the attempt must dispatch Builder
+instead:
+
+- the touched-file count is ≤2;
+- the change is obvious and low-risk;
+- no behavioural surface is affected;
+- no public contract (exported symbols, API shape, CLI flags/output, schemas,
+  event payloads, config shape, env-var expectations, migration manifests,
+  package boundaries) is touched;
+- no governance surface (ADRs, runbooks, ledger templates, policy docs) is
+  touched;
+- no broad discovery or whole-repo archaeology is needed;
+- no substantial Orchestrator context load is required to make the change
+  safely;
+- this is not the third consecutive inline-eligible `change_first` attempt
+  in the batch without an explicit user-confirmed exception recorded.
+
+**`change_first` dispatch triggers** (any one forces Builder dispatch even
+for `change_first`):
+
+- the change would touch >2 files;
+- the change reaches a non-doc or high-risk path;
+- the change reaches a behavioural, public-contract, or governance surface;
+- the change requires broad discovery beyond `batch.files` and bounded local
+  probes;
+- the Orchestrator is uncertain about the smallest correct change;
+- the change would require a heavy context load that defeats the inline
+  bound;
+- the repeated-inline threshold is reached.
+
+**Repair after open P0/P1 is Builder-only.** An open P0/P1 finding after any
+committed implementation attempt (Builder envelope or Orchestrator-inline)
+routes to Builder repair. Inline repair is never permitted, even when the
+initial committed attempt was inline.
+
+**Validator wave is path-independent.** The full always-on Validator wave
+applies to every committed implementation attempt, regardless of which path
+produced the commit (no reduced wave for inline attempts). Persona selection,
+invocation, and findings normalization live in
+[findings-and-validators.md](findings-and-validators.md).
+
+Orchestrator-inline attempts honour the same `batch.files` authority
+boundary as Builder and are recorded in their own audit lane (defined by U4).
+For the Builder Work Packet, authority boundary, Preflight Checklist, and
+return envelope, see [builder-dispatch.md](builder-dispatch.md).
+
 ## Outer loop (v1 L692-753)
 
 1. **Select the next batch.** First batch in YAML order where
@@ -59,11 +119,12 @@ and short-circuit before selecting a batch.
    fail-stop with `blocked_reason: no-eligible-batch` and print the blocked
    dependencies. If no batches remain pending, skip host readiness and
    advance when step 8 applies.
-3. **Pre-dispatch host readiness.** Verify host Builder readiness for the
-   selected eligible batch before any batch status mutation. The full
-   capability list and the
-   `blocked_reason: host-builder-tools-unavailable` outcome live in
-   [host-adapters.md](host-adapters.md).
+3. **Pre-implementation host readiness.** Verify host Builder readiness for
+   the selected eligible batch before any batch status mutation. Readiness is
+   a pre-implementation gate that applies before every Stage 4 implementation
+   attempt (Builder dispatch or Orchestrator-inline). The full capability
+   list and the `blocked_reason: host-builder-tools-unavailable` outcome
+   live in [host-adapters.md](host-adapters.md).
 4. **Lifecycle checkpoint: start batch.** Mark `status: in-progress` and
    commit a ledger-only lifecycle checkpoint before Builder starts:
    `chore(issue-{issue-number}): start <batch-id> batch`. This is a

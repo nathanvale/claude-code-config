@@ -85,14 +85,34 @@ Allowed modes:
 Keep this vocabulary runbook-local until a second workflow adopts it. At that
 point, promote the terms into a shared pattern doc or ADR.
 
+The execution-mode choice also drives the Stage 4 dispatch policy: `tdd` and
+`proof_first` always dispatch Builder; `change_first` may stay
+Orchestrator-inline only while bounded (≤2 touched files, low-risk,
+non-behavioural, non-governance, non-public-contract, no broad discovery, no
+heavy Orchestrator context load, and not the third consecutive inline attempt
+without an explicit user-confirmed exception); a repair attempt after any open
+P0/P1 must dispatch Builder regardless of mode. See `## Builder dispatch
+overview` below.
+
 ## Builder dispatch overview
 
-Stage 4 uses the Builder dispatch contract instead of in-session
-implementation by the Orchestrator. The shared contract is host-neutral:
-hosts must provide an isolated Builder dispatch with the required Builder tool
-set and authority boundary, Work Packet delivery, git status and commit-ref
-visibility, envelope capture, and timeout/failure classification. The required
-Builder tool set is the ability to read/search target-repo files, edit only
+Stage 4 dispatches Builder for `tdd`, `proof_first`, and every repair
+attempt, and for `change_first` attempts that exceed inline eligibility. The
+Orchestrator may implement a `change_first` attempt inline only while every
+inline bound above holds; as soon as a dispatch trigger fires (too many files,
+non-doc or high-risk paths, behavioural / public-contract / governance
+surface, broad discovery, uncertainty, heavy Orchestrator context load, or
+the repeated-inline threshold), the attempt must dispatch Builder. Inline
+attempts honour the same `batch.files` authority boundary as Builder and are
+recorded as Orchestrator-inline evidence in their own audit lane (defined by
+U4). The full always-on Validator wave runs on every committed implementation
+attempt, regardless of path.
+
+The shared Builder dispatch contract is host-neutral: hosts must provide an
+isolated Builder dispatch with the required Builder tool set and authority
+boundary, Work Packet delivery, git status and commit-ref visibility,
+envelope capture, and timeout/failure classification. The required Builder
+tool set is the ability to read/search target-repo files, edit only
 authorized `batch.files`, run deterministic repo-local checks/probes, inspect
 git status and diffs, create exactly one commit for a successful attempt, and
 return the structured envelope. The runbook must not depend on any

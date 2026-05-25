@@ -52,12 +52,19 @@ The role language is executable contract language:
 - The ledger stores the confirmed execution contract.
 - Orchestrator owns stages, ledger writes, user gates, Builder dispatch,
   Builder envelope validation, Validator dispatch, and final workflow gates.
-- Builder is dispatched as a fresh Builder sub-agent per attempt. The
-  Orchestrator does not play Builder or implement batches directly during
-  Stage 4.
+- Builder is dispatched as a fresh Builder sub-agent per *Builder* attempt.
+  The Orchestrator does not play Builder during Stage 4, with one bounded
+  exemption: a `change_first` attempt may be implemented Orchestrator-inline
+  while inline eligibility holds (small, low-risk, non-behavioural,
+  non-governance, non-public-contract, no broad discovery, no heavy
+  Orchestrator context load, and not the third consecutive inline attempt
+  without an explicit user-confirmed exception). `tdd`, `proof_first`, and
+  any repair after an open P0/P1 always dispatch Builder.
 - Builder implements exactly one batch attempt under the confirmed ledger
   contract, or fail-stops if that contract is unsafe or stale after reading
-  the files.
+  the files. An Orchestrator-inline `change_first` attempt honours the same
+  `batch.files` authority boundary as Builder and is recorded in its own
+  audit lane (defined by U4).
 - Validator personas are read-only reviewers. They do not fix, choose modes, or
   re-rank severity.
 
@@ -66,10 +73,20 @@ The Builder dispatch contract is sourced from
 
 ## Builder dispatch contract
 
-Stage 4 dispatches Builder as a fresh sub-agent per attempt. The dispatch is
-host-neutral: the runbook defines the Work Packet, authority boundary,
-preflight rules, and return envelope, while each host maps that contract to
-its own available execution primitive.
+**Applies to:** every `tdd` attempt, every `proof_first` attempt, every
+repair attempt after an open P0/P1, and every `change_first` attempt after a
+dispatch trigger fires (too many files, non-doc or high-risk paths,
+behavioural / public-contract / governance surface, broad discovery,
+uncertainty, heavy Orchestrator context load, or the repeated-inline
+threshold). Bounded inline-eligible `change_first` attempts run
+Orchestrator-inline under the same `batch.files` authority boundary and
+record their evidence in the Orchestrator-inline audit lane (defined by U4);
+they do not use this dispatch contract.
+
+Stage 4 dispatches Builder as a fresh sub-agent per Builder attempt. The
+dispatch is host-neutral: the runbook defines the Work Packet, authority
+boundary, preflight rules, and return envelope, while each host maps that
+contract to its own available execution primitive.
 
 ### Builder Work Packet
 

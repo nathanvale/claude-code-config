@@ -29,8 +29,13 @@ available as the frozen behavior baseline.
 3. **User confirms batch contract before Builder work.** Stage 3
    commits the DAG to `## Batches` only after the user confirms the
    exact digest triple, AC mapping, and execution modes.
-4. **Builder edits only confirmed `batch.files`.** Stage 4 dispatches
-   one Builder attempt per turn against one confirmed contract.
+4. **Implementation edits only confirmed `batch.files`.** Stage 4 runs
+   one implementation attempt per turn against one confirmed contract.
+   `tdd`, `proof_first`, and every repair after an open P0/P1 dispatch
+   one Builder attempt; bounded inline-eligible `change_first` may
+   instead be Orchestrator-inline under the same `batch.files`
+   authority boundary. Builder's authority over `batch.files` is
+   unchanged on either path.
 5. **Validators own correctness findings.** The orchestrator records,
    normalizes, and routes findings; Validators (and `/ce-code-review`
    personas at Stage 5) decide whether a finding stands.
