@@ -1,6 +1,6 @@
 ---
 name: issue-to-pr
-description: Drives one GitHub issue to a PR through the host-neutral Issue-to-PR v2 ledger workflow. Use when the user says "ship issue #N", "drive issue-to-pr for #N", "open a PR for issue #N", "/issue-to-pr <N>", or asks to take a specific GitHub issue end-to-end through plan, build, validate, and ship. Sized for issues with a code deliverable; for decision-only or doc-only issues (for example a standalone ADR), prefer a direct commit and PR. The skill is the control plane; deterministic facts come from the v2 CLI, repeated packets from templates, and deep stage mechanics from one-level references.
+description: Drive one GitHub issue to PR via host-neutral Issue-to-PR v2 ledger workflow (plan, build, validate, ship). Trigger: "ship issue #N", "drive issue-to-pr for #N", "open PR for issue #N", "/issue-to-pr <N>". Sized for code deliverables; for decision-only or doc-only issues (e.g. standalone ADR), commit + PR directly. Control plane only: deterministic facts from v2 CLI, repeated packets from templates, deep mechanics from one-level references.
 argument-hint: <issue-number> [target-repo]
 user-invocable: true
 disable-model-invocation: true
@@ -9,15 +9,9 @@ disable-model-invocation: true
 # /issue-to-pr
 
 <objective>
-Drive one GitHub issue to a PR using the Issue-to-PR v2 per-issue
-ledger workflow. This skill is the host-neutral control plane: it owns
-the durable orchestration loop, host adapter behavior, routing gates,
-reference loading, stage shells, review loop, and success criteria.
+Drive one GitHub issue to PR via Issue-to-PR v2 per-issue ledger. This skill is the host-neutral control plane — owns: orchestration loop, host adapters, routing gates, reference loading, stage shells, review loop, success criteria.
 
-Keep deterministic mechanics behind `runbooks/issue-to-pr-v2/cli.ts`
-and `runbooks/issue-to-pr-v2/decompose.ts`. Keep repeated handoff
-payloads in `runbooks/issue-to-pr-v2/templates/`. Keep deep or rare
-stage detail in `runbooks/issue-to-pr-v2/references/`.
+Deterministic mechanics → `runbooks/issue-to-pr-v2/cli.ts` + `decompose.ts`. Handoff payloads → `runbooks/issue-to-pr-v2/templates/`. Deep/rare stage detail → `runbooks/issue-to-pr-v2/references/`.
 </objective>
 
 <quick_start>
@@ -26,117 +20,64 @@ stage detail in `runbooks/issue-to-pr-v2/references/`.
 /issue-to-pr <issue-number> [target-repo]
 ```
 
-- `<issue-number>` (required): the GitHub issue number to drive
-- `[target-repo]` (optional): `owner/repo` form; defaults to the
-  current repo
+- `<issue-number>` (required): GitHub issue number to drive
+- `[target-repo]` (optional): `owner/repo`; defaults to current repo
 
-Use the canonical ledger path in the target repo:
+Canonical ledger path in target repo:
 
 ```
 docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md
 ```
 
-On the first turn, establish `{issue-number}`, `{target-repo}`, the
-target repo root, the ledger path, and `{v2-cli}`. If `{target-repo}` is
-provided, resolve or open that repo before running helper commands. If
-the ledger already exists, read it. Then run the v2 CLI from the target
-repo root, making this the first durable-state command:
+On first turn: establish `{issue-number}`, `{target-repo}`, target repo root, ledger path, `{v2-cli}`. If `{target-repo}` provided, resolve/open it before helper commands. If the ledger exists, read it. Then run the v2 CLI from the target repo root as the first durable-state command.
 
-`{v2-cli}` is the host-resolved path to
-`runbooks/issue-to-pr-v2/cli.ts`, such as the repo-local path in this
-checkout or `~/.claude/runbooks/issue-to-pr-v2/cli.ts` in a Claude Code
-install.
+`{v2-cli}` is the host-resolved path to `runbooks/issue-to-pr-v2/cli.ts` — repo-local in this checkout, or `~/.claude/runbooks/issue-to-pr-v2/cli.ts` in a Claude Code install.
 
 ```
 bun {v2-cli} state docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md --json
 ```
 
-Route only from that command's emitted facts, not from conversation
-memory.
+Route only from emitted facts, not conversation memory.
 </quick_start>
 
 <host_adapters>
 
-The workflow authority is this skill control plane plus the durable
-ledger. Host drivers are only ways to keep the loop running.
+Workflow authority = this skill control plane + durable ledger. Host drivers only keep the loop running.
 
 **Codex**
 
 - Drive the loop directly in the current thread.
-- Use repo-local reads and edits from the target repo root.
-- Resolve `{v2-cli}` before the first state command. In this config
-  repo, the source path is `runbooks/issue-to-pr-v2/cli.ts`; in other
-  target repos, prefer the installed runbook path for the active host.
-- Do not depend on `/goal` or `/loop` for routing, convergence, or
-  transcript evidence.
+- Repo-local reads/edits from target repo root.
+- Resolve `{v2-cli}` before first state command. This config repo: `runbooks/issue-to-pr-v2/cli.ts`. Other target repos: prefer the installed runbook path for the active host.
+- Do not depend on `/goal` or `/loop` for routing, convergence, or transcript evidence.
 
 **Claude Code**
 
-- Manual `/issue-to-pr <issue-number> [target-repo]` invocation remains
-  supported.
-- When an autonomous driver is useful, `/goal` may point at this skill
-  control plane, the target issue, the target repo, the canonical
-  ledger path, and the installed v2 assets under
-  `~/.claude/runbooks/issue-to-pr-v2/`.
+- Manual `/issue-to-pr <issue-number> [target-repo]` supported.
+- For autonomous driving, `/goal` may point at: this skill control plane, target issue, target repo, canonical ledger path, installed v2 assets at `~/.claude/runbooks/issue-to-pr-v2/`.
 - `/loop` is a fixed-cadence fallback for older Claude Code harnesses.
-- `/goal` and `/loop` do not own workflow policy; they re-enter this
-  control plane and the ledger-driven loop.
+- `/goal` and `/loop` do not own workflow policy — they re-enter this control plane and the ledger-driven loop.
 
 **Autonomous-mode policy (active `/goal`, `/loop`, or `lfg`)**
 
-When an autonomous driver is active, the loop runs hands-off and does
-NOT pause for discretionary checkpoints. The distinction is by gate
-kind, not by convenience:
+Under an autonomous driver, the loop runs hands-off and does NOT pause for discretionary checkpoints. Distinction is by gate kind, not convenience:
 
-- **Mandatory gates — always stop, even under a goal.** These are the
-  workflow's designed human checkpoints and safety stops: Stage 1
-  acceptance-criteria confirmation, the Stage 3 batch-contract
-  confirmation (DAG, execution modes, digests), both kinds of Stage 4
-  decision gate (the `change_first` investigation-required gate and the
-  `accepted-risk` gate), and any fail-stop in `<fail_stops>`.
-  Auto-confirming these would defeat the workflow's purpose, so an
-  active goal never skips them.
-- **Discretionary pauses — never stop under a goal; just proceed.** Do
-  NOT ask "shall I proceed to Stage N?", "want me to run the next
-  batch?", or "how should I drive the remaining batches?" between
-  stages or subroutes. Under a goal these are noise: advance to the
-  next `data.route_id` action automatically and report the outcome
-  inline. Surface a checkpoint only when it is a mandatory gate above.
-- **Avoid self-inflicted permission prompts.** Prefer tool calls and
-  git forms that do not trip permission/hook stops mid-run. In
-  particular, reconstruct a specific file's content with
-  `git diff <ref> -- <path> | git apply` (scoping the diff to that path)
-  rather than `git checkout <ref> -- <path>` or
-  `git restore --source=<ref> <path>` (both are commonly hook-blocked),
-  and never use inline script-execution flags (Python's `-c`, Node's or
-  Ruby's `-e`, or `sh -c '...'` / `bash -c '...'` one-liners) that may
-  trip a permission or security prompt. A permission prompt for a
-  genuinely-needed write is a harness-settings concern, not a reason to
-  stop the goal; note it and continue once cleared.
+- **Mandatory gates — always stop, even under a goal.** Designed human checkpoints + safety stops: Stage 1 AC confirmation, Stage 3 batch-contract confirmation (DAG, execution modes, digests), both Stage 4 decision gates (`change_first` investigation-required, `accepted-risk`), any `<fail_stops>` entry. Auto-confirming these defeats the workflow; an active goal never skips them.
+- **Discretionary pauses — never stop under a goal; just proceed.** Do NOT ask "shall I proceed to Stage N?", "want me to run the next batch?", or "how should I drive the remaining batches?" between stages or subroutes. Under a goal these are noise: advance to the next `data.route_id` action and report inline. Surface a checkpoint only when it is a mandatory gate above.
+- **Avoid self-inflicted permission prompts.** Prefer tool calls and git forms that do not trip permission/hook stops mid-run. To reconstruct a file's content, use `git diff <ref> -- <path> | git apply` (scoped to that path) rather than `git checkout <ref> -- <path>` or `git restore --source=<ref> <path>` (both commonly hook-blocked). Never use inline script-execution flags (Python `-c`, Node/Ruby `-e`, `sh -c '...'` / `bash -c '...'` one-liners) that may trip a permission/security prompt. A permission prompt for a genuinely-needed write is a harness-settings concern, not a reason to stop the goal — note it and continue once cleared.
 
 </host_adapters>
 
 <durable_state_contract>
 
-Durable ledger state beats transcript memory. Every resumed turn routes
-from the v2 CLI state envelope, not from what the conversation appears
-to remember.
+Durable ledger state beats transcript memory. Every resumed turn routes from the v2 CLI state envelope, not conversation recall.
 
-- The canonical ledger lives in the target repo at
-  `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`.
-- Run helper commands from the target repo root, even when `{v2-cli}`
-  points to an installed path outside that repo.
-- If the ledger does not exist yet, use the canonical ledger path and
-  let the state envelope route to ledger creation.
-- Treat `cli.ts state <ledger-path> --json` as the first non-read
-  operation on every resumed turn.
-- Use emitted facts such as `data.route_id`,
-  `data.required_reference_ids`, `data.blocking_gates`, and sibling
-  gate fields as inputs to orchestration.
-- Do not restate or hand-validate the full ledger schema, route union,
-  packet schema, or helper output contract in this skill. Those
-  deterministic contracts belong to the CLI, helper, templates, and
-  runtime code.
+- Canonical ledger: target repo at `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`.
+- Run helper commands from target repo root, even when `{v2-cli}` points to an installed path outside it.
+- If the ledger does not exist, use the canonical path and let the state envelope route to ledger creation.
+- `cli.ts state <ledger-path> --json` = first non-read operation on every resumed turn.
+- Use emitted facts (`data.route_id`, `data.required_reference_ids`, `data.blocking_gates`, sibling gate fields) as orchestration inputs.
+- Do not restate or hand-validate the ledger schema, route union, packet schema, or helper output contract in this skill — those deterministic contracts belong to the CLI, helper, templates, and runtime code.
 
 </durable_state_contract>
 
@@ -145,66 +86,34 @@ to remember.
 Start every turn in this order:
 
 1. Re-read this skill control plane.
-2. Resolve `{issue-number}`, `{target-repo}`, target repo root,
-   `{ledger-path}`, and `{v2-cli}`.
+2. Resolve `{issue-number}`, `{target-repo}`, target repo root, `{ledger-path}`, `{v2-cli}`.
 3. Re-read the per-issue ledger if it exists.
-4. Run `bun {v2-cli} state {ledger-path} --json` from the target repo
-   root as the first non-read operation.
+4. Run `bun {v2-cli} state {ledger-path} --json` from target repo root as first non-read operation.
 5. Apply pre-route gates before entering a stage.
-6. Route from `data.route_id`. Unknown route IDs are findings against
-   `runbooks/issue-to-pr-v2/lib/route.ts`, not invitations to invent a
-   prose route.
-7. Load every reference listed in `data.required_reference_ids`. Load
-   action-specific templates only when preparing that packet or handoff.
-7b. When `data.route_id` begins with `blocked-`, this skill loop also
-   loads `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`, in
-   addition to the route's `data.required_reference_ids`. This is a
-   control-plane load layered on top of the CLI's required set: the CLI
-   does not emit the guide in `data.required_reference_ids` (by design),
-   so the loop adds it deterministically on every `blocked-` route.
-8. Execute exactly one visible workflow action for the turn: advance a
-   stage, commit one lifecycle checkpoint, run one implementation
-   attempt (Builder dispatch or bounded Orchestrator-inline), run one
-   Validator wave, converge one batch, or fail-stop
-   with a specific question. Under an autonomous driver, "advance a
-   stage" proceeds without an inter-stage confirmation pause; only the
-   mandatory gates and fail-stops in the autonomous-mode policy
-   (`<host_adapters>`) interrupt the loop.
-9. Commit any required lifecycle checkpoint before ending the turn when
-   the stage requires durable state. The working tree must be committed
-   and clean before any state-changing stage transition, not only at the
-   stages whose exit conditions restate it.
-10. When the host evaluator needs transcript evidence, echo the ledger
-    frontmatter, `## Batches`, `## Findings data`, and `## Findings`
-    table or provide an equivalent host-visible summary.
+6. Route from `data.route_id`. Unknown route IDs = findings against `runbooks/issue-to-pr-v2/lib/route.ts`, not invitations to invent a prose route.
+7. Load every reference listed in `data.required_reference_ids`. Action-specific templates load only when preparing that packet/handoff.
+7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` on top of `data.required_reference_ids`. This is a control-plane load: the CLI does not emit the guide in `data.required_reference_ids` by design, so the loop adds it deterministically on every `blocked-` route.
+8. Execute exactly one visible workflow action: advance a stage, commit one lifecycle checkpoint, run one implementation attempt (Builder dispatch or bounded Orchestrator-inline), record one implementation-attempt checkpoint, run one Validator wave, converge one batch, or fail-stop with a specific question. Under an autonomous driver, "advance a stage" proceeds without inter-stage confirmation; only the mandatory gates and fail-stops in autonomous-mode policy (`<host_adapters>`) interrupt the loop.
+9. Commit any required lifecycle checkpoint before turn-end when the stage requires durable state. Working tree must be committed + clean before any state-changing stage transition, not only at stages whose exit conditions restate it.
+10. When the host evaluator needs transcript evidence, echo the ledger frontmatter, `## Batches`, `## Findings data`, and `## Findings` table — or an equivalent host-visible summary.
 
 </orchestration_loop>
 
 <pre_route_gates>
 
-These gates re-fire on every turn after `cli.ts state --json` and
-before any Builder, Validator, Proposer, or ship work.
+These gates re-fire on every turn after `cli.ts state --json` and before any Builder, Validator, Proposer, or ship work.
 
 **Runbook version skew**
 
-- If the envelope reports `data.runbook_version_skew` as missing or
-  mismatched without continuation evidence, stop.
-- Surface the mismatch and load
-  `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` for the
-  continuation evidence shape. See also
-  `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` recipe 2.4
-  (`blocked-runbook-version-skew`) for the symptom-first evidence
-  recipe (the exact `state --json` fields that prove the skew).
+- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, stop.
+- Surface the mismatch and load `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` for the continuation evidence shape. See `first-run-gotchas.md` recipe 2.4 (`blocked-runbook-version-skew`) for the symptom-first evidence recipe (exact `state --json` fields that prove the skew).
 - Do not auto-rewrite the ledger frontmatter version field.
 
 **Installed artifact presence**
 
 - If `data.installed_artifact_presence.all_present` is false, stop.
-- Surface the missing installed roots and ask the operator to repair the
-  v2 install or symlink before continuing.
-- Treat this as a sibling-field gate. It is not necessarily represented
-  as a `data.blocking_gates` entry or a blocked `route_id`, so do not
-  route from those fields alone.
+- Surface missing installed roots; ask operator to repair the v2 install or symlink before continuing.
+- Sibling-field gate. Not necessarily a `data.blocking_gates` entry or blocked `route_id` — do not route from those fields alone.
 
 Both gates must clear before entering the route catalog.
 
@@ -212,11 +121,7 @@ Both gates must clear before entering the route catalog.
 
 <reference_loading_policy>
 
-Load references one level deep from this skill. The CLI's
-`data.required_reference_ids` is the turn-specific authority for files
-under `runbooks/issue-to-pr-v2/references/`; each ID is a reference
-filename. Templates are action-specific and are loaded only while
-preparing that packet or handoff.
+Load references one level deep from this skill. `data.required_reference_ids` is the turn-specific authority for files under `runbooks/issue-to-pr-v2/references/` — each ID is a reference filename. Templates are action-specific, loaded only while preparing that packet/handoff.
 
 | Route or action need | Reference or action template |
 | --- | --- |
@@ -236,29 +141,19 @@ preparing that packet or handoff.
 | Stage 6 ship | `runbooks/issue-to-pr-v2/references/stage-6-ship.md`; `runbooks/issue-to-pr-v2/references/findings-and-validators.md` |
 | Router regression audit | `runbooks/issue-to-pr-v2/references/regression-matrix.md` |
 
-Do not copy packet schemas, ledger schema, route field tuples, or full
-hatch semantics into this skill. If a route needs a reference that
-`data.required_reference_ids` does not name, file the drift against
-`runbooks/issue-to-pr-v2/lib/route.ts` or the packet renderer.
+Do not copy packet schemas, ledger schema, route field tuples, or full hatch semantics into this skill. If a route needs a reference that `data.required_reference_ids` does not name, file the drift against `runbooks/issue-to-pr-v2/lib/route.ts` or the packet renderer.
 
-`first-run-gotchas.md` has a split trigger. On `blocked-` routes it is
-**deterministically loaded by this skill's loop** (orchestration step 7b)
-while **remaining absent from `data.required_reference_ids` by design**:
-`requiredReferenceIdsFor` does not return it for any route, and that is
-intentional, not a route.ts drift to file. Adding it to
-`requiredReferenceIdsFor` would still be wrong. On non-blocked but
-cryptic first-run states it stays **discretionary**: a recovery overlay
-the operator loads on judgment when a valid state is confusing. Either
-way, the load is a skill-loop decision, not because
-`data.required_reference_ids` named it.
+`first-run-gotchas.md` has a split trigger:
+- On `blocked-` routes: **deterministically loaded by this skill's loop** (orchestration step 7b) while **absent from `data.required_reference_ids` by design**. `requiredReferenceIdsFor` does not return it for any route — intentional, not a route.ts drift to file. Adding it to `requiredReferenceIdsFor` would still be wrong.
+- On non-blocked but cryptic first-run states: **discretionary** — a recovery overlay the operator loads on judgment when a valid state is confusing.
+
+Either way, the load is a skill-loop decision, not because `data.required_reference_ids` named it.
 
 </reference_loading_policy>
 
 <route_catalog>
 
-`runbooks/issue-to-pr-v2/lib/route.ts` is the runtime source of truth
-for route IDs. This catalog is an operator-facing map for the control
-plane.
+`runbooks/issue-to-pr-v2/lib/route.ts` is the runtime source of truth for route IDs. This catalog is an operator-facing map.
 
 **Happy path**
 
@@ -272,105 +167,54 @@ plane.
 
 **Blocked routes**
 
-- `blocked-frontmatter-blocked-reason`: surface the recorded blocked
-  reason and ask whether to unblock, abandon, or reframe.
+- `blocked-frontmatter-blocked-reason`: surface recorded blocked reason; ask whether to unblock, abandon, or reframe.
 - `blocked-runbook-version-skew`: use the version-skew gate above.
-- `blocked-acceptance-criteria-stale`: return to Stage 1 AC
-  re-confirmation; do not auto-rewrite ACs. See
-  `first-run-gotchas.md` recipe 2.1
-  (`blocked-acceptance-criteria-stale`) for the symptom-first evidence
-  recipe and the stale-digest vs. blocked-status proof split.
+- `blocked-acceptance-criteria-stale`: return to Stage 1 AC re-confirmation; do not auto-rewrite ACs. See `first-run-gotchas.md` recipe 2.1 (`blocked-acceptance-criteria-stale`) for the symptom-first evidence recipe + stale-digest vs. blocked-status proof split.
 - `blocked-stage-3`: return to Stage 3 plan or contract revision.
-- `blocked-batch-contract-stale` and `blocked-digests-stale`: return
-  to Stage 3 recompute and user confirmation. See
-  `first-run-gotchas.md` recipe 2.2 (`blocked-batch-contract-stale`)
-  and recipe 2.3 (`blocked-digests-stale`) for the symptom-first
-  evidence recipe.
+- `blocked-batch-contract-stale` and `blocked-digests-stale`: return to Stage 3 recompute + user confirmation. See `first-run-gotchas.md` recipes 2.2 + 2.3.
 
-`first-run-gotchas.md` gives a symptom-first CLI evidence recipe (the
-exact command, JSON fields, what they prove, and the recovery action).
-On any `blocked-` route the loop loads it deterministically (orchestration
-step 7b), so it is already in context for the blocked-route recovery
-above. On a valid-but-cryptic non-blocked first-run state, load it on
-operator judgment when recovery is not obvious:
-`runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.
+`first-run-gotchas.md` gives a symptom-first CLI evidence recipe (exact command, JSON fields, what they prove, recovery action). On any `blocked-` route the loop loads it deterministically (orchestration step 7b), so it is already in context for blocked-route recovery above. On a valid-but-cryptic non-blocked first-run state, load on operator judgment when recovery is not obvious: `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.
 
-Unknown route IDs are blocking findings against the runtime route
-contract. Do not invent prose-only routes.
+Unknown route IDs = blocking findings against the runtime route contract. Do not invent prose-only routes.
 
 </route_catalog>
 
 <stage_shells>
 
-Each stage shell is an entrypoint, not the full playbook. Load the
-required references before taking the one visible action.
+Each stage shell is an entrypoint, not the full playbook. Load required references before taking the one visible action.
 
 **Stage 1: issue and acceptance criteria**
 
-- Inputs: `{issue-number}`, optional `{target-repo}`, target repo root,
-  canonical ledger path.
-- Required references: `stage-1-pick-issue.md`,
-  `ledger-and-helper.md` when writing ledger state.
-- One visible action: create or resume the ledger and get user-confirmed
-  acceptance criteria.
-- Exit condition: ledger exists, ACs are confirmed and committed, the
-  issue feature branch is in place, tree is clean, next state routes to
-  `plan`.
-- Stop conditions: closed or blocked issue without override, user
-  abort, unsafe branch, or unresolved AC ambiguity.
+- Inputs: `{issue-number}`, optional `{target-repo}`, target repo root, canonical ledger path.
+- Required references: `stage-1-pick-issue.md`; `ledger-and-helper.md` when writing ledger state.
+- One visible action: create/resume the ledger and get user-confirmed acceptance criteria.
+- Exit: ledger exists, ACs confirmed + committed, issue feature branch in place, tree clean, next state routes to `plan`.
+- Stop: closed/blocked issue without override, user abort, unsafe branch, unresolved AC ambiguity.
 
 **Stage 2: plan**
 
-- Inputs: confirmed ACs and ledger path.
-- Required references: `stage-2-plan.md`, `ledger-and-helper.md`,
-  `ce-plan-addendum.md` when preparing the planning packet.
-- One visible action: render the planning addendum, invoke planning, or
-  persist the resulting `plan_path` checkpoint.
-- Exit condition: `plan_path` is set, the plan exists, the feature
-  branch is renamed off its `-pending` placeholder, tree is clean, next
-  state routes to `decompose`.
-- Stop conditions: planning asks the user a question, no plan output
-  after one retry, or the plan has no implementation units.
+- Inputs: confirmed ACs, ledger path.
+- Required references: `stage-2-plan.md`, `ledger-and-helper.md`; `ce-plan-addendum.md` when preparing the planning packet.
+- One visible action: render the planning addendum, invoke planning, or persist the resulting `plan_path` checkpoint.
+- Exit: `plan_path` is set, plan exists, feature branch renamed off its `-pending` placeholder, tree clean, next state routes to `decompose`.
+- Stop: planning asks the user a question, no plan output after one retry, plan has no implementation units.
 
 **Stage 3: decompose and confirm batch contract**
 
 - Inputs: plan path, confirmed ACs, ledger path.
-- Required references: `stage-3-decompose.md`,
-  `ledger-and-helper.md`.
-- One visible action: parse/validate the candidate DAG, run contract
-  review, present the digest-backed batch contract for confirmation, or
-  persist the confirmed `## Batches` checkpoint.
-- Exit condition: batch contract is confirmed, every batch starts
-  pending, coverage and digests are confirmed, tree is clean, next state
-  routes to `batch-loop`.
-- Stop conditions: parse error, cyclic DAG, uncovered AC, missing batch
-  contract field, open Stage 3 P0/P1, contract-review cycle cap reached
-  without convergence, stale digest, or confirmation refusal.
+- Required references: `stage-3-decompose.md`, `ledger-and-helper.md`.
+- One visible action: parse/validate the candidate DAG, run contract review, present the digest-backed batch contract for confirmation, or persist the confirmed `## Batches` checkpoint.
+- Exit: batch contract confirmed, every batch starts pending, coverage + digests confirmed, tree clean, next state routes to `batch-loop`.
+- Stop: parse error, cyclic DAG, uncovered AC, missing batch contract field, open Stage 3 P0/P1, contract-review cycle cap reached without convergence, stale digest, confirmation refusal.
 
 **Stage 4: batch loop**
 
-- Inputs: confirmed batch DAG and current findings state.
-- Required references: `stage-4-batch-loop.md`,
-  `builder-dispatch.md`, `host-adapters.md`,
-  `findings-and-validators.md`, and `ledger-and-helper.md` for writes.
+- Inputs: confirmed batch DAG, current findings state.
+- Required references: `stage-4-batch-loop.md`, `builder-dispatch.md`, `host-adapters.md`, `findings-and-validators.md`; `ledger-and-helper.md` for writes.
 - One visible action: exactly one Stage 4 subroute below.
-- Dispatch policy: `tdd`, `proof_first`, every repair after an
-  open P0/P1, and every attempt on a patch-batch (`id: patch-NNN`, which
-  carries an open final-review P0/P1 forward and is therefore never
-  inline-eligible) MUST dispatch Builder; `change_first` MAY stay
-  Orchestrator-inline only while bounded (≤2 touched files, obvious,
-  low-risk, non-behavioural, non-governance, non-public-contract, no broad
-  discovery, no heavy Orchestrator context load, not the third
-  consecutive inline attempt without a user-confirmed exception), and
-  falls back to Builder dispatch as soon as a dispatch trigger fires.
-  The full always-on Validator wave runs on every committed
-  implementation attempt regardless of path.
-- Exit condition: every batch is `converged` or `accepted-risk`, no
-  open P0/P1 blocks the batch loop, tree is clean, next state routes to
-  `final-review`.
-- Stop conditions: host readiness failure, Builder infrastructure
-  failure, no eligible batch, escape hatch fire, iteration cap, or user
-  decision required.
+- Dispatch policy: `tdd`, `proof_first`, every repair after an open P0/P1, and every attempt on a patch-batch (`id: patch-NNN`, which carries an open final-review P0/P1 forward — never inline-eligible) MUST dispatch Builder. `change_first` MAY stay Orchestrator-inline only while bounded: ≤2 touched files, obvious, low-risk, non-behavioural, non-governance, non-public-contract, no broad discovery, no heavy Orchestrator context load, not the third consecutive inline attempt without user-confirmed exception. Falls back to Builder dispatch as soon as a dispatch trigger fires. The full always-on Validator wave runs on every committed implementation attempt regardless of path.
+- Exit: every batch is `converged` or `accepted-risk`, no open P0/P1 blocks the batch loop, tree clean, next state routes to `final-review`.
+- Stop: host readiness failure, Builder infrastructure failure, no eligible batch, escape hatch fire, iteration cap, user decision required.
 
 Stage 4 subroutes:
 
@@ -395,10 +239,16 @@ Stage 4 subroutes:
     confirmed `batch.files`) and records the attempt as
     Orchestrator-inline evidence in its own audit lane on the ledger,
     separate from Builder attempt evidence.
+- `attempt-checkpoint`: after a committed Builder or Orchestrator-inline
+  implementation attempt and before Validator packet rendering, record the
+  `implementation_attempt_checkpoint` Notes evidence tied to the commit and
+  attempt lane. This is ledger-only evidence; it does not replace the
+  Validator wave.
 - `validator-wave`: hand Validators the committed implementation
-  evidence and touched files. Validators own correctness findings; the
-  Orchestrator records and normalizes them. The full always-on wave
-  runs regardless of which implementation path produced the commit.
+  evidence and touched files after the matching attempt checkpoint exists.
+  Validators own correctness findings; the Orchestrator records and
+  normalizes them. The full always-on wave runs regardless of which
+  implementation path produced the commit.
 - `finding-repair`: dispatch a Builder repair for open P0/P1 findings
   in the active batch. Repairs are Builder-only; inline repair is never
   permitted, even after an inline initial attempt.
@@ -407,49 +257,29 @@ Stage 4 subroutes:
 - `accepted-risk-or-reframe`: record a user-approved accepted risk or
   stop for reframe/replan when hatches or caps prevent convergence.
 
-Only one Stage 4 subroute is the visible action for a turn. The
-Orchestrator routes and records lifecycle state; the implementation
-path (Builder dispatch or bounded Orchestrator-inline) owns one scoped attempt
-against `batch.files`; Validators own correctness findings; Proposer
-only appears when Stage 5 sends a final-review finding back as a
-patch-batch candidate.
+Only one Stage 4 subroute is the visible action per turn. Orchestrator routes + records lifecycle state. Implementation path (Builder dispatch or bounded Orchestrator-inline) owns one scoped attempt against `batch.files`. Validators own correctness findings. Proposer only appears when Stage 5 sends a final-review finding back as a patch-batch candidate.
 
 **Stage 5: final review**
 
-- Inputs: every batch terminal and a clean tree.
-- Required references: `stage-5-final-review.md`,
-  `findings-and-validators.md`, and `stage-4-batch-loop.md` for
-  patch-batch routing.
-- One visible action: run final review, record final findings, close
-  non-blocking findings, or route one open P0/P1 through the
-  Proposer/patch-batch handoff back to Stage 4.
-- Exit condition: final findings are terminal, `final_reviewed_at` is
-  set and committed, the working tree is clean, next state routes to
-  `ship`.
-- Stop conditions: reviewer coverage cannot cover correctness and
-  testing, final review needs replan, or patch-batch confirmation is
-  required.
+- Inputs: every batch terminal, clean tree.
+- Required references: `stage-5-final-review.md`, `findings-and-validators.md`; `stage-4-batch-loop.md` for patch-batch routing.
+- One visible action: run final review, record final findings, close non-blocking findings, or route one open P0/P1 through the Proposer/patch-batch handoff back to Stage 4.
+- Exit: final findings terminal, `final_reviewed_at` set + committed, tree clean, next state routes to `ship`.
+- Stop: reviewer coverage cannot cover correctness + testing, final review needs replan, patch-batch confirmation required.
 
 **Stage 6: ship**
 
 - Inputs: final review complete, clean tree, no open P0/P1.
-- Required references: `stage-6-ship.md`,
-  `findings-and-validators.md`.
-- One visible action: run local checks, create/push the PR, or persist
-  the final shipped ledger checkpoint.
-- Exit condition: `pr_url` is set, ledger status is `shipped`, tree is
-  clean, next state routes to `shipped`.
-- Stop conditions: local check failure, unsafe final ledger commit,
-  unsupported smoke-direct request, or PR creation failure requiring
-  operator input.
+- Required references: `stage-6-ship.md`, `findings-and-validators.md`.
+- One visible action: run local checks, create/push the PR, or persist the final shipped ledger checkpoint.
+- Exit: `pr_url` is set, ledger status is `shipped`, tree clean, next state routes to `shipped`.
+- Stop: local check failure, unsafe final ledger commit, unsupported smoke-direct request, PR creation failure requiring operator input.
 
 </stage_shells>
 
 <fail_stops>
 
-When a fail-stop fires, do three things: record durable state when the
-stage requires it, surface the smallest useful evidence to the user,
-and name the resume condition.
+When a fail-stop fires: record durable state when the stage requires it, surface the smallest useful evidence to the user, name the resume condition.
 
 | Condition | Record or surface | Resume condition |
 | --- | --- | --- |
@@ -475,8 +305,7 @@ and name the resume condition.
 | Unsupported smoke-direct request | Requested `smoke-direct` on a non-disposable repo | Target repo and checkout are disposable, or the standard ship path is used; see `stage-6-ship.md` |
 | PR creation failure | Failing `gh pr create` / push evidence | Operator resolves the failure and the PR URL is recorded; see `stage-6-ship.md` |
 
-Detailed hatch semantics and closure rules live in
-`runbooks/issue-to-pr-v2/references/findings-and-validators.md`.
+Detailed hatch semantics + closure rules: `runbooks/issue-to-pr-v2/references/findings-and-validators.md`.
 
 </fail_stops>
 
@@ -484,52 +313,31 @@ Detailed hatch semantics and closure rules live in
 
 Stage 4 uses an implementation/Validator convergence loop:
 
-1. Orchestrator selects one eligible confirmed batch and records
-   lifecycle state.
-2. One implementation attempt runs against the confirmed batch. For
-   `tdd` and `proof_first` the attempt is always a Builder dispatch:
-   Builder receives one Work Packet, edits only confirmed
-   `batch.files`, and returns evidence. For `change_first` the
-   Orchestrator may instead edit inline within the same `batch.files`
-   authority boundary, but only while inline eligibility holds (see
-   the Stage 4 dispatch policy above); as soon as a dispatch trigger
-   fires the attempt must dispatch Builder. Inline attempts record
-   their own evidence in the Orchestrator-inline audit lane on the
-   ledger, separate from Builder attempt evidence.
-3. Validators review the committed attempt and own correctness
-   findings. The full always-on wave runs regardless of path.
-4. Orchestrator records normalized findings in the ledger.
-5. Open P0/P1 findings block batch convergence.
-6. Repair attempts continue until no open P0/P1 remains, an
-   accepted-risk decision is recorded, or a fail-stop fires. Repairs
-   are Builder-only: an open P0/P1 after any committed attempt
-   (Builder or inline) routes to Builder repair, never inline.
+1. Orchestrator selects one eligible confirmed batch and records lifecycle state.
+2. One implementation attempt runs against the confirmed batch. For `tdd` and `proof_first`, the attempt is always Builder dispatch: Builder receives one Work Packet, edits only confirmed `batch.files`, returns evidence. For `change_first`, Orchestrator MAY edit inline within the same `batch.files` authority boundary, but only while inline eligibility holds (see Stage 4 dispatch policy above); as soon as a dispatch trigger fires, the attempt MUST dispatch Builder. Inline attempts record their evidence in the Orchestrator-inline audit lane on the ledger, separate from Builder attempt evidence.
+3. Orchestrator records the ledger-only `implementation_attempt_checkpoint` Notes evidence for the committed attempt before rendering Validator packets.
+4. Validators review the committed attempt and own correctness findings. The full always-on wave runs regardless of path; completed-wave evidence is recorded in Notes.
+5. Orchestrator records normalized findings in the ledger.
+6. Open P0/P1 findings block batch convergence.
+7. Repair attempts continue until no open P0/P1 remains, an accepted-risk decision is recorded, or a fail-stop fires. Repairs are Builder-only: an open P0/P1 after any committed attempt (Builder or inline) routes to Builder repair, never inline.
 
-Each repair dispatch targets exactly one committed open P0/P1 finding
-signature and may land at most one Builder commit for that target. Run
-separate Builder repair dispatches for separate signatures; if the attempt
-cap would be exceeded, fail-stop for user choice instead of batching
-unrelated finding fixes into one repair packet.
+Each repair dispatch targets exactly one committed open P0/P1 finding signature and may land at most one Builder commit for that target. Run separate Builder repair dispatches for separate signatures; if the attempt cap would be exceeded, fail-stop for user choice instead of batching unrelated finding fixes into one repair packet.
 
-Stage 5 repeats the same P0/P1 rule over the cumulative diff. A final
-review P0/P1 never becomes an Orchestrator-authored implementation fix:
-route it through the Proposer and patch-batch path back into Stage 4,
-or fail-stop when it needs replan.
+Stage 5 repeats the same P0/P1 rule over the cumulative diff. A final review P0/P1 never becomes an Orchestrator-authored implementation fix: route through Proposer + patch-batch path back into Stage 4, or fail-stop when it needs replan.
 
 </review_loop>
 
 <success_criteria>
 
-The workflow is complete only when all of these are true:
+Workflow is complete only when all are true:
 
 - `cli.ts state {ledger-path} --json` reports `route_id: "shipped"`.
 - Ledger frontmatter has `status: shipped`.
 - `pr_url` is set.
-- Every batch is terminal: `converged` or `accepted-risk`.
+- Every batch terminal: `converged` or `accepted-risk`.
 - No open P0/P1 finding remains.
 - Required local checks have passed.
-- The working tree is clean.
-- The final ledger echo or equivalent host-visible summary has been
-  produced.
+- Working tree is clean.
+- Final ledger echo (or equivalent host-visible summary) produced.
 
 </success_criteria>
