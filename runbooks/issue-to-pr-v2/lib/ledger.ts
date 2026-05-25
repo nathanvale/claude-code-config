@@ -2935,7 +2935,7 @@ export function validateWorkflowLearnings(ledgerPath: string): void {
 
     for (const required of ["signature", "affected_surface", "what_was_wrong"] as const) {
       const value = entry[required];
-      if (typeof value !== "string" || value.length === 0) {
+      if (typeof value !== "string" || value.trim().length === 0) {
         fail(
           `ledger ${ledgerPath} '## ${sectionName}' ${label} is missing required string field "${required}"`,
         );

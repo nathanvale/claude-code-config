@@ -1726,6 +1726,20 @@ describe("validateWorkflowLearnings (in-process via withFailMode)", () => {
     ).toThrow(/signature/);
   });
 
+  test("fails when signature is whitespace-only", () => {
+    const ledgerPath = writeLedgerWithWorkflowLearnings([
+      "```yaml",
+      "workflow_learnings:",
+      '  - signature: "   "',
+      '    affected_surface: "cli-observability"',
+      '    what_was_wrong: "whitespace-only signature"',
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).toThrow(/signature/);
+  });
+
   test("fails when a canonical field 'summary' is present on a ledger entry", () => {
     const ledgerPath = writeLedgerWithWorkflowLearnings([
       "```yaml",
