@@ -228,6 +228,13 @@ implementation attempt before a current-version batch may be terminal:
   (`role: validator`, `target_id: <batch>@<commit>`, and
   `cli_route_id: packet.validator`), `outcome`, and `findings`.
 
+Both rows MUST cite a single resolved commit ref for `implementation_commit`
+and (for `validator_wave_completed`) for the `target_id` `<commit>` slot — not
+a range. The Validator packet's `commit_ref_or_range` field may carry a range
+for the Builder reduced-wave case, but the durable evidence rows always pin
+the one terminal commit each attempt produced, and the helper resolves and
+compares them as full SHAs.
+
 `findings: []` is the required clean-wave proof. The helper validates
 current-version terminal batches against these Notes rows so a converged or
 accepted-risk batch cannot silently skip Validator evidence after a committed

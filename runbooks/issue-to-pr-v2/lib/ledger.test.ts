@@ -1498,6 +1498,304 @@ describe("validateLedgerBatches: Validator-wave evidence", () => {
       withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
     ).toThrow(/missing completed Validator-wave evidence/);
   });
+
+  // Round-1 hardening additions (U6 review): close coverage gaps the
+  // adversarial / acceptance-criteria / testing angles surfaced. Each test
+  // pins a load-bearing branch of the new R5/R6/R7 enforcement.
+
+  test("accepts a current-version terminal Builder attempt with findings-recorded outcome", () => {
+    // R6 explicitly names "clean AND finding-bearing waves" as durable
+    // evidence. The Round-1 testing/acceptance-criteria angles found the
+    // findings-recorded branch was entirely untested — every prior fixture
+    // used outcome: clean. Pin the positive happy path.
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      validatorEvidenceNotes(RUNBOOK_HEAL_CONTROL_PLANE_SHA, "builder_attempts", {
+        outcome: "findings-recorded",
+        findings: ["F-b1-001", "F-b1-002"],
+      }),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("skips wave-evidence check when frontmatter runbook_version is missing (skew gate bypass)", () => {
+    // R7 plan lines 782-785 scope the new evidence requirement to current-
+    // runbook-version ledgers and explicitly keep the temporal requirement
+    // in Stage 4 prose for legacy ledgers. A regression that removed the
+    // ledgerUsesCurrentRunbookVersion early-return would hard-fail every
+    // pre-U6 resume run. Pin the bypass so the gate semantics cannot drift.
+    const ledgerPath = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        // intentionally NO runbook_version frontmatter
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        ...terminalBatchRecording(
+          RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+          RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+        ),
+        "",
+        // intentionally NO Notes evidence rows — gate must skip
+      ].join("\n"),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("rejects an inline terminal attempt when checkpoint+wave evidence is wrongly labeled builder_attempts", () => {
+    // The Round-1 testing angle flagged that cross-lane confusion has no
+    // negative coverage: dedup keys include lane, but a regression that
+    // dropped the lane component would silently let Builder-labeled
+    // evidence satisfy an inline attempt (or vice-versa). Pin the per-row
+    // (batch, commit, lane) key contract.
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalInlineBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      // wrong lane — the batch has an inline attempt but the evidence
+      // claims builder_attempts. Indexer keys evidence under builder_attempts
+      // lane; the inline attempt loop looks for orchestrator_inline_attempts
+      // keys; lookup misses; helper fails.
+      validatorEvidenceNotes(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        "builder_attempts",
+      ),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(
+      /orchestrator_inline_attempts commit .* is missing implementation attempt checkpoint evidence/,
+    );
+  });
+
+  test("rejects a current-version terminal inline attempt without completed-wave evidence", () => {
+    // Parity with the Builder-lane missing-wave test (`rejects a current-
+    // version terminal committed attempt without completed-wave evidence`).
+    // Round-1 acceptance-criteria angle: the inline-lane rejection branch
+    // of validateTerminalValidatorWaveEvidence was implementation-covered
+    // but not test-covered.
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalInlineBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "## Notes",
+        "",
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "orchestrator_inline_attempts"',
+        '  timestamp: "2026-05-25T10:00:00+10:00"',
+        "```",
+        "",
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(
+      /orchestrator_inline_attempts commit .* is missing completed Validator-wave evidence/,
+    );
+  });
+
+  test("rejects completed-wave evidence missing one of the always-on Validator personas", () => {
+    // Round-1 testing angle: ALWAYS_ON_VALIDATOR_PERSONAS is hardcoded in
+    // ledger.ts; the runbook prose lists the same five. Every prior fixture
+    // included all five so a renderer regression that dropped one persona
+    // would only fail at ledger-write time, not in the test suite. Pin the
+    // membership-check negative.
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "## Notes",
+        "",
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        '  timestamp: "2026-05-25T10:00:00+10:00"',
+        "```",
+        "",
+        "<!-- validator-wave-completed -->",
+        "```yaml",
+        "validator_wave_completed:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        "  personas:",
+        // intentionally omitting ce-adversarial-reviewer
+        '    - "compound-engineering:ce-correctness-reviewer"',
+        '    - "compound-engineering:ce-testing-reviewer"',
+        '    - "compound-engineering:ce-maintainability-reviewer"',
+        '    - "compound-engineering:ce-project-standards-reviewer"',
+        "  dispatch_evidence:",
+        '    role: "validator"',
+        `    target_id: "b1@${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '    cli_route_id: "packet.validator"',
+        '  outcome: "clean"',
+        "  findings: []",
+        "```",
+        "",
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(
+      /is missing always-on persona "compound-engineering:ce-adversarial-reviewer"/,
+    );
+  });
+
+  test("rejects duplicate implementation-attempt-checkpoint evidence blocks for the same (batch, commit, lane) triple", () => {
+    // Round-1 testing angle: indexImplementationAttemptCheckpoints fails
+    // on duplicate keys but no test exercised the path. A regression that
+    // dropped the `keys.has(key)` check would let two contradictory rows
+    // coexist silently. Pin the dedup contract.
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "## Notes",
+        "",
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        '  timestamp: "2026-05-25T10:00:00+10:00"',
+        "```",
+        "",
+        // duplicate checkpoint for the SAME (batch, commit, lane) triple
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        '  timestamp: "2026-05-25T11:00:00+10:00"',
+        "```",
+        "",
+        "<!-- validator-wave-completed -->",
+        "```yaml",
+        "validator_wave_completed:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        "  personas:",
+        '    - "compound-engineering:ce-correctness-reviewer"',
+        '    - "compound-engineering:ce-testing-reviewer"',
+        '    - "compound-engineering:ce-maintainability-reviewer"',
+        '    - "compound-engineering:ce-project-standards-reviewer"',
+        '    - "compound-engineering:ce-adversarial-reviewer"',
+        "  dispatch_evidence:",
+        '    role: "validator"',
+        `    target_id: "b1@${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '    cli_route_id: "packet.validator"',
+        '  outcome: "clean"',
+        "  findings: []",
+        "```",
+        "",
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/duplicate implementation attempt checkpoint evidence/);
+  });
+
+  test("rejects completed-wave evidence whose dispatch_evidence.target_id commit differs from implementation_commit", () => {
+    // The earlier `rejects completed-wave evidence that cites the wrong
+    // implementation commit` test actually fires the key-lookup miss path
+    // (the helper-wide "missing completed Validator-wave evidence" error
+    // — both halves of the row use waveCommit, so the per-row dedup key
+    // matches THAT sha and the per-attempt key matches the OTHER sha).
+    //
+    // This test exercises the *inner* shape check at
+    // validateValidatorWaveEvidenceShape:
+    //   `dispatch_evidence.target_id commit does not match implementation_commit`.
+    // It needs both shas to be reachable (so validateReachableCommit
+    // resolves both) but the target_id and implementation_commit to
+    // disagree internally within a single wave-evidence block.
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "## Notes",
+        "",
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        '  timestamp: "2026-05-25T10:00:00+10:00"',
+        "```",
+        "",
+        "<!-- validator-wave-completed -->",
+        "```yaml",
+        "validator_wave_completed:",
+        '  batch_id: "b1"',
+        // implementation_commit names the control-plane sha so the helper
+        // matches it against the committed Builder attempt's commit_sha
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        "  personas:",
+        '    - "compound-engineering:ce-correctness-reviewer"',
+        '    - "compound-engineering:ce-testing-reviewer"',
+        '    - "compound-engineering:ce-maintainability-reviewer"',
+        '    - "compound-engineering:ce-project-standards-reviewer"',
+        '    - "compound-engineering:ce-adversarial-reviewer"',
+        "  dispatch_evidence:",
+        '    role: "validator"',
+        // target_id's commit is a DIFFERENT reachable sha, so the inner
+        // equality check fires (rather than the outer key-lookup miss).
+        `    target_id: "b1@${RUNBOOK_HEAL_DELIVERABLE_SHA}"`,
+        '    cli_route_id: "packet.validator"',
+        '  outcome: "clean"',
+        "  findings: []",
+        "```",
+        "",
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(
+      /dispatch_evidence\.target_id commit does not match implementation_commit/,
+    );
+  });
 });
 
 function baseRunbookHealFinding(
