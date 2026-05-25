@@ -5,7 +5,7 @@ issue_url: "https://github.com/nathanvale/claude-code-config/issues/90"
 target_repo: "nathanvale/claude-code-config"
 plan_path: "docs/plans/2026-05-25-002-feat-workflow-learnings-registry-helper-plan.md"
 started_at: "2026-05-25T08:25:02+1000"
-status: "in-progress"
+status: "shipped"
 runbook_version: "2"
 ac_source: "gold-standard"
 ac_confirmation_status: "confirmed"
@@ -13,10 +13,10 @@ ac_confirmed_at: "2026-05-25T08:25:02+1000"
 batch_contract_confirmation_status: "confirmed"
 batch_contract_confirmed_at: "2026-05-25T08:37:14+1000"
 blocked_reason: null
-pr_url: null
+pr_url: "https://github.com/nathanvale/claude-code-config/pull/96"
 ship_mode: "standard"
 final_reviewed_at: "2026-05-25T10:39:45+1000"
-plan_digest: "sha256:9da9ab9f9c9043088d83213851d61f5ae5f1b19234aa6ada735d51c07c29dfd1"
+plan_digest: "sha256:d1a53627ea7cee83e4f6c2f20b256e989495fc64d067938d394c0494cff15fe0"
 batch_contract_digest: "sha256:9ce54fc1c34c46a2e3ccf5a08154e793b749e3ed10d0bae4837f65f2aca81a21"
 ac_digest: "sha256:17e9d98826395a5c32a2439fe846e176880adcd0af5e4d768d376476d59eb6f9"
 ---
@@ -933,6 +933,18 @@ dirty/staged path summaries>
 - tests: bun test runbooks/issue-to-pr-v2/ (mcp__bun-runner__bun_runTests rejected as SPAWN_FAILURE: Not inside a git repository — sandbox quirk; fell back to direct shell bun test per AGENTS.md ladder). exit 0; 721 pass / 0 fail / 2905 expect() calls across 15 files.
 - types: mcp__tsc-runner__tsc_check on tsconfig.json. exit 0; 0 errors.
 - lint: mcp__biome-runner__biome_lintCheck on runbooks/issue-to-pr-v2/. exit code from MCP runner clean for this PR's files (verified per-file during Stage 4 batches); MCP returned 2 unrelated repo-wide warnings (lint/style/noNonNullAssertion, lint/suspicious/noPrototypeBuiltins) with file: "unknown" line: 0, not attributable to this PR's diff.
+
+### Post-merge Stage 6 closeout (2026-05-25T11:13+1000)
+
+PR #96 merged before the final ship checkpoint commit landed. Recovery: branched chore/issue-90-ship-closeout off main and committed the ledger-only ship metadata here.
+
+CodeRabbit feedback on PR #96 produced two post-Stage-5 fix commits:
+- 7959752 Address PR review feedback (#96) — closed F12 (registry-doc parser description), F21 (test temp-dir leak), F63 partial (dispatcher header); narrowed F59 via signatureFor + validateCandidate evidence-identifying-field guards; declined the tmpdir-escape suggestion as Stage 5 deferred (F48 closed, F50/F51 deferred-P2/P3).
+- 16a12e7 Address PR review nitpicks (#96) — closed F63 fully (lib header), made repo-root discovery hermetic in learnings-registry.test.ts, added missing-owner assertion to the signatureFor test.
+
+The 7959752 plan-doc typo fix (mermaid `candidate_update` → `canonical_update`) refreshed plan_digest sha256:9da9ab9f → sha256:d1a53627. ac_digest and batch_contract_digest unchanged (no structural contract change). plan_digest refreshed in this closeout. Test counts at ship: 72/72 lib + 41/41 ws + 725/725 wider v2 suite; tsc 0; biome 0.
+
+User decision: open a small chore PR for the ledger-only closeout rather than direct-commit to main.
 
 ### runbook_version skew continuation evidence (U6)
 
