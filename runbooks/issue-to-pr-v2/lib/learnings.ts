@@ -17,9 +17,10 @@
  * later batches (and tests) validate against the same closed sets.
  */
 
-import { readFileSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { sha256Digest } from "./digest";
 
@@ -134,36 +135,63 @@ const SOURCE_EXTENSIONS = [
  * candidate/registry validation errors still surface first because they are
  * more actionable for the operator.
  *
- * Path normalization mirrors `decompose.ts#normalizePath` (separators, leading
- * `./`, trailing slashes), and adds a `..` traversal guard so a path like
- * `references/../skills/SKILL.md` cannot smuggle a write to a forbidden surface.
+ * The previous repair (b6bbeb0) traded a denylist for a TAIL-MATCH allowlist,
+ * which closed F42 but reintroduced two adjacent gaps the adversarial reviewer
+ * surfaced as F48 + F49:
  *
- * Accept rule is a TAIL-MATCH ALLOWLIST (the plan's KTD5 strict allowlist
- * approach, not a denylist of forbidden categories):
+ *   - F49 (foreign-tail-match-no-repo-containment): tail-matching alone
+ *     accepts ANY absolute path that happens to end with the canonical
+ *     relative path — e.g. `/Users/attacker/runbooks/.../registry.md`,
+ *     `/etc/runbooks/.../registry.md`, or a staged decoy directory. A caller
+ *     in a wrong cwd / stale worktree / adversarial cwd would then write
+ *     outside the real repo.
  *
- * 1. If the normalized candidate ENDS WITH the canonical relative path
- *    `runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md`
- *    (compared CASE-INSENSITIVELY so macOS APFS cannot bypass the gate by
- *    flipping a letter's case), accept. This handles the production path
- *    and any absolute-path form a test might pass.
+ *   - F48 (f42-tmpdir-escape-still-accepts-arbitrary-md-files): the
+ *     tmpdir-escape accepted ANY `.md` leaf under `os.tmpdir()` as long as
+ *     no tripwire fired (`/tmp/i_just_pwned_you.md`, `/tmp/README.md`...).
  *
- * 2. Otherwise, an os.tmpdir() escape kicks in for the prior-batch
- *    dispatcher tests that write to `${tmp}/registry.md`: if the resolved
- *    absolute path lives inside `os.tmpdir()` AND the leaf ends in `.md`
- *    AND no tripwire trips (source extension, a `skills/` segment, or an
- *    `issue-*-ledger.md` filename), accept. The tripwires are the same
- *    forbidden categories from AC5 so a misdirected tmp path still cannot
- *    stomp a forbidden surface even when it happens to live under tmpdir.
+ * The fix is REPO-ROOT ANCHORING + a much tighter tmpdir-escape contract:
  *
- * 3. Anything else is refused with an actionable error that names the
- *    rejected target AND the canonical allowed path so the operator can
- *    self-correct.
+ * 1. Empty-string / non-string and any `..` traversal segment are refused
+ *    at the top (unchanged from the prior repair).
  *
- * The case-insensitive tail comparison (and the case-insensitive tripwires)
- * close F40 on case-insensitive filesystems. The expanded SOURCE_EXTENSIONS
- * set closes F41 (the prior `/\.ts$/i` missed .mts/.cts/.tsx/.js/.jsx/.mjs/
- * .cjs). The allowlist (instead of an "accept anything not denied" denylist)
- * closes F42 so arbitrary unrelated paths can no longer slip through.
+ * 2. Compute the CANONICAL ABSOLUTE PATH = `${repoRoot}/${canonicalRelative}`.
+ *    The repo root is resolved once (cached) via `git rev-parse
+ *    --show-toplevel` (mirroring the spawnSync pattern in `decompose.ts`),
+ *    with a `package.json`-walk fallback when git is unavailable. If neither
+ *    works, the helper throws an unrecoverable error: it cannot run safely
+ *    without knowing where the canonical write target actually lives.
+ *
+ * 3. PRODUCTION accept rule: the candidate's resolved absolute path
+ *    (`realpathSync` on the existing ancestor + tail) equals the canonical
+ *    absolute path. Compared CASE-INSENSITIVELY so macOS APFS does not
+ *    bypass the gate by case-flipping. F49 closes here: a foreign
+ *    `/Users/attacker/.../registry.md` does not match the real repo root,
+ *    so it is refused.
+ *
+ * 4. TMPDIR-ESCAPE (preserved narrowly for test infrastructure): when the
+ *    resolved candidate is under the realpathSync'd `os.tmpdir()`, accept
+ *    ONLY when the leaf filename matches one of two narrow shapes
+ *    (case-insensitive):
+ *      - `registry.md`  (used by `lib/learnings.test.ts`'s `writeRegistry`
+ *        helper for the prior-batch dispatcher tests), or
+ *      - `workflow-learnings-registry.md`  (used by this file's
+ *        `makeCanonicalRegistry` for the canonical-tail dispatcher tests).
+ *    AND none of the AC5 tripwires fires (a `skills/` segment
+ *    case-insensitive, an `issue-*-ledger.md` filename, or any
+ *    SOURCE_EXTENSIONS extension). AND the leaf is not bare `.md`. AND the
+ *    leaf does not contain control characters. F48 closes here: a
+ *    `/tmp/i_just_pwned_you.md` is not one of the two allowed leaves so it
+ *    is refused even though it sits under tmpdir.
+ *
+ * 5. ELSE refuse with an actionable error that names the rejected target,
+ *    the canonical allowed absolute path, and the underlying reason so the
+ *    operator can self-correct.
+ *
+ * The case-insensitive comparisons (and case-insensitive tripwires) keep F40
+ * closed on case-insensitive filesystems. The expanded SOURCE_EXTENSIONS set
+ * keeps F41 closed. The allowlist (rather than a denylist) keeps F42 closed
+ * for repo-relative paths.
  */
 export function assertRegistryWriteTarget(path: string): void {
   if (typeof path !== "string" || path.length === 0) {
@@ -190,58 +218,170 @@ export function assertRegistryWriteTarget(path: string): void {
     );
   }
 
-  // Step 3: TAIL-MATCH allowlist. Compare lowercased for macOS APFS so a
-  // path like `Runbooks/.../Workflow-Learnings-Registry.md` (which resolves
-  // to the real lowercase file on a case-insensitive FS) is also accepted
-  // — and conversely, the case-insensitive tripwires below cannot be bypassed
-  // by flipping a letter.
-  const lowered = normalized.toLowerCase();
-  const canonicalTail = CANONICAL_REGISTRY_RELATIVE_PATH.toLowerCase();
-  if (lowered === canonicalTail || lowered.endsWith(`/${canonicalTail}`)) {
-    return;
-  }
-
-  // Step 4: os.tmpdir() escape for prior-batch dispatcher tests that write to
-  // `${tmp}/registry.md`. Production code only ever writes to the canonical
-  // tail (handled in step 3); test code may write to a tmp registry whose
-  // tail intentionally does NOT mirror the production layout. We resolve the
-  // candidate to an absolute path, then walk through `realpathSync` on the
-  // candidate AND on `os.tmpdir()` so symlinked tmpdirs (macOS `/tmp` is a
-  // symlink to `/private/tmp`) compare equal.
   const filename = segments[segments.length - 1] ?? "";
   const loweredFilename = filename.toLowerCase();
 
-  const insideTmpdir = isInsideTmpdir(path);
-  if (insideTmpdir && loweredFilename.endsWith(".md")) {
-    // Tmpdir-escape tripwires (defense in depth — the same forbidden-surface
-    // categories from AC5 apply even when the path is under os.tmpdir()).
-    const loweredSegments = segments.map((segment) => segment.toLowerCase());
+  // Step 3: PRODUCTION accept rule — resolve the candidate to an absolute
+  // path (case-insensitive, symlink-aware via the existing-ancestor walk) and
+  // compare against the REAL repo root's canonical registry path. This is the
+  // F49 fix: tail-matching alone is no longer enough; the path must actually
+  // live under the real repo root.
+  const canonicalAbsolute = canonicalRegistryAbsolutePath();
+  const resolvedCandidate = resolveCandidateAbsolutePath(path);
+  if (resolvedCandidate.toLowerCase() === canonicalAbsolute.toLowerCase()) {
+    return;
+  }
 
+  // Step 4: TMPDIR-ESCAPE — narrowly preserved for prior-batch + dispatcher
+  // tests. The previous repair accepted any `.md` leaf under tmpdir (F48);
+  // the tightened contract accepts ONLY the two leaf shapes used by the
+  // existing test infrastructure and refuses everything else.
+  const insideTmpdir = isInsideTmpdir(path);
+  if (insideTmpdir) {
+    // The leaf must be a recognised test-registry shape. Anything else under
+    // tmpdir (e.g. `/tmp/i_just_pwned_you.md`, `/tmp/README.md`) is refused
+    // with a "tmpdir-rooted but failed test-shape check" reason.
+    const isAllowedTestLeaf =
+      loweredFilename === "registry.md" ||
+      loweredFilename === CANONICAL_REGISTRY_FILENAME.toLowerCase();
+    if (!isAllowedTestLeaf) {
+      throw new Error(
+        `learnings-registry write-scope: refusing target "${path}" because it is tmpdir-rooted but its leaf "${filename}" is not one of the recognised test-mode registry leaves ("registry.md" or "${CANONICAL_REGISTRY_FILENAME}"); the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
+      );
+    }
+    // Bare ".md" (empty stem) is never legitimate; refuse explicitly so the
+    // error names the rule rather than relying on the tripwire pass.
+    if (filename === ".md" || filename.length === 0) {
+      throw new Error(
+        `learnings-registry write-scope: refusing target "${path}" because its leaf is empty / bare ".md"; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
+      );
+    }
+    // Control characters in the leaf are never legitimate.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: writing the rule for control bytes requires matching them
+    if (/[\x00-\x1f\x7f]/.test(filename)) {
+      throw new Error(
+        `learnings-registry write-scope: refusing target "${path}" because its leaf contains a control character; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
+      );
+    }
+    // Tripwires apply even when the leaf shape is allowed: a tmp path with
+    // `skills/` in it, or an `issue-NNN-ledger.md` filename, or a source
+    // extension must still be refused (defence in depth — the same AC5
+    // forbidden-surface categories apply even under tmpdir).
+    const loweredSegments = segments.map((segment) => segment.toLowerCase());
     if (loweredSegments.includes("skills")) {
       throw new Error(
-        `learnings-registry write-scope: refusing target "${path}" because it targets the skills surface; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+        `learnings-registry write-scope: refusing target "${path}" because it targets the skills surface; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
       );
     }
     if (/^issue-.*-ledger\.md$/i.test(filename)) {
       throw new Error(
-        `learnings-registry write-scope: refusing target "${path}" because it targets a per-issue ledger; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+        `learnings-registry write-scope: refusing target "${path}" because it targets a per-issue ledger; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
       );
     }
     if (SOURCE_EXTENSIONS.some((ext) => loweredFilename.endsWith(ext))) {
       throw new Error(
-        `learnings-registry write-scope: refusing target "${path}" because it targets a source file; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+        `learnings-registry write-scope: refusing target "${path}" because it targets a source file; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
       );
     }
-    // No tripwire tripped; accept the tmp-dir test path.
     return;
   }
 
-  // Step 5: refuse. The path is neither a canonical-tail match nor an
+  // Step 5: refuse. The path is neither the canonical absolute path nor an
   // accepted tmpdir-escape; surface the rejected target AND the canonical
-  // allowed path so the operator knows exactly how to self-correct.
+  // absolute allowed path so the operator knows exactly how to self-correct.
   throw new Error(
-    `learnings-registry write-scope: refusing target "${path}" because it does not end with the canonical registry path; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+    `learnings-registry write-scope: refusing target "${path}" because it is a non-tmpdir foreign path that does not resolve to the canonical registry absolute path; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (canonical absolute path ${canonicalAbsolute})`,
   );
+}
+
+/** Cached canonical absolute path of the registry under the real repo root. */
+let cachedCanonicalAbsolute: string | undefined;
+
+/**
+ * Compute the canonical ABSOLUTE path of the registry under the real repo
+ * root. Resolves the repo root via `git rev-parse --show-toplevel` (mirroring
+ * the `spawnSync` pattern in `decompose.ts#touchedFilesForRef`); falls back to
+ * walking up from this module's directory looking for `package.json` when git
+ * is unavailable or fails. If both strategies fail the helper throws — it
+ * cannot enforce write-scope without knowing where the canonical target lives.
+ * Cached for the lifetime of the process so a hot loop does not spawn git on
+ * every call.
+ */
+function canonicalRegistryAbsolutePath(): string {
+  if (cachedCanonicalAbsolute !== undefined) return cachedCanonicalAbsolute;
+  const repoRoot = resolveRepoRoot();
+  cachedCanonicalAbsolute = join(repoRoot, CANONICAL_REGISTRY_RELATIVE_PATH);
+  return cachedCanonicalAbsolute;
+}
+
+/**
+ * Resolve the repo root once. Prefer `git rev-parse --show-toplevel` so this
+ * matches whatever git considers the working tree (handles worktrees, submodule
+ * boundaries, and unusual checkouts). When git is unavailable, fall back to
+ * walking up from this module's directory until a `package.json` is found
+ * (a stable marker in this monorepo). If neither strategy yields a directory,
+ * throw — the helper cannot validate a write target without an anchor.
+ */
+function resolveRepoRoot(): string {
+  // Strategy 1: git rev-parse --show-toplevel (mirrors decompose.ts pattern).
+  try {
+    const out = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+    });
+    if (out.status === 0) {
+      const candidate = out.stdout.trim();
+      if (candidate.length > 0) {
+        try {
+          return realpathSync(candidate);
+        } catch {
+          return candidate;
+        }
+      }
+    }
+  } catch {
+    // git not available; fall through to package.json walk.
+  }
+
+  // Strategy 2: walk up from this module's directory until a `package.json`
+  // ancestor exists. `import.meta.dir` is the runtime equivalent of __dirname
+  // under Bun and resolves to wherever this file ships.
+  let cursor: string;
+  try {
+    cursor = import.meta.dir;
+  } catch {
+    cursor = process.cwd();
+  }
+  let previous = "";
+  while (cursor !== previous) {
+    if (existsSync(join(cursor, "package.json"))) {
+      try {
+        return realpathSync(cursor);
+      } catch {
+        return cursor;
+      }
+    }
+    previous = cursor;
+    cursor = dirname(cursor);
+  }
+
+  throw new Error(
+    `learnings-registry write-scope: cannot resolve the repo root via git or package.json walk; the helper cannot validate a write target without an anchor`,
+  );
+}
+
+/**
+ * Resolve `path` to an absolute path, symlink-aware where possible. The
+ * candidate may not yet exist on disk (the dispatcher passes the registry
+ * target BEFORE writing it), so we walk up to find an existing ancestor we
+ * can realpathSync, then re-append the unresolved descendant tail.
+ */
+function resolveCandidateAbsolutePath(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return realpathExistingAncestor(absolute);
+  }
 }
 
 /**

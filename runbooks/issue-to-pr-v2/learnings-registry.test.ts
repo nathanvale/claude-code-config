@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -122,8 +123,21 @@ describe("assertRegistryWriteTarget (unit)", () => {
     expect(() => assertRegistryWriteTarget(CANONICAL_RELATIVE)).not.toThrow();
   });
 
-  test("accepts an absolute path whose tail equals the canonical relative path", () => {
-    const absolute = `/Users/someone/code/repo/${CANONICAL_RELATIVE}`;
+  test("accepts an absolute path that resolves to the REAL repo root's canonical registry (F49 production rule)", () => {
+    // The previous (b6bbeb0) repair accepted any absolute path whose tail
+    // mirrored the canonical relative path, regardless of where that path
+    // actually lived. The F49 fix anchors the production rule on the REAL
+    // repo root: only the canonical absolute path under the real working
+    // tree is accepted. Foreign absolute paths with the same tail are
+    // covered by the F49-negative tests below.
+    const repoRoot = (() => {
+      const out = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+        encoding: "utf8",
+      });
+      return out.status === 0 ? out.stdout.trim() : "";
+    })();
+    expect(repoRoot.length).toBeGreaterThan(0);
+    const absolute = join(repoRoot, CANONICAL_RELATIVE);
     expect(() => assertRegistryWriteTarget(absolute)).not.toThrow();
   });
 
@@ -247,6 +261,73 @@ describe("assertRegistryWriteTarget (unit)", () => {
     // refuse it: the tail is not the canonical registry, and the path is not
     // under os.tmpdir().
     expect(() => assertRegistryWriteTarget("/etc/passwd")).toThrow(/refus/i);
+  });
+
+  // F49: foreign-tail-match-no-repo-containment.
+  // Production accept rule must anchor on the REAL REPO ROOT, not just match
+  // the tail. An absolute path under an attacker-controlled prefix that still
+  // ends with the canonical relative path is OUTSIDE the real repo and must
+  // be refused. Without repo-root anchoring, a caller in a wrong cwd, a stale
+  // worktree, or with an attacker-staged decoy could stomp files outside the
+  // repo while satisfying a naive tail-match.
+  test("F49: refuses a foreign absolute path whose tail mirrors the canonical relative path (no repo containment)", () => {
+    // /Users/attacker/... is NOT under tmpdir AND NOT under the real repo
+    // root, so neither the production accept nor the tmpdir-escape may fire.
+    const foreign = `/Users/attacker/${CANONICAL_RELATIVE}`;
+    expect(() => assertRegistryWriteTarget(foreign)).toThrow(/refus/i);
+  });
+
+  test("F49: refuses a /etc-rooted absolute path that tail-matches the canonical relative path", () => {
+    const foreign = `/etc/${CANONICAL_RELATIVE}`;
+    expect(() => assertRegistryWriteTarget(foreign)).toThrow(/refus/i);
+  });
+
+  test("F49: accepts the canonical absolute path resolved from the real repo root (production rule)", () => {
+    // Resolve the real repo root the same way the production helper does so
+    // the test is robust against where the repo is checked out.
+    const repoRoot = (() => {
+      const out = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+        encoding: "utf8",
+      });
+      return out.status === 0 ? out.stdout.trim() : "";
+    })();
+    expect(repoRoot.length).toBeGreaterThan(0);
+    const canonicalAbsolute = join(repoRoot, CANONICAL_RELATIVE);
+    expect(() => assertRegistryWriteTarget(canonicalAbsolute)).not.toThrow();
+  });
+
+  // F48: f42-tmpdir-escape-still-accepts-arbitrary-md-files.
+  // The prior repair's tmpdir-escape accepted ANY .md file under os.tmpdir()
+  // so long as no tripwire fired. The tightened contract restricts the
+  // tmpdir-escape to two narrow leaf shapes:
+  //   1. `registry.md` (the prior-batch lib/learnings.test.ts dispatcher
+  //      pattern), and
+  //   2. the canonical filename `workflow-learnings-registry.md` (the
+  //      dispatcher integration pattern in this file's `makeCanonicalRegistry`).
+  // Any other .md leaf under tmpdir must be refused.
+  test("F48: refuses an arbitrary .md file under os.tmpdir() that is neither a `registry.md` nor a `workflow-learnings-registry.md` leaf", () => {
+    const decoy = join(tmpdir(), "i_just_pwned_you.md");
+    expect(() => assertRegistryWriteTarget(decoy)).toThrow(/refus/i);
+  });
+
+  test("F48: refuses a bare README.md under os.tmpdir() (not registry-shaped)", () => {
+    const decoy = join(tmpdir(), "README.md");
+    expect(() => assertRegistryWriteTarget(decoy)).toThrow(/refus/i);
+  });
+
+  test("F48: refuses a bare `.md` leaf (empty stem) under os.tmpdir()", () => {
+    const decoy = join(tmpdir(), ".md");
+    expect(() => assertRegistryWriteTarget(decoy)).toThrow(/refus/i);
+  });
+
+  test("F48: accepts a tmpdir-rooted [tmp]/registry.md (prior-batch lib/learnings.test.ts test-mode escape)", () => {
+    const allowed = join(tmpdir(), "registry.md");
+    expect(() => assertRegistryWriteTarget(allowed)).not.toThrow();
+  });
+
+  test("F48: accepts a tmpdir-rooted canonical-tail path (this file's makeCanonicalRegistry test-mode escape)", () => {
+    const allowed = join(tmpdir(), "x", CANONICAL_RELATIVE);
+    expect(() => assertRegistryWriteTarget(allowed)).not.toThrow();
   });
 });
 
