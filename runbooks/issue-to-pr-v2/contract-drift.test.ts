@@ -19,6 +19,7 @@ import {
   type DriftFinding,
   checkContractDrift,
   checkGotchasRelationship,
+  checkLedgerLifecycleFieldDrift,
   compareClaimsToFacts,
   extractDocClaims,
   finiteChildKeys,
@@ -869,6 +870,7 @@ const repoRoot = join(import.meta.dir, "..", "..");
 const skillDocPath = "skills/issue-to-pr/SKILL.md";
 const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
+const ledgerTemplatePath = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 
 /** Read one scoped doc's text by its repo-relative path. */
 async function readScopedDoc(relPath: string): Promise<string> {
@@ -908,7 +910,10 @@ describe("F11/F13: live-doc route-ID claims reconcile with loadContractFacts", (
     const subrouteNames = [
       "select-eligible-batch",
       "start-batch-checkpoint",
-      "builder-attempt",
+      "implementation-attempt",
+      "implementation-attempt-builder",
+      "implementation-attempt-inline",
+      "attempt-checkpoint",
       "validator-wave",
       "finding-repair",
       "converge-batch",
@@ -993,6 +998,103 @@ describe("F12: installed_artifact_presence.missing reconciles loader vs extracto
       p.startsWith("data.blocking_gates."),
     );
     expect(invented).toBe(false);
+  });
+});
+
+describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () => {
+  test("real ledger template and ledger/helper reference mention every lifecycle field", async () => {
+    const findings = await checkLedgerLifecycleFieldDrift({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("missing lifecycle field in the ledger template is reported as drift", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-field-template-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerTemplatePath),
+      (await readScopedDoc(ledgerTemplatePath)).replaceAll(
+        "orchestrator_inline_attempts",
+        "inline_attempts_missing_from_template",
+      ),
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      await readScopedDoc(ledgerDocPath),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "ledger-lifecycle-field",
+          claim: "orchestrator_inline_attempts",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing lifecycle field in ledger-and-helper.md is reported as drift", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-field-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerTemplatePath),
+      await readScopedDoc(ledgerTemplatePath),
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      (await readScopedDoc(ledgerDocPath)).replaceAll(
+        "orchestrator_inline_attempts",
+        "inline_attempts_missing_from_reference",
+      ),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-lifecycle-field",
+          claim: "orchestrator_inline_attempts",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("ledger/helper drift is tied to the batch field list, not whole-doc mentions", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-field-bullet-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, ledgerTemplatePath),
+      await readScopedDoc(ledgerTemplatePath),
+    );
+    await Bun.write(
+      join(dir, ledgerDocPath),
+      (await readScopedDoc(ledgerDocPath)).replace(
+        "- `status`: `pending | in-progress | converged | accepted-risk | blocked`.",
+        "- `batch_status`: `pending | in-progress | converged | accepted-risk | blocked`.",
+      ),
+    );
+    try {
+      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerDocPath,
+          kind: "ledger-lifecycle-field",
+          claim: "status",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
   });
 });
 
@@ -1735,26 +1837,27 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
     "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
     "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
   ];
+  const driftSurfaceRels = [...scopedDocRels, ledgerTemplatePath];
 
   /**
-   * Stage a fixture repo by copying the four REAL scoped docs into a temp dir,
-   * so the gotchas relationship + clean-pass invariants hold by default. The
-   * caller mutates one doc to inject drift. The CLI is still the real sibling
-   * cli.ts (facts come from the live surface), via the default cliPath.
+   * Stage a fixture repo by copying the real drift-surface docs into a temp
+   * dir, so gotchas + lifecycle-field clean-pass invariants hold by default.
+   * The caller mutates one doc to inject drift. The CLI is still the real
+   * sibling cli.ts (facts come from the live surface), via the default cliPath.
    */
   async function stageFixtureRepo(): Promise<string> {
     const dir = join(
       import.meta.dir,
       `../../.tmp-cd-orch-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
-    for (const rel of scopedDocRels) {
+    for (const rel of driftSurfaceRels) {
       const text = await Bun.file(join(realRepoRoot, rel)).text();
       await Bun.write(join(dir, rel), text);
     }
     return dir;
   }
 
-  test("AC1: over the 4 REAL scoped docs the check returns ok:true with no findings", async () => {
+  test("AC1: over the real drift surfaces the check returns ok:true with no findings", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });
     if (!result.ok) {
       throw new Error(
@@ -1909,11 +2012,11 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
     ).rejects.toThrow();
   });
 
-  test("AC6: the check performs no writes — the 4 scoped docs are unchanged after a run", async () => {
-    // Capture content + mtime of each real scoped doc, run the check, and
+  test("AC6: the check performs no writes — the drift-surface docs are unchanged after a run", async () => {
+    // Capture content + mtime of each real drift-surface doc, run the check, and
     // assert nothing changed on disk (read-only invariant).
     const before = await Promise.all(
-      scopedDocRels.map(async (rel) => {
+      driftSurfaceRels.map(async (rel) => {
         const abs = join(realRepoRoot, rel);
         return {
           rel,
@@ -1963,7 +2066,7 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
 
   // F21 (positive control): the real token-carrying docs DO extract claims, so
   // the claim floor must NOT fire for them — the live clean pass is preserved.
-  test("F21: the real 4 docs still pass clean — no claim-floor finding fires", async () => {
+  test("F21: the real drift surfaces still pass clean — no claim-floor finding fires", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });
     expect(result.ok).toBe(true);
     expect(
@@ -1982,7 +2085,7 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
 
   // F22 (default preserved): passing no opts must still use the real four
   // SCOPED_DOCS and pass clean — the empty-scope guard must not break defaults.
-  test("F22: the default (no scopedDocs) still uses the real 4 docs and passes", async () => {
+  test("F22: the default (no scopedDocs) still uses the real drift surfaces and passes", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });
     expect(result.ok).toBe(true);
   });

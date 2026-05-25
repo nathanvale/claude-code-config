@@ -30,6 +30,7 @@
  */
 
 import { beforeAll, afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +63,10 @@ function writeLedger(content: string): string {
   const path = join(dir, "ledger.md");
   writeFileSync(path, content);
   return path;
+}
+
+function sha256Digest(payload: string): string {
+  return `sha256:${createHash("sha256").update(payload).digest("hex")}`;
 }
 
 function nonExistentLedgerPath(): string {
@@ -379,6 +384,62 @@ function ledgerVersionSkewMismatched(): string {
   });
 }
 
+function ledgerConfirmedBatchLoop(): string {
+  const dir = makeTempDir();
+  const planContent = "# Plan\n\nOne batch.\n";
+  const planPath = join(dir, "plan.md");
+  writeFileSync(planPath, planContent);
+
+  const contractPayload = JSON.stringify([
+    {
+      id: "u1",
+      name: "U1",
+      goal: "Keep the batch pending",
+      files: ["README.md"],
+      depends_on: [],
+      execution_mode: "change_first",
+      acceptance_tests: ["AC 1"],
+      ac_mapping: [1],
+      rationale: null,
+    },
+  ]);
+
+  return buildLedger({
+    frontmatter: {
+      issue_number: "1",
+      status: "in-progress",
+      ac_confirmation_status: "confirmed",
+      batch_contract_confirmation_status: "confirmed",
+      plan_path: JSON.stringify(planPath),
+      runbook_version: '"3"',
+      ac_digest: JSON.stringify(sha256Digest("- [ ] AC 1")),
+      plan_digest: JSON.stringify(sha256Digest(planContent)),
+      batch_contract_digest: JSON.stringify(sha256Digest(contractPayload)),
+    },
+    batchesYaml: [
+      "batches:",
+      '  - id: "u1"',
+      '    name: "U1"',
+      '    goal: "Keep the batch pending"',
+      "    files:",
+      '      - "README.md"',
+      "    depends_on: []",
+      "    execution_mode: change_first",
+      "    acceptance_tests:",
+      '      - "AC 1"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      "    status: pending",
+      "    builder_commits: []",
+      "    builder_attempts: []",
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 0",
+      "    final_verdict: null",
+    ].join("\n"),
+  });
+}
+
 /**
  * Ledger with no frontmatter delimiter at all. This is the most
  * aggressive malformed shape: the ledger reader's frontmatter parse
@@ -511,6 +572,16 @@ describe("Block 3: state command × ledger states", () => {
     expect(typeof confirmation.batch_contract).toBe("string");
     expect(typeof confirmation.digests).toBe("string");
     expect(confirmation.acceptance_criteria).toBe("pending");
+  });
+
+  test("confirmed not-terminal ledger reports route_id: batch-loop", async () => {
+    const ledger = ledgerConfirmedBatchLoop();
+    const result = await runCli(["state", ledger, "--json"]);
+    assertSuccessEnvelopeShape(result.envelope);
+    const data = result.envelope.data as Record<string, unknown>;
+    expect(data.route_id).toBe("batch-loop");
+    expect(data.has_batches).toBe(true);
+    expect(data.all_batches_terminal).toBe(false);
   });
 
   test("frontmatter status: blocked ledger reports blocked-frontmatter-blocked-reason", async () => {

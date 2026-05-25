@@ -40,20 +40,22 @@
  * boundary below is intentional; a future maintainer must NOT extend it into a
  * general prose/consistency linter without re-opening the scope decision.
  *
- *  - SCOPE is exactly the four operator docs in `SCOPED_DOCS`
+ *  - Main SCOPE is exactly the four operator docs in `SCOPED_DOCS`
  *    (skills/issue-to-pr/SKILL.md, runbooks/issue-to-pr-v2/README.md,
  *    references/ledger-and-helper.md, references/first-run-gotchas.md). It does
  *    NOT validate other Issue-to-PR references (stage-*.md,
  *    findings-and-validators.md, builder-dispatch.md, host-adapters.md, etc.).
+ *    A narrow U7 add-on also cross-checks the ledger template's batch lifecycle
+ *    field mentions against the runtime key sets in `lib/contract.ts`.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
  *    and the scoped recovery/control-plane links (the first-run-gotchas
- *    relationship). It does NOT judge prose truth, broad docs consistency, or
- *    any token kind beyond these.
- *  - It adds NO dependency (imports are node/bun stdlib + bun:test only), NO
- *    new CLI command, NO new emitted fact (it only READS the existing CLI via
- *    subprocess), and generates NO docs.
+ *    relationship). The U7 add-on checks only lifecycle field-name presence.
+ *    It does NOT judge prose truth, broad docs consistency, or any token kind
+ *    beyond these.
+ *  - It adds NO external dependency, NO new CLI command, NO new emitted fact
+ *    (it only READS the existing CLI via subprocess), and generates NO docs.
  *  - It does NOT validate decompose.ts flags
  *    (`decompose.ts --validate-ledger-batches` yields no command claim),
  *    route-precedence ORDER, enum-value prose (`committed`, `needs-revision`),
@@ -66,6 +68,8 @@
 import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { execPath } from "node:process";
+
+import { BATCH_KEYS, LEDGER_BATCH_KEYS } from "./lib/contract";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -921,6 +925,7 @@ export type DriftKind =
   | "packet-role"
   | "field-path"
   | "scoped-link"
+  | "ledger-lifecycle-field"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1090,6 +1095,7 @@ export type GotchasRelationshipOptions = {
 const GOTCHAS_GUIDE_REL = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
 const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
+const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
 
@@ -1225,6 +1231,148 @@ async function readScopedDocOrThrow(
     );
   }
   return file.text();
+}
+
+/** Escape a string for literal use inside a RegExp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Return the runtime batch lifecycle fields by subtracting Stage 3's immutable
+ * batch contract keys from the helper-owned ledger batch key set.
+ */
+function lifecycleBatchFields(): string[] {
+  return [...LEDGER_BATCH_KEYS]
+    .filter((key) => !BATCH_KEYS.has(key))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Extract a markdown section body by heading-label pattern. Returns the whole
+ * document when the section is absent so a missing section still produces
+ * field-level drift findings instead of hiding every missing field.
+ */
+function markdownSectionByHeadingPattern(
+  text: string,
+  headingPattern: RegExp,
+): string {
+  const lines = text.split("\n");
+  let start = -1;
+  let level = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^(#{1,6})\s+(.*)$/.exec(lines[i] ?? "");
+    if (!match || !headingPattern.test(match[2] ?? "")) continue;
+    start = i + 1;
+    level = match[1]?.length ?? 0;
+    break;
+  }
+  if (start === -1) return text;
+
+  const closingRe = new RegExp(`^#{1,${level}}\\s`);
+  const body: string[] = [];
+  for (let i = start; i < lines.length; i += 1) {
+    if (closingRe.test(lines[i] ?? "")) break;
+    body.push(lines[i] ?? "");
+  }
+  return body.join("\n");
+}
+
+/** Extract a markdown section body by exact heading label. */
+function markdownSection(text: string, headingLabel: string): string {
+  return markdownSectionByHeadingPattern(
+    text,
+    new RegExp(`^${escapeRegExp(headingLabel)}$`, "i"),
+  );
+}
+
+/** True when a doc region mentions a field as a standalone snake_case token. */
+function regionMentionsField(region: string, field: string): boolean {
+  const tokenRe = new RegExp(
+    `(?<![A-Za-z0-9_])${escapeRegExp(field)}(?![A-Za-z0-9_])`,
+  );
+  return tokenRe.test(region);
+}
+
+/** True when a section lists a lifecycle field as a markdown bullet field. */
+function regionMentionsFieldBullet(region: string, field: string): boolean {
+  const bulletRe = new RegExp(
+    `^\\s*[-*]\\s+\`${escapeRegExp(field)}\`\\s*:`,
+    "m",
+  );
+  return bulletRe.test(region);
+}
+
+/**
+ * Options for the U7 ledger lifecycle field drift check.
+ *
+ * @example
+ * ```typescript
+ * await checkLedgerLifecycleFieldDrift({ repoRoot: "/repo" });
+ * ```
+ */
+export type LedgerLifecycleFieldDriftOptions = {
+  /** Repo root that ledger docs resolve against. */
+  repoRoot?: string;
+};
+
+/**
+ * Cross-check the ledger template and ledger/helper reference against the
+ * runtime-owned batch lifecycle field set.
+ *
+ * @param opts - Optional repo root override for fixture tests.
+ * @returns Field-presence drift findings. Empty means the docs mention every
+ * helper-owned lifecycle field.
+ *
+ * @example
+ * ```typescript
+ * const findings = await checkLedgerLifecycleFieldDrift();
+ * if (findings.length > 0) console.error(findings);
+ * ```
+ */
+export async function checkLedgerLifecycleFieldDrift(
+  opts: LedgerLifecycleFieldDriftOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = [];
+  const lifecycleFields = lifecycleBatchFields();
+
+  const templateText = await readScopedDocOrThrow(
+    join(repoRoot, LEDGER_TEMPLATE_REL),
+    LEDGER_TEMPLATE_REL,
+    "contract-drift ledger lifecycle field check",
+  );
+  const ledgerText = await readScopedDocOrThrow(
+    join(repoRoot, LEDGER_DOC_REL),
+    LEDGER_DOC_REL,
+    "contract-drift ledger lifecycle field check",
+  );
+
+  const templateBatchSection = markdownSection(templateText, "Batches");
+  const ledgerBatchFieldSection = markdownSectionByHeadingPattern(
+    ledgerText,
+    /`## Batches`\s+entry fields/i,
+  );
+  for (const field of lifecycleFields) {
+    if (!regionMentionsField(templateBatchSection, field)) {
+      findings.push({
+        doc: LEDGER_TEMPLATE_REL,
+        kind: "ledger-lifecycle-field",
+        claim: field,
+        reason: `ledger template Batches section does not mention helper-owned lifecycle field \`${field}\`.`,
+      });
+    }
+    if (!regionMentionsFieldBullet(ledgerBatchFieldSection, field)) {
+      findings.push({
+        doc: LEDGER_DOC_REL,
+        kind: "ledger-lifecycle-field",
+        claim: field,
+        reason: `ledger-and-helper.md batch entry field list does not mention helper-owned lifecycle field \`${field}\`.`,
+      });
+    }
+  }
+
+  return findings;
 }
 
 /**
@@ -1440,8 +1588,8 @@ function contractClaimCount(claims: DocClaims): number {
 }
 
 /**
- * Run the runtime contract-drift check over the four scoped operator docs and
- * report aggregated drift findings.
+ * Run the runtime contract-drift check over the four scoped operator docs plus
+ * the U7 ledger lifecycle surfaces, then report aggregated drift findings.
  *
  * Pipeline (composes batches 1-3, re-implements none of them):
  *  1. Load the authoritative contract facts ONCE via `loadContractFacts()`
@@ -1451,8 +1599,8 @@ function contractClaimCount(claims: DocClaims): number {
  *     claims (batch 2), compare them to the facts (batch 3, awaited), and
  *     aggregate the findings. ALL docs are processed — the check never
  *     short-circuits at the first doc with drift.
- *  3. Run the first-run-gotchas relationship check ONCE (batch 3) and
- *     aggregate its findings.
+ *  3. Run the first-run-gotchas relationship check ONCE (batch 3), then the
+ *     U7 ledger lifecycle field check, and aggregate their findings.
  *
  * `ok` is true exactly when zero findings were collected. Read-only (AC6):
  * the orchestrator only reads docs and spawns the read-only CLI; it performs
@@ -1513,6 +1661,7 @@ export async function checkContractDrift(
 
   // The deterministic control-plane relationship the workflow relies on.
   findings.push(...(await checkGotchasRelationship({ repoRoot })));
+  findings.push(...(await checkLedgerLifecycleFieldDrift({ repoRoot })));
 
   return { ok: findings.length === 0, findings };
 }

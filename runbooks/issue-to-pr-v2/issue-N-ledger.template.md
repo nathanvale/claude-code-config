@@ -73,6 +73,8 @@ Well-formed Builder fail-stops count as Builder attempts and increment
 `iterations`. Builder infrastructure failures stay outside both attempt lanes
 and outside the iteration cap. Fail-stop attempts use `commit_sha: null` and
 do not append to `builder_commits`.
+`final_verdict` records the terminal Stage 4 outcome for the batch:
+`converged`, `accepted-risk`, or `blocked-for-user`.
 Host readiness failures use frontmatter `blocked_reason:
 host-builder-tools-unavailable` before any Stage 4 implementation attempt,
 including bounded Orchestrator-inline work. They leave every batch status

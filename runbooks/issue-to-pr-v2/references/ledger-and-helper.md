@@ -336,16 +336,18 @@ At the start of every turn:
    the first non-read operation of every resumed turn — never infer
    route from memory.
 4. Walk one stage step (or one inner-loop iteration during `batch-loop`).
-5. Commit the ledger lifecycle checkpoint or Builder commit appropriate to
-   the step.
+5. Commit the ledger lifecycle checkpoint or implementation attempt commit
+   appropriate to the step.
 6. Echo the ledger frontmatter + batches YAML + findings data + findings
    table inline at the end of the turn so the `/goal` evaluator can verify
    convergence from the transcript.
 
 Each turn does **one thing visible**: advance a stage, commit one ledger
-lifecycle checkpoint, commit one Validator findings checkpoint, run one
-Builder commit, run one validate pass, or fail-stop with a question. **Never
-do two stages in one turn.**
+lifecycle checkpoint, run one implementation attempt (Builder dispatch or
+bounded Orchestrator-inline), record one implementation-attempt checkpoint,
+run one full Validator wave, commit one Validator findings checkpoint, run
+one convergence/validation pass, or fail-stop with a question. **Never do two
+stages in one turn.**
 
 ## Route ids (v2 `cli.ts`)
 

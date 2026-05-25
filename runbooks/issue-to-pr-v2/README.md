@@ -94,7 +94,13 @@ The artifacts a maintainer needs to find, in this order:
    Run `bun ~/.claude/runbooks/issue-to-pr-v2/decompose.ts` with no
    arguments for the full flag listing; the helper enumerates its
    usage string in its error path.
-5. **`lib/`** - implementation modules behind `cli.ts` and
+5. **`contract-drift.ts`** - the read-only drift check for operator
+   docs against the live CLI contract. It also pins the ledger template
+   and `ledger-and-helper.md` batch lifecycle field mentions against the
+   helper-owned `LEDGER_BATCH_KEYS` set so runtime fields like
+   `orchestrator_inline_attempts` and `final_verdict` cannot disappear
+   from operator-facing docs.
+6. **`lib/`** - implementation modules behind `cli.ts` and
    `decompose.ts`. One-line role per module:
    - `contract.ts` - runtime contract constants shared across the CLI
      and helper surfaces.
@@ -110,7 +116,7 @@ The artifacts a maintainer needs to find, in this order:
 
    The public API of each module lives in the module itself; this
    README does not restate it.
-6. **`references/`** - per-stage prose. The read trigger for each file
+7. **`references/`** - per-stage prose. The read trigger for each file
    lives in its own header. The skill's reference-loading policy and the
    support hot router name which file to open for each route id. Files
    in this directory:
@@ -119,14 +125,14 @@ The artifacts a maintainer needs to find, in this order:
    `stage-6-ship.md`, `builder-dispatch.md`,
    `findings-and-validators.md`, `host-adapters.md`,
    `ledger-and-helper.md`, `regression-matrix.md`.
-7. **`templates/`** - packet templates rendered by `cli.ts packet`.
+8. **`templates/`** - packet templates rendered by `cli.ts packet`.
    Files: `builder-work-packet.md`, `builder-return-envelope.md`,
    `proposer-envelope.md`, `validator-envelope.md`,
    `patch-proposal.md`, `ce-plan-addendum.md`. The role each template
    serves is encoded in its filename; the validator persona model lives
    in
    [`references/findings-and-validators.md`](references/findings-and-validators.md).
-8. **`issue-N-ledger.template.md`** - the U6 ledger template (see
+9. **`issue-N-ledger.template.md`** - the current ledger template (see
    [Per-issue ledger](#per-issue-ledger) above).
 
 ## Helper execution context
@@ -150,6 +156,12 @@ directory validates against the wrong git repository — lives in
 - **Ledger path is shared with v1.** See [Per-issue
   ledger](#per-issue-ledger) above. The v1-vs-v2 skew rules live in
   [`references/ledger-and-helper.md`](references/ledger-and-helper.md).
+- **Current workflow contract version.** New v2 ledgers declare
+  `runbook_version: "3"`. Version-skew behavior and continuation
+  evidence live in
+  [`references/ledger-and-helper.md`](references/ledger-and-helper.md#runbook-version-skew-u6);
+  `contract-drift.ts` keeps the docs and runtime lifecycle fields
+  aligned after versioned contract changes.
 
 ## What this area deliberately does not do
 
