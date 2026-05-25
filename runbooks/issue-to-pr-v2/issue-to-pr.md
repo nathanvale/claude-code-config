@@ -26,14 +26,15 @@ available as the frozen behavior baseline.
 2. **User confirms ACs before planning.** Stage 1 ends with a durable
    `ac_confirmation_status: confirmed` checkpoint; no Stage 2 work
    until the envelope shows that confirmation.
-3. **User confirms batch contract before Builder work.** Stage 3
+3. **User confirms batch contract before implementation work.** Stage 3
    commits the DAG to `## Batches` only after the user confirms the
    exact digest triple, AC mapping, and execution modes.
 4. **Implementation edits only confirmed `batch.files`.** Stage 4 runs
    one implementation attempt per turn against one confirmed contract.
-   `tdd`, `proof_first`, and every repair after an open P0/P1 dispatch
-   one Builder attempt; bounded inline-eligible `change_first` may
-   instead be Orchestrator-inline under the same `batch.files`
+   `tdd`, `proof_first`, every repair after an open P0/P1, and every
+   attempt on a patch-batch (`id: patch-NNN`, never inline-eligible)
+   dispatch one Builder attempt; bounded inline-eligible `change_first`
+   may instead be Orchestrator-inline under the same `batch.files`
    authority boundary. Builder's authority over `batch.files` is
    unchanged on either path.
 5. **Validators own correctness findings.** The orchestrator records,
@@ -46,9 +47,9 @@ available as the frozen behavior baseline.
    committed and clean before any state-changing transition.
 8. **Stop on version skew or partial install.** The two pre-stage
    gates (`runbook_version_skew` and `installed_artifact_presence`)
-   fire before any Builder, Validator, or ship work.
+   fire before any implementation, Validator, or ship work.
 9. **One visible action per turn.** Advance a stage, commit one
-   lifecycle checkpoint, run one Builder commit, run one Validator
+   lifecycle checkpoint, run one implementation attempt, run one Validator
    wave, or fail-stop with a question. Never two stages in one turn.
 
 ## Reference loading
@@ -69,7 +70,7 @@ a finding against `lib/route.ts`.
 | Terminal — no references required | `route_id == "shipped"` | (none — echo the final ledger and stop) |
 | Builder dispatch envelope | About to dispatch a Builder packet | [`references/builder-dispatch.md`](references/builder-dispatch.md) |
 | Validator persona + findings normalization | About to dispatch Validators or write `## Findings data` | [`references/findings-and-validators.md`](references/findings-and-validators.md) |
-| Host-readiness gate | Before Stage 4 Builder dispatch | [`references/host-adapters.md`](references/host-adapters.md) |
+| Host-readiness gate | Before every Stage 4 implementation attempt | [`references/host-adapters.md`](references/host-adapters.md) |
 | Ledger schema + helper context + `cli.ts state` shape | Any turn that writes ledger YAML; resumed runs reading durable state | [`references/ledger-and-helper.md`](references/ledger-and-helper.md) |
 | ce-plan addendum body | Stage 2 only | [`templates/ce-plan-addendum.md`](templates/ce-plan-addendum.md) |
 | Builder Work Packet shape | Stage 4 Builder dispatch | [`templates/builder-work-packet.md`](templates/builder-work-packet.md) |
@@ -322,13 +323,14 @@ reference, then walk the steps.
   `cli.ts packet <role> --ledger <path> [...] --json`.
 - **Action summary (one visible thing per turn):** Select the next
   eligible pending batch, run host readiness, lifecycle-checkpoint
-  the batch start, dispatch one Builder attempt, normalise Validator
+  the batch start, run one implementation attempt (Builder dispatch or
+  bounded Orchestrator-inline), run the Validator wave, normalise
   findings, then loop. Convergence is `decompose.ts
   --assert-no-open-p0p1 <ledger-path>` exiting zero with batch
   P0/P1 == 0 and `iteration < 5`.
 - **Exit condition:** Every batch is `converged` or `accepted-risk`;
   `cli.ts state --json` reports `route_id: "final-review"`.
-- **Stop conditions:** `host-builder-tools-unavailable` (pre-dispatch),
+- **Stop conditions:** `host-builder-tools-unavailable` (pre-implementation),
   `builder-infrastructure-failure` (post-dispatch),
   `no-eligible-batch`, escape-hatch fire (`same-signature-twice`,
   `finding-count-rises`, `tautological-test`), iteration cap (5)
@@ -448,13 +450,13 @@ reference quickly.
 - **R-no-orchestrator-CLI.** The CLI is read-only. Every ledger
   write is the orchestrator's responsibility.
 - **R3 (lib/* module split).** No new `lib/*` modules in this seam
-  (the U7 `cli-diagnostics.ts` emitter upgrade is the only
-  exception, and it preserves the U4 record shape verbatim).
+  except narrowly-scoped emitter extensions that preserve existing
+  route-record shapes verbatim.
 - **R8 (deterministic from templates + ledger).** Same ledger + same
   filesystem state must yield identical `route_id`,
   `blocking_gates`, and `required_reference_ids`. No mtime / inode /
   fs-order dependencies in this prose.
-- **R10 (preserve U3/U4/U5/U6 split).** No re-exports from
+- **R10 (preserve helper module boundaries).** No re-exports from
   `lib/packets.ts`, `lib/ledger.ts`, or `lib/route.ts` added here.
 - **R11 (runbook_version contract).** Skew classification is the
   helper's job; this file stops on `missing` / `mismatched` without

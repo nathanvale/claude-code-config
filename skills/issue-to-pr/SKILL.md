@@ -163,8 +163,9 @@ Start every turn in this order:
    does not emit the guide in `data.required_reference_ids` (by design),
    so the loop adds it deterministically on every `blocked-` route.
 8. Execute exactly one visible workflow action for the turn: advance a
-   stage, commit one lifecycle checkpoint, dispatch one Builder
-   attempt, run one Validator wave, converge one batch, or fail-stop
+   stage, commit one lifecycle checkpoint, run one implementation
+   attempt (Builder dispatch or bounded Orchestrator-inline), run one
+   Validator wave, converge one batch, or fail-stop
    with a specific question. Under an autonomous driver, "advance a
    stage" proceeds without an inter-stage confirmation pause; only the
    mandatory gates and fail-stops in the autonomous-mode policy
@@ -228,7 +229,7 @@ preparing that packet or handoff.
 | Stage 4 batch loop | `runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md` |
 | Stage 4 Builder dispatch | `runbooks/issue-to-pr-v2/references/builder-dispatch.md`; `runbooks/issue-to-pr-v2/templates/builder-work-packet.md` |
 | Stage 4 Validator wave or findings write | `runbooks/issue-to-pr-v2/references/findings-and-validators.md`; `runbooks/issue-to-pr-v2/templates/validator-envelope.md` |
-| Host readiness before Builder work | `runbooks/issue-to-pr-v2/references/host-adapters.md` |
+| Host readiness before Stage 4 implementation attempts | `runbooks/issue-to-pr-v2/references/host-adapters.md` |
 | Ledger writes or helper output interpretation | `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` |
 | Stage 5 final review | `runbooks/issue-to-pr-v2/references/stage-5-final-review.md`; `runbooks/issue-to-pr-v2/references/findings-and-validators.md` |
 | Stage 5 Proposer or patch-batch handoff | `runbooks/issue-to-pr-v2/templates/proposer-envelope.md`; `runbooks/issue-to-pr-v2/templates/patch-proposal.md` |
@@ -353,10 +354,12 @@ required references before taking the one visible action.
   `builder-dispatch.md`, `host-adapters.md`,
   `findings-and-validators.md`, and `ledger-and-helper.md` for writes.
 - One visible action: exactly one Stage 4 subroute below.
-- Dispatch policy: `tdd`, `proof_first`, and every repair after an
-  open P0/P1 MUST dispatch Builder; `change_first` MAY stay
-  Orchestrator-inline only while bounded (≤2 touched files, low-risk,
-  non-behavioural, non-governance, non-public-contract, no broad
+- Dispatch policy: `tdd`, `proof_first`, every repair after an
+  open P0/P1, and every attempt on a patch-batch (`id: patch-NNN`, which
+  carries an open final-review P0/P1 forward and is therefore never
+  inline-eligible) MUST dispatch Builder; `change_first` MAY stay
+  Orchestrator-inline only while bounded (≤2 touched files, obvious,
+  low-risk, non-behavioural, non-governance, non-public-contract, no broad
   discovery, no heavy Orchestrator context load, not the third
   consecutive inline attempt without a user-confirmed exception), and
   falls back to Builder dispatch as soon as a dispatch trigger fires.
@@ -386,7 +389,8 @@ Stage 4 subroutes:
     dispatch trigger fires. Render the Builder Work Packet and dispatch
     one Builder attempt.
   - `implementation-attempt-inline`: allowed only for bounded
-    inline-eligible `change_first` attempts. The Orchestrator edits
+    inline-eligible `change_first` attempts, and never for a patch-batch
+    (`id: patch-NNN`), which is Builder-only on every attempt. The Orchestrator edits
     inline within the same authority boundary as Builder (edits only
     confirmed `batch.files`) and records the attempt as
     Orchestrator-inline evidence in its own audit lane on the ledger,
@@ -405,7 +409,7 @@ Stage 4 subroutes:
 
 Only one Stage 4 subroute is the visible action for a turn. The
 Orchestrator routes and records lifecycle state; the implementation
-path (Builder dispatch or bounded inline) owns one scoped attempt
+path (Builder dispatch or bounded Orchestrator-inline) owns one scoped attempt
 against `batch.files`; Validators own correctness findings; Proposer
 only appears when Stage 5 sends a final-review finding back as a
 patch-batch candidate.
@@ -501,13 +505,11 @@ Stage 4 uses an implementation/Validator convergence loop:
    are Builder-only: an open P0/P1 after any committed attempt
    (Builder or inline) routes to Builder repair, never inline.
 
-A repair dispatch should land as **one combined commit per dispatch**,
-not one commit per finding. The ledger requires every `builder_commits`
-entry to map 1:1 to a committed `builder_attempts` record, capped at
-`MAX_BUILDER_ATTEMPTS`; per-finding commits inflate the commit count
-past that cap and force a mid-run history squash (which itself trips
-permission prompts). Group a wave's fixes into a single repair commit so
-commits stay 1:1 with attempts and under the cap.
+Each repair dispatch targets exactly one committed open P0/P1 finding
+signature and may land at most one Builder commit for that target. Run
+separate Builder repair dispatches for separate signatures; if the attempt
+cap would be exceeded, fail-stop for user choice instead of batching
+unrelated finding fixes into one repair packet.
 
 Stage 5 repeats the same P0/P1 rule over the cumulative diff. A final
 review P0/P1 never becomes an Orchestrator-authored implementation fix:

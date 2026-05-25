@@ -1,7 +1,9 @@
 # Builder dispatch reference
 
 **Applies To:** every `tdd` attempt, every `proof_first` attempt, every
-repair attempt after an open P0/P1, and every `change_first` attempt after a
+repair attempt after an open P0/P1, every attempt on a patch-batch
+(`id: patch-NNN`, which carries an open final-review P0/P1 forward and is
+therefore never inline-eligible), and every `change_first` attempt after a
 dispatch trigger fires. Bounded inline-eligible `change_first` attempts do
 not use this contract; they run Orchestrator-inline under the same
 `batch.files` authority boundary. For the inline-eligibility rule and the
@@ -9,9 +11,9 @@ full list of `change_first` dispatch triggers, see
 [stage-4-batch-loop.md](stage-4-batch-loop.md#builder-dispatch-policy)
 (single source of truth).
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L13-20 (file scope),
-L43-65 (role boundaries), L67-265 (Builder dispatch contract), L1056-1109
-(Builder execution rules); `runbooks/issue-to-pr/README.md` L30-139
+**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L13-22 (file scope),
+L44-74 (role boundaries), L78-290 (Builder dispatch contract), L1093-1146
+(Builder execution rules); `runbooks/issue-to-pr/README.md` L35-166
 (compatibility and Builder overview).
 
 **Read trigger:** open this reference when Stage 4 batch-loop is about to
@@ -27,9 +29,10 @@ single reference is the ADR 0001 (Orchestration / mechanic split) line.
 
 ## File scope
 
-The hot router (v2) does not yet depend on this reference. Public cutover
-lands in U7. Until then this reference is shadow content consumed only by U2
-templates and downstream seam authors.
+This reference is active when Stage 4 selects the Builder dispatch path. The
+Stage 4 batch-loop reference owns the dispatch-policy decision; this file owns
+the Builder-specific Work Packet, authority boundary, preflight rules, and
+return envelope.
 
 ## Role boundaries (v1 L43-65)
 
@@ -43,12 +46,13 @@ The role language is executable contract language:
 - The ledger stores the confirmed execution contract.
 - Orchestrator owns stages, ledger writes, user gates, Builder dispatch,
   Builder envelope validation, Validator dispatch, and final workflow gates.
-- Builder is dispatched as a fresh Builder sub-agent per attempt. The
-  Orchestrator does not play Builder or implement batches directly during
-  Stage 4.
-- Builder implements exactly one batch attempt under the confirmed ledger
-  contract, or fail-stops if that contract is unsafe or stale after reading
-  the files.
+- Builder is dispatched as a fresh Builder sub-agent per *Builder* attempt.
+  Bounded inline-eligible `change_first` attempts may run Orchestrator-inline
+  under the Stage 4 dispatch policy; they are not Builder attempts and do not
+  use this dispatch contract.
+- Builder implements exactly one dispatched batch attempt under the confirmed
+  ledger contract, or fail-stops if that contract is unsafe or stale after
+  reading the files.
 - Validator personas are read-only reviewers. They do not fix, choose modes,
   or re-rank severity.
 
@@ -287,7 +291,7 @@ automatically**. The stop prompt must show:
 Helper validation rejects a dependent that lists both the original and the
 replacement before the confirmation gate.
 
-## Packet rendering contract (U5)
+## Packet rendering contract
 
 The Builder Work Packet shape above is rendered deterministically by
 `renderBuilderPacket()` in
@@ -298,9 +302,9 @@ front door: `runbooks/issue-to-pr-v2/cli.ts packet builder --ledger
 packet body, a structured `packet` payload that mirrors the YAML in
 `templates/builder-work-packet.md`, and a `dispatch_evidence` object
 (timestamp, role, target id, loaded references/templates, CLI route
-id). The Orchestrator carries that evidence into ledger Notes once U6
-lands the write infrastructure; the U5 CLI is read-only and does not
-mutate ledger state.
+id). The Orchestrator carries that evidence into ledger Notes through the
+runbook's evidence-write flow; the CLI is read-only and does not mutate
+ledger state.
 
 The renderer scopes inputs to the target batch only: findings, prior
 attempts, and Notes are filtered by `batch_id` before render, so the
@@ -311,8 +315,8 @@ u5-packet-rendering.md` is enforced at the render boundary.
 
 - [stage-4-batch-loop.md](stage-4-batch-loop.md) for the outer/inner loop that
   drives Builder dispatch.
-- [host-adapters.md](host-adapters.md) for the
-  `host-readiness-vs-infra-failure` boundary that gates Builder dispatch.
+- [host-adapters.md](host-adapters.md) for the pre-implementation readiness
+  boundary and Builder infrastructure-failure classification.
 - [findings-and-validators.md](findings-and-validators.md) for Validator
   invocation rules and the persona selector.
 - Templates: [`templates/builder-work-packet.md`](../templates/builder-work-packet.md)

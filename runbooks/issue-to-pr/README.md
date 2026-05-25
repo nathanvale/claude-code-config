@@ -87,22 +87,28 @@ point, promote the terms into a shared pattern doc or ADR.
 
 The execution-mode choice also drives the Stage 4 dispatch policy: `tdd` and
 `proof_first` always dispatch Builder; `change_first` may stay
-Orchestrator-inline only while bounded (≤2 touched files, low-risk,
-non-behavioural, non-governance, non-public-contract, no broad discovery, no
-heavy Orchestrator context load, and not the third consecutive inline attempt
-without an explicit user-confirmed exception); a repair attempt after any open
-P0/P1 must dispatch Builder regardless of mode. See `## Builder dispatch
-overview` below.
+Orchestrator-inline only while bounded (the batch is not a patch-batch, ≤2
+touched files, obvious, low-risk, non-behavioural, non-governance,
+non-public-contract, no broad discovery, no heavy Orchestrator context load,
+and not the third consecutive inline attempt without an explicit
+user-confirmed exception). Builder dispatch is mandatory regardless of mode
+for a repair attempt after any open P0/P1 and for every attempt on a
+patch-batch (`id: patch-NNN`, which carries an open final-review P0/P1 forward
+and is therefore never inline-eligible). See `## Builder dispatch overview`
+below.
 
 ## Builder dispatch overview
 
-Stage 4 dispatches Builder for `tdd`, `proof_first`, and every repair
-attempt, and for `change_first` attempts that exceed inline eligibility. The
+Stage 4 dispatches Builder for `tdd`, `proof_first`, every repair
+attempt, every attempt on a patch-batch (`id: patch-NNN`, which carries an
+open final-review P0/P1 forward and is therefore never inline-eligible), and
+for `change_first` attempts that exceed inline eligibility. The
 Orchestrator may implement a `change_first` attempt inline only while every
-inline bound above holds; as soon as a dispatch trigger fires (too many files,
-non-doc or high-risk paths, behavioural / public-contract / governance
-surface, broad discovery, uncertainty, heavy Orchestrator context load, or
-the repeated-inline threshold), the attempt must dispatch Builder. Inline
+inline bound above holds; as soon as a dispatch trigger fires (any attempt on
+a patch-batch, too many files, non-doc or high-risk paths, behavioural /
+public-contract / governance surface, broad discovery, uncertainty, heavy
+Orchestrator context load, or the repeated-inline threshold), the attempt
+must dispatch Builder. Inline
 attempts honour the same `batch.files` authority boundary as Builder and are
 recorded as Orchestrator-inline evidence in their own audit lane on the
 ledger, separate from Builder attempt evidence. The full always-on Validator
@@ -152,10 +158,11 @@ files, dependencies, execution mode, tests, and rationale before appending it
 to `## Batches`. Builder and reviewer output never authorizes the patch
 contract by itself.
 
-If host readiness fails before Builder dispatch, record frontmatter
-`status: blocked` and `blocked_reason: host-builder-tools-unavailable`, append
-Notes evidence, leave batch statuses unchanged, and do not fall back to
-Orchestrator-direct implementation. If dispatch, timeout, permission,
+If host readiness fails before a Stage 4 implementation attempt, record
+frontmatter `status: blocked` and
+`blocked_reason: host-builder-tools-unavailable`, append Notes evidence, leave
+batch statuses unchanged, and do not fall back to Orchestrator-inline
+implementation as a workaround. If dispatch, timeout, permission,
 serialization, schema, or malformed-envelope failure happens after Builder
 dispatch, record `blocked_reason: builder-infrastructure-failure`, leave the
 current batch `in-progress`, append no `builder_attempts` row, do not
@@ -225,11 +232,13 @@ at ~/.claude/runbooks/issue-to-pr/issue-N-ledger.template.md.
 
 Walk the six stages in order: pick-issue, plan, decompose, batch-loop,
 final-review, ship. Inside batch-loop, walk batches in topological order. For
-each batch, run the inner loop: Builder commits, persona suite (always-on +
-adversarial + diff-conditional) validates, gate on P0/P1 findings. Iterate the
-inner loop until zero open P0/P1 findings remain or the iteration cap (5) is
-hit. After all batches converge, run final-review (one /ce-code-review pass
-over the cumulative diff) under the same P0/P1 gate.
+each batch, run the inner loop: one implementation attempt lands (Builder
+dispatch or bounded Orchestrator-inline), the persona suite (always-on +
+adversarial + diff-conditional) validates, and the loop gates on P0/P1
+findings. Repairs after open P0/P1 are Builder-only. Iterate the inner loop
+until zero open P0/P1 findings remain or the iteration cap (5) is hit. After
+all batches converge, run final-review (one /ce-code-review pass over the
+cumulative diff) under the same P0/P1 gate.
 
 Goal met when: every batch has status `converged` (or `accepted-risk` with
 user confirmation); final-review has zero open P0/P1 findings and
@@ -278,22 +287,25 @@ At the start of every turn:
    the end of the turn.
 
 Each turn does one thing visible: advance a stage, commit one ledger lifecycle
-checkpoint, commit one Validator findings checkpoint, run one Builder commit,
-run one validate pass, or fail-stop with a question. Never do two stages in one
-turn.
+checkpoint, commit one Validator findings checkpoint, run one implementation
+attempt, run one validate pass, or fail-stop with a question. Never do two
+stages in one turn.
 
 ## Fix protocol (shared)
 
 Fixes happen inside `batch-loop`'s **inner loop** (see `issue-to-pr.md`,
 `## Inner loop`). They are NOT cross-batch. Each batch's inner loop:
 
-1. Builder commits one implementation or repair attempt scoped to the batch's
-   `files`.
+1. One implementation attempt lands scoped to the batch's `files`: Builder
+   dispatch for `tdd`, `proof_first`, repairs, any patch-batch
+   (`id: patch-NNN`, never inline-eligible), or `change_first` after a
+   dispatch trigger; bounded Orchestrator-inline only for eligible
+   `change_first` on a non-patch-batch.
 2. Persona suite re-runs over the new diff.
 3. Orchestrator normalizes and deduplicates Validator findings, writes
    `## Findings data`, renders `## Findings`, runs `--validate-findings`, and
-   commits a ledger-only Validator findings checkpoint before any repair
-   Builder starts.
+   commits a ledger-only Validator findings checkpoint before any Builder
+   repair starts.
 4. Builder repairs exactly one committed open P0/P1 finding by signature, and
    fixes only that target finding.
 5. Repeat until open P0/P1 == 0 OR iteration cap hit OR an escape hatch fires.
@@ -350,7 +362,7 @@ them.
   only when deterministic risk triggers fire.
 - **Builder dispatch contract**: the runbook-owned prompt shape, required
   capabilities, preflight rules, authority boundary, and return envelope that
-  each host maps to its own fresh Builder sub-agent per attempt.
+  each host maps to its own fresh Builder sub-agent per Builder attempt.
   Source requirements:
   `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
 - **Builder Work Packet**: the per-attempt, batch-only payload the Orchestrator
@@ -359,9 +371,10 @@ them.
   deterministic-probe step before edits.
 - **Builder attempt**: one Builder dispatch that returns a well-formed Builder
   envelope, whether it commits or Builder-authored fail-stops.
-- **Host Builder readiness failure**: an Orchestrator-owned block before
-  Builder exists because the host cannot provide the required fresh sub-agent
-  capabilities. Recorded as `host-builder-tools-unavailable`.
+- **Host Builder readiness failure**: an Orchestrator-owned block before a
+  Stage 4 implementation attempt because the host cannot provide the required
+  fresh sub-agent capabilities for Builder dispatch or later repair. Recorded
+  as `host-builder-tools-unavailable`.
 - **Builder infrastructure failure**: a post-dispatch host, tool, permission,
   dispatch, serialization, schema, or malformed-envelope failure before a
   well-formed Builder envelope exists.

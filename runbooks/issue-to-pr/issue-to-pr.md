@@ -12,17 +12,18 @@ the target repo. Template at [issue-N-ledger.template.md](issue-N-ledger.templat
 
 ## Files in scope
 
-This runbook does not own a fixed file list. The Builder is only permitted to
-touch the files listed in the current batch's `files` field (see `## Batch
-schema`). A missing path listed in `files` may be created by Builder, but
-Builder must fail-stop if preflight suggests the path is stale, mistyped,
-wrong-package, or semantically unauthorized. Out-of-scope edits trigger a
-fail-stop (see `## Inner loop` and `## Escape hatches`).
+This runbook does not own a fixed file list. Stage 4 implementation attempts
+are only permitted to touch the files listed in the current batch's `files`
+field (see `## Batch schema`). A missing path listed in `files` may be created
+by Builder or by a bounded Orchestrator-inline attempt, but Builder must
+fail-stop if preflight suggests the path is stale, mistyped, wrong-package, or
+semantically unauthorized. Out-of-scope edits trigger a fail-stop (see
+`## Inner loop` and `## Escape hatches`).
 
 ## Suggested reviewer personas
 
-Always-on, dispatched in parallel after every Builder commit inside `## Inner
-loop`:
+Always-on, dispatched in parallel after every committed implementation attempt
+inside `## Inner loop`:
 
 - `compound-engineering:ce-correctness-reviewer`
 - `compound-engineering:ce-testing-reviewer`
@@ -55,11 +56,14 @@ The role language is executable contract language:
 - Builder is dispatched as a fresh Builder sub-agent per *Builder* attempt.
   The Orchestrator does not play Builder during Stage 4, with one bounded
   exemption: a `change_first` attempt may be implemented Orchestrator-inline
-  while inline eligibility holds (small, low-risk, non-behavioural,
-  non-governance, non-public-contract, no broad discovery, no heavy
-  Orchestrator context load, and not the third consecutive inline attempt
-  without an explicit user-confirmed exception). `tdd`, `proof_first`, and
-  any repair after an open P0/P1 always dispatch Builder.
+  while inline eligibility holds (the batch is not a patch-batch, <=2 touched
+  files, obvious, low-risk, non-behavioural, non-governance,
+  non-public-contract, no broad discovery, no heavy Orchestrator context load,
+  and not the third consecutive inline attempt without an explicit
+  user-confirmed exception). `tdd`, `proof_first`, any repair after an open
+  P0/P1, and every attempt on a patch-batch (`id: patch-NNN`, which carries an
+  open final-review P0/P1 forward and is therefore never inline-eligible)
+  always dispatch Builder.
 - Builder implements exactly one batch attempt under the confirmed ledger
   contract, or fail-stops if that contract is unsafe or stale after reading
   the files. An Orchestrator-inline `change_first` attempt honours the same
@@ -74,8 +78,10 @@ The Builder dispatch contract is sourced from
 ## Builder dispatch contract
 
 **Applies to:** every `tdd` attempt, every `proof_first` attempt, every
-repair attempt after an open P0/P1, and every `change_first` attempt after a
-dispatch trigger fires (too many files, non-doc or high-risk paths,
+repair attempt after an open P0/P1, every attempt on a patch-batch
+(`id: patch-NNN`, which carries an open final-review P0/P1 forward and is
+therefore never inline-eligible), and every `change_first` attempt after a
+dispatch trigger fires (>2 touched files, non-doc or high-risk paths,
 behavioural / public-contract / governance surface, broad discovery,
 uncertainty, heavy Orchestrator context load, or the repeated-inline
 threshold). Bounded inline-eligible `change_first` attempts run
@@ -294,7 +300,7 @@ own skill body, not declared here.
 ## Inter-stage precondition: clean tree
 
 Before transitioning from stage N to stage N+1, the working tree MUST be
-clean (`git status --porcelain` returns empty). Builder commits inside
+clean (`git status --porcelain` returns empty). Implementation commits inside
 batch-loop must land before any stage transition. The decompose stage's
 ledger edits, frontmatter updates, and YAML block insertions all count: they
 must be committed (one commit per stage transition is the convention) before
@@ -302,7 +308,8 @@ the next stage begins.
 
 Stage 4 lifecycle ledger checkpoints are the same kind of orchestrator-owned
 state transition. They are visible `batch-loop` turns, but they are not
-Builder commits and they do not count toward the Builder / Validator
+implementation commits and they do not count toward the implementation /
+Validator
 iteration count.
 
 A non-empty working tree at stage transition is a runbook bug. Fail-stop and
@@ -702,10 +709,11 @@ reports all three states as `confirmed`; working tree clean.
 
 **Inputs:** Ledger with batches in topological order.
 
-If Stage 4 resumes with a batch already `in-progress` and another Builder
-dispatch is needed, do not select a new pending batch and do not change batch
-status. Verify host Builder readiness for the current in-progress batch
-immediately before dispatch.
+If Stage 4 resumes with a batch already `in-progress` and another
+implementation attempt is needed (Builder dispatch or bounded
+Orchestrator-inline), do not select a new pending batch and do not change
+batch status. Verify host Builder readiness for the current in-progress batch
+immediately before the next implementation attempt.
 
 **Outer loop:**
 
@@ -734,19 +742,21 @@ immediately before dispatch.
    missing Builder capability means repairs cannot dispatch later, so no
    implementation attempt may begin).
 4. Mark `status: in-progress` and commit a ledger-only lifecycle checkpoint
-   before Builder starts:
+   before the implementation attempt starts:
    `chore(issue-{issue-number}): start <batch-id> batch`.
    This is a stage-visible `batch-loop` turn. It does not count toward
-   `iterations`, and it is outside Builder scope discipline because the
-   orchestrator owns ledger lifecycle state. Stage only the per-issue ledger
-   path and verify the working tree is clean after the commit.
+   `iterations`, and it is outside implementation scope discipline because the
+   orchestrator owns ledger lifecycle state (this applies to both Builder
+   dispatch and Orchestrator-inline implementation paths). Stage only the
+   per-issue ledger path and verify the working tree is clean after the commit.
 5. Run the inner loop (see `## Inner loop` below).
-6. On inner-loop success: set `status: converged`, append the Builder commit
-   refs to `builder_commits`, append compact records for every well-formed
-   Builder envelope to `builder_attempts`, set `iterations` to the number of
-   well-formed implementation attempts for that batch (Builder envelopes —
-   committed or Builder-authored fail-stop — plus committed
-   Orchestrator-inline attempts, excluding Validator persona waves), and set
+6. On inner-loop success: set `status: converged`, preserve path-specific
+   attempt evidence (Builder commit refs in `builder_commits`, compact Builder
+   envelope records in `builder_attempts`, and Orchestrator-inline evidence in
+   its separate audit lane), set `iterations` to the number of well-formed
+   implementation attempts for that batch (committed Builder attempts,
+   Builder-authored fail-stops, and committed Orchestrator-inline attempts,
+   excluding Validator persona waves), and set
    `final_verdict: converged`.
    Auto-close batch P2/P3 findings as `deferred-P2` / `deferred-P3`, update
    the rendered findings table, run `--validate-findings`, and commit a
@@ -882,9 +892,10 @@ with user confirmation); working tree clean.
            keep `batch_contract_confirmation_status: confirmed`, update
            `batch_contract_confirmed_at`, and run `--confirmation-state`
            before returning to stage 4 (batch-loop) to converge it. The
-           appended patch-batch is now a confirmed batch; the Stage 4 Builder
-           owns one implementation or repair attempt against that confirmed
-           contract.
+           appended patch-batch is now a confirmed batch that remediates an
+           open final-review P0/P1; it is Builder-only on every attempt,
+           never Orchestrator-inline, because it carries an open P0/P1
+           forward. Repairs remain Builder-only.
          - When the patch-batch converges, update the original
            `batch_id: final` finding row in `## Findings data` to
            `status: fixed` with `resolution: patch-batch <id>` (or
@@ -1003,18 +1014,21 @@ working tree clean; final ledger update pushed. Goal met.
 
 ## Persona selector
 
-After every committed Builder envelope, compute the conditional persona list
-from touched file names, the batch contract, and Builder
-`suggested_validator_focus`. Orchestrator may read full commit diff content
-only for Builder authority checks, envelope integrity, and lightweight
-correctness sanity checks; persona selection must not depend on Orchestrator
-implementation analysis. When path/name signals or Builder focus are
-incomplete, dispatch the default broad reviewer set. Existing path,
+After every committed implementation attempt, compute the conditional persona
+list from touched file names, the batch contract, and the real attempt evidence
+source. Builder-dispatched attempts may contribute Builder
+`suggested_validator_focus`; Orchestrator-inline attempts contribute compact
+inline evidence and must not fabricate Builder focus. Orchestrator may read
+full commit diff content only for authority checks, envelope integrity, and
+lightweight correctness sanity checks; persona selection must not depend on
+Orchestrator implementation analysis. When path/name signals or attempt focus
+are incomplete, dispatch the default broad reviewer set. Existing path,
 touched-file, and batch-contract signals that match the table below must
 dispatch their validators regardless of Builder suggestion.
-Before Validator dispatch, Orchestrator stops only for Builder authority
-breaches or malformed envelopes; correctness concerns without an
-authority/envelope violation are passed only as transient Validator focus.
+Before Validator dispatch, Orchestrator stops only for authority breaches,
+malformed Builder envelopes, or malformed Orchestrator-inline evidence;
+correctness concerns without an authority/evidence violation are passed only
+as transient Validator focus.
 
 The **default broad reviewer set** is the always-on reviewer list plus every
 conditional reviewer in the table below, except
@@ -1056,12 +1070,12 @@ flowchart TD
 ```
 
 **Inner-loop iteration cap: 5.** After 5 well-formed implementation attempts
-in one batch (Builder envelopes — committed or Builder-authored fail-stop —
-plus committed Orchestrator-inline attempts), stop and ask the user.
+in one batch (committed Builder attempts, Builder-authored fail-stops, and
+committed Orchestrator-inline attempts), stop and ask the user.
 
-Before every Builder dispatch, including resumed implementation and repair
-dispatches, verify host Builder readiness against the current in-progress
-batch. If readiness is unavailable, record frontmatter `status: blocked` and
+Before every Stage 4 implementation attempt (Builder dispatch or bounded
+Orchestrator-inline), including resumed implementation and repair attempts,
+verify host Builder readiness against the current in-progress batch. If readiness is unavailable, record frontmatter `status: blocked` and
 `blocked_reason: host-builder-tools-unavailable`, append Notes evidence, leave
 the current batch status unchanged, do not increment `iterations`, do not
 dispatch Validators, and ask the user to retry or abandon.
@@ -1138,9 +1152,12 @@ the user chooses retry, import, or abandon.
    when present.
 2. Pass each persona commit refs/ranges, touched file names, batch id, goal,
    files, `execution_mode`, acceptance tests, AC mapping, relevant ledger
-   findings, and Builder evidence from the envelope (`implementation_steps`,
+   findings, and the real attempt evidence source. Builder-dispatched attempts
+   include Builder evidence from the envelope (`implementation_steps`,
    `existing_seams_used`, `tests_run`, `assumptions`, `risks`, `deferred`,
-   and `suggested_validator_focus`). Include transient Orchestrator sanity
+   and `suggested_validator_focus`). Orchestrator-inline attempts include the
+   implementation commit, touched files, inline-validity note, and any
+   user-confirmed exception note. Include transient Orchestrator sanity
    concerns only as Validator focus; do not persist them as ledger entries or
    Orchestrator-authored findings.
 3. Ask each persona to return this envelope:
@@ -1314,7 +1331,7 @@ Allowed statuses and resolutions:
 
 | Status | Resolution | Meaning |
 | --- | --- | --- |
-| `fixed` | `commit <sha>` or `patch-batch patch-NNN` | The finding was fixed by a reachable Builder commit recorded in a terminal ledger batch, or a terminal patch-batch with reachable Builder commits. |
+| `fixed` | `commit <sha>` or `patch-batch patch-NNN` | The finding was fixed by a reachable implementation commit recorded in a terminal ledger batch, or a terminal patch-batch with reachable Builder commits. |
 | `accepted-risk` | `accepted-risk: <reason>` | User explicitly accepted the finding; goes into PR body as a known-issue note. |
 | `deferred-P2` | `deferred-P2` | Auto-closed at batch or final-review convergence (P2 severity). Surfaced in PR body. |
 | `deferred-P3` | `deferred-P3` | Auto-closed at batch or final-review convergence (P3 severity). Logged only. |

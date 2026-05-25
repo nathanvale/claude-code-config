@@ -1,16 +1,17 @@
 # Stage 4: batch-loop reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L683-701, L715-753
+**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L708-786
 (outer loop, lifecycle checkpoints, convergence, accepted risk, batch-loop
-exit); L1017-1035 (inner-loop diagram); L806-886 (final-review patch-batch
-decision tree — moved here per the U2 plan); L872-879
+exit); L1053-1070 (inner-loop diagram); L838-901 (final-review patch-batch
+decision tree, moved here during the v2 reference split); L877-884
 (smallest-contract-patch heuristic).
 
 **Read trigger:** open this reference when entering or resuming `batch-loop`,
-before selecting the next pending batch, before any Builder dispatch (the
-pre-dispatch readiness check from [host-adapters.md](host-adapters.md)
-applies), when an inner-loop iteration completes, or when Stage 5 routes a
-final-review finding back here for patch-batch remediation. See also:
+before selecting the next pending batch, before any Stage 4 implementation
+attempt (the pre-implementation readiness check from
+[host-adapters.md](host-adapters.md) applies), when an inner-loop iteration
+completes, or when Stage 5 routes a final-review finding back here for
+patch-batch remediation. See also:
 [builder-dispatch.md](builder-dispatch.md),
 [host-adapters.md](host-adapters.md),
 [findings-and-validators.md](findings-and-validators.md),
@@ -19,12 +20,13 @@ final-review finding back here for patch-batch remediation. See also:
 ## Inputs
 
 Ledger with batches in topological order. If Stage 4 resumes with a batch
-already `in-progress` and another Builder dispatch is needed, do not select a
-new pending batch and do not change batch status. Verify host Builder
-readiness for the current in-progress batch immediately before dispatch (see
+already `in-progress` and another implementation attempt is needed (Builder
+dispatch or bounded Orchestrator-inline), do not select a new pending batch
+and do not change batch status. Verify host Builder readiness for the current
+in-progress batch immediately before the next implementation attempt (see
 [host-adapters.md](host-adapters.md)).
 
-## Pre-stage gates (must clear before any Builder dispatch)
+## Pre-stage gates (must clear before any implementation attempt)
 
 Stage 4 inherits two stop-required gates from the durable ledger snapshot
 exposed by `cli.ts state <ledger-path> --json`. The orchestrator routes
@@ -61,12 +63,17 @@ Stage 4 has two implementation paths and one routing rule between them.
 - every repair attempt after any open P0/P1, regardless of whether the
   prior committed attempt was a Builder envelope or an Orchestrator-inline
   attempt (repairs are Builder-only);
+- every attempt on a patch-batch (`id: patch-NNN`), including its initial
+  implementation attempt: a patch-batch carries an open final-review P0/P1
+  forward, so the `change_first` inline exemption never applies to it;
 - every `change_first` attempt once a dispatch trigger fires (see below).
 
 **`change_first` may stay Orchestrator-inline** only while every bound below
 holds. As soon as any bound fails, the attempt must dispatch Builder
 instead:
 
+- the batch is not a patch-batch (`id: patch-NNN`); patch-batches are always
+  Builder-only because they carry an open final-review P0/P1 forward;
 - the touched-file count is ≤2;
 - the change is obvious and low-risk;
 - no behavioural surface is affected;
@@ -82,7 +89,11 @@ instead:
   in the active batch without an explicit user-confirmed exception recorded
   (consecutive means consecutive committed inline attempts in this batch with
   no intervening Builder dispatch; a Builder dispatch in the same batch
-  resets the count).
+  resets the count). This count is derived from durable ledger state, not
+  transcript memory, so it is recoverable on a resumed turn; the inline audit
+  lane and Builder attempt records carry enough ordering to reconstruct the
+  interleaving (the exact field shape is owned by the ledger contract, not
+  this policy).
 
 **`change_first` dispatch triggers** (any one forces Builder dispatch even
 for `change_first`):
@@ -139,13 +150,14 @@ return envelope, see [builder-dispatch.md](builder-dispatch.md).
    only the per-issue ledger path and verify
    the working tree is clean after the commit.
 5. **Run the inner loop** (see Inner loop section below).
-6. **On inner-loop success.** Set `status: converged`, append the Builder
-   commit refs to `builder_commits`, append compact records for every
-   well-formed Builder envelope to `builder_attempts`, set `iterations` to
-   the number of well-formed implementation attempts for that batch
-   (Builder envelopes — committed or Builder-authored fail-stop — plus
-   committed Orchestrator-inline attempts, excluding Validator persona
-   waves), and set `final_verdict: converged`. Auto-close batch P2/P3 findings as
+6. **On inner-loop success.** Set `status: converged`, preserve path-specific
+   attempt evidence (Builder commit refs in `builder_commits`, compact
+   Builder envelope records in `builder_attempts`, and Orchestrator-inline
+   evidence in its separate audit lane), set `iterations` to the number of
+   well-formed implementation attempts for that batch (committed Builder
+   attempts, Builder-authored fail-stops, and committed Orchestrator-inline
+   attempts, excluding Validator persona waves), and set
+   `final_verdict: converged`. Auto-close batch P2/P3 findings as
    `deferred-P2` / `deferred-P3`, update the rendered findings table, run
    `--validate-findings`, and commit a ledger-only lifecycle checkpoint:
    `chore(issue-{issue-number}): converge <batch-id> batch`. This is a
@@ -192,8 +204,8 @@ flowchart TD
 ```
 
 **Inner-loop iteration cap: 5.** After 5 well-formed implementation attempts
-in one batch (Builder envelopes — committed or Builder-authored fail-stop —
-plus committed Orchestrator-inline attempts), stop and ask the user.
+in one batch (committed Builder attempts, Builder-authored fail-stops, and
+committed Orchestrator-inline attempts), stop and ask the user.
 
 Builder execution rules (scope discipline, initial implementation commit, one
 finding per fix commit, follow `execution_mode`, pin behaviour first,
@@ -289,8 +301,9 @@ bounded patch-batch path or must fail-stop for user re-planning.
     `confirmation_state.batch_contract: "confirmed"` and
     `route_id: "batch-loop"` with the appended patch-batch present in
     `## Batches` and pending. The appended patch-batch
-    is now a confirmed batch; the Stage 4 Builder owns one implementation or
-    repair attempt against that confirmed contract.
+    is now a confirmed batch that remediates an open final-review P0/P1;
+    it is Builder-only on every attempt, never Orchestrator-inline, because
+    it carries an open P0/P1 forward. Repairs remain Builder-only.
   - When the patch-batch converges, update the original `batch_id: final`
     finding row in `## Findings data` to `status: fixed` with
     `resolution: patch-batch <id>` (or `resolution: commit <sha>` when the
@@ -318,8 +331,9 @@ converge, re-invoke `/ce-code-review` from the top of Stage 5.
 
 - [builder-dispatch.md](builder-dispatch.md) for the Builder execution rules,
   authority boundary, and replacement-batch mechanics referenced here.
-- [host-adapters.md](host-adapters.md) for the pre-dispatch and post-dispatch
-  host-readiness boundary that gates Builder dispatch.
+- [host-adapters.md](host-adapters.md) for the pre-implementation readiness
+  boundary that gates every Stage 4 attempt, plus the post-dispatch
+  infrastructure-failure boundary for Builder dispatch.
 - [findings-and-validators.md](findings-and-validators.md) for Validator
   invocation, persona selector, broad-reviewer fallback, and findings table
   shape.
