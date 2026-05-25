@@ -729,7 +729,10 @@ immediately before dispatch.
    `blocked_reason: host-builder-tools-unavailable`, append Notes evidence,
    leave every batch status unchanged, do not append `builder_attempts`, do
    not increment `iterations`, do not dispatch Validators, and do not fall
-   back to Orchestrator-direct implementation.
+   back to Orchestrator-inline implementation as a workaround for host
+   unavailability (the inline path is gated on the same host readiness; a
+   missing Builder capability means repairs cannot dispatch later, so no
+   implementation attempt may begin).
 4. Mark `status: in-progress` and commit a ledger-only lifecycle checkpoint
    before Builder starts:
    `chore(issue-{issue-number}): start <batch-id> batch`.
@@ -741,8 +744,9 @@ immediately before dispatch.
 6. On inner-loop success: set `status: converged`, append the Builder commit
    refs to `builder_commits`, append compact records for every well-formed
    Builder envelope to `builder_attempts`, set `iterations` to the number of
-   well-formed Builder envelopes for that batch, committed or Builder-authored
-   fail-stop, excluding Validator persona waves, and set
+   well-formed implementation attempts for that batch (Builder envelopes —
+   committed or Builder-authored fail-stop — plus committed
+   Orchestrator-inline attempts, excluding Validator persona waves), and set
    `final_verdict: converged`.
    Auto-close batch P2/P3 findings as `deferred-P2` / `deferred-P3`, update
    the rendered findings table, run `--validate-findings`, and commit a
@@ -1038,7 +1042,7 @@ Inside `batch-loop` for each batch:
 
 ```mermaid
 flowchart TD
-  IMPL["Builder initial implementation commit<br/>(scoped to batch.files)"] --> P["Compute persona set:<br/>always-on + adversarial + diff-conditional"]
+  IMPL["Initial implementation commit<br/>(Builder dispatch or bounded inline,<br/>scoped to batch.files)"] --> P["Compute persona set:<br/>always-on + adversarial + diff-conditional"]
   P --> V["Dispatch personas in parallel<br/>(all read-only)"]
   V --> F["Normalize + dedupe findings:<br/>write data/table and validate"]
   F --> G{"Open P0/P1<br/>findings == 0?"}
@@ -1051,8 +1055,9 @@ flowchart TD
   S --> P
 ```
 
-**Inner-loop iteration cap: 5.** After 5 well-formed Builder envelopes in one
-batch, committed or Builder-authored fail-stop, stop and ask the user.
+**Inner-loop iteration cap: 5.** After 5 well-formed implementation attempts
+in one batch (Builder envelopes — committed or Builder-authored fail-stop —
+plus committed Orchestrator-inline attempts), stop and ask the user.
 
 Before every Builder dispatch, including resumed implementation and repair
 dispatches, verify host Builder readiness against the current in-progress
