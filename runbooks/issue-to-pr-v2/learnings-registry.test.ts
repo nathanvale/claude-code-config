@@ -179,6 +179,117 @@ describe("assertRegistryWriteTarget (unit)", () => {
     expect(captured).toBeInstanceOf(Error);
     expect((captured as Error).message).toContain(CANONICAL_FILENAME);
   });
+
+  // F40: write-scope-case-insensitive-fs-bypass.
+  // macOS APFS is case-insensitive by default, so `Skills/foo.md` resolves to
+  // the same on-disk file as `skills/foo.md`. The guard must refuse any case
+  // variant of the documented forbidden categories so a path that differs only
+  // in case still cannot overwrite the real file.
+  test("F40: refuses a Skills/ segment with capital S (case-insensitive FS)", () => {
+    expect(() =>
+      assertRegistryWriteTarget("Skills/issue-to-pr/SKILL.md"),
+    ).toThrow(/refus/i);
+  });
+
+  test("F40: refuses an issue-NNN-ledger.md path with capitalized stem", () => {
+    expect(() =>
+      assertRegistryWriteTarget(
+        "docs/runbooks/issue-to-pr/Issue-90-Ledger.md",
+      ),
+    ).toThrow(/refus/i);
+  });
+
+  test("F40: refuses a References/ directory with capital R hosting a non-canonical file", () => {
+    expect(() =>
+      assertRegistryWriteTarget(
+        "runbooks/issue-to-pr-v2/References/builder-dispatch.md",
+      ),
+    ).toThrow(/refus/i);
+  });
+
+  // F41: write-scope-non-ts-source-extension-bypass.
+  // The v2 codebase is TS-via-Bun and reachable source extensions include
+  // .mts/.cts/.tsx/.js/.jsx/.mjs/.cjs in addition to .ts. The guard must refuse
+  // ALL of them so a path like `lib/learnings.mts` cannot overwrite source.
+  test.each([
+    ["lib/learnings.mts"],
+    ["lib/learnings.cts"],
+    ["components/Foo.tsx"],
+    ["lib/learnings.js"],
+    ["components/Foo.jsx"],
+    ["lib/learnings.mjs"],
+    ["lib/learnings.cjs"],
+  ])("F41: refuses source extension target %s", (relative) => {
+    expect(() =>
+      assertRegistryWriteTarget(`runbooks/issue-to-pr-v2/${relative}`),
+    ).toThrow(/refus/i);
+  });
+
+  // F42: write-scope-denylist-vs-allowlist-foreign-path.
+  // AC5 says the helper may write ONLY the registry it owns. An arbitrary
+  // unrelated REPO-RELATIVE path (README.md, package.json, ~/.bashrc shape)
+  // is not the registry and must be refused. The tmpdir escape only applies
+  // to paths INSIDE os.tmpdir(); these are not.
+  test("F42: refuses an unrelated repo-relative README.md", () => {
+    expect(() => assertRegistryWriteTarget("README.md")).toThrow(/refus/i);
+  });
+
+  test("F42: refuses an unrelated repo-relative package.json", () => {
+    expect(() => assertRegistryWriteTarget("package.json")).toThrow(/refus/i);
+  });
+
+  test("F42: refuses an unrelated repo-relative docs/foo.md", () => {
+    expect(() => assertRegistryWriteTarget("docs/foo.md")).toThrow(/refus/i);
+  });
+
+  test("F42: refuses an absolute path outside both the canonical tail AND os.tmpdir()", () => {
+    // /etc/passwd is the canonical "foreign path" example. The guard must
+    // refuse it: the tail is not the canonical registry, and the path is not
+    // under os.tmpdir().
+    expect(() => assertRegistryWriteTarget("/etc/passwd")).toThrow(/refus/i);
+  });
+});
+
+describe("learnings-registry write-scope (F40/F41/F42 integration)", () => {
+  test("F40: dispatcher refuses Skills/ (capital S) target and leaves it unchanged", async () => {
+    const target = makeForbiddenFile(
+      "Skills/issue-to-pr/SKILL.md",
+      "# Skill (capital-S)\n\nDo not touch.\n",
+    );
+    const before = readFileSync(target, "utf8");
+    const candidatePath = makeCandidate();
+
+    const result = await runRegistry(["--upsert", target, candidatePath]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/refus/i);
+    expect(readFileSync(target, "utf8")).toBe(before);
+  });
+
+  test("F41: dispatcher refuses a .mts source target and leaves it unchanged", async () => {
+    const target = makeForbiddenFile(
+      "runbooks/issue-to-pr-v2/lib/learnings.mts",
+      "// .mts source must not be a registry write target.\n",
+    );
+    const before = readFileSync(target, "utf8");
+    const candidatePath = makeCandidate();
+
+    const result = await runRegistry(["--upsert", target, candidatePath]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/refus/i);
+    expect(readFileSync(target, "utf8")).toBe(before);
+  });
+
+  test("F42: dispatcher refuses an arbitrary unrelated absolute path (outside tmpdir)", async () => {
+    // Construct a path that is clearly NOT under os.tmpdir() AND does NOT have
+    // the canonical tail. Using a fixed non-existent /var path (not /tmp) keeps
+    // the assertion deterministic without modifying any real file.
+    const target = "/var/empty/not-the-registry.md";
+    const candidatePath = makeCandidate();
+
+    const result = await runRegistry(["--upsert", target, candidatePath]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/refus/i);
+  });
 });
 
 describe("learnings-registry.ts --upsert write-scope (integration)", () => {

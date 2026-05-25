@@ -17,7 +17,9 @@
  * later batches (and tests) validate against the same closed sets.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 
 import { sha256Digest } from "./digest";
 
@@ -104,6 +106,24 @@ const CANONICAL_REGISTRY_RELATIVE_PATH =
 const CANONICAL_REGISTRY_FILENAME = "workflow-learnings-registry.md";
 
 /**
+ * Source-file extensions that must NEVER be a registry write target. The v2
+ * codebase is TS-via-Bun and these are all the reachable source extensions
+ * (.ts plus the variants the plain `/\.ts$/i` regex would miss). Defense in
+ * depth: even inside the tmpdir-escape branch, a path that ends in one of
+ * these gets refused so a misdirected test cannot stomp source files.
+ */
+const SOURCE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+] as const;
+
+/**
  * Refuse any write target outside the registry surface this helper owns
  * (issue #90, AC5).
  *
@@ -118,13 +138,32 @@ const CANONICAL_REGISTRY_FILENAME = "workflow-learnings-registry.md";
  * `./`, trailing slashes), and adds a `..` traversal guard so a path like
  * `references/../skills/SKILL.md` cannot smuggle a write to a forbidden surface.
  *
- * The accept rule is filename-and-category based, not a strict absolute-path
- * match: a path is accepted when its tail filename is exactly
- * `workflow-learnings-registry.md` AND its tail directory is `references/` AND
- * the path does not fall under one of the documented forbidden categories
- * (skills, lib source, per-issue ledger, references/ with a non-canonical
- * filename). This keeps the guard friendly to tmp-dir tests that mirror the
- * canonical tail while still refusing every category enumerated by AC5.
+ * Accept rule is a TAIL-MATCH ALLOWLIST (the plan's KTD5 strict allowlist
+ * approach, not a denylist of forbidden categories):
+ *
+ * 1. If the normalized candidate ENDS WITH the canonical relative path
+ *    `runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md`
+ *    (compared CASE-INSENSITIVELY so macOS APFS cannot bypass the gate by
+ *    flipping a letter's case), accept. This handles the production path
+ *    and any absolute-path form a test might pass.
+ *
+ * 2. Otherwise, an os.tmpdir() escape kicks in for the prior-batch
+ *    dispatcher tests that write to `${tmp}/registry.md`: if the resolved
+ *    absolute path lives inside `os.tmpdir()` AND the leaf ends in `.md`
+ *    AND no tripwire trips (source extension, a `skills/` segment, or an
+ *    `issue-*-ledger.md` filename), accept. The tripwires are the same
+ *    forbidden categories from AC5 so a misdirected tmp path still cannot
+ *    stomp a forbidden surface even when it happens to live under tmpdir.
+ *
+ * 3. Anything else is refused with an actionable error that names the
+ *    rejected target AND the canonical allowed path so the operator can
+ *    self-correct.
+ *
+ * The case-insensitive tail comparison (and the case-insensitive tripwires)
+ * close F40 on case-insensitive filesystems. The expanded SOURCE_EXTENSIONS
+ * set closes F41 (the prior `/\.ts$/i` missed .mts/.cts/.tsx/.js/.jsx/.mjs/
+ * .cjs). The allowlist (instead of an "accept anything not denied" denylist)
+ * closes F42 so arbitrary unrelated paths can no longer slip through.
  */
 export function assertRegistryWriteTarget(path: string): void {
   if (typeof path !== "string" || path.length === 0) {
@@ -151,57 +190,125 @@ export function assertRegistryWriteTarget(path: string): void {
     );
   }
 
+  // Step 3: TAIL-MATCH allowlist. Compare lowercased for macOS APFS so a
+  // path like `Runbooks/.../Workflow-Learnings-Registry.md` (which resolves
+  // to the real lowercase file on a case-insensitive FS) is also accepted
+  // — and conversely, the case-insensitive tripwires below cannot be bypassed
+  // by flipping a letter.
+  const lowered = normalized.toLowerCase();
+  const canonicalTail = CANONICAL_REGISTRY_RELATIVE_PATH.toLowerCase();
+  if (lowered === canonicalTail || lowered.endsWith(`/${canonicalTail}`)) {
+    return;
+  }
+
+  // Step 4: os.tmpdir() escape for prior-batch dispatcher tests that write to
+  // `${tmp}/registry.md`. Production code only ever writes to the canonical
+  // tail (handled in step 3); test code may write to a tmp registry whose
+  // tail intentionally does NOT mirror the production layout. We resolve the
+  // candidate to an absolute path, then walk through `realpathSync` on the
+  // candidate AND on `os.tmpdir()` so symlinked tmpdirs (macOS `/tmp` is a
+  // symlink to `/private/tmp`) compare equal.
   const filename = segments[segments.length - 1] ?? "";
-  const parentDir = segments.length >= 2 ? segments[segments.length - 2] : "";
+  const loweredFilename = filename.toLowerCase();
 
-  // Step 3: enumerate the AC5 forbidden categories. Each one carries a
-  // specific actionable message so the operator knows what kind of write was
-  // refused (and what the only allowed target is).
-  //
-  // 3a) Per-issue ledger: any `issue-*-ledger.md` filename is the per-issue
-  //     ledger surface, which lives under `docs/runbooks/issue-to-pr/` but we
-  //     match on the filename pattern so a path passed from any working
-  //     directory is caught.
-  if (/^issue-.*-ledger\.md$/.test(filename)) {
-    throw new Error(
-      `learnings-registry write-scope: refusing target "${path}" because it targets a per-issue ledger; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
-    );
+  const insideTmpdir = isInsideTmpdir(path);
+  if (insideTmpdir && loweredFilename.endsWith(".md")) {
+    // Tmpdir-escape tripwires (defense in depth — the same forbidden-surface
+    // categories from AC5 apply even when the path is under os.tmpdir()).
+    const loweredSegments = segments.map((segment) => segment.toLowerCase());
+
+    if (loweredSegments.includes("skills")) {
+      throw new Error(
+        `learnings-registry write-scope: refusing target "${path}" because it targets the skills surface; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+      );
+    }
+    if (/^issue-.*-ledger\.md$/i.test(filename)) {
+      throw new Error(
+        `learnings-registry write-scope: refusing target "${path}" because it targets a per-issue ledger; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+      );
+    }
+    if (SOURCE_EXTENSIONS.some((ext) => loweredFilename.endsWith(ext))) {
+      throw new Error(
+        `learnings-registry write-scope: refusing target "${path}" because it targets a source file; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+      );
+    }
+    // No tripwire tripped; accept the tmp-dir test path.
+    return;
   }
 
-  // 3b) Source code: any `.ts` extension (lib source, dispatcher source,
-  //     test source). Source files are NEVER a registry write target.
-  if (/\.ts$/i.test(filename)) {
-    throw new Error(
-      `learnings-registry write-scope: refusing target "${path}" because it targets a TypeScript source file; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
-    );
-  }
+  // Step 5: refuse. The path is neither a canonical-tail match nor an
+  // accepted tmpdir-escape; surface the rejected target AND the canonical
+  // allowed path so the operator knows exactly how to self-correct.
+  throw new Error(
+    `learnings-registry write-scope: refusing target "${path}" because it does not end with the canonical registry path; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
+  );
+}
 
-  // 3c) Skills surface: any path that includes a `skills/` segment.
-  if (segments.includes("skills")) {
-    throw new Error(
-      `learnings-registry write-scope: refusing target "${path}" because it targets the skills surface; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
-    );
-  }
+/**
+ * True when `path` resolves to a location INSIDE `os.tmpdir()`. We use
+ * `realpathSync` on BOTH the candidate (when it exists) and the tmpdir
+ * root so symlinked tmpdirs (macOS `/tmp` -> `/private/tmp`) compare
+ * equal. When the candidate path does not exist yet (the common case for
+ * a fresh test that has not written it), we fall back to the resolved
+ * absolute path so the prefix check still works.
+ */
+function isInsideTmpdir(path: string): boolean {
+  const resolvedCandidate = (() => {
+    try {
+      return realpathSync(resolve(path));
+    } catch {
+      // The candidate file may not exist yet; resolve() alone still gives
+      // an absolute form we can prefix-compare. If even the parent dir is
+      // missing, we accept the unresolved form and fall back to prefix
+      // matching against the realpath of tmpdir (which always exists).
+      try {
+        const r = resolve(path);
+        // Walk up until we find an existing ancestor we can realpath, then
+        // append the unresolved tail so symlinked tmpdirs still compare.
+        return realpathExistingAncestor(r);
+      } catch {
+        return resolve(path);
+      }
+    }
+  })();
+  const resolvedTmpRoot = (() => {
+    try {
+      return realpathSync(tmpdir());
+    } catch {
+      return tmpdir();
+    }
+  })();
+  const candidate = resolvedCandidate.endsWith("/")
+    ? resolvedCandidate
+    : `${resolvedCandidate}/`;
+  const root = resolvedTmpRoot.endsWith("/")
+    ? resolvedTmpRoot
+    : `${resolvedTmpRoot}/`;
+  return candidate.startsWith(root) || resolvedCandidate === resolvedTmpRoot;
+}
 
-  // 3d) references/*.md with a non-canonical filename. The references/ folder
-  //     contains many runbook reference docs; the helper owns only the one
-  //     named `workflow-learnings-registry.md`. Any sibling reference is
-  //     refused with its filename surfaced so the operator can self-correct.
-  if (
-    parentDir === "references" &&
-    filename.endsWith(".md") &&
-    filename !== CANONICAL_REGISTRY_FILENAME
-  ) {
-    throw new Error(
-      `learnings-registry write-scope: refusing target "${path}" because "${filename}" is not the canonical registry; the only allowed write target is the canonical registry ${CANONICAL_REGISTRY_FILENAME} (repo-relative path ${CANONICAL_REGISTRY_RELATIVE_PATH})`,
-    );
+/**
+ * Walk up `absolute` toward `/` until we find an existing ancestor, realpath
+ * it, then re-append the unresolved descendant tail. This lets the tmpdir
+ * prefix check work for paths that do not yet exist on disk (the test
+ * dispatcher passes the target BEFORE creating it).
+ */
+function realpathExistingAncestor(absolute: string): string {
+  let cursor = absolute;
+  const trailing: string[] = [];
+  while (cursor !== "/" && cursor.length > 0) {
+    try {
+      const resolved = realpathSync(cursor);
+      if (trailing.length === 0) return resolved;
+      return `${resolved}/${trailing.reverse().join("/")}`;
+    } catch {
+      const slash = cursor.lastIndexOf("/");
+      if (slash <= 0) break;
+      trailing.push(cursor.slice(slash + 1));
+      cursor = cursor.slice(0, slash);
+    }
   }
-
-  // Anything else is permitted: a path ending with the canonical filename,
-  // or a registry-like tmp path used in tests that does not match a
-  // forbidden category. The dispatcher's downstream serializer (which can
-  // only emit valid registry markdown) prevents writing a malformed file
-  // to an acceptable target.
+  return absolute;
 }
 
 /**
