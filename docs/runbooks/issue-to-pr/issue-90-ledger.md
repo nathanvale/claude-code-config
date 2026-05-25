@@ -659,6 +659,38 @@ findings:
     status: open
     summary: "No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test"
     resolution: null
+  - id: F48
+    batch_id: write-scope
+    signature: f42-tmpdir-escape-still-accepts-arbitrary-md-files
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "F42 only partially closed: tmpdir-escape accepts ANY .md filename under os.tmpdir() (including /tmp/i_just_pwned_you.md) so long as no tripwire fires; AC5 spirit still violated for tmpdir-rooted paths"
+    resolution: null
+  - id: F49
+    batch_id: write-scope
+    signature: foreign-tail-match-no-repo-containment
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "Tail-match allowlist has no repo-root anchor; any absolute path that ends with the canonical relative path (e.g. /Users/attacker/runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md) is accepted; a caller in a wrong cwd, worktree, or attacker-staged decoy directory writes outside the real repo"
+    resolution: null
+  - id: F50
+    batch_id: write-scope
+    signature: tmpdir-escape-inconsistent-with-non-tmpdir-branch
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "Inconsistent contract: references/*.md is refused outside tmpdir but accepted under tmpdir; tmpdir tripwires only catch skills/, issue-*-ledger.md, source extensions; foreign reference markdown is not gated under tmpdir"
+    resolution: null
+  - id: F51
+    batch_id: write-scope
+    signature: control-chars-and-bare-dotmd-accepted-under-tmpdir
+    persona: ce-adversarial-reviewer
+    severity: P3
+    status: open
+    summary: "Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir"
+    resolution: null
 ```
 
 ## Findings
@@ -712,6 +744,10 @@ findings:
 | F45 | write-scope | write-scope-references-non-md-bypass | ce-adversarial-reviewer | P2 | open | The references-sibling check requires filename.endsWith(.md); references/schema.json or references/notes.txt bypass the check | |
 | F46 | write-scope | write-scope-ledger-filename-prefix-bypass | ce-adversarial-reviewer | P2 | open | The per-issue ledger regex is filename-prefix-anchored; filenames with any prefix before issue- (e.g. preview-issue-90-ledger.md) bypass the check | |
 | F47 | write-scope | ws-tests-unrelated-tmp-path-acceptance-unpinned | ce-testing-reviewer | P2 | open | No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test | |
+| F48 | write-scope | f42-tmpdir-escape-still-accepts-arbitrary-md-files | ce-adversarial-reviewer | P1 | open | F42 only partially closed: tmpdir-escape accepts ANY .md filename under os.tmpdir() (including /tmp/i_just_pwned_you.md) so long as no tripwire fires; AC5 spirit still violated for tmpdir-rooted paths | |
+| F49 | write-scope | foreign-tail-match-no-repo-containment | ce-adversarial-reviewer | P1 | open | Tail-match allowlist has no repo-root anchor; any absolute path that ends with the canonical relative path is accepted; a caller in a wrong cwd, worktree, or attacker-staged decoy directory writes outside the real repo | |
+| F50 | write-scope | tmpdir-escape-inconsistent-with-non-tmpdir-branch | ce-adversarial-reviewer | P2 | open | Inconsistent contract: references/*.md is refused outside tmpdir but accepted under tmpdir; tmpdir tripwires only catch skills/, issue-*-ledger.md, source extensions; foreign reference markdown is not gated under tmpdir | |
+| F51 | write-scope | control-chars-and-bare-dotmd-accepted-under-tmpdir | ce-adversarial-reviewer | P3 | open | Edge cases accepted under tmpdir: a file literally named .md, leaf names with embedded newline, segments containing skills as substring; defense-in-depth opportunity to tighten leaf shape under tmpdir | |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
