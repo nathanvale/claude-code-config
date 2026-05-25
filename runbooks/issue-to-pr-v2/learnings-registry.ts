@@ -11,9 +11,9 @@
  *   learnings-registry.ts --validate <registry-path>
  *   learnings-registry.ts --upsert <registry-path> <candidate-path>
  *
- * Write-scope enforcement (preventing `--upsert` from writing outside the
- * registry path) lands in the NEXT batch (`write-scope`); this batch writes
- * to whatever path it is given.
+ * `--upsert` enforces write-scope via `assertRegistryWriteTarget` before any
+ * registry read/serialize/write, so it cannot write outside the canonical
+ * registry path (with a narrow tmpdir-escape for tests).
  */
 
 import { writeFileSync } from "node:fs";
@@ -162,8 +162,8 @@ if (args[0] === "--upsert") {
     );
   }
 
-  // Write-scope guard lands in the next batch; this batch writes to the path
-  // the operator passed in.
+  // Persist validated, round-trip-safe bytes to the already write-scoped
+  // target (refused upstream by assertRegistryWriteTarget when not canonical).
   try {
     writeFileSync(registryPath, newMarkdown);
   } catch (error) {

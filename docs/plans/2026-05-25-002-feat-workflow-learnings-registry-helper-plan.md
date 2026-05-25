@@ -188,7 +188,7 @@ flowchart TD
   F -- yes --> G{Signature matches existing entry?}
   G -- no --> H[Append new entry verbatim]
   G -- yes --> I[Append evidence + update lifecycle fields]
-  I --> J{candidate_update marker present?}
+  I --> J{canonical_update marker present?}
   J -- no --> K[Keep canonical summary/owner/retirement_condition]
   J -- yes --> L[Replace canonical fields from candidate]
   H --> M[Serialize + write registry]

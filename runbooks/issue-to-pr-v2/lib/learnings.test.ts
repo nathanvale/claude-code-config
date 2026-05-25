@@ -408,11 +408,9 @@ describe("loadCandidate", () => {
   });
 
   test("throws an actionable error naming the file when it cannot be read", () => {
-    const missing = join(
-      mkdtempSync(join(tmpdir(), "issue-90-candidate-missing-")),
-      "nope.json",
-    );
-    tempDirs.push(missing);
+    const dir = mkdtempSync(join(tmpdir(), "issue-90-candidate-missing-"));
+    tempDirs.push(dir);
+    const missing = join(dir, "nope.json");
     expect(() => loadCandidate(missing)).toThrow(/nope\.json/);
   });
 
@@ -481,6 +479,28 @@ describe("validateCandidate", () => {
     expect(validateCandidate([]).length).toBeGreaterThan(0);
     expect(validateCandidate("nope").length).toBeGreaterThan(0);
   });
+
+  test("rejects a candidate whose evidence omits an identifying field used for signature derivation", () => {
+    for (const field of ["run", "affected_surface", "what_was_wrong"] as const) {
+      const candidate = validCandidateObject();
+      delete (candidate.evidence as Record<string, unknown>)[field];
+      const errors = validateCandidate(candidate);
+      expect(errors.some((e) => e.includes(`evidence field "${field}"`))).toBe(
+        true,
+      );
+    }
+  });
+
+  test("rejects a candidate whose identifying evidence fields are present but empty", () => {
+    for (const field of ["run", "affected_surface", "what_was_wrong"] as const) {
+      const candidate = validCandidateObject();
+      (candidate.evidence as Record<string, unknown>)[field] = "";
+      const errors = validateCandidate(candidate);
+      expect(errors.some((e) => e.includes(`evidence field "${field}"`))).toBe(
+        true,
+      );
+    }
+  });
 });
 
 /**
@@ -536,6 +556,27 @@ describe("signatureFor", () => {
     candidate.signature = "";
     const sig = signatureFor(candidate);
     expect(sig).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("throws when an identifying evidence field is missing or empty (programmatic-caller guard)", () => {
+    for (const field of ["affected_surface", "what_was_wrong"] as const) {
+      const missing = validCandidateObject();
+      delete missing.signature;
+      delete (missing.evidence as Record<string, unknown>)[field];
+      expect(() => signatureFor(missing)).toThrow(/non-empty strings/);
+
+      const empty = validCandidateObject();
+      delete empty.signature;
+      (empty.evidence as Record<string, unknown>)[field] = "";
+      expect(() => signatureFor(empty)).toThrow(/non-empty strings/);
+    }
+  });
+
+  test("throws when owner is missing or empty (programmatic-caller guard)", () => {
+    const candidate = validCandidateObject();
+    delete candidate.signature;
+    candidate.owner = "";
+    expect(() => signatureFor(candidate)).toThrow(/non-empty strings/);
   });
 });
 

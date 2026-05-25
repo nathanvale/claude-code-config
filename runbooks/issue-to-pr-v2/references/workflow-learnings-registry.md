@@ -26,11 +26,13 @@ filed to resolved or retired.
 The registry is human-readable Markdown with a single fenced YAML block. The
 documented-block pattern mirrors `issue-N-ledger.template.md`: prose explains the
 schema, and exactly one fenced `yaml` block holds the authoritative data. The
-future registry helper extracts that single block with the same fenced-yaml
-scan the ledger helper uses (a regex matching a triple-backtick yaml fence), so
-this file MUST contain exactly one fenced yaml block. All schema examples in this
-document are kept inline (in prose or non-yaml fences) so they are never mistaken
-for the data block.
+registry helper extracts that single block with a stricter fenced-yaml scan
+than the ledger helper: the closing fence must be line-anchored (the closing
+backticks must start at column 0 on their own line), so an inline backtick
+sequence inside a YAML scalar value will not prematurely close the captured
+block. This file MUST contain exactly one fenced yaml block. All schema
+examples in this document are kept inline (in prose or non-yaml fences) so
+they are never mistaken for the data block.
 
 ## Entry schema
 

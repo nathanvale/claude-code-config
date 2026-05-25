@@ -755,6 +755,18 @@ export function validateCandidate(candidate: unknown): string[] {
         );
       }
     }
+    // Require the identifying fields signatureFor derives from to be present
+    // and non-empty. Without this, candidates with sparse evidence would hash
+    // to the same derived signature and silently merge unrelated learnings.
+    const ev = evidence as Record<string, unknown>;
+    for (const field of ["run", "affected_surface", "what_was_wrong"] as const) {
+      const value = ev[field];
+      if (typeof value !== "string" || value.length === 0) {
+        errors.push(
+          `candidate: evidence field "${field}" must be a non-empty string`,
+        );
+      }
+    }
   }
 
   checkEnumFields(entry, errors, "candidate");
@@ -845,10 +857,26 @@ export function signatureFor(candidate: unknown): string {
     );
   }
   const ev = evidence as Record<string, unknown>;
+  // Require non-empty identifying fields so two distinct learnings with sparse
+  // evidence cannot collide on an empty-payload hash. validateCandidate
+  // enforces this upstream; this throw is the source-of-truth guarantee for
+  // programmatic callers that skip validateCandidate.
+  if (
+    typeof ev.affected_surface !== "string" ||
+    ev.affected_surface.length === 0 ||
+    typeof ev.what_was_wrong !== "string" ||
+    ev.what_was_wrong.length === 0 ||
+    typeof entry.owner !== "string" ||
+    entry.owner.length === 0
+  ) {
+    throw new Error(
+      "signatureFor: candidate.owner and evidence.{affected_surface, what_was_wrong} must be non-empty strings to derive a signature",
+    );
+  }
   const payload = JSON.stringify({
-    affected_surface: typeof ev.affected_surface === "string" ? ev.affected_surface : "",
-    what_was_wrong: typeof ev.what_was_wrong === "string" ? ev.what_was_wrong : "",
-    owner: typeof entry.owner === "string" ? entry.owner : "",
+    affected_surface: ev.affected_surface,
+    what_was_wrong: ev.what_was_wrong,
+    owner: entry.owner,
   });
   return sha256Digest(payload);
 }
