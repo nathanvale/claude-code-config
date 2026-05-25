@@ -157,11 +157,23 @@ batches:
       - 3
       - 5
     rationale: null
-    status: in-progress
-    builder_commits: []
-    builder_attempts: []
-    iterations: 0
-    final_verdict: null
+    status: converged
+    builder_commits:
+      - "1854690"
+    builder_attempts:
+      - attempt_type: "implementation"
+        status: "committed"
+        commit_sha: "1854690"
+        files_touched:
+          - "runbooks/issue-to-pr-v2/lib/ledger.ts"
+          - "runbooks/issue-to-pr-v2/decompose.ts"
+          - "runbooks/issue-to-pr-v2/lib/ledger.test.ts"
+        route_hint: null
+        blockers: []
+        probe_results: []
+        notes: "General-purpose Builder sub-agent dispatched with rendered Work Packet; tdd flow: red (TS2305 confirmed), then green (validator + CLI dispatch + 20 tests); 96/96 ledger tests pass, tsc 0 errors, biome clean on new code. ce-correctness-reviewer validator wave returned zero findings, confirmed whitelist symmetry with registry ALLOWED_EVIDENCE_KEYS (minus run, plus signature) and template/validator parity."
+    iterations: 1
+    final_verdict: converged
 ```
 
 ## Findings data
