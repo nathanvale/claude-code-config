@@ -595,6 +595,70 @@ findings:
     status: deferred-P3
     summary: "validateRegistry's new whitelist loop skips evidence records that are null, scalar, or array via early return without recording an error; a hand-edited registry trips emitYaml with a generic message rather than an actionable validateRegistry error naming the entry"
     resolution: deferred-P3
+  - id: F40
+    batch_id: write-scope
+    signature: write-scope-case-insensitive-fs-bypass
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "All denylist checks are case-sensitive but macOS default APFS is case-insensitive; paths like Skills/, References/, or Issue-90-Ledger.md bypass the guard and overwrite the real lowercase files on macOS"
+    resolution: null
+  - id: F41
+    batch_id: write-scope
+    signature: write-scope-non-ts-source-extension-bypass
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "Source-file denylist only matches .ts extension; legitimate TypeScript/JS source files with .mts, .cts, .tsx, .js, .jsx, .mjs, .cjs extensions slip through and can be overwritten with registry markdown"
+    resolution: null
+  - id: F42
+    batch_id: write-scope
+    signature: write-scope-denylist-vs-allowlist-foreign-path
+    persona: ce-adversarial-reviewer
+    severity: P1
+    status: open
+    summary: "Denylist accepts arbitrary unrelated paths (e.g. /tmp/random.md, README.md, package.json); AC5 spirit (cannot write any surface outside the registry it owns) materially violated; correct fix is a tail-match allowlist that keeps prior-batch tmp-path tests green"
+    resolution: null
+  - id: F43
+    batch_id: write-scope
+    signature: write-scope-symlink-bypass
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "Guard does no realpath/lstat resolution; a symlink at a non-canonical path is refused but a symlink at the canonical path could still trick the guard; narrow attack surface, mitigation requires realpathSync"
+    resolution: null
+  - id: F44
+    batch_id: write-scope
+    signature: write-scope-references-deep-nesting-bypass
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "The sibling-reference check only fires when parentDir is literally references; nested paths like references/subfolder/other.md bypass; tail-match allowlist would close this"
+    resolution: null
+  - id: F45
+    batch_id: write-scope
+    signature: write-scope-references-non-md-bypass
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "The references-sibling check requires filename.endsWith(.md); references/schema.json or references/notes.txt bypass the check"
+    resolution: null
+  - id: F46
+    batch_id: write-scope
+    signature: write-scope-ledger-filename-prefix-bypass
+    persona: ce-adversarial-reviewer
+    severity: P2
+    status: open
+    summary: "The per-issue ledger regex is filename-prefix-anchored; filenames with any prefix before issue- (e.g. preview-issue-90-ledger.md) bypass the check"
+    resolution: null
+  - id: F47
+    batch_id: write-scope
+    signature: ws-tests-unrelated-tmp-path-acceptance-unpinned
+    persona: ce-testing-reviewer
+    severity: P2
+    status: open
+    summary: "No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test"
+    resolution: null
 ```
 
 ## Findings
@@ -640,6 +704,14 @@ findings:
 | F37 | upsert-op | validateregistry-allows-evidence-list-items-that-are-not-mappings | ce-adversarial-reviewer | P3 | deferred-P3 | validateRegistry only checks Array.isArray on evidence and does not enforce per-item shape; a hand-edited registry whose evidence list contains a scalar item passes validation but makes the next serializeRegistry throw in emitYaml, blocking all subsequent upserts | deferred-P3 |
 | F38 | upsert-op | f24-late-gate-no-longer-has-test-coverage | ce-adversarial-reviewer | P2 | deferred-P2 | The F24 re-validate gate code still exists in the dispatcher but no test exercises it after the F33 repair repurposed its fixture to the earlier gate; an emitYaml regression that produces parser-rejectable bytes would be undetectable by the suite (gate still catches at runtime) | deferred-P2 |
 | F39 | upsert-op | validateregistry-silently-skips-malformed-evidence-records | ce-adversarial-reviewer | P3 | deferred-P3 | validateRegistry's new whitelist loop skips evidence records that are null, scalar, or array via early return without recording an error; a hand-edited registry trips emitYaml with a generic message rather than an actionable validateRegistry error naming the entry | deferred-P3 |
+| F40 | write-scope | write-scope-case-insensitive-fs-bypass | ce-adversarial-reviewer | P1 | open | All denylist checks are case-sensitive but macOS default APFS is case-insensitive; paths like Skills/, References/, or Issue-90-Ledger.md bypass the guard and overwrite the real lowercase files on macOS | |
+| F41 | write-scope | write-scope-non-ts-source-extension-bypass | ce-adversarial-reviewer | P1 | open | Source-file denylist only matches .ts extension; legitimate TypeScript/JS source files with .mts, .cts, .tsx, .js, .jsx, .mjs, .cjs extensions slip through and can be overwritten with registry markdown | |
+| F42 | write-scope | write-scope-denylist-vs-allowlist-foreign-path | ce-adversarial-reviewer | P1 | open | Denylist accepts arbitrary unrelated paths (e.g. /tmp/random.md, README.md, package.json); AC5 spirit (cannot write any surface outside the registry it owns) materially violated; correct fix is a tail-match allowlist that keeps prior-batch tmp-path tests green | |
+| F43 | write-scope | write-scope-symlink-bypass | ce-adversarial-reviewer | P2 | open | Guard does no realpath/lstat resolution; a symlink at a non-canonical path is refused but a symlink at the canonical path could still trick the guard; narrow attack surface, mitigation requires realpathSync | |
+| F44 | write-scope | write-scope-references-deep-nesting-bypass | ce-adversarial-reviewer | P2 | open | The sibling-reference check only fires when parentDir is literally references; nested paths like references/subfolder/other.md bypass; tail-match allowlist would close this | |
+| F45 | write-scope | write-scope-references-non-md-bypass | ce-adversarial-reviewer | P2 | open | The references-sibling check requires filename.endsWith(.md); references/schema.json or references/notes.txt bypass the check | |
+| F46 | write-scope | write-scope-ledger-filename-prefix-bypass | ce-adversarial-reviewer | P2 | open | The per-issue ledger regex is filename-prefix-anchored; filenames with any prefix before issue- (e.g. preview-issue-90-ledger.md) bypass the check | |
+| F47 | write-scope | ws-tests-unrelated-tmp-path-acceptance-unpinned | ce-testing-reviewer | P2 | open | No test pins the dispatcher behavior for a totally unrelated writable path; the deny-list accept rule is documented in a code comment but not asserted by a test | |
 | --- | -------- | --------- | ------- | -------- | ------ | ------- | ---------- |
 
 ## Notes
