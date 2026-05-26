@@ -11,6 +11,7 @@ import {
   renderProposerPacket,
   renderValidatorPacket,
 } from "./packets";
+import { renderScaffold } from "./scaffolds";
 
 /**
  * U5 packet rendering tests.
@@ -1835,6 +1836,18 @@ describe("ce-plan packet", () => {
       expect(blob).toContain("change_first");
       expect(blob).toContain("ac_mapping");
       expect(blob).toContain("execution_mode");
+    });
+
+    test("includes the generated ce-plan candidate scaffold block", () => {
+      const packet = renderCePlanPacket({ now: FROZEN_TIME });
+      const blob = packet.data.addendum_body;
+      expect(blob).toContain(
+        '<!-- generated-scaffold:start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+      );
+      expect(blob).toContain(
+        "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+      );
+      expect(blob).toContain(renderScaffold("ce-plan-candidate-batch").body.trimEnd());
     });
   });
 

@@ -74,6 +74,11 @@ import {
   renderValidatorPacket,
 } from "./lib/packets";
 import {
+  SCAFFOLD_IDS,
+  isScaffoldId,
+  renderScaffold,
+} from "./lib/scaffolds";
+import {
   BLOCKING_GATE_FIELD_NAMES,
   blockingGatesFor,
   buildDiagnoseDrift,
@@ -125,6 +130,7 @@ const CONTRACT_SLICES = [
   // without grepping route.ts. `ordering: catalog` because the order
   // mirrors the precedence walk inside `blockingGatesFor`.
   "blocking_gate_field_names",
+  "scaffold_ids",
 ] as const;
 type ContractSlice = (typeof CONTRACT_SLICES)[number];
 
@@ -250,6 +256,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
     values: [...BLOCKING_GATE_FIELD_NAMES],
     ordering: "catalog",
   },
+  scaffold_ids: {
+    values: [...SCAFFOLD_IDS],
+    ordering: "catalog",
+  },
 };
 
 /**
@@ -295,6 +305,7 @@ const ERROR_CODES = [
   { code: "unknown-command", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "open_docs" } },
   { code: "unknown-contract-slice", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "unknown-packet-role", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "unknown-scaffold-id", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "missing-packet-flag", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "packet-render-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
   { code: "ledger-validation-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
@@ -337,7 +348,14 @@ const HELP_DATA = {
         "Render a complete role packet (Builder, Proposer, Validator, patch-proposal, ce-plan) from templates + ledger state. Read-only; returns the packet body plus dispatch evidence shape. U6 owns the ledger Notes write.",
       argv: ["packet", "<role>", "--ledger", "<ledger-path>", "--json"],
     },
+    {
+      name: "scaffold",
+      summary:
+        "Render a runtime-owned scaffold view by id. Read-only; returns the scaffold body and source metadata.",
+      argv: ["scaffold", "<id>", "--json"],
+    },
   ],
+  scaffold_ids: SCAFFOLD_IDS,
   packet_roles: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
   packet_flags: {
     "--ledger": "Path to issue-N ledger (required for builder, proposer, validator, patch-proposal).",
@@ -473,11 +491,18 @@ const HELP_DATA = {
   contract_slice_response_shape: {
     slice: "string (one of contract_slices)",
     values:
-      "array of primitives or structured records. Field-set and enum slices emit string arrays; `route_required_references` entries are { route_id, required_reference_ids }.",
+      "array of primitives or structured records. Field-set and enum slices emit string arrays; `route_required_references` entries are { route_id, required_reference_ids }; `scaffold_ids` emits scaffold ids.",
     ordering: {
       sorted: "alphabetical; set semantics; order is not contractual",
       catalog: "source-declared order is contractually significant (precedence, stage progression, severity escalation)",
     },
+  },
+  scaffold_response_shape: {
+    scaffold_id: "string (one of scaffold_ids)",
+    output_kind: "yaml",
+    source: "runtime owner for the rendered scaffold",
+    ordering: "catalog",
+    body: "rendered scaffold body; no filesystem mutation is performed",
   },
   error_codes: ERROR_CODES,
   exit_codes: EXIT_CODES,
@@ -548,7 +573,7 @@ export function run(options: RunOptions): RunResult {
         startedAtMs,
         code: "missing-command",
         message:
-          "no command provided; this CLI is agent-only and requires one of state | next | contract | diagnose with --json",
+          "no command provided; this CLI is agent-only and requires one of state | next | contract | diagnose | packet | scaffold with --json",
         exitCode: 64,
         hint: {
           summary:
@@ -625,6 +650,14 @@ export function run(options: RunOptions): RunResult {
       });
     case "packet":
       return runPacketCommand({
+        ...options,
+        runId,
+        startedAtMs,
+        args: remaining.slice(1),
+        diagnosticOptions,
+      });
+    case "scaffold":
+      return runScaffoldCommand({
         ...options,
         runId,
         startedAtMs,
@@ -873,6 +906,39 @@ function runDiagnoseCommand(ctx: CommandContext): RunResult {
   } catch (error) {
     return emitErrorFromException(ctx, "diagnose", error);
   }
+}
+
+function runScaffoldCommand(ctx: CommandContext): RunResult {
+  const scaffoldId = expectOneArg(ctx, "scaffold", "scaffold id");
+  if (scaffoldId === null) return { exit_code: 64 };
+
+  if (!isScaffoldId(scaffoldId)) {
+    writeJson(
+      ctx.stdoutWriter,
+      createErrorEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        code: "unknown-scaffold-id",
+        message: `unknown scaffold id "${scaffoldId}"; allowed: ${SCAFFOLD_IDS.join(", ")}`,
+        exitCode: 64,
+        hint: {
+          summary: "Pass one of the catalogued scaffold ids.",
+          action: "change_input",
+        },
+      }),
+    );
+    return { exit_code: 64 };
+  }
+
+  writeJson(
+    ctx.stdoutWriter,
+    createSuccessEnvelope({
+      runId: ctx.runId,
+      startedAtMs: ctx.startedAtMs,
+      data: renderScaffold(scaffoldId),
+    }),
+  );
+  return { exit_code: 0 };
 }
 
 const PACKET_ROLES = [

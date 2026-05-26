@@ -45,9 +45,9 @@
  *    issue-to-pr.md, references/ledger-and-helper.md,
  *    references/first-run-gotchas.md). It does NOT validate other Issue-to-PR
  *    references (stage-*.md, findings-and-validators.md,
- *    builder-dispatch.md, host-adapters.md, etc.). A narrow U7 add-on also
- *    cross-checks the ledger template's batch lifecycle field mentions against
- *    the live CLI ledger lifecycle field slice.
+ *    builder-dispatch.md, host-adapters.md, etc.). Narrow add-ons also
+ *    cross-check the ledger template's batch lifecycle field mentions and the
+ *    ce-plan template's marked generated scaffold block.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
@@ -57,8 +57,8 @@
  *    ledger helper reference.
  *    It does NOT judge prose truth, broad docs consistency, or any token kind
  *    beyond these.
- *  - It adds NO external dependency, NO new CLI command, NO new emitted fact
- *    (it only READS the existing CLI via subprocess), and generates NO docs.
+ *  - It adds NO external dependency and generates NO docs. Runtime contract
+ *    checks only read live CLI or renderer facts.
  *  - It does NOT validate decompose.ts flags
  *    (`decompose.ts --validate-ledger-batches` yields no command claim),
  *    route-precedence ORDER, enum-value prose (`committed`, `needs-revision`),
@@ -71,6 +71,7 @@
 import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { execPath } from "node:process";
+import { isScaffoldId, renderScaffold } from "./lib/scaffolds";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -932,6 +933,7 @@ export type DriftKind =
   | "scoped-link"
   | "ledger-lifecycle-field"
   | "ledger-schema-slice-pointer"
+  | "generated-scaffold-block"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1103,6 +1105,8 @@ const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
 const ISSUE_TO_PR_DOC_REL = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
+const CE_PLAN_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
 
@@ -1498,6 +1502,131 @@ export async function checkLedgerLifecycleFieldDrift(
   return findings;
 }
 
+type GeneratedScaffoldBlock = {
+  id: string;
+  source: string;
+  body: string | null;
+  line: number;
+  malformedReason?: string;
+};
+
+const GENERATED_SCAFFOLD_START_RE =
+  /<!--\s*generated-scaffold:start\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
+
+function generatedScaffoldEndRe(id: string): RegExp {
+  return new RegExp(
+    `<!--\\s*generated-scaffold:end\\s+id=${escapeRegExp(id)}\\s*-->`,
+  );
+}
+
+function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] {
+  const blocks: GeneratedScaffoldBlock[] = [];
+  for (const match of text.matchAll(GENERATED_SCAFFOLD_START_RE)) {
+    const id = match[1] ?? "";
+    const source = match[2] ?? "";
+    const startIndex = match.index ?? 0;
+    const bodyStart = startIndex + match[0].length;
+    const endMatch = generatedScaffoldEndRe(id).exec(text.slice(bodyStart));
+    if (!endMatch || endMatch.index === undefined) {
+      blocks.push({
+        id,
+        source,
+        body: null,
+        line: lineOf(text, startIndex),
+        malformedReason: "missing generated-scaffold end marker",
+      });
+      continue;
+    }
+
+    const region = text.slice(bodyStart, bodyStart + endMatch.index);
+    const fenceMatch = /```ya?ml\n([\s\S]*?)\n```/.exec(region);
+    if (!fenceMatch) {
+      blocks.push({
+        id,
+        source,
+        body: null,
+        line: lineOf(text, startIndex),
+        malformedReason: "missing fenced yaml body",
+      });
+      continue;
+    }
+
+    blocks.push({
+      id,
+      source,
+      body: `${fenceMatch[1] ?? ""}\n`,
+      line: lineOf(text, startIndex),
+    });
+  }
+  return blocks;
+}
+
+export type GeneratedScaffoldDriftOptions = {
+  repoRoot?: string;
+};
+
+export async function checkGeneratedScaffoldBlocksDrift(
+  opts: GeneratedScaffoldDriftOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = [];
+  const text = await readScopedDocOrThrow(
+    join(repoRoot, CE_PLAN_TEMPLATE_REL),
+    CE_PLAN_TEMPLATE_REL,
+    "contract-drift generated scaffold check",
+  );
+  const blocks = extractGeneratedScaffoldBlocks(text);
+
+  for (const block of blocks) {
+    if (!isScaffoldId(block.id)) {
+      findings.push({
+        doc: CE_PLAN_TEMPLATE_REL,
+        kind: "generated-scaffold-block",
+        claim: block.id,
+        line: block.line,
+        reason: `generated scaffold marker names unknown scaffold id "${block.id}".`,
+      });
+      continue;
+    }
+
+    const expectedSource = `cli.ts scaffold ${block.id} --json`;
+    if (block.source !== expectedSource) {
+      findings.push({
+        doc: CE_PLAN_TEMPLATE_REL,
+        kind: "generated-scaffold-block",
+        claim: block.id,
+        line: block.line,
+        reason: `generated scaffold marker source is "${block.source}", expected "${expectedSource}".`,
+      });
+    }
+
+    if (block.body === null) {
+      findings.push({
+        doc: CE_PLAN_TEMPLATE_REL,
+        kind: "generated-scaffold-block",
+        claim: block.id,
+        line: block.line,
+        reason: `generated scaffold marker is malformed: ${block.malformedReason}.`,
+      });
+      continue;
+    }
+
+    const expected = renderScaffold(block.id).body;
+    if (block.body !== expected) {
+      findings.push({
+        doc: CE_PLAN_TEMPLATE_REL,
+        kind: "generated-scaffold-block",
+        claim: block.id,
+        line: block.line,
+        reason:
+          "generated scaffold block differs from the runtime scaffold renderer output.",
+      });
+    }
+  }
+
+  return findings;
+}
+
 /**
  * Verify the deterministic control-plane relationship the Issue-to-PR v2
  * workflow relies on for the first-run-gotchas guide (Key Decision 7). Returns
@@ -1797,6 +1926,11 @@ export async function checkContractDrift(
     ...(await checkLedgerLifecycleFieldDrift({
       repoRoot,
       cliPath: opts.cliPath,
+    })),
+  );
+  findings.push(
+    ...(await checkGeneratedScaffoldBlocksDrift({
+      repoRoot,
     })),
   );
 

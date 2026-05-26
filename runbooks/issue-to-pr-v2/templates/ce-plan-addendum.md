@@ -74,6 +74,7 @@ paths need the high-risk prefix. Stage 3 will surface these for user confirm.
 Emit each unit's machine-readable shape as a fenced YAML code block
 immediately after that unit's prose, using this exact schema:
 
+<!-- generated-scaffold:start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->
 ```yaml
 id: <stable-slug>
 name: <Title from the Implementation Unit heading>
@@ -87,8 +88,9 @@ acceptance_tests:
   - "AC <i> holds: <verifiable behaviour>"
 ac_mapping:
   - <i>   # AC index (1-based) this batch satisfies; list multiple if merged
-rationale: null  # string only for split/merge, placeholders, or change_first exceptions
+rationale: null  # string only for split/merge, placeholders such as "out-of-scope: investigation-required", or change_first exceptions
 ```
+<!-- generated-scaffold:end id=ce-plan-candidate-batch -->
 
 The `ac_mapping` field is consumed by `decompose.ts --validate-ac-coverage`.
 Every AC index must appear in at least one batch's `ac_mapping`. If an AC

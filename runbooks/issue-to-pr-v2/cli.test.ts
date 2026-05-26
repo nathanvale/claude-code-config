@@ -18,6 +18,10 @@ import {
   ROUTE_IDS,
   type RouteId,
 } from "./lib/route";
+import {
+  SCAFFOLD_IDS,
+  renderScaffold,
+} from "./lib/scaffolds";
 import { run } from "./cli";
 
 /**
@@ -514,6 +518,19 @@ describe("AC5: contract emits runtime contract slices", () => {
     }
   });
 
+  test("scaffold_ids slice returns the catalog-ordered scaffold ids", () => {
+    const { envelope } = invoke(["contract", "scaffold_ids", "--json"]);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      slice: string;
+      values: readonly string[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("scaffold_ids");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values).toEqual([...SCAFFOLD_IDS]);
+  });
+
   test("unknown slice returns unknown-contract-slice error", () => {
     const { envelope, exit_code } = invoke([
       "contract",
@@ -922,6 +939,7 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
       "diagnose",
       "next",
       "packet",
+      "scaffold",
       "state",
     ]);
     expect(data.contract_slices.length).toBeGreaterThan(0);
@@ -934,6 +952,18 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     );
     expect(data.contract_slices).toContain("finding_fields");
     expect(data.contract_slices).toContain("builder_attempt_types");
+    expect(data.contract_slices).toContain("scaffold_ids");
+  });
+
+  test("--help documents scaffold ids and response shape", () => {
+    const { envelope } = invoke(["--help"]);
+    const data = envelope.data as {
+      scaffold_ids: readonly string[];
+      scaffold_response_shape: Record<string, string>;
+    };
+    expect(data.scaffold_ids).toEqual([...SCAFFOLD_IDS]);
+    expect(data.scaffold_response_shape.scaffold_id).toContain("scaffold_ids");
+    expect(data.scaffold_response_shape.body).toContain("rendered scaffold");
   });
 
   test("F005 fix: --help exposes the full error and exit-code discovery surface", () => {
@@ -1957,6 +1987,44 @@ describe("U6: contract slice for blocking_gate_field_names", () => {
       "batch_contract_confirmation_status",
       "frontmatter.runbook_version",
     ]);
+  });
+});
+
+// ---------------- scaffold command (issue 114 tracer) ----------------
+
+describe("scaffold command", () => {
+  test("renders the ce-plan candidate batch scaffold with metadata", () => {
+    const { envelope, exit_code } = invoke([
+      "scaffold",
+      "ce-plan-candidate-batch",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      scaffold_id: string;
+      output_kind: string;
+      source: string;
+      ordering: string;
+      body: string;
+    };
+    expect(data.scaffold_id).toBe("ce-plan-candidate-batch");
+    expect(data.output_kind).toBe("yaml");
+    expect(data.ordering).toBe("catalog");
+    expect(data.source).toContain("lib/scaffolds.ts");
+    expect(data.body).toBe(renderScaffold("ce-plan-candidate-batch").body);
+  });
+
+  test("unknown scaffold id returns unknown-scaffold-id", () => {
+    const { envelope, exit_code } = invoke([
+      "scaffold",
+      "not-a-scaffold",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "unknown-scaffold-id",
+    );
+    expect(exit_code).toBe(64);
   });
 });
 

@@ -49,6 +49,7 @@ import {
   ROUTE_IDS,
   type RouteId,
 } from "./lib/route";
+import { renderScaffold } from "./lib/scaffolds";
 
 const scriptPath = join(import.meta.dir, "cli.ts");
 const bunExecutable = execPath;
@@ -170,6 +171,11 @@ function helpContractSlices(): readonly string[] {
 function helpPacketRoles(): readonly string[] {
   assertHelpDataLoaded();
   return HELP_DATA.packet_roles as readonly string[];
+}
+
+function helpScaffoldIds(): readonly string[] {
+  assertHelpDataLoaded();
+  return HELP_DATA.scaffold_ids as readonly string[];
 }
 
 type PacketRoleFlagSpec = {
@@ -839,6 +845,46 @@ describe("Block 5: contract command × every documented slice", () => {
 });
 
 // =====================================================================
+// Block 5b - `scaffold` command × every documented scaffold
+// =====================================================================
+
+describe("Block 5b: scaffold command × every documented scaffold", () => {
+  test("scaffold_ids is non-empty (sanity)", () => {
+    expect(helpScaffoldIds().length).toBeGreaterThan(0);
+  });
+
+  test("every documented scaffold id returns success with metadata and body", async () => {
+    for (const scaffoldId of helpScaffoldIds()) {
+      const result = await runCli(["scaffold", scaffoldId, "--json"]);
+      if (!result.envelopeParsed) {
+        throw new Error(
+          `[scaffold=${scaffoldId}] envelope did not parse. stdout=${result.stdout.slice(0, 200)} stderr=${result.stderr.slice(0, 200)}`,
+        );
+      }
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as Record<string, unknown>;
+      expect(data.scaffold_id).toBe(scaffoldId);
+      expect(data.output_kind).toBe("yaml");
+      expect(data.ordering).toBe("catalog");
+      expect(typeof data.source).toBe("string");
+      expect(data.body).toBe(
+        renderScaffold(scaffoldId as Parameters<typeof renderScaffold>[0]).body,
+      );
+    }
+  });
+
+  test("unknown scaffold id returns unknown-scaffold-id error with exit_code 64", async () => {
+    const result = await runCli([
+      "scaffold",
+      "definitely-not-a-real-scaffold",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "unknown-scaffold-id");
+  });
+});
+
+// =====================================================================
 // Block 6 - `diagnose` command × ledger states
 // =====================================================================
 
@@ -1048,6 +1094,7 @@ describe("Block 8: Every documented error_code", () => {
         "unknown-command",
         "unknown-contract-slice",
         "unknown-packet-role",
+        "unknown-scaffold-id",
       ].sort(),
     );
   });
@@ -1093,6 +1140,16 @@ describe("Block 8: Every documented error_code", () => {
     ]);
     expect(result.envelopeParsed).toBe(true);
     assertErrorEnvelopeShape(result.envelope, "unknown-packet-role");
+  });
+
+  test("unknown-scaffold-id: scaffold unknown-scaffold --json (smoke-link to Block 5b)", async () => {
+    const result = await runCli([
+      "scaffold",
+      "totally-unknown-scaffold",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "unknown-scaffold-id");
   });
 
   test("missing-packet-flag: packet builder --ledger ... --json (missing --batch and --attempt-type)", async () => {

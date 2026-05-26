@@ -18,6 +18,7 @@ import {
   type DocClaims,
   type DriftFinding,
   checkContractDrift,
+  checkGeneratedScaffoldBlocksDrift,
   checkGotchasRelationship,
   checkLedgerLifecycleFieldDrift,
   compareClaimsToFacts,
@@ -876,6 +877,7 @@ const issueToPrDocPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const ledgerTemplatePath = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
+const cePlanTemplatePath = "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
 const scopedDocRels = [
   skillDocPath,
   readmeDocPath,
@@ -883,7 +885,11 @@ const scopedDocRels = [
   ledgerDocPath,
   gotchasDocPath,
 ] as const;
-const driftSurfaceRels = [...scopedDocRels, ledgerTemplatePath] as const;
+const driftSurfaceRels = [
+  ...scopedDocRels,
+  ledgerTemplatePath,
+  cePlanTemplatePath,
+] as const;
 
 /** Read one scoped doc's text by its repo-relative path. */
 async function readScopedDoc(relPath: string): Promise<string> {
@@ -1316,6 +1322,100 @@ describe("U7: ledger schema docs stay aligned with emitted contract slices", () 
           doc: ledgerTemplatePath,
           kind: "ledger-schema-slice-pointer",
           claim: "ledger_batch_lifecycle_fields",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+});
+
+describe("issue 114: generated scaffold blocks stay aligned with runtime renderers", () => {
+  test("real ce-plan addendum generated scaffold block matches the renderer", async () => {
+    const findings = await checkGeneratedScaffoldBlocksDrift({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("stale generated scaffold body is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replace("id: <stable-slug>", "id: <stale-generated-slug>"),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "ce-plan-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("unknown scaffold id in marker is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replaceAll("ce-plan-candidate-batch", "unknown-scaffold"),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "unknown-scaffold",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing generated scaffold end marker is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replace(
+          "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+          "",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "ce-plan-candidate-batch",
+        }),
+      );
+      expect(findings[0]?.reason).toContain("missing generated-scaffold end");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("checkContractDrift orchestrator surfaces stale scaffold findings", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replace("name: <Title", "name: <Stale Title"),
+    });
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "ce-plan-candidate-batch",
         }),
       );
     } finally {
