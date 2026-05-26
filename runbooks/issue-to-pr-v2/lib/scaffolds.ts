@@ -619,6 +619,9 @@ function renderLedgerFindingRowField(field: FindingField): string[] {
   }
 }
 
+type NotesImplementationAttemptCheckpointField =
+  (typeof NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS)[number];
+
 function renderNotesImplementationAttemptCheckpointBody(): string {
   return renderTwoSpaceScalarEvidenceBody(
     NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY,
@@ -627,7 +630,9 @@ function renderNotesImplementationAttemptCheckpointBody(): string {
   );
 }
 
-function renderImplementationAttemptCheckpointField(field: string): string {
+function renderImplementationAttemptCheckpointField(
+  field: NotesImplementationAttemptCheckpointField,
+): string {
   switch (field) {
     case "batch_id":
       return '"<batch-id>"';
@@ -637,11 +642,13 @@ function renderImplementationAttemptCheckpointField(field: string): string {
       return `"<${ATTEMPT_LANE_VALUES.join(" | ")}>"`;
     case "timestamp":
       return '"<ISO 8601>"';
-    default:
+    default: {
+      const unknownField: never = field;
       throw new ScaffoldRenderError(
         "unknown-notes-implementation-checkpoint-field",
-        `unknown implementation checkpoint evidence field "${field}"`,
+        `unknown implementation checkpoint evidence field "${unknownField}"`,
       );
+    }
   }
 }
 
@@ -692,7 +699,12 @@ function renderNotesValidatorWaveCompletedBody(): string {
   return `${lines.join("\n")}\n`;
 }
 
-function renderValidatorDispatchEvidenceField(field: string): string {
+type NotesValidatorWaveDispatchEvidenceField =
+  (typeof NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS)[number];
+
+function renderValidatorDispatchEvidenceField(
+  field: NotesValidatorWaveDispatchEvidenceField,
+): string {
   switch (field) {
     case "role":
       return '"validator"';
@@ -700,13 +712,18 @@ function renderValidatorDispatchEvidenceField(field: string): string {
       return '"<batch-id>@<sha>"';
     case "cli_route_id":
       return '"packet.validator"';
-    default:
+    default: {
+      const unknownField: never = field;
       throw new ScaffoldRenderError(
         "unknown-notes-validator-dispatch-field",
-        `unknown Validator-wave dispatch evidence field "${field}"`,
+        `unknown Validator-wave dispatch evidence field "${unknownField}"`,
       );
+    }
   }
 }
+
+type NotesRunbookVersionSkewContinuationField =
+  (typeof NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS)[number];
 
 function renderNotesRunbookVersionSkewContinuationBody(): string {
   return renderTwoSpaceScalarEvidenceBody(
@@ -716,7 +733,9 @@ function renderNotesRunbookVersionSkewContinuationBody(): string {
   );
 }
 
-function renderRunbookVersionSkewContinuationField(field: string): string {
+function renderRunbookVersionSkewContinuationField(
+  field: NotesRunbookVersionSkewContinuationField,
+): string {
   switch (field) {
     case "ledger_version":
       return "null";
@@ -732,18 +751,20 @@ function renderRunbookVersionSkewContinuationField(field: string): string {
       return '"<reference file the operator consulted>"';
     case "accepted_risk":
       return '"<one-line reason>"';
-    default:
+    default: {
+      const unknownField: never = field;
       throw new ScaffoldRenderError(
         "unknown-notes-runbook-version-skew-field",
-        `unknown runbook-version skew evidence field "${field}"`,
+        `unknown runbook-version skew evidence field "${unknownField}"`,
       );
+    }
   }
 }
 
-function renderTwoSpaceScalarEvidenceBody(
+function renderTwoSpaceScalarEvidenceBody<Field extends string>(
   rootKey: string,
-  fields: readonly string[],
-  renderField: (field: string) => string,
+  fields: readonly Field[],
+  renderField: (field: Field) => string,
 ): string {
   return `${[
     `${rootKey}:`,

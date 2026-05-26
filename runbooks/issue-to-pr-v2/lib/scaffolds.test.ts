@@ -399,6 +399,39 @@ describe("scaffolds: Proposer and Validator return envelopes", () => {
   });
 });
 
+describe("scaffolds: Notes evidence projection exhaustiveness (U6)", () => {
+  test("Notes implementation checkpoint scaffold preserves the contract field order", () => {
+    const body = renderScaffold("notes-implementation-attempt-checkpoint").body;
+    expect(body).toContain("implementation_attempt_checkpoint:");
+    expect(body).toContain('  batch_id: "<batch-id>"');
+    expect(body).toContain('  implementation_commit: "<sha>"');
+    expect(body).toContain('  timestamp: "<ISO 8601>"');
+    expect(body).toMatch(/  attempt_lane: "<.*>"/);
+  });
+
+  test("Notes Validator-wave scaffold preserves the contract field order", () => {
+    const body = renderScaffold("notes-validator-wave-completed").body;
+    expect(body).toContain("validator_wave_completed:");
+    expect(body).toContain('  batch_id: "<batch-id>"');
+    expect(body).toContain("  personas:");
+    expect(body).toContain("  dispatch_evidence:");
+    expect(body).toContain('    role: "validator"');
+    expect(body).toContain('    cli_route_id: "packet.validator"');
+    expect(body).toContain("  findings: []");
+  });
+
+  test("Notes runbook-version-skew continuation scaffold preserves the contract field order", () => {
+    const body = renderScaffold(
+      "notes-runbook-version-skew-continuation",
+    ).body;
+    expect(body).toContain("runbook_version_skew_continuation:");
+    expect(body).toContain("  ledger_version: null");
+    expect(body).toMatch(/  runtime_version: "[^"]+"/);
+    expect(body).toContain('  operator_decision: "<actor>"');
+    expect(body).toContain('  accepted_risk: "<one-line reason>"');
+  });
+});
+
 describe("scaffolds: runtime renderer parseability", () => {
   test("every scaffold body parses through Bun.YAML.parse", () => {
     for (const id of SCAFFOLD_IDS) {
