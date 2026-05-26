@@ -37,6 +37,14 @@ import { join } from "node:path";
 import { execPath } from "node:process";
 
 import {
+  BUILDER_ATTEMPT_FIELDS,
+  BUILDER_ATTEMPT_TYPE_VALUES,
+  CANDIDATE_BATCH_FIELDS,
+  FINDING_FIELDS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+} from "./lib/contract";
+import {
   requiredReferenceIdsFor,
   ROUTE_IDS,
   type RouteId,
@@ -790,6 +798,33 @@ describe("Block 5: contract command × every documented slice", () => {
       data.values.find((entry) => entry.route_id === "shipped")
         ?.required_reference_ids,
     ).toEqual([]);
+  });
+
+  test("ledger schema contract slices return catalog-ordered runtime facts", async () => {
+    const cases = [
+      ["candidate_batch_fields", CANDIDATE_BATCH_FIELDS],
+      ["ledger_batch_lifecycle_fields", LEDGER_BATCH_LIFECYCLE_FIELDS],
+      ["builder_attempt_fields", BUILDER_ATTEMPT_FIELDS],
+      [
+        "orchestrator_inline_attempt_fields",
+        ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+      ],
+      ["finding_fields", FINDING_FIELDS],
+      ["builder_attempt_types", BUILDER_ATTEMPT_TYPE_VALUES],
+    ] as const;
+
+    for (const [slice, expected] of cases) {
+      const result = await runCli(["contract", slice, "--json"]);
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as {
+        slice: string;
+        values: readonly string[];
+        ordering: string;
+      };
+      expect(data.slice).toBe(slice);
+      expect(data.ordering).toBe("catalog");
+      expect(data.values).toEqual([...expected]);
+    }
   });
 
   test("unknown slice returns unknown-contract-slice error with exit_code 64", async () => {

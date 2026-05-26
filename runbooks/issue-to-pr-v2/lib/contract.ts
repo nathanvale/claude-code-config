@@ -106,7 +106,7 @@ export const LEGACY_EXECUTION_MODE_HINTS = new Map([
   ["direct", "change_first"],
 ]);
 
-export const BATCH_KEYS = new Set([
+export const CANDIDATE_BATCH_FIELDS = [
   "id",
   "name",
   "goal",
@@ -117,19 +117,25 @@ export const BATCH_KEYS = new Set([
   "acceptance_tests",
   "ac_mapping",
   "rationale",
-]);
+] as const;
 
-export const LEDGER_BATCH_KEYS = new Set([
-  ...BATCH_KEYS,
+export const LEDGER_BATCH_LIFECYCLE_FIELDS = [
   "status",
   "builder_commits",
   "builder_attempts",
   "orchestrator_inline_attempts",
   "iterations",
   "final_verdict",
+] as const;
+
+export const BATCH_KEYS = new Set<string>(CANDIDATE_BATCH_FIELDS);
+
+export const LEDGER_BATCH_KEYS = new Set<string>([
+  ...CANDIDATE_BATCH_FIELDS,
+  ...LEDGER_BATCH_LIFECYCLE_FIELDS,
 ]);
 
-export const BUILDER_ATTEMPT_KEYS = new Set([
+export const BUILDER_ATTEMPT_FIELDS = [
   "attempt_type",
   "status",
   "commit_sha",
@@ -138,15 +144,30 @@ export const BUILDER_ATTEMPT_KEYS = new Set([
   "blockers",
   "probe_results",
   "notes",
-]);
+] as const;
 
-export const ORCHESTRATOR_INLINE_ATTEMPT_KEYS = new Set([
+export const BUILDER_ATTEMPT_KEYS = new Set<string>(
+  BUILDER_ATTEMPT_FIELDS,
+);
+
+export const ORCHESTRATOR_INLINE_ATTEMPT_FIELDS = [
   "commit_sha",
   "files_touched",
   "notes",
-]);
+] as const;
 
-export const BUILDER_ATTEMPT_TYPES = new Set(["implementation", "repair"]);
+export const ORCHESTRATOR_INLINE_ATTEMPT_KEYS = new Set<string>(
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+);
+
+export const BUILDER_ATTEMPT_TYPE_VALUES = [
+  "implementation",
+  "repair",
+] as const;
+
+export const BUILDER_ATTEMPT_TYPES = new Set<string>(
+  BUILDER_ATTEMPT_TYPE_VALUES,
+);
 
 export const BUILDER_ATTEMPT_STATUSES = new Set([
   "committed",
@@ -165,7 +186,7 @@ export const MAX_BUILDER_ATTEMPTS = 5;
 
 export const STAGE_3_BATCH_ID = "stage-3";
 
-export const FINDING_KEYS = new Set([
+export const FINDING_FIELDS = [
   "id",
   "batch_id",
   "signature",
@@ -174,7 +195,9 @@ export const FINDING_KEYS = new Set([
   "status",
   "summary",
   "resolution",
-]);
+] as const;
+
+export const FINDING_KEYS = new Set<string>(FINDING_FIELDS);
 
 export const FINDING_SEVERITIES = new Set(["P0", "P1", "P2", "P3"]);
 

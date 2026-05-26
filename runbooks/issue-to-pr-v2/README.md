@@ -67,7 +67,7 @@ The artifacts a maintainer needs to find, in this order:
    - `state` - emit the ledger's durable state for the skill or support
      hot router to route from.
    - `next` - emit the minimal next route id as a fact.
-   - `contract` - emit a runtime contract slice from `lib/contract.ts`.
+   - `contract` - emit a runtime contract slice from the CLI catalog.
    - `diagnose` - emit a richer diagnostic envelope than `state` for
      debugging drift, version skew, and install presence.
    - `packet` - render a dispatch-role packet from `templates/` and
@@ -94,11 +94,9 @@ The artifacts a maintainer needs to find, in this order:
    arguments for the full flag listing; the helper enumerates its
    usage string in its error path.
 5. **`contract-drift.ts`** - the read-only drift check for operator
-   docs against the live CLI contract. It also pins the ledger template
-   and `ledger-and-helper.md` batch lifecycle field mentions against the
-   helper-owned `LEDGER_BATCH_KEYS` set so runtime fields like
-   `orchestrator_inline_attempts` and `final_verdict` cannot disappear
-   from operator-facing docs.
+   docs against the live CLI contract. It also reads live ledger schema
+   slices, checks the ledger template lifecycle scaffold, and requires
+   `ledger-and-helper.md` to point at the emitted slice commands.
 6. **`lib/`** - implementation modules behind `cli.ts` and
    `decompose.ts`. One-line role per module:
    - `contract.ts` - runtime contract constants shared across the CLI

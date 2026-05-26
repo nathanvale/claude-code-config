@@ -50,6 +50,7 @@ import {
   HIGH_RISK_NEW_FILE_PATCH_EXCEPTION_PREFIX,
   INVESTIGATION_RATIONALE,
   LEDGER_BATCH_KEYS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
   LEGACY_EXECUTION_MODE_HINTS,
   MAX_BUILDER_ATTEMPTS,
   NEW_FILE_PATCH_EXCEPTION_PREFIX,
@@ -2337,14 +2338,7 @@ function ledgerRowsToBatches(parsedRows: Record<string, unknown>[]): Batch[] {
     const context = `ledger batch ${index + 1}`;
     const unknownKeys = Object.keys(parsed).filter((key) => !LEDGER_BATCH_KEYS.has(key));
     if (unknownKeys.length > 0) fail(`${context} has unknown field "${unknownKeys[0]}"`);
-    for (const key of [
-      "status",
-      "builder_commits",
-      "builder_attempts",
-      "orchestrator_inline_attempts",
-      "iterations",
-      "final_verdict",
-    ]) {
+    for (const key of LEDGER_BATCH_LIFECYCLE_FIELDS) {
       if (!hasKey(parsed, key)) fail(`${context} is missing required ledger field "${key}"`);
     }
     const id = requiredString(parsed, "id", context);

@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BufferWriter } from "./lib/cli-envelope";
-import { RUNBOOK_VERSION } from "./lib/contract";
+import {
+  BUILDER_ATTEMPT_FIELDS,
+  BUILDER_ATTEMPT_TYPE_VALUES,
+  CANDIDATE_BATCH_FIELDS,
+  FINDING_FIELDS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+  RUNBOOK_VERSION,
+} from "./lib/contract";
 import {
   requiredReferenceIdsFor,
   ROUTE_IDS,
@@ -479,6 +487,33 @@ describe("AC5: contract emits runtime contract slices", () => {
     );
   });
 
+  test("ledger schema field-set slices return the ordered runtime facts", () => {
+    const cases = [
+      ["candidate_batch_fields", CANDIDATE_BATCH_FIELDS],
+      ["ledger_batch_lifecycle_fields", LEDGER_BATCH_LIFECYCLE_FIELDS],
+      ["builder_attempt_fields", BUILDER_ATTEMPT_FIELDS],
+      [
+        "orchestrator_inline_attempt_fields",
+        ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+      ],
+      ["finding_fields", FINDING_FIELDS],
+      ["builder_attempt_types", BUILDER_ATTEMPT_TYPE_VALUES],
+    ] as const;
+
+    for (const [slice, expected] of cases) {
+      const { envelope } = invoke(["contract", slice, "--json"]);
+      expect(envelope.status).toBe("ok");
+      const data = envelope.data as {
+        slice: string;
+        values: readonly string[];
+        ordering: string;
+      };
+      expect(data.slice).toBe(slice);
+      expect(data.ordering).toBe("catalog");
+      expect(data.values).toEqual([...expected]);
+    }
+  });
+
   test("unknown slice returns unknown-contract-slice error", () => {
     const { envelope, exit_code } = invoke([
       "contract",
@@ -891,6 +926,14 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     ]);
     expect(data.contract_slices.length).toBeGreaterThan(0);
     expect(data.contract_slices).toContain("route_required_references");
+    expect(data.contract_slices).toContain("candidate_batch_fields");
+    expect(data.contract_slices).toContain("ledger_batch_lifecycle_fields");
+    expect(data.contract_slices).toContain("builder_attempt_fields");
+    expect(data.contract_slices).toContain(
+      "orchestrator_inline_attempt_fields",
+    );
+    expect(data.contract_slices).toContain("finding_fields");
+    expect(data.contract_slices).toContain("builder_attempt_types");
   });
 
   test("F005 fix: --help exposes the full error and exit-code discovery surface", () => {

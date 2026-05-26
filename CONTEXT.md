@@ -16,6 +16,18 @@ _Avoid_: evidence proof, proof recipe, CLI proof
 A focused Issue-to-PR validation that keeps prose claims about CLI-owned facts aligned with the runtime contract the helper emits. It covers mechanically checkable facts and the control-plane links needed for operator recovery, not broad documentation quality.
 _Avoid_: public docs drift check, general docs audit, markdown link crawler, gotchas-only safeguard
 
+**Ledger schema contract**:
+Runtime-owned Issue-to-PR ledger field sets and allowed values emitted through CLI contract slices and enforced by helper validators. It defines allowed and required members, not authoring intent, operator judgment, or section purpose.
+_Avoid_: ledger schema prose, docs-owned schema, ledger-and-helper schema
+
+**Ledger authoring guidance**:
+Prose-owned Issue-to-PR guidance for why ledger sections exist, who writes them, when confirmation is required, and how operators use helper facts. It may point at ledger schema contracts, but must not restate their members.
+_Avoid_: ledger schema contract, runtime field list, schema owner
+
+**Ledger template scaffold**:
+Concrete per-issue ledger starting shape that shows the fields an operator must instantiate. It is a repeated handoff artifact, not the durable schema source of truth.
+_Avoid_: generated schema doc, prose schema, contract owner
+
 **Capability**:
 A registry-managed skill or agent, together with the files owned by that skill or agent. In v1, runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins are not capabilities.
 _Avoid_: imported thing, tool, plugin, runbook capability
@@ -91,6 +103,12 @@ Domain expert: "No. The helper command contract is only about how the helper is 
 
 Dev: "Should a runtime contract drift check scan every Issue-to-PR markdown link?"
 Domain expert: "No. A runtime contract drift check compares prose claims with CLI-owned facts and only checks recovery links that affect the control plane."
+
+Dev: "Does `ledger-and-helper.md` own the ledger schema?"
+Domain expert: "No. Runtime code owns the ledger schema contract. `ledger-and-helper.md` owns ledger authoring guidance and points to emitted contract slices."
+
+Dev: "Can the ledger template still show concrete batch fields?"
+Domain expert: "Yes. The ledger template scaffold shows the repeated starting shape, but runtime contract slices remain the source of truth for schema members."
 
 Dev: "Should `one-password` include the exact npm token item name?"
 Domain expert: "No. `one-password` defines the safe `op` workflow. The npm-owning skill supplies the exact item and field names."

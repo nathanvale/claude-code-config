@@ -1,8 +1,10 @@
 # Ledger and helper reference
 
 **Contract owner:** this reference owns stage framing, helper execution
-context, turn protocol, ledger schema, acceptance criteria, batches YAML,
-findings YAML, notes evidence, and runbook-version skew handling.
+context, turn protocol, ledger authoring guidance, acceptance criteria,
+batches YAML purpose, findings YAML purpose, notes evidence, and
+runbook-version skew handling. Ledger schema facts live in runtime contract
+slices.
 
 **Read trigger:** open this reference when starting or resuming a turn (to
 re-read durable confirmation state), when writing or updating ledger YAML
@@ -101,12 +103,11 @@ steps is [first-run-gotchas.md](first-run-gotchas.md) recipe 2.3
 (`blocked-digests-stale`).
 
 **Immutable batch contract fields covered by `batch_contract_digest`.** The
-digest is recomputed over the confirmed batch contract: `id`, `name`, `goal`,
-`files`, `depends_on`, optional `supersedes`, `execution_mode`,
-`acceptance_tests`, `ac_mapping`, and optional `rationale`. Runtime
-lifecycle fields (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`) are
-mutated by Stage 4 and are **not** part of the digest.
+digest is recomputed over the confirmed candidate batch contract. Query
+`cli.ts contract candidate_batch_fields --json` for digest-covered fields.
+Runtime lifecycle fields from
+`cli.ts contract ledger_batch_lifecycle_fields --json` are mutated by Stage 4
+and are **not** part of the digest.
 
 ## Ledger schema overview
 
@@ -137,6 +138,30 @@ Frontmatter digest fields (`plan_digest`, `ac_digest`, `batch_contract_digest`)
 are recomputed via `decompose.ts --plan-digest`, `--ac-digest`, and
 `--batch-contract-digest`.
 
+### Runtime-owned schema facts
+
+Ledger field-set and finite enum membership live in runtime code and are
+discoverable through `cli.ts contract <slice> --json`.
+
+Ledger schema slices:
+
+- `cli.ts contract candidate_batch_fields --json`
+- `cli.ts contract ledger_batch_lifecycle_fields --json`
+- `cli.ts contract builder_attempt_fields --json`
+- `cli.ts contract orchestrator_inline_attempt_fields --json`
+- `cli.ts contract finding_fields --json`
+- `cli.ts contract builder_attempt_types --json`
+
+Related existing slices:
+
+- `cli.ts contract execution_modes --json`
+- `cli.ts contract batch_statuses --json`
+- `cli.ts contract builder_attempt_statuses --json`
+- `cli.ts contract finding_severities --json`
+- `cli.ts contract finding_statuses --json`
+- `cli.ts contract final_verdicts --json`
+- `cli.ts contract confirmation_states --json`
+
 ### Frontmatter fields
 
 Required fields (set at Stage 1 unless noted):
@@ -165,52 +190,44 @@ Required fields (set at Stage 1 unless noted):
 
 ### `## Batches` entry fields
 
-Each batch entry must include:
+Candidate batch field membership is
+`cli.ts contract candidate_batch_fields --json`. `files` are non-empty
+repo-relative paths. `depends_on` may be `[]`. `supersedes` is audit metadata
+for replacement batches; it never satisfies dependencies. `execution_mode`
+membership is `cli.ts contract execution_modes --json`. `acceptance_tests`
+is non-empty; `ac_mapping` is non-empty unless this is a `patch-*` batch.
+`rationale` is required when execution-mode and path combinations need an
+explicit exception prefix.
 
-- `id`, `name`, `goal`, `files` (non-empty repo-relative paths), `depends_on`
-  (may be `[]`).
-- Optional `supersedes` (only when this is a replacement batch superseding a
-  blocked original).
-- `execution_mode`: exactly one of `tdd`, `proof_first`, `change_first`.
-- `acceptance_tests` (non-empty), `ac_mapping` (non-empty unless this is a
-  `patch-*` batch).
-- Optional `rationale` (required when execution_mode and path combinations
-  need an explicit exception prefix).
+Lifecycle field membership is
+`cli.ts contract ledger_batch_lifecycle_fields --json`. `status` membership
+is `cli.ts contract batch_statuses --json`. Stage 4 mutates lifecycle fields
+at runtime. `iterations` counts well-formed Builder attempts plus committed
+Orchestrator-inline attempts seen so far. Builder infrastructure failures are
+outside both attempt lanes and outside the iteration cap. `builder_commits`
+records commit SHAs from successful Builder attempts on this batch.
 
-Stage 4 mutates batch entries at runtime to add:
+`builder_attempts` are compact records, one per well-formed Builder envelope.
+Field membership is `cli.ts contract builder_attempt_fields --json`;
+`attempt_type` membership is `cli.ts contract builder_attempt_types --json`;
+`status` membership is `cli.ts contract builder_attempt_statuses --json`.
+`blockers` and `probe_results` are YAML lists of compact strings (`[]` when
+empty); `notes` is a single string. Rich envelope evidence is **not**
+persisted here; it lives in Notes or is passed to Validators.
 
-- `status`: `pending | in-progress | converged | accepted-risk | blocked`.
-- `iterations`: number of well-formed Builder attempts plus committed
-  Orchestrator-inline attempts seen so far. Builder infrastructure failures
-  are outside both attempt lanes and outside the iteration cap.
-- `builder_commits`: list of commit SHAs from successful Builder attempts on
-  this batch.
-- `builder_attempts`: compact records, one per well-formed Builder envelope,
-  each with `attempt_type`, `status`, `commit_sha`, `files_touched`,
-  `route_hint`, `blockers`, `probe_results`, `notes`. `blockers` and
-  `probe_results` are YAML lists of compact strings (`[]` when empty);
-  `notes` is a single string. Rich envelope evidence
-  (implementation steps, tests run, assumptions, risks, deferred, suggested
-  Validator focus) is **not** persisted here; it lives in Notes or is passed to
-  Validators.
-- `orchestrator_inline_attempts`: compact records, one per committed
-  Orchestrator-inline `change_first` attempt, initialized to `[]` on current
-  batch rows. Each record contains exactly `commit_sha`, `files_touched`, and
-  `notes`; Builder-only fields such as `attempt_type`, `status`,
-  `route_hint`, `blockers`, and `probe_results` are not allowed. Inline rows
-  are committed-only evidence: if a dispatch trigger appears before the inline
-  implementation commit, append no inline row and route the work to Builder
-  dispatch. Inline commits are found through this lane, not through
-  `builder_commits`. Every batch row a `"3"` runtime emits carries this field,
-  so a field-lacking row originates from a pre-`"3"` runtime. The
-  runbook-version skew gate (not per-batch tolerance of the absent field) is
-  what protects such legacy ledgers from being silently reinterpreted under
-  the inline-lane meaning: it keys on frontmatter `runbook_version`, so a
-  ledger still declaring an old version classifies as `missing` or
-  `mismatched` and only proceeds once an operator supplies continuation
-  evidence. Migrating historical ledgers to the inline-lane meaning is out of
-  scope; the gate keeps the old and new meanings from mixing.
-- `final_verdict`: `converged | accepted-risk | blocked-for-user`.
+`orchestrator_inline_attempts` are compact records, one per committed
+Orchestrator-inline `change_first` attempt. Field membership is
+`cli.ts contract orchestrator_inline_attempt_fields --json`. Inline rows are
+committed-only evidence: if a dispatch trigger appears before the inline
+implementation commit, append no inline row and route the work to Builder
+dispatch. Inline commits are found through this lane, not through
+`builder_commits`. Every batch row a `"3"` runtime emits carries this field,
+so a field-lacking row originates from a pre-`"3"` runtime. The
+runbook-version skew gate protects such legacy ledgers from being silently
+reinterpreted under the inline-lane meaning.
+
+`final_verdict` records the terminal Stage 4 outcome; membership is
+`cli.ts contract final_verdicts --json`.
 
 ### `## Notes` implementation evidence
 
@@ -241,19 +258,19 @@ Builder or Orchestrator-inline attempt.
 
 ### `## Findings data` field requirements
 
-Each finding row is YAML with `id`, `batch_id`, `signature`, `persona`,
-`severity`, `status`, `summary`, and `resolution`. Constraints:
+Each finding row is YAML. Field membership is
+`cli.ts contract finding_fields --json`. Constraints:
 
 - `id` is unique within the ledger.
 - `batch_id` must be one of `stage-3`, `final`, or a confirmed batch id from
   `## Batches`.
 - `signature` is a stable kebab-case dedupe key; the same finding from
   multiple personas shares one signature.
-- `severity` is one of `P0`, `P1`, `P2`, `P3` (from the persona's own rubric;
-  the runbook does not re-rank).
-- `status` is one of `open`, `fixed`, `accepted-risk`, `deferred-P2`,
-  `deferred-P3`, `out-of-scope-for-this-issue`, `ADR-contradicts-<id>`,
-  `superseded`.
+- `severity` membership is `cli.ts contract finding_severities --json` (from
+  the persona's own rubric; the runbook does not re-rank).
+- finite `status` membership is `cli.ts contract finding_statuses --json`.
+  Parameterized `ADR-contradicts-<id>` handling lives in
+  [findings-and-validators.md](findings-and-validators.md).
 - `summary` text is verbatim what the rendered `## Findings` table will show
   (helper validation enforces no drift).
 - `resolution` matches the status per the allowed status/resolution pairs in
@@ -311,11 +328,9 @@ confirmation; changes after confirmation route through helper validation and
 re-confirmation.
 
 `## Batches` is a fenced YAML block (no XML-style wrapping) with one entry per
-batch. Each entry includes `id`, `name`, `goal`, `files`, `depends_on`,
-optional `supersedes`, `execution_mode` (`tdd | proof_first | change_first`),
-`acceptance_tests`, `ac_mapping`, optional `rationale`, plus run-time fields
-populated by Stage 4 (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`).
+batch. Candidate and lifecycle field membership is runtime-owned; query
+`cli.ts contract candidate_batch_fields --json` and
+`cli.ts contract ledger_batch_lifecycle_fields --json`.
 
 The acceptance criteria list and batches block jointly drive
 `decompose.ts --validate-ac-coverage`: every AC index must appear in at least

@@ -25,12 +25,18 @@ import { argv, exit, stderr, stdout } from "node:process";
 
 import {
   BATCH_STATUSES,
+  BUILDER_ATTEMPT_FIELDS,
   BUILDER_ATTEMPT_STATUSES,
+  BUILDER_ATTEMPT_TYPE_VALUES,
+  CANDIDATE_BATCH_FIELDS,
   CONFIRMATION_STATES,
   EXECUTION_MODES,
   FINAL_VERDICTS,
+  FINDING_FIELDS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
   RUNBOOK_VERSION_SKEW_STATES,
   TERMINAL_BATCH_STATUSES,
 } from "./lib/contract";
@@ -81,12 +87,18 @@ import {
 
 const CONTRACT_SLICES = [
   "batch_statuses",
+  "candidate_batch_fields",
+  "ledger_batch_lifecycle_fields",
+  "builder_attempt_fields",
   "builder_attempt_statuses",
+  "builder_attempt_types",
   "confirmation_states",
   "execution_modes",
   "final_verdicts",
+  "finding_fields",
   "finding_severities",
   "finding_statuses",
+  "orchestrator_inline_attempt_fields",
   "route_ids",
   "route_required_references",
   "terminal_batch_statuses",
@@ -152,9 +164,25 @@ const EXIT_CODES = [
 
 const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   batch_statuses: { values: [...BATCH_STATUSES].sort(), ordering: "sorted" },
+  candidate_batch_fields: {
+    values: [...CANDIDATE_BATCH_FIELDS],
+    ordering: "catalog",
+  },
+  ledger_batch_lifecycle_fields: {
+    values: [...LEDGER_BATCH_LIFECYCLE_FIELDS],
+    ordering: "catalog",
+  },
+  builder_attempt_fields: {
+    values: [...BUILDER_ATTEMPT_FIELDS],
+    ordering: "catalog",
+  },
   builder_attempt_statuses: {
     values: [...BUILDER_ATTEMPT_STATUSES].sort(),
     ordering: "sorted",
+  },
+  builder_attempt_types: {
+    values: [...BUILDER_ATTEMPT_TYPE_VALUES],
+    ordering: "catalog",
   },
   confirmation_states: {
     values: [...CONFIRMATION_STATES].sort(),
@@ -162,6 +190,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   },
   execution_modes: { values: [...EXECUTION_MODES].sort(), ordering: "sorted" },
   final_verdicts: { values: [...FINAL_VERDICTS].sort(), ordering: "sorted" },
+  finding_fields: {
+    values: [...FINDING_FIELDS],
+    ordering: "catalog",
+  },
   finding_severities: {
     values: [...FINDING_SEVERITIES].sort(),
     ordering: "sorted",
@@ -169,6 +201,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   finding_statuses: {
     values: [...FINDING_STATUSES].sort(),
     ordering: "sorted",
+  },
+  orchestrator_inline_attempt_fields: {
+    values: [...ORCHESTRATOR_INLINE_ATTEMPT_FIELDS],
+    ordering: "catalog",
   },
   route_ids: { values: [...ROUTE_IDS], ordering: "catalog" },
   route_required_references: {
@@ -437,7 +473,7 @@ const HELP_DATA = {
   contract_slice_response_shape: {
     slice: "string (one of contract_slices)",
     values:
-      "array of primitives or structured records. `route_required_references` entries are { route_id, required_reference_ids }.",
+      "array of primitives or structured records. Field-set and enum slices emit string arrays; `route_required_references` entries are { route_id, required_reference_ids }.",
     ordering: {
       sorted: "alphabetical; set semantics; order is not contractual",
       catalog: "source-declared order is contractually significant (precedence, stage progression, severity escalation)",

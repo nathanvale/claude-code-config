@@ -387,23 +387,21 @@ function fakeCliScript(parts: {
   help: Record<string, unknown>;
   routeIds: unknown;
   packetRoles: unknown;
+  contractValues?: Record<string, unknown>;
 }): string {
   const help = JSON.stringify({ status: "ok", data: parts.help });
-  const routeIds = JSON.stringify({
-    status: "ok",
-    data: { values: parts.routeIds },
-  });
-  const packetRoles = JSON.stringify({
-    status: "ok",
-    data: { values: parts.packetRoles },
+  const contractValues = JSON.stringify({
+    route_ids: parts.routeIds,
+    packet_roles: parts.packetRoles,
+    ...(parts.contractValues ?? {}),
   });
   // process.argv: [bun, scriptPath, ...cliArgs]. The loader invokes
-  // `--help`, `contract route_ids`, and `contract packet_roles`.
+  // `--help`, `contract route_ids`, `contract packet_roles`, and ledger schema
+  // slices used by the pointer drift check.
   return [
     `const argv = process.argv.slice(2);`,
     `if (argv.includes("--help")) { console.log(${JSON.stringify(help)}); }`,
-    `else if (argv.includes("route_ids")) { console.log(${JSON.stringify(routeIds)}); }`,
-    `else if (argv.includes("packet_roles")) { console.log(${JSON.stringify(packetRoles)}); }`,
+    `else if (argv[0] === "contract") { const values = ${contractValues}[argv[1]]; console.log(JSON.stringify({ status: "ok", data: { values } })); }`,
     `else { console.log(${JSON.stringify(JSON.stringify({ status: "ok", data: {} }))}); }`,
   ].join("\n");
 }
@@ -1037,22 +1035,22 @@ describe("F12: installed_artifact_presence.missing reconciles loader vs extracto
   });
 });
 
-describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () => {
-  test("real ledger template and ledger/helper reference mention every lifecycle field", async () => {
+describe("U7: ledger schema docs stay aligned with emitted contract slices", () => {
+  test("real ledger template and ledger/helper reference match emitted schema facts", async () => {
     const findings = await checkLedgerLifecycleFieldDrift({ repoRoot });
     expect(findings).toEqual([]);
   });
 
-  test("missing lifecycle field in the ledger template is reported as drift", async () => {
+  test("missing lifecycle slice pointer in the ledger template is reported as drift", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-template-${process.pid}-${Math.random().toString(36).slice(2)}`,
+      `../../.tmp-ledger-slice-template-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerTemplatePath),
       (await readScopedDoc(ledgerTemplatePath)).replaceAll(
-        "orchestrator_inline_attempts",
-        "inline_attempts_missing_from_template",
+        "cli.ts contract ledger_batch_lifecycle_fields --json",
+        "cli.ts contract ledger_batch_lifecycle_fields_missing --json",
       ),
     );
     await Bun.write(
@@ -1064,8 +1062,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerTemplatePath,
-          kind: "ledger-lifecycle-field",
-          claim: "orchestrator_inline_attempts",
+          kind: "ledger-schema-slice-pointer",
+          claim: "ledger_batch_lifecycle_fields",
         }),
       );
     } finally {
@@ -1073,10 +1071,10 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("missing lifecycle field in ledger-and-helper.md is reported as drift", async () => {
+  test("missing ledger schema slice pointer in ledger-and-helper.md is reported as drift", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
+      `../../.tmp-ledger-slice-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerTemplatePath),
@@ -1085,8 +1083,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     await Bun.write(
       join(dir, ledgerDocPath),
       (await readScopedDoc(ledgerDocPath)).replaceAll(
-        "orchestrator_inline_attempts",
-        "inline_attempts_missing_from_reference",
+        "cli.ts contract orchestrator_inline_attempt_fields --json",
+        "cli.ts contract inline_attempt_fields_missing_from_reference --json",
       ),
     );
     try {
@@ -1094,8 +1092,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerDocPath,
-          kind: "ledger-lifecycle-field",
-          claim: "orchestrator_inline_attempts",
+          kind: "ledger-schema-slice-pointer",
+          claim: "orchestrator_inline_attempt_fields",
         }),
       );
     } finally {
@@ -1103,10 +1101,10 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("ledger/helper drift is tied to the batch field list, not whole-doc mentions", async () => {
+  test("ledger/helper pointer drift is tied to the runtime schema section, not whole-doc mentions", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-bullet-${process.pid}-${Math.random().toString(36).slice(2)}`,
+      `../../.tmp-ledger-slice-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerTemplatePath),
@@ -1115,8 +1113,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     await Bun.write(
       join(dir, ledgerDocPath),
       (await readScopedDoc(ledgerDocPath)).replace(
-        "- `status`: `pending | in-progress | converged | accepted-risk | blocked`.",
-        "- `batch_status`: `pending | in-progress | converged | accepted-risk | blocked`.",
+        "- `cli.ts contract builder_attempt_fields --json`",
+        "- `cli.ts contract builder_attempt_fields_missing --json`",
       ),
     );
     try {
@@ -1124,8 +1122,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerDocPath,
-          kind: "ledger-lifecycle-field",
-          claim: "status",
+          kind: "ledger-schema-slice-pointer",
+          claim: "builder_attempt_fields",
         }),
       );
     } finally {
@@ -1154,7 +1152,7 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerTemplatePath,
-          kind: "ledger-lifecycle-field",
+          kind: "ledger-schema-slice-pointer",
           claim: "## Batches",
         }),
       );
@@ -1163,10 +1161,10 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("section-rename in ledger-and-helper.md surfaces a `## Batches` entry fields finding instead of silently scanning the whole doc", async () => {
+  test("section-rename in ledger-and-helper.md surfaces a schema pointer finding instead of silently scanning the whole doc", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-reference-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
+      `../../.tmp-ledger-schema-reference-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerTemplatePath),
@@ -1175,8 +1173,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     await Bun.write(
       join(dir, ledgerDocPath),
       (await readScopedDoc(ledgerDocPath)).replace(
-        "`## Batches` entry fields",
-        "Batch entry fields",
+        "Runtime-owned schema facts",
+        "Runtime schema commands",
       ),
     );
     try {
@@ -1184,10 +1182,77 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerDocPath,
-          kind: "ledger-lifecycle-field",
-          claim: "`## Batches` entry fields",
+          kind: "ledger-schema-slice-pointer",
+          claim: "Runtime-owned schema facts",
         }),
       );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fake CLI missing the ledger lifecycle field slice fails loudly", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-schema-fake-cli-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const fakeCli = join(dir, "fake-cli.ts");
+    await Bun.write(
+      fakeCli,
+      fakeCliScript({
+        help: validHelpPayload(),
+        routeIds: ["no-ledger"],
+        packetRoles: ["builder"],
+      }),
+    );
+    try {
+      await expect(
+        checkLedgerLifecycleFieldDrift({ repoRoot, cliPath: fakeCli }),
+      ).rejects.toThrow(/ledger lifecycle field slice/i);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fake CLI with an empty non-lifecycle schema slice fails loudly", async () => {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-ledger-schema-empty-slice-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const fakeCli = join(dir, "fake-cli.ts");
+    const help = {
+      ...validHelpPayload(),
+      contract_slices: [
+        "route_ids",
+        "packet_roles",
+        "candidate_batch_fields",
+        "ledger_batch_lifecycle_fields",
+        "builder_attempt_fields",
+        "orchestrator_inline_attempt_fields",
+        "finding_fields",
+        "builder_attempt_types",
+      ],
+    };
+    await Bun.write(
+      fakeCli,
+      fakeCliScript({
+        help,
+        routeIds: ["no-ledger"],
+        packetRoles: ["builder"],
+        contractValues: {
+          candidate_batch_fields: ["id"],
+          ledger_batch_lifecycle_fields: ["status"],
+          builder_attempt_fields: [],
+          orchestrator_inline_attempt_fields: ["commit_sha"],
+          finding_fields: ["id"],
+          builder_attempt_types: ["implementation"],
+        },
+      }),
+    );
+    try {
+      await expect(
+        checkLedgerLifecycleFieldDrift({ repoRoot, cliPath: fakeCli }),
+      ).rejects.toThrow(/builder_attempt_fields data\.values is empty/i);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
@@ -1235,10 +1300,13 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("checkContractDrift orchestrator surfaces lifecycle-field findings when the template drops a field", async () => {
+  test("checkContractDrift orchestrator surfaces lifecycle-slice findings when the template drops the pointer", async () => {
     const dir = await stageDriftSurfaceFixture({
       [ledgerTemplatePath]: (text) =>
-        text.replaceAll("orchestrator_inline_attempts", "inline_attempts_missing"),
+        text.replaceAll(
+          "cli.ts contract ledger_batch_lifecycle_fields --json",
+          "cli.ts contract ledger_batch_lifecycle_fields_missing --json",
+        ),
     });
     try {
       const result = await checkContractDrift({ repoRoot: dir });
@@ -1246,8 +1314,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(result.findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerTemplatePath,
-          kind: "ledger-lifecycle-field",
-          claim: "orchestrator_inline_attempts",
+          kind: "ledger-schema-slice-pointer",
+          claim: "ledger_batch_lifecycle_fields",
         }),
       );
     } finally {

@@ -43,7 +43,18 @@ row in `## Notes` (see the evidence shape below).
 
 ## Batches
 
-Each batch row must include `execution_mode: tdd | proof_first | change_first`.
+Batch schema facts are runtime-owned. Query:
+
+- `cli.ts contract candidate_batch_fields --json`
+- `cli.ts contract ledger_batch_lifecycle_fields --json`
+- `cli.ts contract builder_attempt_fields --json`
+- `cli.ts contract orchestrator_inline_attempt_fields --json`
+- `cli.ts contract builder_attempt_types --json`
+- `cli.ts contract execution_modes --json`
+- `cli.ts contract batch_statuses --json`
+- `cli.ts contract builder_attempt_statuses --json`
+- `cli.ts contract final_verdicts --json`
+
 Replacement batches may include optional `supersedes: <blocked-batch-id>` as
 audit metadata. `supersedes` does not satisfy dependencies; downstream
 `depends_on` edges must name the replacement batch after helper validation and
@@ -53,28 +64,22 @@ when changing `files`, `acceptance_tests`, or `execution_mode`.
 Recommended rationale format: `replacement-contract: <reason>`.
 `builder_commits` entries must be reachable git commit refs.
 `builder_attempts` is the compact persisted audit trail for well-formed Builder
-envelopes. Each attempt row contains `attempt_type`, `status`, `commit_sha`,
-`files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
-Persisted `blockers` and `probe_results` are YAML lists of compact string
-summaries (use `[]` when empty), not raw Builder envelope object arrays;
-`notes` is a single string. Rich Builder evidence stays transient for
-Validator handoff or summarized in Notes.
+envelopes. Persisted `blockers` and `probe_results` are YAML lists of compact
+string summaries (use `[]` when empty), not raw Builder envelope object arrays.
+Rich Builder evidence stays transient for Validator handoff or summarized in
+Notes.
 `orchestrator_inline_attempts` is the compact persisted audit trail for
 committed Orchestrator-inline `change_first` attempts. It is initialized to
-`[]` on each current batch row. Each inline attempt row contains exactly
-`commit_sha`, `files_touched`, and `notes`; it never carries Builder-only
-fields such as `attempt_type`, `status`, `route_hint`, `blockers`, or
-`probe_results`. Inline rows are committed-only evidence: if a dispatch trigger
-appears before the inline implementation commit, append no inline row and
-route the work to Builder dispatch instead. Inline commits are found through
-this lane, not through `builder_commits`.
+`[]` on each current batch row. Inline rows are committed-only evidence: if a
+dispatch trigger appears before the inline implementation commit, append no
+inline row and route the work to Builder dispatch instead. Inline commits are
+found through this lane, not through `builder_commits`.
 Well-formed Builder fail-stops count as Builder attempts and increment
 `iterations`; committed Orchestrator-inline attempts also increment
 `iterations`. Builder infrastructure failures stay outside both attempt lanes
 and outside the iteration cap. Fail-stop attempts use `commit_sha: null` and
 do not append to `builder_commits`.
-`final_verdict` records the terminal Stage 4 outcome for the batch:
-`converged`, `accepted-risk`, or `blocked-for-user`.
+`final_verdict` records the terminal Stage 4 outcome for the batch.
 Host readiness failures use frontmatter `blocked_reason:
 host-builder-tools-unavailable` before any Stage 4 implementation attempt,
 including bounded Orchestrator-inline work. They leave every batch status
@@ -93,13 +98,15 @@ batches: []
 ## Findings data
 
 This YAML block is the source of truth for gates and convergence checks. Keep
-the markdown table below in sync for human scanning. `severity` must be `P0`,
-`P1`, `P2`, or `P3`. `status` must be `open`, `fixed`, `accepted-risk`,
-`deferred-P2`, `deferred-P3`, `out-of-scope-for-this-issue`,
-`ADR-contradicts-<id>`, or `superseded`. An open blocker means `severity` is
-`P0` or `P1` and `status` is `open`. Use `batch_id: stage-3` for Stage 3
-Contract Review findings before batch confirmation, `batch_id: final` for
-final review findings, or a confirmed ledger batch id for batch-loop findings.
+the markdown table below in sync for human scanning. Query
+`cli.ts contract finding_fields --json`,
+`cli.ts contract finding_severities --json`, and
+`cli.ts contract finding_statuses --json` for runtime-owned field and finite
+enum membership. Parameterized `ADR-contradicts-<id>` status handling lives in
+`findings-and-validators.md`. An open blocker means `severity` is `P0` or `P1`
+and `status` is `open`. Use `batch_id: stage-3` for Stage 3 Contract Review
+findings before batch confirmation, `batch_id: final` for final review
+findings, or a confirmed ledger batch id for batch-loop findings.
 Fixed Stage 3 findings must use `resolution: plan-revision <sha>` for the
 reachable plan/DAG revision that closed them. Fixed `batch_id: final` findings
 closed by an in-run orchestrator runbook self-heal use `resolution:

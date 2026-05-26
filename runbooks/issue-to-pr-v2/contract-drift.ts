@@ -47,21 +47,18 @@
  *    references (stage-*.md, findings-and-validators.md,
  *    builder-dispatch.md, host-adapters.md, etc.). A narrow U7 add-on also
  *    cross-checks the ledger template's batch lifecycle field mentions against
- *    the runtime key sets in `lib/contract.ts`.
+ *    the live CLI ledger lifecycle field slice.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
  *    and the scoped recovery/control-plane links (the first-run-gotchas
- *    relationship). The U7 add-on checks only lifecycle field-name presence.
+ *    relationship). The ledger add-on checks only lifecycle field-name
+ *    presence in the template plus emitted schema-slice pointers in the
+ *    ledger helper reference.
  *    It does NOT judge prose truth, broad docs consistency, or any token kind
  *    beyond these.
  *  - It adds NO external dependency, NO new CLI command, NO new emitted fact
  *    (it only READS the existing CLI via subprocess), and generates NO docs.
- *    Sole exception: the U7 lifecycle-field check imports `BATCH_KEYS` and
- *    `LEDGER_BATCH_KEYS` directly from `lib/contract`, because those constants
- *    are runtime-owned key sets — not CLI envelope facts — and a subprocess
- *    call would not surface them. Subprocess-only remains the default for
- *    every other check.
  *  - It does NOT validate decompose.ts flags
  *    (`decompose.ts --validate-ledger-batches` yields no command claim),
  *    route-precedence ORDER, enum-value prose (`committed`, `needs-revision`),
@@ -74,8 +71,6 @@
 import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { execPath } from "node:process";
-
-import { BATCH_KEYS, LEDGER_BATCH_KEYS } from "./lib/contract";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -936,6 +931,7 @@ export type DriftKind =
   | "field-path"
   | "scoped-link"
   | "ledger-lifecycle-field"
+  | "ledger-schema-slice-pointer"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1310,15 +1306,6 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * Return the runtime batch lifecycle fields by subtracting Stage 3's immutable
- * batch contract keys from the helper-owned ledger batch key set.
- */
-function lifecycleBatchFields(): string[] {
-  return [...LEDGER_BATCH_KEYS]
-    .filter((key) => !BATCH_KEYS.has(key))
-    .sort((a, b) => a.localeCompare(b));
-}
-
 /**
  * Extract a markdown section body by heading-label pattern. Returns `null`
  * when no matching heading exists so callers can emit a section-missing
@@ -1358,21 +1345,49 @@ function markdownSection(text: string, headingLabel: string): string | null {
   );
 }
 
-/** True when a doc region mentions a field as a standalone snake_case token. */
-function regionMentionsField(region: string, field: string): boolean {
-  const tokenRe = new RegExp(
-    `(?<![A-Za-z0-9_])${escapeRegExp(field)}(?![A-Za-z0-9_])`,
+function regionMentionsContractSliceCommand(
+  region: string,
+  slice: string,
+): boolean {
+  const commandRe = new RegExp(
+    `cli\\.ts\\s+contract\\s+${escapeRegExp(slice)}\\s+--json`,
   );
-  return tokenRe.test(region);
+  return commandRe.test(region);
 }
 
-/** True when a section lists a lifecycle field as a markdown bullet field. */
-function regionMentionsFieldBullet(region: string, field: string): boolean {
-  const bulletRe = new RegExp(
-    `^\\s*[-*]\\s+\`${escapeRegExp(field)}\`\\s*:`,
-    "m",
+function ledgerLifecycleSliceName(facts: ContractFacts): string {
+  const slice = facts.contractSlices.find(
+    (candidate) =>
+      candidate.includes("ledger") &&
+      candidate.includes("lifecycle") &&
+      candidate.endsWith("_fields"),
   );
-  return bulletRe.test(region);
+  if (!slice) {
+    throw new Error(
+      "contract-drift ledger schema check: live CLI help has no ledger lifecycle field slice.",
+    );
+  }
+  return slice;
+}
+
+function ledgerSchemaPointerSlices(facts: ContractFacts): string[] {
+  const slices = facts.contractSlices.filter(
+    (slice) => slice.endsWith("_fields") || slice.endsWith("_types"),
+  );
+  if (slices.length === 0) {
+    throw new Error(
+      "contract-drift ledger schema check: live CLI help has no field/type slices for ledger schema docs to point at.",
+    );
+  }
+  return slices;
+}
+
+async function loadContractSliceValues(
+  cliPath: string,
+  slice: string,
+): Promise<string[]> {
+  const data = await readCliData(cliPath, ["contract", slice, "--json"]);
+  return expectStringArray(data.values, `contract ${slice} data.values`);
 }
 
 /**
@@ -1386,15 +1401,16 @@ function regionMentionsFieldBullet(region: string, field: string): boolean {
 export type LedgerLifecycleFieldDriftOptions = {
   /** Repo root that ledger docs resolve against. */
   repoRoot?: string;
+  /** CLI path forwarded to live contract-slice reads. */
+  cliPath?: string;
 };
 
 /**
- * Cross-check the ledger template and ledger/helper reference against the
- * runtime-owned batch lifecycle field set.
+ * Cross-check ledger schema docs against live CLI facts.
  *
  * @param opts - Optional repo root override for fixture tests.
- * @returns Field-presence drift findings. Empty means the docs mention every
- * helper-owned lifecycle field.
+ * @returns Drift findings. Empty means the template still points at the
+ * lifecycle field slice and the helper reference points at emitted slices.
  *
  * @example
  * ```typescript
@@ -1406,8 +1422,20 @@ export async function checkLedgerLifecycleFieldDrift(
   opts: LedgerLifecycleFieldDriftOptions = {},
 ): Promise<DriftFinding[]> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const cliPath = opts.cliPath ?? defaultCliPath();
   const findings: DriftFinding[] = [];
-  const lifecycleFields = lifecycleBatchFields();
+  const facts = await loadContractFacts({ cliPath });
+  const lifecycleSlice = ledgerLifecycleSliceName(facts);
+  const pointerSlices = ledgerSchemaPointerSlices(facts);
+  const pointerSliceValues = new Map<string, string[]>();
+  for (const slice of pointerSlices) {
+    pointerSliceValues.set(slice, await loadContractSliceValues(cliPath, slice));
+  }
+  if (!pointerSliceValues.has(lifecycleSlice)) {
+    throw new Error(
+      `contract-drift ledger schema check: live CLI help has lifecycle slice "${lifecycleSlice}" but it is not part of the ledger schema pointer set.`,
+    );
+  }
 
   const templateText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_TEMPLATE_REL),
@@ -1424,44 +1452,45 @@ export async function checkLedgerLifecycleFieldDrift(
   if (templateBatchSection === null) {
     findings.push({
       doc: LEDGER_TEMPLATE_REL,
-      kind: "ledger-lifecycle-field",
+      kind: "ledger-schema-slice-pointer",
       claim: "## Batches",
-      reason: `ledger template is missing the canonical \`## Batches\` section; lifecycle field drift cannot be checked.`,
+      reason: `ledger template is missing the canonical \`## Batches\` section; lifecycle slice pointer drift cannot be checked.`,
     });
   }
-  const ledgerBatchFieldSection = markdownSectionByHeadingPattern(
+  const schemaFactsSection = markdownSectionByHeadingPattern(
     ledgerText,
-    /`## Batches`\s+entry fields/i,
+    /runtime-owned schema facts/i,
   );
-  if (ledgerBatchFieldSection === null) {
+  if (schemaFactsSection === null) {
     findings.push({
       doc: LEDGER_DOC_REL,
-      kind: "ledger-lifecycle-field",
-      claim: "`## Batches` entry fields",
-      reason: `ledger-and-helper.md is missing the canonical \`\`## Batches\`\` entry fields section; lifecycle field drift cannot be checked.`,
+      kind: "ledger-schema-slice-pointer",
+      claim: "Runtime-owned schema facts",
+      reason: `ledger-and-helper.md is missing the runtime-owned schema facts section; ledger schema slice pointers cannot be checked.`,
     });
   }
-  for (const field of lifecycleFields) {
+  if (
+    templateBatchSection !== null &&
+    !regionMentionsContractSliceCommand(templateBatchSection, lifecycleSlice)
+  ) {
+    findings.push({
+      doc: LEDGER_TEMPLATE_REL,
+      kind: "ledger-schema-slice-pointer",
+      claim: lifecycleSlice,
+      reason: `ledger template Batches section does not point to \`cli.ts contract ${lifecycleSlice} --json\`.`,
+    });
+  }
+
+  for (const slice of pointerSlices) {
     if (
-      templateBatchSection !== null &&
-      !regionMentionsField(templateBatchSection, field)
-    ) {
-      findings.push({
-        doc: LEDGER_TEMPLATE_REL,
-        kind: "ledger-lifecycle-field",
-        claim: field,
-        reason: `ledger template Batches section does not mention helper-owned lifecycle field \`${field}\`.`,
-      });
-    }
-    if (
-      ledgerBatchFieldSection !== null &&
-      !regionMentionsFieldBullet(ledgerBatchFieldSection, field)
+      schemaFactsSection !== null &&
+      !regionMentionsContractSliceCommand(schemaFactsSection, slice)
     ) {
       findings.push({
         doc: LEDGER_DOC_REL,
-        kind: "ledger-lifecycle-field",
-        claim: field,
-        reason: `ledger-and-helper.md batch entry field list does not mention helper-owned lifecycle field \`${field}\`.`,
+        kind: "ledger-schema-slice-pointer",
+        claim: slice,
+        reason: `ledger-and-helper.md runtime-owned schema facts section does not point to \`cli.ts contract ${slice} --json\`.`,
       });
     }
   }
@@ -1692,7 +1721,7 @@ function contractClaimCount(claims: DocClaims): number {
 
 /**
  * Run the runtime contract-drift check over the scoped operator docs plus
- * the U7 ledger lifecycle surfaces, then report aggregated drift findings.
+ * the ledger schema surfaces, then report aggregated drift findings.
  *
  * Pipeline (composes batches 1-3, re-implements none of them):
  *  1. Load the authoritative contract facts ONCE via `loadContractFacts()`
@@ -1703,7 +1732,7 @@ function contractClaimCount(claims: DocClaims): number {
  *     aggregate the findings. ALL docs are processed — the check never
  *     short-circuits at the first doc with drift.
  *  3. Run the first-run-gotchas relationship check ONCE (batch 3), then the
- *     U7 ledger lifecycle field check, and aggregate their findings.
+ *     ledger schema contract check, and aggregate their findings.
  *
  * `ok` is true exactly when zero findings were collected. Read-only (AC6):
  * the orchestrator only reads docs and spawns the read-only CLI; it performs
@@ -1764,7 +1793,12 @@ export async function checkContractDrift(
 
   // The deterministic control-plane relationship the workflow relies on.
   findings.push(...(await checkGotchasRelationship({ repoRoot })));
-  findings.push(...(await checkLedgerLifecycleFieldDrift({ repoRoot })));
+  findings.push(
+    ...(await checkLedgerLifecycleFieldDrift({
+      repoRoot,
+      cliPath: opts.cliPath,
+    })),
+  );
 
   return { ok: findings.length === 0, findings };
 }
