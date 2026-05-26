@@ -124,6 +124,45 @@ export function renderLedgerInit(input: LedgerInitInput): LedgerInitResult {
   };
 }
 
+/**
+ * Public LedgerInitRenderError codes. Keeping this list pinned at the
+ * type level lets the CLI error envelope mapping in `cli.ts` stay
+ * exhaustive without restating the strings.
+ */
+export const LEDGER_INIT_ERROR_CODES = [
+  "invalid-issue-number",
+  "missing-required-input",
+  "invalid-control-characters",
+  "invalid-started-at",
+  "invalid-ac-source",
+  "missing-acceptance-criteria",
+  "empty-acceptance-criterion",
+] as const;
+export type LedgerInitErrorCode = (typeof LEDGER_INIT_ERROR_CODES)[number];
+
+function hasControlCharacters(value: string): boolean {
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function isIso8601Timestamp(value: string): boolean {
+  // YYYY-MM-DD"T"HH:MM:SS(.fff)?(Z|±HH:MM). Mirrors the format the existing
+  // tests already pass and the format `new Date(...).toISOString()` emits,
+  // plus a numeric offset alternative ("+10:00").
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed);
+}
+
 function validateInput(input: LedgerInitInput): void {
   if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0) {
     throw new LedgerInitRenderError(
@@ -143,6 +182,18 @@ function validateInput(input: LedgerInitInput): void {
         `ledger-init requires non-empty ${label}`,
       );
     }
+    if (hasControlCharacters(value)) {
+      throw new LedgerInitRenderError(
+        "invalid-control-characters",
+        `ledger-init ${label} must not contain embedded newlines or control characters`,
+      );
+    }
+  }
+  if (!isIso8601Timestamp(input.startedAt)) {
+    throw new LedgerInitRenderError(
+      "invalid-started-at",
+      "ledger-init started_at must be an ISO-8601 timestamp (e.g. 2026-05-27T07:00:00+10:00 or 2026-05-27T07:00:00Z)",
+    );
   }
   if (!isAcSource(input.acSource)) {
     throw new LedgerInitRenderError(
@@ -161,6 +212,12 @@ function validateInput(input: LedgerInitInput): void {
       throw new LedgerInitRenderError(
         "empty-acceptance-criterion",
         "ledger-init --ac values must be non-empty",
+      );
+    }
+    if (hasControlCharacters(criterion)) {
+      throw new LedgerInitRenderError(
+        "invalid-control-characters",
+        "ledger-init --ac values must not contain embedded newlines or control characters",
       );
     }
   }

@@ -1298,6 +1298,88 @@ describe("ledger-init command", () => {
     );
     expect(exit_code).toBe(64);
   });
+
+  function withArg(
+    flag: string,
+    value: string,
+    base: readonly string[] = argv,
+  ): string[] {
+    const out: string[] = [];
+    let replaced = false;
+    for (let i = 0; i < base.length; i++) {
+      if (base[i] === flag && !replaced) {
+        out.push(flag, value);
+        i += 1;
+        replaced = true;
+      } else {
+        out.push(base[i] as string);
+      }
+    }
+    if (!replaced) out.push(flag, value);
+    return out;
+  }
+
+  test("non-ISO --started-at routes to invalid-started-at public code", () => {
+    const { envelope, exit_code } = invoke(
+      withArg("--started-at", "yesterday"),
+    );
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-started-at",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("embedded newline in --issue-title routes to invalid-control-characters", () => {
+    const { envelope, exit_code } = invoke(
+      withArg("--issue-title", "Title\nwith newline"),
+    );
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-control-characters",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("invalid --ac-source routes through CLI parser to missing-required-arg", () => {
+    const { envelope, exit_code } = invoke(
+      withArg("--ac-source", "definitely-not-a-source"),
+    );
+    expect(envelope.status).toBe("error");
+    // Flag-layer rejection: parser owns enum validation, returns its own
+    // diagnostic code rather than the renderer's invalid-ac-source.
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("empty --ac value routes to empty-acceptance-criterion", () => {
+    const argvWithEmptyAc = [
+      "ledger-init",
+      "--issue-number",
+      "77",
+      "--issue-title",
+      "Title",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/77",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "gold-standard",
+      "--ac",
+      "   ",
+      "--json",
+    ];
+    const { envelope, exit_code } = invoke(argvWithEmptyAc);
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "empty-acceptance-criterion",
+    );
+    expect(exit_code).toBe(64);
+  });
 });
 
 // ---------------- packet command (U5) ----------------

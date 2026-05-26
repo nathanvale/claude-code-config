@@ -69,6 +69,8 @@ import {
   withFailMode,
 } from "./lib/ledger";
 import {
+  LEDGER_INIT_ERROR_CODES,
+  type LedgerInitErrorCode,
   LedgerInitRenderError,
   isAcSource,
   renderLedgerInit,
@@ -332,6 +334,13 @@ const ERROR_CODES = [
   { code: "missing-packet-flag", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "packet-render-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
   { code: "ledger-init-render-failed", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-issue-number", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "missing-required-input", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-control-characters", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-started-at", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-ac-source", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "missing-acceptance-criteria", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "empty-acceptance-criterion", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "ledger-validation-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
   { code: "unexpected-error", exit_code: 70, severity: "fatal", recoverability: "unrecoverable", retryable: false, hint: { action: "contact_support" } },
 ] as const satisfies readonly ErrorCodeEntry[];
@@ -1144,12 +1153,13 @@ function emitLedgerInitError(
     return { exit_code: 64 };
   }
   if (error instanceof LedgerInitRenderError) {
+    const publicCode = mapLedgerInitErrorCode(error.code);
     writeJson(
       ctx.stdoutWriter,
       createErrorEnvelope({
         runId: ctx.runId,
         startedAtMs: ctx.startedAtMs,
-        code: "ledger-init-render-failed",
+        code: publicCode,
         message: error.message,
         exitCode: 64,
         hint: {
@@ -1161,6 +1171,14 @@ function emitLedgerInitError(
     return { exit_code: 64 };
   }
   return emitErrorFromException(ctx, "ledger-init", error);
+}
+
+function mapLedgerInitErrorCode(
+  code: string,
+): LedgerInitErrorCode | "ledger-init-render-failed" {
+  return (LEDGER_INIT_ERROR_CODES as readonly string[]).includes(code)
+    ? (code as LedgerInitErrorCode)
+    : "ledger-init-render-failed";
 }
 
 function kebabCase(value: string): string {

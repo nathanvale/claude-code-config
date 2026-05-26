@@ -104,3 +104,114 @@ describe("ledger init renderer", () => {
     ).toThrow(LedgerInitRenderError);
   });
 });
+
+describe("ledger init validation contract", () => {
+  function call(overrides: Partial<Parameters<typeof renderLedgerInit>[0]>) {
+    return () =>
+      renderLedgerInit({
+        issueNumber: 7,
+        issueTitle: "Title",
+        issueUrl: "https://github.com/acme/widgets/issues/7",
+        targetRepo: "acme/widgets",
+        startedAt: "2026-05-27T07:00:00+10:00",
+        acSource: "pasted",
+        acceptanceCriteria: ["Behaviour"],
+        ...overrides,
+      });
+  }
+
+  function expectErrorCode(
+    invocation: () => unknown,
+    expectedCode: string,
+  ): void {
+    try {
+      invocation();
+    } catch (error) {
+      if (!(error instanceof LedgerInitRenderError)) {
+        throw new Error(
+          `expected LedgerInitRenderError, got ${(error as Error).name}: ${(error as Error).message}`,
+        );
+      }
+      expect(error.code).toBe(expectedCode);
+      return;
+    }
+    throw new Error("expected LedgerInitRenderError, got no throw");
+  }
+
+  test("invalid issue number returns invalid-issue-number", () => {
+    expectErrorCode(call({ issueNumber: 0 }), "invalid-issue-number");
+    expectErrorCode(call({ issueNumber: -1 }), "invalid-issue-number");
+    expectErrorCode(call({ issueNumber: 1.5 }), "invalid-issue-number");
+  });
+
+  test("whitespace-only required input returns missing-required-input", () => {
+    expectErrorCode(call({ issueTitle: "   " }), "missing-required-input");
+    expectErrorCode(call({ targetRepo: "" }), "missing-required-input");
+  });
+
+  test("embedded newline in any required input returns invalid-control-characters", () => {
+    expectErrorCode(
+      call({ issueTitle: "Title\nwith newline" }),
+      "invalid-control-characters",
+    );
+    expectErrorCode(
+      call({ issueUrl: "https://example.com/\nbad" }),
+      "invalid-control-characters",
+    );
+    expectErrorCode(
+      call({ targetRepo: "acme/\nwidgets" }),
+      "invalid-control-characters",
+    );
+    expectErrorCode(
+      call({ acceptanceCriteria: ["good", "bad\nrow"] }),
+      "invalid-control-characters",
+    );
+  });
+
+  test("non-printable control character (NUL, DEL) returns invalid-control-characters", () => {
+    expectErrorCode(
+      call({ issueTitle: "Title\x00with NUL" }),
+      "invalid-control-characters",
+    );
+    expectErrorCode(
+      call({ targetRepo: "acme\x7fwidgets" }),
+      "invalid-control-characters",
+    );
+  });
+
+  test("non-ISO started_at returns invalid-started-at", () => {
+    expectErrorCode(
+      call({ startedAt: "2026-05-27" }),
+      "invalid-started-at",
+    );
+    expectErrorCode(
+      call({ startedAt: "yesterday" }),
+      "invalid-started-at",
+    );
+    expectErrorCode(
+      call({ startedAt: "2026/05/27 07:00:00" }),
+      "invalid-started-at",
+    );
+  });
+
+  test("ISO started_at with Z or numeric offset succeeds", () => {
+    expect(() => call({ startedAt: "2026-05-27T07:00:00Z" })()).not.toThrow();
+    expect(() =>
+      call({ startedAt: "2026-05-27T07:00:00.123+10:00" })(),
+    ).not.toThrow();
+  });
+
+  test("invalid ac_source returns invalid-ac-source", () => {
+    expectErrorCode(
+      call({ acSource: "bogus" as never }),
+      "invalid-ac-source",
+    );
+  });
+
+  test("empty ac value returns empty-acceptance-criterion", () => {
+    expectErrorCode(
+      call({ acceptanceCriteria: ["valid", "   "] }),
+      "empty-acceptance-criterion",
+    );
+  });
+});

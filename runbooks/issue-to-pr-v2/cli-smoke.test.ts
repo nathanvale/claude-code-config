@@ -587,6 +587,54 @@ describe("Block 1: Envelope-shape invariants (cross-command)", () => {
     );
   });
 
+  test("ledger-init non-ISO --started-at routes to invalid-started-at at process boundary", async () => {
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke ledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "not-an-iso-timestamp",
+      "--ac-source",
+      "pasted",
+      "--ac",
+      "Smoke AC",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-started-at");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init embedded newline in --issue-title routes to invalid-control-characters at process boundary", async () => {
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke\nledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "pasted",
+      "--ac",
+      "Smoke AC",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-control-characters");
+    expect(result.exitCode).toBe(64);
+  });
+
   test("envelope schema_version is the literal '1' string for both success and error", async () => {
     const success = await runCli(["contract", "route_ids", "--json"]);
     expect(success.envelope.schema_version).toBe("1");
@@ -1156,12 +1204,19 @@ describe("Block 8: Every documented error_code", () => {
     const codes = helpErrorCodes().map((e) => e.code).sort();
     expect(codes).toEqual(
       [
+        "empty-acceptance-criterion",
+        "invalid-ac-source",
+        "invalid-control-characters",
+        "invalid-issue-number",
+        "invalid-started-at",
         "ledger-validation-failed",
         "ledger-init-render-failed",
+        "missing-acceptance-criteria",
         "missing-command",
         "missing-json-flag",
         "missing-packet-flag",
         "missing-required-arg",
+        "missing-required-input",
         "packet-render-failed",
         "unexpected-error",
         "unknown-command",
