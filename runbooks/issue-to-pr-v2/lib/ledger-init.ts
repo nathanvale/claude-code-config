@@ -5,6 +5,7 @@ import {
 } from "./contract";
 import { sha256Digest } from "./digest";
 import { renderScaffold } from "./scaffolds";
+import { quoteYamlScalar } from "./yaml-scalar";
 
 export const LEDGER_INIT_SECTION_ORDER = [
   "Acceptance criteria",
@@ -169,11 +170,3 @@ function fencedYaml(body: string): string {
   return ["```yaml", body.trimEnd(), "```"].join("\n");
 }
 
-function quoteYamlScalar(value: string): string {
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    .replace(/"/g, '\\"')}"`;
-}

@@ -77,6 +77,7 @@ import {
   VALIDATOR_WAVE_OUTCOMES,
 } from "./contract";
 import { contractDigest, sha256Digest } from "./digest";
+import { quoteYamlScalar } from "./yaml-scalar";
 
 export interface BuilderAttempt {
   attempt_type: string;
@@ -2242,15 +2243,6 @@ function readAcceptanceCriteriaDigestPayload(ledgerPath: string): string {
     fail(`ledger ${ledgerPath} '## Acceptance criteria' section has no checkbox items`);
   }
   return payload;
-}
-
-function quoteYamlScalar(value: string): string {
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    .replace(/"/g, '\\"')}"`;
 }
 
 function countAcsInLedger(ledgerPath: string): number {

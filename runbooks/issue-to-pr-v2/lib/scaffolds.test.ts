@@ -1,3 +1,4 @@
+import { YAML } from "bun";
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -395,5 +396,62 @@ describe("scaffolds: Proposer and Validator return envelopes", () => {
     expect(body).toContain("residual_risks: []");
     expect(body).toContain("testing_gaps: []");
     expect(body).toContain("cli.ts scaffold ledger-finding-row --json");
+  });
+});
+
+describe("scaffolds: runtime renderer parseability", () => {
+  test("every scaffold body parses through Bun.YAML.parse", () => {
+    for (const id of SCAFFOLD_IDS) {
+      const { body } = renderScaffold(id);
+      let parsed: unknown;
+      try {
+        parsed = YAML.parse(body);
+      } catch (err) {
+        throw new Error(
+          `scaffold "${id}" failed YAML.parse: ${(err as Error).message}\n--- body ---\n${body}`,
+        );
+      }
+      expect(parsed).toBeDefined();
+    }
+  });
+
+  test("ledger-empty-batches parses to a list, not the string 'null'", () => {
+    const parsed = YAML.parse(renderScaffold("ledger-empty-batches").body) as {
+      batches: unknown;
+    };
+    expect(Array.isArray(parsed.batches)).toBe(true);
+    expect((parsed.batches as unknown[]).length).toBe(0);
+  });
+
+  test("ledger-empty-findings-data parses to an empty mapping member", () => {
+    const parsed = YAML.parse(
+      renderScaffold("ledger-empty-findings-data").body,
+    ) as {
+      findings: unknown;
+    };
+    expect(Array.isArray(parsed.findings)).toBe(true);
+  });
+
+  test("nested scaffold (validator-builder-evidence) parses to a mapping with the inner key", () => {
+    const parsed = YAML.parse(
+      renderScaffold("validator-builder-evidence").body,
+    ) as {
+      builder_evidence: Record<string, unknown>;
+    };
+    expect(typeof parsed.builder_evidence).toBe("object");
+    expect(parsed.builder_evidence).not.toBeNull();
+  });
+
+  test("Proposer fail-stop envelope parses with empty list fields, not 'null'", () => {
+    const parsed = YAML.parse(
+      renderScaffold("proposer-fail-stop-envelope").body,
+    ) as {
+      status: string;
+      blockers: unknown;
+      probe_results: unknown;
+    };
+    expect(parsed.status).toBe("fail-stop");
+    expect(Array.isArray(parsed.blockers)).toBe(true);
+    expect(Array.isArray(parsed.probe_results)).toBe(true);
   });
 });

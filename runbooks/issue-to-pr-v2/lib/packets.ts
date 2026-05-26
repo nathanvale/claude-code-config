@@ -40,6 +40,10 @@ import {
   readLedgerSnapshot,
   withFailMode,
 } from "./ledger";
+import {
+  quoteYamlScalar as yamlString,
+  quoteYamlScalarList as yamlList,
+} from "./yaml-scalar";
 
 // ----- shared types -----------------------------------------------------
 
@@ -1765,20 +1769,6 @@ function appendBatchYaml(lines: string[], b: Batch, indent: string): void {
   lines.push(
     `${indent}rationale: ${b.rationale === null ? "null" : yamlString(b.rationale)}`,
   );
-}
-
-function yamlString(value: string): string {
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    .replace(/"/g, '\\"')}"`;
-}
-
-function yamlList(values: string[]): string {
-  if (values.length === 0) return "[]";
-  return `[${values.map((v) => yamlString(v)).join(", ")}]`;
 }
 
 // ----- helpers: prose framing pointers (mirror template prose) --------

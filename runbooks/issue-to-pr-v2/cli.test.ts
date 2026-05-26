@@ -611,7 +611,9 @@ describe("AC5: contract emits runtime contract slices", () => {
       const catalogEntry = catalogData.values.find(
         (entry) => entry.scaffold_id === id,
       );
-      expect(catalogEntry).toBeDefined();
+      if (!catalogEntry) {
+        throw new Error(`scaffold_catalog missing entry for ${id}`);
+      }
 
       const { envelope: scaffoldEnvelope } = invoke(["scaffold", id, "--json"]);
       const scaffoldData = scaffoldEnvelope.data as {
@@ -622,11 +624,11 @@ describe("AC5: contract emits runtime contract slices", () => {
         marker?: string;
         body: string;
       };
-      expect(scaffoldData.scaffold_id).toBe(catalogEntry?.scaffold_id);
-      expect(scaffoldData.output_kind).toBe(catalogEntry?.output_kind);
-      expect(scaffoldData.source).toBe(catalogEntry?.source);
-      expect(scaffoldData.ordering).toBe(catalogEntry?.ordering);
-      expect(scaffoldData.marker).toBe(catalogEntry?.marker);
+      expect(scaffoldData.scaffold_id).toBe(catalogEntry.scaffold_id);
+      expect(scaffoldData.output_kind).toBe(catalogEntry.output_kind);
+      expect(scaffoldData.source).toBe(catalogEntry.source);
+      expect(scaffoldData.ordering).toBe(catalogEntry.ordering);
+      expect(scaffoldData.marker).toBe(catalogEntry.marker);
     }
   });
 
