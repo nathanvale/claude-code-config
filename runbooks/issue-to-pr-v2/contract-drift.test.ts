@@ -1296,26 +1296,39 @@ describe("issue 114/115/116/117: scaffold docs stay aligned with runtime rendere
     }
   });
 
-  test("scaffold inventory classifies prose-owned YAML", () => {
+  test("scaffold inventory carries no prose-owned-shape entries", () => {
     const inventory = scaffoldInventoryClassifications();
+    for (const entry of inventory) {
+      expect(entry.classification).not.toBe("prose-owned-shape");
+    }
+  });
 
+  test("Proposer and Validator return envelopes are pointer-only in active templates", () => {
+    const inventory = scaffoldInventoryClassifications();
     expect(inventory).toContainEqual(
       expect.objectContaining({
         doc: proposerTemplatePath,
-        classification: "prose-owned-shape",
-        fenceContains: "status: candidate-patch-batch",
+        classification: "visible-command-pointer",
+        scaffoldId: "proposer-success-envelope",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: proposerTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "proposer-fail-stop-envelope",
       }),
     );
     expect(inventory).toContainEqual(
       expect.objectContaining({
         doc: validatorEnvelopeTemplatePath,
-        classification: "prose-owned-shape",
-        fenceContains: "reviewer: <persona>",
+        classification: "visible-command-pointer",
+        scaffoldId: "validator-return-envelope",
       }),
     );
   });
 
-  test("missing predecessor scaffold id is reported by inventory", async () => {
+  test("inventory entry naming an unknown scaffold id is reported by drift", async () => {
     const findings = await checkScaffoldInventoryDrift({
       repoRoot,
       scaffoldIds: SCAFFOLD_IDS.filter((id) => id !== "builder-attempt-compact"),
@@ -1323,7 +1336,6 @@ describe("issue 114/115/116/117: scaffold docs stay aligned with runtime rendere
 
     expect(findings).toContainEqual(
       expect.objectContaining({
-        doc: "runbooks/issue-to-pr-v2/lib/scaffolds.ts",
         kind: "scaffold-inventory",
         claim: "builder-attempt-compact",
       }),

@@ -1206,10 +1206,7 @@ type ScaffoldSurface = {
 };
 
 type ScaffoldInventoryClassification =
-  | "generated-block"
-  | "checked-pointer"
   | "visible-command-pointer"
-  | "prose-owned-shape"
   | "removed";
 
 type ScaffoldInventoryEntry = {
@@ -1217,28 +1214,8 @@ type ScaffoldInventoryEntry = {
   coordinate: string;
   classification: ScaffoldInventoryClassification;
   scaffoldId?: string;
-  requiredText?: string;
-  fenceContains?: string;
   forbiddenText?: string;
 };
-
-const PREREQUISITE_SCAFFOLD_IDS = [
-  "ce-plan-candidate-batch",
-  "replacement-candidate-batch",
-  "patch-proposal-candidate-batch",
-  "builder-return-envelope",
-  "builder-attempt-compact",
-  "validator-builder-evidence",
-  "validator-inline-evidence",
-  "ledger-empty-batches",
-  "ledger-empty-findings-data",
-  "ledger-batch-lifecycle-defaults",
-  "ledger-finding-row",
-  "notes-implementation-attempt-checkpoint",
-  "notes-validator-wave-completed",
-  "notes-runbook-version-skew-continuation",
-  "workflow-learnings-empty",
-] as const;
 
 const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
@@ -1315,9 +1292,9 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: PROPOSER_TEMPLATE_REL,
-    coordinate: "### Success: one candidate patch-batch",
-    classification: "prose-owned-shape",
-    fenceContains: "status: candidate-patch-batch",
+    coordinate: "### Success: one candidate patch-batch / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "proposer-success-envelope",
   },
   {
     doc: PROPOSER_TEMPLATE_REL,
@@ -1327,9 +1304,9 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: PROPOSER_TEMPLATE_REL,
-    coordinate: "### Fail-stop",
-    classification: "prose-owned-shape",
-    fenceContains: "status: fail-stop",
+    coordinate: "### Fail-stop / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "proposer-fail-stop-envelope",
   },
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
@@ -1345,21 +1322,15 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
-    coordinate: "Orchestrator-inline evidence selector",
-    classification: "prose-owned-shape",
-    fenceContains: "evidence_source: orchestrator_inline",
-  },
-  {
-    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
     coordinate: "## Packet slots (orchestrator → Validator) / Inline evidence pointer",
     classification: "visible-command-pointer",
     scaffoldId: "validator-inline-evidence",
   },
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
-    coordinate: "## Return envelope",
-    classification: "prose-owned-shape",
-    fenceContains: "reviewer: <persona>",
+    coordinate: "## Return envelope / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-return-envelope",
   },
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
@@ -1487,15 +1458,11 @@ export function scaffoldInventoryClassifications(): readonly ScaffoldInventoryEn
   return SCAFFOLD_INVENTORY;
 }
 
-function scaffoldSurfacesFromInventory(
-  classification:
-    | "generated-block"
-    | "checked-pointer"
-    | "visible-command-pointer",
-): ScaffoldSurface[] {
+function visibleCommandSurfaces(): ScaffoldSurface[] {
   const byDoc = new Map<string, string[]>();
   for (const entry of SCAFFOLD_INVENTORY) {
-    if (entry.classification !== classification || !entry.scaffoldId) continue;
+    if (entry.classification !== "visible-command-pointer" || !entry.scaffoldId)
+      continue;
     const ids = byDoc.get(entry.doc) ?? [];
     ids.push(entry.scaffoldId);
     byDoc.set(entry.doc, ids);
@@ -1503,46 +1470,24 @@ function scaffoldSurfacesFromInventory(
   return [...byDoc].map(([doc, ids]) => ({ doc, ids }));
 }
 
-const GENERATED_SCAFFOLD_SURFACES =
-  scaffoldSurfacesFromInventory("generated-block");
-const SCAFFOLD_POINTER_SURFACES =
-  scaffoldSurfacesFromInventory("checked-pointer");
-const VISIBLE_SCAFFOLD_COMMAND_SURFACES =
-  scaffoldSurfacesFromInventory("visible-command-pointer");
+const VISIBLE_SCAFFOLD_COMMAND_SURFACES = visibleCommandSurfaces();
 
 /**
- * Returns the set of scaffold ids referenced across any drift-check surface
- * (generated-block, pointer, or command). A scaffold id in {@link SCAFFOLD_IDS}
- * absent from this set has no drift enforcement and would silently skip
- * surface-level checks — see the SSOT exhaustiveness test in
+ * Returns the set of scaffold ids referenced by the visible-command-pointer
+ * inventory. A scaffold id in {@link SCAFFOLD_IDS} absent from this set has
+ * no drift enforcement — see the SSOT exhaustiveness test in
  * `contract-drift.test.ts`.
  */
 export function scaffoldIdsCoveredBySurfaces(): Set<string> {
   const covered = new Set<string>();
-  for (const surface of GENERATED_SCAFFOLD_SURFACES) {
-    for (const id of surface.ids) covered.add(id);
-  }
-  for (const surface of SCAFFOLD_POINTER_SURFACES) {
-    for (const id of surface.ids) covered.add(id);
-  }
   for (const surface of VISIBLE_SCAFFOLD_COMMAND_SURFACES) {
     for (const id of surface.ids) covered.add(id);
   }
   return covered;
 }
 
-function countById(ids: readonly string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
-  return counts;
-}
-
 const SCAFFOLD_COMMAND_SURFACE_RELS = [
-  ...new Set([
-    ...GENERATED_SCAFFOLD_SURFACES.map((surface) => surface.doc),
-    ...SCAFFOLD_POINTER_SURFACES.map((surface) => surface.doc),
-    ...VISIBLE_SCAFFOLD_COMMAND_SURFACES.map((surface) => surface.doc),
-  ]),
+  ...new Set(VISIBLE_SCAFFOLD_COMMAND_SURFACES.map((surface) => surface.doc)),
 ] as const;
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
@@ -2059,22 +2004,9 @@ export async function checkScaffoldInventoryDrift(
   const runtimeScaffoldIds = new Set(opts.scaffoldIds ?? SCAFFOLD_IDS);
   const findings: DriftFinding[] = [];
 
-  for (const scaffoldId of PREREQUISITE_SCAFFOLD_IDS) {
-    if (runtimeScaffoldIds.has(scaffoldId)) continue;
-    findings.push({
-      doc: "runbooks/issue-to-pr-v2/lib/scaffolds.ts",
-      kind: "scaffold-inventory",
-      claim: scaffoldId,
-      reason:
-        "required predecessor scaffold id is missing from the runtime scaffold catalog; rebase or land prerequisite scaffold slices before sealing inventory.",
-    });
-  }
-
   for (const entry of SCAFFOLD_INVENTORY) {
     if (
-      (entry.classification === "generated-block" ||
-        entry.classification === "checked-pointer" ||
-        entry.classification === "visible-command-pointer") &&
+      entry.classification === "visible-command-pointer" &&
       entry.scaffoldId &&
       !runtimeScaffoldIds.has(entry.scaffoldId)
     ) {
@@ -2095,75 +2027,33 @@ export async function checkScaffoldInventoryDrift(
       "contract-drift scaffold inventory check",
     );
     const entries = SCAFFOLD_INVENTORY.filter((entry) => entry.doc === doc);
-    const generatedIds = new Set(
-      entries
-        .filter((entry) => entry.classification === "generated-block")
-        .map((entry) => entry.scaffoldId)
-        .filter((id): id is string => typeof id === "string"),
-    );
-    const proseFences = entries.filter(
-      (entry) =>
-        entry.classification === "prose-owned-shape" && entry.fenceContains,
-    );
-    const checkedPointerIds = entries
-      .filter((entry) => entry.classification === "checked-pointer")
-      .map((entry) => entry.scaffoldId)
-      .filter((id): id is string => typeof id === "string");
     const generatedBlocks = extractGeneratedScaffoldBlocks(text);
     const hiddenPointers = extractScaffoldPointers(text);
     const yamlFences = extractYamlFences(text);
 
     for (const block of generatedBlocks) {
-      if (generatedIds.has(block.id)) continue;
       findings.push({
         doc,
         kind: "scaffold-inventory",
         claim: block.id,
         line: block.line,
         reason:
-          "generated-scaffold marker is not classified in the scaffold inventory.",
+          "generated-scaffold marker reintroduced in an active scoped surface; active templates must be pointer-only.",
       });
     }
 
     for (const pointer of hiddenPointers) {
-      if (checkedPointerIds.includes(pointer.id)) continue;
       findings.push({
         doc,
         kind: "scaffold-inventory",
         claim: pointer.id,
         line: pointer.line,
         reason:
-          "hidden scaffold-pointer marker is not classified in the scaffold inventory; use a visible `cli.ts scaffold <id> --json` pointer instead.",
+          "hidden scaffold-pointer marker reintroduced in an active scoped surface; use a visible `cli.ts scaffold <id> --json` pointer instead.",
       });
     }
 
     for (const entry of entries) {
-      if (
-        entry.classification === "prose-owned-shape" &&
-        entry.requiredText &&
-        !text.includes(entry.requiredText)
-      ) {
-        findings.push({
-          doc,
-          kind: "scaffold-inventory",
-          claim: entry.coordinate,
-          reason: `prose-owned inventory entry is missing required anchor text: ${entry.requiredText}`,
-        });
-      }
-
-      if (
-        entry.classification === "prose-owned-shape" &&
-        entry.fenceContains &&
-        !yamlFences.some((fence) => fence.body.includes(entry.fenceContains ?? ""))
-      ) {
-        findings.push({
-          doc,
-          kind: "scaffold-inventory",
-          claim: entry.coordinate,
-          reason: `prose-owned YAML shape is missing its inventoried fence anchor: ${entry.fenceContains}`,
-        });
-      }
-
       if (
         entry.classification === "removed" &&
         entry.forbiddenText &&
@@ -2179,29 +2069,25 @@ export async function checkScaffoldInventoryDrift(
       }
     }
 
-    for (const fence of yamlFences) {
-      const generatedBlock = generatedBlocks.find((block) =>
-        isInsideGeneratedBlock(fence, block),
-      );
-      if (generatedBlock && generatedIds.has(generatedBlock.id)) continue;
-
-      const isClassifiedProseFence = proseFences.some((entry) =>
-        fence.body.includes(entry.fenceContains ?? ""),
-      );
-      if (isClassifiedProseFence) continue;
-
-      findings.push({
-        doc,
-        kind: "scaffold-inventory",
-        claim: "unclassified-yaml-fence",
-        line: fence.line,
-        reason:
-          "fenced YAML block is not a generated scaffold block and is not classified as prose-owned in the scaffold inventory.",
-      });
+    if (isActiveTemplateDoc(doc)) {
+      for (const fence of yamlFences) {
+        findings.push({
+          doc,
+          kind: "scaffold-inventory",
+          claim: "unclassified-yaml-fence",
+          line: fence.line,
+          reason:
+            "fenced YAML block found in an active template; active templates must be pointer-only.",
+        });
+      }
     }
   }
 
   return findings;
+}
+
+function isActiveTemplateDoc(doc: string): boolean {
+  return doc.startsWith("runbooks/issue-to-pr-v2/templates/");
 }
 
 function scaffoldMarkers(text: string): ScaffoldMarker[] {
@@ -2353,136 +2239,6 @@ export async function checkGeneratedScaffoldBlocksDrift(
   const findings: DriftFinding[] = await checkScaffoldInventoryDrift({
     repoRoot,
   });
-
-  for (const surface of GENERATED_SCAFFOLD_SURFACES) {
-    const text = await readScopedDocOrThrow(
-      join(repoRoot, surface.doc),
-      surface.doc,
-      "contract-drift generated scaffold check",
-    );
-    const blocks = extractGeneratedScaffoldBlocks(text);
-    const presentScaffoldCounts = countById(blocks.map((block) => block.id));
-
-    for (const [scaffoldId, expectedCount] of countById(surface.ids)) {
-      if (!isScaffoldId(scaffoldId)) continue;
-      const presentCount = presentScaffoldCounts.get(scaffoldId) ?? 0;
-      if (presentCount >= expectedCount) continue;
-      findings.push({
-        doc: surface.doc,
-        kind: "generated-scaffold-block",
-        claim: scaffoldId,
-        reason: `missing generated-scaffold start marker for "${scaffoldId}"; expected ${expectedCount}, found ${presentCount}; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
-      });
-    }
-
-    for (const block of blocks) {
-      if (!isScaffoldId(block.id)) {
-        findings.push({
-          doc: surface.doc,
-          kind: "generated-scaffold-block",
-          claim: block.id,
-          line: block.line,
-          reason: `generated scaffold marker names unknown scaffold id "${block.id}".`,
-        });
-        continue;
-      }
-
-      const expectedSource = expectedGeneratedScaffoldSource(block.id);
-      if (block.source !== expectedSource) {
-        findings.push({
-          doc: surface.doc,
-          kind: "generated-scaffold-block",
-          claim: block.id,
-          line: block.line,
-          reason: `generated scaffold marker source is "${block.source}", expected "${expectedSource}".`,
-        });
-      }
-
-      if (block.body === null) {
-        findings.push({
-          doc: surface.doc,
-          kind: "generated-scaffold-block",
-          claim: block.id,
-          line: block.line,
-          reason: `generated scaffold marker is malformed: ${block.malformedReason}.`,
-        });
-        continue;
-      }
-
-      let expected: string;
-      try {
-        expected = renderScaffold(block.id).body;
-      } catch (err) {
-        if (err instanceof ScaffoldRenderError) {
-          findings.push({
-            doc: surface.doc,
-            kind: "generated-scaffold-block",
-            claim: block.id,
-            line: block.line,
-            reason: `runtime scaffold renderer for "${block.id}" threw: ${err.message}`,
-          });
-          continue;
-        }
-        throw err;
-      }
-      if (block.body !== expected) {
-        findings.push({
-          doc: surface.doc,
-          kind: "generated-scaffold-block",
-          claim: block.id,
-          line: block.line,
-          reason:
-            "generated scaffold block differs from the runtime scaffold renderer output.",
-        });
-      }
-    }
-  }
-
-  for (const surface of SCAFFOLD_POINTER_SURFACES) {
-    const text = await readScopedDocOrThrow(
-      join(repoRoot, surface.doc),
-      surface.doc,
-      "contract-drift scaffold pointer check",
-    );
-    const pointers = extractScaffoldPointers(text);
-    const presentScaffoldCounts = countById(pointers.map((pointer) => pointer.id));
-
-    for (const [scaffoldId, expectedCount] of countById(surface.ids)) {
-      if (!isScaffoldId(scaffoldId)) continue;
-      const presentCount = presentScaffoldCounts.get(scaffoldId) ?? 0;
-      if (presentCount >= expectedCount) continue;
-      findings.push({
-        doc: surface.doc,
-        kind: "scaffold-pointer",
-        claim: scaffoldId,
-        reason: `missing scaffold-pointer marker for "${scaffoldId}"; expected ${expectedCount}, found ${presentCount}; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
-      });
-    }
-
-    for (const pointer of pointers) {
-      if (!isScaffoldId(pointer.id)) {
-        findings.push({
-          doc: surface.doc,
-          kind: "scaffold-pointer",
-          claim: pointer.id,
-          line: pointer.line,
-          reason: `scaffold pointer marker names unknown scaffold id "${pointer.id}".`,
-        });
-        continue;
-      }
-
-      const expectedSource = expectedGeneratedScaffoldSource(pointer.id);
-      if (pointer.source !== expectedSource) {
-        findings.push({
-          doc: surface.doc,
-          kind: "scaffold-pointer",
-          claim: pointer.id,
-          line: pointer.line,
-          reason: `scaffold pointer marker source is "${pointer.source}", expected "${expectedSource}".`,
-        });
-      }
-    }
-  }
 
   for (const surface of VISIBLE_SCAFFOLD_COMMAND_SURFACES) {
     const text = await readScopedDocOrThrow(
