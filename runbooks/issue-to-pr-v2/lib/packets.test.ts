@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  BUILDER_ATTEMPT_FIELDS,
+  BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+  VALIDATOR_INLINE_EVIDENCE_FIELDS,
+} from "./contract";
+import {
   PacketRenderError,
   renderBuilderPacket,
   renderCePlanPacket,
@@ -144,6 +149,20 @@ function tempDirsCleanup(paths: string[]): void {
       // best-effort cleanup
     }
   }
+}
+
+function nestedFieldOrderUnder(body: string, parent: string): string[] {
+  const lines = body.split("\n");
+  const parentIndex = lines.findIndex((line) => line === `${parent}:`);
+  if (parentIndex === -1) return [];
+
+  const fields: string[] = [];
+  for (const line of lines.slice(parentIndex + 1)) {
+    if (!line.startsWith("  ")) break;
+    const field = line.match(/^ {2}([A-Za-z_][A-Za-z0-9_]*):/)?.[1];
+    if (field) fields.push(field);
+  }
+  return fields;
 }
 
 // =====================================================================
@@ -904,6 +923,54 @@ describe("Builder packet", () => {
         "Orchestrator-inline attempts are Builder attempts",
       );
     });
+
+    test("keeps prior Builder attempts compact and ledger-shaped", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches: [
+            "batches:",
+            "  - id: target",
+            "    name: \"Batch target\"",
+            "    goal: \"implement target\"",
+            "    files:",
+            "      - app/foo.ts",
+            "    depends_on: []",
+            "    execution_mode: tdd",
+            "    acceptance_tests:",
+            "      - \"AC 1 holds: behavior 1\"",
+            "    ac_mapping:",
+            "      - 1",
+            "    rationale: null",
+            "    status: pending",
+            "    builder_commits:",
+            "      - abc123",
+            "    builder_attempts:",
+            committedBuilderAttemptYaml({ commitSha: "abc123" }),
+            "    orchestrator_inline_attempts:",
+            "      - commit_sha: inline123",
+            "        files_touched:",
+            "          - app/foo.ts",
+            "        notes: \"inline note\"",
+            "    iterations: 1",
+            "    final_verdict: null",
+          ].join("\n"),
+        }),
+      );
+      const packet = renderBuilderPacket({
+        ledgerPath,
+        batchId: "target",
+        attemptType: "implementation",
+        now: FROZEN_TIME,
+      });
+      expect(packet.data.prior_builder_attempts).toHaveLength(1);
+      expect(Object.keys(packet.data.prior_builder_attempts[0])).toEqual([
+        ...BUILDER_ATTEMPT_FIELDS,
+      ]);
+      const blob = JSON.stringify(packet.data) + packet.packet_markdown;
+      expect(blob).not.toContain("orchestrator_inline_attempts");
+      expect(blob).not.toContain("inline123");
+      tempDirsCleanup([ledgerPath]);
+    });
   });
 
   // ---- determinism + dispatch evidence ----
@@ -1530,6 +1597,9 @@ describe("Validator packet", () => {
       if (packet.data.evidence_source !== "builder") {
         throw new Error("expected Builder evidence source");
       }
+      expect(Object.keys(packet.data.builder_evidence)).toEqual([
+        ...BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+      ]);
       expect(packet.data.builder_evidence).toEqual({
         implementation_steps: ["a"],
         existing_seams_used: ["b"],
@@ -1539,6 +1609,84 @@ describe("Validator packet", () => {
         deferred: ["f"],
         suggested_validator_focus: ["g"],
       });
+    });
+
+    test("Builder evidence packet data, markdown, and scaffold fields agree", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches:
+            "batches:\n" + pendingBatchYaml("target", ["app/target.ts"], [1]),
+        }),
+      );
+      const packet = renderValidatorPacket({
+        ledgerPath,
+        batchId: "target",
+        persona: "compound-engineering:ce-correctness-reviewer",
+        commitRefOrRange: "deadbeef",
+        touchedFiles: ["app/target.ts"],
+        now: FROZEN_TIME,
+      });
+
+      expect(packet.data.evidence_source).toBe("builder");
+      if (packet.data.evidence_source !== "builder") {
+        throw new Error("expected Builder evidence source");
+      }
+      const scaffoldFields = nestedFieldOrderUnder(
+        renderScaffold("validator-builder-evidence").body,
+        "builder_evidence",
+      );
+      expect(scaffoldFields).toEqual([...BUILDER_VALIDATOR_EVIDENCE_FIELDS]);
+      expect(Object.keys(packet.data.builder_evidence)).toEqual(scaffoldFields);
+      expect(
+        nestedFieldOrderUnder(packet.packet_markdown, "builder_evidence"),
+      ).toEqual(scaffoldFields);
+      for (const field of scaffoldFields) {
+        const key = field as keyof typeof packet.data.builder_evidence;
+        expect(packet.data.builder_evidence[key]).toEqual([]);
+        expect(packet.packet_markdown).toContain(`  ${field}: []`);
+      }
+    });
+
+    test("inline evidence packet data, markdown, and scaffold fields agree", () => {
+      const ledgerPath = writeLedger(
+        builderLedger({
+          batches:
+            "batches:\n" + pendingBatchYaml("target", ["app/target.ts"], [1]),
+        }),
+      );
+      const packet = renderValidatorPacket({
+        ledgerPath,
+        batchId: "target",
+        persona: "compound-engineering:ce-correctness-reviewer",
+        commitRefOrRange: "inline123",
+        touchedFiles: ["app/target.ts"],
+        evidenceSource: "orchestrator_inline",
+        inlineEvidence: {
+          inlineValidityNote: "bounded inline attempt",
+        },
+        now: FROZEN_TIME,
+      });
+
+      expect(packet.data.evidence_source).toBe("orchestrator_inline");
+      if (packet.data.evidence_source !== "orchestrator_inline") {
+        throw new Error("expected inline evidence source");
+      }
+      const scaffoldFields = nestedFieldOrderUnder(
+        renderScaffold("validator-inline-evidence").body,
+        "inline_evidence",
+      );
+      expect(scaffoldFields).toEqual([...VALIDATOR_INLINE_EVIDENCE_FIELDS]);
+      expect(Object.keys(packet.data.inline_evidence)).toEqual(scaffoldFields);
+      expect(
+        nestedFieldOrderUnder(packet.packet_markdown, "inline_evidence"),
+      ).toEqual(scaffoldFields);
+      expect(packet.data.inline_evidence.user_confirmed_exception_note).toBe(
+        null,
+      );
+      expect(packet.packet_markdown).toContain(
+        "  user_confirmed_exception_note: null",
+      );
+      expect(packet.packet_markdown).not.toContain("builder_evidence:");
     });
 
     test("handles stage-3 and final pseudo-batches without requiring ledger Batches entry", () => {

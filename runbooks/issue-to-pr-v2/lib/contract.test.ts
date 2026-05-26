@@ -8,6 +8,10 @@ import {
   BUILDER_ATTEMPT_STATUSES,
   BUILDER_ATTEMPT_TYPE_VALUES,
   BUILDER_ATTEMPT_TYPES,
+  BUILDER_RETURN_FIELDS,
+  BUILDER_RETURN_KEYS,
+  BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+  BUILDER_VALIDATOR_EVIDENCE_KEYS,
   CANDIDATE_BATCH_FIELDS,
   CHANGE_FIRST_EXCEPTION_PREFIX,
   CONFIRMATION_STATES,
@@ -32,6 +36,8 @@ import {
   RUNBOOK_VERSION,
   STAGE_3_BATCH_ID,
   TERMINAL_BATCH_STATUSES,
+  VALIDATOR_INLINE_EVIDENCE_FIELDS,
+  VALIDATOR_INLINE_EVIDENCE_KEYS,
 } from "./contract";
 
 describe("contract: execution modes", () => {
@@ -160,6 +166,95 @@ describe("contract: builder attempt fields", () => {
 
   test("MAX_BUILDER_ATTEMPTS is 5 (inner-loop iteration cap)", () => {
     expect(MAX_BUILDER_ATTEMPTS).toBe(5);
+  });
+});
+
+describe("contract: builder return fields", () => {
+  test("BUILDER_RETURN_FIELDS enumerates the full transient envelope in render order", () => {
+    expect(BUILDER_RETURN_FIELDS).toEqual([
+      "attempt_type",
+      "target_finding_signature",
+      "status",
+      "commit_sha",
+      "files_touched",
+      "route_hint",
+      "blockers",
+      "probe_results",
+      "suggested_scope_changes",
+      "implementation_steps",
+      "existing_seams_used",
+      "tests_run",
+      "assumptions",
+      "risks",
+      "deferred",
+      "suggested_validator_focus",
+      "notes",
+    ]);
+  });
+
+  test("BUILDER_RETURN_KEYS is the membership Set for BUILDER_RETURN_FIELDS", () => {
+    expect(BUILDER_RETURN_KEYS).toBeInstanceOf(Set);
+    expect(BUILDER_RETURN_KEYS).toEqual(new Set(BUILDER_RETURN_FIELDS));
+  });
+
+  test("BUILDER_VALIDATOR_EVIDENCE_FIELDS names the rich Builder evidence lane only", () => {
+    expect(BUILDER_VALIDATOR_EVIDENCE_FIELDS).toEqual([
+      "implementation_steps",
+      "existing_seams_used",
+      "tests_run",
+      "assumptions",
+      "risks",
+      "deferred",
+      "suggested_validator_focus",
+    ]);
+    for (const field of BUILDER_VALIDATOR_EVIDENCE_FIELDS) {
+      expect(BUILDER_RETURN_KEYS.has(field)).toBe(true);
+    }
+  });
+
+  test("BUILDER_VALIDATOR_EVIDENCE_KEYS excludes compact persistence and inline lanes", () => {
+    expect(BUILDER_VALIDATOR_EVIDENCE_KEYS).toBeInstanceOf(Set);
+    expect(BUILDER_VALIDATOR_EVIDENCE_KEYS).toEqual(
+      new Set(BUILDER_VALIDATOR_EVIDENCE_FIELDS),
+    );
+    for (const forbidden of [
+      "notes",
+      "suggested_scope_changes",
+      "builder_commits",
+      "orchestrator_inline_attempts",
+      ...ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+      ...VALIDATOR_INLINE_EVIDENCE_FIELDS,
+    ]) {
+      expect(BUILDER_VALIDATOR_EVIDENCE_KEYS.has(forbidden)).toBe(false);
+    }
+  });
+});
+
+describe("contract: Validator inline evidence fields", () => {
+  test("VALIDATOR_INLINE_EVIDENCE_FIELDS names the Orchestrator-inline evidence lane only", () => {
+    expect(VALIDATOR_INLINE_EVIDENCE_FIELDS).toEqual([
+      "implementation_commit",
+      "touched_files",
+      "inline_validity_note",
+      "user_confirmed_exception_note",
+    ]);
+  });
+
+  test("VALIDATOR_INLINE_EVIDENCE_KEYS excludes Builder evidence fields", () => {
+    expect(VALIDATOR_INLINE_EVIDENCE_KEYS).toBeInstanceOf(Set);
+    expect(VALIDATOR_INLINE_EVIDENCE_KEYS).toEqual(
+      new Set(VALIDATOR_INLINE_EVIDENCE_FIELDS),
+    );
+    for (const forbidden of [
+      "builder_evidence",
+      ...BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+      "attempt_type",
+      "status",
+      "notes",
+      "suggested_scope_changes",
+    ]) {
+      expect(VALIDATOR_INLINE_EVIDENCE_KEYS.has(forbidden)).toBe(false);
+    }
   });
 });
 

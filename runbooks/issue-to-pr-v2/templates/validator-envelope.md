@@ -58,6 +58,13 @@ acceptance_tests: []
 ac_mapping: []
 relevant_ledger_findings: []   # rows from ## Findings data this batch only
 evidence_source: builder
+orchestrator_transient_focus: []   # passed only as Validator focus; never persisted as Orchestrator-authored findings
+```
+
+Builder evidence block:
+
+<!-- generated-scaffold:start id=validator-builder-evidence source="cli.ts scaffold validator-builder-evidence --json" -->
+```yaml
 builder_evidence:
   implementation_steps: []
   existing_seams_used: []
@@ -66,19 +73,26 @@ builder_evidence:
   risks: []
   deferred: []
   suggested_validator_focus: []
-orchestrator_transient_focus: []   # passed only as Validator focus; never persisted as Orchestrator-authored findings
 ```
+<!-- generated-scaffold:end id=validator-builder-evidence -->
 
-For an Orchestrator-inline attempt, the evidence section is instead:
+For an Orchestrator-inline attempt, set:
 
 ```yaml
 evidence_source: orchestrator_inline
+```
+
+Inline evidence block:
+
+<!-- generated-scaffold:start id=validator-inline-evidence source="cli.ts scaffold validator-inline-evidence --json" -->
+```yaml
 inline_evidence:
-  implementation_commit: "<sha>"
+  implementation_commit: "<commit-sha>"
   touched_files: []
   inline_validity_note: "<why inline eligibility still held>"
-  user_confirmed_exception_note: "<note or null>"
+  user_confirmed_exception_note: null
 ```
+<!-- generated-scaffold:end id=validator-inline-evidence -->
 
 The Orchestrator passes transient sanity concerns only as Validator focus.
 The Orchestrator must not persist them as ledger entries or

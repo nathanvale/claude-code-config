@@ -150,6 +150,53 @@ export const BUILDER_ATTEMPT_KEYS = new Set<string>(
   BUILDER_ATTEMPT_FIELDS,
 );
 
+export const BUILDER_RETURN_FIELDS = [
+  "attempt_type",
+  "target_finding_signature",
+  "status",
+  "commit_sha",
+  "files_touched",
+  "route_hint",
+  "blockers",
+  "probe_results",
+  "suggested_scope_changes",
+  "implementation_steps",
+  "existing_seams_used",
+  "tests_run",
+  "assumptions",
+  "risks",
+  "deferred",
+  "suggested_validator_focus",
+  "notes",
+] as const;
+
+export const BUILDER_RETURN_KEYS = new Set<string>(BUILDER_RETURN_FIELDS);
+
+export const BUILDER_VALIDATOR_EVIDENCE_FIELDS = [
+  "implementation_steps",
+  "existing_seams_used",
+  "tests_run",
+  "assumptions",
+  "risks",
+  "deferred",
+  "suggested_validator_focus",
+] as const;
+
+export const BUILDER_VALIDATOR_EVIDENCE_KEYS = new Set<string>(
+  BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+);
+
+export const VALIDATOR_INLINE_EVIDENCE_FIELDS = [
+  "implementation_commit",
+  "touched_files",
+  "inline_validity_note",
+  "user_confirmed_exception_note",
+] as const;
+
+export const VALIDATOR_INLINE_EVIDENCE_KEYS = new Set<string>(
+  VALIDATOR_INLINE_EVIDENCE_FIELDS,
+);
+
 export const ORCHESTRATOR_INLINE_ATTEMPT_FIELDS = [
   "commit_sha",
   "files_touched",
@@ -226,6 +273,26 @@ export const FINAL_VERDICTS = new Set([
 ]);
 
 export const TERMINAL_BATCH_STATUSES = new Set(["converged", "accepted-risk"]);
+
+/**
+ * Contract slice ids ledger docs/templates must point at for field sets and
+ * finite enum membership.
+ */
+export const LEDGER_SCHEMA_POINTER_SLICES = [
+  "candidate_batch_fields",
+  "ledger_batch_lifecycle_fields",
+  "builder_attempt_fields",
+  "orchestrator_inline_attempt_fields",
+  "finding_fields",
+  "builder_attempt_types",
+  "execution_modes",
+  "batch_statuses",
+  "builder_attempt_statuses",
+  "finding_severities",
+  "finding_statuses",
+  "final_verdicts",
+  "confirmation_states",
+] as const;
 
 export const CHANGE_FIRST_EXCEPTION_PREFIX = "change_first-exception:";
 export const HIGH_RISK_CHANGE_FIRST_EXCEPTION_PREFIX =

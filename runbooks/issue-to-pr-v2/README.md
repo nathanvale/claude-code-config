@@ -72,7 +72,8 @@ The artifacts a maintainer needs to find, in this order:
      debugging drift, version skew, and install presence.
    - `packet` - render a dispatch-role packet from `templates/` and
      ledger state.
-   - `scaffold` - render a runtime-owned scaffold view by id.
+   - `scaffold` - render a runtime-owned scaffold view by id, including
+     Builder return-envelope projections.
 
    Every command requires `--json` and writes one envelope to stdout.
    The CLI is a fact emitter and never says "run X" (ADR 0002). For the

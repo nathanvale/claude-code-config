@@ -42,6 +42,7 @@ import {
   CANDIDATE_BATCH_FIELDS,
   FINDING_FIELDS,
   LEDGER_BATCH_LIFECYCLE_FIELDS,
+  LEDGER_SCHEMA_POINTER_SLICES,
   ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
 } from "./lib/contract";
 import {
@@ -817,6 +818,7 @@ describe("Block 5: contract command × every documented slice", () => {
       ],
       ["finding_fields", FINDING_FIELDS],
       ["builder_attempt_types", BUILDER_ATTEMPT_TYPE_VALUES],
+      ["ledger_schema_pointer_slices", LEDGER_SCHEMA_POINTER_SLICES],
     ] as const;
 
     for (const [slice, expected] of cases) {
@@ -881,6 +883,16 @@ describe("Block 5b: scaffold command × every documented scaffold", () => {
     ]);
     expect(result.envelopeParsed).toBe(true);
     assertErrorEnvelopeShape(result.envelope, "unknown-scaffold-id");
+  });
+
+  test("missing scaffold id returns missing-required-arg error with exit_code 64", async () => {
+    const result = await runCli(["scaffold", "--json"]);
+    expect(result.envelopeParsed).toBe(true);
+    expect(result.exitCode).toBe(64);
+    assertErrorEnvelopeShape(result.envelope, "missing-required-arg");
+    expect((result.envelope.error as { message: string }).message).toContain(
+      "scaffold id",
+    );
   });
 });
 

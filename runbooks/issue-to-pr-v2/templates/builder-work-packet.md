@@ -38,11 +38,9 @@ sub-agent reads on entry.
 
 The rendered packet **MUST** include exactly the fields below and **MUST
 NOT** include the full plan file, raw Validator envelopes, unrelated batch
-state, rich Builder evidence (implementation_steps, existing_seams_used,
-tests_run, assumptions, risks, deferred, suggested_validator_focus) from
-prior envelopes, `orchestrator_inline_attempts` as prior Builder attempts,
-ACs not in the target batch's `ac_mapping`, or findings from other batches
-or stage-3 findings.
+state, rich Builder evidence from prior envelopes,
+`orchestrator_inline_attempts` as prior Builder attempts, ACs not in the target
+batch's `ac_mapping`, or findings from other batches or stage-3 findings.
 
 ```yaml
 issue_number: <int>
@@ -203,23 +201,24 @@ before any edit. No readiness, no build. If preflight fails, return a
 Builder returns exactly one structured envelope at the end of the attempt.
 See
 [`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope)
-for the full schema, the status enum (`committed`, `fail-stop-preflight`,
-`fail-stop-out-of-scope`, `fail-stop-execution-mode-mismatch`,
-`fail-stop-read-failed`, `fail-stop-other`), and the rule that
-`suggested_validator_focus` is required.
+for transition semantics and the rule that `suggested_validator_focus` is
+required. Concrete shape is generated from
+`cli.ts scaffold builder-return-envelope --json`.
 
-(The sibling [`builder-return-envelope.md`](builder-return-envelope.md) holds
-the same envelope shape for readers who arrive at the return contract directly.
-The canonical schema lives in `references/builder-dispatch.md`, which is the
-single source of truth both this template and the sibling defer to.)
+<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
 
+(The sibling [`builder-return-envelope.md`](builder-return-envelope.md) points
+at the same runtime-owned scaffold for readers who arrive at the return
+contract directly.)
+
+<!-- generated-scaffold:start id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
 ```yaml
-attempt_type: <implementation | repair>
-target_finding_signature: <signature | null>
-status: <committed | fail-stop-*>
-commit_sha: <sha | null>
+attempt_type: implementation  # implementation | repair
+target_finding_signature: null  # string for repair; null for implementation
+status: committed  # committed | fail-stop-preflight | fail-stop-out-of-scope | fail-stop-execution-mode-mismatch | fail-stop-read-failed | fail-stop-other
+commit_sha: "<commit-sha>"
 files_touched: []
-route_hint: <string | null>
+route_hint: null
 blockers: []
 probe_results: []
 suggested_scope_changes: []
@@ -230,8 +229,9 @@ assumptions: []
 risks: []
 deferred: []
 suggested_validator_focus: []
-notes: ""
+notes: "<attempt summary>"
 ```
+<!-- generated-scaffold:end id=builder-return-envelope -->
 
 ## See also
 

@@ -10,6 +10,7 @@ import {
   CANDIDATE_BATCH_FIELDS,
   FINDING_FIELDS,
   LEDGER_BATCH_LIFECYCLE_FIELDS,
+  LEDGER_SCHEMA_POINTER_SLICES,
   ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
   RUNBOOK_VERSION,
 } from "./lib/contract";
@@ -502,6 +503,7 @@ describe("AC5: contract emits runtime contract slices", () => {
       ],
       ["finding_fields", FINDING_FIELDS],
       ["builder_attempt_types", BUILDER_ATTEMPT_TYPE_VALUES],
+      ["ledger_schema_pointer_slices", LEDGER_SCHEMA_POINTER_SLICES],
     ] as const;
 
     for (const [slice, expected] of cases) {
@@ -529,6 +531,13 @@ describe("AC5: contract emits runtime contract slices", () => {
     expect(data.slice).toBe("scaffold_ids");
     expect(data.ordering).toBe("catalog");
     expect(data.values).toEqual([...SCAFFOLD_IDS]);
+    expect(data.values).toEqual([
+      "ce-plan-candidate-batch",
+      "builder-return-envelope",
+      "builder-attempt-compact",
+      "validator-builder-evidence",
+      "validator-inline-evidence",
+    ]);
   });
 
   test("unknown slice returns unknown-contract-slice error", () => {
@@ -946,6 +955,7 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     expect(data.contract_slices).toContain("route_required_references");
     expect(data.contract_slices).toContain("candidate_batch_fields");
     expect(data.contract_slices).toContain("ledger_batch_lifecycle_fields");
+    expect(data.contract_slices).toContain("ledger_schema_pointer_slices");
     expect(data.contract_slices).toContain("builder_attempt_fields");
     expect(data.contract_slices).toContain(
       "orchestrator_inline_attempt_fields",
@@ -962,6 +972,10 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
       scaffold_response_shape: Record<string, string>;
     };
     expect(data.scaffold_ids).toEqual([...SCAFFOLD_IDS]);
+    expect(data.scaffold_ids).toContain("builder-return-envelope");
+    expect(data.scaffold_ids).toContain("builder-attempt-compact");
+    expect(data.scaffold_ids).toContain("validator-builder-evidence");
+    expect(data.scaffold_ids).toContain("validator-inline-evidence");
     expect(data.scaffold_response_shape.scaffold_id).toContain("scaffold_ids");
     expect(data.scaffold_response_shape.body).toContain("rendered scaffold");
   });
@@ -2015,6 +2029,35 @@ describe("scaffold command", () => {
     expect(data.body).toBe(renderScaffold("ce-plan-candidate-batch").body);
   });
 
+  test("renders every Builder projection scaffold with unchanged envelope shape", () => {
+    for (const scaffoldId of [
+      "builder-return-envelope",
+      "builder-attempt-compact",
+      "validator-builder-evidence",
+      "validator-inline-evidence",
+    ] as const) {
+      const { envelope, exit_code } = invoke([
+        "scaffold",
+        scaffoldId,
+        "--json",
+      ]);
+      expect(exit_code).toBe(0);
+      expect(envelope.status).toBe("ok");
+      const data = envelope.data as {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        body: string;
+      };
+      expect(data.scaffold_id).toBe(scaffoldId);
+      expect(data.output_kind).toBe("yaml");
+      expect(data.ordering).toBe("catalog");
+      expect(data.source).toContain("lib/scaffolds.ts");
+      expect(data.body).toBe(renderScaffold(scaffoldId).body);
+    }
+  });
+
   test("unknown scaffold id returns unknown-scaffold-id", () => {
     const { envelope, exit_code } = invoke([
       "scaffold",
@@ -2023,6 +2066,17 @@ describe("scaffold command", () => {
     ]);
     expect((envelope.error as { code: string }).code).toBe(
       "unknown-scaffold-id",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("missing scaffold id returns missing-required-arg", () => {
+    const { envelope, exit_code } = invoke(["scaffold", "--json"]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect((envelope.error as { message: string }).message).toContain(
+      "scaffold id",
     );
     expect(exit_code).toBe(64);
   });

@@ -118,13 +118,17 @@ transient Validator focus, not orchestrator-authored findings.
 2. Pass each persona commit refs/ranges, touched file names, batch id, goal,
    files, `execution_mode`, acceptance tests, AC mapping, relevant ledger
    findings, and the real attempt evidence source. Builder-dispatched attempts
-   include Builder evidence from the envelope (`implementation_steps`,
-   `existing_seams_used`, `tests_run`, `assumptions`, `risks`, `deferred`, and
-   `suggested_validator_focus`). Orchestrator-inline attempts include the
-   implementation commit, touched files, inline-validity note, and any
-   user-confirmed exception note. Transient Orchestrator sanity concerns are
-   passed only as Validator focus; they are not persisted as ledger entries or
-   Orchestrator-authored findings.
+   include Builder evidence from the envelope.
+
+   <!-- scaffold-pointer id=validator-builder-evidence source="cli.ts scaffold validator-builder-evidence --json" -->
+
+   Orchestrator-inline attempts include inline evidence from the matching
+   scaffold.
+
+   <!-- scaffold-pointer id=validator-inline-evidence source="cli.ts scaffold validator-inline-evidence --json" -->
+
+   Transient Orchestrator sanity concerns are passed only as Validator focus;
+   they are not persisted as ledger entries or Orchestrator-authored findings.
 3. Ask each persona to return this envelope:
    `{"reviewer":"<persona>","findings":[],"residual_risks":[],"testing_gaps":[]}`.
    Normalize the response before writing the ledger:

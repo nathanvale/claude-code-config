@@ -190,25 +190,26 @@ Builder returns one structured envelope. Status is one of `committed`,
 `fail-stop-execution-mode-mismatch`, `fail-stop-read-failed`, or
 `fail-stop-other`.
 
-The envelope includes `attempt_type`, optional target finding signature,
-`commit_sha`, `files_touched`, `route_hint`, `blockers`, `probe_results`,
-`suggested_scope_changes`, `implementation_steps`, `existing_seams_used`,
-`tests_run`, `assumptions`, `risks`, `deferred`, `suggested_validator_focus`,
-and `notes`. Required array fields may be empty; missing
-`suggested_validator_focus` is malformed. Status owns workflow transition;
-`route_hint` is only next-owner guidance. The Builder envelope has no
-inline-only fields; Orchestrator-inline attempt evidence is recorded through
-the separate ledger lane owned by the Stage 4 batch-loop contract.
+Concrete envelope shape: `cli.ts scaffold builder-return-envelope --json`.
+
+<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
+
+Required array fields may be empty; missing `suggested_validator_focus` is
+malformed. Status owns workflow transition; `route_hint` is only next-owner
+guidance. The Builder envelope has no inline-only fields; Orchestrator-inline
+attempt evidence is recorded through the separate ledger lane owned by the
+Stage 4 batch-loop contract.
 
 Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger
-`builder_attempts` record with `attempt_type`, `status`, `commit_sha`,
-`files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
+`builder_attempts` record.
+
+<!-- scaffold-pointer id=builder-attempt-compact source="cli.ts scaffold builder-attempt-compact --json" -->
+
 Persisted `blockers` and `probe_results` are YAML lists of compact string
 summaries (`[]` when empty), not raw envelope object arrays; `notes` is a
-single string. Rich evidence such as implementation steps, tests run,
-assumptions, risks, deferred items, and suggested Validator focus is passed to
-Validators or summarized in Notes rather than persisted wholesale.
+single string. Rich evidence passes to Validators or Notes rather than
+persisting wholesale.
 
 On a well-formed `fail-stop-preflight`, do not dispatch Validators. Append the
 blockers, probe results, and route hint to Notes, set the current batch

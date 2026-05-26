@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  BUILDER_ATTEMPT_FIELDS,
   LEDGER_BATCH_LIFECYCLE_FIELDS,
   RUNBOOK_VERSION,
 } from "./contract";
@@ -397,6 +398,32 @@ describe("validateLedgerBatches (in-process via withFailMode)", () => {
     ];
   }
 
+  function compactBuilderAttemptLines(): string[] {
+    return BUILDER_ATTEMPT_FIELDS.flatMap((field, index) => {
+      const prefix = index === 0 ? "      - " : "        ";
+      switch (field) {
+        case "attempt_type":
+          return [`${prefix}attempt_type: implementation`];
+        case "status":
+          return [`${prefix}status: fail-stop-other`];
+        case "commit_sha":
+          return [`${prefix}commit_sha: null`];
+        case "files_touched":
+          return [`${prefix}files_touched: []`];
+        case "route_hint":
+          return [`${prefix}route_hint: null`];
+        case "blockers":
+          return [`${prefix}blockers: []`];
+        case "probe_results":
+          return [`${prefix}probe_results: []`];
+        case "notes":
+          return [`${prefix}notes: "compact projection fixture"`];
+      }
+      const unreachable: never = field;
+      return unreachable;
+    });
+  }
+
   test("fails when the ledger has no fenced Batches block", () => {
     const ledgerPath = writeLedger(
       [
@@ -467,6 +494,36 @@ describe("validateLedgerBatches (in-process via withFailMode)", () => {
         withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
       ).toThrow();
     }
+  });
+
+  test("accepts a compact Builder attempt row shaped from BUILDER_ATTEMPT_FIELDS", () => {
+    const ledgerPath = writeLedgerWithBatches([
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      "    depends_on: []",
+      "    execution_mode: tdd",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      "    status: in-progress",
+      "    builder_commits: []",
+      "    builder_attempts:",
+      ...compactBuilderAttemptLines(),
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 1",
+      "    final_verdict: null",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
   });
 
   test("fails when a Builder attempt has an unknown field", () => {

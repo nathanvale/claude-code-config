@@ -13,18 +13,18 @@
  * Batch 2 (added below `loadContractFacts`): the **doc-claim extractor**.
  * `extractDocClaims()` parses ONE scoped doc's text and reports the
  * contract-token claims it makes (route ids, command names, slice names,
- * packet roles, `data.*` field paths, and scoped recovery/control-plane
- * links) using bounded patterns over prose and fenced code blocks. It holds
- * no expected contract VALUES of its own (AC5): it only reads structural
- * markers and emits what the doc says, leaving the comparison to later
- * batches. Later batches add the comparator and the orchestrator.
+ * packet roles, scaffold ids, `data.*` field paths, and scoped
+ * recovery/control-plane links) using bounded patterns over prose and fenced
+ * code blocks. It holds no expected contract VALUES of its own (AC5): it only
+ * reads structural markers and emits what the doc says, leaving the comparison
+ * to later batches. Later batches add the comparator and the orchestrator.
  *
  * Design law (AC5): this file holds NO literal route ids, slice names,
  * packet roles, or field paths as expected values. The only contract
  * *coordinates* it knows are which CLI fields to read (the help payload's
  * `commands`, `contract_slices`, `state_response_shape`,
- * `diagnose_response_shape`, and the `data.` path prefix docs use). Those
- * are read-locations, not duplicated contract values.
+ * `diagnose_response_shape`, `scaffold_ids`, and the `data.` path prefix docs
+ * use). Those are read-locations, not duplicated contract values.
  *
  * Design law (AC6): read-only. The loader only invokes the read-only CLI
  * commands (`--help`, `contract <slice>`). It never writes files, touches
@@ -40,14 +40,10 @@
  * boundary below is intentional; a future maintainer must NOT extend it into a
  * general prose/consistency linter without re-opening the scope decision.
  *
- *  - Main SCOPE is exactly the five operator docs in `SCOPED_DOCS`
- *    (skills/issue-to-pr/SKILL.md, runbooks/issue-to-pr-v2/README.md,
- *    issue-to-pr.md, references/ledger-and-helper.md,
- *    references/first-run-gotchas.md). It does NOT validate other Issue-to-PR
- *    references (stage-*.md, findings-and-validators.md,
- *    builder-dispatch.md, host-adapters.md, etc.). Narrow add-ons also
- *    cross-check the ledger template's batch lifecycle field mentions and the
- *    ce-plan template's marked generated scaffold block.
+ *  - Main SCOPE is `SCOPED_DOCS`. It does NOT validate other Issue-to-PR
+ *    references (stage-*.md, host-adapters.md, etc.). Narrow add-ons also
+ *    cross-check ledger template schema-slice pointers, runtime scaffold
+ *    generated blocks, and checked scaffold pointers.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
@@ -91,6 +87,13 @@ export type ContractFacts = {
   contractSlices: string[];
   /** Packet roles from `contract packet_roles --json` → data.values. */
   packetRoles: string[];
+  /** Scaffold ids from `--help --json` → data.scaffold_ids. */
+  scaffoldIds: string[];
+  /**
+   * Ledger schema pointer slice ids from
+   * `contract ledger_schema_pointer_slices --json` → data.values.
+   */
+  ledgerSchemaPointerSlices: string[];
   /**
    * Valid `data.*` dotted response field paths, derived from the help
    * payload's state and diagnose response shapes.
@@ -434,9 +437,11 @@ function deriveFieldPaths(
  *
  * Sources:
  *  - route ids   ← `contract route_ids --json`   → data.values
- *  - packet roles ← `contract packet_roles --json` → data.values
+ *  - packet roles  ← `contract packet_roles --json` → data.values
+ *  - ledger schema pointer slices ← `contract ledger_schema_pointer_slices --json` → data.values
  *  - command names ← `--help --json` → data.commands[].name
  *  - slice names   ← `--help --json` → data.contract_slices
+ *  - scaffold ids  ← `--help --json` → data.scaffold_ids
  *  - field paths   ← `--help --json` → state/diagnose response shapes
  *
  * Throws (never returns partial facts) when any subprocess fails or returns
@@ -456,6 +461,11 @@ export async function loadContractFacts(
   const packetRoleData = await readCliData(cliPath, [
     "contract",
     "packet_roles",
+    "--json",
+  ]);
+  const ledgerSchemaPointerData = await readCliData(cliPath, [
+    "contract",
+    "ledger_schema_pointer_slices",
     "--json",
   ]);
 
@@ -484,6 +494,10 @@ export async function loadContractFacts(
     help.contract_slices,
     "--help data.contract_slices",
   );
+  const scaffoldIds = expectStringArray(
+    help.scaffold_ids,
+    "--help data.scaffold_ids",
+  );
   const routeIds = expectStringArray(
     routeIdData.values,
     "contract route_ids data.values",
@@ -491,6 +505,10 @@ export async function loadContractFacts(
   const packetRoles = expectStringArray(
     packetRoleData.values,
     "contract packet_roles data.values",
+  );
+  const ledgerSchemaPointerSlices = expectStringArray(
+    ledgerSchemaPointerData.values,
+    "contract ledger_schema_pointer_slices data.values",
   );
 
   const stateShape = help.state_response_shape;
@@ -535,6 +553,8 @@ export async function loadContractFacts(
     commandNames,
     contractSlices,
     packetRoles,
+    scaffoldIds,
+    ledgerSchemaPointerSlices,
     responseFieldPaths: {
       state: stateFieldPaths,
       diagnose: diagnoseFieldPaths,
@@ -581,6 +601,7 @@ export type DocClaims = {
   commands: DocClaim[];
   slices: DocClaim[];
   packetRoles: DocClaim[];
+  scaffoldCommands: DocClaim[];
   fieldPaths: DocClaim[];
   scopedLinks: ScopedLinkClaim[];
 };
@@ -771,18 +792,21 @@ function extractRouteIds(text: string): DocClaim[] {
  * Extract command, slice, and packet-role claims from `cli.ts` command
  * positions. The token immediately after `cli.ts ` is a command; after
  * `cli.ts contract ` it is also a slice; after `cli.ts packet ` it is also a
- * packet role. Flags and `<placeholder>` args are skipped. Reading the
- * `cli.ts `, `contract`, and `packet` markers is structural extraction, not a
- * contract value (AC5).
+ * packet role; after visible `cli.ts scaffold ` it is also a scaffold id.
+ * Flags and `<placeholder>` args are skipped. Reading the `cli.ts `,
+ * `contract`, `packet`, and `scaffold` markers is structural extraction, not
+ * a contract value (AC5).
  */
 function extractCliClaims(text: string): {
   commands: DocClaim[];
   slices: DocClaim[];
   packetRoles: DocClaim[];
+  scaffoldCommands: DocClaim[];
 } {
   const commands: DocClaim[] = [];
   const slices: DocClaim[] = [];
   const packetRoles: DocClaim[] = [];
+  const scaffoldCommands: DocClaim[] = [];
 
   // The token after `cli.ts ` is the command. Allow `<...>` so the
   // placeholder is captured then skipped, rather than silently matching the
@@ -806,10 +830,13 @@ function extractCliClaims(text: string): {
       slices.push(claimAt(text, index, next));
     } else if (command === "packet") {
       packetRoles.push(claimAt(text, index, next));
+    } else if (command === "scaffold") {
+      const claim = claimAt(text, index, next);
+      if (!claim.context.startsWith("<!--")) scaffoldCommands.push(claim);
     }
   }
 
-  return { commands, slices, packetRoles };
+  return { commands, slices, packetRoles, scaffoldCommands };
 }
 
 /**
@@ -911,13 +938,15 @@ function extractScopedLinks(text: string, docPath: string): ScopedLinkClaim[] {
  *   attribute claims back to a file. Not used to gate which kinds are parsed.
  */
 export function extractDocClaims(docText: string, docPath: string): DocClaims {
-  const { commands, slices, packetRoles } = extractCliClaims(docText);
+  const { commands, slices, packetRoles, scaffoldCommands } =
+    extractCliClaims(docText);
   return {
     docPath,
     routeIds: extractRouteIds(docText),
     commands,
     slices,
     packetRoles,
+    scaffoldCommands,
     fieldPaths: extractFieldPaths(docText),
     scopedLinks: extractScopedLinks(docText, docPath),
   };
@@ -933,11 +962,13 @@ export type DriftKind =
   | "command"
   | "slice"
   | "packet-role"
+  | "scaffold-command"
   | "field-path"
   | "scoped-link"
   | "ledger-lifecycle-field"
   | "ledger-schema-slice-pointer"
   | "generated-scaffold-block"
+  | "scaffold-pointer"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1063,6 +1094,12 @@ export async function compareClaimsToFacts(
     "packet role",
   );
   checkSet(
+    claims.scaffoldCommands,
+    new Set(facts.scaffoldIds),
+    "scaffold-command",
+    "scaffold id",
+  );
+  checkSet(
     claims.fieldPaths,
     new Set([
       ...facts.responseFieldPaths.state,
@@ -1111,9 +1148,70 @@ const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
 const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 const CE_PLAN_TEMPLATE_REL =
   "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
-const CE_PLAN_GENERATED_SCAFFOLD_IDS = [
-  "ce-plan-candidate-batch",
-] as const satisfies readonly ScaffoldId[];
+const BUILDER_RETURN_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/builder-return-envelope.md";
+const BUILDER_WORK_PACKET_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/builder-work-packet.md";
+const VALIDATOR_ENVELOPE_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/validator-envelope.md";
+const BUILDER_DISPATCH_REL =
+  "runbooks/issue-to-pr-v2/references/builder-dispatch.md";
+const FINDINGS_AND_VALIDATORS_REL =
+  "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
+
+type ScaffoldSurface = {
+  doc: string;
+  ids: readonly ScaffoldId[];
+};
+
+const GENERATED_SCAFFOLD_SURFACES = [
+  {
+    doc: CE_PLAN_TEMPLATE_REL,
+    ids: ["ce-plan-candidate-batch"],
+  },
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    ids: ["builder-return-envelope"],
+  },
+  {
+    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
+    ids: ["builder-return-envelope"],
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    ids: ["validator-builder-evidence", "validator-inline-evidence"],
+  },
+] as const satisfies readonly ScaffoldSurface[];
+
+const SCAFFOLD_POINTER_SURFACES = [
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    ids: [
+      "builder-return-envelope",
+      "builder-attempt-compact",
+      "validator-builder-evidence",
+    ],
+  },
+  {
+    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
+    ids: ["builder-return-envelope"],
+  },
+  {
+    doc: BUILDER_DISPATCH_REL,
+    ids: ["builder-return-envelope", "builder-attempt-compact"],
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    ids: ["validator-builder-evidence", "validator-inline-evidence"],
+  },
+] as const satisfies readonly ScaffoldSurface[];
+
+const SCAFFOLD_COMMAND_SURFACE_RELS = [
+  ...new Set([
+    ...GENERATED_SCAFFOLD_SURFACES.map((surface) => surface.doc),
+    ...SCAFFOLD_POINTER_SURFACES.map((surface) => surface.doc),
+  ]),
+] as const;
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
 
@@ -1382,23 +1480,12 @@ function ledgerLifecycleSliceName(facts: ContractFacts): string {
 }
 
 function ledgerSchemaPointerSlices(facts: ContractFacts): string[] {
-  const slices = facts.contractSlices.filter(
-    (slice) => slice.endsWith("_fields") || slice.endsWith("_types"),
-  );
-  if (slices.length === 0) {
+  if (facts.ledgerSchemaPointerSlices.length === 0) {
     throw new Error(
-      "contract-drift ledger schema check: live CLI help has no field/type slices for ledger schema docs to point at.",
+      "contract-drift ledger schema check: live CLI has no ledger schema pointer slices for ledger schema docs to point at.",
     );
   }
-  return slices;
-}
-
-async function loadContractSliceValues(
-  cliPath: string,
-  slice: string,
-): Promise<string[]> {
-  const data = await readCliData(cliPath, ["contract", slice, "--json"]);
-  return expectStringArray(data.values, `contract ${slice} data.values`);
+  return facts.ledgerSchemaPointerSlices;
 }
 
 /**
@@ -1438,15 +1525,6 @@ export async function checkLedgerLifecycleFieldDrift(
   const facts = await loadContractFacts({ cliPath });
   const lifecycleSlice = ledgerLifecycleSliceName(facts);
   const pointerSlices = ledgerSchemaPointerSlices(facts);
-  const pointerSliceValues = new Map<string, string[]>();
-  for (const slice of pointerSlices) {
-    pointerSliceValues.set(slice, await loadContractSliceValues(cliPath, slice));
-  }
-  if (!pointerSliceValues.has(lifecycleSlice)) {
-    throw new Error(
-      `contract-drift ledger schema check: live CLI help has lifecycle slice "${lifecycleSlice}" but it is not part of the ledger schema pointer set.`,
-    );
-  }
 
   const templateText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_TEMPLATE_REL),
@@ -1494,6 +1572,18 @@ export async function checkLedgerLifecycleFieldDrift(
 
   for (const slice of pointerSlices) {
     if (
+      slice !== lifecycleSlice &&
+      !regionMentionsContractSliceCommand(templateText, slice)
+    ) {
+      findings.push({
+        doc: LEDGER_TEMPLATE_REL,
+        kind: "ledger-schema-slice-pointer",
+        claim: slice,
+        reason: `ledger template does not point to \`cli.ts contract ${slice} --json\`.`,
+      });
+    }
+
+    if (
       schemaFactsSection !== null &&
       !regionMentionsContractSliceCommand(schemaFactsSection, slice)
     ) {
@@ -1517,8 +1607,20 @@ type GeneratedScaffoldBlock = {
   malformedReason?: string;
 };
 
+type ScaffoldPointer = {
+  id: string;
+  source: string;
+  line: number;
+};
+type ScaffoldMarker = {
+  id: string;
+  line: number;
+};
+
 const GENERATED_SCAFFOLD_START_RE =
   /<!--\s*generated-scaffold:start\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
+const SCAFFOLD_POINTER_RE =
+  /<!--\s*scaffold-pointer\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
 
 function expectedGeneratedScaffoldSource(id: ScaffoldId): string {
   return `cli.ts scaffold ${id} --json`;
@@ -1528,6 +1630,44 @@ function generatedScaffoldEndRe(id: string): RegExp {
   return new RegExp(
     `<!--\\s*generated-scaffold:end\\s+id=${escapeRegExp(id)}\\s*-->`,
   );
+}
+
+function parseGeneratedScaffoldRegion(region: string): {
+  body: string | null;
+  malformedReason?: string;
+} {
+  const fenceRe = /```ya?ml\n([\s\S]*?)\n```/g;
+  const fences = [...region.matchAll(fenceRe)];
+  if (fences.length === 0) {
+    return {
+      body: null,
+      malformedReason: "missing fenced yaml body",
+    };
+  }
+  if (fences.length !== 1) {
+    return {
+      body: null,
+      malformedReason: `expected exactly one fenced yaml body, found ${fences.length}`,
+    };
+  }
+
+  const fence = fences[0];
+  const fenceStart = fence.index ?? 0;
+  const fenceEnd = fenceStart + fence[0].length;
+  if (region.slice(0, fenceStart).trim().length > 0) {
+    return {
+      body: null,
+      malformedReason: "non-whitespace content before fenced yaml body",
+    };
+  }
+  if (region.slice(fenceEnd).trim().length > 0) {
+    return {
+      body: null,
+      malformedReason: "non-whitespace content after fenced yaml body",
+    };
+  }
+
+  return { body: `${fence[1] ?? ""}\n` };
 }
 
 function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] {
@@ -1550,14 +1690,14 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
     }
 
     const region = text.slice(bodyStart, bodyStart + endMatch.index);
-    const fenceMatch = /```ya?ml\n([\s\S]*?)\n```/.exec(region);
-    if (!fenceMatch) {
+    const parsed = parseGeneratedScaffoldRegion(region);
+    if (parsed.body === null) {
       blocks.push({
         id,
         source,
         body: null,
         line: lineOf(text, startIndex),
-        malformedReason: "missing fenced yaml body",
+        malformedReason: parsed.malformedReason,
       });
       continue;
     }
@@ -1565,11 +1705,72 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
     blocks.push({
       id,
       source,
-      body: `${fenceMatch[1] ?? ""}\n`,
+      body: parsed.body,
       line: lineOf(text, startIndex),
     });
   }
   return blocks;
+}
+
+function extractScaffoldPointers(text: string): ScaffoldPointer[] {
+  const pointers: ScaffoldPointer[] = [];
+  for (const match of text.matchAll(SCAFFOLD_POINTER_RE)) {
+    pointers.push({
+      id: match[1] ?? "",
+      source: match[2] ?? "",
+      line: lineOf(text, match.index ?? 0),
+    });
+  }
+  return pointers;
+}
+
+function scaffoldMarkers(text: string): ScaffoldMarker[] {
+  return [
+    ...extractGeneratedScaffoldBlocks(text).map((block) => ({
+      id: block.id,
+      line: block.line,
+    })),
+    ...extractScaffoldPointers(text).map((pointer) => ({
+      id: pointer.id,
+      line: pointer.line,
+    })),
+  ].sort((a, b) => a.line - b.line);
+}
+
+function checkVisibleScaffoldCommands(
+  text: string,
+  doc: string,
+): DriftFinding[] {
+  const findings: DriftFinding[] = [];
+  const markers = scaffoldMarkers(text);
+
+  for (const claim of extractDocClaims(text, doc).scaffoldCommands) {
+    if (!isScaffoldId(claim.token)) {
+      findings.push({
+        doc,
+        kind: "scaffold-command",
+        claim: claim.token,
+        line: claim.line,
+        reason: `visible scaffold command names unknown scaffold id "${claim.token}".`,
+      });
+      continue;
+    }
+
+    const nextMarker = markers.find(
+      (marker) => marker.line > claim.line && marker.line - claim.line <= 3,
+    );
+    if (nextMarker && nextMarker.id !== claim.token) {
+      findings.push({
+        doc,
+        kind: "scaffold-command",
+        claim: claim.token,
+        line: claim.line,
+        reason: `visible scaffold command names "${claim.token}", but the adjacent scaffold marker names "${nextMarker.id}".`,
+      });
+    }
+  }
+
+  return findings;
 }
 
 export type GeneratedScaffoldDriftOptions = {
@@ -1581,69 +1782,125 @@ export async function checkGeneratedScaffoldBlocksDrift(
 ): Promise<DriftFinding[]> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
   const findings: DriftFinding[] = [];
-  const text = await readScopedDocOrThrow(
-    join(repoRoot, CE_PLAN_TEMPLATE_REL),
-    CE_PLAN_TEMPLATE_REL,
-    "contract-drift generated scaffold check",
-  );
-  const blocks = extractGeneratedScaffoldBlocks(text);
-  const presentScaffoldIds = new Set(blocks.map((block) => block.id));
 
-  for (const scaffoldId of CE_PLAN_GENERATED_SCAFFOLD_IDS) {
-    if (presentScaffoldIds.has(scaffoldId)) continue;
-    findings.push({
-      doc: CE_PLAN_TEMPLATE_REL,
-      kind: "generated-scaffold-block",
-      claim: scaffoldId,
-      reason: `missing generated-scaffold start marker for "${scaffoldId}"; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
-    });
+  for (const surface of GENERATED_SCAFFOLD_SURFACES) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, surface.doc),
+      surface.doc,
+      "contract-drift generated scaffold check",
+    );
+    const blocks = extractGeneratedScaffoldBlocks(text);
+    const presentScaffoldIds = new Set(blocks.map((block) => block.id));
+
+    for (const scaffoldId of surface.ids) {
+      if (presentScaffoldIds.has(scaffoldId)) continue;
+      findings.push({
+        doc: surface.doc,
+        kind: "generated-scaffold-block",
+        claim: scaffoldId,
+        reason: `missing generated-scaffold start marker for "${scaffoldId}"; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
+      });
+    }
+
+    for (const block of blocks) {
+      if (!isScaffoldId(block.id)) {
+        findings.push({
+          doc: surface.doc,
+          kind: "generated-scaffold-block",
+          claim: block.id,
+          line: block.line,
+          reason: `generated scaffold marker names unknown scaffold id "${block.id}".`,
+        });
+        continue;
+      }
+
+      const expectedSource = expectedGeneratedScaffoldSource(block.id);
+      if (block.source !== expectedSource) {
+        findings.push({
+          doc: surface.doc,
+          kind: "generated-scaffold-block",
+          claim: block.id,
+          line: block.line,
+          reason: `generated scaffold marker source is "${block.source}", expected "${expectedSource}".`,
+        });
+      }
+
+      if (block.body === null) {
+        findings.push({
+          doc: surface.doc,
+          kind: "generated-scaffold-block",
+          claim: block.id,
+          line: block.line,
+          reason: `generated scaffold marker is malformed: ${block.malformedReason}.`,
+        });
+        continue;
+      }
+
+      const expected = renderScaffold(block.id).body;
+      if (block.body !== expected) {
+        findings.push({
+          doc: surface.doc,
+          kind: "generated-scaffold-block",
+          claim: block.id,
+          line: block.line,
+          reason:
+            "generated scaffold block differs from the runtime scaffold renderer output.",
+        });
+      }
+    }
   }
 
-  for (const block of blocks) {
-    if (!isScaffoldId(block.id)) {
-      findings.push({
-        doc: CE_PLAN_TEMPLATE_REL,
-        kind: "generated-scaffold-block",
-        claim: block.id,
-        line: block.line,
-        reason: `generated scaffold marker names unknown scaffold id "${block.id}".`,
-      });
-      continue;
-    }
+  for (const surface of SCAFFOLD_POINTER_SURFACES) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, surface.doc),
+      surface.doc,
+      "contract-drift scaffold pointer check",
+    );
+    const pointers = extractScaffoldPointers(text);
+    const presentScaffoldIds = new Set(pointers.map((pointer) => pointer.id));
 
-    const expectedSource = expectedGeneratedScaffoldSource(block.id);
-    if (block.source !== expectedSource) {
+    for (const scaffoldId of surface.ids) {
+      if (presentScaffoldIds.has(scaffoldId)) continue;
       findings.push({
-        doc: CE_PLAN_TEMPLATE_REL,
-        kind: "generated-scaffold-block",
-        claim: block.id,
-        line: block.line,
-        reason: `generated scaffold marker source is "${block.source}", expected "${expectedSource}".`,
+        doc: surface.doc,
+        kind: "scaffold-pointer",
+        claim: scaffoldId,
+        reason: `missing scaffold-pointer marker for "${scaffoldId}"; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
       });
     }
 
-    if (block.body === null) {
-      findings.push({
-        doc: CE_PLAN_TEMPLATE_REL,
-        kind: "generated-scaffold-block",
-        claim: block.id,
-        line: block.line,
-        reason: `generated scaffold marker is malformed: ${block.malformedReason}.`,
-      });
-      continue;
-    }
+    for (const pointer of pointers) {
+      if (!isScaffoldId(pointer.id)) {
+        findings.push({
+          doc: surface.doc,
+          kind: "scaffold-pointer",
+          claim: pointer.id,
+          line: pointer.line,
+          reason: `scaffold pointer marker names unknown scaffold id "${pointer.id}".`,
+        });
+        continue;
+      }
 
-    const expected = renderScaffold(block.id).body;
-    if (block.body !== expected) {
-      findings.push({
-        doc: CE_PLAN_TEMPLATE_REL,
-        kind: "generated-scaffold-block",
-        claim: block.id,
-        line: block.line,
-        reason:
-          "generated scaffold block differs from the runtime scaffold renderer output.",
-      });
+      const expectedSource = expectedGeneratedScaffoldSource(pointer.id);
+      if (pointer.source !== expectedSource) {
+        findings.push({
+          doc: surface.doc,
+          kind: "scaffold-pointer",
+          claim: pointer.id,
+          line: pointer.line,
+          reason: `scaffold pointer marker source is "${pointer.source}", expected "${expectedSource}".`,
+        });
+      }
     }
+  }
+
+  for (const doc of SCAFFOLD_COMMAND_SURFACE_RELS) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, doc),
+      doc,
+      "contract-drift scaffold command check",
+    );
+    findings.push(...checkVisibleScaffoldCommands(text, doc));
   }
 
   return findings;
@@ -1787,18 +2044,14 @@ export type ScopedDoc = {
 };
 
 /**
- * The five operator-facing docs the drift check is scoped to. These are
- * structural file COORDINATES (the check's SCOPE), not contract VALUES (AC5):
- * they say WHICH docs to validate, never WHAT the contract is. The contract
- * facts themselves still come exclusively from `loadContractFacts()`.
+ * Operator-facing docs the drift check is scoped to. These are structural file
+ * COORDINATES (the check's SCOPE), not contract VALUES (AC5): they say WHICH
+ * docs to validate, never WHAT the contract is. The contract facts themselves
+ * still come exclusively from `loadContractFacts()`.
  *
- * `expectsClaims` marks the two docs the workflow relies on to carry contract
- * tokens (SKILL.md, issue-to-pr.md, and first-run-gotchas.md): if their
- * extraction yields ZERO contract claims, that is a drift finding (F21), not a
- * silent pass. README.md legitimately carries no route ids / field paths (only
- * scoped links and a couple of `cli.ts` command mentions), and
- * ledger-and-helper.md is covered by the gotchas relationship check, so neither
- * is marked `expectsClaims`.
+ * `expectsClaims` marks docs the workflow relies on to carry contract tokens:
+ * if extraction yields ZERO contract claims, that is a drift finding (F21),
+ * not a silent pass.
  *
  * Repo-relative so the orchestrator can resolve them against any `repoRoot`
  * (tests point at a fixture repo; production resolves against the real root)
@@ -1866,6 +2119,7 @@ function contractClaimCount(claims: DocClaims): number {
     claims.commands.length +
     claims.slices.length +
     claims.packetRoles.length +
+    claims.scaffoldCommands.length +
     claims.fieldPaths.length
   );
 }

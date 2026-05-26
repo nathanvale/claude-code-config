@@ -36,6 +36,7 @@ import {
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   LEDGER_BATCH_LIFECYCLE_FIELDS,
+  LEDGER_SCHEMA_POINTER_SLICES,
   ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
   RUNBOOK_VERSION_SKEW_STATES,
   TERMINAL_BATCH_STATUSES,
@@ -94,6 +95,7 @@ const CONTRACT_SLICES = [
   "batch_statuses",
   "candidate_batch_fields",
   "ledger_batch_lifecycle_fields",
+  "ledger_schema_pointer_slices",
   "builder_attempt_fields",
   "builder_attempt_statuses",
   "builder_attempt_types",
@@ -176,6 +178,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   },
   ledger_batch_lifecycle_fields: {
     values: [...LEDGER_BATCH_LIFECYCLE_FIELDS],
+    ordering: "catalog",
+  },
+  ledger_schema_pointer_slices: {
+    values: [...LEDGER_SCHEMA_POINTER_SLICES],
     ordering: "catalog",
   },
   builder_attempt_fields: {

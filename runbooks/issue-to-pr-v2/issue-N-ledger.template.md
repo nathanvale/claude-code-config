@@ -37,6 +37,9 @@ mismatched or missing value is a stop-required signal; the only way to
 keep running is to record an operator-authored continuation evidence
 row in `## Notes` (see the evidence shape below).
 
+Confirmation-state membership is
+`cli.ts contract confirmation_states --json`.
+
 ## Acceptance criteria
 
 <populated at stage 1 from user-confirmed AC list. Format: `- [ ]` checkboxes.>
