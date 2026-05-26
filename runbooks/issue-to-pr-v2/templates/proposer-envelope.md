@@ -39,37 +39,14 @@ Proposer candidate remains evidence only.
 `batch_id: final`, severity `P0|P1`, and status `open`; otherwise the CLI
 returns a `packet-render-failed` envelope.
 
-The rendered packet **MUST NOT** contain any commit-write slot
-(`commit_sha`, `builder_commits`), `builder_attempts` from any batch, the
-full ledger contents, unrelated raw Validator envelopes, findings outside
-`batch_id: final`, or whole-plan replanning prompts.
-
-```yaml
-issue_number: <int>
-target_repo: "<owner/repo>"
-
-final_finding_row:
-  id: <finding-id>
-  signature: <kebab-case signature>
-  persona: <reviewer name>
-  severity: <P0 | P1>
-  summary: "<text>"
-  evidence: "<reviewer evidence; read-only context>"
-
-confirmed_batch_summaries:   # only what Proposer needs for terminal deps and file-scope checks
-  - id: <batch-id>
-    files: []
-    status: <converged | accepted-risk>
-
-confirmation_state_snapshot:
-  acceptance_criteria: <pending | confirmed | stale | blocked>
-  batch_contract: <pending | confirmed | stale | blocked>
-  digests: <pending | confirmed | stale | blocked>
-
-local_law_read_order: <see references/builder-dispatch.md>
-patch_proposal_helper_contract: <see references/stage-4-batch-loop.md final-review patch-batch decision tree>
-scratch_proposal_schema: <see templates/patch-proposal.md>
-```
+The rendered packet body is runtime-owned by `renderProposerPacket()`.
+Use `cli.ts packet proposer --json` for the concrete packet fields.
+The renderer must include the cited final finding, terminal confirmed-batch
+summaries, confirmation-state snapshot, and pointers to Local Law, helper
+contract, and scratch schema. It must not contain any commit-write slot,
+`builder_attempts` from any batch, full ledger contents, unrelated raw
+Validator envelopes, findings outside `batch_id: final`, or whole-plan
+replanning prompts.
 
 The proposal Work Packet **does not** contain unrelated raw Validator
 envelopes, full ledger contents, or whole-plan replanning prompts.
@@ -97,20 +74,18 @@ The Proposer returns exactly one of the following shapes:
 ```yaml
 status: candidate-patch-batch
 candidate_patch_batch:
-  id: patch-<NNN>
-  name: "<Title>"
-  goal: "<one-sentence outcome that addresses the cited finding>"
-  files:
-    - <repo-relative path>
-  depends_on:
-    - <terminal ledger-backed batch id>
-  execution_mode: <tdd | proof_first | change_first>
-  acceptance_tests:
-    - "AC <i> holds: <verifiable behaviour>"   # patch ac_mapping is [] by design
-  ac_mapping: []
-  rationale: "<may begin with new-file-patch-exception: | high-risk-new-file-patch-exception: | contract-softening-exception: when applicable>"
+  <one object matching patch_batches[0] in the patch-proposal candidate scaffold>
 evidence_summary: "<one paragraph: ledger and code evidence consulted; no edits performed>"
 ```
+
+Candidate patch-batch scaffold:
+`cli.ts scaffold patch-proposal-candidate-batch --json`.
+
+<!-- scaffold-pointer id=patch-proposal-candidate-batch source="cli.ts scaffold patch-proposal-candidate-batch --json" -->
+
+The scaffold root `patch_batches:` is scratch-file wrapping only. Proposer
+returns its single list item under `candidate_patch_batch`; Orchestrator wraps
+that object into `patch_batches:` when writing the scratch file.
 
 ### Fail-stop
 

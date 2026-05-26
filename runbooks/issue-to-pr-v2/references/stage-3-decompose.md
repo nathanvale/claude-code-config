@@ -125,14 +125,14 @@ responsibility, not a CLI command.
    after `## Batches` is written, because that is the value every later stage
    transition re-checks against. It is byte-identical to the step-6 candidate
    digest only when the emitted batches block is pasted into `## Batches`
-   verbatim. The digest covers the contract fields (`id`, `name`, `goal`,
-   `files`, `depends_on`, `supersedes`, `execution_mode`, `acceptance_tests`,
-   `ac_mapping`, `rationale`) and is independent of YAML serialization, so
-   reordering batches or editing any of those fields on paste — for example
-   appending a user-decision note to a `rationale` — changes the ledger digest
-   and routes `blocked-batch-contract-stale`. Keep user-decision notes in
-   `## Notes`, never in a batch `rationale`. A resumed agent can regenerate the candidate DAG from
-   `plan_path` and compare it with these stored digests by running
+   verbatim. The digest covers the runtime-owned fields from
+   `cli.ts contract candidate_batch_fields --json` and is independent of YAML
+   serialization, so reordering batches or editing any of those fields on
+   paste — for example appending a user-decision note to a `rationale` —
+   changes the ledger digest and routes `blocked-batch-contract-stale`. Keep
+   user-decision notes in `## Notes`, never in a batch `rationale`. A resumed
+   agent can regenerate the candidate DAG from `plan_path` and compare it with
+   these stored digests by running
    `cli.ts state <ledger-path> --json` (the `confirmation_state` and
    `digest_drift` fields surface drift without re-reading source state
    inline). Leave `## Batches` unchanged until the re-check passes.

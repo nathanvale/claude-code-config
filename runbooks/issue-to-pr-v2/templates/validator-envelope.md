@@ -43,23 +43,12 @@ facts and never as authorized prompt content. For Orchestrator-inline evidence,
 the renderer emits compact inline evidence and rejects any Builder evidence
 payload.
 
-The rendered packet **MUST NOT** include findings from other batches, the
-full ledger, Builder fix prose, or any commit-write or ledger-write slot.
-
-```yaml
-persona: <exact skill name, including plugin namespace when present>
-commit_ref_or_range: "<sha | range>"
-touched_files: []
-batch_id: <batch-id | stage-3 | final>
-batch_goal: "<one-sentence outcome>"
-batch_files: []
-execution_mode: <tdd | proof_first | change_first>
-acceptance_tests: []
-ac_mapping: []
-relevant_ledger_findings: []   # rows from ## Findings data this batch only
-evidence_source: builder
-orchestrator_transient_focus: []   # passed only as Validator focus; never persisted as Orchestrator-authored findings
-```
+The rendered packet body is runtime-owned by `renderValidatorPacket()`.
+Use `cli.ts packet validator --json` for the concrete packet fields.
+The renderer must include persona, commit, touched files, target batch context,
+batch-local findings, evidence source, lane-specific evidence, and transient
+Validator focus. It must not include findings from other batches, the full
+ledger, Builder fix prose, or any commit-write or ledger-write slot.
 
 Builder evidence block:
 
@@ -124,22 +113,23 @@ testing_gaps: []
 
 `findings: []`, `{"findings":[]}`, and the full envelope with an empty
 `findings` array all mean "no rows from this persona." If `findings` is
-non-empty, each row must be ledger-ready with `id`, `batch_id`, `signature`,
-`persona`, `severity`, `status`, `summary`, and `resolution`. Extra envelope
-metadata is not copied into `## Findings data`.
+non-empty, each row must match the runtime-owned finding-row scaffold below.
+Extra envelope metadata is not copied into `## Findings data`.
 
 ### Finding row schema
 
+<!-- generated-scaffold:start id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
 ```yaml
-id: <unique within this batch_id>
+id: <finding-id>
 batch_id: <batch-id | stage-3 | final>
-signature: <stable kebab-case signature; same finding across personas must share signature>
+signature: <stable-kebab-signature>
 persona: <reviewer>
-severity: <P0 | P1 | P2 | P3>   # from this persona's own rubric; runbook does not re-rank
-status: <open | fixed | accepted-risk | deferred-P2 | deferred-P3 | out-of-scope-for-this-issue | ADR-contradicts-<id> | superseded>
-summary: "<verbatim text that the rendered ## Findings table must equal>"
-resolution: "<commit <sha> | patch-batch patch-NNN | plan-revision <sha> | accepted-risk: <reason> | deferred-P2 | deferred-P3 | out-of-scope-for-this-issue: <reason> | ADR-contradicts-<id> | superseded-by-<finding-id> | null>"
+severity: P2  # P0 | P1 | P2 | P3
+status: open  # open | fixed | accepted-risk | deferred-P2 | deferred-P3 | out-of-scope-for-this-issue | superseded | ADR-contradicts-<id>
+summary: "<verbatim table summary>"
+resolution: null
 ```
+<!-- generated-scaffold:end id=ledger-finding-row -->
 
 When a persona's output suggests a fix in prose, the Orchestrator ignores the
 suggestion text and records only the finding row.

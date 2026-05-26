@@ -70,7 +70,8 @@ import { execPath } from "node:process";
 import {
   isScaffoldId,
   renderScaffold,
-  type ScaffoldId,
+  ScaffoldRenderError,
+  SCAFFOLD_IDS,
 } from "./lib/scaffolds";
 
 /**
@@ -129,10 +130,21 @@ function defaultCliPath(): string {
 }
 
 /**
+ * Default per-call deadline for `readCliData` subprocesses, in ms. The
+ * runbook CLI is local and synchronous so 10s is generous; the bound is
+ * here to fail loudly (CI-friendly) if cli.ts ever hangs on a corrupted
+ * ledger, blocked stdin, or filesystem stall rather than letting
+ * `loadContractFacts` block indefinitely across its four sequential
+ * subprocess reads.
+ */
+const READ_CLI_DEADLINE_MS = 10_000;
+
+/**
  * Spawn the read-only CLI with the given args and return the parsed success
  * envelope's `data`. Throws a clear, command-naming Error when the
- * subprocess exits non-zero, emits no parseable JSON, or returns a non-ok
- * envelope (AC6). Never returns empty facts on failure.
+ * subprocess exits non-zero, emits no parseable JSON, returns a non-ok
+ * envelope (AC6), or exceeds {@link READ_CLI_DEADLINE_MS}. Never returns
+ * empty facts on failure.
  */
 async function readCliData(
   cliPath: string,
@@ -147,11 +159,33 @@ async function readCliData(
     stderr: "pipe",
   });
 
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      proc.kill();
+      reject(
+        new Error(
+          `contract-fact loader: "${label}" exceeded ${READ_CLI_DEADLINE_MS}ms deadline; killed.`,
+        ),
+      );
+    }, READ_CLI_DEADLINE_MS);
+  });
+
+  let stdout: string;
+  let stderr: string;
+  let exitCode: number;
+  try {
+    [stdout, stderr, exitCode] = await Promise.race([
+      Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]),
+      deadline,
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 
   if (exitCode !== 0) {
     throw new Error(
@@ -516,8 +550,10 @@ export async function loadContractFacts(
   if (
     !stateShape ||
     typeof stateShape !== "object" ||
+    Array.isArray(stateShape) ||
     !diagnoseShape ||
-    typeof diagnoseShape !== "object"
+    typeof diagnoseShape !== "object" ||
+    Array.isArray(diagnoseShape)
   ) {
     throw new Error(
       "contract-fact loader: --help is missing state_response_shape / diagnose_response_shape",
@@ -969,6 +1005,7 @@ export type DriftKind =
   | "ledger-schema-slice-pointer"
   | "generated-scaffold-block"
   | "scaffold-pointer"
+  | "scaffold-inventory"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1148,6 +1185,10 @@ const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
 const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 const CE_PLAN_TEMPLATE_REL =
   "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
+const PROPOSER_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/proposer-envelope.md";
+const PATCH_PROPOSAL_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/patch-proposal.md";
 const BUILDER_RETURN_TEMPLATE_REL =
   "runbooks/issue-to-pr-v2/templates/builder-return-envelope.md";
 const BUILDER_WORK_PACKET_TEMPLATE_REL =
@@ -1158,53 +1199,414 @@ const BUILDER_DISPATCH_REL =
   "runbooks/issue-to-pr-v2/references/builder-dispatch.md";
 const FINDINGS_AND_VALIDATORS_REL =
   "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
+const STAGE_4_BATCH_LOOP_REL =
+  "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md";
 
 type ScaffoldSurface = {
   doc: string;
-  ids: readonly ScaffoldId[];
+  ids: readonly string[];
 };
 
-const GENERATED_SCAFFOLD_SURFACES = [
+type ScaffoldInventoryClassification =
+  | "generated-block"
+  | "checked-pointer"
+  | "prose-owned-shape"
+  | "removed";
+
+type ScaffoldInventoryEntry = {
+  doc: string;
+  coordinate: string;
+  classification: ScaffoldInventoryClassification;
+  scaffoldId?: string;
+  requiredText?: string;
+  fenceContains?: string;
+  forbiddenText?: string;
+};
+
+const PREREQUISITE_SCAFFOLD_IDS = [
+  "ce-plan-candidate-batch",
+  "replacement-candidate-batch",
+  "patch-proposal-candidate-batch",
+  "builder-return-envelope",
+  "builder-attempt-compact",
+  "validator-builder-evidence",
+  "validator-inline-evidence",
+  "ledger-empty-batches",
+  "ledger-empty-findings-data",
+  "ledger-batch-lifecycle-defaults",
+  "ledger-finding-row",
+  "notes-implementation-attempt-checkpoint",
+  "notes-validator-wave-completed",
+  "notes-runbook-version-skew-continuation",
+  "workflow-learnings-empty",
+] as const;
+
+const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
     doc: CE_PLAN_TEMPLATE_REL,
-    ids: ["ce-plan-candidate-batch"],
+    coordinate: "## Addendum body / candidate batch scaffold",
+    classification: "generated-block",
+    scaffoldId: "ce-plan-candidate-batch",
+  },
+  {
+    doc: PATCH_PROPOSAL_TEMPLATE_REL,
+    coordinate: "## Scratch file shape / patch batch scaffold",
+    classification: "generated-block",
+    scaffoldId: "patch-proposal-candidate-batch",
+  },
+  {
+    doc: PATCH_PROPOSAL_TEMPLATE_REL,
+    coordinate: "## Scratch file shape / dynamic final_finding member list",
+    classification: "removed",
+    forbiddenText: "final_finding fields:",
   },
   {
     doc: BUILDER_RETURN_TEMPLATE_REL,
-    ids: ["builder-return-envelope"],
+    coordinate: "## Authoritative source / return envelope pointer",
+    classification: "checked-pointer",
+    scaffoldId: "builder-return-envelope",
   },
-  {
-    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
-    ids: ["builder-return-envelope"],
-  },
-  {
-    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
-    ids: ["validator-builder-evidence", "validator-inline-evidence"],
-  },
-] as const satisfies readonly ScaffoldSurface[];
-
-const SCAFFOLD_POINTER_SURFACES = [
   {
     doc: BUILDER_RETURN_TEMPLATE_REL,
-    ids: [
-      "builder-return-envelope",
-      "builder-attempt-compact",
-      "validator-builder-evidence",
-    ],
+    coordinate: "## Envelope shape / return envelope scaffold",
+    classification: "generated-block",
+    scaffoldId: "builder-return-envelope",
+  },
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    coordinate: "## What the Orchestrator records / compact attempt pointer",
+    classification: "checked-pointer",
+    scaffoldId: "builder-attempt-compact",
+  },
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    coordinate: "## What the Orchestrator records / Validator evidence pointer",
+    classification: "checked-pointer",
+    scaffoldId: "validator-builder-evidence",
   },
   {
     doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
-    ids: ["builder-return-envelope"],
+    coordinate: "## Packet slots / dynamic Builder packet body",
+    classification: "removed",
+    forbiddenText: "batch_contract:\n  id: <slug>",
+  },
+  {
+    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
+    coordinate: "## Return envelope / Builder return pointer",
+    classification: "checked-pointer",
+    scaffoldId: "builder-return-envelope",
+  },
+  {
+    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
+    coordinate: "## Return envelope / Builder return scaffold",
+    classification: "generated-block",
+    scaffoldId: "builder-return-envelope",
   },
   {
     doc: BUILDER_DISPATCH_REL,
-    ids: ["builder-return-envelope", "builder-attempt-compact"],
+    coordinate: "## Return envelope / Builder return pointer",
+    classification: "checked-pointer",
+    scaffoldId: "builder-return-envelope",
+  },
+  {
+    doc: BUILDER_DISPATCH_REL,
+    coordinate: "## Return envelope / compact attempt pointer",
+    classification: "checked-pointer",
+    scaffoldId: "builder-attempt-compact",
+  },
+  {
+    doc: BUILDER_DISPATCH_REL,
+    coordinate: "## Replacement batches and supersedes / replacement pointer",
+    classification: "checked-pointer",
+    scaffoldId: "replacement-candidate-batch",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "## Packet slots / dynamic Proposer packet body",
+    classification: "removed",
+    forbiddenText: "final_finding_row:\n  id: <finding-id>",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "### Success: one candidate patch-batch",
+    classification: "prose-owned-shape",
+    fenceContains: "status: candidate-patch-batch",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "Candidate patch-batch pointer",
+    classification: "checked-pointer",
+    scaffoldId: "patch-proposal-candidate-batch",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "### Fail-stop",
+    classification: "prose-owned-shape",
+    fenceContains: "status: fail-stop",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Packet slots / dynamic Validator packet body",
+    classification: "removed",
+    forbiddenText: 'commit_ref_or_range: "<sha | range>"',
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "Builder evidence block",
+    classification: "generated-block",
+    scaffoldId: "validator-builder-evidence",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "Orchestrator-inline evidence selector",
+    classification: "prose-owned-shape",
+    fenceContains: "evidence_source: orchestrator_inline",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "Inline evidence block",
+    classification: "generated-block",
+    scaffoldId: "validator-inline-evidence",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Return envelope",
+    classification: "prose-owned-shape",
+    fenceContains: "reviewer: <persona>",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Return envelope / finding row member list",
+    classification: "removed",
+    forbiddenText: "each row must be ledger-ready with `id`,",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "### Finding row schema",
+    classification: "generated-block",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "frontmatter ledger metadata",
+    classification: "prose-owned-shape",
+    requiredText: 'runbook_version: "3"',
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Batches / replacement row pointer",
+    classification: "checked-pointer",
+    scaffoldId: "replacement-candidate-batch",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Batches / lifecycle defaults pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-batch-lifecycle-defaults",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Batches / empty section scaffold",
+    classification: "generated-block",
+    scaffoldId: "ledger-empty-batches",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Findings data / finding row pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Findings data / empty section scaffold",
+    classification: "generated-block",
+    scaffoldId: "ledger-empty-findings-data",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Notes / implementation attempt checkpoint pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-implementation-attempt-checkpoint",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Notes / Validator wave pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-validator-wave-completed",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Notes / version-skew continuation pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-runbook-version-skew-continuation",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Workflow Learnings / member list",
+    classification: "removed",
+    forbiddenText: "Required entry fields:",
+  },
+  {
+    doc: LEDGER_TEMPLATE_REL,
+    coordinate: "## Workflow Learnings / empty state scaffold",
+    classification: "generated-block",
+    scaffoldId: "workflow-learnings-empty",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / empty batches pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-empty-batches",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / lifecycle defaults pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-batch-lifecycle-defaults",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / empty findings pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-empty-findings-data",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / finding row pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / Notes checkpoint pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-implementation-attempt-checkpoint",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / Notes Validator wave pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-validator-wave-completed",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / Notes version-skew pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-runbook-version-skew-continuation",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / workflow learnings pointer",
+    classification: "checked-pointer",
+    scaffoldId: "workflow-learnings-empty",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Notes implementation evidence / checkpoint pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-implementation-attempt-checkpoint",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Notes implementation evidence / Validator wave pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-validator-wave-completed",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Workflow Learnings entry fields",
+    classification: "removed",
+    forbiddenText: "Required entry fields:",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Workflow Learnings / empty state pointer",
+    classification: "checked-pointer",
+    scaffoldId: "workflow-learnings-empty",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Continuation evidence shape / version-skew pointer",
+    classification: "checked-pointer",
+    scaffoldId: "notes-runbook-version-skew-continuation",
+  },
+  {
+    doc: STAGE_4_BATCH_LOOP_REL,
+    coordinate: "### Packet rendering for Stage 4 dispatch / patch proposal pointer",
+    classification: "checked-pointer",
+    scaffoldId: "patch-proposal-candidate-batch",
   },
   {
     doc: FINDINGS_AND_VALIDATORS_REL,
-    ids: ["validator-builder-evidence", "validator-inline-evidence"],
+    coordinate: "## Validator invocation rules / Builder evidence pointer",
+    classification: "checked-pointer",
+    scaffoldId: "validator-builder-evidence",
   },
-] as const satisfies readonly ScaffoldSurface[];
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / inline evidence pointer",
+    classification: "checked-pointer",
+    scaffoldId: "validator-inline-evidence",
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / finding row pointer",
+    classification: "checked-pointer",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / finding row member list",
+    classification: "removed",
+    forbiddenText: "A non-empty finding is ledger-ready only when it has `id`,",
+  },
+];
+
+export function scaffoldInventoryClassifications(): readonly ScaffoldInventoryEntry[] {
+  return SCAFFOLD_INVENTORY;
+}
+
+function scaffoldSurfacesFromInventory(
+  classification: "generated-block" | "checked-pointer",
+): ScaffoldSurface[] {
+  const byDoc = new Map<string, string[]>();
+  for (const entry of SCAFFOLD_INVENTORY) {
+    if (entry.classification !== classification || !entry.scaffoldId) continue;
+    const ids = byDoc.get(entry.doc) ?? [];
+    ids.push(entry.scaffoldId);
+    byDoc.set(entry.doc, ids);
+  }
+  return [...byDoc].map(([doc, ids]) => ({ doc, ids }));
+}
+
+const GENERATED_SCAFFOLD_SURFACES =
+  scaffoldSurfacesFromInventory("generated-block");
+const SCAFFOLD_POINTER_SURFACES =
+  scaffoldSurfacesFromInventory("checked-pointer");
+
+/**
+ * Returns the set of scaffold ids referenced across any drift-check surface
+ * (generated-block, pointer, or command). A scaffold id in {@link SCAFFOLD_IDS}
+ * absent from this set has no drift enforcement and would silently skip
+ * surface-level checks — see the SSOT exhaustiveness test in
+ * `contract-drift.test.ts`.
+ */
+export function scaffoldIdsCoveredBySurfaces(): Set<string> {
+  const covered = new Set<string>();
+  for (const surface of GENERATED_SCAFFOLD_SURFACES) {
+    for (const id of surface.ids) covered.add(id);
+  }
+  for (const surface of SCAFFOLD_POINTER_SURFACES) {
+    for (const id of surface.ids) covered.add(id);
+  }
+  return covered;
+}
+
+function countById(ids: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  return counts;
+}
 
 const SCAFFOLD_COMMAND_SURFACE_RELS = [
   ...new Set([
@@ -1415,7 +1817,6 @@ function escapeRegExp(value: string): string {
 }
 
 /**
-/**
  * Extract a markdown section body by heading-label pattern. Returns `null`
  * when no matching heading exists so callers can emit a section-missing
  * finding rather than silently scan the whole document (which would let
@@ -1479,15 +1880,6 @@ function ledgerLifecycleSliceName(facts: ContractFacts): string {
   return slice;
 }
 
-function ledgerSchemaPointerSlices(facts: ContractFacts): string[] {
-  if (facts.ledgerSchemaPointerSlices.length === 0) {
-    throw new Error(
-      "contract-drift ledger schema check: live CLI has no ledger schema pointer slices for ledger schema docs to point at.",
-    );
-  }
-  return facts.ledgerSchemaPointerSlices;
-}
-
 /**
  * Options for the U7 ledger lifecycle field drift check.
  *
@@ -1524,7 +1916,7 @@ export async function checkLedgerLifecycleFieldDrift(
   const findings: DriftFinding[] = [];
   const facts = await loadContractFacts({ cliPath });
   const lifecycleSlice = ledgerLifecycleSliceName(facts);
-  const pointerSlices = ledgerSchemaPointerSlices(facts);
+  const pointerSlices = facts.ledgerSchemaPointerSlices;
 
   const templateText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_TEMPLATE_REL),
@@ -1604,6 +1996,8 @@ type GeneratedScaffoldBlock = {
   source: string;
   body: string | null;
   line: number;
+  startIndex: number;
+  endIndex: number;
   malformedReason?: string;
 };
 
@@ -1616,13 +2010,19 @@ type ScaffoldMarker = {
   id: string;
   line: number;
 };
+type YamlFence = {
+  body: string;
+  line: number;
+  startIndex: number;
+  endIndex: number;
+};
 
 const GENERATED_SCAFFOLD_START_RE =
   /<!--\s*generated-scaffold:start\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
 const SCAFFOLD_POINTER_RE =
   /<!--\s*scaffold-pointer\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
 
-function expectedGeneratedScaffoldSource(id: ScaffoldId): string {
+function expectedGeneratedScaffoldSource(id: string): string {
   return `cli.ts scaffold ${id} --json`;
 }
 
@@ -1684,12 +2084,15 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
         source,
         body: null,
         line: lineOf(text, startIndex),
+        startIndex,
+        endIndex: text.length,
         malformedReason: "missing generated-scaffold end marker",
       });
       continue;
     }
 
     const region = text.slice(bodyStart, bodyStart + endMatch.index);
+    const endIndex = bodyStart + endMatch.index + endMatch[0].length;
     const parsed = parseGeneratedScaffoldRegion(region);
     if (parsed.body === null) {
       blocks.push({
@@ -1697,6 +2100,8 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
         source,
         body: null,
         line: lineOf(text, startIndex),
+        startIndex,
+        endIndex,
         malformedReason: parsed.malformedReason,
       });
       continue;
@@ -1707,6 +2112,8 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
       source,
       body: parsed.body,
       line: lineOf(text, startIndex),
+      startIndex,
+      endIndex,
     });
   }
   return blocks;
@@ -1722,6 +2129,172 @@ function extractScaffoldPointers(text: string): ScaffoldPointer[] {
     });
   }
   return pointers;
+}
+
+function extractYamlFences(text: string): YamlFence[] {
+  const fences: YamlFence[] = [];
+  const fenceRe = /```ya?ml\n([\s\S]*?)\n```/g;
+  for (const match of text.matchAll(fenceRe)) {
+    const startIndex = match.index ?? 0;
+    fences.push({
+      body: `${match[1] ?? ""}\n`,
+      line: lineOf(text, startIndex),
+      startIndex,
+      endIndex: startIndex + match[0].length,
+    });
+  }
+  return fences;
+}
+
+function isInsideGeneratedBlock(
+  fence: YamlFence,
+  block: GeneratedScaffoldBlock,
+): boolean {
+  return fence.startIndex > block.startIndex && fence.endIndex < block.endIndex;
+}
+
+function lineOfFirstText(text: string, needle: string): number | undefined {
+  const index = text.indexOf(needle);
+  return index === -1 ? undefined : lineOf(text, index);
+}
+
+export type ScaffoldInventoryDriftOptions = {
+  repoRoot?: string;
+  scaffoldIds?: readonly string[];
+};
+
+export async function checkScaffoldInventoryDrift(
+  opts: ScaffoldInventoryDriftOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const runtimeScaffoldIds = new Set(opts.scaffoldIds ?? SCAFFOLD_IDS);
+  const findings: DriftFinding[] = [];
+
+  for (const scaffoldId of PREREQUISITE_SCAFFOLD_IDS) {
+    if (runtimeScaffoldIds.has(scaffoldId)) continue;
+    findings.push({
+      doc: "runbooks/issue-to-pr-v2/lib/scaffolds.ts",
+      kind: "scaffold-inventory",
+      claim: scaffoldId,
+      reason:
+        "required predecessor scaffold id is missing from the runtime scaffold catalog; rebase or land prerequisite scaffold slices before sealing inventory.",
+    });
+  }
+
+  for (const entry of SCAFFOLD_INVENTORY) {
+    if (
+      (entry.classification === "generated-block" ||
+        entry.classification === "checked-pointer") &&
+      entry.scaffoldId &&
+      !runtimeScaffoldIds.has(entry.scaffoldId)
+    ) {
+      findings.push({
+        doc: entry.doc,
+        kind: "scaffold-inventory",
+        claim: entry.scaffoldId,
+        reason: `${entry.classification} inventory entry at ${entry.coordinate} names a scaffold id absent from the runtime catalog.`,
+      });
+    }
+  }
+
+  const docs = [...new Set(SCAFFOLD_INVENTORY.map((entry) => entry.doc))];
+  for (const doc of docs) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, doc),
+      doc,
+      "contract-drift scaffold inventory check",
+    );
+    const entries = SCAFFOLD_INVENTORY.filter((entry) => entry.doc === doc);
+    const generatedIds = new Set(
+      entries
+        .filter((entry) => entry.classification === "generated-block")
+        .map((entry) => entry.scaffoldId)
+        .filter((id): id is string => typeof id === "string"),
+    );
+    const proseFences = entries.filter(
+      (entry) =>
+        entry.classification === "prose-owned-shape" && entry.fenceContains,
+    );
+    const generatedBlocks = extractGeneratedScaffoldBlocks(text);
+    const yamlFences = extractYamlFences(text);
+
+    for (const block of generatedBlocks) {
+      if (generatedIds.has(block.id)) continue;
+      findings.push({
+        doc,
+        kind: "scaffold-inventory",
+        claim: block.id,
+        line: block.line,
+        reason:
+          "generated-scaffold marker is not classified in the scaffold inventory.",
+      });
+    }
+
+    for (const entry of entries) {
+      if (
+        entry.classification === "prose-owned-shape" &&
+        entry.requiredText &&
+        !text.includes(entry.requiredText)
+      ) {
+        findings.push({
+          doc,
+          kind: "scaffold-inventory",
+          claim: entry.coordinate,
+          reason: `prose-owned inventory entry is missing required anchor text: ${entry.requiredText}`,
+        });
+      }
+
+      if (
+        entry.classification === "prose-owned-shape" &&
+        entry.fenceContains &&
+        !yamlFences.some((fence) => fence.body.includes(entry.fenceContains ?? ""))
+      ) {
+        findings.push({
+          doc,
+          kind: "scaffold-inventory",
+          claim: entry.coordinate,
+          reason: `prose-owned YAML shape is missing its inventoried fence anchor: ${entry.fenceContains}`,
+        });
+      }
+
+      if (
+        entry.classification === "removed" &&
+        entry.forbiddenText &&
+        text.includes(entry.forbiddenText)
+      ) {
+        findings.push({
+          doc,
+          kind: "scaffold-inventory",
+          claim: entry.coordinate,
+          line: lineOfFirstText(text, entry.forbiddenText),
+          reason: `removed scaffold surface reappeared; forbidden text matched: ${entry.forbiddenText}`,
+        });
+      }
+    }
+
+    for (const fence of yamlFences) {
+      const generatedBlock = generatedBlocks.find((block) =>
+        isInsideGeneratedBlock(fence, block),
+      );
+      if (generatedBlock && generatedIds.has(generatedBlock.id)) continue;
+
+      const isClassifiedProseFence = proseFences.some((entry) =>
+        fence.body.includes(entry.fenceContains ?? ""),
+      );
+      if (isClassifiedProseFence) continue;
+
+      findings.push({
+        doc,
+        kind: "scaffold-inventory",
+        claim: "unclassified-yaml-fence",
+        line: fence.line,
+        reason:
+          "fenced YAML block is not a generated scaffold block and is not classified as prose-owned in the scaffold inventory.",
+      });
+    }
+  }
+
+  return findings;
 }
 
 function scaffoldMarkers(text: string): ScaffoldMarker[] {
@@ -1781,7 +2354,9 @@ export async function checkGeneratedScaffoldBlocksDrift(
   opts: GeneratedScaffoldDriftOptions = {},
 ): Promise<DriftFinding[]> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
-  const findings: DriftFinding[] = [];
+  const findings: DriftFinding[] = await checkScaffoldInventoryDrift({
+    repoRoot,
+  });
 
   for (const surface of GENERATED_SCAFFOLD_SURFACES) {
     const text = await readScopedDocOrThrow(
@@ -1790,15 +2365,17 @@ export async function checkGeneratedScaffoldBlocksDrift(
       "contract-drift generated scaffold check",
     );
     const blocks = extractGeneratedScaffoldBlocks(text);
-    const presentScaffoldIds = new Set(blocks.map((block) => block.id));
+    const presentScaffoldCounts = countById(blocks.map((block) => block.id));
 
-    for (const scaffoldId of surface.ids) {
-      if (presentScaffoldIds.has(scaffoldId)) continue;
+    for (const [scaffoldId, expectedCount] of countById(surface.ids)) {
+      if (!isScaffoldId(scaffoldId)) continue;
+      const presentCount = presentScaffoldCounts.get(scaffoldId) ?? 0;
+      if (presentCount >= expectedCount) continue;
       findings.push({
         doc: surface.doc,
         kind: "generated-scaffold-block",
         claim: scaffoldId,
-        reason: `missing generated-scaffold start marker for "${scaffoldId}"; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
+        reason: `missing generated-scaffold start marker for "${scaffoldId}"; expected ${expectedCount}, found ${presentCount}; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
       });
     }
 
@@ -1836,7 +2413,22 @@ export async function checkGeneratedScaffoldBlocksDrift(
         continue;
       }
 
-      const expected = renderScaffold(block.id).body;
+      let expected: string;
+      try {
+        expected = renderScaffold(block.id).body;
+      } catch (err) {
+        if (err instanceof ScaffoldRenderError) {
+          findings.push({
+            doc: surface.doc,
+            kind: "generated-scaffold-block",
+            claim: block.id,
+            line: block.line,
+            reason: `runtime scaffold renderer for "${block.id}" threw: ${err.message}`,
+          });
+          continue;
+        }
+        throw err;
+      }
       if (block.body !== expected) {
         findings.push({
           doc: surface.doc,
@@ -1857,15 +2449,17 @@ export async function checkGeneratedScaffoldBlocksDrift(
       "contract-drift scaffold pointer check",
     );
     const pointers = extractScaffoldPointers(text);
-    const presentScaffoldIds = new Set(pointers.map((pointer) => pointer.id));
+    const presentScaffoldCounts = countById(pointers.map((pointer) => pointer.id));
 
-    for (const scaffoldId of surface.ids) {
-      if (presentScaffoldIds.has(scaffoldId)) continue;
+    for (const [scaffoldId, expectedCount] of countById(surface.ids)) {
+      if (!isScaffoldId(scaffoldId)) continue;
+      const presentCount = presentScaffoldCounts.get(scaffoldId) ?? 0;
+      if (presentCount >= expectedCount) continue;
       findings.push({
         doc: surface.doc,
         kind: "scaffold-pointer",
         claim: scaffoldId,
-        reason: `missing scaffold-pointer marker for "${scaffoldId}"; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
+        reason: `missing scaffold-pointer marker for "${scaffoldId}"; expected ${expectedCount}, found ${presentCount}; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
       });
     }
 

@@ -48,39 +48,34 @@ The rendered scratch **MUST NOT** include more than one `patch_batches`
 entry, wildcard paths, non-empty `ac_mapping`, or findings beyond the
 cited `final_finding`.
 
-The scratch file is a fenced YAML document (no XML-style wrapping). Exactly
-one entry under `patch_batches`. Concrete paths only; no wildcards.
+The submitted scratch file is one fenced YAML document (no XML-style
+wrapping). Runtime rendering owns the full `final_finding:` shape and the
+single `patch_batches:` entry. Use values from the cited `## Findings data`
+row. Concrete paths only; no wildcards.
 
+Candidate patch-batch scaffold fragment:
+`cli.ts scaffold patch-proposal-candidate-batch --json`.
+
+Paste the fragment below after `final_finding:` in the same fenced YAML block.
+Do not submit it as a second fence.
+
+<!-- generated-scaffold:start id=patch-proposal-candidate-batch source="cli.ts scaffold patch-proposal-candidate-batch --json" -->
 ```yaml
-final_finding:
-  id: <ledger finding id>
-  signature: <stable kebab-case signature>
-  persona: <reviewer name>
-  severity: <P0 | P1>
-  summary: "<verbatim from ## Findings data>"
-
 patch_batches:
-  - id: patch-<NNN>            # incrementing; helper rejects collisions with existing ledger ids
+  - id: patch-<NNN>
     name: "<Title>"
-    goal: "<one-sentence outcome that addresses final_finding.signature>"
+    goal: "<one-sentence outcome that addresses the final-review finding>"
     files:
-      - <repo-relative path>   # must already be in some confirmed batch's files
-                               # OR carry an explicit rationale prefix (see below)
+      - <repo-relative path>
     depends_on:
-      - <terminal ledger-backed batch id>   # converged or accepted-risk
-    execution_mode: <tdd | proof_first | change_first>
+      - <terminal ledger-backed batch id>
+    execution_mode: tdd  # tdd | proof_first | change_first
     acceptance_tests:
       - "AC <i> holds: <verifiable behaviour>"
-    ac_mapping: []   # patch batches do not map to ACs by design
-    rationale: |
-      <free-form prose; may start with one of:
-       - new-file-patch-exception: <reason>
-       - high-risk-new-file-patch-exception: <reason>
-       - contract-softening-exception: <reason>
-       - change_first-exception: <reason>
-       - high-risk-change_first-exception: <reason>
-       when the helper rules require it>
+    ac_mapping: []
+    rationale: "<may begin with new-file-patch-exception: | high-risk-new-file-patch-exception: | contract-softening-exception: | change_first-exception: | high-risk-change_first-exception: when applicable>"
 ```
+<!-- generated-scaffold:end id=patch-proposal-candidate-batch -->
 
 ## Rationale prefixes
 

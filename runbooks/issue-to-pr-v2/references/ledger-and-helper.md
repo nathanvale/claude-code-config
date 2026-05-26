@@ -162,6 +162,32 @@ Related existing slices:
 - `cli.ts contract final_verdicts --json`
 - `cli.ts contract confirmation_states --json`
 
+Ledger scaffold surfaces:
+
+- Empty batches: `cli.ts scaffold ledger-empty-batches --json`
+<!-- scaffold-pointer id=ledger-empty-batches source="cli.ts scaffold ledger-empty-batches --json" -->
+
+- Lifecycle defaults: `cli.ts scaffold ledger-batch-lifecycle-defaults --json`
+<!-- scaffold-pointer id=ledger-batch-lifecycle-defaults source="cli.ts scaffold ledger-batch-lifecycle-defaults --json" -->
+
+- Empty findings data: `cli.ts scaffold ledger-empty-findings-data --json`
+<!-- scaffold-pointer id=ledger-empty-findings-data source="cli.ts scaffold ledger-empty-findings-data --json" -->
+
+- Finding row: `cli.ts scaffold ledger-finding-row --json`
+<!-- scaffold-pointer id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
+
+- Notes checkpoint: `cli.ts scaffold notes-implementation-attempt-checkpoint --json`
+<!-- scaffold-pointer id=notes-implementation-attempt-checkpoint source="cli.ts scaffold notes-implementation-attempt-checkpoint --json" -->
+
+- Notes Validator wave: `cli.ts scaffold notes-validator-wave-completed --json`
+<!-- scaffold-pointer id=notes-validator-wave-completed source="cli.ts scaffold notes-validator-wave-completed --json" -->
+
+- Notes version-skew continuation: `cli.ts scaffold notes-runbook-version-skew-continuation --json`
+<!-- scaffold-pointer id=notes-runbook-version-skew-continuation source="cli.ts scaffold notes-runbook-version-skew-continuation --json" -->
+
+- Empty workflow learnings: `cli.ts scaffold workflow-learnings-empty --json`
+<!-- scaffold-pointer id=workflow-learnings-empty source="cli.ts scaffold workflow-learnings-empty --json" -->
+
 ### Frontmatter fields
 
 Required fields (set at Stage 1 unless noted):
@@ -235,14 +261,17 @@ Stage 4 records two structured Notes rows around every committed
 implementation attempt before a current-version batch may be terminal:
 
 - `implementation_attempt_checkpoint` is ledger-only evidence written before
-  Validator packet rendering. It cites `batch_id`, `implementation_commit`,
-  `attempt_lane` (`builder_attempts` or `orchestrator_inline_attempts`), and
-  `timestamp`.
+  Validator packet rendering.
 - `validator_wave_completed` is durable evidence written after the full
-  Validator wave. It cites the same `batch_id`, `implementation_commit`, and
-  `attempt_lane`, plus the `personas` set, packet `dispatch_evidence`
-  (`role: validator`, `target_id: <batch>@<commit>`, and
-  `cli_route_id: packet.validator`), `outcome`, and `findings`.
+  Validator wave.
+
+Scaffolds:
+
+- `cli.ts scaffold notes-implementation-attempt-checkpoint --json`
+<!-- scaffold-pointer id=notes-implementation-attempt-checkpoint source="cli.ts scaffold notes-implementation-attempt-checkpoint --json" -->
+
+- `cli.ts scaffold notes-validator-wave-completed --json`
+<!-- scaffold-pointer id=notes-validator-wave-completed source="cli.ts scaffold notes-validator-wave-completed --json" -->
 
 Both rows MUST cite a single resolved commit ref for `implementation_commit`
 and (for `validator_wave_completed`) for the `target_id` `<commit>` slot — not
@@ -296,29 +325,16 @@ canonical lifecycle metadata and dedupe; the ledger never duplicates the
 registry's canonical or lifecycle fields. Each ledger entry is a per-run
 evidence reference plus a `signature` cross-reference into the registry.
 
-Required entry fields:
+Runtime validation owns the required run-scoped evidence keys, optional keys,
+and closed-key whitelist for ledger entries. Canonical and lifecycle fields
+(`summary`, `owner`, `retirement_condition`, `disposition`, `status`,
+`confidence`, `follow_up`) are registry-only and must never appear in a ledger
+entry. The valid empty case is `workflow_learnings: []`: a run with no observed
+workflow learnings is the common path and must not block.
 
-- `signature` (string) — `sha256:<hex>` or stable slug. Resolves to the
-  canonical entry in the cross-run registry.
-- `affected_surface` (string) — which workflow surface the learning concerns;
-  matches the registry's evidence key of the same name.
-- `what_was_wrong` (string) — the observation captured during the run.
+Empty-state scaffold: `cli.ts scaffold workflow-learnings-empty --json`.
 
-Optional entry fields (capture what is known; absence is fine):
-
-- `discovery_method` — how the issue was found during the run.
-- `root_cause` — why it happened.
-- `scope` — blast radius or where else this would surface.
-- `proposed_fix` — suggested change at observation time.
-- `verification_idea` — how a later fix would be confirmed.
-
-Canonical and lifecycle fields (`summary`, `owner`, `retirement_condition`,
-`disposition`, `status`, `confidence`, `follow_up`) are registry-only and
-must never appear in a ledger entry. `decompose.ts
---validate-workflow-learnings` enforces this with a closed-key whitelist
-symmetric with the registry's `ALLOWED_EVIDENCE_KEYS` plus the `signature`
-cross-reference. The valid empty case is `workflow_learnings: []`: a run
-with no observed workflow learnings is the common path and must not block.
+<!-- scaffold-pointer id=workflow-learnings-empty source="cli.ts scaffold workflow-learnings-empty --json" -->
 
 ## Acceptance criteria and batches contract
 
@@ -417,24 +433,13 @@ rendered against a contract the runbook no longer honors.
 ### Continuation evidence shape (U6)
 
 Operators record continuation evidence in `## Notes` using a fenced YAML
-block prefixed by an HTML comment marker. Every field is required; a
-missing field disqualifies the row and the snapshot reports the
-underlying `missing` or `mismatched` skew.
+block prefixed by an HTML comment marker. Scaffold:
+`cli.ts scaffold notes-runbook-version-skew-continuation --json`.
 
-```text
-<!-- runbook-version-skew-continuation -->
-```
+<!-- scaffold-pointer id=notes-runbook-version-skew-continuation source="cli.ts scaffold notes-runbook-version-skew-continuation --json" -->
 
-```yaml
-runbook_version_skew_continuation:
-  ledger_version: "<value | null>"     # what the ledger says (or null)
-  runtime_version: "<value>"            # the RUNBOOK_VERSION the run is using
-  operator_decision: "<actor>"          # e.g. "Nathan @ 2026-05-22T19:00"
-  timestamp: "<ISO 8601>"
-  route_context: "<route id at the time of decision>"
-  reference_context: "<reference file the operator consulted>"
-  accepted_risk: "<one-line reason>"
-```
+Every scaffold field is required; a missing field disqualifies the row and the
+snapshot reports the underlying `missing` or `mismatched` skew.
 
 The parser additionally requires that `ledger_version` matches the
 actual ledger frontmatter value (or both are null) AND that

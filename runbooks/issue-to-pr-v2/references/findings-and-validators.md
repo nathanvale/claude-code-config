@@ -136,8 +136,11 @@ transient Validator focus, not orchestrator-authored findings.
      `findings` array all mean no rows from that persona.
    - Extra envelope metadata is not copied into `## Findings data`. Only
      ledger-ready findings are copied.
-   - A non-empty finding is ledger-ready only when it has `id`, `batch_id`,
-     `signature`, `persona`, `severity`, `status`, `summary`, and `resolution`.
+   - A non-empty finding is ledger-ready only when it matches the runtime-owned
+     finding-row scaffold: `cli.ts scaffold ledger-finding-row --json`.
+
+     <!-- scaffold-pointer id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
+
    - Missing `findings`, non-array `findings`, malformed JSON or YAML, or a
      partial finding is malformed output. Rerun that persona once with the
      envelope contract. If still malformed, treat as unavailable per the

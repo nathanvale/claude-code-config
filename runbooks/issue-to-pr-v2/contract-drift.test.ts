@@ -21,11 +21,15 @@ import {
   checkGeneratedScaffoldBlocksDrift,
   checkGotchasRelationship,
   checkLedgerLifecycleFieldDrift,
+  checkScaffoldInventoryDrift,
   compareClaimsToFacts,
   extractDocClaims,
   finiteChildKeys,
   loadContractFacts,
+  scaffoldInventoryClassifications,
+  scaffoldIdsCoveredBySurfaces,
 } from "./contract-drift";
+import { SCAFFOLD_IDS } from "./lib/scaffolds";
 
 const cliPath = join(import.meta.dir, "cli.ts");
 
@@ -945,6 +949,10 @@ const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const ledgerTemplatePath = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 const cePlanTemplatePath = "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
+const proposerTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/proposer-envelope.md";
+const patchProposalTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/patch-proposal.md";
 const builderReturnTemplatePath =
   "runbooks/issue-to-pr-v2/templates/builder-return-envelope.md";
 const builderWorkPacketTemplatePath =
@@ -955,6 +963,8 @@ const builderDispatchPath =
   "runbooks/issue-to-pr-v2/references/builder-dispatch.md";
 const findingsAndValidatorsPath =
   "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
+const stage4BatchLoopPath =
+  "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md";
 const scopedDocRels = [
   skillDocPath,
   readmeDocPath,
@@ -966,11 +976,14 @@ const driftSurfaceRels = [
   ...scopedDocRels,
   ledgerTemplatePath,
   cePlanTemplatePath,
+  proposerTemplatePath,
+  patchProposalTemplatePath,
   builderReturnTemplatePath,
   builderWorkPacketTemplatePath,
   validatorEnvelopeTemplatePath,
   builderDispatchPath,
   findingsAndValidatorsPath,
+  stage4BatchLoopPath,
 ] as const;
 
 /** Read one scoped doc's text by its repo-relative path. */
@@ -1428,10 +1441,93 @@ describe("U7: ledger schema docs stay aligned with emitted contract slices", () 
   });
 });
 
-describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () => {
+describe("issue 114/115/116/117: scaffold docs stay aligned with runtime renderers", () => {
   test("real generated scaffold blocks and checked pointers match runtime facts", async () => {
     const findings = await checkGeneratedScaffoldBlocksDrift({ repoRoot });
     expect(findings).toEqual([]);
+  });
+
+  test("scaffold inventory classifies ledger frontmatter and prose-owned YAML", () => {
+    const inventory = scaffoldInventoryClassifications();
+
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: ledgerTemplatePath,
+        classification: "prose-owned-shape",
+        coordinate: "frontmatter ledger metadata",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: proposerTemplatePath,
+        classification: "prose-owned-shape",
+        fenceContains: "status: candidate-patch-batch",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: validatorEnvelopeTemplatePath,
+        classification: "prose-owned-shape",
+        fenceContains: "reviewer: <persona>",
+      }),
+    );
+  });
+
+  test("missing predecessor scaffold id is reported by inventory", async () => {
+    const findings = await checkScaffoldInventoryDrift({
+      repoRoot,
+      scaffoldIds: SCAFFOLD_IDS.filter((id) => id !== "builder-attempt-compact"),
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        doc: "runbooks/issue-to-pr-v2/lib/scaffolds.ts",
+        kind: "scaffold-inventory",
+        claim: "builder-attempt-compact",
+      }),
+    );
+  });
+
+  test("unclassified fenced YAML in an inventoried template is reported", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [proposerTemplatePath]: (text) =>
+        `${text}\n\n\`\`\`yaml\nunowned_runtime_shape:\n  field: value\n\`\`\`\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: proposerTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "unclassified-yaml-fence",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("removed dynamic packet member lists stay absent", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        `${text}\n\n\`\`\`yaml\nbatch_contract:\n  id: <slug>\n\`\`\`\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "## Packet slots / dynamic Builder packet body",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
   });
 
   test("stale Builder return-envelope generated body is reported as drift", async () => {
@@ -1499,6 +1595,48 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
           doc: validatorEnvelopeTemplatePath,
           kind: "generated-scaffold-block",
           claim: "validator-inline-evidence",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("stale patch-proposal candidate generated body is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [patchProposalTemplatePath]: (text) =>
+        text.replace("  - id: patch-<NNN>", "  - id: patch-stale"),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: patchProposalTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "patch-proposal-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("stale ledger empty-section generated body is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [ledgerTemplatePath]: (text) =>
+        text.replace("batches: []", "batches: [stale]"),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "ledger-empty-batches",
         }),
       );
     } finally {
@@ -1602,6 +1740,39 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
     }
   });
 
+  test("non-whitespace content before the fenced yaml body is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          '<!-- generated-scaffold:start id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->\n',
+          '<!-- generated-scaffold:start id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->\nleaked prose before fence\n',
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "builder-return-envelope",
+        }),
+      );
+      const block = findings.find(
+        (f) =>
+          f.doc === builderReturnTemplatePath &&
+          f.kind === "generated-scaffold-block" &&
+          f.claim === "builder-return-envelope",
+      );
+      expect(block?.reason).toContain(
+        "non-whitespace content before fenced yaml body",
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
   test("unknown scaffold id in checked pointer is reported as drift", async () => {
     const dir = await stageDriftSurfaceFixture({
       [builderDispatchPath]: (text) =>
@@ -1671,6 +1842,55 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
     }
   });
 
+  test("stale patch-proposal candidate pointer source is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [proposerTemplatePath]: (text) =>
+        text.replace(
+          'source="cli.ts scaffold patch-proposal-candidate-batch --json"',
+          'source="cli.ts scaffold patch-proposal-candidate-batch --bad-json"',
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: proposerTemplatePath,
+          kind: "scaffold-pointer",
+          claim: "patch-proposal-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("stale Notes evidence pointer source is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [ledgerTemplatePath]: (text) =>
+        text.replace(
+          'source="cli.ts scaffold notes-validator-wave-completed --json"',
+          'source="cli.ts scaffold notes-validator-wave-completed --bad-json"',
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "scaffold-pointer",
+          claim: "notes-validator-wave-completed",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+
   test("missing checked pointer is reported as drift", async () => {
     const dir = await stageDriftSurfaceFixture({
       [builderReturnTemplatePath]: (text) =>
@@ -1712,6 +1932,54 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
           doc: findingsAndValidatorsPath,
           kind: "scaffold-pointer",
           claim: "validator-inline-evidence",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing replacement candidate checked pointer is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [ledgerTemplatePath]: (text) =>
+        text.replace(
+          '<!-- scaffold-pointer id=replacement-candidate-batch source="cli.ts scaffold replacement-candidate-batch --json" -->',
+          "",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "scaffold-pointer",
+          claim: "replacement-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing Notes evidence checked pointer is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [ledgerTemplatePath]: (text) =>
+        text.replace(
+          '<!-- scaffold-pointer id=notes-implementation-attempt-checkpoint source="cli.ts scaffold notes-implementation-attempt-checkpoint --json" -->',
+          "",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: ledgerTemplatePath,
+          kind: "scaffold-pointer",
+          claim: "notes-implementation-attempt-checkpoint",
         }),
       );
     } finally {
@@ -1785,6 +2053,30 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
     }
   });
 
+  test("unknown patch-proposal candidate scaffold marker id is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [patchProposalTemplatePath]: (text) =>
+        text.replaceAll(
+          "patch-proposal-candidate-batch",
+          "patch-proposal-candidate-batch-missing",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: patchProposalTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "patch-proposal-candidate-batch-missing",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
   test("missing generated scaffold end marker is reported as drift", async () => {
     const dir = await stageDriftSurfaceFixture({
       [cePlanTemplatePath]: (text) =>
@@ -1829,7 +2121,15 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
           claim: "ce-plan-candidate-batch",
         }),
       );
-      expect(findings[0]?.reason).toContain("missing generated-scaffold start");
+      const generatedFinding = findings.find(
+        (finding) =>
+          finding.doc === cePlanTemplatePath &&
+          finding.kind === "generated-scaffold-block" &&
+          finding.claim === "ce-plan-candidate-batch",
+      );
+      expect(generatedFinding?.reason).toContain(
+        "missing generated-scaffold start",
+      );
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
@@ -1900,6 +2200,39 @@ describe("issue 114/115: scaffold docs stay aligned with runtime renderers", () 
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
+  });
+
+  test("visible wrong-but-valid candidate scaffold command is reported near marker", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [stage4BatchLoopPath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold patch-proposal-candidate-batch --json`",
+          "`cli.ts scaffold replacement-candidate-batch --json`",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: stage4BatchLoopPath,
+          kind: "scaffold-command",
+          claim: "replacement-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("every scaffold id is covered by at least one drift-check surface", () => {
+    // SSOT exhaustiveness: a net-new scaffold id added to lib/scaffolds.ts but
+    // not wired into GENERATED_SCAFFOLD_SURFACES or SCAFFOLD_POINTER_SURFACES
+    // would silently skip surface-level drift enforcement.
+    const covered = scaffoldIdsCoveredBySurfaces();
+    const missing = SCAFFOLD_IDS.filter((id) => !covered.has(id));
+    expect(missing).toEqual([]);
   });
 });
 

@@ -26,11 +26,24 @@ import {
   HIGH_RISK_CHANGE_FIRST_EXCEPTION_PREFIX,
   HIGH_RISK_NEW_FILE_PATCH_EXCEPTION_PREFIX,
   INVESTIGATION_RATIONALE,
+  LEDGER_BATCH_LIFECYCLE_DEFAULTS,
   LEDGER_BATCH_KEYS,
   LEDGER_BATCH_LIFECYCLE_FIELDS,
   LEGACY_EXECUTION_MODE_HINTS,
   MAX_BUILDER_ATTEMPTS,
   NEW_FILE_PATCH_EXCEPTION_PREFIX,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY,
+  NOTES_VALIDATOR_WAVE_COMPLETED_FIELDS,
+  NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS,
+  NOTES_VALIDATOR_WAVE_COMPLETED_MARKER,
+  NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY,
+  NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS,
+  NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS,
   ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
   ORCHESTRATOR_INLINE_ATTEMPT_KEYS,
   RUNBOOK_VERSION,
@@ -38,6 +51,7 @@ import {
   TERMINAL_BATCH_STATUSES,
   VALIDATOR_INLINE_EVIDENCE_FIELDS,
   VALIDATOR_INLINE_EVIDENCE_KEYS,
+  VALIDATOR_WAVE_OUTCOMES,
 } from "./contract";
 
 describe("contract: execution modes", () => {
@@ -107,6 +121,20 @@ describe("contract: batch keys", () => {
     expect(LEDGER_BATCH_KEYS.size).toBe(
       CANDIDATE_BATCH_FIELDS.length + LEDGER_BATCH_LIFECYCLE_FIELDS.length,
     );
+  });
+
+  test("LEDGER_BATCH_LIFECYCLE_DEFAULTS covers each lifecycle field in runtime order", () => {
+    expect(Object.keys(LEDGER_BATCH_LIFECYCLE_DEFAULTS)).toEqual([
+      ...LEDGER_BATCH_LIFECYCLE_FIELDS,
+    ]);
+    expect(LEDGER_BATCH_LIFECYCLE_DEFAULTS).toEqual({
+      status: "pending",
+      builder_commits: [],
+      builder_attempts: [],
+      orchestrator_inline_attempts: [],
+      iterations: 0,
+      final_verdict: null,
+    });
   });
 });
 
@@ -423,5 +451,74 @@ describe("contract: U6 runbook version", () => {
     // explicit operator continuation evidence per U6.
     expect(RUNBOOK_VERSION).toBe("3");
     expect(typeof RUNBOOK_VERSION).toBe("string");
+  });
+});
+
+describe("contract: Notes evidence scaffolds", () => {
+  test("implementation attempt checkpoint marker and fields are runtime facts", () => {
+    expect(NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER).toBe(
+      "implementation-attempt-checkpoint",
+    );
+    expect(NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY).toBe(
+      "implementation_attempt_checkpoint",
+    );
+    expect(NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS).toEqual([
+      "batch_id",
+      "implementation_commit",
+      "attempt_lane",
+      "timestamp",
+    ]);
+  });
+
+  test("Validator wave completed evidence fields are runtime facts", () => {
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_MARKER).toBe(
+      "validator-wave-completed",
+    );
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY).toBe(
+      "validator_wave_completed",
+    );
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS).toEqual([
+      "batch_id",
+      "implementation_commit",
+      "attempt_lane",
+      "outcome",
+    ]);
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS).toEqual([
+      "personas",
+      "findings",
+    ]);
+    expect(NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS).toEqual([
+      "role",
+      "target_id",
+      "cli_route_id",
+    ]);
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_FIELDS).toEqual([
+      "batch_id",
+      "implementation_commit",
+      "attempt_lane",
+      "personas",
+      "dispatch_evidence",
+      "outcome",
+      "findings",
+    ]);
+    expect(VALIDATOR_WAVE_OUTCOMES).toEqual(["clean", "findings-recorded"]);
+  });
+
+  test("runbook-version skew continuation marker and fields are runtime facts", () => {
+    expect(NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER).toBe(
+      "runbook-version-skew-continuation",
+    );
+    expect(NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY).toBe(
+      "runbook_version_skew_continuation",
+    );
+    expect(NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS).toEqual([
+      "ledger_version",
+      "runtime_version",
+      "operator_decision",
+      "timestamp",
+      "route_context",
+      "reference_context",
+      "accepted_risk",
+    ]);
   });
 });

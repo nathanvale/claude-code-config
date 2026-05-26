@@ -65,6 +65,14 @@ user confirmation. Replacement rows may only supersede blocked batches,
 preserve every AC index from the superseded row, and include rationale prose
 when changing `files`, `acceptance_tests`, or `execution_mode`.
 Recommended rationale format: `replacement-contract: <reason>`.
+Replacement row scaffold: `cli.ts scaffold replacement-candidate-batch --json`.
+
+<!-- scaffold-pointer id=replacement-candidate-batch source="cli.ts scaffold replacement-candidate-batch --json" -->
+
+Lifecycle-default scaffold: `cli.ts scaffold ledger-batch-lifecycle-defaults --json`.
+
+<!-- scaffold-pointer id=ledger-batch-lifecycle-defaults source="cli.ts scaffold ledger-batch-lifecycle-defaults --json" -->
+
 `builder_commits` entries must be reachable git commit refs.
 `builder_attempts` is the compact persisted audit trail for well-formed Builder
 envelopes. Persisted `blockers` and `probe_results` are YAML lists of compact
@@ -94,9 +102,11 @@ path summaries in Notes without adding a `builder_attempts` or
 `orchestrator_inline_attempts` row, incrementing `iterations`, or dispatching
 Validators.
 
+<!-- generated-scaffold:start id=ledger-empty-batches source="cli.ts scaffold ledger-empty-batches --json" -->
 ```yaml
 batches: []
 ```
+<!-- generated-scaffold:end id=ledger-empty-batches -->
 
 ## Findings data
 
@@ -121,9 +131,15 @@ patch-NNN`. Duplicate findings are identified by
 `batch_id + signature`; superseded rows must point to the canonical
 non-superseded row with the same batch id and signature.
 
+Finding row scaffold: `cli.ts scaffold ledger-finding-row --json`.
+
+<!-- scaffold-pointer id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
+
+<!-- generated-scaffold:start id=ledger-empty-findings-data source="cli.ts scaffold ledger-empty-findings-data --json" -->
 ```yaml
 findings: []
 ```
+<!-- generated-scaffold:end id=ledger-empty-findings-data -->
 
 ## Findings
 
@@ -144,17 +160,9 @@ Before rendering Validator packets for a committed implementation attempt,
 append this ledger-only checkpoint. The checkpoint is tied to the
 implementation commit and the lane that owns it.
 
-```text
-<!-- implementation-attempt-checkpoint -->
-```
+Scaffold: `cli.ts scaffold notes-implementation-attempt-checkpoint --json`.
 
-```yaml
-implementation_attempt_checkpoint:
-  batch_id: "<batch-id>"
-  implementation_commit: "<sha>"
-  attempt_lane: "<builder_attempts | orchestrator_inline_attempts>"
-  timestamp: "<ISO 8601>"
-```
+<!-- scaffold-pointer id=notes-implementation-attempt-checkpoint source="cli.ts scaffold notes-implementation-attempt-checkpoint --json" -->
 
 ### Completed Validator-wave evidence (U6)
 
@@ -162,55 +170,25 @@ After the full Validator wave completes, append durable wave evidence tied to
 the same implementation commit and lane. Clean waves are explicit, not
 inferred: use `outcome: clean` and `findings: []`.
 
-```text
-<!-- validator-wave-completed -->
-```
+Scaffold: `cli.ts scaffold notes-validator-wave-completed --json`.
 
-```yaml
-validator_wave_completed:
-  batch_id: "<batch-id>"
-  implementation_commit: "<sha>"
-  attempt_lane: "<builder_attempts | orchestrator_inline_attempts>"
-  personas:
-    - "compound-engineering:ce-correctness-reviewer"
-    - "compound-engineering:ce-testing-reviewer"
-    - "compound-engineering:ce-maintainability-reviewer"
-    - "compound-engineering:ce-project-standards-reviewer"
-    - "compound-engineering:ce-adversarial-reviewer"
-  dispatch_evidence:
-    role: "validator"
-    target_id: "<batch-id>@<sha>"
-    cli_route_id: "packet.validator"
-  outcome: "<clean | findings-recorded>"
-  findings: []
-```
+<!-- scaffold-pointer id=notes-validator-wave-completed source="cli.ts scaffold notes-validator-wave-completed --json" -->
 
 ### runbook_version skew continuation evidence (U6)
 
 When the v2 runtime detects `runbook_version` skew (a missing or mismatched
 frontmatter value) and the operator decides to continue against the new
 contract anyway, append a continuation evidence row to this section using the
-exact shape below. The v2 helper parses it; partial rows are rejected and the
-skew remains a stop-required signal.
+runtime-owned scaffold. The v2 helper parses it; partial rows are rejected and
+the skew remains a stop-required signal.
 
-The marker comment line must appear immediately before the fenced YAML block
-(no blank line between them is required, but blank lines are allowed). Every
-listed field is required; omitting one disqualifies the row.
+Scaffold: `cli.ts scaffold notes-runbook-version-skew-continuation --json`.
 
-```text
-<!-- runbook-version-skew-continuation -->
-```
+<!-- scaffold-pointer id=notes-runbook-version-skew-continuation source="cli.ts scaffold notes-runbook-version-skew-continuation --json" -->
 
-```yaml
-runbook_version_skew_continuation:
-  ledger_version: "<quoted-version-string OR bare null>"
-  runtime_version: "<quoted-version-string>"
-  operator_decision: "<actor>"          # e.g. "Nathan @ 2026-05-22T19:00"
-  timestamp: "<ISO 8601>"
-  route_context: "<route id at the time of decision>"
-  reference_context: "<reference file the operator consulted>"
-  accepted_risk: "<one-line reason>"
-```
+The scaffold response includes the marker comment and YAML body. The marker
+comment line must appear immediately before the fenced YAML block (no blank
+line between them is required, but blank lines are allowed).
 
 `ledger_version` is special: write a **bare** `null` (no quotes) when the
 ledger frontmatter has no `runbook_version` field at all. Write a quoted
@@ -243,32 +221,12 @@ future reader can look up the canonical entry.
 `workflow_learnings: []` is the valid empty case: a run with no observed
 workflow learnings is the common path and must not block. The helper
 `bun ~/.claude/runbooks/issue-to-pr-v2/decompose.ts --validate-workflow-learnings <ledger-path>`
-validates the section's shape (single fenced yaml block, top-level
-`workflow_learnings` array, every entry a mapping with required string fields
-`signature`, `affected_surface`, `what_was_wrong` non-empty, and unknown keys
-rejected against a closed whitelist symmetric with the registry's
-`ALLOWED_EVIDENCE_KEYS`).
+validates the section's shape and closed-key whitelist against runtime code
+and the registry contract. Canonical and lifecycle fields live exclusively in
+the registry; including them in a ledger entry is a validator error.
 
-Required entry fields:
-
-- `signature` (string) — `sha256:<hex>` or stable slug. Resolves to the
-  canonical entry in the cross-run registry.
-- `affected_surface` (string) — which workflow surface the learning concerns
-  (matches the registry's evidence key by the same name).
-- `what_was_wrong` (string) — the observation captured during the run.
-
-Optional entry fields (capture what is known; absence is fine):
-
-- `discovery_method` — how the issue was found during the run.
-- `root_cause` — why it happened.
-- `scope` — blast radius / where else this would surface.
-- `proposed_fix` — suggested change at observation time.
-- `verification_idea` — how a later fix would be confirmed.
-
-Canonical and lifecycle fields (`summary`, `owner`, `retirement_condition`,
-`disposition`, `status`, `confidence`, `follow_up`) live exclusively in the
-registry. Including any of them in a ledger entry is a validator error.
-
+<!-- generated-scaffold:start id=workflow-learnings-empty source="cli.ts scaffold workflow-learnings-empty --json" -->
 ```yaml
 workflow_learnings: []
 ```
+<!-- generated-scaffold:end id=workflow-learnings-empty -->

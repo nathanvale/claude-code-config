@@ -250,6 +250,10 @@ carrying both `packet` (machine-readable) and `packet_markdown`
   `cli.ts packet proposer --ledger <ledger-path> --finding <finding-id> --json`
 - Patch-proposal candidate persistence:
   `cli.ts packet patch-proposal --ledger <ledger-path> --finding <finding-id> --patch-id <patch-NNN> --patch-name <title> --patch-goal <sentence> --patch-execution-mode <mode> --patch-rationale <text> [--patch-file <path> ...] [--patch-depends-on <batch-id> ...] [--patch-acceptance-test <text> ...] --json`
+- Patch-proposal candidate scaffold:
+  `cli.ts scaffold patch-proposal-candidate-batch --json`
+
+  <!-- scaffold-pointer id=patch-proposal-candidate-batch source="cli.ts scaffold patch-proposal-candidate-batch --json" -->
 
 ## Final-review patch-batch decision tree
 

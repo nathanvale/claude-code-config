@@ -63,9 +63,8 @@ The Orchestrator sends Builder one batch-only Work Packet:
 - `attempt_type: implementation | repair`;
 - exactly one open P0/P1 target finding signature from committed
   `## Findings data` for repair attempts, and null otherwise;
-- the confirmed batch contract verbatim: `id`, `name`, `goal`, `files`,
-  `depends_on`, optional `supersedes`, `execution_mode`, `acceptance_tests`,
-  `ac_mapping`, and `rationale`;
+- the confirmed batch contract verbatim, using the runtime-owned field set from
+  `cli.ts contract candidate_batch_fields --json`;
 - the current iteration number, existing `builder_commits`, and compact prior
   `builder_attempts` for this batch;
 - `## Findings data` rows for this batch only;
@@ -271,6 +270,11 @@ batch, and go through helper validation, digest recomputation, and user
 confirmation before Stage 4 continues. The recommended rationale prefix for
 a replacement batch is `replacement-contract: <reason>` (per the v2 ledger
 template recommendation).
+
+Replacement row scaffold:
+`cli.ts scaffold replacement-candidate-batch --json`.
+
+<!-- scaffold-pointer id=replacement-candidate-batch source="cli.ts scaffold replacement-candidate-batch --json" -->
 
 When a replacement supersedes a blocked batch, pending downstream batches that
 depend on the blocked original must have `depends_on` rewritten from the

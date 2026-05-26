@@ -50,6 +50,69 @@ export const RUNBOOK_VERSION_SKEW_STATES = [
 export type RunbookVersionSkewState =
   (typeof RUNBOOK_VERSION_SKEW_STATES)[number];
 
+export const NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER =
+  "implementation-attempt-checkpoint";
+export const NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY =
+  "implementation_attempt_checkpoint";
+export const NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS = [
+  "batch_id",
+  "implementation_commit",
+  "attempt_lane",
+  "timestamp",
+] as const;
+
+export const NOTES_VALIDATOR_WAVE_COMPLETED_MARKER =
+  "validator-wave-completed";
+export const NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY =
+  "validator_wave_completed";
+export const NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS = [
+  "batch_id",
+  "implementation_commit",
+  "attempt_lane",
+  "outcome",
+] as const;
+export const NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS = [
+  "personas",
+  "findings",
+] as const;
+export const NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS = [
+  "role",
+  "target_id",
+  "cli_route_id",
+] as const;
+export const NOTES_VALIDATOR_WAVE_COMPLETED_FIELDS = [
+  "batch_id",
+  "implementation_commit",
+  "attempt_lane",
+  "personas",
+  "dispatch_evidence",
+  "outcome",
+  "findings",
+] as const;
+export const VALIDATOR_WAVE_OUTCOMES = ["clean", "findings-recorded"] as const;
+
+export const NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER =
+  "runbook-version-skew-continuation";
+export const NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY =
+  "runbook_version_skew_continuation";
+export const NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS = [
+  "ledger_version",
+  "runtime_version",
+  "operator_decision",
+  "timestamp",
+  "route_context",
+  "reference_context",
+  "accepted_risk",
+] as const;
+
+export const ALWAYS_ON_VALIDATOR_PERSONAS = [
+  "compound-engineering:ce-correctness-reviewer",
+  "compound-engineering:ce-testing-reviewer",
+  "compound-engineering:ce-maintainability-reviewer",
+  "compound-engineering:ce-project-standards-reviewer",
+  "compound-engineering:ce-adversarial-reviewer",
+] as const;
+
 export type ConfirmationState = "pending" | "confirmed" | "stale" | "blocked";
 export type ExecutionMode = "tdd" | "proof_first" | "change_first";
 
@@ -127,6 +190,20 @@ export const LEDGER_BATCH_LIFECYCLE_FIELDS = [
   "iterations",
   "final_verdict",
 ] as const;
+export type LedgerBatchLifecycleField =
+  (typeof LEDGER_BATCH_LIFECYCLE_FIELDS)[number];
+
+export const LEDGER_BATCH_LIFECYCLE_DEFAULTS = {
+  status: "pending",
+  builder_commits: [],
+  builder_attempts: [],
+  orchestrator_inline_attempts: [],
+  iterations: 0,
+  final_verdict: null,
+} as const satisfies Record<
+  LedgerBatchLifecycleField,
+  string | number | null | readonly unknown[]
+>;
 
 export const BATCH_KEYS = new Set<string>(CANDIDATE_BATCH_FIELDS);
 
@@ -206,6 +283,13 @@ export const ORCHESTRATOR_INLINE_ATTEMPT_FIELDS = [
 export const ORCHESTRATOR_INLINE_ATTEMPT_KEYS = new Set<string>(
   ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
 );
+
+export const ATTEMPT_LANE_VALUES = [
+  "builder_attempts",
+  "orchestrator_inline_attempts",
+] as const;
+export type AttemptLane = (typeof ATTEMPT_LANE_VALUES)[number];
+export const ATTEMPT_LANES = new Set<string>(ATTEMPT_LANE_VALUES);
 
 export const BUILDER_ATTEMPT_TYPE_VALUES = [
   "implementation",

@@ -533,10 +533,20 @@ describe("AC5: contract emits runtime contract slices", () => {
     expect(data.values).toEqual([...SCAFFOLD_IDS]);
     expect(data.values).toEqual([
       "ce-plan-candidate-batch",
+      "replacement-candidate-batch",
+      "patch-proposal-candidate-batch",
       "builder-return-envelope",
       "builder-attempt-compact",
       "validator-builder-evidence",
       "validator-inline-evidence",
+      "ledger-empty-batches",
+      "ledger-empty-findings-data",
+      "ledger-batch-lifecycle-defaults",
+      "ledger-finding-row",
+      "notes-implementation-attempt-checkpoint",
+      "notes-validator-wave-completed",
+      "notes-runbook-version-skew-continuation",
+      "workflow-learnings-empty",
     ]);
   });
 
@@ -972,12 +982,28 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
       scaffold_response_shape: Record<string, string>;
     };
     expect(data.scaffold_ids).toEqual([...SCAFFOLD_IDS]);
+    expect(data.scaffold_ids).toContain("ce-plan-candidate-batch");
+    expect(data.scaffold_ids).toContain("replacement-candidate-batch");
+    expect(data.scaffold_ids).toContain("patch-proposal-candidate-batch");
     expect(data.scaffold_ids).toContain("builder-return-envelope");
     expect(data.scaffold_ids).toContain("builder-attempt-compact");
     expect(data.scaffold_ids).toContain("validator-builder-evidence");
     expect(data.scaffold_ids).toContain("validator-inline-evidence");
+    expect(data.scaffold_ids).toContain("ledger-empty-batches");
+    expect(data.scaffold_ids).toContain("ledger-empty-findings-data");
+    expect(data.scaffold_ids).toContain("ledger-batch-lifecycle-defaults");
+    expect(data.scaffold_ids).toContain("ledger-finding-row");
+    expect(data.scaffold_ids).toContain(
+      "notes-implementation-attempt-checkpoint",
+    );
+    expect(data.scaffold_ids).toContain("notes-validator-wave-completed");
+    expect(data.scaffold_ids).toContain(
+      "notes-runbook-version-skew-continuation",
+    );
+    expect(data.scaffold_ids).toContain("workflow-learnings-empty");
     expect(data.scaffold_response_shape.scaffold_id).toContain("scaffold_ids");
     expect(data.scaffold_response_shape.body).toContain("rendered scaffold");
+    expect(data.scaffold_response_shape.marker).toContain("Notes evidence");
   });
 
   test("F005 fix: --help exposes the full error and exit-code discovery surface", () => {
@@ -2029,13 +2055,10 @@ describe("scaffold command", () => {
     expect(data.body).toBe(renderScaffold("ce-plan-candidate-batch").body);
   });
 
-  test("renders every Builder projection scaffold with unchanged envelope shape", () => {
-    for (const scaffoldId of [
-      "builder-return-envelope",
-      "builder-attempt-compact",
-      "validator-builder-evidence",
-      "validator-inline-evidence",
-    ] as const) {
+  test("renders every additional scaffold with unchanged envelope shape", () => {
+    for (const scaffoldId of SCAFFOLD_IDS.filter(
+      (id) => id !== "ce-plan-candidate-batch",
+    )) {
       const { envelope, exit_code } = invoke([
         "scaffold",
         scaffoldId,
@@ -2056,6 +2079,21 @@ describe("scaffold command", () => {
       expect(data.source).toContain("lib/scaffolds.ts");
       expect(data.body).toBe(renderScaffold(scaffoldId).body);
     }
+  });
+
+  test("marker-aware Notes scaffolds expose marker metadata additively", () => {
+    for (const scaffoldId of [
+      "notes-implementation-attempt-checkpoint",
+      "notes-validator-wave-completed",
+      "notes-runbook-version-skew-continuation",
+    ] as const) {
+      const { envelope } = invoke(["scaffold", scaffoldId, "--json"]);
+      const data = envelope.data as { marker?: string };
+      expect(data.marker).toBe(renderScaffold(scaffoldId).marker);
+    }
+
+    const { envelope } = invoke(["scaffold", "ledger-empty-batches", "--json"]);
+    expect((envelope.data as { marker?: string }).marker).toBeUndefined();
   });
 
   test("unknown scaffold id returns unknown-scaffold-id", () => {

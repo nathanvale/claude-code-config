@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   BUILDER_ATTEMPT_FIELDS,
   BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+  CANDIDATE_BATCH_FIELDS,
   VALIDATOR_INLINE_EVIDENCE_FIELDS,
 } from "./contract";
 import {
@@ -163,6 +164,18 @@ function nestedFieldOrderUnder(body: string, parent: string): string[] {
     if (field) fields.push(field);
   }
   return fields;
+}
+
+function patchBatchFieldOrder(body: string): string[] {
+  return body
+    .split("\n")
+    .map((line) =>
+      line
+        .match(/^  - ([A-Za-z_][A-Za-z0-9_]*):|^ {4}([A-Za-z_][A-Za-z0-9_]*):/)
+        ?.slice(1)
+        .find(Boolean),
+    )
+    .filter((field): field is string => field !== undefined);
 }
 
 // =====================================================================
@@ -1947,6 +1960,43 @@ describe("Patch proposal packet", () => {
         depends_on: ["b-terminal"],
         ac_mapping: [],
       });
+    });
+
+    test("patch packet fields match the generated patch candidate scaffold", () => {
+      const ledgerPath = writeLedger(
+        patchLedger(
+          "| ff1 | final | sig-x | reviewer | P1 | open | the cited blocker | |",
+        ),
+      );
+      const packet = renderPatchProposalPacket({
+        ledgerPath,
+        findingId: "ff1",
+        candidatePatchBatch: {
+          id: "patch-003",
+          name: "Patch three",
+          goal: "fix sig-x",
+          files: ["app/x.ts"],
+          depends_on: ["b-terminal"],
+          execution_mode: "tdd",
+          acceptance_tests: ["AC 1 holds: bug gone"],
+          rationale: "rationale",
+        },
+        now: FROZEN_TIME,
+      });
+      const scaffoldFields = patchBatchFieldOrder(
+        renderScaffold("patch-proposal-candidate-batch").body,
+      );
+
+      expect(scaffoldFields).toEqual(
+        CANDIDATE_BATCH_FIELDS.filter((field) => field !== "supersedes"),
+      );
+      expect(Object.keys(packet.data.patch_batches[0])).toEqual(
+        scaffoldFields,
+      );
+      expect(patchBatchFieldOrder(packet.packet_markdown)).toEqual(
+        scaffoldFields,
+      );
+      expect(packet.packet_markdown).not.toContain("supersedes:");
     });
   });
 });

@@ -36,40 +36,15 @@ framing only, per the U2 approach. The XML tags **never** wrap
 helper-validated YAML or JSON; they only frame the prose payload the Builder
 sub-agent reads on entry.
 
-The rendered packet **MUST** include exactly the fields below and **MUST
-NOT** include the full plan file, raw Validator envelopes, unrelated batch
-state, rich Builder evidence from prior envelopes,
-`orchestrator_inline_attempts` as prior Builder attempts, ACs not in the target
-batch's `ac_mapping`, or findings from other batches or stage-3 findings.
-
-```yaml
-issue_number: <int>
-target_repo: "<owner/repo>"
-attempt_type: <implementation | repair>
-target_finding_signature: <signature | null>   # null for implementation; required for repair
-
-batch_contract:
-  id: <slug>
-  name: "<Title>"
-  goal: "<one-sentence outcome>"
-  files:
-    - <repo-relative path>
-  depends_on: []
-  supersedes: <blocked-batch-id | null>
-  execution_mode: <tdd | proof_first | change_first>
-  acceptance_tests:
-    - "AC <i> holds: <verifiable behaviour>"
-  ac_mapping:
-    - <i>
-  rationale: <string | null>
-
-iteration: <int>
-builder_commits: []
-prior_builder_attempts: []   # compact records; not full envelopes
-
-findings_data_for_this_batch: []   # rows from ## Findings data, this batch only
-notes_summary_for_this_batch: ""   # non-authoritative summary lines, this batch only
-```
+The rendered packet body is runtime-owned by `renderBuilderPacket()`.
+Use `cli.ts packet builder --json` for the concrete packet fields.
+The renderer must include target batch contract, iteration, compact prior
+Builder attempts, batch-local findings, Notes summary, and prose framing
+slots. It must not include the full plan file, raw Validator envelopes,
+unrelated batch state, rich Builder evidence from prior envelopes,
+`orchestrator_inline_attempts` as prior Builder attempts, ACs outside the
+target batch's `ac_mapping`, or findings from other batches or stage-3
+findings.
 
 `prior_builder_attempts` is Builder-only. Orchestrator-inline attempt rows are
 not Builder envelopes and must not appear there; they may only be summarized in

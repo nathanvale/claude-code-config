@@ -508,6 +508,8 @@ const HELP_DATA = {
     output_kind: "yaml",
     source: "runtime owner for the rendered scaffold",
     ordering: "catalog",
+    marker:
+      "HTML comment marker string for marker-aware Notes evidence scaffold ids; omitted for YAML-only scaffold ids",
     body: "rendered scaffold body; no filesystem mutation is performed",
   },
   error_codes: ERROR_CODES,
@@ -1110,7 +1112,7 @@ function dispatchPacketRender(role: PacketRoleArg, flags: PacketFlags) {
       requireFlag(flags.ledger, "builder", "--ledger");
       requireFlag(flags.batch, "builder", "--batch");
       requireFlag(flags.attemptType, "builder", "--attempt-type");
-      const attemptType = flags.attemptType as "implementation" | "repair";
+      const attemptType = flags.attemptType;
       if (attemptType !== "implementation" && attemptType !== "repair") {
         throw new PacketFlagError(
           `--attempt-type must be "implementation" or "repair"`,

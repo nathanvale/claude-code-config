@@ -869,9 +869,11 @@ describe("Block 5b: scaffold command × every documented scaffold", () => {
       expect(data.output_kind).toBe("yaml");
       expect(data.ordering).toBe("catalog");
       expect(typeof data.source).toBe("string");
-      expect(data.body).toBe(
-        renderScaffold(scaffoldId as Parameters<typeof renderScaffold>[0]).body,
+      const rendered = renderScaffold(
+        scaffoldId as Parameters<typeof renderScaffold>[0],
       );
+      expect(data.body).toBe(rendered.body);
+      expect(data.marker).toBe(rendered.marker);
     }
   });
 
