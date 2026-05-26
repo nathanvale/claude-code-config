@@ -427,7 +427,11 @@ function deriveFieldPaths(
 /**
  * Load the authoritative contract facts from the live, read-only CLI.
  *
- * Sources, all at runtime:
+ * Sources, all at runtime. Newly emitted slices are accepted through
+ * `--help data.contract_slices`; this checker does not need per-slice
+ * source edits when the CLI owns the slice.
+ *
+ * Sources:
  *  - route ids   ← `contract route_ids --json`   → data.values
  *  - packet roles ← `contract packet_roles --json` → data.values
  *  - command names ← `--help --json` → data.commands[].name
@@ -1141,11 +1145,10 @@ function regionMentionsGuide(region: string): boolean {
  * and a guide reference (path or basename).
  *
  * Anchoring on the STEP construct — not whole-doc co-occurrence and not loose
- * proximity — is what lets the check detect deletion of step 7b. The route
- * catalog and the reference-loading-policy table mention `blocked-` and the
- * guide too, but they are prose/table that merely CITE step 7b; neither begins
- * with a numbered step marker, so removing the real step makes this return
- * false even though those citations remain. The check tolerates harmless
+ * proximity — is what lets the check detect deletion of step 7b. Other policy
+ * prose may mention `blocked-` and the guide too, but those citations do not
+ * begin with a numbered step marker, so removing the real step makes this
+ * return false even if those citations remain. The check tolerates harmless
  * rewording inside the step (any load verb, path or basename, any blocked-
  * route id) and is not pinned to the literal "7b" or exact prose.
  */
@@ -1415,9 +1418,9 @@ export async function checkLedgerLifecycleFieldDrift(
  *      orchestration step must, within its own bounded body, tie a `blocked-`
  *      route trigger to LOADING the guide (a load verb + the guide path or its
  *      basename). Whole-doc co-occurrence is deliberately NOT enough — the
- *      route catalog and the reference-loading-policy table both mention
- *      `blocked-` and the guide elsewhere, so a co-occurrence check could not
- *      detect deletion of the very step-7b load it exists to protect.
+ *      other policy prose may mention `blocked-` and the guide elsewhere, so
+ *      a co-occurrence check could not detect deletion of the very step-7b
+ *      load it exists to protect.
  *  (b) `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` links from its
  *      route-id / blocked-route section to the guide: the doc's blocked-route
  *      section region (the heading through the next same-or-higher heading)

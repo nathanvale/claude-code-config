@@ -10,6 +10,7 @@ import {
   isRouteId,
   requiredReferenceIdsFor,
   ROUTE_IDS,
+  routeRequiredReferenceEntries,
   type RouteId,
   type RouteInputs,
   SPECIAL_ROUTE_IDS,
@@ -401,6 +402,47 @@ describe("requiredReferenceIdsFor (F010 fix: exhaustiveness guard)", () => {
         "ledger-and-helper.md",
         "stage-3-decompose.md",
       ]);
+    }
+  });
+});
+
+describe("routeRequiredReferenceEntries", () => {
+  test("emits one entry per ROUTE_IDS member in catalog order", () => {
+    const entries = routeRequiredReferenceEntries();
+    expect(entries.map((entry) => entry.route_id)).toEqual([...ROUTE_IDS]);
+    expect(new Set(entries.map((entry) => entry.route_id)).size).toBe(
+      ROUTE_IDS.length,
+    );
+  });
+
+  test("derives every required_reference_ids list from requiredReferenceIdsFor", () => {
+    for (const entry of routeRequiredReferenceEntries()) {
+      expect(entry.required_reference_ids).toEqual(
+        requiredReferenceIdsFor(entry.route_id),
+      );
+    }
+  });
+
+  test("keeps shipped as the terminal route with no required references", () => {
+    expect(
+      routeRequiredReferenceEntries().find(
+        (entry) => entry.route_id === "shipped",
+      )?.required_reference_ids,
+    ).toEqual([]);
+  });
+
+  test("keeps blocked routes in precedence order", () => {
+    const blockedRoutes = routeRequiredReferenceEntries()
+      .map((entry) => entry.route_id)
+      .filter((route) => route.startsWith("blocked-"));
+    expect(blockedRoutes).toEqual([...BLOCKED_ROUTE_IDS]);
+  });
+
+  test("does not include first-run-gotchas.md in any required references", () => {
+    for (const entry of routeRequiredReferenceEntries()) {
+      expect(entry.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
     }
   });
 });

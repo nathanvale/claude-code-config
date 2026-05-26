@@ -36,6 +36,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
 
+import {
+  requiredReferenceIdsFor,
+  ROUTE_IDS,
+  type RouteId,
+} from "./lib/route";
+
 const scriptPath = join(import.meta.dir, "cli.ts");
 const bunExecutable = execPath;
 const tempDirs: string[] = [];
@@ -189,6 +195,37 @@ type ErrorCodeEntry = {
 function helpErrorCodes(): readonly ErrorCodeEntry[] {
   assertHelpDataLoaded();
   return HELP_DATA.error_codes as readonly ErrorCodeEntry[];
+}
+
+type RouteRequiredReferenceRecord = {
+  route_id: RouteId;
+  required_reference_ids: string[];
+};
+
+async function routeRequiredReferencesFromContract(): Promise<
+  RouteRequiredReferenceRecord[]
+> {
+  const result = await runCli([
+    "contract",
+    "route_required_references",
+    "--json",
+  ]);
+  assertSuccessEnvelopeShape(result.envelope);
+  const data = result.envelope.data as {
+    values: RouteRequiredReferenceRecord[];
+  };
+  return data.values;
+}
+
+function requiredReferencesForRouteFromContract(
+  records: readonly RouteRequiredReferenceRecord[],
+  routeId: string,
+): string[] {
+  const record = records.find((entry) => entry.route_id === routeId);
+  if (!record) {
+    throw new Error(`missing route_required_references entry for ${routeId}`);
+  }
+  return record.required_reference_ids;
 }
 
 function findErrorCodeEntry(code: string): ErrorCodeEntry {
@@ -639,6 +676,31 @@ describe("Block 3: state command × ledger states", () => {
     assertNullableString(data.final_reviewed_at, "final_reviewed_at");
     assertNullableString(data.pr_url, "pr_url");
   });
+
+  test("state required_reference_ids match route_required_references for representative routes", async () => {
+    const contractRecords = await routeRequiredReferencesFromContract();
+    const ledgers = [
+      nonExistentLedgerPath(),
+      ledgerPendingAc(),
+      ledgerConfirmedBatchLoop(),
+      ledgerBlockedFrontmatter(),
+      ledgerVersionSkewMismatched(),
+    ];
+    for (const ledger of ledgers) {
+      const result = await runCli(["state", ledger, "--json"]);
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as {
+        route_id: string;
+        required_reference_ids: string[];
+      };
+      expect(data.required_reference_ids).toEqual(
+        requiredReferencesForRouteFromContract(contractRecords, data.route_id),
+      );
+      expect(data.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
+  });
 });
 
 // =====================================================================
@@ -699,6 +761,35 @@ describe("Block 5: contract command × every documented slice", () => {
         throw err;
       }
     }
+  });
+
+  test("route_required_references returns catalog-ordered route records", async () => {
+    const result = await runCli([
+      "contract",
+      "route_required_references",
+      "--json",
+    ]);
+    assertSuccessEnvelopeShape(result.envelope);
+    const data = result.envelope.data as {
+      slice: string;
+      values: RouteRequiredReferenceRecord[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("route_required_references");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.route_id)).toEqual([...ROUTE_IDS]);
+    for (const entry of data.values) {
+      expect(entry.required_reference_ids).toEqual(
+        [...requiredReferenceIdsFor(entry.route_id)],
+      );
+      expect(entry.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
+    expect(
+      data.values.find((entry) => entry.route_id === "shipped")
+        ?.required_reference_ids,
+    ).toEqual([]);
   });
 
   test("unknown slice returns unknown-contract-slice error with exit_code 64", async () => {
@@ -783,6 +874,34 @@ describe("Block 6: diagnose command × ledger states", () => {
         (g) => g.kind === "field" && g.field === "frontmatter.runbook_version",
       ),
     ).toBe(true);
+  });
+
+  test("diagnose expected_reference_ids match route_required_references for representative routes", async () => {
+    const contractRecords = await routeRequiredReferencesFromContract();
+    const ledgers = [
+      nonExistentLedgerPath(),
+      ledgerPendingAc(),
+      ledgerConfirmedBatchLoop(),
+      ledgerBlockedFrontmatter(),
+      ledgerVersionSkewMismatched(),
+    ];
+    for (const ledger of ledgers) {
+      const result = await runCli(["diagnose", ledger, "--json"]);
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as {
+        inferred_route_id: string;
+        expected_reference_ids: string[];
+      };
+      expect(data.expected_reference_ids).toEqual(
+        requiredReferencesForRouteFromContract(
+          contractRecords,
+          data.inferred_route_id,
+        ),
+      );
+      expect(data.expected_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
   });
 });
 

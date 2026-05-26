@@ -58,9 +58,10 @@ memory. The four-state confirmation semantics live in `lib/contract.ts`
 
 For richer diagnosis (per-axis digest drift, expected reference list,
 install presence) the same shape is available via `cli.ts diagnose
-<ledger-path> --json`; for the legal route-id list use `cli.ts
-contract route_ids --json`. (Command surface and installed path live
-in [`README.md`](../README.md#file-map).)
+<ledger-path> --json`; for route facts use `cli.ts contract route_ids
+--json` and `cli.ts contract route_required_references --json`.
+(Command surface and installed path live in
+[`README.md`](../README.md#file-map).)
 
 ## Helper execution context
 
@@ -353,62 +354,21 @@ ids are **facts** about where the workflow currently sits, not imperative
 instructions — ADR 0002. The hot router (U7) consumes a route id and
 decides what to do next; the CLI never says "run X" or "execute Y".
 
-The executable source of truth is the `ROUTE_IDS` const in
-`runbooks/issue-to-pr-v2/lib/route.ts`. The catalog below mirrors that
-const verbatim; drift between code and this section is a P1 finding per
-the U4 audit prompt.
+Runtime owners:
 
-### Stage route ids (happy path)
-
-| Route id | When the CLI emits it |
-| --- | --- |
-| `pick-issue` | Ledger exists but the derived `confirmation_state.acceptance_criteria` is not `confirmed` — either `ac_confirmation_status` is not `confirmed`, or it is `confirmed` with a null `ac_digest`, so Stage 1 has not yet committed a digest-anchored AC checkpoint. A non-null but mismatched `ac_digest` is `stale`, which routes to `blocked-acceptance-criteria-stale` (see the blocked-route table below), not `pick-issue`. |
-| `plan` | AC is confirmed but `frontmatter.plan_path` is null; Stage 2 has not yet recorded a plan file. |
-| `decompose` | Plan path present but `batch_contract_confirmation_status` is not `confirmed`, or no batches have been written to `## Batches`. |
-| `batch-loop` | Batch contract confirmed and at least one batch exists, but not every batch is in a terminal status (`converged` or `accepted-risk`). |
-| `final-review` | Every batch is terminal but `frontmatter.final_reviewed_at` is null; Stage 5 has not yet committed the cumulative-diff review checkpoint. |
-| `ship` | Final review complete but `frontmatter.pr_url` is null; Stage 6 has not yet recorded the PR URL. |
-| `shipped` | `frontmatter.pr_url` is set and `frontmatter.status` is `shipped`. Terminal success state. |
+- Route catalog and precedence: `ROUTE_IDS`, `BLOCKED_ROUTE_IDS`, and
+  `classifyRoute` in `runbooks/issue-to-pr-v2/lib/route.ts`.
+- Full route catalog: `cli.ts contract route_ids --json`.
+- Route/reference map: `cli.ts contract route_required_references --json`.
+- Per-route references for current turn: `data.required_reference_ids`.
 
 ### Blocked route ids
 
-| Route id | When the CLI emits it |
-| --- | --- |
-| `blocked-frontmatter-blocked-reason` | `frontmatter.status` is the literal `blocked`. Highest-precedence blocked state. |
-| `blocked-runbook-version-skew` | `runbook_version` skew classification is `mismatched` or `missing` (U6). A `continuation-evidence-present` classification suppresses this id and routing falls through to the happy-path stage. |
-| `blocked-acceptance-criteria-stale` | `ac_confirmation_status` is `blocked` or the stored AC digest no longer matches the ledger's `## Acceptance criteria` content. |
-| `blocked-stage-3` | `batch_contract_confirmation_status` is `blocked` because Stage 3 Contract Review surfaced an open P0/P1 finding. |
-| `blocked-batch-contract-stale` | The stored batch contract digest no longer matches the ledger's `## Batches` content. |
-| `blocked-digests-stale` | One of `plan_digest`, `ac_digest`, or `batch_contract_digest` no longer matches the source content but the individual `*_confirmation_status` fields haven't been flipped yet. |
-
-For symptom-first recovery recipes for these blocked routes (exact command,
-JSON fields, what they prove, and the recovery action), see
+Blocked route semantics live in `classifyRoute` and `blockingGatesFor`.
+Use `data.blocking_gates` and sibling state fields for the proximate
+cause. For symptom-first recovery recipes (exact command, JSON fields,
+what they prove, recovery action), see
 [first-run-gotchas.md](first-run-gotchas.md).
-
-### Special route ids
-
-| Route id | When the CLI emits it |
-| --- | --- |
-| `no-ledger` | The ledger file does not exist on disk. The CLI never advances past this point; the consuming router must invoke Stage 1 to create the ledger. |
-
-### Precedence order
-
-`classifyRoute` in `lib/route.ts` walks the inputs in this fixed precedence
-order, returning the first match:
-
-1. `no-ledger` — ledger file absent.
-2. `blocked-frontmatter-blocked-reason` — explicit user decision wins
-   over any derived state.
-3. `blocked-runbook-version-skew` — version mismatch must be resolved
-   before any other gate.
-4. `blocked-*` durable states (AC blocked, Stage 3 blocked).
-5. `blocked-*` stale states (AC stale, batch contract stale, digests
-   stale).
-6. `shipped` (when both `pr_url` and `frontmatter.status: shipped` are
-   set).
-7. Happy-path stage progression in stage order.
-
-Tests at `runbooks/issue-to-pr-v2/lib/route.test.ts` pin every branch.
 
 ## Runbook version skew (U6)
 

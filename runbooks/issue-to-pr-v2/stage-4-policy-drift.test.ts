@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
+import { routeRequiredReferenceEntries } from "./lib/route";
+
 const repoRoot = join(import.meta.dir, "..", "..");
 
 const u1PolicyDocs = [
@@ -165,9 +167,9 @@ describe("Stage 4 policy drift guards", () => {
         "runbooks/issue-to-pr-v2/templates/builder-work-packet.md",
       ),
     );
-    const route = compact(
-      await readRepoFile("runbooks/issue-to-pr-v2/lib/route.ts"),
-    );
+    const frontmatterBlockedRefs = routeRequiredReferenceEntries().find(
+      (entry) => entry.route_id === "blocked-frontmatter-blocked-reason",
+    )?.required_reference_ids;
 
     expect(host).toContain(
       "Before any batch status mutation or resumed Stage 4 implementation attempt",
@@ -274,15 +276,10 @@ describe("Stage 4 policy drift guards", () => {
       expectToContainAll(text, snippets, context);
     }
 
-    expectToContainAll(
-      route,
-      [
-        "case \"blocked-frontmatter-blocked-reason\"",
-        "\"ledger-and-helper.md\"",
-        "\"findings-and-validators.md\"",
-        "\"host-adapters.md\"",
-      ],
-      "route reference mapping",
-    );
+    expect(frontmatterBlockedRefs).toEqual([
+      "ledger-and-helper.md",
+      "findings-and-validators.md",
+      "host-adapters.md",
+    ]);
   });
 });

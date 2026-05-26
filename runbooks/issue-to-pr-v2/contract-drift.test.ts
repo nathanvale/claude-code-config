@@ -618,9 +618,14 @@ describe("AC2: command, slice, and packet-role claims from cli.ts positions", ()
     const doc = [
       "`cli.ts contract route_ids --json`",
       "`cli.ts contract packet_roles --json`",
+      "`cli.ts contract route_required_references --json`",
     ].join("\n");
     const claims = extractDocClaims(doc, "doc.md");
-    expect(tokens(claims.slices)).toEqual(["route_ids", "packet_roles"]);
+    expect(tokens(claims.slices)).toEqual([
+      "route_ids",
+      "packet_roles",
+      "route_required_references",
+    ]);
     // `contract` is itself a command; the slice is the NEXT token, not a
     // duplicate command claim of the slice name.
     expect(tokens(claims.commands)).toContain("contract");
@@ -1431,6 +1436,45 @@ describe("AC2: command / slice / packet-role claim membership", () => {
     );
     expect(findings.length).toBe(0);
   });
+
+  test("the route/reference contract slice claim is validated from live help", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.contractSlices).toContain("route_required_references");
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        commands: [claim("contract")],
+        slices: [claim("route_required_references")],
+      }),
+      facts,
+    );
+    expect(findings.length).toBe(0);
+  });
+
+  test("the hot-router route/reference pointer is validated from the real doc", async () => {
+    const docPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
+    const doc = await Bun.file(join(import.meta.dir, "issue-to-pr.md")).text();
+    const claims = extractDocClaims(doc, docPath);
+    const routeReferenceClaims = claims.slices.filter(
+      (c) => c.token === "route_required_references",
+    );
+    const contractCommandClaims = claims.commands.filter(
+      (c) => c.token === "contract",
+    );
+
+    expect(routeReferenceClaims.length).toBeGreaterThan(0);
+    expect(contractCommandClaims.length).toBeGreaterThan(0);
+
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath,
+        commands: contractCommandClaims,
+        slices: routeReferenceClaims,
+      }),
+      facts,
+    );
+    expect(findings).toEqual([]);
+  });
 });
 
 describe("AC3: data.* field-path claim membership against response shapes", () => {
@@ -1581,7 +1625,7 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // check could NOT catch: `blocked-` and the guide path both still appear
   // elsewhere in the doc after the deletion, so the old logic returned 0
   // findings. The structural orchestration-step anchor returns a finding.
-  test("deleting ONLY the step-7b load block (catalog + policy table intact) produces a finding", async () => {
+  test("deleting ONLY the step-7b load block (catalog + policy prose intact) produces a finding", async () => {
     const realSkill = await Bun.file(
       join(repoRoot, "skills/issue-to-pr/SKILL.md"),
     ).text();
@@ -1601,16 +1645,11 @@ describe("AC4: first-run-gotchas relationship check", () => {
     }
     const mutated = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
 
-    // Sanity-check the mutation is surgical: the route catalog and the
-    // reference-loading-policy table (which co-locate `blocked-` and the guide)
-    // survive, so whole-doc co-occurrence would still hold.
+    // Sanity-check the mutation is surgical: route catalog and reference
+    // loading policy prose survive, so whole-doc co-occurrence would still hold.
     expect(mutated.includes("<route_catalog>")).toBe(true);
     expect(mutated.includes("<reference_loading_policy>")).toBe(true);
-    expect(
-      mutated.includes(
-        "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-      ),
-    ).toBe(true);
+    expect(mutated.includes("first-run-gotchas.md")).toBe(true);
     expect(/blocked-/.test(mutated)).toBe(true);
     // But the operative `7b.` orchestration step is gone.
     expect(/^7b\.\s/m.test(mutated)).toBe(false);

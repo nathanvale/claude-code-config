@@ -5,7 +5,11 @@ import { join } from "node:path";
 
 import { BufferWriter } from "./lib/cli-envelope";
 import { RUNBOOK_VERSION } from "./lib/contract";
-import { ROUTE_IDS } from "./lib/route";
+import {
+  requiredReferenceIdsFor,
+  ROUTE_IDS,
+  type RouteId,
+} from "./lib/route";
 import { run } from "./cli";
 
 /**
@@ -86,6 +90,33 @@ function invoke(argv: readonly string[]): {
     envelope,
     exit_code: result.exit_code,
   };
+}
+
+type RouteRequiredReferenceRecord = {
+  route_id: RouteId;
+  required_reference_ids: string[];
+};
+
+function contractRouteRequiredReferences(): RouteRequiredReferenceRecord[] {
+  const { envelope } = invoke([
+    "contract",
+    "route_required_references",
+    "--json",
+  ]);
+  const data = envelope.data as {
+    values: RouteRequiredReferenceRecord[];
+  };
+  return data.values;
+}
+
+function requiredReferencesFromContractFor(routeId: string): string[] {
+  const record = contractRouteRequiredReferences().find(
+    (entry) => entry.route_id === routeId,
+  );
+  if (!record) {
+    throw new Error(`missing route_required_references entry for ${routeId}`);
+  }
+  return record.required_reference_ids;
 }
 
 function minimalConfirmedLedger(extra: { final_reviewed_at?: string; pr_url?: string; status?: string } = {}): string {
@@ -394,7 +425,7 @@ describe("AC4: diagnose reports the documented diagnostic shape", () => {
 
 // ---------------- AC5: contract emits runtime contract slices ----------------
 
-describe("AC5: contract emits runtime contract slices from lib/contract.ts", () => {
+describe("AC5: contract emits runtime contract slices", () => {
   test("execution_modes slice returns the tdd | proof_first | change_first set", () => {
     const { envelope } = invoke(["contract", "execution_modes", "--json"]);
     expect(envelope.status).toBe("ok");
@@ -410,6 +441,35 @@ describe("AC5: contract emits runtime contract slices from lib/contract.ts", () 
     const data = envelope.data as { slice: string; values: string[] };
     expect(data.slice).toBe("route_ids");
     expect(data.values).toEqual([...ROUTE_IDS]);
+  });
+
+  test("route_required_references slice returns the catalog-ordered route/reference mapping", () => {
+    const { envelope } = invoke([
+      "contract",
+      "route_required_references",
+      "--json",
+    ]);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      slice: string;
+      values: RouteRequiredReferenceRecord[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("route_required_references");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.route_id)).toEqual([...ROUTE_IDS]);
+    for (const entry of data.values) {
+      expect(entry.required_reference_ids).toEqual(
+        [...requiredReferenceIdsFor(entry.route_id)],
+      );
+      expect(entry.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
+    expect(
+      data.values.find((entry) => entry.route_id === "shipped")
+        ?.required_reference_ids,
+    ).toEqual([]);
   });
 
   test("finding_severities slice returns P0/P1/P2/P3", () => {
@@ -490,6 +550,73 @@ describe("AC5: contract emits runtime contract slices from lib/contract.ts", () 
     ).values;
     expect(values.find((v) => v.code === 0)?.meaning).toBe("success");
     expect(values.find((v) => v.code === 64)?.meaning).toContain("usage error");
+  });
+});
+
+describe("route_required_references parity with state and diagnose", () => {
+  function expectStateAndDiagnoseMatchContract(ledger: string): void {
+    const state = invoke(["state", ledger, "--json"]);
+    const stateData = state.envelope.data as {
+      route_id: string;
+      required_reference_ids: string[];
+    };
+    const expectedStateRefs = requiredReferencesFromContractFor(
+      stateData.route_id,
+    );
+    expect(stateData.required_reference_ids).toEqual(expectedStateRefs);
+    expect(stateData.required_reference_ids).not.toContain(
+      "first-run-gotchas.md",
+    );
+
+    const diagnose = invoke(["diagnose", ledger, "--json"]);
+    const diagnoseData = diagnose.envelope.data as {
+      inferred_route_id: string;
+      expected_reference_ids: string[];
+    };
+    const expectedDiagnoseRefs = requiredReferencesFromContractFor(
+      diagnoseData.inferred_route_id,
+    );
+    expect(diagnoseData.expected_reference_ids).toEqual(expectedDiagnoseRefs);
+    expect(diagnoseData.expected_reference_ids).not.toContain(
+      "first-run-gotchas.md",
+    );
+  }
+
+  test("no-ledger state and diagnose match the no-ledger contract record", () => {
+    expectStateAndDiagnoseMatchContract(nonExistentLedgerPath());
+  });
+
+  test("stage-route state and diagnose match the emitted contract record", () => {
+    expectStateAndDiagnoseMatchContract(minimalConfirmedLedger());
+  });
+
+  test("blocked frontmatter state and diagnose match the emitted contract record", () => {
+    expectStateAndDiagnoseMatchContract(
+      minimalConfirmedLedger({ status: "blocked" }),
+    );
+  });
+
+  test("blocked version-skew state and diagnose match the emitted contract record", () => {
+    const ledger = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        'runbook_version: "1"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+      ].join("\n"),
+    );
+    expectStateAndDiagnoseMatchContract(ledger);
   });
 });
 
@@ -763,6 +890,7 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
       "state",
     ]);
     expect(data.contract_slices.length).toBeGreaterThan(0);
+    expect(data.contract_slices).toContain("route_required_references");
   });
 
   test("F005 fix: --help exposes the full error and exit-code discovery surface", () => {

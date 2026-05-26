@@ -276,6 +276,22 @@ export function requiredReferenceIdsFor(route: RouteId): readonly string[] {
   }
 }
 
+export type RouteRequiredReferenceEntry = {
+  readonly route_id: RouteId;
+  readonly required_reference_ids: readonly string[];
+};
+
+/**
+ * Runtime-owned route/reference contract entries, preserving `ROUTE_IDS`
+ * catalog order for stage progression and blocked-route precedence.
+ */
+export function routeRequiredReferenceEntries(): readonly RouteRequiredReferenceEntry[] {
+  return ROUTE_IDS.map((route) => ({
+    route_id: route,
+    required_reference_ids: [...requiredReferenceIdsFor(route)],
+  }));
+}
+
 /**
  * Structured blocking-gate fact (F006 fix). The CLI emits gates as a
  * typed discriminated union so consumers do not have to parse mixed

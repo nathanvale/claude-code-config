@@ -76,6 +76,7 @@ import {
   installedArtifactPresence,
   ROUTE_IDS,
   requiredReferenceIdsFor,
+  routeRequiredReferenceEntries,
 } from "./lib/route";
 
 const CONTRACT_SLICES = [
@@ -87,6 +88,7 @@ const CONTRACT_SLICES = [
   "finding_severities",
   "finding_statuses",
   "route_ids",
+  "route_required_references",
   "terminal_batch_statuses",
   // F005 fix: agent-discoverable enums from lib/cli-envelope.ts +
   // lib/cli-diagnostics.ts so --help consumers can enumerate every error
@@ -169,6 +171,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
     ordering: "sorted",
   },
   route_ids: { values: [...ROUTE_IDS], ordering: "catalog" },
+  route_required_references: {
+    values: routeRequiredReferenceEntries(),
+    ordering: "catalog",
+  },
   terminal_batch_statuses: {
     values: [...TERMINAL_BATCH_STATUSES].sort(),
     ordering: "sorted",
@@ -280,7 +286,7 @@ const HELP_DATA = {
     {
       name: "contract",
       summary:
-        "Emit a runtime contract slice from lib/contract.ts (see `contract_slices`).",
+        "Emit a runtime contract slice (see `contract_slices`).",
       argv: ["contract", "<slice>", "--json"],
     },
     {
@@ -430,7 +436,8 @@ const HELP_DATA = {
   // responses so agents can route without invoking the command first.
   contract_slice_response_shape: {
     slice: "string (one of contract_slices)",
-    values: "array of primitives or {code, meaning}-style records",
+    values:
+      "array of primitives or structured records. `route_required_references` entries are { route_id, required_reference_ids }.",
     ordering: {
       sorted: "alphabetical; set semantics; order is not contractual",
       catalog: "source-declared order is contractually significant (precedence, stage progression, severity escalation)",
