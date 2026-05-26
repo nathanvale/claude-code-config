@@ -527,7 +527,7 @@ describe("AC6: empty/partial well-formed fact sets are hard errors", () => {
  * own (AC5): it reads bounded structural markers and reports what the doc
  * says. The comparator (batch 3) and orchestrator (batch 4) consume these.
  *
- * Fixtures below are small real snippets from the four scoped docs so the
+ * Fixtures below are small real snippets from the scoped docs so the
  * extractor's patterns stay grounded in the actual prose.
  */
 
@@ -874,12 +874,14 @@ describe("AC5: extractor emits claims only, holds no contract values", () => {
 const repoRoot = join(import.meta.dir, "..", "..");
 const skillDocPath = "skills/issue-to-pr/SKILL.md";
 const readmeDocPath = "runbooks/issue-to-pr-v2/README.md";
+const issueToPrDocPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const ledgerTemplatePath = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 const scopedDocRels = [
   skillDocPath,
   readmeDocPath,
+  issueToPrDocPath,
   ledgerDocPath,
   gotchasDocPath,
 ] as const;
@@ -1614,7 +1616,78 @@ describe("AC4: scoped-link existence checking", () => {
 describe("AC4: first-run-gotchas relationship check", () => {
   const repoRoot = join(import.meta.dir, "..", "..");
 
-  test("the real SKILL.md + ledger-and-helper.md relationship produces no finding", async () => {
+  function validSkillGotchasDoc(
+    guideRef = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ): string {
+    return [
+      "# Skill",
+      "",
+      "7. Load every reference listed in `data.required_reference_ids`.",
+      `7b. When \`data.route_id\` begins with \`blocked-\`, also load \`${guideRef}\`.`,
+      "8. Apply remaining pre-stage gates before entering a stage.",
+      "",
+      "**Runbook version skew**",
+      "",
+      "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+      "- Use `first-run-gotchas.md` recipe 2.4.",
+    ].join("\n");
+  }
+
+  function validIssueToPrGotchasDoc(): string {
+    return [
+      "# Issue to PR",
+      "",
+      "## Start every turn",
+      "",
+      "6. **Load the references listed in `data.required_reference_ids`.**",
+      "   When `data.route_id` begins with `blocked-`, also load",
+      "   [first-run-gotchas.md](references/first-run-gotchas.md)",
+      "   before any blocked-route stop.",
+      "7. **Honour remaining pre-stage gates** before entering stage work.",
+      "",
+      "### Version-skew gate",
+      "",
+      "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+    ].join("\n");
+  }
+
+  const validLedgerGotchasDoc =
+    "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n";
+
+  async function stageGotchasFixture(
+    overrides: {
+      skill?: string;
+      issueToPr?: string;
+      ledger?: string;
+      writeGuide?: boolean;
+    } = {},
+  ): Promise<string> {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      overrides.skill ?? validSkillGotchasDoc(),
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/issue-to-pr.md"),
+      overrides.issueToPr ?? validIssueToPrGotchasDoc(),
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      overrides.ledger ?? validLedgerGotchasDoc,
+    );
+    if (overrides.writeGuide ?? true) {
+      await Bun.write(
+        join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+        "# First run gotchas\n",
+      );
+    }
+    return dir;
+  }
+
+  test("the real SKILL.md + issue-to-pr.md + ledger relationship produces no finding", async () => {
     const findings = await checkGotchasRelationship({ repoRoot });
     expect(findings).toEqual([]);
   });
@@ -1654,20 +1727,7 @@ describe("AC4: first-run-gotchas relationship check", () => {
     // But the operative `7b.` orchestration step is gone.
     expect(/^7b\.\s/m.test(mutated)).toBe(false);
 
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-7b-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(join(dir, "skills/issue-to-pr/SKILL.md"), mutated);
-    // A valid ledger + present guide so ONLY signal (a) can fire.
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({ skill: mutated });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const skillFindings = findings.filter(
@@ -1682,57 +1742,129 @@ describe("AC4: first-run-gotchas relationship check", () => {
 
   test("a missing 7b control-plane load in SKILL.md produces one relationship finding", async () => {
     // Mock SKILL.md without the deterministic 7b first-run-gotchas load.
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-skill-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
-    const ledgerPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    );
-    const gotchasPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-    );
-    await Bun.write(skillPath, "# Skill\n\nNo deterministic gotchas load here.\n");
-    await Bun.write(
-      ledgerPath,
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(gotchasPath, "# First run gotchas\n");
+    const dir = await stageGotchasFixture({
+      skill: "# Skill\n\nNo deterministic gotchas load here.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
-      expect(findingsOfKind(findings, "scoped-link").length).toBe(1);
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("moving the SKILL.md blocked load after remaining gates produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "9. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+        "- Use `first-run-gotchas.md` recipe 2.4.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a SKILL.md version-skew stop without gotchas loading produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, stop.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a missing hot-router blocked load produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. Load the references listed in `data.required_reference_ids`.",
+        "7. Honour remaining pre-stage gates before entering stage work.",
+        "",
+        "### Version-skew gate",
+        "",
+        "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const hotRouterFindings = findings.filter(
+        (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+      );
+      expect(hotRouterFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("moving the hot-router blocked load after remaining gates produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. Load the references listed in `data.required_reference_ids`.",
+        "7. Honour remaining pre-stage gates before entering stage work.",
+        "8. When `data.route_id` begins with `blocked-`, also load [first-run-gotchas.md](references/first-run-gotchas.md).",
+        "",
+        "### Version-skew gate",
+        "",
+        "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const hotRouterFindings = findings.filter(
+        (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+      );
+      expect(hotRouterFindings.length).toBe(1);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
   });
 
   test("a missing ledger-and-helper link to first-run-gotchas.md produces one finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-ledger-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
-    const ledgerPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    );
-    const gotchasPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-    );
-    await Bun.write(
-      skillPath,
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    // ledger doc has the blocked section but NO link to the gotchas guide.
-    await Bun.write(
-      ledgerPath,
-      "### Blocked route ids\n\nNo recovery link here.\n",
-    );
-    await Bun.write(gotchasPath, "# First run gotchas\n");
+    const dir = await stageGotchasFixture({
+      // ledger doc has the blocked section but NO link to the gotchas guide.
+      ledger: "### Blocked route ids\n\nNo recovery link here.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       expect(findings.length).toBe(1);
@@ -1742,24 +1874,7 @@ describe("AC4: first-run-gotchas relationship check", () => {
   });
 
   test("a link to a first-run-gotchas.md that does not exist on disk produces a finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-target-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
-    const ledgerPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    );
-    await Bun.write(
-      skillPath,
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    await Bun.write(
-      ledgerPath,
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    // Deliberately DO NOT write first-run-gotchas.md — the link target is broken.
+    const dir = await stageGotchasFixture({ writeGuide: false });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       expect(findings.length).toBeGreaterThanOrEqual(1);
@@ -1791,22 +1906,20 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // blocked-route load step exists). `unblocked-state` is a substring trap the
   // old `/blocked-/` regex would have wrongly accepted.
   test("an `unblocked-` token does not satisfy the blocked-route trigger", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-unblocked-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. On an `unblocked-state` route, load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7b. On an `unblocked-state` route, load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+        "- Use `first-run-gotchas.md` recipe 2.4.",
+      ].join("\n"),
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const skillFindings = findings.filter(
@@ -1822,22 +1935,9 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // legitimate load — it must NOT produce a false 'missing 7b' finding. The
   // basename is unambiguous in this scope, so signal (a) accepts it.
   test("a basename-only guide reference in step 7b does not produce a false finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-basename-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. When `data.route_id` begins with `blocked-`, this loop also loads `first-run-gotchas.md` deterministically.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      skill: validSkillGotchasDoc("first-run-gotchas.md"),
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const skillFindings = findings.filter(
@@ -1853,24 +1953,12 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // (e.g. in a cross-references footer) does NOT satisfy the relationship —
   // Key Decision 7 requires the link to come FROM the blocked-route section.
   test("a ledger guide-link outside the blocked-route section produces a finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-ledger-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    // The blocked-route section has NO guide link; the link only appears under
-    // a later, unrelated heading.
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\n### Cross references\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recipes.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      // The blocked-route section has NO guide link; the link only appears
+      // under a later, unrelated heading.
+      ledger:
+        "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\n### Cross references\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recipes.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const ledgerFindings = findings.filter(
@@ -1886,22 +1974,10 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // F18.3 (positive control): a guide link INSIDE the blocked-route section
   // satisfies the relationship — no finding. Mirrors the live ledger layout.
   test("a ledger guide-link inside the blocked-route section produces no finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-ledger-in-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recovery recipes.\n\n### Special route ids\n\nnothing here.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      ledger:
+        "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recovery recipes.\n\n### Special route ids\n\nnothing here.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       expect(findings).toEqual([]);
@@ -1916,6 +1992,7 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
   const liveDocs = [
     "skills/issue-to-pr/SKILL.md",
     "runbooks/issue-to-pr-v2/README.md",
+    "runbooks/issue-to-pr-v2/issue-to-pr.md",
     "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
     "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
   ];
@@ -1926,6 +2003,7 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
   // findings). We pin a non-empty claim floor for these.
   const tokenCarryingDocs = new Set([
     "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/issue-to-pr.md",
     "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
   ]);
 
@@ -1938,7 +2016,7 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
     c.fieldPaths.length +
     c.scopedLinks.length;
 
-  test("each of the 4 scoped docs reconciles cleanly against live facts", async () => {
+  test("each scoped doc reconciles cleanly against live facts", async () => {
     const facts = await loadContractFacts();
     for (const rel of liveDocs) {
       const text = await Bun.file(join(repoRoot, rel)).text();
@@ -2004,16 +2082,16 @@ describe("comparator returns findings as DATA, never throws on claim drift", () 
  * Issue #81 — batch 4 (orchestrator + runnable entry).
  *
  * `checkContractDrift(opts?)` ties the loader, extractor, comparator, and
- * gotchas-relationship check together over the four scoped operator docs and
+ * gotchas-relationship check together over the scoped operator docs and
  * returns `{ ok, findings }`. These tests prove:
  *  - AC7: a fixture doc with a deliberately STALE contract claim (a route id
  *    not in the live route_ids, a removed command, a bogus data.* path, a
  *    missing scoped link) makes the check return `ok:false` with a finding
  *    NAMING that token — the check fails for a real mismatch (load-bearing).
- *  - AC1: over the four REAL scoped docs the check returns `ok:true` (docs in
+ *  - AC1: over the REAL scoped docs the check returns `ok:true` (docs in
  *    sync), and a MISSING scoped doc is a hard error (throw), not a clean pass.
  *  - AC6: the check (and the runnable entry) perform no filesystem writes / no
- *    git mutations; the four scoped docs are unchanged after a run.
+ *    git mutations; the scoped docs are unchanged after a run.
  *
  * Fixture docs are written to a temp dir (test scaffolding); the CHECK under
  * test reads them read-only. Stale tokens are provably NOT contract values
@@ -2254,7 +2332,7 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
     ).rejects.toThrow(/scopedDocs|empty|scope/i);
   });
 
-  // F22 (default preserved): passing no opts must still use the real four
+  // F22 (default preserved): passing no opts must still use the real
   // SCOPED_DOCS and pass clean — the empty-scope guard must not break defaults.
   test("F22: the default (no scopedDocs) still uses the real drift surfaces and passes", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });

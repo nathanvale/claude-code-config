@@ -6,10 +6,10 @@
  * The hot router (U7) consumes a route id and decides what to do next;
  * the CLI never says "run X" or "execute Y".
  *
- * This module is the **executable source of truth** for the catalog. The
- * documentation in `references/ledger-and-helper.md` (added by U4) mirrors
- * this catalog — drift between the two is a P1 finding per the U4 audit
- * prompt.
+ * This module is the **executable source of truth** for the catalog. The CLI
+ * emits the agent-facing views through `contract route_ids --json` and
+ * `contract route_required_references --json`; prose docs point here instead
+ * of mirroring route/reference tables by hand.
  *
  * Route ids form a flat enum: every route id is one of the constants in
  * `ROUTE_IDS`. There are no nested or composite ids. This keeps the
@@ -45,10 +45,8 @@ export type StageRouteId = (typeof STAGE_ROUTE_IDS)[number];
  */
 /**
  * Blocked route ids declared in **precedence order** — highest-priority
- * gate first. The prose table in
- * `references/ledger-and-helper.md` and the `classifyRoute` precedence
- * walk both mirror this order. Drift between any of the three is a P3
- * finding (F008/F021 from sweep 1).
+ * gate first. `classifyRoute` walks this tuple, and the emitted contract
+ * slices preserve its order.
  */
 export const BLOCKED_ROUTE_IDS = [
   "blocked-frontmatter-blocked-reason",

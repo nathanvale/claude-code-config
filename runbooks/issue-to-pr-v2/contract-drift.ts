@@ -40,13 +40,14 @@
  * boundary below is intentional; a future maintainer must NOT extend it into a
  * general prose/consistency linter without re-opening the scope decision.
  *
- *  - Main SCOPE is exactly the four operator docs in `SCOPED_DOCS`
+ *  - Main SCOPE is exactly the five operator docs in `SCOPED_DOCS`
  *    (skills/issue-to-pr/SKILL.md, runbooks/issue-to-pr-v2/README.md,
- *    references/ledger-and-helper.md, references/first-run-gotchas.md). It does
- *    NOT validate other Issue-to-PR references (stage-*.md,
- *    findings-and-validators.md, builder-dispatch.md, host-adapters.md, etc.).
- *    A narrow U7 add-on also cross-checks the ledger template's batch lifecycle
- *    field mentions against the runtime key sets in `lib/contract.ts`.
+ *    issue-to-pr.md, references/ledger-and-helper.md,
+ *    references/first-run-gotchas.md). It does NOT validate other Issue-to-PR
+ *    references (stage-*.md, findings-and-validators.md,
+ *    builder-dispatch.md, host-adapters.md, etc.). A narrow U7 add-on also
+ *    cross-checks the ledger template's batch lifecycle field mentions against
+ *    the runtime key sets in `lib/contract.ts`.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
@@ -1103,6 +1104,7 @@ export type GotchasRelationshipOptions = {
  */
 const GOTCHAS_GUIDE_REL = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
+const ISSUE_TO_PR_DOC_REL = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 /** Just the guide's basename, for matching markdown links to it. */
@@ -1136,25 +1138,20 @@ function regionMentionsGuide(region: string): boolean {
   );
 }
 
+type NumberedStepBlock = {
+  readonly line: number;
+  readonly body: string;
+};
+
 /**
- * True when SOME numbered orchestration step expresses the deterministic
- * blocked-route load of the guide. We split the text into step blocks (a line
- * starting with a numbered/lettered step marker like `7b.` or `8.`, its body
- * running until the next step marker or a blank line) and require ONE block to
- * carry all three signals together: a `blocked-` route trigger, a load verb,
- * and a guide reference (path or basename).
- *
- * Anchoring on the STEP construct — not whole-doc co-occurrence and not loose
- * proximity — is what lets the check detect deletion of step 7b. Other policy
- * prose may mention `blocked-` and the guide too, but those citations do not
- * begin with a numbered step marker, so removing the real step makes this
- * return false even if those citations remain. The check tolerates harmless
- * rewording inside the step (any load verb, path or basename, any blocked-
- * route id) and is not pinned to the literal "7b" or exact prose.
+ * Split numbered orchestration steps into bounded blocks. The first line must
+ * start with a numbered/lettered step marker like `7b.` or `8.`, and the block
+ * runs until the next step marker or blank line.
  */
-function skillHasBlockedLoadStep(skillText: string): boolean {
-  const lines = skillText.split("\n");
+function numberedStepBlocks(text: string): NumberedStepBlock[] {
+  const lines = text.split("\n");
   const stepMarker = /^\s*\d+[a-z]?\.\s/;
+  const blocks: NumberedStepBlock[] = [];
   let i = 0;
   while (i < lines.length) {
     if (!stepMarker.test(lines[i] ?? "")) {
@@ -1171,17 +1168,83 @@ function skillHasBlockedLoadStep(skillText: string): boolean {
       block.push(next);
       j += 1;
     }
-    const body = block.join("\n");
-    if (
-      BLOCKED_ROUTE_TRIGGER.test(body) &&
-      LOAD_VERB.test(body) &&
-      regionMentionsGuide(body)
-    ) {
-      return true;
-    }
+    blocks.push({ line: i + 1, body: block.join("\n") });
     i = j;
   }
-  return false;
+  return blocks;
+}
+
+function isBlockedGotchasLoadStep(block: NumberedStepBlock): boolean {
+  return (
+    BLOCKED_ROUTE_TRIGGER.test(block.body) &&
+    LOAD_VERB.test(block.body) &&
+    regionMentionsGuide(block.body)
+  );
+}
+
+function isRemainingPreStageGateStep(block: NumberedStepBlock): boolean {
+  return /\b(?:honou?r|apply)\b[\s\S]{0,80}\bremaining\s+pre-stage gates\b/i.test(
+    block.body,
+  );
+}
+
+/**
+ * True when the deterministic blocked-route gotchas load happens before the
+ * step that applies remaining pre-stage gates. Existence alone is not enough:
+ * moving the load after that gate would make `blocked-runbook-version-skew`
+ * stop before recovery context was loaded.
+ */
+function blockedGotchasLoadPrecedesRemainingGates(text: string): boolean {
+  const steps = numberedStepBlocks(text);
+  const load = steps.find(isBlockedGotchasLoadStep);
+  const gate = steps.find(isRemainingPreStageGateStep);
+  return load !== undefined && gate !== undefined && load.line < gate.line;
+}
+
+function regionAroundLabel(text: string, labelPattern: RegExp): string | null {
+  const lines = text.split("\n");
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^#{1,6}\s+/.test(line) && labelPattern.test(line)) {
+      start = i;
+      break;
+    }
+    if (/^\s*\*\*[^*]+?\*\*\s*$/.test(line) && labelPattern.test(line)) {
+      start = i;
+      break;
+    }
+  }
+  if (start === -1) return null;
+
+  const body: string[] = [lines[start] ?? ""];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^#{1,6}\s+/.test(line) || /^\s*\*\*[^*]+?\*\*\s*$/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+function versionSkewGateLoadsGotchasBeforeStop(text: string): boolean {
+  const region = regionAroundLabel(text, /runbook version skew|version-skew gate/i);
+  if (region === null || !regionMentionsGuide(region)) return false;
+
+  return (
+    /\bload(?:s|ed|ing)?\b[\s\S]{0,120}(?:blocked-route overlay|first-run-gotchas\.md)[\s\S]{0,120}\bstop\b/i.test(
+      region,
+    ) ||
+    /\bstop\b[\s\S]{0,80}\bafter\s+load(?:s|ed|ing)?\b[\s\S]{0,120}(?:blocked-route overlay|first-run-gotchas\.md)/i.test(
+      region,
+    )
+  );
+}
+
+function docPreservesGotchasLoadBeforeStops(text: string): boolean {
+  return (
+    blockedGotchasLoadPrecedesRemainingGates(text) &&
+    versionSkewGateLoadsGotchasBeforeStop(text)
+  );
 }
 
 /**
@@ -1412,15 +1475,11 @@ export async function checkLedgerLifecycleFieldDrift(
  * structured drift findings (DATA); a present, intact relationship yields an
  * empty array. Three relationship facts are checked:
  *
- *  (a) `skills/issue-to-pr/SKILL.md` carries the deterministic control-plane
- *      load of the guide for `blocked-` routes (orchestration step 7b). This is
- *      anchored STRUCTURALLY, not by whole-doc co-occurrence: SOME numbered
- *      orchestration step must, within its own bounded body, tie a `blocked-`
- *      route trigger to LOADING the guide (a load verb + the guide path or its
- *      basename). Whole-doc co-occurrence is deliberately NOT enough — the
- *      other policy prose may mention `blocked-` and the guide elsewhere, so
- *      a co-occurrence check could not detect deletion of the very step-7b
- *      load it exists to protect.
+ *  (a) `skills/issue-to-pr/SKILL.md` and `issue-to-pr.md` carry the
+ *      deterministic control-plane load of the guide for `blocked-` routes
+ *      before remaining pre-stage gates, plus version-skew wording that loads
+ *      recovery context before stopping. This is anchored STRUCTURALLY, not by
+ *      whole-doc co-occurrence.
  *  (b) `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` links from its
  *      route-id / blocked-route section to the guide: the doc's blocked-route
  *      section region (the heading through the next same-or-higher heading)
@@ -1433,9 +1492,10 @@ export async function checkLedgerLifecycleFieldDrift(
  * The check does NOT require per-route deep links, and does NOT require or
  * forbid the guide in CLI `required_reference_ids` (Key Decision 7).
  *
- * Hard-error boundary (Key Decision 8): SKILL.md and ledger-and-helper.md are
- * docs the check is asked to READ, so their absence throws. A missing LINK
- * TARGET (the guide file a doc links to) is a finding, not a throw.
+ * Hard-error boundary (Key Decision 8): SKILL.md, issue-to-pr.md, and
+ * ledger-and-helper.md are docs the check is asked to READ, so their absence
+ * throws. A missing LINK TARGET (the guide file a doc links to) is a finding,
+ * not a throw.
  */
 export async function checkGotchasRelationship(
   opts: GotchasRelationshipOptions = {},
@@ -1448,26 +1508,35 @@ export async function checkGotchasRelationship(
     SKILL_DOC_REL,
     "contract-drift gotchas check",
   );
+  const issueToPrText = await readScopedDocOrThrow(
+    join(repoRoot, ISSUE_TO_PR_DOC_REL),
+    ISSUE_TO_PR_DOC_REL,
+    "contract-drift gotchas check",
+  );
   const ledgerText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_DOC_REL),
     LEDGER_DOC_REL,
     "contract-drift gotchas check",
   );
 
-  // (a) Deterministic control-plane load in SKILL.md for blocked- routes,
-  // anchored on the orchestration STEP construct (step 7b): some numbered step
-  // must, within its own bounded body, tie a `blocked-` trigger to LOADING the
-  // guide. Not whole-doc co-occurrence — see `skillHasBlockedLoadStep`. This is
-  // a doc-level finding: it points at the doc, not a single line, so `line` is
-  // omitted (Key Decision: no `0` sentinel against a 1-based contract).
-  if (!skillHasBlockedLoadStep(skillText)) {
-    findings.push({
-      doc: SKILL_DOC_REL,
-      kind: "scoped-link",
-      claim: GOTCHAS_GUIDE_REL,
-      reason:
-        "SKILL.md is missing the deterministic control-plane load of first-run-gotchas.md for `blocked-` routes: no numbered orchestration step ties a `blocked-` route trigger to loading the guide (orchestration step 7b).",
-    });
+  // (a) Deterministic control-plane load in SKILL.md and issue-to-pr.md for
+  // blocked- routes, anchored on ordered orchestration steps. Some numbered step
+  // must tie a `blocked-` trigger to LOADING the guide, and it must occur before
+  // the remaining pre-stage gates. The version-skew section must also express
+  // load-before-stop semantics. Doc-level finding: no `0` line sentinel.
+  for (const [relDoc, text] of [
+    [SKILL_DOC_REL, skillText],
+    [ISSUE_TO_PR_DOC_REL, issueToPrText],
+  ] as const) {
+    if (!docPreservesGotchasLoadBeforeStops(text)) {
+      findings.push({
+        doc: relDoc,
+        kind: "scoped-link",
+        claim: GOTCHAS_GUIDE_REL,
+        reason:
+          `${relDoc} must load first-run-gotchas.md for \`blocked-\` routes before remaining pre-stage gates and before the version-skew stop; the ordered gotchas relationship is missing or out of order.`,
+      });
+    }
   }
 
   // (b) ledger-and-helper.md links from its blocked-route-ids section to the
@@ -1492,11 +1561,12 @@ export async function checkGotchasRelationship(
     });
   }
 
-  // (c) every markdown link to first-run-gotchas.md in the two scoped docs
+  // (c) every markdown link to first-run-gotchas.md in the scoped docs
   // resolves to an existing file. A broken target is a finding (Key Decision
   // 8), not a hard error.
   for (const [relDoc, text] of [
     [SKILL_DOC_REL, skillText],
+    [ISSUE_TO_PR_DOC_REL, issueToPrText],
     [LEDGER_DOC_REL, ledgerText],
   ] as const) {
     for (const link of extractScopedLinks(text, relDoc)) {
@@ -1537,17 +1607,18 @@ export type ScopedDoc = {
 };
 
 /**
- * The four operator-facing docs the drift check is scoped to. These are
+ * The five operator-facing docs the drift check is scoped to. These are
  * structural file COORDINATES (the check's SCOPE), not contract VALUES (AC5):
  * they say WHICH docs to validate, never WHAT the contract is. The contract
  * facts themselves still come exclusively from `loadContractFacts()`.
  *
  * `expectsClaims` marks the two docs the workflow relies on to carry contract
- * tokens (SKILL.md and first-run-gotchas.md): if their extraction yields ZERO
- * contract claims, that is a drift finding (F21), not a silent pass. README.md
- * legitimately carries no route ids / field paths (only scoped links and a
- * couple of `cli.ts` command mentions), and ledger-and-helper.md is covered by
- * the gotchas relationship check, so neither is marked `expectsClaims`.
+ * tokens (SKILL.md, issue-to-pr.md, and first-run-gotchas.md): if their
+ * extraction yields ZERO contract claims, that is a drift finding (F21), not a
+ * silent pass. README.md legitimately carries no route ids / field paths (only
+ * scoped links and a couple of `cli.ts` command mentions), and
+ * ledger-and-helper.md is covered by the gotchas relationship check, so neither
+ * is marked `expectsClaims`.
  *
  * Repo-relative so the orchestrator can resolve them against any `repoRoot`
  * (tests point at a fixture repo; production resolves against the real root)
@@ -1556,6 +1627,7 @@ export type ScopedDoc = {
 export const SCOPED_DOCS: readonly ScopedDoc[] = [
   { path: "skills/issue-to-pr/SKILL.md", expectsClaims: true },
   { path: "runbooks/issue-to-pr-v2/README.md", expectsClaims: false },
+  { path: "runbooks/issue-to-pr-v2/issue-to-pr.md", expectsClaims: true },
   {
     path: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
     expectsClaims: false,
@@ -1570,14 +1642,14 @@ export const SCOPED_DOCS: readonly ScopedDoc[] = [
  * Options for the orchestrator. All are overridable so tests can point at a
  * fixture repo / fixture doc list / fake CLI (the AC7 stale-doc test relies on
  * `repoRoot`, the missing-doc test on `scopedDocs`, the CLI-failure test on
- * `cliPath`). Production callers pass nothing and get the real four docs, the
+ * `cliPath`). Production callers pass nothing and get the real five docs, the
  * real repo root, and the sibling `cli.ts`.
  */
 export type CheckContractDriftOptions = {
   /** Repo root that scoped-doc paths and link targets resolve against. */
   repoRoot?: string;
   /**
-   * Scoped docs to validate. Defaults to the four `SCOPED_DOCS`. Accepts either
+   * Scoped docs to validate. Defaults to the five `SCOPED_DOCS`. Accepts either
    * bare repo-relative path strings (legacy callers / tests; treated as
    * `expectsClaims: false`) or full `ScopedDoc` entries. An explicitly-passed
    * EMPTY array is a caller error (F22): it would check zero docs and silently
@@ -1619,7 +1691,7 @@ function contractClaimCount(claims: DocClaims): number {
 }
 
 /**
- * Run the runtime contract-drift check over the four scoped operator docs plus
+ * Run the runtime contract-drift check over the scoped operator docs plus
  * the U7 ledger lifecycle surfaces, then report aggregated drift findings.
  *
  * Pipeline (composes batches 1-3, re-implements none of them):
@@ -1644,7 +1716,7 @@ export async function checkContractDrift(
   opts: CheckContractDriftOptions = {},
 ): Promise<ContractDriftResult> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
-  // The DEFAULT (no scopedDocs) uses the real four SCOPED_DOCS. An EXPLICITLY
+  // The DEFAULT (no scopedDocs) uses the real SCOPED_DOCS. An EXPLICITLY
   // passed empty array is a caller mis-wiring (F22): it would run the per-doc
   // loop zero times and report ok:true having validated nothing, silently
   // disarming the whole check. An empty scope is a hard error, not a clean
