@@ -553,6 +553,96 @@ describe("AC5: contract emits runtime contract slices", () => {
     ]);
   });
 
+  test("scaffold_catalog slice returns structured records in catalog order", () => {
+    const { envelope } = invoke(["contract", "scaffold_catalog", "--json"]);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      slice: string;
+      values: readonly {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+      }[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("scaffold_catalog");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.scaffold_id)).toEqual([
+      ...SCAFFOLD_IDS,
+    ]);
+    for (const entry of data.values) {
+      expect(entry.output_kind).toBe("yaml");
+      expect(entry.ordering).toBe("catalog");
+      expect(entry.source).toBe(
+        `runbooks/issue-to-pr-v2/lib/scaffolds.ts#${entry.scaffold_id}`,
+      );
+    }
+    const markered = data.values.find(
+      (entry) => entry.scaffold_id === "notes-implementation-attempt-checkpoint",
+    );
+    expect(markered?.marker).toBeDefined();
+    expect(typeof markered?.marker).toBe("string");
+    const unmarkered = data.values.find(
+      (entry) => entry.scaffold_id === "ledger-empty-batches",
+    );
+    expect(unmarkered).toBeDefined();
+    expect(unmarkered).not.toHaveProperty("marker");
+  });
+
+  test("scaffold_catalog entry agrees with scaffold <id> --json for that id", () => {
+    const { envelope: catalogEnvelope } = invoke([
+      "contract",
+      "scaffold_catalog",
+      "--json",
+    ]);
+    const catalogData = catalogEnvelope.data as {
+      values: readonly {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+      }[];
+    };
+
+    for (const id of SCAFFOLD_IDS) {
+      const catalogEntry = catalogData.values.find(
+        (entry) => entry.scaffold_id === id,
+      );
+      expect(catalogEntry).toBeDefined();
+
+      const { envelope: scaffoldEnvelope } = invoke(["scaffold", id, "--json"]);
+      const scaffoldData = scaffoldEnvelope.data as {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+        body: string;
+      };
+      expect(scaffoldData.scaffold_id).toBe(catalogEntry?.scaffold_id);
+      expect(scaffoldData.output_kind).toBe(catalogEntry?.output_kind);
+      expect(scaffoldData.source).toBe(catalogEntry?.source);
+      expect(scaffoldData.ordering).toBe(catalogEntry?.ordering);
+      expect(scaffoldData.marker).toBe(catalogEntry?.marker);
+    }
+  });
+
+  test("--help advertises the scaffold_catalog contract slice and HELP_DATA snapshot", () => {
+    const { envelope } = invoke(["--help", "--json"]);
+    expect(envelope.status).toBe("ok");
+    const help = envelope.data as {
+      contract_slices: readonly string[];
+      scaffold_catalog: readonly { scaffold_id: string }[];
+    };
+    expect(help.contract_slices).toContain("scaffold_catalog");
+    expect(help.scaffold_catalog.map((entry) => entry.scaffold_id)).toEqual([
+      ...SCAFFOLD_IDS,
+    ]);
+  });
+
   test("unknown slice returns unknown-contract-slice error", () => {
     const { envelope, exit_code } = invoke([
       "contract",

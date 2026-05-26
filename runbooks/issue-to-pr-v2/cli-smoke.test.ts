@@ -926,6 +926,34 @@ describe("Block 5b: scaffold command × every documented scaffold", () => {
       "scaffold id",
     );
   });
+
+  test("contract scaffold_catalog --json carries every scaffold id with derived source", async () => {
+    const result = await runCli(["contract", "scaffold_catalog", "--json"]);
+    assertSuccessEnvelopeShape(result.envelope);
+    const data = result.envelope.data as {
+      slice: string;
+      ordering: string;
+      values: readonly {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+      }[];
+    };
+    expect(data.slice).toBe("scaffold_catalog");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.scaffold_id)).toEqual([
+      ...helpScaffoldIds(),
+    ]);
+    for (const entry of data.values) {
+      expect(entry.output_kind).toBe("yaml");
+      expect(entry.ordering).toBe("catalog");
+      expect(entry.source).toBe(
+        `runbooks/issue-to-pr-v2/lib/scaffolds.ts#${entry.scaffold_id}`,
+      );
+    }
+  });
 });
 
 // =====================================================================

@@ -83,6 +83,7 @@ import {
 } from "./lib/packets";
 import {
   SCAFFOLD_IDS,
+  getScaffoldCatalog,
   isScaffoldId,
   renderScaffold,
 } from "./lib/scaffolds";
@@ -140,6 +141,11 @@ const CONTRACT_SLICES = [
   // mirrors the precedence walk inside `blockingGatesFor`.
   "blocking_gate_field_names",
   "scaffold_ids",
+  // U3 (2026-05-27 plan): expose every scaffold id with its runtime
+  // source, output kind, ordering, and marker metadata in one slice so
+  // agents discover the catalog without fan-out scaffold calls or
+  // template scraping.
+  "scaffold_catalog",
 ] as const;
 type ContractSlice = (typeof CONTRACT_SLICES)[number];
 
@@ -273,6 +279,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
     values: [...SCAFFOLD_IDS],
     ordering: "catalog",
   },
+  scaffold_catalog: {
+    values: getScaffoldCatalog().map((entry) => ({ ...entry })),
+    ordering: "catalog",
+  },
 };
 
 /**
@@ -393,6 +403,7 @@ const HELP_DATA = {
     },
   ],
   scaffold_ids: SCAFFOLD_IDS,
+  scaffold_catalog: getScaffoldCatalog(),
   packet_roles: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
   packet_flags: {
     "--ledger": "Path to issue-N ledger (required for builder, proposer, validator, patch-proposal).",
@@ -528,7 +539,7 @@ const HELP_DATA = {
   contract_slice_response_shape: {
     slice: "string (one of contract_slices)",
     values:
-      "array of primitives or structured records. Field-set and enum slices emit string arrays; `route_required_references` entries are { route_id, required_reference_ids }; `scaffold_ids` emits scaffold ids.",
+      "array of primitives or structured records. Field-set and enum slices emit string arrays; `route_required_references` entries are { route_id, required_reference_ids }; `scaffold_ids` emits scaffold ids; `scaffold_catalog` emits { scaffold_id, output_kind, source, ordering, marker? } records (the same shape as `scaffold <id> --json` minus `body`).",
     ordering: {
       sorted: "alphabetical; set semantics; order is not contractual",
       catalog: "source-declared order is contractually significant (precedence, stage progression, severity escalation)",

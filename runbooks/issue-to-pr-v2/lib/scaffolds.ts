@@ -39,9 +39,19 @@ import {
 export type ScaffoldOutputKind = "yaml";
 export type ScaffoldOrdering = "catalog";
 
+const SCAFFOLD_SOURCE_ROOT = "runbooks/issue-to-pr-v2/lib/scaffolds.ts";
+
+/**
+ * Derive the scaffold-owner anchor from the id. Every scaffold renderer lives
+ * in this file, so the source is a stable id-keyed anchor; agents can resolve
+ * the owning module without per-id hand-maintenance.
+ */
+export function scaffoldSourceForId(id: string): string {
+  return `${SCAFFOLD_SOURCE_ROOT}#${id}`;
+}
+
 type ScaffoldDefinition = {
   output_kind: ScaffoldOutputKind;
-  source: string;
   ordering: ScaffoldOrdering;
   marker?: string;
   renderBody: () => string;
@@ -50,126 +60,94 @@ type ScaffoldDefinition = {
 const SCAFFOLD_DEFINITIONS = {
   "ce-plan-candidate-batch": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#ce-plan-candidate-batch",
     ordering: "catalog",
     renderBody: () => renderCandidateBatchBody("ce-plan"),
   },
   "replacement-candidate-batch": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#replacement-candidate-batch",
     ordering: "catalog",
     renderBody: () => renderCandidateBatchBody("replacement"),
   },
   "patch-proposal-candidate-batch": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#patch-proposal-candidate-batch",
     ordering: "catalog",
     renderBody: () => renderCandidateBatchBody("patch-proposal"),
   },
   "builder-return-envelope": {
     output_kind: "yaml",
-    source: "runbooks/issue-to-pr-v2/lib/scaffolds.ts#builder-return-envelope",
     ordering: "catalog",
     renderBody: renderBuilderReturnEnvelopeBody,
   },
   "builder-attempt-compact": {
     output_kind: "yaml",
-    source: "runbooks/issue-to-pr-v2/lib/scaffolds.ts#builder-attempt-compact",
     ordering: "catalog",
     renderBody: renderBuilderAttemptCompactBody,
   },
   "validator-builder-evidence": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#validator-builder-evidence",
     ordering: "catalog",
     renderBody: renderValidatorBuilderEvidenceBody,
   },
   "validator-inline-evidence": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#validator-inline-evidence",
     ordering: "catalog",
     renderBody: renderValidatorInlineEvidenceBody,
   },
   "proposer-success-envelope": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#proposer-success-envelope",
     ordering: "catalog",
     renderBody: renderProposerSuccessEnvelopeBody,
   },
   "proposer-fail-stop-envelope": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#proposer-fail-stop-envelope",
     ordering: "catalog",
     renderBody: renderProposerFailStopEnvelopeBody,
   },
   "validator-return-envelope": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#validator-return-envelope",
     ordering: "catalog",
     renderBody: renderValidatorReturnEnvelopeBody,
   },
   "ledger-empty-batches": {
     output_kind: "yaml",
-    source: "runbooks/issue-to-pr-v2/lib/scaffolds.ts#ledger-empty-batches",
     ordering: "catalog",
     renderBody: () => "batches: []\n",
   },
   "ledger-empty-findings-data": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#ledger-empty-findings-data",
     ordering: "catalog",
     renderBody: () => "findings: []\n",
   },
   "ledger-batch-lifecycle-defaults": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#ledger-batch-lifecycle-defaults",
     ordering: "catalog",
     renderBody: renderLedgerBatchLifecycleDefaultsBody,
   },
   "ledger-finding-row": {
     output_kind: "yaml",
-    source: "runbooks/issue-to-pr-v2/lib/scaffolds.ts#ledger-finding-row",
     ordering: "catalog",
     renderBody: renderLedgerFindingRowBody,
   },
   "notes-implementation-attempt-checkpoint": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#notes-implementation-attempt-checkpoint",
     ordering: "catalog",
     marker: NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER,
     renderBody: renderNotesImplementationAttemptCheckpointBody,
   },
   "notes-validator-wave-completed": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#notes-validator-wave-completed",
     ordering: "catalog",
     marker: NOTES_VALIDATOR_WAVE_COMPLETED_MARKER,
     renderBody: renderNotesValidatorWaveCompletedBody,
   },
   "notes-runbook-version-skew-continuation": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#notes-runbook-version-skew-continuation",
     ordering: "catalog",
     marker: NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER,
     renderBody: renderNotesRunbookVersionSkewContinuationBody,
   },
   "workflow-learnings-empty": {
     output_kind: "yaml",
-    source:
-      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#workflow-learnings-empty",
     ordering: "catalog",
     renderBody: () => "workflow_learnings: []\n",
   },
@@ -777,11 +755,11 @@ function scaffoldDefinitionToCatalogEntry(
   scaffold_id: ScaffoldId,
   definition: ScaffoldDefinition,
 ): ScaffoldCatalogEntry {
-  const { output_kind, source, ordering } = definition;
+  const { output_kind, ordering } = definition;
   return {
     scaffold_id,
     output_kind,
-    source,
+    source: scaffoldSourceForId(scaffold_id),
     ordering,
     ...(definition.marker ? { marker: definition.marker } : {}),
   };
@@ -809,7 +787,7 @@ export function renderScaffold(id: ScaffoldId): ScaffoldRenderResult {
   return {
     scaffold_id: id,
     output_kind: definition.output_kind,
-    source: definition.source,
+    source: scaffoldSourceForId(id),
     ordering: definition.ordering,
     ...(definition.marker ? { marker: definition.marker } : {}),
     body: definition.renderBody(),
