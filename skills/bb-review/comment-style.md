@@ -51,6 +51,18 @@ One comment, scannable, same terse voice. Order:
 
 Keep the whole thing shorter than a reader expects. If it reads like a generated report, cut it down.
 
+## Reply shape: defending a tool/script flagged as DX noise
+
+When a reviewer questions a script, helper, or bespoke bit of machinery ("conscious of the noise this adds to our DX", "why this vs the established pattern", "do we want to maintain this?"), do NOT just explain what it does. Sell it and answer their unspoken questions, then hand the decision back. Cover, in order:
+
+1. **Why it exists / what it catches that the alternative doesn't.** Ground it in a concrete failure the simpler approach would miss.
+2. **Maintenance burden for the next dev** — answer it head-on, with the mechanism. "Auto-discovers every X, no manifest to keep in sync" beats a vague "it's low-maintenance".
+3. **Is it automated / invisible at runtime?** Name the single command a dev actually runs; make clear the machinery is an implementation detail they never touch.
+4. **Offer to reduce the visible surface** — e.g. fold internals behind one script so it stops reading as bespoke noise.
+5. **Offer to make it the documented convention** if it lands, and **end with a question** that hands the call back ("Does that address it, or is there a specific part you'd want to simplify first?"). Don't declare the convention unilaterally.
+
+Verify every claim against the code first (how discovery works, the actual command, the default values) — a confident wrong claim about your own tooling is worse than no reply. Before promising a simplification ("happy to fold it behind one command"), check it's actually cheap; if a native feature might replace the custom tool entirely, say that's worth checking rather than over-promising the smaller fix.
+
 ## Non-blocker bullet examples
 
 These are the right grain and voice for the summary's non-blocker list:

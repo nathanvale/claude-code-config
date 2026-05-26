@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
+import { routeRequiredReferenceEntries } from "./lib/route";
+
 const repoRoot = join(import.meta.dir, "..", "..");
 
 const u1PolicyDocs = [
@@ -148,9 +150,6 @@ describe("Stage 4 policy drift guards", () => {
         "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md",
       ),
     );
-    const v2Template = compact(
-      await readRepoFile("runbooks/issue-to-pr-v2/issue-N-ledger.template.md"),
-    );
     const hotRouter = compact(
       await readRepoFile("runbooks/issue-to-pr-v2/issue-to-pr.md"),
     );
@@ -165,9 +164,9 @@ describe("Stage 4 policy drift guards", () => {
         "runbooks/issue-to-pr-v2/templates/builder-work-packet.md",
       ),
     );
-    const route = compact(
-      await readRepoFile("runbooks/issue-to-pr-v2/lib/route.ts"),
-    );
+    const frontmatterBlockedRefs = routeRequiredReferenceEntries().find(
+      (entry) => entry.route_id === "blocked-frontmatter-blocked-reason",
+    )?.required_reference_ids;
 
     expect(host).toContain(
       "Before any batch status mutation or resumed Stage 4 implementation attempt",
@@ -222,16 +221,6 @@ describe("Stage 4 policy drift guards", () => {
         ],
       },
       {
-        context: "v2 ledger template",
-        text: v2Template,
-        snippets: [
-          "host-builder-tools-unavailable",
-          "Stage 4 implementation attempt",
-          "bounded Orchestrator-inline",
-          "dispatch no Validators",
-        ],
-      },
-      {
         context: "v2 hot router",
         text: hotRouter,
         snippets: [
@@ -274,15 +263,10 @@ describe("Stage 4 policy drift guards", () => {
       expectToContainAll(text, snippets, context);
     }
 
-    expectToContainAll(
-      route,
-      [
-        "case \"blocked-frontmatter-blocked-reason\"",
-        "\"ledger-and-helper.md\"",
-        "\"findings-and-validators.md\"",
-        "\"host-adapters.md\"",
-      ],
-      "route reference mapping",
-    );
+    expect(frontmatterBlockedRefs).toEqual([
+      "ledger-and-helper.md",
+      "findings-and-validators.md",
+      "host-adapters.md",
+    ]);
   });
 });

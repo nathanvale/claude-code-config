@@ -155,8 +155,8 @@ deliberate schema choice so multiple blockers or probe results survive
 without being jammed into one delimited string.
 
 **Owner:** `gotchas guide`.
-**Retire when** the ledger template ships an inline comment documenting the
-list typing at the `builder_attempts` field, making the shape self-evident.
+**Retire when** the ledger schema reference documents list typing at
+`builder_attempts`, making the shape self-evident.
 
 ### 1.3 Candidate-vs-ledger batch digest mismatch
 

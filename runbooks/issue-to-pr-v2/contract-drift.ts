@@ -13,18 +13,18 @@
  * Batch 2 (added below `loadContractFacts`): the **doc-claim extractor**.
  * `extractDocClaims()` parses ONE scoped doc's text and reports the
  * contract-token claims it makes (route ids, command names, slice names,
- * packet roles, `data.*` field paths, and scoped recovery/control-plane
- * links) using bounded patterns over prose and fenced code blocks. It holds
- * no expected contract VALUES of its own (AC5): it only reads structural
- * markers and emits what the doc says, leaving the comparison to later
- * batches. Later batches add the comparator and the orchestrator.
+ * packet roles, scaffold ids, `data.*` field paths, and scoped
+ * recovery/control-plane links) using bounded patterns over prose and fenced
+ * code blocks. It holds no expected contract VALUES of its own (AC5): it only
+ * reads structural markers and emits what the doc says, leaving the comparison
+ * to later batches. Later batches add the comparator and the orchestrator.
  *
  * Design law (AC5): this file holds NO literal route ids, slice names,
  * packet roles, or field paths as expected values. The only contract
  * *coordinates* it knows are which CLI fields to read (the help payload's
  * `commands`, `contract_slices`, `state_response_shape`,
- * `diagnose_response_shape`, and the `data.` path prefix docs use). Those
- * are read-locations, not duplicated contract values.
+ * `diagnose_response_shape`, `scaffold_ids`, and the `data.` path prefix docs
+ * use). Those are read-locations, not duplicated contract values.
  *
  * Design law (AC6): read-only. The loader only invokes the read-only CLI
  * commands (`--help`, `contract <slice>`). It never writes files, touches
@@ -40,27 +40,20 @@
  * boundary below is intentional; a future maintainer must NOT extend it into a
  * general prose/consistency linter without re-opening the scope decision.
  *
- *  - Main SCOPE is exactly the four operator docs in `SCOPED_DOCS`
- *    (skills/issue-to-pr/SKILL.md, runbooks/issue-to-pr-v2/README.md,
- *    references/ledger-and-helper.md, references/first-run-gotchas.md). It does
- *    NOT validate other Issue-to-PR references (stage-*.md,
- *    findings-and-validators.md, builder-dispatch.md, host-adapters.md, etc.).
- *    A narrow U7 add-on also cross-checks the ledger template's batch lifecycle
- *    field mentions against the runtime key sets in `lib/contract.ts`.
+ *  - Main SCOPE is `SCOPED_DOCS`. It does NOT validate other Issue-to-PR
+ *    references (stage-*.md, host-adapters.md, etc.). Narrow add-ons also
+ *    cross-check ledger schema-slice pointers, runtime scaffold generated
+ *    blocks, hidden pointer compatibility, and visible scaffold commands.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
  *    and the scoped recovery/control-plane links (the first-run-gotchas
- *    relationship). The U7 add-on checks only lifecycle field-name presence.
+ *    relationship). The ledger add-on checks emitted schema-slice pointers in
+ *    the ledger helper reference.
  *    It does NOT judge prose truth, broad docs consistency, or any token kind
  *    beyond these.
- *  - It adds NO external dependency, NO new CLI command, NO new emitted fact
- *    (it only READS the existing CLI via subprocess), and generates NO docs.
- *    Sole exception: the U7 lifecycle-field check imports `BATCH_KEYS` and
- *    `LEDGER_BATCH_KEYS` directly from `lib/contract`, because those constants
- *    are runtime-owned key sets — not CLI envelope facts — and a subprocess
- *    call would not surface them. Subprocess-only remains the default for
- *    every other check.
+ *  - It adds NO external dependency and generates NO docs. Runtime contract
+ *    checks only read live CLI or renderer facts.
  *  - It does NOT validate decompose.ts flags
  *    (`decompose.ts --validate-ledger-batches` yields no command claim),
  *    route-precedence ORDER, enum-value prose (`committed`, `needs-revision`),
@@ -73,8 +66,7 @@
 import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { execPath } from "node:process";
-
-import { BATCH_KEYS, LEDGER_BATCH_KEYS } from "./lib/contract";
+import { isScaffoldId, SCAFFOLD_IDS } from "./lib/scaffolds";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -90,6 +82,13 @@ export type ContractFacts = {
   contractSlices: string[];
   /** Packet roles from `contract packet_roles --json` → data.values. */
   packetRoles: string[];
+  /** Scaffold ids from `--help --json` → data.scaffold_ids. */
+  scaffoldIds: string[];
+  /**
+   * Ledger schema pointer slice ids from
+   * `contract ledger_schema_pointer_slices --json` → data.values.
+   */
+  ledgerSchemaPointerSlices: string[];
   /**
    * Valid `data.*` dotted response field paths, derived from the help
    * payload's state and diagnose response shapes.
@@ -107,6 +106,12 @@ export type LoadContractFactsOptions = {
    * path; production callers leave it unset.
    */
   cliPath?: string;
+  /**
+   * Override the per-call subprocess deadline (ms). Defaults to
+   * {@link READ_CLI_DEADLINE_MS}. Tests use a small value to drive the
+   * deadline branch deterministically; production callers leave it unset.
+   */
+  readCliDeadlineMs?: number;
 };
 
 /** Shape of a CLI success/error envelope, narrowed to what the loader reads. */
@@ -125,14 +130,26 @@ function defaultCliPath(): string {
 }
 
 /**
+ * Default per-call deadline for `readCliData` subprocesses, in ms. The
+ * runbook CLI is local and synchronous so 10s is generous; the bound is
+ * here to fail loudly (CI-friendly) if cli.ts ever hangs on a corrupted
+ * ledger, blocked stdin, or filesystem stall rather than letting
+ * `loadContractFacts` block indefinitely across its four sequential
+ * subprocess reads.
+ */
+const READ_CLI_DEADLINE_MS = 10_000;
+
+/**
  * Spawn the read-only CLI with the given args and return the parsed success
  * envelope's `data`. Throws a clear, command-naming Error when the
- * subprocess exits non-zero, emits no parseable JSON, or returns a non-ok
- * envelope (AC6). Never returns empty facts on failure.
+ * subprocess exits non-zero, emits no parseable JSON, returns a non-ok
+ * envelope (AC6), or exceeds {@link READ_CLI_DEADLINE_MS}. Never returns
+ * empty facts on failure.
  */
 async function readCliData(
   cliPath: string,
   args: string[],
+  deadlineMs: number = READ_CLI_DEADLINE_MS,
 ): Promise<Record<string, unknown>> {
   const label = `bun ${cliPath} ${args.join(" ")}`;
   // Spawn inline so Bun's overload narrows stdout/stderr to ReadableStream
@@ -143,11 +160,33 @@ async function readCliData(
     stderr: "pipe",
   });
 
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      proc.kill();
+      reject(
+        new Error(
+          `contract-fact loader: "${label}" exceeded ${deadlineMs}ms deadline; killed.`,
+        ),
+      );
+    }, deadlineMs);
+  });
+
+  let stdout: string;
+  let stderr: string;
+  let exitCode: number;
+  try {
+    [stdout, stderr, exitCode] = await Promise.race([
+      Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]),
+      deadline,
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 
   if (exitCode !== 0) {
     throw new Error(
@@ -427,11 +466,17 @@ function deriveFieldPaths(
 /**
  * Load the authoritative contract facts from the live, read-only CLI.
  *
- * Sources, all at runtime:
+ * Sources, all at runtime. Newly emitted slices are accepted through
+ * `--help data.contract_slices`; this checker does not need per-slice
+ * source edits when the CLI owns the slice.
+ *
+ * Sources:
  *  - route ids   ← `contract route_ids --json`   → data.values
- *  - packet roles ← `contract packet_roles --json` → data.values
+ *  - packet roles  ← `contract packet_roles --json` → data.values
+ *  - ledger schema pointer slices ← `contract ledger_schema_pointer_slices --json` → data.values
  *  - command names ← `--help --json` → data.commands[].name
  *  - slice names   ← `--help --json` → data.contract_slices
+ *  - scaffold ids  ← `--help --json` → data.scaffold_ids
  *  - field paths   ← `--help --json` → state/diagnose response shapes
  *
  * Throws (never returns partial facts) when any subprocess fails or returns
@@ -441,18 +486,24 @@ export async function loadContractFacts(
   options: LoadContractFactsOptions = {},
 ): Promise<ContractFacts> {
   const cliPath = options.cliPath ?? defaultCliPath();
+  const deadlineMs = options.readCliDeadlineMs ?? READ_CLI_DEADLINE_MS;
 
-  const help = await readCliData(cliPath, ["--help", "--json"]);
-  const routeIdData = await readCliData(cliPath, [
-    "contract",
-    "route_ids",
-    "--json",
-  ]);
-  const packetRoleData = await readCliData(cliPath, [
-    "contract",
-    "packet_roles",
-    "--json",
-  ]);
+  const help = await readCliData(cliPath, ["--help", "--json"], deadlineMs);
+  const routeIdData = await readCliData(
+    cliPath,
+    ["contract", "route_ids", "--json"],
+    deadlineMs,
+  );
+  const packetRoleData = await readCliData(
+    cliPath,
+    ["contract", "packet_roles", "--json"],
+    deadlineMs,
+  );
+  const ledgerSchemaPointerData = await readCliData(
+    cliPath,
+    ["contract", "ledger_schema_pointer_slices", "--json"],
+    deadlineMs,
+  );
 
   const commands = help.commands;
   if (!Array.isArray(commands)) {
@@ -479,6 +530,10 @@ export async function loadContractFacts(
     help.contract_slices,
     "--help data.contract_slices",
   );
+  const scaffoldIds = expectStringArray(
+    help.scaffold_ids,
+    "--help data.scaffold_ids",
+  );
   const routeIds = expectStringArray(
     routeIdData.values,
     "contract route_ids data.values",
@@ -487,14 +542,20 @@ export async function loadContractFacts(
     packetRoleData.values,
     "contract packet_roles data.values",
   );
+  const ledgerSchemaPointerSlices = expectStringArray(
+    ledgerSchemaPointerData.values,
+    "contract ledger_schema_pointer_slices data.values",
+  );
 
   const stateShape = help.state_response_shape;
   const diagnoseShape = help.diagnose_response_shape;
   if (
     !stateShape ||
     typeof stateShape !== "object" ||
+    Array.isArray(stateShape) ||
     !diagnoseShape ||
-    typeof diagnoseShape !== "object"
+    typeof diagnoseShape !== "object" ||
+    Array.isArray(diagnoseShape)
   ) {
     throw new Error(
       "contract-fact loader: --help is missing state_response_shape / diagnose_response_shape",
@@ -530,6 +591,8 @@ export async function loadContractFacts(
     commandNames,
     contractSlices,
     packetRoles,
+    scaffoldIds,
+    ledgerSchemaPointerSlices,
     responseFieldPaths: {
       state: stateFieldPaths,
       diagnose: diagnoseFieldPaths,
@@ -576,6 +639,7 @@ export type DocClaims = {
   commands: DocClaim[];
   slices: DocClaim[];
   packetRoles: DocClaim[];
+  scaffoldCommands: DocClaim[];
   fieldPaths: DocClaim[];
   scopedLinks: ScopedLinkClaim[];
 };
@@ -610,6 +674,23 @@ function contextOf(text: string, index: number): string {
 /** Build a claim anchored at `index` in `text`. */
 function claimAt(text: string, index: number, token: string): DocClaim {
   return { token, line: lineOf(text, index), context: contextOf(text, index) };
+}
+
+function htmlCommentRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const commentRe = /<!--[\s\S]*?(?:-->|$)/g;
+  for (const match of text.matchAll(commentRe)) {
+    const start = match.index ?? 0;
+    ranges.push([start, start + match[0].length]);
+  }
+  return ranges;
+}
+
+function inHtmlComment(
+  index: number,
+  ranges: Array<[number, number]>,
+): boolean {
+  return ranges.some(([start, end]) => index >= start && index < end);
 }
 
 /**
@@ -766,18 +847,22 @@ function extractRouteIds(text: string): DocClaim[] {
  * Extract command, slice, and packet-role claims from `cli.ts` command
  * positions. The token immediately after `cli.ts ` is a command; after
  * `cli.ts contract ` it is also a slice; after `cli.ts packet ` it is also a
- * packet role. Flags and `<placeholder>` args are skipped. Reading the
- * `cli.ts `, `contract`, and `packet` markers is structural extraction, not a
- * contract value (AC5).
+ * packet role; after visible `cli.ts scaffold ` it is also a scaffold id.
+ * Flags and `<placeholder>` args are skipped. Reading the `cli.ts `,
+ * `contract`, `packet`, and `scaffold` markers is structural extraction, not
+ * a contract value (AC5).
  */
 function extractCliClaims(text: string): {
   commands: DocClaim[];
   slices: DocClaim[];
   packetRoles: DocClaim[];
+  scaffoldCommands: DocClaim[];
 } {
   const commands: DocClaim[] = [];
   const slices: DocClaim[] = [];
   const packetRoles: DocClaim[] = [];
+  const scaffoldCommands: DocClaim[] = [];
+  const commentRanges = htmlCommentRanges(text);
 
   // The token after `cli.ts ` is the command. Allow `<...>` so the
   // placeholder is captured then skipped, rather than silently matching the
@@ -786,6 +871,7 @@ function extractCliClaims(text: string): {
   for (const m of text.matchAll(cliRe)) {
     const command = m[1];
     const index = m.index ?? 0;
+    if (inHtmlComment(index, commentRanges)) continue;
     if (!isPlaceholder(command) && !isFlag(command)) {
       commands.push(claimAt(text, index, command));
     }
@@ -801,10 +887,12 @@ function extractCliClaims(text: string): {
       slices.push(claimAt(text, index, next));
     } else if (command === "packet") {
       packetRoles.push(claimAt(text, index, next));
+    } else if (command === "scaffold") {
+      scaffoldCommands.push(claimAt(text, index, next));
     }
   }
 
-  return { commands, slices, packetRoles };
+  return { commands, slices, packetRoles, scaffoldCommands };
 }
 
 /**
@@ -906,13 +994,15 @@ function extractScopedLinks(text: string, docPath: string): ScopedLinkClaim[] {
  *   attribute claims back to a file. Not used to gate which kinds are parsed.
  */
 export function extractDocClaims(docText: string, docPath: string): DocClaims {
-  const { commands, slices, packetRoles } = extractCliClaims(docText);
+  const { commands, slices, packetRoles, scaffoldCommands } =
+    extractCliClaims(docText);
   return {
     docPath,
     routeIds: extractRouteIds(docText),
     commands,
     slices,
     packetRoles,
+    scaffoldCommands,
     fieldPaths: extractFieldPaths(docText),
     scopedLinks: extractScopedLinks(docText, docPath),
   };
@@ -928,9 +1018,14 @@ export type DriftKind =
   | "command"
   | "slice"
   | "packet-role"
+  | "scaffold-command"
   | "field-path"
   | "scoped-link"
   | "ledger-lifecycle-field"
+  | "ledger-schema-slice-pointer"
+  | "generated-scaffold-block"
+  | "scaffold-pointer"
+  | "scaffold-inventory"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1056,6 +1151,12 @@ export async function compareClaimsToFacts(
     "packet role",
   );
   checkSet(
+    claims.scaffoldCommands,
+    new Set(facts.scaffoldIds),
+    "scaffold-command",
+    "scaffold id",
+  );
+  checkSet(
     claims.fieldPaths,
     new Set([
       ...facts.responseFieldPaths.state,
@@ -1099,8 +1200,376 @@ export type GotchasRelationshipOptions = {
  */
 const GOTCHAS_GUIDE_REL = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
 const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
+const ISSUE_TO_PR_DOC_REL = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
-const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
+const CE_PLAN_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
+const PROPOSER_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/proposer-envelope.md";
+const PATCH_PROPOSAL_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/patch-proposal.md";
+const BUILDER_RETURN_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/builder-return-envelope.md";
+const BUILDER_WORK_PACKET_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/builder-work-packet.md";
+const VALIDATOR_ENVELOPE_TEMPLATE_REL =
+  "runbooks/issue-to-pr-v2/templates/validator-envelope.md";
+const BUILDER_DISPATCH_REL =
+  "runbooks/issue-to-pr-v2/references/builder-dispatch.md";
+const FINDINGS_AND_VALIDATORS_REL =
+  "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
+const STAGE_4_BATCH_LOOP_REL =
+  "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md";
+
+type ScaffoldSurface = {
+  doc: string;
+  ids: readonly string[];
+};
+
+type ScaffoldInventoryClassification =
+  | "visible-command-pointer"
+  | "removed";
+
+type ScaffoldInventoryEntry = {
+  doc: string;
+  coordinate: string;
+  classification: ScaffoldInventoryClassification;
+  scaffoldId?: string;
+  forbiddenText?: string;
+};
+
+/**
+ * Build a structural detector for a `removed` inventory entry's `forbiddenText`
+ * sentinel. The literal `text.includes()` gate was bypassed by trivial idiomatic
+ * rewrites (single-quoted scalars, tab between `key:` and value, double spaces,
+ * `<sha|range>` without internal spaces). The hardened detector:
+ *
+ *   - collapses ASCII whitespace runs to a single match-any-whitespace class,
+ *   - treats `"..."` and `'...'` as interchangeable when the literal contains
+ *     a double-quoted scalar,
+ *   - tolerates optional whitespace around `|` inside angle-bracket placeholders
+ *     (`<sha | range>` ↔ `<sha|range>`).
+ *
+ * Anchored to the byte-level sentinels SCAFFOLD_INVENTORY already encodes; no
+ * structural YAML parsing required for any current entry.
+ */
+function buildForbiddenTextDetector(forbiddenText: string): RegExp {
+  // Tokenise into runs that escape verbatim and runs of whitespace that map to
+  // `\s+`. Then convert `"..."` quoted scalars into `["'][...]["']` so a copy
+  // restored with single quotes still trips the gate. Whitespace that bumps
+  // up against a `|` collapses to optional whitespace, so `<sha | range>` and
+  // `<sha|range>` both match.
+  let pattern = "";
+  let i = 0;
+  while (i < forbiddenText.length) {
+    const ch = forbiddenText[i] ?? "";
+    if (/\s/.test(ch)) {
+      let j = i;
+      while (j < forbiddenText.length && /\s/.test(forbiddenText[j] ?? "")) {
+        j += 1;
+      }
+      const prev = forbiddenText[i - 1] ?? "";
+      const next = forbiddenText[j] ?? "";
+      const adjacentToPipe = prev === "|" || next === "|";
+      pattern += adjacentToPipe ? "\\s*" : "\\s+";
+      i = j;
+      continue;
+    }
+    if (ch === '"') {
+      // Match either quote style at this position.
+      pattern += "[\"']";
+      i += 1;
+      continue;
+    }
+    if (ch === "|") {
+      pattern += "\\s*\\|\\s*";
+      i += 1;
+      continue;
+    }
+    pattern += escapeRegExp(ch);
+    i += 1;
+  }
+  return new RegExp(pattern);
+}
+
+const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
+  {
+    doc: CE_PLAN_TEMPLATE_REL,
+    coordinate: "## Structured-output requirement (issue-to-pr workflow) / candidate batch pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "ce-plan-candidate-batch",
+  },
+  {
+    doc: PATCH_PROPOSAL_TEMPLATE_REL,
+    coordinate: "## Scratch file shape / patch batch pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "patch-proposal-candidate-batch",
+  },
+  {
+    doc: PATCH_PROPOSAL_TEMPLATE_REL,
+    coordinate: "## Scratch file shape / dynamic final_finding member list",
+    classification: "removed",
+    forbiddenText: "final_finding fields:",
+  },
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    coordinate: "## Authoritative source / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "builder-return-envelope",
+  },
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    coordinate: "## What the Orchestrator records / compact attempt pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "builder-attempt-compact",
+  },
+  {
+    doc: BUILDER_RETURN_TEMPLATE_REL,
+    coordinate: "## What the Orchestrator records / Validator evidence pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-builder-evidence",
+  },
+  {
+    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
+    coordinate: "## Packet slots / dynamic Builder packet body",
+    classification: "removed",
+    forbiddenText: "batch_contract:\n  id: <slug>",
+  },
+  {
+    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
+    coordinate: "## Return envelope / Builder return pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "builder-return-envelope",
+  },
+  {
+    doc: BUILDER_DISPATCH_REL,
+    coordinate: "## Return envelope / Builder return pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "builder-return-envelope",
+  },
+  {
+    doc: BUILDER_DISPATCH_REL,
+    coordinate: "## Return envelope / compact attempt pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "builder-attempt-compact",
+  },
+  {
+    doc: BUILDER_DISPATCH_REL,
+    coordinate: "## Replacement batches and `supersedes` / replacement pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "replacement-candidate-batch",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "## Packet slots / dynamic Proposer packet body",
+    classification: "removed",
+    forbiddenText: "final_finding_row:\n  id: <finding-id>",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "### Success: one candidate patch-batch / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "proposer-success-envelope",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "### Success: one candidate patch-batch / Candidate patch-batch pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "patch-proposal-candidate-batch",
+  },
+  {
+    doc: PROPOSER_TEMPLATE_REL,
+    coordinate: "### Fail-stop / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "proposer-fail-stop-envelope",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Packet slots / dynamic Validator packet body",
+    classification: "removed",
+    forbiddenText: 'commit_ref_or_range: "<sha | range>"',
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Packet slots (orchestrator → Validator) / Builder evidence pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-builder-evidence",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Packet slots (orchestrator → Validator) / Inline evidence pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-inline-evidence",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Return envelope / return envelope pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-return-envelope",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "## Return envelope / finding row member list",
+    classification: "removed",
+    forbiddenText: "each row must be ledger-ready with `id`,",
+  },
+  {
+    doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
+    coordinate: "### Finding row schema",
+    classification: "visible-command-pointer",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / empty batches pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "ledger-empty-batches",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / lifecycle defaults pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "ledger-batch-lifecycle-defaults",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / empty findings pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "ledger-empty-findings-data",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / finding row pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / Notes checkpoint pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "notes-implementation-attempt-checkpoint",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / Notes Validator wave pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "notes-validator-wave-completed",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / Notes version-skew pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "notes-runbook-version-skew-continuation",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Runtime-owned schema facts / workflow learnings pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "workflow-learnings-empty",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### `## Notes` implementation evidence / checkpoint pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "notes-implementation-attempt-checkpoint",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### `## Notes` implementation evidence / Validator wave pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "notes-validator-wave-completed",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Workflow Learnings entry fields",
+    classification: "removed",
+    forbiddenText: "Required entry fields:",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### `## Workflow Learnings` entry fields / empty state pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "workflow-learnings-empty",
+  },
+  {
+    doc: LEDGER_DOC_REL,
+    coordinate: "### Continuation evidence shape (U6) / version-skew pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "notes-runbook-version-skew-continuation",
+  },
+  {
+    doc: STAGE_4_BATCH_LOOP_REL,
+    coordinate: "### Packet rendering for Stage 4 dispatch / patch proposal pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "patch-proposal-candidate-batch",
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / Builder evidence pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-builder-evidence",
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / inline evidence pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "validator-inline-evidence",
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / finding row pointer",
+    classification: "visible-command-pointer",
+    scaffoldId: "ledger-finding-row",
+  },
+  {
+    doc: FINDINGS_AND_VALIDATORS_REL,
+    coordinate: "## Validator invocation rules / finding row member list",
+    classification: "removed",
+    forbiddenText: "A non-empty finding is ledger-ready only when it has `id`,",
+  },
+];
+
+/**
+ * Return scaffold inventory classifications for coverage tests.
+ *
+ * This module owns the inventory; callers receive a read-only view for
+ * inspection, not a second source of truth.
+ */
+export function scaffoldInventoryClassifications(): readonly ScaffoldInventoryEntry[] {
+  return SCAFFOLD_INVENTORY;
+}
+
+function visibleCommandSurfaces(): ScaffoldSurface[] {
+  const byDoc = new Map<string, string[]>();
+  for (const entry of SCAFFOLD_INVENTORY) {
+    if (entry.classification !== "visible-command-pointer" || !entry.scaffoldId)
+      continue;
+    const ids = byDoc.get(entry.doc) ?? [];
+    ids.push(entry.scaffoldId);
+    byDoc.set(entry.doc, ids);
+  }
+  return [...byDoc].map(([doc, ids]) => ({ doc, ids }));
+}
+
+const VISIBLE_SCAFFOLD_COMMAND_SURFACES = visibleCommandSurfaces();
+
+/**
+ * Returns the set of scaffold ids referenced by the visible-command-pointer
+ * inventory. A scaffold id in {@link SCAFFOLD_IDS} absent from this set has
+ * no drift enforcement — see the SSOT exhaustiveness test in
+ * `contract-drift.test.ts`.
+ */
+export function scaffoldIdsCoveredBySurfaces(): Set<string> {
+  const covered = new Set<string>();
+  for (const surface of VISIBLE_SCAFFOLD_COMMAND_SURFACES) {
+    for (const id of surface.ids) covered.add(id);
+  }
+  return covered;
+}
+
+const SCAFFOLD_COMMAND_SURFACE_RELS = [
+  ...new Set(VISIBLE_SCAFFOLD_COMMAND_SURFACES.map((surface) => surface.doc)),
+] as const;
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
 
@@ -1132,26 +1601,20 @@ function regionMentionsGuide(region: string): boolean {
   );
 }
 
+type NumberedStepBlock = {
+  readonly line: number;
+  readonly body: string;
+};
+
 /**
- * True when SOME numbered orchestration step expresses the deterministic
- * blocked-route load of the guide. We split the text into step blocks (a line
- * starting with a numbered/lettered step marker like `7b.` or `8.`, its body
- * running until the next step marker or a blank line) and require ONE block to
- * carry all three signals together: a `blocked-` route trigger, a load verb,
- * and a guide reference (path or basename).
- *
- * Anchoring on the STEP construct — not whole-doc co-occurrence and not loose
- * proximity — is what lets the check detect deletion of step 7b. The route
- * catalog and the reference-loading-policy table mention `blocked-` and the
- * guide too, but they are prose/table that merely CITE step 7b; neither begins
- * with a numbered step marker, so removing the real step makes this return
- * false even though those citations remain. The check tolerates harmless
- * rewording inside the step (any load verb, path or basename, any blocked-
- * route id) and is not pinned to the literal "7b" or exact prose.
+ * Split numbered orchestration steps into bounded blocks. The first line must
+ * start with a numbered/lettered step marker like `7b.` or `8.`, and the block
+ * runs until the next step marker or blank line.
  */
-function skillHasBlockedLoadStep(skillText: string): boolean {
-  const lines = skillText.split("\n");
+function numberedStepBlocks(text: string): NumberedStepBlock[] {
+  const lines = text.split("\n");
   const stepMarker = /^\s*\d+[a-z]?\.\s/;
+  const blocks: NumberedStepBlock[] = [];
   let i = 0;
   while (i < lines.length) {
     if (!stepMarker.test(lines[i] ?? "")) {
@@ -1168,17 +1631,83 @@ function skillHasBlockedLoadStep(skillText: string): boolean {
       block.push(next);
       j += 1;
     }
-    const body = block.join("\n");
-    if (
-      BLOCKED_ROUTE_TRIGGER.test(body) &&
-      LOAD_VERB.test(body) &&
-      regionMentionsGuide(body)
-    ) {
-      return true;
-    }
+    blocks.push({ line: i + 1, body: block.join("\n") });
     i = j;
   }
-  return false;
+  return blocks;
+}
+
+function isBlockedGotchasLoadStep(block: NumberedStepBlock): boolean {
+  return (
+    BLOCKED_ROUTE_TRIGGER.test(block.body) &&
+    LOAD_VERB.test(block.body) &&
+    regionMentionsGuide(block.body)
+  );
+}
+
+function isRemainingPreStageGateStep(block: NumberedStepBlock): boolean {
+  return /\b(?:honou?r|apply)\b[\s\S]{0,80}\bremaining\s+pre-stage gates\b/i.test(
+    block.body,
+  );
+}
+
+/**
+ * True when the deterministic blocked-route gotchas load happens before the
+ * step that applies remaining pre-stage gates. Existence alone is not enough:
+ * moving the load after that gate would make `blocked-runbook-version-skew`
+ * stop before recovery context was loaded.
+ */
+function blockedGotchasLoadPrecedesRemainingGates(text: string): boolean {
+  const steps = numberedStepBlocks(text);
+  const load = steps.find(isBlockedGotchasLoadStep);
+  const gate = steps.find(isRemainingPreStageGateStep);
+  return load !== undefined && gate !== undefined && load.line < gate.line;
+}
+
+function regionAroundLabel(text: string, labelPattern: RegExp): string | null {
+  const lines = text.split("\n");
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^#{1,6}\s+/.test(line) && labelPattern.test(line)) {
+      start = i;
+      break;
+    }
+    if (/^\s*\*\*[^*]+?\*\*\s*$/.test(line) && labelPattern.test(line)) {
+      start = i;
+      break;
+    }
+  }
+  if (start === -1) return null;
+
+  const body: string[] = [lines[start] ?? ""];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^#{1,6}\s+/.test(line) || /^\s*\*\*[^*]+?\*\*\s*$/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+function versionSkewGateLoadsGotchasBeforeStop(text: string): boolean {
+  const region = regionAroundLabel(text, /runbook version skew|version-skew gate/i);
+  if (region === null || !regionMentionsGuide(region)) return false;
+
+  return (
+    /\bload(?:s|ed|ing)?\b[\s\S]{0,120}(?:blocked-route overlay|first-run-gotchas\.md)[\s\S]{0,120}\bstop\b/i.test(
+      region,
+    ) ||
+    /\bstop\b[\s\S]{0,80}\bafter\s+load(?:s|ed|ing)?\b[\s\S]{0,120}(?:blocked-route overlay|first-run-gotchas\.md)/i.test(
+      region,
+    )
+  );
+}
+
+function docPreservesGotchasLoadBeforeStops(text: string): boolean {
+  return (
+    blockedGotchasLoadPrecedesRemainingGates(text) &&
+    versionSkewGateLoadsGotchasBeforeStop(text)
+  );
 }
 
 /**
@@ -1244,16 +1773,6 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * Return the runtime batch lifecycle fields by subtracting Stage 3's immutable
- * batch contract keys from the helper-owned ledger batch key set.
- */
-function lifecycleBatchFields(): string[] {
-  return [...LEDGER_BATCH_KEYS]
-    .filter((key) => !BATCH_KEYS.has(key))
-    .sort((a, b) => a.localeCompare(b));
-}
-
-/**
  * Extract a markdown section body by heading-label pattern. Returns `null`
  * when no matching heading exists so callers can emit a section-missing
  * finding rather than silently scan the whole document (which would let
@@ -1263,6 +1782,18 @@ function markdownSectionByHeadingPattern(
   text: string,
   headingPattern: RegExp,
 ): string | null {
+  return markdownSectionRegionByHeadingPattern(text, headingPattern)?.body ?? null;
+}
+
+type MarkdownSectionRegion = {
+  body: string;
+  startLine: number;
+};
+
+function markdownSectionRegionByHeadingPattern(
+  text: string,
+  headingPattern: RegExp,
+): MarkdownSectionRegion | null {
   const lines = text.split("\n");
   let start = -1;
   let level = 0;
@@ -1281,7 +1812,7 @@ function markdownSectionByHeadingPattern(
     if (closingRe.test(lines[i] ?? "")) break;
     body.push(lines[i] ?? "");
   }
-  return body.join("\n");
+  return { body: body.join("\n"), startLine: start + 1 };
 }
 
 /** Extract a markdown section body by exact heading label, or `null`. */
@@ -1292,21 +1823,14 @@ function markdownSection(text: string, headingLabel: string): string | null {
   );
 }
 
-/** True when a doc region mentions a field as a standalone snake_case token. */
-function regionMentionsField(region: string, field: string): boolean {
-  const tokenRe = new RegExp(
-    `(?<![A-Za-z0-9_])${escapeRegExp(field)}(?![A-Za-z0-9_])`,
+function regionMentionsContractSliceCommand(
+  region: string,
+  slice: string,
+): boolean {
+  const commandRe = new RegExp(
+    `cli\\.ts\\s+contract\\s+${escapeRegExp(slice)}\\s+--json`,
   );
-  return tokenRe.test(region);
-}
-
-/** True when a section lists a lifecycle field as a markdown bullet field. */
-function regionMentionsFieldBullet(region: string, field: string): boolean {
-  const bulletRe = new RegExp(
-    `^\\s*[-*]\\s+\`${escapeRegExp(field)}\`\\s*:`,
-    "m",
-  );
-  return bulletRe.test(region);
+  return commandRe.test(region);
 }
 
 /**
@@ -1320,15 +1844,16 @@ function regionMentionsFieldBullet(region: string, field: string): boolean {
 export type LedgerLifecycleFieldDriftOptions = {
   /** Repo root that ledger docs resolve against. */
   repoRoot?: string;
+  /** CLI path forwarded to live contract-slice reads. */
+  cliPath?: string;
 };
 
 /**
- * Cross-check the ledger template and ledger/helper reference against the
- * runtime-owned batch lifecycle field set.
+ * Cross-check ledger schema docs against live CLI facts.
  *
  * @param opts - Optional repo root override for fixture tests.
- * @returns Field-presence drift findings. Empty means the docs mention every
- * helper-owned lifecycle field.
+ * @returns Drift findings. Empty means the helper reference points at emitted
+ * schema slices.
  *
  * @example
  * ```typescript
@@ -1340,64 +1865,580 @@ export async function checkLedgerLifecycleFieldDrift(
   opts: LedgerLifecycleFieldDriftOptions = {},
 ): Promise<DriftFinding[]> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const cliPath = opts.cliPath ?? defaultCliPath();
   const findings: DriftFinding[] = [];
-  const lifecycleFields = lifecycleBatchFields();
+  const facts = await loadContractFacts({ cliPath });
+  const pointerSlices = facts.ledgerSchemaPointerSlices;
 
-  const templateText = await readScopedDocOrThrow(
-    join(repoRoot, LEDGER_TEMPLATE_REL),
-    LEDGER_TEMPLATE_REL,
-    "contract-drift ledger lifecycle field check",
-  );
   const ledgerText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_DOC_REL),
     LEDGER_DOC_REL,
     "contract-drift ledger lifecycle field check",
   );
 
-  const templateBatchSection = markdownSection(templateText, "Batches");
-  if (templateBatchSection === null) {
-    findings.push({
-      doc: LEDGER_TEMPLATE_REL,
-      kind: "ledger-lifecycle-field",
-      claim: "## Batches",
-      reason: `ledger template is missing the canonical \`## Batches\` section; lifecycle field drift cannot be checked.`,
-    });
-  }
-  const ledgerBatchFieldSection = markdownSectionByHeadingPattern(
+  const schemaFactsSection = markdownSectionByHeadingPattern(
     ledgerText,
-    /`## Batches`\s+entry fields/i,
+    /runtime-owned schema facts/i,
   );
-  if (ledgerBatchFieldSection === null) {
+  if (schemaFactsSection === null) {
     findings.push({
       doc: LEDGER_DOC_REL,
-      kind: "ledger-lifecycle-field",
-      claim: "`## Batches` entry fields",
-      reason: `ledger-and-helper.md is missing the canonical \`\`## Batches\`\` entry fields section; lifecycle field drift cannot be checked.`,
+      kind: "ledger-schema-slice-pointer",
+      claim: "Runtime-owned schema facts",
+      reason: `ledger-and-helper.md is missing the runtime-owned schema facts section; ledger schema slice pointers cannot be checked.`,
     });
   }
-  for (const field of lifecycleFields) {
+
+  for (const slice of pointerSlices) {
     if (
-      templateBatchSection !== null &&
-      !regionMentionsField(templateBatchSection, field)
-    ) {
-      findings.push({
-        doc: LEDGER_TEMPLATE_REL,
-        kind: "ledger-lifecycle-field",
-        claim: field,
-        reason: `ledger template Batches section does not mention helper-owned lifecycle field \`${field}\`.`,
-      });
-    }
-    if (
-      ledgerBatchFieldSection !== null &&
-      !regionMentionsFieldBullet(ledgerBatchFieldSection, field)
+      schemaFactsSection !== null &&
+      !regionMentionsContractSliceCommand(schemaFactsSection, slice)
     ) {
       findings.push({
         doc: LEDGER_DOC_REL,
-        kind: "ledger-lifecycle-field",
-        claim: field,
-        reason: `ledger-and-helper.md batch entry field list does not mention helper-owned lifecycle field \`${field}\`.`,
+        kind: "ledger-schema-slice-pointer",
+        claim: slice,
+        reason: `ledger-and-helper.md runtime-owned schema facts section does not point to \`cli.ts contract ${slice} --json\`.`,
       });
     }
+  }
+
+  return findings;
+}
+
+type GeneratedScaffoldBlock = {
+  id: string;
+  source: string;
+  body: string | null;
+  line: number;
+  startIndex: number;
+  endIndex: number;
+  malformedReason?: string;
+};
+
+type ScaffoldPointer = {
+  id: string;
+  source: string;
+  line: number;
+  malformedReason?: string;
+};
+type ScaffoldMarker = {
+  id: string;
+  line: number;
+};
+type YamlFence = {
+  body: string;
+  line: number;
+  startIndex: number;
+  endIndex: number;
+};
+
+// Marker regexes are intentionally LENIENT — they accept case variants on the
+// marker name, either quote style on the `source=...` attribute, and any
+// trailing attribute soup before the closing `-->`. The point is to refuse to
+// silently ignore a near-match; once captured, `buildScaffoldMarkerSummary`
+// classifies the marker as well-formed or malformed and the inventory check
+// surfaces both as drift findings.
+const GENERATED_SCAFFOLD_START_LOOSE_RE =
+  /<!--\s*generated-scaffold:start\b([^>]*?)-->/gi;
+const SCAFFOLD_POINTER_LOOSE_RE = /<!--\s*scaffold-pointer\b([^>]*?)-->/gi;
+const SCAFFOLD_MARKER_ID_RE = /\bid\s*=\s*([A-Za-z0-9_-]+)\b/i;
+const SCAFFOLD_MARKER_SOURCE_RE = /\bsource\s*=\s*("([^"]*)"|'([^']*)')/i;
+
+function expectedGeneratedScaffoldSource(id: string): string {
+  return `cli.ts scaffold ${id} --json`;
+}
+
+function generatedScaffoldEndRe(id: string): RegExp {
+  return new RegExp(
+    `<!--\\s*generated-scaffold:end\\s+id=${escapeRegExp(id)}\\s*-->`,
+    "i",
+  );
+}
+
+// Active templates must be pointer-only; any fenced YAML body — regardless of
+// language-token casing (` ```YAML `), trailing info-string (` ```yaml:foo `),
+// or CRLF line endings emitted by Windows or GitHub web UIs — is treated as a
+// reintroduction attempt. The detector is case-insensitive on the language tag
+// and accepts `\r?\n` on both fence boundaries.
+const YAML_FENCE_RE = /```ya?ml\b[^\r\n]*\r?\n([\s\S]*?)\r?\n```/gi;
+
+function parseGeneratedScaffoldRegion(region: string): {
+  body: string | null;
+  malformedReason?: string;
+} {
+  const fenceRe = new RegExp(YAML_FENCE_RE.source, YAML_FENCE_RE.flags);
+  const fences = [...region.matchAll(fenceRe)];
+  if (fences.length === 0) {
+    return {
+      body: null,
+      malformedReason: "missing fenced yaml body",
+    };
+  }
+  if (fences.length !== 1) {
+    return {
+      body: null,
+      malformedReason: `expected exactly one fenced yaml body, found ${fences.length}`,
+    };
+  }
+
+  const fence = fences[0];
+  const fenceStart = fence.index ?? 0;
+  const fenceEnd = fenceStart + fence[0].length;
+  if (region.slice(0, fenceStart).trim().length > 0) {
+    return {
+      body: null,
+      malformedReason: "non-whitespace content before fenced yaml body",
+    };
+  }
+  if (region.slice(fenceEnd).trim().length > 0) {
+    return {
+      body: null,
+      malformedReason: "non-whitespace content after fenced yaml body",
+    };
+  }
+
+  return { body: `${fence[1] ?? ""}\n` };
+}
+
+/**
+ * Decompose a loose marker match into its `id`, `source`, and any malformed
+ * reason. Returns:
+ *   - `id` empty string when the marker has no `id=...` attribute (or one with
+ *     non-identifier characters);
+ *   - `source` empty string when no `source=...` attribute is present;
+ *   - `malformedReason` populated when the marker deviates from the canonical
+ *     shape (` <!-- name id=foo source="bar" --> ` with lowercase name and
+ *     double-quoted source). A populated reason still surfaces the marker as a
+ *     finding so contributors get a tripwire instead of silent acceptance.
+ */
+function parseMarkerAttributes(
+  markerName: string,
+  rawMatch: string,
+  attributePayload: string,
+): { id: string; source: string; malformedReason?: string } {
+  const reasons: string[] = [];
+  const idMatch = SCAFFOLD_MARKER_ID_RE.exec(attributePayload);
+  const id = idMatch?.[1] ?? "";
+  if (!idMatch) {
+    reasons.push("missing or non-identifier `id=...`");
+  }
+  const sourceMatch = SCAFFOLD_MARKER_SOURCE_RE.exec(attributePayload);
+  const source = sourceMatch
+    ? (sourceMatch[2] ?? sourceMatch[3] ?? "")
+    : "";
+  if (!sourceMatch) {
+    reasons.push("missing `source=...` attribute");
+  } else if (sourceMatch[3] !== undefined) {
+    reasons.push("source attribute uses single-quoted scalar");
+  }
+  // Detect case drift on the marker name (lowercase is canonical).
+  const nameMatch = new RegExp(`^<!--\\s*(${markerName})\\b`, "i").exec(
+    rawMatch,
+  );
+  if (nameMatch && nameMatch[1] !== markerName) {
+    reasons.push(`marker name "${nameMatch[1]}" must be lowercase`);
+  }
+  // Anything beyond `id` and `source` is unrecognised in pointer-only mode.
+  const leftover = attributePayload
+    .replace(SCAFFOLD_MARKER_ID_RE, "")
+    .replace(SCAFFOLD_MARKER_SOURCE_RE, "")
+    .trim();
+  if (leftover.length > 0) {
+    reasons.push(`unrecognised trailing attribute(s): ${leftover}`);
+  }
+  return {
+    id,
+    source,
+    malformedReason: reasons.length > 0 ? reasons.join("; ") : undefined,
+  };
+}
+
+function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] {
+  const blocks: GeneratedScaffoldBlock[] = [];
+  for (const match of text.matchAll(GENERATED_SCAFFOLD_START_LOOSE_RE)) {
+    const attrs = parseMarkerAttributes(
+      "generated-scaffold:start",
+      match[0] ?? "",
+      match[1] ?? "",
+    );
+    const id = attrs.id;
+    const source = attrs.source;
+    const startIndex = match.index ?? 0;
+    const bodyStart = startIndex + (match[0]?.length ?? 0);
+    const startReason = attrs.malformedReason;
+    // The end-marker search only runs when we have an id to anchor against.
+    const endMatch = id
+      ? generatedScaffoldEndRe(id).exec(text.slice(bodyStart))
+      : null;
+    if (!endMatch || endMatch.index === undefined) {
+      blocks.push({
+        id,
+        source,
+        body: null,
+        line: lineOf(text, startIndex),
+        startIndex,
+        endIndex: text.length,
+        malformedReason:
+          startReason ?? "missing generated-scaffold end marker",
+      });
+      continue;
+    }
+
+    const region = text.slice(bodyStart, bodyStart + endMatch.index);
+    const endIndex = bodyStart + endMatch.index + endMatch[0].length;
+    const parsed = parseGeneratedScaffoldRegion(region);
+    if (parsed.body === null) {
+      blocks.push({
+        id,
+        source,
+        body: null,
+        line: lineOf(text, startIndex),
+        startIndex,
+        endIndex,
+        malformedReason: startReason ?? parsed.malformedReason,
+      });
+      continue;
+    }
+
+    blocks.push({
+      id,
+      source,
+      body: parsed.body,
+      line: lineOf(text, startIndex),
+      startIndex,
+      endIndex,
+      malformedReason: startReason,
+    });
+  }
+  return blocks;
+}
+
+function extractScaffoldPointers(text: string): ScaffoldPointer[] {
+  const pointers: ScaffoldPointer[] = [];
+  for (const match of text.matchAll(SCAFFOLD_POINTER_LOOSE_RE)) {
+    const attrs = parseMarkerAttributes(
+      "scaffold-pointer",
+      match[0] ?? "",
+      match[1] ?? "",
+    );
+    pointers.push({
+      id: attrs.id,
+      source: attrs.source,
+      line: lineOf(text, match.index ?? 0),
+      malformedReason: attrs.malformedReason,
+    });
+  }
+  return pointers;
+}
+
+function extractYamlFences(text: string): YamlFence[] {
+  const fences: YamlFence[] = [];
+  const fenceRe = new RegExp(YAML_FENCE_RE.source, YAML_FENCE_RE.flags);
+  for (const match of text.matchAll(fenceRe)) {
+    const startIndex = match.index ?? 0;
+    fences.push({
+      body: `${match[1] ?? ""}\n`,
+      line: lineOf(text, startIndex),
+      startIndex,
+      endIndex: startIndex + match[0].length,
+    });
+  }
+  return fences;
+}
+
+/** Options for scaffold inventory drift checks. */
+export type ScaffoldInventoryDriftOptions = {
+  /** Repo root used for scoped doc reads. */
+  repoRoot?: string;
+  /** Runtime scaffold ids to compare against; defaults to `SCAFFOLD_IDS`. */
+  scaffoldIds?: readonly string[];
+};
+
+/**
+ * Check scaffold inventory entries and pointer-only template surfaces.
+ *
+ * Returns a fresh findings array owned by the caller. Empty means inventory
+ * ids, hidden markers, retired generated blocks, and active template YAML
+ * surfaces match the runtime-owned scaffold contract.
+ */
+export async function checkScaffoldInventoryDrift(
+  opts: ScaffoldInventoryDriftOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const runtimeScaffoldIds = new Set(opts.scaffoldIds ?? SCAFFOLD_IDS);
+  const findings: DriftFinding[] = [];
+
+  for (const entry of SCAFFOLD_INVENTORY) {
+    if (
+      entry.classification === "visible-command-pointer" &&
+      entry.scaffoldId &&
+      !runtimeScaffoldIds.has(entry.scaffoldId)
+    ) {
+      findings.push({
+        doc: entry.doc,
+        kind: "scaffold-inventory",
+        claim: entry.scaffoldId,
+        reason: `${entry.classification} inventory entry at ${entry.coordinate} names a scaffold id absent from the runtime catalog.`,
+      });
+    }
+  }
+
+  const docs = [...new Set(SCAFFOLD_INVENTORY.map((entry) => entry.doc))];
+  for (const doc of docs) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, doc),
+      doc,
+      "contract-drift scaffold inventory check",
+    );
+    const entries = SCAFFOLD_INVENTORY.filter((entry) => entry.doc === doc);
+    const generatedBlocks = extractGeneratedScaffoldBlocks(text);
+    const hiddenPointers = extractScaffoldPointers(text);
+    const yamlFences = extractYamlFences(text);
+
+    for (const block of generatedBlocks) {
+      const suffix = block.malformedReason
+        ? ` (malformed marker: ${block.malformedReason})`
+        : "";
+      findings.push({
+        doc,
+        kind: "scaffold-inventory",
+        claim: block.id || "<malformed-generated-scaffold-marker>",
+        line: block.line,
+        reason: `generated-scaffold marker reintroduced in an active scoped surface; active templates must be pointer-only.${suffix}`,
+      });
+    }
+
+    for (const pointer of hiddenPointers) {
+      const suffix = pointer.malformedReason
+        ? ` (malformed marker: ${pointer.malformedReason})`
+        : "";
+      findings.push({
+        doc,
+        kind: "scaffold-inventory",
+        claim: pointer.id || "<malformed-scaffold-pointer>",
+        line: pointer.line,
+        reason: `hidden scaffold-pointer marker reintroduced in an active scoped surface; use a visible \`cli.ts scaffold <id> --json\` pointer instead.${suffix}`,
+      });
+    }
+
+    for (const entry of entries) {
+      if (entry.classification === "removed" && entry.forbiddenText) {
+        const detector = buildForbiddenTextDetector(entry.forbiddenText);
+        const hit = detector.exec(text);
+        if (hit) {
+          findings.push({
+            doc,
+            kind: "scaffold-inventory",
+            claim: entry.coordinate,
+            line: lineOf(text, hit.index ?? 0),
+            reason: `removed scaffold surface reappeared; structural detector matched (sentinel: ${entry.forbiddenText}).`,
+          });
+        }
+      }
+    }
+
+    if (isActiveTemplateDoc(doc)) {
+      for (const fence of yamlFences) {
+        findings.push({
+          doc,
+          kind: "scaffold-inventory",
+          claim: "unclassified-yaml-fence",
+          line: fence.line,
+          reason:
+            "fenced YAML block found in an active template; active templates must be pointer-only.",
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
+function isActiveTemplateDoc(doc: string): boolean {
+  return doc.startsWith("runbooks/issue-to-pr-v2/templates/");
+}
+
+function scaffoldMarkers(text: string): ScaffoldMarker[] {
+  return [
+    ...extractGeneratedScaffoldBlocks(text).map((block) => ({
+      id: block.id,
+      line: block.line,
+    })),
+    ...extractScaffoldPointers(text).map((pointer) => ({
+      id: pointer.id,
+      line: pointer.line,
+    })),
+  ].sort((a, b) => a.line - b.line);
+}
+
+function checkVisibleScaffoldCommands(
+  text: string,
+  doc: string,
+): DriftFinding[] {
+  const findings: DriftFinding[] = [];
+  const markers = scaffoldMarkers(text);
+
+  for (const claim of extractDocClaims(text, doc).scaffoldCommands) {
+    if (!isScaffoldId(claim.token)) {
+      findings.push({
+        doc,
+        kind: "scaffold-command",
+        claim: claim.token,
+        line: claim.line,
+        reason: `visible scaffold command names unknown scaffold id "${claim.token}".`,
+      });
+      continue;
+    }
+
+    const nextMarker = markers.find(
+      (marker) => marker.line > claim.line && marker.line - claim.line <= 3,
+    );
+    if (nextMarker && nextMarker.id !== claim.token) {
+      findings.push({
+        doc,
+        kind: "scaffold-command",
+        claim: claim.token,
+        line: claim.line,
+        reason: `visible scaffold command names "${claim.token}", but the adjacent scaffold marker names "${nextMarker.id}".`,
+      });
+    }
+  }
+
+  return findings;
+}
+
+function headingLabelFromCoordinate(coordinate: string): string {
+  const raw = coordinate.split("/")[0]?.trim() ?? coordinate.trim();
+  return raw.replace(/^#{1,6}\s+/, "").trim();
+}
+
+function visibleCommandSourceMatches(context: string, scaffoldId: string): boolean {
+  const commandRe = new RegExp(
+    `\\bcli\\.ts\\s+scaffold\\s+${escapeRegExp(scaffoldId)}\\s+--json\\b`,
+  );
+  return commandRe.test(context);
+}
+
+function checkVisibleCommandPointerEntry(
+  text: string,
+  entry: ScaffoldInventoryEntry,
+): DriftFinding[] {
+  if (!entry.scaffoldId) return [];
+
+  const headingLabel = headingLabelFromCoordinate(entry.coordinate);
+  const section = markdownSectionRegionByHeadingPattern(
+    text,
+    new RegExp(`^${escapeRegExp(headingLabel)}$`, "i"),
+  );
+  if (section === null) {
+    return [
+      {
+        doc: entry.doc,
+        kind: "scaffold-command",
+        claim: entry.scaffoldId,
+        reason: `visible scaffold command pointer at ${entry.coordinate} is missing its owning section "${headingLabel}".`,
+      },
+    ];
+  }
+
+  const sectionClaims = extractDocClaims(section.body, entry.doc)
+    .scaffoldCommands
+    .map((claim) => ({
+      ...claim,
+      line: claim.line + section.startLine - 1,
+    }));
+  const expectedSource = expectedGeneratedScaffoldSource(entry.scaffoldId);
+  const matching = sectionClaims.find(
+    (claim) =>
+      claim.token === entry.scaffoldId &&
+      visibleCommandSourceMatches(claim.context, entry.scaffoldId ?? ""),
+  );
+  if (matching) return [];
+
+  const sameIdWrongSource = sectionClaims.find(
+    (claim) => claim.token === entry.scaffoldId,
+  );
+  if (sameIdWrongSource) {
+    return [
+      {
+        doc: entry.doc,
+        kind: "scaffold-command",
+        claim: entry.scaffoldId,
+        line: sameIdWrongSource.line,
+        reason: `visible scaffold command pointer at ${entry.coordinate} names "${entry.scaffoldId}" but does not match expected source "${expectedSource}".`,
+      },
+    ];
+  }
+
+  const otherScaffold = sectionClaims[0];
+  return [
+    {
+      doc: entry.doc,
+      kind: "scaffold-command",
+      claim: otherScaffold?.token ?? entry.scaffoldId,
+      line: otherScaffold?.line,
+      reason:
+        otherScaffold === undefined
+          ? `visible scaffold command pointer at ${entry.coordinate} is missing expected source "${expectedSource}".`
+          : `visible scaffold command pointer at ${entry.coordinate} names "${otherScaffold.token}", expected "${entry.scaffoldId}".`,
+    },
+  ];
+}
+
+function checkVisibleCommandPointers(
+  text: string,
+  entries: readonly ScaffoldInventoryEntry[],
+): DriftFinding[] {
+  return entries.flatMap((entry) =>
+    entry.classification === "visible-command-pointer"
+      ? checkVisibleCommandPointerEntry(text, entry)
+      : [],
+  );
+}
+
+/** Options for generated scaffold and visible pointer drift checks. */
+export type GeneratedScaffoldDriftOptions = {
+  /** Repo root used for scoped doc reads. */
+  repoRoot?: string;
+};
+
+/**
+ * Run the full scaffold drift surface for active docs.
+ *
+ * Returns a fresh findings array owned by the caller. Empty means active docs
+ * use visible `cli.ts scaffold` pointers that resolve to runtime scaffold ids,
+ * with no retired generated blocks or hidden pointer markers.
+ */
+export async function checkGeneratedScaffoldBlocksDrift(
+  opts: GeneratedScaffoldDriftOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = await checkScaffoldInventoryDrift({
+    repoRoot,
+  });
+
+  for (const surface of VISIBLE_SCAFFOLD_COMMAND_SURFACES) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, surface.doc),
+      surface.doc,
+      "contract-drift visible scaffold command pointer check",
+    );
+    const entries = SCAFFOLD_INVENTORY.filter(
+      (entry) =>
+        entry.doc === surface.doc &&
+        entry.classification === "visible-command-pointer",
+    );
+    findings.push(...checkVisibleCommandPointers(text, entries));
+  }
+
+  for (const doc of SCAFFOLD_COMMAND_SURFACE_RELS) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, doc),
+      doc,
+      "contract-drift scaffold command check",
+    );
+    findings.push(...checkVisibleScaffoldCommands(text, doc));
   }
 
   return findings;
@@ -1409,15 +2450,11 @@ export async function checkLedgerLifecycleFieldDrift(
  * structured drift findings (DATA); a present, intact relationship yields an
  * empty array. Three relationship facts are checked:
  *
- *  (a) `skills/issue-to-pr/SKILL.md` carries the deterministic control-plane
- *      load of the guide for `blocked-` routes (orchestration step 7b). This is
- *      anchored STRUCTURALLY, not by whole-doc co-occurrence: SOME numbered
- *      orchestration step must, within its own bounded body, tie a `blocked-`
- *      route trigger to LOADING the guide (a load verb + the guide path or its
- *      basename). Whole-doc co-occurrence is deliberately NOT enough — the
- *      route catalog and the reference-loading-policy table both mention
- *      `blocked-` and the guide elsewhere, so a co-occurrence check could not
- *      detect deletion of the very step-7b load it exists to protect.
+ *  (a) `skills/issue-to-pr/SKILL.md` and `issue-to-pr.md` carry the
+ *      deterministic control-plane load of the guide for `blocked-` routes
+ *      before remaining pre-stage gates, plus version-skew wording that loads
+ *      recovery context before stopping. This is anchored STRUCTURALLY, not by
+ *      whole-doc co-occurrence.
  *  (b) `runbooks/issue-to-pr-v2/references/ledger-and-helper.md` links from its
  *      route-id / blocked-route section to the guide: the doc's blocked-route
  *      section region (the heading through the next same-or-higher heading)
@@ -1430,9 +2467,10 @@ export async function checkLedgerLifecycleFieldDrift(
  * The check does NOT require per-route deep links, and does NOT require or
  * forbid the guide in CLI `required_reference_ids` (Key Decision 7).
  *
- * Hard-error boundary (Key Decision 8): SKILL.md and ledger-and-helper.md are
- * docs the check is asked to READ, so their absence throws. A missing LINK
- * TARGET (the guide file a doc links to) is a finding, not a throw.
+ * Hard-error boundary (Key Decision 8): SKILL.md, issue-to-pr.md, and
+ * ledger-and-helper.md are docs the check is asked to READ, so their absence
+ * throws. A missing LINK TARGET (the guide file a doc links to) is a finding,
+ * not a throw.
  */
 export async function checkGotchasRelationship(
   opts: GotchasRelationshipOptions = {},
@@ -1445,26 +2483,35 @@ export async function checkGotchasRelationship(
     SKILL_DOC_REL,
     "contract-drift gotchas check",
   );
+  const issueToPrText = await readScopedDocOrThrow(
+    join(repoRoot, ISSUE_TO_PR_DOC_REL),
+    ISSUE_TO_PR_DOC_REL,
+    "contract-drift gotchas check",
+  );
   const ledgerText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_DOC_REL),
     LEDGER_DOC_REL,
     "contract-drift gotchas check",
   );
 
-  // (a) Deterministic control-plane load in SKILL.md for blocked- routes,
-  // anchored on the orchestration STEP construct (step 7b): some numbered step
-  // must, within its own bounded body, tie a `blocked-` trigger to LOADING the
-  // guide. Not whole-doc co-occurrence — see `skillHasBlockedLoadStep`. This is
-  // a doc-level finding: it points at the doc, not a single line, so `line` is
-  // omitted (Key Decision: no `0` sentinel against a 1-based contract).
-  if (!skillHasBlockedLoadStep(skillText)) {
-    findings.push({
-      doc: SKILL_DOC_REL,
-      kind: "scoped-link",
-      claim: GOTCHAS_GUIDE_REL,
-      reason:
-        "SKILL.md is missing the deterministic control-plane load of first-run-gotchas.md for `blocked-` routes: no numbered orchestration step ties a `blocked-` route trigger to loading the guide (orchestration step 7b).",
-    });
+  // (a) Deterministic control-plane load in SKILL.md and issue-to-pr.md for
+  // blocked- routes, anchored on ordered orchestration steps. Some numbered step
+  // must tie a `blocked-` trigger to LOADING the guide, and it must occur before
+  // the remaining pre-stage gates. The version-skew section must also express
+  // load-before-stop semantics. Doc-level finding: no `0` line sentinel.
+  for (const [relDoc, text] of [
+    [SKILL_DOC_REL, skillText],
+    [ISSUE_TO_PR_DOC_REL, issueToPrText],
+  ] as const) {
+    if (!docPreservesGotchasLoadBeforeStops(text)) {
+      findings.push({
+        doc: relDoc,
+        kind: "scoped-link",
+        claim: GOTCHAS_GUIDE_REL,
+        reason:
+          `${relDoc} must load first-run-gotchas.md for \`blocked-\` routes before remaining pre-stage gates and before the version-skew stop; the ordered gotchas relationship is missing or out of order.`,
+      });
+    }
   }
 
   // (b) ledger-and-helper.md links from its blocked-route-ids section to the
@@ -1489,11 +2536,12 @@ export async function checkGotchasRelationship(
     });
   }
 
-  // (c) every markdown link to first-run-gotchas.md in the two scoped docs
+  // (c) every markdown link to first-run-gotchas.md in the scoped docs
   // resolves to an existing file. A broken target is a finding (Key Decision
   // 8), not a hard error.
   for (const [relDoc, text] of [
     [SKILL_DOC_REL, skillText],
+    [ISSUE_TO_PR_DOC_REL, issueToPrText],
     [LEDGER_DOC_REL, ledgerText],
   ] as const) {
     for (const link of extractScopedLinks(text, relDoc)) {
@@ -1534,17 +2582,14 @@ export type ScopedDoc = {
 };
 
 /**
- * The four operator-facing docs the drift check is scoped to. These are
- * structural file COORDINATES (the check's SCOPE), not contract VALUES (AC5):
- * they say WHICH docs to validate, never WHAT the contract is. The contract
- * facts themselves still come exclusively from `loadContractFacts()`.
+ * Operator-facing docs the drift check is scoped to. These are structural file
+ * COORDINATES (the check's SCOPE), not contract VALUES (AC5): they say WHICH
+ * docs to validate, never WHAT the contract is. The contract facts themselves
+ * still come exclusively from `loadContractFacts()`.
  *
- * `expectsClaims` marks the two docs the workflow relies on to carry contract
- * tokens (SKILL.md and first-run-gotchas.md): if their extraction yields ZERO
- * contract claims, that is a drift finding (F21), not a silent pass. README.md
- * legitimately carries no route ids / field paths (only scoped links and a
- * couple of `cli.ts` command mentions), and ledger-and-helper.md is covered by
- * the gotchas relationship check, so neither is marked `expectsClaims`.
+ * `expectsClaims` marks docs the workflow relies on to carry contract tokens:
+ * if extraction yields ZERO contract claims, that is a drift finding (F21),
+ * not a silent pass.
  *
  * Repo-relative so the orchestrator can resolve them against any `repoRoot`
  * (tests point at a fixture repo; production resolves against the real root)
@@ -1553,6 +2598,7 @@ export type ScopedDoc = {
 export const SCOPED_DOCS: readonly ScopedDoc[] = [
   { path: "skills/issue-to-pr/SKILL.md", expectsClaims: true },
   { path: "runbooks/issue-to-pr-v2/README.md", expectsClaims: false },
+  { path: "runbooks/issue-to-pr-v2/issue-to-pr.md", expectsClaims: true },
   {
     path: "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
     expectsClaims: false,
@@ -1567,14 +2613,14 @@ export const SCOPED_DOCS: readonly ScopedDoc[] = [
  * Options for the orchestrator. All are overridable so tests can point at a
  * fixture repo / fixture doc list / fake CLI (the AC7 stale-doc test relies on
  * `repoRoot`, the missing-doc test on `scopedDocs`, the CLI-failure test on
- * `cliPath`). Production callers pass nothing and get the real four docs, the
+ * `cliPath`). Production callers pass nothing and get the real five docs, the
  * real repo root, and the sibling `cli.ts`.
  */
 export type CheckContractDriftOptions = {
   /** Repo root that scoped-doc paths and link targets resolve against. */
   repoRoot?: string;
   /**
-   * Scoped docs to validate. Defaults to the four `SCOPED_DOCS`. Accepts either
+   * Scoped docs to validate. Defaults to the five `SCOPED_DOCS`. Accepts either
    * bare repo-relative path strings (legacy callers / tests; treated as
    * `expectsClaims: false`) or full `ScopedDoc` entries. An explicitly-passed
    * EMPTY array is a caller error (F22): it would check zero docs and silently
@@ -1611,13 +2657,14 @@ function contractClaimCount(claims: DocClaims): number {
     claims.commands.length +
     claims.slices.length +
     claims.packetRoles.length +
+    claims.scaffoldCommands.length +
     claims.fieldPaths.length
   );
 }
 
 /**
- * Run the runtime contract-drift check over the four scoped operator docs plus
- * the U7 ledger lifecycle surfaces, then report aggregated drift findings.
+ * Run the runtime contract-drift check over the scoped operator docs plus
+ * the ledger schema surfaces, then report aggregated drift findings.
  *
  * Pipeline (composes batches 1-3, re-implements none of them):
  *  1. Load the authoritative contract facts ONCE via `loadContractFacts()`
@@ -1628,7 +2675,7 @@ function contractClaimCount(claims: DocClaims): number {
  *     aggregate the findings. ALL docs are processed — the check never
  *     short-circuits at the first doc with drift.
  *  3. Run the first-run-gotchas relationship check ONCE (batch 3), then the
- *     U7 ledger lifecycle field check, and aggregate their findings.
+ *     ledger schema contract check, and aggregate their findings.
  *
  * `ok` is true exactly when zero findings were collected. Read-only (AC6):
  * the orchestrator only reads docs and spawns the read-only CLI; it performs
@@ -1641,7 +2688,7 @@ export async function checkContractDrift(
   opts: CheckContractDriftOptions = {},
 ): Promise<ContractDriftResult> {
   const repoRoot = opts.repoRoot ?? defaultRepoRoot();
-  // The DEFAULT (no scopedDocs) uses the real four SCOPED_DOCS. An EXPLICITLY
+  // The DEFAULT (no scopedDocs) uses the real SCOPED_DOCS. An EXPLICITLY
   // passed empty array is a caller mis-wiring (F22): it would run the per-doc
   // loop zero times and report ok:true having validated nothing, silently
   // disarming the whole check. An empty scope is a hard error, not a clean
@@ -1689,7 +2736,17 @@ export async function checkContractDrift(
 
   // The deterministic control-plane relationship the workflow relies on.
   findings.push(...(await checkGotchasRelationship({ repoRoot })));
-  findings.push(...(await checkLedgerLifecycleFieldDrift({ repoRoot })));
+  findings.push(
+    ...(await checkLedgerLifecycleFieldDrift({
+      repoRoot,
+      cliPath: opts.cliPath,
+    })),
+  );
+  findings.push(
+    ...(await checkGeneratedScaffoldBlocksDrift({
+      repoRoot,
+    })),
+  );
 
   return { ok: findings.length === 0, findings };
 }

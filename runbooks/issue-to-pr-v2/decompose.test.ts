@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
 
+import { renderPatchProposalPacket } from "./lib/packets";
+import { renderScaffold } from "./lib/scaffolds";
+
 const scriptPath = join(import.meta.dir, "decompose.ts");
 const bunExecutable = execPath || "bun";
 const tempDirs: string[] = [];
@@ -230,6 +233,27 @@ function yamlList(items: string[], indent: number): string {
 
 function currentCommitFilesYaml(indent = 6): string {
 	return yamlList(currentCommitFiles, indent);
+}
+
+function concreteReplacementScaffoldRow(): string {
+	let body = renderScaffold("replacement-candidate-batch").body
+		.replace("id: <replacement-stable-slug>", 'id: "replacement"')
+		.replace("name: <Title from the Implementation Unit heading>", 'name: "Replacement"')
+		.replace("goal: <one-sentence outcome, ideally the AC verbatim>", 'goal: "AC 1 with corrected file scope"')
+		.replace("depends_on: []  # or list of ids; emit [] explicitly when none", "depends_on: []")
+		.replace("supersedes: <blocked-batch-id>", 'supersedes: "original"')
+		.replace(/execution_mode: tdd\s+#.*/, "execution_mode: tdd")
+		.replace('- "AC <i> holds: <verifiable behaviour>"', '- "Original proof"')
+		.replace(/- <i>\s+#.*/, "- 1")
+		.replace('rationale: "replacement-contract: <reason>"', 'rationale: "replacement-contract: User approved corrected file scope."');
+	body = body.replace("  - <repo-relative path>", `  - ${currentCommitFile}`);
+	body = body.replace("  - <repo-relative path>", "  - src/replacement.ts");
+
+	return body
+		.trimEnd()
+		.split("\n")
+		.map((line, index) => (index === 0 ? `  - ${line}` : `    ${line}`))
+		.join("\n");
 }
 
 function currentCommittedAttemptYaml(
@@ -975,6 +999,102 @@ rationale: final-review remediation
 		expect(patchMode.stdout).toContain('      - "original-batch"');
 		expect(patchMode.stdout).toContain("    ac_mapping: []");
 		expect(patchMode.stdout).toContain("    status: pending");
+	});
+
+	test("validates rendered patch proposal packets", async () => {
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			`${ledgerWithBatch}
+## Findings
+
+| id | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ff1 | final | sig-one | ce-correctness-reviewer | P1 | open | Something is wrong |  |
+`,
+		);
+		const packet = renderPatchProposalPacket({
+			ledgerPath,
+			findingId: "ff1",
+			candidatePatchBatch: {
+				id: "patch-001",
+				name: "Patch finding",
+				goal: "Fix final review finding",
+				files: [currentCommitFile],
+				depends_on: ["original-batch"],
+				execution_mode: "proof_first",
+				acceptance_tests: ["Regression proof passes"],
+				rationale: "final-review remediation",
+			},
+		});
+		const plan = writeFixture("patch-packet.md", packet.packet_markdown);
+
+		const result = await runDecompose([plan, "--patch-proposal", ledgerPath]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain('id: "patch-001"');
+		expect(result.stdout).toContain("    ac_mapping: []");
+		expect(result.stdout).toContain("    status: pending");
+	});
+
+	test("rejects malformed rendered patch proposal envelopes", async () => {
+		const ledgerPath = writeFixture(
+			"ledger.md",
+			`${ledgerWithBatch}
+## Findings
+
+| id | batch_id | signature | persona | severity | status | summary | resolution |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ff1 | final | sig-one | ce-correctness-reviewer | P1 | open | Something is wrong |  |
+`,
+		);
+		const packet = renderPatchProposalPacket({
+			ledgerPath,
+			findingId: "ff1",
+			candidatePatchBatch: {
+				id: "patch-001",
+				name: "Patch finding",
+				goal: "Fix final review finding",
+				files: [currentCommitFile],
+				depends_on: ["original-batch"],
+				execution_mode: "proof_first",
+				acceptance_tests: ["Regression proof passes"],
+				rationale: "final-review remediation",
+			},
+		});
+		const extraRoot = writeFixture(
+			"patch-extra-root.md",
+			packet.packet_markdown.replace(
+				"\npatch_batches:",
+				'\nunexpected_extra_root: "nope"\npatch_batches:',
+			),
+		);
+		const missingFinding = writeFixture(
+			"patch-missing-finding.md",
+			packet.packet_markdown.replace(
+				/final_finding:[\s\S]*?\n\npatch_batches:/,
+				"patch_batches:",
+			),
+		);
+
+		const extraRootResult = await runDecompose([
+			extraRoot,
+			"--patch-proposal",
+			ledgerPath,
+		]);
+		const missingFindingResult = await runDecompose([
+			missingFinding,
+			"--patch-proposal",
+			ledgerPath,
+		]);
+
+		expect(extraRootResult.exitCode).toBe(1);
+		expect(extraRootResult.stderr).toContain(
+			'unexpected root field "unexpected_extra_root"',
+		);
+		expect(missingFindingResult.exitCode).toBe(1);
+		expect(missingFindingResult.stderr).toContain(
+			'missing required root field "final_finding"',
+		);
 	});
 
 	test("rejects non-patch ids in patch proposal mode", async () => {
@@ -3917,6 +4037,53 @@ ${failStopAttemptItemYaml(6)}
 		expect(acceptanceTestsResult.stderr).toContain("changes acceptance_tests");
 		expect(allChangedResult.exitCode).toBe(1);
 		expect(allChangedResult.stderr).toContain("changes files, acceptance_tests, and execution_mode");
+	});
+
+	test("validates replacement batches rendered from the scaffold projection", async () => {
+		const ledgerPath = writeFixture(
+			"replacement-scaffold-ledger.md",
+			`${ledgerOne}
+## Batches
+
+\`\`\`yaml
+batches:
+  - id: "original"
+    name: "Original"
+    goal: "AC 1"
+    files:
+${currentCommitFilesYaml(6)}
+    depends_on: []
+    execution_mode: proof_first
+    acceptance_tests:
+      - "Original proof"
+    ac_mapping:
+      - 1
+    rationale: null
+    status: blocked
+    builder_commits: []
+    builder_attempts:
+${failStopAttemptItemYaml(6)}
+    orchestrator_inline_attempts: []
+    iterations: 1
+    final_verdict: blocked-for-user
+${concreteReplacementScaffoldRow()}
+    status: pending
+    builder_commits: []
+    builder_attempts: []
+    orchestrator_inline_attempts: []
+    iterations: 0
+    final_verdict: null
+\`\`\`
+`,
+		);
+
+		const result = await runDecompose([
+			"--validate-ledger-batches",
+			ledgerPath,
+		]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Ledger batches OK");
 	});
 
 	test("validates replacement dependency rewrites from blocked originals", async () => {

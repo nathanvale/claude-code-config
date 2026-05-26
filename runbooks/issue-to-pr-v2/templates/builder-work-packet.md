@@ -36,42 +36,15 @@ framing only, per the U2 approach. The XML tags **never** wrap
 helper-validated YAML or JSON; they only frame the prose payload the Builder
 sub-agent reads on entry.
 
-The rendered packet **MUST** include exactly the fields below and **MUST
-NOT** include the full plan file, raw Validator envelopes, unrelated batch
-state, rich Builder evidence (implementation_steps, existing_seams_used,
-tests_run, assumptions, risks, deferred, suggested_validator_focus) from
-prior envelopes, `orchestrator_inline_attempts` as prior Builder attempts,
-ACs not in the target batch's `ac_mapping`, or findings from other batches
-or stage-3 findings.
-
-```yaml
-issue_number: <int>
-target_repo: "<owner/repo>"
-attempt_type: <implementation | repair>
-target_finding_signature: <signature | null>   # null for implementation; required for repair
-
-batch_contract:
-  id: <slug>
-  name: "<Title>"
-  goal: "<one-sentence outcome>"
-  files:
-    - <repo-relative path>
-  depends_on: []
-  supersedes: <blocked-batch-id | null>
-  execution_mode: <tdd | proof_first | change_first>
-  acceptance_tests:
-    - "AC <i> holds: <verifiable behaviour>"
-  ac_mapping:
-    - <i>
-  rationale: <string | null>
-
-iteration: <int>
-builder_commits: []
-prior_builder_attempts: []   # compact records; not full envelopes
-
-findings_data_for_this_batch: []   # rows from ## Findings data, this batch only
-notes_summary_for_this_batch: ""   # non-authoritative summary lines, this batch only
-```
+The rendered packet body is runtime-owned by `renderBuilderPacket()`.
+Use `cli.ts packet builder --json` for the concrete packet fields.
+The renderer must include target batch contract, iteration, compact prior
+Builder attempts, batch-local findings, Notes summary, and prose framing
+slots. It must not include the full plan file, raw Validator envelopes,
+unrelated batch state, rich Builder evidence from prior envelopes,
+`orchestrator_inline_attempts` as prior Builder attempts, ACs outside the
+target batch's `ac_mapping`, or findings from other batches or stage-3
+findings.
 
 `prior_builder_attempts` is Builder-only. Orchestrator-inline attempt rows are
 not Builder envelopes and must not appear there; they may only be summarized in
@@ -203,35 +176,13 @@ before any edit. No readiness, no build. If preflight fails, return a
 Builder returns exactly one structured envelope at the end of the attempt.
 See
 [`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope)
-for the full schema, the status enum (`committed`, `fail-stop-preflight`,
-`fail-stop-out-of-scope`, `fail-stop-execution-mode-mismatch`,
-`fail-stop-read-failed`, `fail-stop-other`), and the rule that
-`suggested_validator_focus` is required.
+for transition semantics and the rule that `suggested_validator_focus` is
+required. Concrete shape is generated from
+`cli.ts scaffold builder-return-envelope --json`.
 
-(The sibling [`builder-return-envelope.md`](builder-return-envelope.md) holds
-the same envelope shape for readers who arrive at the return contract directly.
-The canonical schema lives in `references/builder-dispatch.md`, which is the
-single source of truth both this template and the sibling defer to.)
-
-```yaml
-attempt_type: <implementation | repair>
-target_finding_signature: <signature | null>
-status: <committed | fail-stop-*>
-commit_sha: <sha | null>
-files_touched: []
-route_hint: <string | null>
-blockers: []
-probe_results: []
-suggested_scope_changes: []
-implementation_steps: []
-existing_seams_used: []
-tests_run: []
-assumptions: []
-risks: []
-deferred: []
-suggested_validator_focus: []
-notes: ""
-```
+(The sibling [`builder-return-envelope.md`](builder-return-envelope.md) points
+at the same runtime-owned scaffold for readers who arrive at the return
+contract directly.)
 
 ## See also
 

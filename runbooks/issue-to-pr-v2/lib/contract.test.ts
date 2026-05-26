@@ -3,29 +3,55 @@ import { describe, expect, test } from "bun:test";
 import {
   BATCH_KEYS,
   BATCH_STATUSES,
+  BUILDER_ATTEMPT_FIELDS,
   BUILDER_ATTEMPT_KEYS,
   BUILDER_ATTEMPT_STATUSES,
+  BUILDER_ATTEMPT_TYPE_VALUES,
   BUILDER_ATTEMPT_TYPES,
+  BUILDER_RETURN_FIELDS,
+  BUILDER_RETURN_KEYS,
+  BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+  BUILDER_VALIDATOR_EVIDENCE_KEYS,
+  CANDIDATE_BATCH_FIELDS,
   CHANGE_FIRST_EXCEPTION_PREFIX,
   CONFIRMATION_STATES,
   EXECUTION_MODES,
   EXTENSIONLESS_FILE_NAMES,
   FAIL_STOP_ATTEMPT_STATUSES,
   FINAL_VERDICTS,
+  FINDING_FIELDS,
   FINDING_KEYS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   HIGH_RISK_CHANGE_FIRST_EXCEPTION_PREFIX,
   HIGH_RISK_NEW_FILE_PATCH_EXCEPTION_PREFIX,
   INVESTIGATION_RATIONALE,
+  LEDGER_BATCH_LIFECYCLE_DEFAULTS,
   LEDGER_BATCH_KEYS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
   LEGACY_EXECUTION_MODE_HINTS,
   MAX_BUILDER_ATTEMPTS,
   NEW_FILE_PATCH_EXCEPTION_PREFIX,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY,
+  NOTES_VALIDATOR_WAVE_COMPLETED_FIELDS,
+  NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS,
+  NOTES_VALIDATOR_WAVE_COMPLETED_MARKER,
+  NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY,
+  NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS,
+  NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
   ORCHESTRATOR_INLINE_ATTEMPT_KEYS,
   RUNBOOK_VERSION,
   STAGE_3_BATCH_ID,
   TERMINAL_BATCH_STATUSES,
+  VALIDATOR_INLINE_EVIDENCE_FIELDS,
+  VALIDATOR_INLINE_EVIDENCE_KEYS,
+  VALIDATOR_WAVE_OUTCOMES,
 } from "./contract";
 
 describe("contract: execution modes", () => {
@@ -53,59 +79,93 @@ describe("contract: confirmation states", () => {
 });
 
 describe("contract: batch keys", () => {
-  test("BATCH_KEYS enumerates the 10 candidate-batch fields", () => {
-    expect(BATCH_KEYS).toEqual(
-      new Set([
-        "id",
-        "name",
-        "goal",
-        "files",
-        "depends_on",
-        "supersedes",
-        "execution_mode",
-        "acceptance_tests",
-        "ac_mapping",
-        "rationale",
-      ]),
-    );
+  test("CANDIDATE_BATCH_FIELDS enumerates the 10 candidate-batch fields in authoring order", () => {
+    expect(CANDIDATE_BATCH_FIELDS).toEqual([
+      "id",
+      "name",
+      "goal",
+      "files",
+      "depends_on",
+      "supersedes",
+      "execution_mode",
+      "acceptance_tests",
+      "ac_mapping",
+      "rationale",
+    ]);
   });
 
-  test("LEDGER_BATCH_KEYS extends BATCH_KEYS with the 6 runtime lifecycle fields", () => {
+  test("BATCH_KEYS is the membership Set for CANDIDATE_BATCH_FIELDS", () => {
+    expect(BATCH_KEYS).toBeInstanceOf(Set);
+    expect(BATCH_KEYS).toEqual(new Set(CANDIDATE_BATCH_FIELDS));
+  });
+
+  test("LEDGER_BATCH_LIFECYCLE_FIELDS enumerates the 6 runtime lifecycle fields in runtime order", () => {
+    expect(LEDGER_BATCH_LIFECYCLE_FIELDS).toEqual([
+      "status",
+      "builder_commits",
+      "builder_attempts",
+      "orchestrator_inline_attempts",
+      "iterations",
+      "final_verdict",
+    ]);
+  });
+
+  test("LEDGER_BATCH_KEYS extends BATCH_KEYS with the lifecycle fields", () => {
     const lifecycleOnly = [...LEDGER_BATCH_KEYS].filter(
       (key) => !BATCH_KEYS.has(key),
     );
-    expect(new Set(lifecycleOnly)).toEqual(
-      new Set([
-        "status",
-        "builder_commits",
-        "builder_attempts",
-        "orchestrator_inline_attempts",
-        "iterations",
-        "final_verdict",
-      ]),
+    expect(lifecycleOnly).toEqual([...LEDGER_BATCH_LIFECYCLE_FIELDS]);
+    expect(LEDGER_BATCH_KEYS).toEqual(
+      new Set([...CANDIDATE_BATCH_FIELDS, ...LEDGER_BATCH_LIFECYCLE_FIELDS]),
     );
-    expect(LEDGER_BATCH_KEYS.size).toBe(BATCH_KEYS.size + 6);
+    expect(LEDGER_BATCH_KEYS.size).toBe(
+      CANDIDATE_BATCH_FIELDS.length + LEDGER_BATCH_LIFECYCLE_FIELDS.length,
+    );
+  });
+
+  test("LEDGER_BATCH_LIFECYCLE_DEFAULTS covers each lifecycle field in runtime order", () => {
+    expect(Object.keys(LEDGER_BATCH_LIFECYCLE_DEFAULTS)).toEqual([
+      ...LEDGER_BATCH_LIFECYCLE_FIELDS,
+    ]);
+    expect(LEDGER_BATCH_LIFECYCLE_DEFAULTS).toEqual({
+      status: "pending",
+      builder_commits: [],
+      builder_attempts: [],
+      orchestrator_inline_attempts: [],
+      iterations: 0,
+      final_verdict: null,
+    });
   });
 });
 
 describe("contract: builder attempt fields", () => {
-  test("BUILDER_ATTEMPT_KEYS enumerates the 8 compact-record fields", () => {
-    expect(BUILDER_ATTEMPT_KEYS).toEqual(
-      new Set([
-        "attempt_type",
-        "status",
-        "commit_sha",
-        "files_touched",
-        "route_hint",
-        "blockers",
-        "probe_results",
-        "notes",
-      ]),
-    );
+  test("BUILDER_ATTEMPT_FIELDS enumerates the 8 compact-record fields in authoring order", () => {
+    expect(BUILDER_ATTEMPT_FIELDS).toEqual([
+      "attempt_type",
+      "status",
+      "commit_sha",
+      "files_touched",
+      "route_hint",
+      "blockers",
+      "probe_results",
+      "notes",
+    ]);
   });
 
-  test("BUILDER_ATTEMPT_TYPES contains implementation and repair only", () => {
-    expect(BUILDER_ATTEMPT_TYPES).toEqual(new Set(["implementation", "repair"]));
+  test("BUILDER_ATTEMPT_KEYS is the membership Set for BUILDER_ATTEMPT_FIELDS", () => {
+    expect(BUILDER_ATTEMPT_KEYS).toBeInstanceOf(Set);
+    expect(BUILDER_ATTEMPT_KEYS).toEqual(new Set(BUILDER_ATTEMPT_FIELDS));
+  });
+
+  test("BUILDER_ATTEMPT_TYPE_VALUES contains implementation and repair in catalog order", () => {
+    expect(BUILDER_ATTEMPT_TYPE_VALUES).toEqual(["implementation", "repair"]);
+  });
+
+  test("BUILDER_ATTEMPT_TYPES is the membership Set for BUILDER_ATTEMPT_TYPE_VALUES", () => {
+    expect(BUILDER_ATTEMPT_TYPES).toBeInstanceOf(Set);
+    expect(BUILDER_ATTEMPT_TYPES).toEqual(
+      new Set(BUILDER_ATTEMPT_TYPE_VALUES),
+    );
   });
 
   test("BUILDER_ATTEMPT_STATUSES contains committed plus five fail-stop statuses", () => {
@@ -137,10 +197,108 @@ describe("contract: builder attempt fields", () => {
   });
 });
 
+describe("contract: builder return fields", () => {
+  test("BUILDER_RETURN_FIELDS enumerates the full transient envelope in render order", () => {
+    expect(BUILDER_RETURN_FIELDS).toEqual([
+      "attempt_type",
+      "target_finding_signature",
+      "status",
+      "commit_sha",
+      "files_touched",
+      "route_hint",
+      "blockers",
+      "probe_results",
+      "suggested_scope_changes",
+      "implementation_steps",
+      "existing_seams_used",
+      "tests_run",
+      "assumptions",
+      "risks",
+      "deferred",
+      "suggested_validator_focus",
+      "notes",
+    ]);
+  });
+
+  test("BUILDER_RETURN_KEYS is the membership Set for BUILDER_RETURN_FIELDS", () => {
+    expect(BUILDER_RETURN_KEYS).toBeInstanceOf(Set);
+    expect(BUILDER_RETURN_KEYS).toEqual(new Set(BUILDER_RETURN_FIELDS));
+  });
+
+  test("BUILDER_VALIDATOR_EVIDENCE_FIELDS names the rich Builder evidence lane only", () => {
+    expect(BUILDER_VALIDATOR_EVIDENCE_FIELDS).toEqual([
+      "implementation_steps",
+      "existing_seams_used",
+      "tests_run",
+      "assumptions",
+      "risks",
+      "deferred",
+      "suggested_validator_focus",
+    ]);
+    for (const field of BUILDER_VALIDATOR_EVIDENCE_FIELDS) {
+      expect(BUILDER_RETURN_KEYS.has(field)).toBe(true);
+    }
+  });
+
+  test("BUILDER_VALIDATOR_EVIDENCE_KEYS excludes compact persistence and inline lanes", () => {
+    expect(BUILDER_VALIDATOR_EVIDENCE_KEYS).toBeInstanceOf(Set);
+    expect(BUILDER_VALIDATOR_EVIDENCE_KEYS).toEqual(
+      new Set(BUILDER_VALIDATOR_EVIDENCE_FIELDS),
+    );
+    for (const forbidden of [
+      "notes",
+      "suggested_scope_changes",
+      "builder_commits",
+      "orchestrator_inline_attempts",
+      ...ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+      ...VALIDATOR_INLINE_EVIDENCE_FIELDS,
+    ]) {
+      expect(BUILDER_VALIDATOR_EVIDENCE_KEYS.has(forbidden)).toBe(false);
+    }
+  });
+});
+
+describe("contract: Validator inline evidence fields", () => {
+  test("VALIDATOR_INLINE_EVIDENCE_FIELDS names the Orchestrator-inline evidence lane only", () => {
+    expect(VALIDATOR_INLINE_EVIDENCE_FIELDS).toEqual([
+      "implementation_commit",
+      "touched_files",
+      "inline_validity_note",
+      "user_confirmed_exception_note",
+    ]);
+  });
+
+  test("VALIDATOR_INLINE_EVIDENCE_KEYS excludes Builder evidence fields", () => {
+    expect(VALIDATOR_INLINE_EVIDENCE_KEYS).toBeInstanceOf(Set);
+    expect(VALIDATOR_INLINE_EVIDENCE_KEYS).toEqual(
+      new Set(VALIDATOR_INLINE_EVIDENCE_FIELDS),
+    );
+    for (const forbidden of [
+      "builder_evidence",
+      ...BUILDER_VALIDATOR_EVIDENCE_FIELDS,
+      "attempt_type",
+      "status",
+      "notes",
+      "suggested_scope_changes",
+    ]) {
+      expect(VALIDATOR_INLINE_EVIDENCE_KEYS.has(forbidden)).toBe(false);
+    }
+  });
+});
+
 describe("contract: orchestrator inline attempt fields", () => {
-  test("ORCHESTRATOR_INLINE_ATTEMPT_KEYS enumerates the 3 compact-record fields", () => {
+  test("ORCHESTRATOR_INLINE_ATTEMPT_FIELDS enumerates the 3 compact-record fields in authoring order", () => {
+    expect(ORCHESTRATOR_INLINE_ATTEMPT_FIELDS).toEqual([
+      "commit_sha",
+      "files_touched",
+      "notes",
+    ]);
+  });
+
+  test("ORCHESTRATOR_INLINE_ATTEMPT_KEYS is the membership Set for ORCHESTRATOR_INLINE_ATTEMPT_FIELDS", () => {
+    expect(ORCHESTRATOR_INLINE_ATTEMPT_KEYS).toBeInstanceOf(Set);
     expect(ORCHESTRATOR_INLINE_ATTEMPT_KEYS).toEqual(
-      new Set(["commit_sha", "files_touched", "notes"]),
+      new Set(ORCHESTRATOR_INLINE_ATTEMPT_FIELDS),
     );
   });
 
@@ -150,7 +308,11 @@ describe("contract: orchestrator inline attempt fields", () => {
     // Builder-only field is ever added and accidentally allowed into the inline
     // set, this test fails. The three compact fields are the intentional
     // overlap between the two lanes.
-    const sharedCompactFields = new Set(["commit_sha", "files_touched", "notes"]);
+    const sharedCompactFields = new Set<string>([
+      "commit_sha",
+      "files_touched",
+      "notes",
+    ]);
     const builderOnlyFields = [...BUILDER_ATTEMPT_KEYS].filter(
       (key) => !sharedCompactFields.has(key),
     );
@@ -171,19 +333,22 @@ describe("contract: orchestrator inline attempt fields", () => {
 });
 
 describe("contract: finding fields", () => {
-  test("FINDING_KEYS enumerates the 8 ledger-ready finding fields", () => {
-    expect(FINDING_KEYS).toEqual(
-      new Set([
-        "id",
-        "batch_id",
-        "signature",
-        "persona",
-        "severity",
-        "status",
-        "summary",
-        "resolution",
-      ]),
-    );
+  test("FINDING_FIELDS enumerates the 8 ledger-ready finding fields in authoring order", () => {
+    expect(FINDING_FIELDS).toEqual([
+      "id",
+      "batch_id",
+      "signature",
+      "persona",
+      "severity",
+      "status",
+      "summary",
+      "resolution",
+    ]);
+  });
+
+  test("FINDING_KEYS is the membership Set for FINDING_FIELDS", () => {
+    expect(FINDING_KEYS).toBeInstanceOf(Set);
+    expect(FINDING_KEYS).toEqual(new Set(FINDING_FIELDS));
   });
 
   test("FINDING_SEVERITIES contains P0, P1, P2, P3", () => {
@@ -286,5 +451,74 @@ describe("contract: U6 runbook version", () => {
     // explicit operator continuation evidence per U6.
     expect(RUNBOOK_VERSION).toBe("3");
     expect(typeof RUNBOOK_VERSION).toBe("string");
+  });
+});
+
+describe("contract: Notes evidence scaffolds", () => {
+  test("implementation attempt checkpoint marker and fields are runtime facts", () => {
+    expect(NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER).toBe(
+      "implementation-attempt-checkpoint",
+    );
+    expect(NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY).toBe(
+      "implementation_attempt_checkpoint",
+    );
+    expect(NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS).toEqual([
+      "batch_id",
+      "implementation_commit",
+      "attempt_lane",
+      "timestamp",
+    ]);
+  });
+
+  test("Validator wave completed evidence fields are runtime facts", () => {
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_MARKER).toBe(
+      "validator-wave-completed",
+    );
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY).toBe(
+      "validator_wave_completed",
+    );
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS).toEqual([
+      "batch_id",
+      "implementation_commit",
+      "attempt_lane",
+      "outcome",
+    ]);
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS).toEqual([
+      "personas",
+      "findings",
+    ]);
+    expect(NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS).toEqual([
+      "role",
+      "target_id",
+      "cli_route_id",
+    ]);
+    expect(NOTES_VALIDATOR_WAVE_COMPLETED_FIELDS).toEqual([
+      "batch_id",
+      "implementation_commit",
+      "attempt_lane",
+      "personas",
+      "dispatch_evidence",
+      "outcome",
+      "findings",
+    ]);
+    expect(VALIDATOR_WAVE_OUTCOMES).toEqual(["clean", "findings-recorded"]);
+  });
+
+  test("runbook-version skew continuation marker and fields are runtime facts", () => {
+    expect(NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER).toBe(
+      "runbook-version-skew-continuation",
+    );
+    expect(NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY).toBe(
+      "runbook_version_skew_continuation",
+    );
+    expect(NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS).toEqual([
+      "ledger_version",
+      "runtime_version",
+      "operator_decision",
+      "timestamp",
+      "route_context",
+      "reference_context",
+      "accepted_risk",
+    ]);
   });
 });

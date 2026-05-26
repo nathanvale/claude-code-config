@@ -18,13 +18,18 @@ import {
   type DocClaims,
   type DriftFinding,
   checkContractDrift,
+  checkGeneratedScaffoldBlocksDrift,
   checkGotchasRelationship,
   checkLedgerLifecycleFieldDrift,
+  checkScaffoldInventoryDrift,
   compareClaimsToFacts,
   extractDocClaims,
   finiteChildKeys,
   loadContractFacts,
+  scaffoldInventoryClassifications,
+  scaffoldIdsCoveredBySurfaces,
 } from "./contract-drift";
+import { SCAFFOLD_IDS } from "./lib/scaffolds";
 
 const cliPath = join(import.meta.dir, "cli.ts");
 
@@ -96,6 +101,30 @@ describe("AC2: loadContractFacts derives names from the live CLI", () => {
     expect(Array.isArray(liveRoles)).toBe(true);
     expect(liveRoles.length).toBeGreaterThan(0);
     expect(facts.packetRoles).toEqual(liveRoles);
+  });
+
+  test("scaffold ids match `--help --json` data.scaffold_ids", async () => {
+    const facts = await loadContractFacts();
+    const help = await runCli(["--help", "--json"]);
+    const liveScaffoldIds = help.data.scaffold_ids as string[];
+
+    expect(Array.isArray(liveScaffoldIds)).toBe(true);
+    expect(liveScaffoldIds.length).toBeGreaterThan(0);
+    expect(facts.scaffoldIds).toEqual(liveScaffoldIds);
+  });
+
+  test("ledger schema pointer slices match their runtime catalog", async () => {
+    const facts = await loadContractFacts();
+    const live = await runCli([
+      "contract",
+      "ledger_schema_pointer_slices",
+      "--json",
+    ]);
+    const liveSlices = live.data.values as string[];
+
+    expect(Array.isArray(liveSlices)).toBe(true);
+    expect(liveSlices.length).toBeGreaterThan(0);
+    expect(facts.ledgerSchemaPointerSlices).toEqual(liveSlices);
   });
 });
 
@@ -274,8 +303,10 @@ describe("AC5: the loader holds no duplicate source-of-truth lists", () => {
     const allowedReadCoordinates = new Set([
       "route_ids",
       "packet_roles",
+      "ledger_schema_pointer_slices",
       "commands",
       "contract_slices",
+      "scaffold_ids",
       "state_response_shape",
       "diagnose_response_shape",
     ]);
@@ -302,6 +333,8 @@ describe("AC6: read-only loader, hard errors on CLI failure", () => {
     expect(facts.commandNames.length).toBeGreaterThan(0);
     expect(facts.contractSlices.length).toBeGreaterThan(0);
     expect(facts.packetRoles.length).toBeGreaterThan(0);
+    expect(facts.scaffoldIds.length).toBeGreaterThan(0);
+    expect(facts.ledgerSchemaPointerSlices.length).toBeGreaterThan(0);
     expect(facts.responseFieldPaths.state.length).toBeGreaterThan(0);
     expect(facts.responseFieldPaths.diagnose.length).toBeGreaterThan(0);
   });
@@ -326,9 +359,48 @@ describe("AC6: read-only loader, hard errors on CLI failure", () => {
     const fakeCli = join(dir, "fake-cli.ts");
     await Bun.write(fakeCli, `console.log(${JSON.stringify(errorEnvelope)});`);
     try {
+      // Pin to the literal phrase readCliData emits — `/fake-cli|error|ok|...`
+      // matched almost any message and would silently survive a contract
+      // regression that changed the rejection phrasing.
       await expect(
         loadContractFacts({ cliPath: fakeCli }),
-      ).rejects.toThrow(/fake-cli|error|ok|contract|help|status/i);
+      ).rejects.toThrow("returned a non-ok envelope");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("rejects with a deadline error and kills the subprocess when the CLI hangs past the deadline", async () => {
+    // Spawn a fake CLI that sleeps for far longer than the injected deadline
+    // and never writes to stdout. The loader's Promise.race against the
+    // setTimeout deadline must reject with the deadline-naming message AND
+    // call proc.kill() — otherwise an interactively-stalled cli.ts would
+    // wedge every pre-stage gate trigger. The fake script also installs a
+    // SIGTERM handler that, if not killed promptly, would write a sentinel
+    // line; observing the deadline error before that sentinel proves the
+    // kill path runs.
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-contract-drift-deadline-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const fakeCli = join(dir, "hanging-cli.ts");
+    await Bun.write(
+      fakeCli,
+      [
+        "// Hang past the loader's deadline to drive the timeout race.",
+        "await new Promise(() => {});",
+      ].join("\n"),
+    );
+    try {
+      const before = Date.now();
+      await expect(
+        loadContractFacts({ cliPath: fakeCli, readCliDeadlineMs: 50 }),
+      ).rejects.toThrow(/exceeded\s+50ms\s+deadline; killed/);
+      const elapsed = Date.now() - before;
+      // The deadline is 50ms; the loader's own startup overhead bounds the
+      // upper edge. An order-of-magnitude bound proves the timeout actually
+      // fired rather than the test waiting on the natural 10s default.
+      expect(elapsed).toBeLessThan(5_000);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
@@ -387,23 +459,22 @@ function fakeCliScript(parts: {
   help: Record<string, unknown>;
   routeIds: unknown;
   packetRoles: unknown;
+  contractValues?: Record<string, unknown>;
 }): string {
   const help = JSON.stringify({ status: "ok", data: parts.help });
-  const routeIds = JSON.stringify({
-    status: "ok",
-    data: { values: parts.routeIds },
-  });
-  const packetRoles = JSON.stringify({
-    status: "ok",
-    data: { values: parts.packetRoles },
+  const contractValues = JSON.stringify({
+    route_ids: parts.routeIds,
+    packet_roles: parts.packetRoles,
+    ledger_schema_pointer_slices: ["candidate_batch_fields"],
+    ...(parts.contractValues ?? {}),
   });
   // process.argv: [bun, scriptPath, ...cliArgs]. The loader invokes
-  // `--help`, `contract route_ids`, and `contract packet_roles`.
+  // `--help`, `contract route_ids`, `contract packet_roles`, and ledger schema
+  // slices used by the pointer drift check.
   return [
     `const argv = process.argv.slice(2);`,
     `if (argv.includes("--help")) { console.log(${JSON.stringify(help)}); }`,
-    `else if (argv.includes("route_ids")) { console.log(${JSON.stringify(routeIds)}); }`,
-    `else if (argv.includes("packet_roles")) { console.log(${JSON.stringify(packetRoles)}); }`,
+    `else if (argv[0] === "contract") { const values = ${contractValues}[argv[1]]; console.log(JSON.stringify({ status: "ok", data: { values } })); }`,
     `else { console.log(${JSON.stringify(JSON.stringify({ status: "ok", data: {} }))}); }`,
   ].join("\n");
 }
@@ -417,6 +488,7 @@ function validHelpPayload(): Record<string, unknown> {
   return {
     commands: [{ name: "state" }, { name: "diagnose" }],
     contract_slices: ["route_ids", "packet_roles"],
+    scaffold_ids: ["ce-plan-candidate-batch"],
     state_response_shape: { ledger_path: "string", route_id: "one of route_ids" },
     diagnose_response_shape: {
       ledger_path: "string",
@@ -432,6 +504,7 @@ describe("AC6: empty/partial well-formed fact sets are hard errors", () => {
     help: Record<string, unknown>;
     routeIds: unknown;
     packetRoles: unknown;
+    contractValues?: Record<string, unknown>;
   }): Promise<{ rejects: ReturnType<typeof expect>["rejects"] }> {
     const fakeCli = join(dir, `fake-${Math.random().toString(36).slice(2)}.ts`);
     await Bun.write(fakeCli, fakeCliScript(parts));
@@ -469,6 +542,27 @@ describe("AC6: empty/partial well-formed fact sets are hard errors", () => {
       packetRoles: ["builder"],
     });
     await rejects.toThrow(/commands|empty/i);
+  });
+
+  test("empty scaffold_ids is a hard error", async () => {
+    const help = validHelpPayload();
+    help.scaffold_ids = [];
+    const { rejects } = await loadWith({
+      help,
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+    });
+    await rejects.toThrow(/scaffold_ids|empty/i);
+  });
+
+  test("empty ledger schema pointer catalog is a hard error", async () => {
+    const { rejects } = await loadWith({
+      help: validHelpPayload(),
+      routeIds: ["blocked-x"],
+      packetRoles: ["builder"],
+      contractValues: { ledger_schema_pointer_slices: [] },
+    });
+    await rejects.toThrow(/ledger_schema_pointer_slices|empty/i);
   });
 
   test("empty contract_slices is a hard error", async () => {
@@ -527,7 +621,7 @@ describe("AC6: empty/partial well-formed fact sets are hard errors", () => {
  * own (AC5): it reads bounded structural markers and reports what the doc
  * says. The comparator (batch 3) and orchestrator (batch 4) consume these.
  *
- * Fixtures below are small real snippets from the four scoped docs so the
+ * Fixtures below are small real snippets from the scoped docs so the
  * extractor's patterns stay grounded in the actual prose.
  */
 
@@ -618,9 +712,14 @@ describe("AC2: command, slice, and packet-role claims from cli.ts positions", ()
     const doc = [
       "`cli.ts contract route_ids --json`",
       "`cli.ts contract packet_roles --json`",
+      "`cli.ts contract route_required_references --json`",
     ].join("\n");
     const claims = extractDocClaims(doc, "doc.md");
-    expect(tokens(claims.slices)).toEqual(["route_ids", "packet_roles"]);
+    expect(tokens(claims.slices)).toEqual([
+      "route_ids",
+      "packet_roles",
+      "route_required_references",
+    ]);
     // `contract` is itself a command; the slice is the NEXT token, not a
     // duplicate command claim of the slice name.
     expect(tokens(claims.commands)).toContain("contract");
@@ -642,6 +741,32 @@ describe("AC2: command, slice, and packet-role claims from cli.ts positions", ()
     expect(got).toContain("builder");
     expect(got).toContain("validator");
     expect(got).toContain("proposer");
+  });
+
+  test("extracts visible scaffold ids from `cli.ts scaffold <id>` positions", () => {
+    const doc = [
+      "`cli.ts scaffold builder-return-envelope --json`",
+      "Resolve that command before writing the concrete shape.",
+    ].join("\n");
+    const got = tokens(extractDocClaims(doc, "doc.md").scaffoldCommands);
+    expect(got).toEqual(["builder-return-envelope"]);
+  });
+
+  test("ignores `cli.ts scaffold` positions inside HTML comments", () => {
+    const doc = [
+      "`cli.ts scaffold builder-return-envelope --json`",
+      "Visible prose <!-- `cli.ts scaffold hidden-inline --json` --> continues.",
+      "<!--",
+      "`cli.ts scaffold hidden-multiline --json`",
+      "-->",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "doc.md");
+
+    expect(tokens(claims.scaffoldCommands)).toEqual([
+      "builder-return-envelope",
+    ]);
+    expect(tokens(claims.commands).filter((token) => token === "scaffold"))
+      .toHaveLength(1);
   });
 
   test("does NOT extract a packet role from a template filename or prose noun", () => {
@@ -821,7 +946,12 @@ describe("AC5: extractor emits claims only, holds no contract values", () => {
 
     // `route_ids` / `packet_roles` are slice ARGUMENT names (read-coordinates),
     // not duplicated contract values, so they may appear in the source.
-    const allowedReadCoordinates = new Set(["route_ids", "packet_roles"]);
+    const allowedReadCoordinates = new Set([
+      "route_ids",
+      "packet_roles",
+      "ledger_schema_pointer_slices",
+      "scaffold_ids",
+    ]);
 
     const forbidden = [
       ...routeIds,
@@ -842,6 +972,7 @@ describe("AC5: extractor emits claims only, holds no contract values", () => {
     expect(claims.commands.length).toBe(0);
     expect(claims.slices.length).toBe(0);
     expect(claims.packetRoles.length).toBe(0);
+    expect(claims.scaffoldCommands.length).toBe(0);
     expect(claims.fieldPaths.length).toBe(0);
     expect(claims.scopedLinks.length).toBe(0);
   });
@@ -869,16 +1000,45 @@ describe("AC5: extractor emits claims only, holds no contract values", () => {
 const repoRoot = join(import.meta.dir, "..", "..");
 const skillDocPath = "skills/issue-to-pr/SKILL.md";
 const readmeDocPath = "runbooks/issue-to-pr-v2/README.md";
+const issueToPrDocPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const ledgerDocPath = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
 const gotchasDocPath = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
-const ledgerTemplatePath = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
+const cePlanTemplatePath = "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
+const proposerTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/proposer-envelope.md";
+const patchProposalTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/patch-proposal.md";
+const builderReturnTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/builder-return-envelope.md";
+const builderWorkPacketTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/builder-work-packet.md";
+const validatorEnvelopeTemplatePath =
+  "runbooks/issue-to-pr-v2/templates/validator-envelope.md";
+const builderDispatchPath =
+  "runbooks/issue-to-pr-v2/references/builder-dispatch.md";
+const findingsAndValidatorsPath =
+  "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
+const stage4BatchLoopPath =
+  "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md";
 const scopedDocRels = [
   skillDocPath,
   readmeDocPath,
+  issueToPrDocPath,
   ledgerDocPath,
   gotchasDocPath,
 ] as const;
-const driftSurfaceRels = [...scopedDocRels, ledgerTemplatePath] as const;
+const driftSurfaceRels = [
+  ...scopedDocRels,
+  cePlanTemplatePath,
+  proposerTemplatePath,
+  patchProposalTemplatePath,
+  builderReturnTemplatePath,
+  builderWorkPacketTemplatePath,
+  validatorEnvelopeTemplatePath,
+  builderDispatchPath,
+  findingsAndValidatorsPath,
+  stage4BatchLoopPath,
+] as const;
 
 /** Read one scoped doc's text by its repo-relative path. */
 async function readScopedDoc(relPath: string): Promise<string> {
@@ -1030,56 +1190,22 @@ describe("F12: installed_artifact_presence.missing reconciles loader vs extracto
   });
 });
 
-describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () => {
-  test("real ledger template and ledger/helper reference mention every lifecycle field", async () => {
+describe("U7: ledger schema docs stay aligned with emitted contract slices", () => {
+  test("real ledger/helper reference matches emitted schema facts", async () => {
     const findings = await checkLedgerLifecycleFieldDrift({ repoRoot });
     expect(findings).toEqual([]);
   });
 
-  test("missing lifecycle field in the ledger template is reported as drift", async () => {
+  test("missing ledger schema slice pointer in ledger-and-helper.md is reported as drift", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-template-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, ledgerTemplatePath),
-      (await readScopedDoc(ledgerTemplatePath)).replaceAll(
-        "orchestrator_inline_attempts",
-        "inline_attempts_missing_from_template",
-      ),
-    );
-    await Bun.write(
-      join(dir, ledgerDocPath),
-      await readScopedDoc(ledgerDocPath),
-    );
-    try {
-      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          doc: ledgerTemplatePath,
-          kind: "ledger-lifecycle-field",
-          claim: "orchestrator_inline_attempts",
-        }),
-      );
-    } finally {
-      await Bun.$`rm -rf ${dir}`.quiet();
-    }
-  });
-
-  test("missing lifecycle field in ledger-and-helper.md is reported as drift", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-ledger-field-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, ledgerTemplatePath),
-      await readScopedDoc(ledgerTemplatePath),
+      `../../.tmp-ledger-slice-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerDocPath),
       (await readScopedDoc(ledgerDocPath)).replaceAll(
-        "orchestrator_inline_attempts",
-        "inline_attempts_missing_from_reference",
+        "cli.ts contract orchestrator_inline_attempt_fields --json",
+        "cli.ts contract inline_attempt_fields_missing_from_reference --json",
       ),
     );
     try {
@@ -1087,8 +1213,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerDocPath,
-          kind: "ledger-lifecycle-field",
-          claim: "orchestrator_inline_attempts",
+          kind: "ledger-schema-slice-pointer",
+          claim: "orchestrator_inline_attempt_fields",
         }),
       );
     } finally {
@@ -1096,20 +1222,16 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("ledger/helper drift is tied to the batch field list, not whole-doc mentions", async () => {
+  test("missing builder attempt status pointer in ledger-and-helper.md is reported as drift", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-bullet-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, ledgerTemplatePath),
-      await readScopedDoc(ledgerTemplatePath),
+      `../../.tmp-ledger-builder-status-reference-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerDocPath),
       (await readScopedDoc(ledgerDocPath)).replace(
-        "- `status`: `pending | in-progress | converged | accepted-risk | blocked`.",
-        "- `batch_status`: `pending | in-progress | converged | accepted-risk | blocked`.",
+        "- `cli.ts contract builder_attempt_statuses --json`",
+        "- `cli.ts contract builder_attempt_statuses_missing --json`",
       ),
     );
     try {
@@ -1117,8 +1239,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerDocPath,
-          kind: "ledger-lifecycle-field",
-          claim: "status",
+          kind: "ledger-schema-slice-pointer",
+          claim: "builder_attempt_statuses",
         }),
       );
     } finally {
@@ -1126,50 +1248,16 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("section-rename in the ledger template surfaces a `## Batches` finding instead of silently scanning the whole doc", async () => {
+  test("section-rename in ledger-and-helper.md surfaces a schema pointer finding instead of silently scanning the whole doc", async () => {
     const dir = join(
       import.meta.dir,
-      `../../.tmp-ledger-field-template-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, ledgerTemplatePath),
-      (await readScopedDoc(ledgerTemplatePath)).replace(
-        "## Batches",
-        "## Batch entries",
-      ),
-    );
-    await Bun.write(
-      join(dir, ledgerDocPath),
-      await readScopedDoc(ledgerDocPath),
-    );
-    try {
-      const findings = await checkLedgerLifecycleFieldDrift({ repoRoot: dir });
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          doc: ledgerTemplatePath,
-          kind: "ledger-lifecycle-field",
-          claim: "## Batches",
-        }),
-      );
-    } finally {
-      await Bun.$`rm -rf ${dir}`.quiet();
-    }
-  });
-
-  test("section-rename in ledger-and-helper.md surfaces a `## Batches` entry fields finding instead of silently scanning the whole doc", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-ledger-field-reference-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, ledgerTemplatePath),
-      await readScopedDoc(ledgerTemplatePath),
+      `../../.tmp-ledger-schema-reference-rename-${process.pid}-${Math.random().toString(36).slice(2)}`,
     );
     await Bun.write(
       join(dir, ledgerDocPath),
       (await readScopedDoc(ledgerDocPath)).replace(
-        "`## Batches` entry fields",
-        "Batch entry fields",
+        "Runtime-owned schema facts",
+        "Runtime schema commands",
       ),
     );
     try {
@@ -1177,8 +1265,8 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
       expect(findings).toContainEqual(
         expect.objectContaining({
           doc: ledgerDocPath,
-          kind: "ledger-lifecycle-field",
-          claim: "`## Batches` entry fields",
+          kind: "ledger-schema-slice-pointer",
+          claim: "Runtime-owned schema facts",
         }),
       );
     } finally {
@@ -1228,19 +1316,22 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
     }
   });
 
-  test("checkContractDrift orchestrator surfaces lifecycle-field findings when the template drops a field", async () => {
+  test("checkContractDrift orchestrator surfaces ledger schema findings from the helper reference", async () => {
     const dir = await stageDriftSurfaceFixture({
-      [ledgerTemplatePath]: (text) =>
-        text.replaceAll("orchestrator_inline_attempts", "inline_attempts_missing"),
+      [ledgerDocPath]: (text) =>
+        text.replaceAll(
+          "cli.ts contract ledger_batch_lifecycle_fields --json",
+          "cli.ts contract ledger_batch_lifecycle_fields_missing --json",
+        ),
     });
     try {
       const result = await checkContractDrift({ repoRoot: dir });
       expect(result.ok).toBe(false);
       expect(result.findings).toContainEqual(
         expect.objectContaining({
-          doc: ledgerTemplatePath,
-          kind: "ledger-lifecycle-field",
-          claim: "orchestrator_inline_attempts",
+          doc: ledgerDocPath,
+          kind: "ledger-schema-slice-pointer",
+          claim: "ledger_batch_lifecycle_fields",
         }),
       );
     } finally {
@@ -1249,6 +1340,538 @@ describe("U7: ledger lifecycle fields stay aligned with helper-owned keys", () =
   });
 });
 
+describe("issue 114/115/116/117: scaffold docs stay aligned with runtime renderers", () => {
+  test("real visible scaffold command pointers match runtime facts", async () => {
+    const findings = await checkGeneratedScaffoldBlocksDrift({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("real drift surfaces contain no hidden scaffold-pointer comments", async () => {
+    for (const rel of driftSurfaceRels) {
+      expect(await readScopedDoc(rel)).not.toContain("scaffold-pointer");
+    }
+  });
+
+  test("scaffold inventory carries no prose-owned-shape entries", () => {
+    const inventory = scaffoldInventoryClassifications();
+    for (const entry of inventory) {
+      expect(entry.classification).not.toBe("prose-owned-shape");
+    }
+  });
+
+  test("Proposer and Validator return envelopes are pointer-only in active templates", () => {
+    const inventory = scaffoldInventoryClassifications();
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: proposerTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "proposer-success-envelope",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: proposerTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "proposer-fail-stop-envelope",
+      }),
+    );
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        doc: validatorEnvelopeTemplatePath,
+        classification: "visible-command-pointer",
+        scaffoldId: "validator-return-envelope",
+      }),
+    );
+  });
+
+  test("inventory entry naming an unknown scaffold id is reported by drift", async () => {
+    const findings = await checkScaffoldInventoryDrift({
+      repoRoot,
+      scaffoldIds: SCAFFOLD_IDS.filter((id) => id !== "builder-attempt-compact"),
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        kind: "scaffold-inventory",
+        claim: "builder-attempt-compact",
+      }),
+    );
+  });
+
+  test("unclassified fenced YAML in an inventoried template is reported", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [proposerTemplatePath]: (text) =>
+        `${text}\n\n\`\`\`yaml\nunowned_runtime_shape:\n  field: value\n\`\`\`\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: proposerTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "unclassified-yaml-fence",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("removed dynamic packet member lists stay absent", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        `${text}\n\n\`\`\`yaml\nbatch_contract:\n  id: <slug>\n\`\`\`\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "## Packet slots / dynamic Builder packet body",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing visible scaffold command is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        text.replace("`cli.ts scaffold builder-return-envelope --json`.", ""),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-return-envelope",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("visible wrong-but-valid scaffold command is reported in its owning section", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold builder-return-envelope --json`.",
+          "`cli.ts scaffold builder-attempt-compact --json`.",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-attempt-compact",
+        }),
+      );
+      expect(
+        findings.find(
+          (finding) =>
+            finding.doc === builderReturnTemplatePath &&
+            finding.kind === "scaffold-command",
+        )?.reason,
+      ).toContain("expected \"builder-return-envelope\"");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("visible unknown scaffold command is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold builder-return-envelope --json`.",
+          "`cli.ts scaffold builder-return-missing --json`.",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-return-missing",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("visible scaffold command moved outside its owning section is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderWorkPacketTemplatePath]: (text) =>
+        `${text.replace("\n`cli.ts scaffold builder-return-envelope --json`.\n", "\n")}\n\n## Stray commands\n\n\`cli.ts scaffold builder-return-envelope --json\`.\n`,
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderWorkPacketTemplatePath,
+          kind: "scaffold-command",
+          claim: "builder-return-envelope",
+        }),
+      );
+      expect(
+        findings.find(
+          (finding) =>
+            finding.doc === builderWorkPacketTemplatePath &&
+            finding.kind === "scaffold-command",
+        )?.reason,
+      ).toContain("missing expected source");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("hidden scaffold-pointer comments reintroduced in source are reported", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [builderReturnTemplatePath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold builder-return-envelope --json`.",
+          "`cli.ts scaffold builder-return-envelope --json`.\n<!-- scaffold-pointer id=builder-return-envelope source=\"cli.ts scaffold builder-return-envelope --json\" -->",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: builderReturnTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "builder-return-envelope",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("generated scaffold markers reintroduced in pointer-only source are reported by inventory", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replace(
+          "Before returning output, resolve the runtime-owned candidate batch scaffold:\n`cli.ts scaffold ce-plan-candidate-batch --json`.",
+          [
+            '<!-- generated-scaffold:start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+            "```yaml",
+            "candidate_batches: []",
+            "```",
+            "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+          ].join("\n"),
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "scaffold-inventory",
+          claim: "ce-plan-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("checkContractDrift orchestrator surfaces visible scaffold command findings", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [stage4BatchLoopPath]: (text) =>
+        text.replace(
+          "`cli.ts scaffold patch-proposal-candidate-batch --json`",
+          "`cli.ts scaffold replacement-candidate-batch --json`",
+        ),
+    });
+    try {
+      const result = await checkContractDrift({ repoRoot: dir });
+      expect(result.ok).toBe(false);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({
+          doc: stage4BatchLoopPath,
+          kind: "scaffold-command",
+          claim: "replacement-candidate-batch",
+        }),
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("every scaffold id is covered by at least one drift-check surface", () => {
+    // SSOT exhaustiveness: a net-new scaffold id added to lib/scaffolds.ts but
+    // not wired into the scaffold inventory would silently skip surface-level
+    // drift enforcement.
+    const covered = scaffoldIdsCoveredBySurfaces();
+    const missing = SCAFFOLD_IDS.filter((id) => !covered.has(id));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe("issue 124: contract-drift gates resist near-miss bypasses", () => {
+  const activeTemplates = [
+    cePlanTemplatePath,
+    proposerTemplatePath,
+    patchProposalTemplatePath,
+    builderReturnTemplatePath,
+    builderWorkPacketTemplatePath,
+    validatorEnvelopeTemplatePath,
+  ] as const;
+
+  describe("AC1: fenced YAML gate fires regardless of case/CRLF/info-string", () => {
+    const fenceBypasses: ReadonlyArray<{ label: string; appendix: string }> = [
+      {
+        label: "upper-case YAML language tag",
+        appendix:
+          "\n\n```YAML\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "yml language tag (short form)",
+        appendix:
+          "\n\n```yml\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "info-string suffix after yaml token",
+        appendix:
+          "\n\n```yaml:scaffold\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "CRLF line endings",
+        appendix:
+          "\r\n\r\n```yaml\r\nunowned_runtime_shape:\r\n  field: value\r\n```\r\n",
+      },
+    ];
+
+    for (const template of activeTemplates) {
+      for (const bypass of fenceBypasses) {
+        test(`${template} → ${bypass.label}`, async () => {
+          const dir = await stageDriftSurfaceFixture({
+            [template]: (text: string) => `${text}${bypass.appendix}`,
+          });
+          try {
+            const findings = await checkGeneratedScaffoldBlocksDrift({
+              repoRoot: dir,
+            });
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                doc: template,
+                kind: "scaffold-inventory",
+                claim: "unclassified-yaml-fence",
+              }),
+            );
+          } finally {
+            await Bun.$`rm -rf ${dir}`.quiet();
+          }
+        });
+      }
+    }
+  });
+
+  describe("AC2: hidden marker gate fires on case/quote/trailing-attr variants", () => {
+    const markerVariants: ReadonlyArray<{ label: string; comment: string }> = [
+      {
+        label: "lowercase canonical (control)",
+        comment:
+          '<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->',
+      },
+      {
+        label: "uppercase marker name",
+        comment:
+          '<!-- Scaffold-Pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->',
+      },
+      {
+        label: "single-quoted source attribute",
+        comment:
+          "<!-- scaffold-pointer id=builder-return-envelope source='cli.ts scaffold builder-return-envelope --json' -->",
+      },
+      {
+        label: "trailing attribute soup",
+        comment:
+          '<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" generated-by="x" -->',
+      },
+    ];
+
+    for (const variant of markerVariants) {
+      test(`scaffold-pointer marker: ${variant.label}`, async () => {
+        const dir = await stageDriftSurfaceFixture({
+          [builderReturnTemplatePath]: (text) =>
+            text.replace(
+              "`cli.ts scaffold builder-return-envelope --json`.",
+              `\`cli.ts scaffold builder-return-envelope --json\`.\n${variant.comment}`,
+            ),
+        });
+        try {
+          const findings = await checkGeneratedScaffoldBlocksDrift({
+            repoRoot: dir,
+          });
+          expect(
+            findings.some(
+              (finding) =>
+                finding.doc === builderReturnTemplatePath &&
+                finding.kind === "scaffold-inventory" &&
+                /scaffold-pointer marker reintroduced/.test(finding.reason),
+            ),
+          ).toBe(true);
+        } finally {
+          await Bun.$`rm -rf ${dir}`.quiet();
+        }
+      });
+    }
+
+    test("uppercase generated-scaffold:start marker is still reported", async () => {
+      const dir = await stageDriftSurfaceFixture({
+        [cePlanTemplatePath]: (text) =>
+          text.replace(
+            "`cli.ts scaffold ce-plan-candidate-batch --json`.",
+            [
+              '<!-- Generated-Scaffold:Start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+              "```yaml",
+              "candidate_batches: []",
+              "```",
+              "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+            ].join("\n"),
+          ),
+      });
+      try {
+        const findings = await checkGeneratedScaffoldBlocksDrift({
+          repoRoot: dir,
+        });
+        expect(
+          findings.some(
+            (finding) =>
+              finding.doc === cePlanTemplatePath &&
+              finding.kind === "scaffold-inventory" &&
+              /generated-scaffold marker reintroduced/.test(finding.reason),
+          ),
+        ).toBe(true);
+      } finally {
+        await Bun.$`rm -rf ${dir}`.quiet();
+      }
+    });
+
+    test("malformed marker (missing source attribute) surfaces with malformed reason", async () => {
+      const dir = await stageDriftSurfaceFixture({
+        [builderReturnTemplatePath]: (text) =>
+          text.replace(
+            "`cli.ts scaffold builder-return-envelope --json`.",
+            "`cli.ts scaffold builder-return-envelope --json`.\n<!-- scaffold-pointer id=builder-return-envelope -->",
+          ),
+      });
+      try {
+        const findings = await checkGeneratedScaffoldBlocksDrift({
+          repoRoot: dir,
+        });
+        const malformed = findings.find(
+          (finding) =>
+            finding.doc === builderReturnTemplatePath &&
+            finding.kind === "scaffold-inventory" &&
+            finding.reason.includes("malformed marker"),
+        );
+        expect(malformed).toBeDefined();
+        expect(malformed?.reason).toContain("missing `source=...`");
+      } finally {
+        await Bun.$`rm -rf ${dir}`.quiet();
+      }
+    });
+  });
+
+  describe("AC3: removed-surface detector catches idiomatic rewrites", () => {
+    const removedVariants: ReadonlyArray<{
+      label: string;
+      template: (typeof activeTemplates)[number];
+      coordinate: string;
+      injection: string;
+    }> = [
+      {
+        label: "single-quoted scalar for commit_ref_or_range",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: "\n\ncommit_ref_or_range: '<sha | range>'\n",
+      },
+      {
+        label: "no internal spaces in <sha|range>",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range: "<sha|range>"\n',
+      },
+      {
+        label: "tab between colon and quoted value",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range:\t"<sha | range>"\n',
+      },
+      {
+        label: "double space between colon and quoted value",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range:  "<sha | range>"\n',
+      },
+      {
+        label: "dynamic Builder packet body restored",
+        template: builderWorkPacketTemplatePath,
+        coordinate: "## Packet slots / dynamic Builder packet body",
+        injection: "\n\nbatch_contract:\n  id:  <slug>\n",
+      },
+      {
+        label: "dynamic Proposer packet body restored",
+        template: proposerTemplatePath,
+        coordinate: "## Packet slots / dynamic Proposer packet body",
+        injection: "\n\nfinal_finding_row:\n  id: <finding-id>\n",
+      },
+      {
+        label: "Patch Proposal final_finding fields restored",
+        template: patchProposalTemplatePath,
+        coordinate: "## Scratch file shape / dynamic final_finding member list",
+        injection: "\n\nfinal_finding\tfields:\n",
+      },
+    ];
+
+    for (const variant of removedVariants) {
+      test(variant.label, async () => {
+        const dir = await stageDriftSurfaceFixture({
+          [variant.template]: (text: string) => `${text}${variant.injection}`,
+        });
+        try {
+          const findings = await checkGeneratedScaffoldBlocksDrift({
+            repoRoot: dir,
+          });
+          expect(findings).toContainEqual(
+            expect.objectContaining({
+              doc: variant.template,
+              kind: "scaffold-inventory",
+              claim: variant.coordinate,
+            }),
+          );
+        } finally {
+          await Bun.$`rm -rf ${dir}`.quiet();
+        }
+      });
+    }
+  });
+});
 describe("F14: route-id and packet-role negative guards", () => {
   test("a non-blocked kebab token in plain PROSE is NOT a route id", () => {
     // No route-catalog context, not a blocked-* token, not a route_id:
@@ -1346,6 +1969,7 @@ function claimsFrom(partial: Partial<DocClaims>): DocClaims {
     commands: partial.commands ?? [],
     slices: partial.slices ?? [],
     packetRoles: partial.packetRoles ?? [],
+    scaffoldCommands: partial.scaffoldCommands ?? [],
     fieldPaths: partial.fieldPaths ?? [],
     scopedLinks: partial.scopedLinks ?? [],
   };
@@ -1387,7 +2011,7 @@ describe("AC1: route-ID claim membership against facts.routeIds", () => {
   });
 });
 
-describe("AC2: command / slice / packet-role claim membership", () => {
+describe("AC2: command / slice / packet-role / scaffold claim membership", () => {
   test("an unknown command claim produces one command finding", async () => {
     const facts = await loadContractFacts();
     const findings = await compareClaimsToFacts(
@@ -1419,17 +2043,69 @@ describe("AC2: command / slice / packet-role claim membership", () => {
     expect(findingsOfKind(findings, "packet-role")[0].claim).toBe("buildmaster");
   });
 
-  test("a live command / slice / packet-role claim produces no finding", async () => {
+  test("an unknown scaffold command claim produces one scaffold-command finding", async () => {
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({ scaffoldCommands: [claim("missing-scaffold")] }),
+      facts,
+    );
+    expect(findingsOfKind(findings, "scaffold-command").length).toBe(1);
+    expect(findingsOfKind(findings, "scaffold-command")[0].claim).toBe(
+      "missing-scaffold",
+    );
+  });
+
+  test("a live command / slice / packet-role / scaffold claim produces no finding", async () => {
     const facts = await loadContractFacts();
     const findings = await compareClaimsToFacts(
       claimsFrom({
         commands: [claim(facts.commandNames[0])],
         slices: [claim(facts.contractSlices[0])],
         packetRoles: [claim(facts.packetRoles[0])],
+        scaffoldCommands: [claim(facts.scaffoldIds[0])],
       }),
       facts,
     );
     expect(findings.length).toBe(0);
+  });
+
+  test("the route/reference contract slice claim is validated from live help", async () => {
+    const facts = await loadContractFacts();
+    expect(facts.contractSlices).toContain("route_required_references");
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        commands: [claim("contract")],
+        slices: [claim("route_required_references")],
+      }),
+      facts,
+    );
+    expect(findings.length).toBe(0);
+  });
+
+  test("the hot-router route/reference pointer is validated from the real doc", async () => {
+    const docPath = "runbooks/issue-to-pr-v2/issue-to-pr.md";
+    const doc = await Bun.file(join(import.meta.dir, "issue-to-pr.md")).text();
+    const claims = extractDocClaims(doc, docPath);
+    const routeReferenceClaims = claims.slices.filter(
+      (c) => c.token === "route_required_references",
+    );
+    const contractCommandClaims = claims.commands.filter(
+      (c) => c.token === "contract",
+    );
+
+    expect(routeReferenceClaims.length).toBeGreaterThan(0);
+    expect(contractCommandClaims.length).toBeGreaterThan(0);
+
+    const facts = await loadContractFacts();
+    const findings = await compareClaimsToFacts(
+      claimsFrom({
+        docPath,
+        commands: contractCommandClaims,
+        slices: routeReferenceClaims,
+      }),
+      facts,
+    );
+    expect(findings).toEqual([]);
   });
 });
 
@@ -1570,7 +2246,78 @@ describe("AC4: scoped-link existence checking", () => {
 describe("AC4: first-run-gotchas relationship check", () => {
   const repoRoot = join(import.meta.dir, "..", "..");
 
-  test("the real SKILL.md + ledger-and-helper.md relationship produces no finding", async () => {
+  function validSkillGotchasDoc(
+    guideRef = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
+  ): string {
+    return [
+      "# Skill",
+      "",
+      "7. Load every reference listed in `data.required_reference_ids`.",
+      `7b. When \`data.route_id\` begins with \`blocked-\`, also load \`${guideRef}\`.`,
+      "8. Apply remaining pre-stage gates before entering a stage.",
+      "",
+      "**Runbook version skew**",
+      "",
+      "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+      "- Use `first-run-gotchas.md` recipe 2.4.",
+    ].join("\n");
+  }
+
+  function validIssueToPrGotchasDoc(): string {
+    return [
+      "# Issue to PR",
+      "",
+      "## Start every turn",
+      "",
+      "6. **Load the references listed in `data.required_reference_ids`.**",
+      "   When `data.route_id` begins with `blocked-`, also load",
+      "   [first-run-gotchas.md](references/first-run-gotchas.md)",
+      "   before any blocked-route stop.",
+      "7. **Honour remaining pre-stage gates** before entering stage work.",
+      "",
+      "### Version-skew gate",
+      "",
+      "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+    ].join("\n");
+  }
+
+  const validLedgerGotchasDoc =
+    "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n";
+
+  async function stageGotchasFixture(
+    overrides: {
+      skill?: string;
+      issueToPr?: string;
+      ledger?: string;
+      writeGuide?: boolean;
+    } = {},
+  ): Promise<string> {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-gotchas-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      overrides.skill ?? validSkillGotchasDoc(),
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/issue-to-pr.md"),
+      overrides.issueToPr ?? validIssueToPrGotchasDoc(),
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
+      overrides.ledger ?? validLedgerGotchasDoc,
+    );
+    if (overrides.writeGuide ?? true) {
+      await Bun.write(
+        join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
+        "# First run gotchas\n",
+      );
+    }
+    return dir;
+  }
+
+  test("the real SKILL.md + issue-to-pr.md + ledger relationship produces no finding", async () => {
     const findings = await checkGotchasRelationship({ repoRoot });
     expect(findings).toEqual([]);
   });
@@ -1581,7 +2328,7 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // check could NOT catch: `blocked-` and the guide path both still appear
   // elsewhere in the doc after the deletion, so the old logic returned 0
   // findings. The structural orchestration-step anchor returns a finding.
-  test("deleting ONLY the step-7b load block (catalog + policy table intact) produces a finding", async () => {
+  test("deleting ONLY the step-7b load block (catalog + policy prose intact) produces a finding", async () => {
     const realSkill = await Bun.file(
       join(repoRoot, "skills/issue-to-pr/SKILL.md"),
     ).text();
@@ -1601,34 +2348,16 @@ describe("AC4: first-run-gotchas relationship check", () => {
     }
     const mutated = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
 
-    // Sanity-check the mutation is surgical: the route catalog and the
-    // reference-loading-policy table (which co-locate `blocked-` and the guide)
-    // survive, so whole-doc co-occurrence would still hold.
+    // Sanity-check the mutation is surgical: route catalog and reference
+    // loading policy prose survive, so whole-doc co-occurrence would still hold.
     expect(mutated.includes("<route_catalog>")).toBe(true);
     expect(mutated.includes("<reference_loading_policy>")).toBe(true);
-    expect(
-      mutated.includes(
-        "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-      ),
-    ).toBe(true);
+    expect(mutated.includes("first-run-gotchas.md")).toBe(true);
     expect(/blocked-/.test(mutated)).toBe(true);
     // But the operative `7b.` orchestration step is gone.
     expect(/^7b\.\s/m.test(mutated)).toBe(false);
 
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-7b-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(join(dir, "skills/issue-to-pr/SKILL.md"), mutated);
-    // A valid ledger + present guide so ONLY signal (a) can fire.
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({ skill: mutated });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const skillFindings = findings.filter(
@@ -1643,57 +2372,129 @@ describe("AC4: first-run-gotchas relationship check", () => {
 
   test("a missing 7b control-plane load in SKILL.md produces one relationship finding", async () => {
     // Mock SKILL.md without the deterministic 7b first-run-gotchas load.
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-skill-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
-    const ledgerPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    );
-    const gotchasPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-    );
-    await Bun.write(skillPath, "# Skill\n\nNo deterministic gotchas load here.\n");
-    await Bun.write(
-      ledgerPath,
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(gotchasPath, "# First run gotchas\n");
+    const dir = await stageGotchasFixture({
+      skill: "# Skill\n\nNo deterministic gotchas load here.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
-      expect(findingsOfKind(findings, "scoped-link").length).toBe(1);
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("moving the SKILL.md blocked load after remaining gates produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "9. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+        "- Use `first-run-gotchas.md` recipe 2.4.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a SKILL.md version-skew stop without gotchas loading produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, stop.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const skillFindings = findings.filter(
+        (f) => f.doc === "skills/issue-to-pr/SKILL.md",
+      );
+      expect(skillFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("a missing hot-router blocked load produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. Load the references listed in `data.required_reference_ids`.",
+        "7. Honour remaining pre-stage gates before entering stage work.",
+        "",
+        "### Version-skew gate",
+        "",
+        "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const hotRouterFindings = findings.filter(
+        (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+      );
+      expect(hotRouterFindings.length).toBe(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("moving the hot-router blocked load after remaining gates produces a finding", async () => {
+    const dir = await stageGotchasFixture({
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. Load the references listed in `data.required_reference_ids`.",
+        "7. Honour remaining pre-stage gates before entering stage work.",
+        "8. When `data.route_id` begins with `blocked-`, also load [first-run-gotchas.md](references/first-run-gotchas.md).",
+        "",
+        "### Version-skew gate",
+        "",
+        "- **Stop after loading `first-run-gotchas.md`.** Do not dispatch.",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkGotchasRelationship({ repoRoot: dir });
+      const hotRouterFindings = findings.filter(
+        (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+      );
+      expect(hotRouterFindings.length).toBe(1);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
   });
 
   test("a missing ledger-and-helper link to first-run-gotchas.md produces one finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-ledger-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
-    const ledgerPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    );
-    const gotchasPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
-    );
-    await Bun.write(
-      skillPath,
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    // ledger doc has the blocked section but NO link to the gotchas guide.
-    await Bun.write(
-      ledgerPath,
-      "### Blocked route ids\n\nNo recovery link here.\n",
-    );
-    await Bun.write(gotchasPath, "# First run gotchas\n");
+    const dir = await stageGotchasFixture({
+      // ledger doc has the blocked section but NO link to the gotchas guide.
+      ledger: "### Blocked route ids\n\nNo recovery link here.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       expect(findings.length).toBe(1);
@@ -1703,24 +2504,7 @@ describe("AC4: first-run-gotchas relationship check", () => {
   });
 
   test("a link to a first-run-gotchas.md that does not exist on disk produces a finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-target-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    const skillPath = join(dir, "skills/issue-to-pr/SKILL.md");
-    const ledgerPath = join(
-      dir,
-      "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
-    );
-    await Bun.write(
-      skillPath,
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    await Bun.write(
-      ledgerPath,
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    // Deliberately DO NOT write first-run-gotchas.md — the link target is broken.
+    const dir = await stageGotchasFixture({ writeGuide: false });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       expect(findings.length).toBeGreaterThanOrEqual(1);
@@ -1752,22 +2536,20 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // blocked-route load step exists). `unblocked-state` is a substring trap the
   // old `/blocked-/` regex would have wrongly accepted.
   test("an `unblocked-` token does not satisfy the blocked-route trigger", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-unblocked-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. On an `unblocked-state` route, load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7b. On an `unblocked-state` route, load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.",
+        "8. Apply remaining pre-stage gates before entering a stage.",
+        "",
+        "**Runbook version skew**",
+        "",
+        "- If envelope reports `data.runbook_version_skew` missing/mismatched without continuation evidence, load the blocked-route overlay, then stop.",
+        "- Use `first-run-gotchas.md` recipe 2.4.",
+      ].join("\n"),
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const skillFindings = findings.filter(
@@ -1783,22 +2565,9 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // legitimate load — it must NOT produce a false 'missing 7b' finding. The
   // basename is unambiguous in this scope, so signal (a) accepts it.
   test("a basename-only guide reference in step 7b does not produce a false finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-basename-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. When `data.route_id` begins with `blocked-`, this loop also loads `first-run-gotchas.md` deterministically.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\nsee [first-run-gotchas.md](first-run-gotchas.md).\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      skill: validSkillGotchasDoc("first-run-gotchas.md"),
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const skillFindings = findings.filter(
@@ -1814,24 +2583,12 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // (e.g. in a cross-references footer) does NOT satisfy the relationship —
   // Key Decision 7 requires the link to come FROM the blocked-route section.
   test("a ledger guide-link outside the blocked-route section produces a finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-ledger-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    // The blocked-route section has NO guide link; the link only appears under
-    // a later, unrelated heading.
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\n### Cross references\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recipes.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      // The blocked-route section has NO guide link; the link only appears
+      // under a later, unrelated heading.
+      ledger:
+        "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\n### Cross references\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recipes.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       const ledgerFindings = findings.filter(
@@ -1847,22 +2604,10 @@ describe("AC4: first-run-gotchas relationship check", () => {
   // F18.3 (positive control): a guide link INSIDE the blocked-route section
   // satisfies the relationship — no finding. Mirrors the live ledger layout.
   test("a ledger guide-link inside the blocked-route section produces no finding", async () => {
-    const dir = join(
-      import.meta.dir,
-      `../../.tmp-gotchas-ledger-in-section-${process.pid}-${Math.random().toString(36).slice(2)}`,
-    );
-    await Bun.write(
-      join(dir, "skills/issue-to-pr/SKILL.md"),
-      "7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md`.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"),
-      "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recovery recipes.\n\n### Special route ids\n\nnothing here.\n",
-    );
-    await Bun.write(
-      join(dir, "runbooks/issue-to-pr-v2/references/first-run-gotchas.md"),
-      "# First run gotchas\n",
-    );
+    const dir = await stageGotchasFixture({
+      ledger:
+        "### Blocked route ids\n\n| Route id | When |\n| --- | --- |\n| `blocked-stage-3` | stage 3 open finding. |\n\nsee [first-run-gotchas.md](first-run-gotchas.md) for recovery recipes.\n\n### Special route ids\n\nnothing here.\n",
+    });
     try {
       const findings = await checkGotchasRelationship({ repoRoot: dir });
       expect(findings).toEqual([]);
@@ -1877,6 +2622,7 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
   const liveDocs = [
     "skills/issue-to-pr/SKILL.md",
     "runbooks/issue-to-pr-v2/README.md",
+    "runbooks/issue-to-pr-v2/issue-to-pr.md",
     "runbooks/issue-to-pr-v2/references/ledger-and-helper.md",
     "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
   ];
@@ -1887,6 +2633,7 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
   // findings). We pin a non-empty claim floor for these.
   const tokenCarryingDocs = new Set([
     "skills/issue-to-pr/SKILL.md",
+    "runbooks/issue-to-pr-v2/issue-to-pr.md",
     "runbooks/issue-to-pr-v2/references/first-run-gotchas.md",
   ]);
 
@@ -1896,10 +2643,11 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
     c.commands.length +
     c.slices.length +
     c.packetRoles.length +
+    c.scaffoldCommands.length +
     c.fieldPaths.length +
     c.scopedLinks.length;
 
-  test("each of the 4 scoped docs reconciles cleanly against live facts", async () => {
+  test("each scoped doc reconciles cleanly against live facts", async () => {
     const facts = await loadContractFacts();
     for (const rel of liveDocs) {
       const text = await Bun.file(join(repoRoot, rel)).text();
@@ -1935,6 +2683,7 @@ describe("comparator returns findings as DATA, never throws on claim drift", () 
         commands: [claim("frobnicate")],
         slices: [claim("not_a_slice")],
         packetRoles: [claim("buildmaster")],
+        scaffoldCommands: [claim("missing-scaffold")],
         fieldPaths: [claim("data.nope")],
       }),
       facts,
@@ -1943,6 +2692,7 @@ describe("comparator returns findings as DATA, never throws on claim drift", () 
     expect(findingsOfKind(findings, "command").length).toBe(1);
     expect(findingsOfKind(findings, "slice").length).toBe(1);
     expect(findingsOfKind(findings, "packet-role").length).toBe(1);
+    expect(findingsOfKind(findings, "scaffold-command").length).toBe(1);
     expect(findingsOfKind(findings, "field-path").length).toBe(1);
   });
 
@@ -1965,16 +2715,16 @@ describe("comparator returns findings as DATA, never throws on claim drift", () 
  * Issue #81 — batch 4 (orchestrator + runnable entry).
  *
  * `checkContractDrift(opts?)` ties the loader, extractor, comparator, and
- * gotchas-relationship check together over the four scoped operator docs and
+ * gotchas-relationship check together over the scoped operator docs and
  * returns `{ ok, findings }`. These tests prove:
  *  - AC7: a fixture doc with a deliberately STALE contract claim (a route id
  *    not in the live route_ids, a removed command, a bogus data.* path, a
  *    missing scoped link) makes the check return `ok:false` with a finding
  *    NAMING that token — the check fails for a real mismatch (load-bearing).
- *  - AC1: over the four REAL scoped docs the check returns `ok:true` (docs in
+ *  - AC1: over the REAL scoped docs the check returns `ok:true` (docs in
  *    sync), and a MISSING scoped doc is a hard error (throw), not a clean pass.
  *  - AC6: the check (and the runnable entry) perform no filesystem writes / no
- *    git mutations; the four scoped docs are unchanged after a run.
+ *    git mutations; the scoped docs are unchanged after a run.
  *
  * Fixture docs are written to a temp dir (test scaffolding); the CHECK under
  * test reads them read-only. Stale tokens are provably NOT contract values
@@ -2215,7 +2965,7 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
     ).rejects.toThrow(/scopedDocs|empty|scope/i);
   });
 
-  // F22 (default preserved): passing no opts must still use the real four
+  // F22 (default preserved): passing no opts must still use the real
   // SCOPED_DOCS and pass clean — the empty-scope guard must not break defaults.
   test("F22: the default (no scopedDocs) still uses the real drift surfaces and passes", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });

@@ -63,9 +63,8 @@ The Orchestrator sends Builder one batch-only Work Packet:
 - `attempt_type: implementation | repair`;
 - exactly one open P0/P1 target finding signature from committed
   `## Findings data` for repair attempts, and null otherwise;
-- the confirmed batch contract verbatim: `id`, `name`, `goal`, `files`,
-  `depends_on`, optional `supersedes`, `execution_mode`, `acceptance_tests`,
-  `ac_mapping`, and `rationale`;
+- the confirmed batch contract verbatim, using the runtime-owned field set from
+  `cli.ts contract candidate_batch_fields --json`;
 - the current iteration number, existing `builder_commits`, and compact prior
   `builder_attempts` for this batch;
 - `## Findings data` rows for this batch only;
@@ -190,25 +189,24 @@ Builder returns one structured envelope. Status is one of `committed`,
 `fail-stop-execution-mode-mismatch`, `fail-stop-read-failed`, or
 `fail-stop-other`.
 
-The envelope includes `attempt_type`, optional target finding signature,
-`commit_sha`, `files_touched`, `route_hint`, `blockers`, `probe_results`,
-`suggested_scope_changes`, `implementation_steps`, `existing_seams_used`,
-`tests_run`, `assumptions`, `risks`, `deferred`, `suggested_validator_focus`,
-and `notes`. Required array fields may be empty; missing
-`suggested_validator_focus` is malformed. Status owns workflow transition;
-`route_hint` is only next-owner guidance. The Builder envelope has no
-inline-only fields; Orchestrator-inline attempt evidence is recorded through
-the separate ledger lane owned by the Stage 4 batch-loop contract.
+Concrete envelope shape: `cli.ts scaffold builder-return-envelope --json`.
+
+Required array fields may be empty; missing `suggested_validator_focus` is
+malformed. Status owns workflow transition; `route_hint` is only next-owner
+guidance. The Builder envelope has no inline-only fields; Orchestrator-inline
+attempt evidence is recorded through the separate ledger lane owned by the
+Stage 4 batch-loop contract.
 
 Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger
-`builder_attempts` record with `attempt_type`, `status`, `commit_sha`,
-`files_touched`, `route_hint`, `blockers`, `probe_results`, and `notes`.
+`builder_attempts` record.
+
+Compact row scaffold: `cli.ts scaffold builder-attempt-compact --json`.
+
 Persisted `blockers` and `probe_results` are YAML lists of compact string
 summaries (`[]` when empty), not raw envelope object arrays; `notes` is a
-single string. Rich evidence such as implementation steps, tests run,
-assumptions, risks, deferred items, and suggested Validator focus is passed to
-Validators or summarized in Notes rather than persisted wholesale.
+single string. Rich evidence passes to Validators or Notes rather than
+persisting wholesale.
 
 On a well-formed `fail-stop-preflight`, do not dispatch Validators. Append the
 blockers, probe results, and route hint to Notes, set the current batch
@@ -270,6 +268,9 @@ batch, and go through helper validation, digest recomputation, and user
 confirmation before Stage 4 continues. The recommended rationale prefix for
 a replacement batch is `replacement-contract: <reason>` (per the v2 ledger
 template recommendation).
+
+Replacement row scaffold:
+`cli.ts scaffold replacement-candidate-batch --json`.
 
 When a replacement supersedes a blocked batch, pending downstream batches that
 depend on the blocked original must have `depends_on` rewritten from the

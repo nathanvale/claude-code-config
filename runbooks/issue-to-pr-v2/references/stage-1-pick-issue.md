@@ -86,40 +86,16 @@ ledger creation, before branch preflight). See also:
      `started_at` within the last hour, fail-stop with the concurrent-run
      warning.
    - Re-run guard: if `status == shipped`, ask the user re-run or abandon.
-   - First-run: copy from
-     `~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md` (U6
-     template; declares `runbook_version: "3"`).
-   Populate frontmatter: `issue_number`, `issue_title`, `issue_url`,
-   `target_repo`, `started_at` (ISO 8601 with timezone), `status: in-progress`,
-   `runbook_version: "3"`, `ac_source`,
-   `ac_confirmation_status: confirmed`, `ac_confirmed_at`,
-   `batch_contract_confirmation_status: pending`,
-   `batch_contract_confirmed_at: null`, `ship_mode: standard`,
-   `final_reviewed_at: null`. Write the confirmed AC list to
-   `## Acceptance criteria` as `- [ ]` checkboxes. Compute and persist
-   `ac_digest` in this same Stage 1 checkpoint: the derived
-   `confirmation_state.acceptance_criteria` only reaches `confirmed` when
-   `ac_confirmation_status: confirmed` AND a stored `ac_digest` matches the
-   ledger AC content (see `lib/ledger.ts` `readAcceptanceCriteriaState`,
-   which checks `ac_confirmation_status` first: a `blocked`, `stale`, or
-   `pending` status short-circuits to that state, and only a `confirmed`
-   status with a null `ac_digest` falls through to `pending`). So at Stage 1,
-   when `ac_confirmation_status: confirmed` is set but `ac_digest` is still
-   null, the derived state is `pending`, which keeps the route at
-   `pick-issue` and Stage 1 can never advance to `plan`. The `plan_digest`
-   and
-   `batch_contract_digest` fields stay null at Stage 1 because their source
-   content (the plan, the batch contract) does not exist yet; they are
-   populated at Stage 2 and Stage 3 confirmation respectively. The
-   orchestrator computes each digest via the named helper command at the
-   stage that produces its source content
-   (`decompose.ts --ac-digest <ledger-path>` at Stage 1,
-   `decompose.ts --plan-digest <plan-path>` at Stage 2,
-   `decompose.ts --batch-contract-digest <ledger-path>` at Stage 3) and
-   persists the returned value to frontmatter in the same checkpoint commit;
-   the CLI itself is read-only per ADR 0002 and never writes the digest
-   fields. If a `force-run` override was used, append override evidence to
-   Notes in the same checkpoint.
+   - First-run: run
+     `cli.ts ledger-init --issue-number <N> --issue-title <title> --issue-url <url> --target-repo <owner/repo> --started-at <iso8601> --ac-source <source> --ac <text> --json`
+     with one `--ac` per confirmed criterion. Write
+     the `ledger_markdown` payload to the ledger path. The command is read-only; the
+     orchestrator owns the file write.
+   `ledger-init` populates Stage 1 frontmatter, writes confirmed AC checkboxes,
+   stores `ac_digest`, and leaves plan/batch digests null until their source
+   content exists. It renders the initial empty sections from runtime
+   scaffolds and declares `runbook_version: "3"`. If a `force-run` override
+   was used, append override evidence to Notes in the same checkpoint.
 8. Run `cli.ts state <ledger-path> --json` (the v2 fact-emitter; see
    [ledger-and-helper.md](ledger-and-helper.md#cli-ts-state-facts)).
    The returned `data` envelope must report

@@ -29,6 +29,9 @@ import { posix as pathPosix } from "node:path";
 import { exit, stderr, stdout } from "node:process";
 
 import {
+  ALWAYS_ON_VALIDATOR_PERSONAS,
+  ATTEMPT_LANES,
+  type AttemptLane,
   type Batch,
   BATCH_KEYS,
   BATCH_STATUSES,
@@ -50,15 +53,31 @@ import {
   HIGH_RISK_NEW_FILE_PATCH_EXCEPTION_PREFIX,
   INVESTIGATION_RATIONALE,
   LEDGER_BATCH_KEYS,
+  LEDGER_BATCH_LIFECYCLE_DEFAULTS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  type LedgerBatchLifecycleField,
   LEGACY_EXECUTION_MODE_HINTS,
   MAX_BUILDER_ATTEMPTS,
   NEW_FILE_PATCH_EXCEPTION_PREFIX,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER,
+  NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER,
+  NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY,
+  NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS,
+  NOTES_VALIDATOR_WAVE_COMPLETED_MARKER,
+  NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY,
+  NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS,
+  NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS,
   ORCHESTRATOR_INLINE_ATTEMPT_KEYS,
   RUNBOOK_VERSION,
   STAGE_3_BATCH_ID,
   TERMINAL_BATCH_STATUSES,
+  VALIDATOR_WAVE_OUTCOMES,
 } from "./contract";
 import { contractDigest, sha256Digest } from "./digest";
+import { quoteYamlScalar } from "./yaml-scalar";
 
 export interface BuilderAttempt {
   attempt_type: string;
@@ -76,8 +95,6 @@ export interface OrchestratorInlineAttempt {
   files_touched: string[];
   notes: string;
 }
-
-type AttemptLane = "builder_attempts" | "orchestrator_inline_attempts";
 
 interface ImplementationAttemptCheckpointEvidence {
   batch_id: string;
@@ -100,14 +117,6 @@ interface ValidatorWaveCompletedEvidence {
   findings: string[];
 }
 
-const ALWAYS_ON_VALIDATOR_PERSONAS = [
-  "compound-engineering:ce-correctness-reviewer",
-  "compound-engineering:ce-testing-reviewer",
-  "compound-engineering:ce-maintainability-reviewer",
-  "compound-engineering:ce-project-standards-reviewer",
-  "compound-engineering:ce-adversarial-reviewer",
-] as const;
-
 export interface ParseOptions {
   patchProposalMode?: boolean;
   allowPatchBatches?: boolean;
@@ -120,6 +129,18 @@ interface ParsedBlock {
   values: Record<string, unknown>;
   errors: string[];
 }
+
+const PATCH_PROPOSAL_ROOT_FIELDS = new Set([
+  "final_finding",
+  "patch_batches",
+]);
+const PATCH_PROPOSAL_FINAL_FINDING_FIELDS = new Set([
+  "id",
+  "signature",
+  "persona",
+  "severity",
+  "summary",
+]);
 
 export interface Finding {
   id: string;
@@ -279,31 +300,26 @@ export function parse(planPath: string, options: ParseOptions = {}): Batch[] {
 
   const batches: Batch[] = [];
   for (const [index, block] of blocks.entries()) {
-    if (!looksLikeBatchCandidateBlock(block)) continue;
-    const parsedBlock = parseFlatBatchBlock(block);
-    const parsed = parsedBlock.values;
-    if (!isBatchCandidate(parsed)) continue;
     const blockLabel = `YAML block ${index + 1}`;
-    if (parsedBlock.errors.length > 0) {
-      fail(`${blockLabel}: ${parsedBlock.errors.join("; ")}`);
+    const patchProposalBlocks = options.patchProposalMode
+      ? parsePatchProposalBatchBlocks(block)
+      : null;
+    if (patchProposalBlocks !== null) {
+      for (const [patchIndex, parsedBlock] of patchProposalBlocks.entries()) {
+        const batch = batchFromParsedBlock(
+          parsedBlock,
+          `${blockLabel} patch_batches[${patchIndex + 1}]`,
+        );
+        if (batch !== null) batches.push(batch);
+      }
+      continue;
     }
-    const unknownKeys = Object.keys(parsed).filter((key) => !BATCH_KEYS.has(key));
-    if (unknownKeys.length > 0) {
-      fail(`${blockLabel} has unknown field "${unknownKeys[0]}"`);
+
+    if (!looksLikeBatchCandidateBlock(block)) continue;
+    const batch = batchFromParsedBlock(parseFlatBatchBlock(block), blockLabel);
+    if (batch !== null) {
+      batches.push(batch);
     }
-    const id = requiredString(parsed, "id", blockLabel);
-    batches.push({
-      id,
-      name: requiredString(parsed, "name", id),
-      goal: requiredString(parsed, "goal", id),
-      files: requiredArray(parsed, "files", id),
-      depends_on: requiredArray(parsed, "depends_on", id),
-      supersedes: optionalNullableScalar(parsed.supersedes, "supersedes"),
-      execution_mode: asExecutionMode(requiredString(parsed, "execution_mode", id), id),
-      acceptance_tests: requiredArray(parsed, "acceptance_tests", id),
-      ac_mapping: requiredNumberArray(parsed, "ac_mapping", id),
-      rationale: optionalRationale(parsed.rationale),
-    });
   }
 
   if (batches.length === 0) {
@@ -312,6 +328,164 @@ export function parse(planPath: string, options: ParseOptions = {}): Batch[] {
 
   validateBatchContracts(batches, options);
   return topoSortOrFail(batches);
+}
+
+function batchFromParsedBlock(parsedBlock: ParsedBlock, blockLabel: string): Batch | null {
+  const parsed = parsedBlock.values;
+  if (parsedBlock.errors.length > 0) {
+    fail(`${blockLabel}: ${parsedBlock.errors.join("; ")}`);
+  }
+  if (!isBatchCandidate(parsed)) return null;
+  const unknownKeys = Object.keys(parsed).filter((key) => !BATCH_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    fail(`${blockLabel} has unknown field "${unknownKeys[0]}"`);
+  }
+  const id = requiredString(parsed, "id", blockLabel);
+  return {
+    id,
+    name: requiredString(parsed, "name", id),
+    goal: requiredString(parsed, "goal", id),
+    files: requiredArray(parsed, "files", id),
+    depends_on: requiredArray(parsed, "depends_on", id),
+    supersedes: optionalNullableScalar(parsed.supersedes, "supersedes"),
+    execution_mode: asExecutionMode(requiredString(parsed, "execution_mode", id), id),
+    acceptance_tests: requiredArray(parsed, "acceptance_tests", id),
+    ac_mapping: requiredNumberArray(parsed, "ac_mapping", id),
+    rationale: optionalRationale(parsed.rationale),
+  };
+}
+
+function parsePatchProposalBatchBlocks(text: string): ParsedBlock[] | null {
+  const lines = text.split("\n");
+  const headerIndex = lines.findIndex((raw) =>
+    /^patch_batches:\s*(?:\[\s*\]\s*)?(?:#.*)?$/.test(raw),
+  );
+  if (headerIndex === -1) return null;
+
+  const rootErrors = validatePatchProposalRoot(lines);
+  if (rootErrors.length > 0) {
+    return [{ values: {}, errors: rootErrors }];
+  }
+
+  const blocks: string[][] = [];
+  let current: string[] | null = null;
+  let itemIndent: number | null = null;
+
+  for (const [offset, raw] of lines.slice(headerIndex + 1).entries()) {
+    const lineNumber = headerIndex + offset + 2;
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (!line.trim()) {
+      if (current !== null) current.push("");
+      continue;
+    }
+
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (indent === 0) break;
+
+    const item = line.match(/^(\s*)-\s+(.*)$/);
+    if (item && (itemIndent === null || item[1].length === itemIndent)) {
+      if (current !== null) blocks.push(current);
+      itemIndent = item[1].length;
+      current = [item[2]];
+      continue;
+    }
+
+    if (current === null || itemIndent === null) {
+      return [{
+        values: {},
+        errors: [`line ${lineNumber} is not a patch_batches list item`],
+      }];
+    }
+    if (indent <= itemIndent) {
+      return [{
+        values: {},
+        errors: [`line ${lineNumber} is not nested under patch_batches`],
+      }];
+    }
+
+    const fieldIndent = itemIndent + 2;
+    current.push(line.slice(Math.min(fieldIndent, indent)));
+  }
+
+  if (current !== null) blocks.push(current);
+  if (blocks.length === 0) {
+    return [{
+      values: {},
+      errors: ["patch_batches must contain at least one batch"],
+    }];
+  }
+  return blocks.map((block) => parseFlatBatchBlock(block.join("\n")));
+}
+
+function validatePatchProposalRoot(lines: string[]): string[] {
+  const errors: string[] = [];
+  const rootFields: { key: string; line: number }[] = [];
+  for (const [index, raw] of lines.entries()) {
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (!line.trim()) continue;
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*):/);
+    if (match) rootFields.push({ key: match[1], line: index });
+  }
+
+  const seenRoot = new Set<string>();
+  for (const field of rootFields) {
+    if (!PATCH_PROPOSAL_ROOT_FIELDS.has(field.key)) {
+      errors.push(`unexpected root field "${field.key}"`);
+      continue;
+    }
+    if (seenRoot.has(field.key)) {
+      errors.push(`duplicate root field "${field.key}"`);
+    }
+    seenRoot.add(field.key);
+  }
+  if (!seenRoot.has("final_finding")) {
+    errors.push('missing required root field "final_finding"');
+  }
+  if (!seenRoot.has("patch_batches")) {
+    errors.push('missing required root field "patch_batches"');
+  }
+
+  const finalFinding = rootFields.find((field) => field.key === "final_finding");
+  if (finalFinding) {
+    errors.push(...validatePatchProposalFinalFinding(lines, finalFinding.line));
+  }
+  return errors;
+}
+
+function validatePatchProposalFinalFinding(lines: string[], startLine: number): string[] {
+  const errors: string[] = [];
+  const fields: string[] = [];
+
+  for (const raw of lines.slice(startLine + 1)) {
+    const line = stripYamlComment(raw).replace(/\s+$/, "");
+    if (!line.trim()) continue;
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (indent === 0) break;
+    const match = line.match(/^ {2}([A-Za-z_][A-Za-z0-9_]*):/);
+    if (!match) {
+      errors.push("final_finding must contain only scalar fields");
+      continue;
+    }
+    fields.push(match[1]);
+  }
+
+  const seen = new Set<string>();
+  for (const field of fields) {
+    if (!PATCH_PROPOSAL_FINAL_FINDING_FIELDS.has(field)) {
+      errors.push(`final_finding has unexpected field "${field}"`);
+      continue;
+    }
+    if (seen.has(field)) {
+      errors.push(`final_finding has duplicate field "${field}"`);
+    }
+    seen.add(field);
+  }
+  for (const field of PATCH_PROPOSAL_FINAL_FINDING_FIELDS) {
+    if (!seen.has(field)) {
+      errors.push(`final_finding is missing required field "${field}"`);
+    }
+  }
+  return errors;
 }
 
 function isBatchCandidate(parsed: Record<string, unknown>): boolean {
@@ -893,14 +1067,18 @@ export function emit(batches: Batch[]): void {
       for (const i of b.ac_mapping) lines.push(`      - ${i}`);
     }
     lines.push(`    rationale: ${b.rationale === null ? "null" : quoteYamlScalar(b.rationale)}`);
-    lines.push(`    status: pending`);
-    lines.push(`    builder_commits: []`);
-    lines.push(`    builder_attempts: []`);
-    lines.push(`    orchestrator_inline_attempts: []`);
-    lines.push(`    iterations: 0`);
-    lines.push(`    final_verdict: null`);
+    for (const field of LEDGER_BATCH_LIFECYCLE_FIELDS) {
+      lines.push(`    ${field}: ${ledgerBatchLifecycleDefaultYaml(field)}`);
+    }
   }
   stdout.write(lines.join("\n") + "\n");
+}
+
+function ledgerBatchLifecycleDefaultYaml(field: LedgerBatchLifecycleField): string {
+  const value = LEDGER_BATCH_LIFECYCLE_DEFAULTS[field];
+  if (Array.isArray(value)) return "[]";
+  if (value === null) return "null";
+  return String(value);
 }
 
 /**
@@ -1282,7 +1460,7 @@ export function parseRunbookVersionContinuationEvidence(
 
   for (const body of markedYamlBlocksFromNotes(
     notesBody,
-    "runbook-version-skew-continuation",
+    NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_MARKER,
   )) {
     const evidence = parseContinuationEvidenceBlock(body);
     if (evidence !== null) return evidence;
@@ -1328,13 +1506,12 @@ function markedYamlBlocksFromNotes(
       const fence = fenceMatch[1];
       if (openFence === null) {
         // Look backward past blank lines for the legitimate marker →
-        // yaml pair. The template at `issue-N-ledger.template.md`
-        // explicitly permits blank lines between the marker comment
-        // and the opening yaml fence; require column-zero marker and
-        // column-zero fence but otherwise tolerate the blank-line
-        // gap. If the immediate-previous-non-blank line is the marker
-        // (and we are not currently inside another fenced region),
-        // treat this fence as the evidence opener.
+        // yaml pair. Ledger Notes evidence permits blank lines between
+        // the marker comment and the opening yaml fence; require
+        // column-zero marker and column-zero fence but otherwise
+        // tolerate the blank-line gap. If the previous non-blank line
+        // is the marker (and we are not currently inside another
+        // fenced region), treat this fence as the evidence opener.
         const previousMarkerFound = findPrecedingMarker(lines, i, markerName);
         if (fence === "```" && /^```yaml/.test(line) && previousMarkerFound) {
           const body = consumeMarkedYamlFence(lines, i);
@@ -1417,7 +1594,10 @@ function parseContinuationEvidenceBlock(
     const line = stripYamlComment(raw).replace(/\s+$/, "");
     if (line.trim().length === 0) continue;
     if (!sawHeader) {
-      if (!/^runbook_version_skew_continuation:\s*$/.test(line.trim())) {
+      if (
+        line.trim() !==
+        `${NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_ROOT_KEY}:`
+      ) {
         return null;
       }
       sawHeader = true;
@@ -1449,20 +1629,17 @@ function parseContinuationEvidenceBlock(
   }
   if (!sawHeader) return null;
 
-  const required = [
-    "ledger_version",
-    "runtime_version",
-    "operator_decision",
-    "timestamp",
-    "route_context",
-    "reference_context",
-    "accepted_risk",
-  ] as const;
-  for (const key of required) {
+  for (const key of NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS) {
     if (!fields.has(key)) return null;
   }
   for (const key of fields.keys()) {
-    if (!required.includes(key as (typeof required)[number])) return null;
+    if (
+      !NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS.includes(
+        key as (typeof NOTES_RUNBOOK_VERSION_SKEW_CONTINUATION_FIELDS)[number],
+      )
+    ) {
+      return null;
+    }
   }
 
   // Both `ledger_version` and `runtime_version` are compared
@@ -1511,7 +1688,7 @@ function parseImplementationAttemptCheckpointEvidence(
   if (notesBody === null) return [];
   return markedYamlBlocksFromNotes(
     notesBody,
-    "implementation-attempt-checkpoint",
+    NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_MARKER,
   ).map(parseImplementationAttemptCheckpointBlock);
 }
 
@@ -1520,8 +1697,9 @@ function parseImplementationAttemptCheckpointBlock(
 ): ImplementationAttemptCheckpointEvidence {
   const fields = parseTwoSpaceScalarBlock(
     block,
-    "implementation_attempt_checkpoint",
+    NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_ROOT_KEY,
     "implementation attempt checkpoint evidence",
+    NOTES_IMPLEMENTATION_ATTEMPT_CHECKPOINT_FIELDS,
   );
   const batchId = evidenceRequiredString(fields, "batch_id", "implementation attempt checkpoint evidence");
   const implementationCommit = evidenceRequiredString(
@@ -1547,9 +1725,10 @@ function parseValidatorWaveCompletedEvidence(
 ): ValidatorWaveCompletedEvidence[] {
   const notesBody = readNotesBodyOrNull(ledgerPath);
   if (notesBody === null) return [];
-  return markedYamlBlocksFromNotes(notesBody, "validator-wave-completed").map(
-    parseValidatorWaveCompletedBlock,
-  );
+  return markedYamlBlocksFromNotes(
+    notesBody,
+    NOTES_VALIDATOR_WAVE_COMPLETED_MARKER,
+  ).map(parseValidatorWaveCompletedBlock);
 }
 
 function parseValidatorWaveCompletedBlock(
@@ -1561,15 +1740,17 @@ function parseValidatorWaveCompletedBlock(
   const scalars = new Map<string, string>();
   const dispatchEvidence = new Map<string, string>();
   const lists = new Map<string, string[]>();
-  let currentList: "personas" | "findings" | null = null;
+  let currentList:
+    | (typeof NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS)[number]
+    | null = null;
   let inDispatchEvidence = false;
 
   for (const [index, raw] of lines.entries()) {
     const line = stripYamlComment(raw).replace(/\s+$/, "");
     if (line.trim().length === 0) continue;
     if (!sawHeader) {
-      if (!/^validator_wave_completed:\s*$/.test(line.trim())) {
-        fail(`${context} must start with validator_wave_completed:`);
+      if (line.trim() !== `${NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY}:`) {
+        fail(`${context} must start with ${NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY}:`);
       }
       sawHeader = true;
       continue;
@@ -1581,10 +1762,16 @@ function parseValidatorWaveCompletedBlock(
       const rest = topScalar[2];
       currentList = null;
       inDispatchEvidence = false;
-      if (key === "personas" || key === "findings") {
-        if (lists.has(key)) fail(`${context} has duplicate field "${key}"`);
-        lists.set(key, parseEvidenceListHeader(rest, `${context} ${key}`));
-        currentList = key;
+      if (
+        NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS.includes(
+          key as (typeof NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS)[number],
+        )
+      ) {
+        const listKey =
+          key as (typeof NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS)[number];
+        if (lists.has(listKey)) fail(`${context} has duplicate field "${key}"`);
+        lists.set(listKey, parseEvidenceListHeader(rest, `${context} ${key}`));
+        currentList = listKey;
         continue;
       }
       if (key === "dispatch_evidence") {
@@ -1626,7 +1813,9 @@ function parseValidatorWaveCompletedBlock(
 
     fail(`${context} line ${index + 1} is not valid evidence YAML`);
   }
-  if (!sawHeader) fail(`${context} is missing validator_wave_completed:`);
+  if (!sawHeader) {
+    fail(`${context} is missing ${NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY}:`);
+  }
 
   const result = {
     batch_id: evidenceRequiredString(scalars, "batch_id", context),
@@ -1655,17 +1844,29 @@ function parseValidatorWaveCompletedBlock(
   };
 
   for (const key of scalars.keys()) {
-    if (!["batch_id", "implementation_commit", "attempt_lane", "outcome"].includes(key)) {
+    if (
+      !NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS.includes(
+        key as (typeof NOTES_VALIDATOR_WAVE_COMPLETED_SCALAR_FIELDS)[number],
+      )
+    ) {
       fail(`${context} has unknown field "${key}"`);
     }
   }
   for (const key of lists.keys()) {
-    if (key !== "personas" && key !== "findings") {
+    if (
+      !NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS.includes(
+        key as (typeof NOTES_VALIDATOR_WAVE_COMPLETED_LIST_FIELDS)[number],
+      )
+    ) {
       fail(`${context} has unknown list field "${key}"`);
     }
   }
   for (const key of dispatchEvidence.keys()) {
-    if (!["role", "target_id", "cli_route_id"].includes(key)) {
+    if (
+      !NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS.includes(
+        key as (typeof NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS)[number],
+      )
+    ) {
       fail(`${context} dispatch_evidence has unknown field "${key}"`);
     }
   }
@@ -1677,6 +1878,7 @@ function parseTwoSpaceScalarBlock(
   block: string,
   header: string,
   context: string,
+  allowedFields: readonly string[],
 ): Map<string, string> {
   const fields = new Map<string, string>();
   let sawHeader = false;
@@ -1696,7 +1898,7 @@ function parseTwoSpaceScalarBlock(
   }
   if (!sawHeader) fail(`${context} is missing ${header}:`);
   for (const key of fields.keys()) {
-    if (!["batch_id", "implementation_commit", "attempt_lane", "timestamp"].includes(key)) {
+    if (!allowedFields.includes(key)) {
       fail(`${context} has unknown field "${key}"`);
     }
   }
@@ -1750,10 +1952,10 @@ function evidenceRequiredAttemptLane(
   context: string,
 ): AttemptLane {
   const lane = evidenceRequiredString(fields, "attempt_lane", context);
-  if (lane !== "builder_attempts" && lane !== "orchestrator_inline_attempts") {
+  if (!ATTEMPT_LANES.has(lane)) {
     fail(`${context} has invalid attempt_lane "${lane}"`);
   }
-  return lane;
+  return lane as AttemptLane;
 }
 
 function validateValidatorWaveEvidenceShape(
@@ -1782,7 +1984,7 @@ function validateValidatorWaveEvidenceShape(
   if (targetCommit !== implementationCommit) {
     fail(`${context} dispatch_evidence.target_id commit does not match implementation_commit`);
   }
-  if (evidence.outcome !== "clean" && evidence.outcome !== "findings-recorded") {
+  if (!VALIDATOR_WAVE_OUTCOMES.includes(evidence.outcome as (typeof VALIDATOR_WAVE_OUTCOMES)[number])) {
     fail(`${context} has invalid outcome "${evidence.outcome}"`);
   }
   if (evidence.outcome === "clean" && evidence.findings.length > 0) {
@@ -2041,15 +2243,6 @@ function readAcceptanceCriteriaDigestPayload(ledgerPath: string): string {
     fail(`ledger ${ledgerPath} '## Acceptance criteria' section has no checkbox items`);
   }
   return payload;
-}
-
-function quoteYamlScalar(value: string): string {
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    .replace(/"/g, '\\"')}"`;
 }
 
 function countAcsInLedger(ledgerPath: string): number {
@@ -2337,14 +2530,7 @@ function ledgerRowsToBatches(parsedRows: Record<string, unknown>[]): Batch[] {
     const context = `ledger batch ${index + 1}`;
     const unknownKeys = Object.keys(parsed).filter((key) => !LEDGER_BATCH_KEYS.has(key));
     if (unknownKeys.length > 0) fail(`${context} has unknown field "${unknownKeys[0]}"`);
-    for (const key of [
-      "status",
-      "builder_commits",
-      "builder_attempts",
-      "orchestrator_inline_attempts",
-      "iterations",
-      "final_verdict",
-    ]) {
+    for (const key of LEDGER_BATCH_LIFECYCLE_FIELDS) {
       if (!hasKey(parsed, key)) fail(`${context} is missing required ledger field "${key}"`);
     }
     const id = requiredString(parsed, "id", context);

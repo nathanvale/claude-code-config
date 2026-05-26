@@ -118,13 +118,19 @@ transient Validator focus, not orchestrator-authored findings.
 2. Pass each persona commit refs/ranges, touched file names, batch id, goal,
    files, `execution_mode`, acceptance tests, AC mapping, relevant ledger
    findings, and the real attempt evidence source. Builder-dispatched attempts
-   include Builder evidence from the envelope (`implementation_steps`,
-   `existing_seams_used`, `tests_run`, `assumptions`, `risks`, `deferred`, and
-   `suggested_validator_focus`). Orchestrator-inline attempts include the
-   implementation commit, touched files, inline-validity note, and any
-   user-confirmed exception note. Transient Orchestrator sanity concerns are
-   passed only as Validator focus; they are not persisted as ledger entries or
-   Orchestrator-authored findings.
+   include Builder evidence from the envelope.
+
+   Builder evidence scaffold:
+   `cli.ts scaffold validator-builder-evidence --json`.
+
+   Orchestrator-inline attempts include inline evidence from the matching
+   scaffold.
+
+   Inline evidence scaffold:
+   `cli.ts scaffold validator-inline-evidence --json`.
+
+   Transient Orchestrator sanity concerns are passed only as Validator focus;
+   they are not persisted as ledger entries or Orchestrator-authored findings.
 3. Ask each persona to return this envelope:
    `{"reviewer":"<persona>","findings":[],"residual_risks":[],"testing_gaps":[]}`.
    Normalize the response before writing the ledger:
@@ -132,8 +138,9 @@ transient Validator focus, not orchestrator-authored findings.
      `findings` array all mean no rows from that persona.
    - Extra envelope metadata is not copied into `## Findings data`. Only
      ledger-ready findings are copied.
-   - A non-empty finding is ledger-ready only when it has `id`, `batch_id`,
-     `signature`, `persona`, `severity`, `status`, `summary`, and `resolution`.
+   - A non-empty finding is ledger-ready only when it matches the runtime-owned
+     finding-row scaffold: `cli.ts scaffold ledger-finding-row --json`.
+
    - Missing `findings`, non-array `findings`, malformed JSON or YAML, or a
      partial finding is malformed output. Rerun that persona once with the
      envelope contract. If still malformed, treat as unavailable per the

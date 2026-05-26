@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { RUNBOOK_VERSION } from "./contract";
+import {
+  BUILDER_ATTEMPT_FIELDS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  RUNBOOK_VERSION,
+} from "./contract";
 import {
   DecomposeError,
   fail,
@@ -17,6 +21,7 @@ import {
   validateWorkflowLearnings,
   withFailMode,
 } from "./ledger";
+import { renderScaffold } from "./scaffolds";
 
 /**
  * Module-level tests for `lib/ledger.ts` public surface (U3 AC5).
@@ -252,6 +257,30 @@ describe("parse error branches (in-process via withFailMode)", () => {
     ).toThrow(/no fenced yaml blocks/);
   });
 
+  test("patch proposal mode rejects inline empty patch_batches list with contract error", () => {
+    for (const header of ["patch_batches: []", "patch_batches: [ ]"]) {
+      const planPath = writePlan(
+        [
+          "```yaml",
+          "final_finding:",
+          "  id: F-b1-001",
+          "  signature: empty-patch-batches",
+          "  persona: ce-correctness",
+          "  severity: P1",
+          "  summary: patch proposal had no batches",
+          header,
+          "```",
+          "",
+        ].join("\n"),
+      );
+      expect(() =>
+        withFailMode("throw", () =>
+          parse(planPath, { patchProposalMode: true }),
+        ),
+      ).toThrow(/patch_batches must contain at least one batch/);
+    }
+  });
+
   test("fails on a yaml block missing required execution_mode", () => {
     const planPath = writePlan(
       [
@@ -345,6 +374,81 @@ describe("parse error branches (in-process via withFailMode)", () => {
 });
 
 describe("validateLedgerBatches (in-process via withFailMode)", () => {
+  function writeLedgerWithBatches(batchLines: string[]): string {
+    return writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        `runbook_version: "${RUNBOOK_VERSION}"`,
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        ...batchLines,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  function pendingBatchLines(extraLines: string[] = []): string[] {
+    return [
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      "    depends_on: []",
+      "    execution_mode: tdd",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      ...extraLines,
+      "    status: pending",
+      "    builder_commits: []",
+      "    builder_attempts: []",
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 0",
+      "    final_verdict: null",
+      "```",
+    ];
+  }
+
+  function compactBuilderAttemptLines(): string[] {
+    return BUILDER_ATTEMPT_FIELDS.flatMap((field, index) => {
+      const prefix = index === 0 ? "      - " : "        ";
+      switch (field) {
+        case "attempt_type":
+          return [`${prefix}attempt_type: implementation`];
+        case "status":
+          return [`${prefix}status: fail-stop-other`];
+        case "commit_sha":
+          return [`${prefix}commit_sha: null`];
+        case "files_touched":
+          return [`${prefix}files_touched: []`];
+        case "route_hint":
+          return [`${prefix}route_hint: null`];
+        case "blockers":
+          return [`${prefix}blockers: []`];
+        case "probe_results":
+          return [`${prefix}probe_results: []`];
+        case "notes":
+          return [`${prefix}notes: "compact projection fixture"`];
+      }
+      const unreachable: never = field;
+      return unreachable;
+    });
+  }
+
   test("fails when the ledger has no fenced Batches block", () => {
     const ledgerPath = writeLedger(
       [
@@ -393,6 +497,167 @@ describe("validateLedgerBatches (in-process via withFailMode)", () => {
     expect(() =>
       withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
     ).toThrow(/has no confirmed batches/);
+  });
+
+  test("fails when a ledger batch has an unknown candidate field", () => {
+    const ledgerPath = writeLedgerWithBatches(
+      pendingBatchLines(['    owner: "nobody"']),
+    );
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/ledger batch 1 has unknown field "owner"/);
+  });
+
+  test("requires every emitted ledger lifecycle field", () => {
+    for (const field of LEDGER_BATCH_LIFECYCLE_FIELDS) {
+      const ledgerPath = writeLedgerWithBatches(
+        pendingBatchLines().filter(
+          (line) => !line.trimStart().startsWith(`${field}:`),
+        ),
+      );
+      expect(() =>
+        withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+      ).toThrow();
+    }
+  });
+
+  test("accepts a compact Builder attempt row shaped from BUILDER_ATTEMPT_FIELDS", () => {
+    const ledgerPath = writeLedgerWithBatches([
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      "    depends_on: []",
+      "    execution_mode: tdd",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      "    status: in-progress",
+      "    builder_commits: []",
+      "    builder_attempts:",
+      ...compactBuilderAttemptLines(),
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 1",
+      "    final_verdict: null",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("fails when a Builder attempt has an unknown field", () => {
+    const ledgerPath = writeLedgerWithBatches([
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      "    depends_on: []",
+      "    execution_mode: tdd",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      "    status: in-progress",
+      "    builder_commits: []",
+      "    builder_attempts:",
+      "      - attempt_type: implementation",
+      "        status: fail-stop-other",
+      "        commit_sha: null",
+      "        files_touched: []",
+      "        route_hint: null",
+      "        blockers: []",
+      "        probe_results: []",
+      '        notes: "fixture"',
+      '        owner: "nobody"',
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 1",
+      "    final_verdict: null",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/unknown builder_attempts field "owner"/);
+  });
+
+  test("fails when an orchestrator-inline attempt carries a Builder-only field", () => {
+    const ledgerPath = writeLedgerWithBatches([
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      "    depends_on: []",
+      "    execution_mode: change_first",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      '    rationale: "change_first-exception: fixture"',
+      "    status: in-progress",
+      "    builder_commits: []",
+      "    builder_attempts: []",
+      "    orchestrator_inline_attempts:",
+      '      - commit_sha: "8be31d4"',
+      "        files_touched:",
+      '          - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      '        notes: "fixture"',
+      '        route_hint: "builder-only"',
+      "    iterations: 1",
+      "    final_verdict: null",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/unknown orchestrator_inline_attempts field "route_hint"/);
+  });
+
+  test("fails when a Builder attempt uses an invalid attempt_type", () => {
+    const ledgerPath = writeLedgerWithBatches([
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+      "    depends_on: []",
+      "    execution_mode: tdd",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      "    status: in-progress",
+      "    builder_commits: []",
+      "    builder_attempts:",
+      "      - attempt_type: exploration",
+      "        status: fail-stop-other",
+      "        commit_sha: null",
+      "        files_touched: []",
+      "        route_hint: null",
+      "        blockers: []",
+      "        probe_results: []",
+      '        notes: "fixture"',
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 1",
+      "    final_verdict: null",
+      "```",
+    ]);
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/invalid builder_attempts attempt_type "exploration"/);
   });
 });
 
@@ -460,6 +725,53 @@ describe("validateFindingsData (in-process via withFailMode)", () => {
     expect(() =>
       withFailMode("throw", () => validateFindingsData(ledgerPath)),
     ).toThrow(/cannot mix findings: \[\] with finding rows/);
+  });
+
+  test("fails when a finding row has an unknown field", () => {
+    const ledgerPath = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        "```yaml",
+        "batches: []",
+        "```",
+        "",
+        "## Findings data",
+        "",
+        "```yaml",
+        "findings:",
+        "  - id: f1",
+        "    batch_id: b1",
+        "    signature: sig-1",
+        "    persona: ce-correctness",
+        "    severity: P0",
+        "    status: open",
+        '    summary: "bad"',
+        "    resolution: null",
+        '    owner: "nobody"',
+        "```",
+        "",
+        "## Findings",
+        "",
+        "| id | batch_id | signature | persona | severity | status | summary | resolution |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| f1 | b1 | sig-1 | ce-correctness | P0 | open | bad |  |",
+        "",
+      ].join("\n"),
+    );
+    expect(() =>
+      withFailMode("throw", () => validateFindingsData(ledgerPath)),
+    ).toThrow(/finding 1 has unknown field "owner"/);
   });
 });
 
@@ -1123,12 +1435,12 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
     expect(evidence).toBe(null);
   });
 
-  test("template-documented blank line between marker and yaml fence is honored", () => {
-    // The template at issue-N-ledger.template.md explicitly says blank
-    // lines are allowed between the marker comment and the opening
-    // yaml fence. This regression test pins the walker against the
-    // sweep-2 finding where the immediate-previous-line check would
-    // have silently dropped the legitimate row.
+  test("documented blank line between marker and yaml fence is honored", () => {
+    // Ledger Notes evidence permits blank lines between the marker
+    // comment and the opening yaml fence. This regression test pins
+    // the walker against the sweep-2 finding where the
+    // immediate-previous-line check would have silently dropped the
+    // legitimate row.
     const ledgerPath = ledgerWithRawNotes([
       "<!-- runbook-version-skew-continuation -->",
       "",
@@ -2002,6 +2314,272 @@ describe("validateLedgerBatches: Validator-wave evidence", () => {
     ).toThrow(
       /dispatch_evidence\.target_id commit does not match implementation_commit/,
     );
+  });
+});
+
+function scaffoldBodyLines(scaffoldId: Parameters<typeof renderScaffold>[0]): string[] {
+  return renderScaffold(scaffoldId).body.trimEnd().split("\n");
+}
+
+function notesEvidenceFromScaffold(
+  scaffoldId: Parameters<typeof renderScaffold>[0],
+  replacements: Record<string, string>,
+): string[] {
+  const scaffold = renderScaffold(scaffoldId);
+  if (!scaffold.marker) {
+    throw new Error(`${scaffoldId} is not marker-aware`);
+  }
+  let body = scaffold.body;
+  for (const [needle, value] of Object.entries(replacements)) {
+    body = body.replaceAll(needle, value);
+  }
+  return [
+    `<!-- ${scaffold.marker} -->`,
+    "```yaml",
+    ...body.trimEnd().split("\n"),
+    "```",
+    "",
+  ];
+}
+
+function findingDataFromRowScaffold(): string[] {
+  const body = renderScaffold("ledger-finding-row").body
+    .replace("<finding-id>", "f1")
+    .replace("<batch-id | stage-3 | final>", "final")
+    .replace("<stable-kebab-signature>", "scaffold-row")
+    .replace("<reviewer>", "ce-correctness")
+    .replace("<verbatim table summary>", "scaffold row validates");
+  return [
+    "findings:",
+    ...body.trimEnd().split("\n").map((line, index) =>
+      index === 0 ? `  - ${line}` : `    ${line}`,
+    ),
+  ];
+}
+
+describe("generated ledger scaffolds validate through ledger helpers", () => {
+  test("empty batches scaffold is accepted by the pre-batch snapshot path", () => {
+    const ledgerPath = writeLedgerWithFrontmatter(
+      [`runbook_version: "${RUNBOOK_VERSION}"`],
+      [
+        "## Batches",
+        "",
+        "```yaml",
+        ...scaffoldBodyLines("ledger-empty-batches"),
+        "```",
+        "",
+      ],
+    );
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.has_batches).toBe(false);
+  });
+
+  test("empty findings data scaffold validates with the empty findings table", () => {
+    const ledgerPath = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Findings data",
+        "",
+        "```yaml",
+        ...scaffoldBodyLines("ledger-empty-findings-data"),
+        "```",
+        "",
+        "## Findings",
+        "",
+        "| id | batch_id | signature | persona | severity | status | summary | resolution |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "",
+      ].join("\n"),
+    );
+    expect(() =>
+      withFailMode("throw", () => validateFindingsData(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("workflow-learnings empty scaffold validates through workflow helper", () => {
+    const ledgerPath = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Workflow Learnings",
+        "",
+        "```yaml",
+        ...scaffoldBodyLines("workflow-learnings-empty"),
+        "```",
+        "",
+      ].join("\n"),
+    );
+    expect(() =>
+      withFailMode("throw", () => validateWorkflowLearnings(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("lifecycle-default scaffold materializes into a valid pending batch row", () => {
+    const lifecycleLines = scaffoldBodyLines(
+      "ledger-batch-lifecycle-defaults",
+    ).map((line) => `    ${line}`);
+    const ledgerPath = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        `runbook_version: "${RUNBOOK_VERSION}"`,
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        "```yaml",
+        "batches:",
+        '  - id: "b1"',
+        '    name: "B1"',
+        '    goal: "AC 1"',
+        "    files:",
+        '      - "runbooks/issue-to-pr-v2/lib/ledger.ts"',
+        "    depends_on: []",
+        "    execution_mode: tdd",
+        "    acceptance_tests:",
+        '      - "AC 1 holds"',
+        "    ac_mapping:",
+        "      - 1",
+        "    rationale: null",
+        ...lifecycleLines,
+        "```",
+        "",
+      ].join("\n"),
+    );
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("finding-row scaffold materializes into valid findings data", () => {
+    const ledgerPath = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Batches",
+        "",
+        "```yaml",
+        "batches: []",
+        "```",
+        "",
+        "## Findings data",
+        "",
+        "```yaml",
+        ...findingDataFromRowScaffold(),
+        "```",
+        "",
+        "## Findings",
+        "",
+        "| id | batch_id | signature | persona | severity | status | summary | resolution |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| f1 | final | scaffold-row | ce-correctness | P2 | open | scaffold row validates |  |",
+        "",
+      ].join("\n"),
+    );
+    expect(() =>
+      withFailMode("throw", () => validateFindingsData(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("Notes evidence scaffolds materialize into a valid terminal batch", () => {
+    const sha = RUNBOOK_HEAL_CONTROL_PLANE_SHA;
+    const checkpoint = notesEvidenceFromScaffold(
+      "notes-implementation-attempt-checkpoint",
+      {
+        "<batch-id>": "b1",
+        "<sha>": sha,
+        "<builder_attempts | orchestrator_inline_attempts>": "builder_attempts",
+        "<ISO 8601>": "2026-05-26T09:05:00+10:00",
+      },
+    );
+    const wave = notesEvidenceFromScaffold("notes-validator-wave-completed", {
+      "<batch-id>": "b1",
+      "<sha>": sha,
+      "<builder_attempts | orchestrator_inline_attempts>": "builder_attempts",
+      "<clean | findings-recorded>": "clean",
+    });
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(sha, RUNBOOK_HEAL_CONTROL_PLANE_FILES),
+      ["## Notes", "", ...checkpoint, ...wave],
+    );
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  test("runbook-version skew continuation scaffold clears the skew gate", () => {
+    const continuation = notesEvidenceFromScaffold(
+      "notes-runbook-version-skew-continuation",
+      {
+        "<actor>": "Nathan @ 2026-05-26T09:00",
+        "<ISO 8601>": "2026-05-26T09:00:00+10:00",
+        "<route id at the time of decision>": "batch-loop",
+        "<reference file the operator consulted>":
+          "references/ledger-and-helper.md",
+        "<one-line reason>": "legacy ledger resumed; changes additive",
+      },
+    );
+    const ledgerPath = writeLedgerWithFrontmatter([], [
+      "## Notes",
+      "",
+      ...continuation,
+    ]);
+    const snapshot = withFailMode("throw", () => readLedgerSnapshot(ledgerPath));
+    expect(snapshot.runbook_version_skew).toBe("continuation-evidence-present");
+  });
+
+  test("Notes evidence body without its marker still fails through parser path", () => {
+    const sha = RUNBOOK_HEAL_CONTROL_PLANE_SHA;
+    const bodyOnlyCheckpoint = renderScaffold(
+      "notes-implementation-attempt-checkpoint",
+    ).body
+      .replaceAll("<batch-id>", "b1")
+      .replaceAll("<sha>", sha)
+      .replaceAll(
+        "<builder_attempts | orchestrator_inline_attempts>",
+        "builder_attempts",
+      )
+      .replaceAll("<ISO 8601>", "2026-05-26T09:05:00+10:00");
+    const wave = notesEvidenceFromScaffold("notes-validator-wave-completed", {
+      "<batch-id>": "b1",
+      "<sha>": sha,
+      "<builder_attempts | orchestrator_inline_attempts>": "builder_attempts",
+      "<clean | findings-recorded>": "clean",
+    });
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      terminalBatchRecording(sha, RUNBOOK_HEAL_CONTROL_PLANE_FILES),
+      [
+        "## Notes",
+        "",
+        "```yaml",
+        ...bodyOnlyCheckpoint.trimEnd().split("\n"),
+        "```",
+        "",
+        ...wave,
+      ],
+    );
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/missing implementation attempt checkpoint evidence/);
   });
 });
 

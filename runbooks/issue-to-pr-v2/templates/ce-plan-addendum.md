@@ -71,24 +71,12 @@ rationales do not authorize `change_first` on non-doc paths; non-doc
 `change_first` still needs one of the explicit prefixes above, and high-risk
 paths need the high-risk prefix. Stage 3 will surface these for user confirm.
 
-Emit each unit's machine-readable shape as a fenced YAML code block
-immediately after that unit's prose, using this exact schema:
+Before returning output, resolve the runtime-owned candidate batch scaffold:
+`cli.ts scaffold ce-plan-candidate-batch --json`.
 
-```yaml
-id: <stable-slug>
-name: <Title from the Implementation Unit heading>
-goal: <one-sentence outcome, ideally the AC verbatim>
-files:
-  - <repo-relative path>
-  - <repo-relative path>
-depends_on: []  # or list of ids; emit [] explicitly when none
-execution_mode: tdd  # tdd | proof_first | change_first
-acceptance_tests:
-  - "AC <i> holds: <verifiable behaviour>"
-ac_mapping:
-  - <i>   # AC index (1-based) this batch satisfies; list multiple if merged
-rationale: null  # string only for split/merge, placeholders, or change_first exceptions
-```
+Emit each unit's machine-readable shape as a fenced YAML code block
+immediately after that unit's prose, using that scaffold's body as the exact
+field shape.
 
 The `ac_mapping` field is consumed by `decompose.ts --validate-ac-coverage`.
 Every AC index must appear in at least one batch's `ac_mapping`. If an AC

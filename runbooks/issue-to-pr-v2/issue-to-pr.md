@@ -8,8 +8,8 @@ routing decision is made off the CLI's emitted facts, never from
 conversation memory.
 
 **Ledger:** `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`
-in the target repo. Template at
-`~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.
+in the target repo. First run renders the starting document through
+`~/.claude/runbooks/issue-to-pr-v2/cli.ts ledger-init --json`.
 Frontmatter declares `runbook_version: "3"`.
 
 The public host-neutral control plane lives at
@@ -53,30 +53,12 @@ The v2 tree owns the runnable contract.
 
 ## Reference loading
 
-Load the matching reference when the durable route id (or stage
-context) names it. The `required_reference_ids` field on every
-`cli.ts state --json` envelope mirrors this table verbatim — drift is
-a finding against `lib/route.ts`.
+Load every file named by `data.required_reference_ids`. Full
+route/reference map: `cli.ts contract route_required_references --json`;
+runtime source: `lib/route.ts`.
 
-| Need | Read when | Reference |
-| --- | --- | --- |
-| Stage 1 details | `route_id == "pick-issue"` or `route_id == "no-ledger"` | [`references/stage-1-pick-issue.md`](references/stage-1-pick-issue.md) |
-| Stage 2 details | `route_id == "plan"` | [`references/stage-2-plan.md`](references/stage-2-plan.md) |
-| Stage 3 details | `route_id == "decompose"` or any `blocked-batch-contract-*` / `blocked-stage-3` / `blocked-digests-stale` | [`references/stage-3-decompose.md`](references/stage-3-decompose.md) |
-| Stage 4 outer + inner loop | `route_id == "batch-loop"` | [`references/stage-4-batch-loop.md`](references/stage-4-batch-loop.md) |
-| Stage 5 read-only gate | `route_id == "final-review"` | [`references/stage-5-final-review.md`](references/stage-5-final-review.md) |
-| Stage 6 ship gate | `route_id == "ship"` | [`references/stage-6-ship.md`](references/stage-6-ship.md) |
-| Terminal — no references required | `route_id == "shipped"` | (none — echo the final ledger and stop) |
-| Builder dispatch envelope | About to dispatch a Builder packet | [`references/builder-dispatch.md`](references/builder-dispatch.md) |
-| Validator persona + findings normalization | About to dispatch Validators or write `## Findings data` | [`references/findings-and-validators.md`](references/findings-and-validators.md) |
-| Host-readiness gate | Before every Stage 4 implementation attempt | [`references/host-adapters.md`](references/host-adapters.md) |
-| Ledger schema + helper context + `cli.ts state` shape | Any turn that writes ledger YAML; resumed runs reading durable state | [`references/ledger-and-helper.md`](references/ledger-and-helper.md) |
-| ce-plan addendum body | Stage 2 only | [`templates/ce-plan-addendum.md`](templates/ce-plan-addendum.md) |
-| Builder Work Packet shape | Stage 4 Builder dispatch | [`templates/builder-work-packet.md`](templates/builder-work-packet.md) |
-| Validator envelope shape | Stage 4 Validator dispatch | [`templates/validator-envelope.md`](templates/validator-envelope.md) |
-| Proposer envelope shape | Stage 5 finding handoff | [`templates/proposer-envelope.md`](templates/proposer-envelope.md) |
-| Patch-proposal scratch schema | Stage 5 → Stage 4 patch-batch route | [`templates/patch-proposal.md`](templates/patch-proposal.md) |
-| Regression invariants | Reviewing or auditing the hot router | [`references/regression-matrix.md`](references/regression-matrix.md) |
+Action-specific templates are outside `required_reference_ids`; load only
+while preparing that packet or handoff.
 
 ## Start every turn
 
@@ -91,30 +73,33 @@ time.
    `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md` path.
 3. **Run `cli.ts state <ledger-path> --json`.** This is the first
    non-read operation. Capture the `data` envelope verbatim.
-4. **Honour pre-stage gates** before reading the route id (see
-   [Pre-stage gates](#pre-stage-gates) below). If a gate fires, stop
-   and ask the operator — do not proceed.
+4. **Honour install-presence gate** before loading references (see
+   [Install-presence gate](#install-presence-gate) below). If it fires,
+   stop and ask the operator — do not proceed.
 5. **Route from `data.route_id`.** Match it against the [Router state
    enumeration](#router-state-enumeration). If the id does not appear
    there, it does not exist — fail-stop with the literal id and the
    raw envelope so the gap can be filed against `lib/route.ts`.
 6. **Load the references listed in `data.required_reference_ids`.**
-   The table above mirrors this list per route. Do not load
-   references for routes you are not entering.
-7. **Execute one visible action** per the matched stage shell below.
-8. **Commit the lifecycle checkpoint** the stage requires (Stage 4
+   Inspect `cli.ts contract route_required_references --json` only
+   when the full mapping is needed.
+   When `data.route_id` begins with `blocked-`, also load
+   [`references/first-run-gotchas.md`](references/first-run-gotchas.md)
+   before any blocked-route stop.
+7. **Honour remaining pre-stage gates** before entering stage work.
+8. **Execute one visible action** per the matched stage shell below.
+9. **Commit the lifecycle checkpoint** the stage requires (Stage 4
    inner-loop iterations and lifecycle checkpoints are distinct —
    see Stage 4 shell).
-9. **Echo the ledger frontmatter + `## Batches` + `## Findings data`
+10. **Echo the ledger frontmatter + `## Batches` + `## Findings data`
    + `## Findings` table** inline at the end of the turn so the
    `/goal` evaluator can verify convergence from the transcript.
 
 ## Pre-stage gates
 
-Both gates re-fire on every turn. The hot router routes off
-`cli.ts state --json` even when the route id is a happy-path stage,
-because `data.blocking_gates` may carry a stop-required entry that the
-classifier elevates to a blocked route id.
+Both gates re-fire on every turn. Install presence fires before reference
+loading. Version skew fires after blocked-route overlay loading, before
+Builder, Proposer, Validator, or ship work.
 
 ### Version-skew gate (R11)
 
@@ -125,8 +110,9 @@ If `data.runbook_version_skew` is `missing` or `mismatched` (and not
 - `data.blocking_gates` contains a
   `{kind: "field", field: "frontmatter.runbook_version", value: "missing" | "mismatched"}`
   entry.
-- **Stop.** Tell the operator the ledger's `runbook_version` does not
-  match the v2 `RUNBOOK_VERSION` constant and point them at
+- **Stop after loading `first-run-gotchas.md`.** Tell the operator the
+  ledger's `runbook_version` does not match the v2 `RUNBOOK_VERSION`
+  constant and point them at
   [`references/ledger-and-helper.md`](references/ledger-and-helper.md#continuation-evidence-shape-u6)
   for the continuation evidence shape. Do not dispatch any Builder,
   Proposer, Validator, or ship work. Do not auto-rewrite the
@@ -245,16 +231,13 @@ classification to `blocked-frontmatter-blocked-reason`.
 
 ## Stage shells
 
-Each shell is short by design: inputs, required reference, CLI facts
-to consume, action summary, exit condition, stop conditions. The
-detailed mechanics live in the referenced stage file — read the
-reference, then walk the steps.
+Each shell is short by design: inputs, CLI facts to consume, action
+summary, exit condition, stop conditions. Detailed mechanics live in
+the references loaded from `data.required_reference_ids`.
 
 ### Stage 1 shell: pick-issue
 
 - **Inputs:** `{issue-number}`, `{target-repo}` (optional).
-- **Required reference:**
-  [`references/stage-1-pick-issue.md`](references/stage-1-pick-issue.md).
 - **CLI facts consumed:** `cli.ts state --json` post-create returns
   `confirmation_state.acceptance_criteria: "confirmed"`,
   `confirmation_state.batch_contract: "pending"`,
@@ -272,9 +255,6 @@ reference, then walk the steps.
 ### Stage 2 shell: plan
 
 - **Inputs:** Confirmed AC list in ledger.
-- **Required reference:**
-  [`references/stage-2-plan.md`](references/stage-2-plan.md);
-  [`templates/ce-plan-addendum.md`](templates/ce-plan-addendum.md).
 - **CLI facts consumed:** `cli.ts state --json` should already report
   `route_id: "plan"`. After Stage 2 commit, it advances to
   `route_id: "decompose"`.
@@ -291,8 +271,6 @@ reference, then walk the steps.
 ### Stage 3 shell: decompose
 
 - **Inputs:** Plan path + confirmed AC list.
-- **Required reference:**
-  [`references/stage-3-decompose.md`](references/stage-3-decompose.md).
 - **CLI facts consumed:** Stale or blocked routes here surface as
   `blocked-batch-contract-stale`, `blocked-digests-stale`, or
   `blocked-stage-3` from `cli.ts state --json`. Post-confirmation,
@@ -313,11 +291,6 @@ reference, then walk the steps.
 ### Stage 4 shell: batch-loop
 
 - **Inputs:** Confirmed batch DAG; at least one non-terminal batch.
-- **Required references:**
-  [`references/stage-4-batch-loop.md`](references/stage-4-batch-loop.md),
-  [`references/builder-dispatch.md`](references/builder-dispatch.md),
-  [`references/host-adapters.md`](references/host-adapters.md),
-  [`references/findings-and-validators.md`](references/findings-and-validators.md).
 - **CLI facts consumed:** `cli.ts state --json` carries
   `route_id: "batch-loop"`. Builder, Validator, and patch-proposal
   packets are rendered via
@@ -341,10 +314,6 @@ reference, then walk the steps.
 
 - **Inputs:** Cumulative diff after every batch is terminal; tree
   clean.
-- **Required references:**
-  [`references/stage-5-final-review.md`](references/stage-5-final-review.md),
-  [`references/findings-and-validators.md`](references/findings-and-validators.md),
-  [`references/stage-4-batch-loop.md`](references/stage-4-batch-loop.md).
 - **CLI facts consumed:** `cli.ts state --json` reports
   `all_batches_terminal: true`, `final_reviewed_at: null`,
   `route_id: "final-review"`. Proposer / patch-proposal dispatch
@@ -370,9 +339,6 @@ reference, then walk the steps.
 ### Stage 6 shell: ship
 
 - **Inputs:** `final_reviewed_at` set; tree clean.
-- **Required references:**
-  [`references/stage-6-ship.md`](references/stage-6-ship.md),
-  [`references/findings-and-validators.md`](references/findings-and-validators.md).
 - **CLI facts consumed:** `cli.ts state --json` reports
   `route_id: "ship"` and empty `blocking_gates`.
 - **Action summary:** Run target-repo local checks (MCP runners

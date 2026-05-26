@@ -36,6 +36,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
 
+import {
+  BUILDER_ATTEMPT_FIELDS,
+  BUILDER_ATTEMPT_TYPE_VALUES,
+  CANDIDATE_BATCH_FIELDS,
+  FINDING_FIELDS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  LEDGER_SCHEMA_POINTER_SLICES,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+} from "./lib/contract";
+import {
+  requiredReferenceIdsFor,
+  ROUTE_IDS,
+  type RouteId,
+} from "./lib/route";
+import { renderScaffold } from "./lib/scaffolds";
+
 const scriptPath = join(import.meta.dir, "cli.ts");
 const bunExecutable = execPath;
 const tempDirs: string[] = [];
@@ -158,6 +174,11 @@ function helpPacketRoles(): readonly string[] {
   return HELP_DATA.packet_roles as readonly string[];
 }
 
+function helpScaffoldIds(): readonly string[] {
+  assertHelpDataLoaded();
+  return HELP_DATA.scaffold_ids as readonly string[];
+}
+
 type PacketRoleFlagSpec = {
   required: readonly string[];
   optional?: readonly string[];
@@ -189,6 +210,37 @@ type ErrorCodeEntry = {
 function helpErrorCodes(): readonly ErrorCodeEntry[] {
   assertHelpDataLoaded();
   return HELP_DATA.error_codes as readonly ErrorCodeEntry[];
+}
+
+type RouteRequiredReferenceRecord = {
+  route_id: RouteId;
+  required_reference_ids: string[];
+};
+
+async function routeRequiredReferencesFromContract(): Promise<
+  RouteRequiredReferenceRecord[]
+> {
+  const result = await runCli([
+    "contract",
+    "route_required_references",
+    "--json",
+  ]);
+  assertSuccessEnvelopeShape(result.envelope);
+  const data = result.envelope.data as {
+    values: RouteRequiredReferenceRecord[];
+  };
+  return data.values;
+}
+
+function requiredReferencesForRouteFromContract(
+  records: readonly RouteRequiredReferenceRecord[],
+  routeId: string,
+): string[] {
+  const record = records.find((entry) => entry.route_id === routeId);
+  if (!record) {
+    throw new Error(`missing route_required_references entry for ${routeId}`);
+  }
+  return record.required_reference_ids;
 }
 
 function findErrorCodeEntry(code: string): ErrorCodeEntry {
@@ -509,6 +561,159 @@ describe("Block 1: Envelope-shape invariants (cross-command)", () => {
     assertSuccessEnvelopeShape(result.envelope);
   });
 
+  test("ledger-init --json returns a success envelope with all required top-level fields", async () => {
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke ledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "pasted",
+      "--ac",
+      "Smoke AC",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertSuccessEnvelopeShape(result.envelope);
+    expect((result.envelope.data as { ledger_markdown: string }).ledger_markdown).toContain(
+      "## Acceptance criteria",
+    );
+  });
+
+  test("ledger-init non-ISO --started-at routes to invalid-started-at at process boundary", async () => {
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke ledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "not-an-iso-timestamp",
+      "--ac-source",
+      "pasted",
+      "--ac",
+      "Smoke AC",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-started-at");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init embedded newline in --issue-title routes to invalid-control-characters at process boundary", async () => {
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke\nledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "pasted",
+      "--ac",
+      "Smoke AC",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-control-characters");
+    expect(result.exitCode).toBe(64);
+  });
+
+  // Each ledger-init public error code below is driven through the process
+  // boundary so the documented catalog stays reachable. Codes left uncovered
+  // here (`ledger-init-render-failed`) are reserved fallbacks that the CLI
+  // boundary cannot provoke without modifying lib source — they are pinned
+  // separately in the renderer unit tests.
+  function ledgerInitArgs(overrides: Partial<Record<string, string>> = {}): string[] {
+    const defaults: Record<string, string> = {
+      "--issue-number": "88",
+      "--issue-title": "Smoke ledger",
+      "--issue-url": "https://github.com/acme/widgets/issues/88",
+      "--target-repo": "acme/widgets",
+      "--started-at": "2026-05-26T10:30:00+10:00",
+      "--ac-source": "pasted",
+    };
+    const merged = { ...defaults, ...overrides };
+    const args = ["ledger-init"];
+    for (const [flag, value] of Object.entries(merged)) {
+      if (value === "") continue;
+      args.push(flag, value as string);
+    }
+    args.push("--ac", overrides["--ac"] ?? "Smoke AC", "--json");
+    return args;
+  }
+
+  test("ledger-init --issue-number 0 routes to invalid-issue-number at process boundary", async () => {
+    const result = await runCli(ledgerInitArgs({ "--issue-number": "0" }));
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-issue-number");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init whitespace --issue-title routes to missing-required-input at process boundary", async () => {
+    const result = await runCli(
+      ledgerInitArgs({ "--issue-title": "   " }),
+    );
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "missing-required-input");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init unknown --ac-source routes to invalid-ac-source at process boundary", async () => {
+    const result = await runCli(
+      ledgerInitArgs({ "--ac-source": "definitely-not-a-source" }),
+    );
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-ac-source");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init no --ac flag routes to missing-acceptance-criteria at process boundary", async () => {
+    // ledgerInitArgs always appends --ac; build a no-AC argv inline.
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke ledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "pasted",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "missing-acceptance-criteria");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init whitespace --ac routes to empty-acceptance-criterion at process boundary", async () => {
+    const result = await runCli(ledgerInitArgs({ "--ac": "   " }));
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "empty-acceptance-criterion");
+    expect(result.exitCode).toBe(64);
+  });
+
   test("envelope schema_version is the literal '1' string for both success and error", async () => {
     const success = await runCli(["contract", "route_ids", "--json"]);
     expect(success.envelope.schema_version).toBe("1");
@@ -534,7 +739,11 @@ describe("Block 2: Every command × --json requirement", () => {
           ? ["contract", "route_ids"]
           : cmd === "packet"
             ? ["packet", "builder"]
-            : [cmd, nonExistentLedgerPath()];
+            : cmd === "scaffold"
+              ? ["scaffold", "builder-return-envelope"]
+              : cmd === "ledger-init"
+                ? ["ledger-init"]
+                : [cmd, nonExistentLedgerPath()];
       const result = await runCli(args);
       if (!result.envelopeParsed) {
         throw new Error(
@@ -639,6 +848,31 @@ describe("Block 3: state command × ledger states", () => {
     assertNullableString(data.final_reviewed_at, "final_reviewed_at");
     assertNullableString(data.pr_url, "pr_url");
   });
+
+  test("state required_reference_ids match route_required_references for representative routes", async () => {
+    const contractRecords = await routeRequiredReferencesFromContract();
+    const ledgers = [
+      nonExistentLedgerPath(),
+      ledgerPendingAc(),
+      ledgerConfirmedBatchLoop(),
+      ledgerBlockedFrontmatter(),
+      ledgerVersionSkewMismatched(),
+    ];
+    for (const ledger of ledgers) {
+      const result = await runCli(["state", ledger, "--json"]);
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as {
+        route_id: string;
+        required_reference_ids: string[];
+      };
+      expect(data.required_reference_ids).toEqual(
+        requiredReferencesForRouteFromContract(contractRecords, data.route_id),
+      );
+      expect(data.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
+  });
 });
 
 // =====================================================================
@@ -701,6 +935,63 @@ describe("Block 5: contract command × every documented slice", () => {
     }
   });
 
+  test("route_required_references returns catalog-ordered route records", async () => {
+    const result = await runCli([
+      "contract",
+      "route_required_references",
+      "--json",
+    ]);
+    assertSuccessEnvelopeShape(result.envelope);
+    const data = result.envelope.data as {
+      slice: string;
+      values: RouteRequiredReferenceRecord[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("route_required_references");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.route_id)).toEqual([...ROUTE_IDS]);
+    for (const entry of data.values) {
+      expect(entry.required_reference_ids).toEqual(
+        [...requiredReferenceIdsFor(entry.route_id)],
+      );
+      expect(entry.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
+    expect(
+      data.values.find((entry) => entry.route_id === "shipped")
+        ?.required_reference_ids,
+    ).toEqual([]);
+  });
+
+  test("ledger schema contract slices return catalog-ordered runtime facts", async () => {
+    const cases = [
+      ["candidate_batch_fields", CANDIDATE_BATCH_FIELDS],
+      ["ledger_batch_lifecycle_fields", LEDGER_BATCH_LIFECYCLE_FIELDS],
+      ["builder_attempt_fields", BUILDER_ATTEMPT_FIELDS],
+      [
+        "orchestrator_inline_attempt_fields",
+        ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+      ],
+      ["finding_fields", FINDING_FIELDS],
+      ["builder_attempt_types", BUILDER_ATTEMPT_TYPE_VALUES],
+      ["ledger_schema_pointer_slices", LEDGER_SCHEMA_POINTER_SLICES],
+    ] as const;
+
+    for (const [slice, expected] of cases) {
+      const result = await runCli(["contract", slice, "--json"]);
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as {
+        slice: string;
+        values: readonly string[];
+        ordering: string;
+      };
+      expect(data.slice).toBe(slice);
+      expect(data.ordering).toBe("catalog");
+      expect(data.values).toEqual([...expected]);
+    }
+  });
+
   test("unknown slice returns unknown-contract-slice error with exit_code 64", async () => {
     const result = await runCli([
       "contract",
@@ -709,6 +1000,86 @@ describe("Block 5: contract command × every documented slice", () => {
     ]);
     expect(result.envelopeParsed).toBe(true);
     assertErrorEnvelopeShape(result.envelope, "unknown-contract-slice");
+  });
+});
+
+// =====================================================================
+// Block 5b - `scaffold` command × every documented scaffold
+// =====================================================================
+
+describe("Block 5b: scaffold command × every documented scaffold", () => {
+  test("scaffold_ids is non-empty (sanity)", () => {
+    expect(helpScaffoldIds().length).toBeGreaterThan(0);
+  });
+
+  test("every documented scaffold id returns success with metadata and body", async () => {
+    for (const scaffoldId of helpScaffoldIds()) {
+      const result = await runCli(["scaffold", scaffoldId, "--json"]);
+      if (!result.envelopeParsed) {
+        throw new Error(
+          `[scaffold=${scaffoldId}] envelope did not parse. stdout=${result.stdout.slice(0, 200)} stderr=${result.stderr.slice(0, 200)}`,
+        );
+      }
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as Record<string, unknown>;
+      expect(data.scaffold_id).toBe(scaffoldId);
+      expect(data.output_kind).toBe("yaml");
+      expect(data.ordering).toBe("catalog");
+      expect(typeof data.source).toBe("string");
+      const rendered = renderScaffold(
+        scaffoldId as Parameters<typeof renderScaffold>[0],
+      );
+      expect(data.body).toBe(rendered.body);
+      expect(data.marker).toBe(rendered.marker);
+    }
+  });
+
+  test("unknown scaffold id returns unknown-scaffold-id error with exit_code 64", async () => {
+    const result = await runCli([
+      "scaffold",
+      "definitely-not-a-real-scaffold",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "unknown-scaffold-id");
+  });
+
+  test("missing scaffold id returns missing-required-arg error with exit_code 64", async () => {
+    const result = await runCli(["scaffold", "--json"]);
+    expect(result.envelopeParsed).toBe(true);
+    expect(result.exitCode).toBe(64);
+    assertErrorEnvelopeShape(result.envelope, "missing-required-arg");
+    expect((result.envelope.error as { message: string }).message).toContain(
+      "scaffold id",
+    );
+  });
+
+  test("contract scaffold_catalog --json carries every scaffold id with derived source", async () => {
+    const result = await runCli(["contract", "scaffold_catalog", "--json"]);
+    assertSuccessEnvelopeShape(result.envelope);
+    const data = result.envelope.data as {
+      slice: string;
+      ordering: string;
+      values: readonly {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+      }[];
+    };
+    expect(data.slice).toBe("scaffold_catalog");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.scaffold_id)).toEqual([
+      ...helpScaffoldIds(),
+    ]);
+    for (const entry of data.values) {
+      expect(entry.output_kind).toBe("yaml");
+      expect(entry.ordering).toBe("catalog");
+      expect(entry.source).toBe(
+        `runbooks/issue-to-pr-v2/lib/scaffolds.ts#${entry.scaffold_id}`,
+      );
+    }
   });
 });
 
@@ -783,6 +1154,34 @@ describe("Block 6: diagnose command × ledger states", () => {
         (g) => g.kind === "field" && g.field === "frontmatter.runbook_version",
       ),
     ).toBe(true);
+  });
+
+  test("diagnose expected_reference_ids match route_required_references for representative routes", async () => {
+    const contractRecords = await routeRequiredReferencesFromContract();
+    const ledgers = [
+      nonExistentLedgerPath(),
+      ledgerPendingAc(),
+      ledgerConfirmedBatchLoop(),
+      ledgerBlockedFrontmatter(),
+      ledgerVersionSkewMismatched(),
+    ];
+    for (const ledger of ledgers) {
+      const result = await runCli(["diagnose", ledger, "--json"]);
+      assertSuccessEnvelopeShape(result.envelope);
+      const data = result.envelope.data as {
+        inferred_route_id: string;
+        expected_reference_ids: string[];
+      };
+      expect(data.expected_reference_ids).toEqual(
+        requiredReferencesForRouteFromContract(
+          contractRecords,
+          data.inferred_route_id,
+        ),
+      );
+      expect(data.expected_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
   });
 });
 
@@ -884,16 +1283,25 @@ describe("Block 8: Every documented error_code", () => {
     const codes = helpErrorCodes().map((e) => e.code).sort();
     expect(codes).toEqual(
       [
+        "empty-acceptance-criterion",
+        "invalid-ac-source",
+        "invalid-control-characters",
+        "invalid-issue-number",
+        "invalid-started-at",
         "ledger-validation-failed",
+        "ledger-init-render-failed",
+        "missing-acceptance-criteria",
         "missing-command",
         "missing-json-flag",
         "missing-packet-flag",
         "missing-required-arg",
+        "missing-required-input",
         "packet-render-failed",
         "unexpected-error",
         "unknown-command",
         "unknown-contract-slice",
         "unknown-packet-role",
+        "unknown-scaffold-id",
       ].sort(),
     );
   });
@@ -939,6 +1347,16 @@ describe("Block 8: Every documented error_code", () => {
     ]);
     expect(result.envelopeParsed).toBe(true);
     assertErrorEnvelopeShape(result.envelope, "unknown-packet-role");
+  });
+
+  test("unknown-scaffold-id: scaffold unknown-scaffold --json (smoke-link to Block 5b)", async () => {
+    const result = await runCli([
+      "scaffold",
+      "totally-unknown-scaffold",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "unknown-scaffold-id");
   });
 
   test("missing-packet-flag: packet builder --ledger ... --json (missing --batch and --attempt-type)", async () => {

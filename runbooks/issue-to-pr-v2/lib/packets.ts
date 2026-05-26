@@ -40,15 +40,32 @@ import {
   readLedgerSnapshot,
   withFailMode,
 } from "./ledger";
+import {
+  quoteYamlScalar as yamlString,
+  quoteYamlScalarList as yamlList,
+} from "./yaml-scalar";
 
 // ----- shared types -----------------------------------------------------
 
-export type PacketRole =
-  | "builder"
-  | "proposer"
-  | "validator"
-  | "patch-proposal"
-  | "ce-plan";
+/**
+ * Canonical packet-role catalog. Every other surface — the help envelope,
+ * the `contract packet_roles --json` slice, the dispatcher's allow-list,
+ * and the `PacketRole` discriminated union — derives from this tuple. Add
+ * a role here and TypeScript will surface every site that needs an update.
+ */
+export const PACKET_ROLES = [
+  "builder",
+  "proposer",
+  "validator",
+  "patch-proposal",
+  "ce-plan",
+] as const;
+
+export type PacketRole = (typeof PACKET_ROLES)[number];
+
+export function isPacketRole(value: string): value is PacketRole {
+  return (PACKET_ROLES as readonly string[]).includes(value);
+}
 
 /**
  * Dispatch evidence returned with every packet. **Defined here** so the
@@ -1446,6 +1463,8 @@ function renderBuilderMarkdown(data: BuilderPacketData): string {
   return [
     "# Builder Work Packet (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromBuilder(data),
     "```",
@@ -1539,6 +1558,8 @@ function renderProposerMarkdown(data: ProposerPacketData): string {
   return [
     "# Proposer envelope (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromProposer(data),
     "```",
@@ -1593,9 +1614,13 @@ function renderValidatorMarkdown(data: ValidatorPacketData): string {
   return [
     "# Validator envelope (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromValidator(data),
     "```",
+    "",
+    "Finding row scaffold: `cli.ts scaffold ledger-finding-row --json`.",
     "",
   ].join("\n");
 }
@@ -1679,9 +1704,13 @@ function renderPatchProposalMarkdown(data: PatchProposalPacketData): string {
   return [
     "# Patch proposal scratch file (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromPatchProposal(data),
     "```",
+    "",
+    "Patch batch scaffold: `cli.ts scaffold patch-proposal-candidate-batch --json`.",
     "",
   ].join("\n");
 }
@@ -1755,20 +1784,6 @@ function appendBatchYaml(lines: string[], b: Batch, indent: string): void {
   );
 }
 
-function yamlString(value: string): string {
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    .replace(/"/g, '\\"')}"`;
-}
-
-function yamlList(values: string[]): string {
-  if (values.length === 0) return "[]";
-  return `[${values.map((v) => yamlString(v)).join(", ")}]`;
-}
-
 // ----- helpers: prose framing pointers (mirror template prose) --------
 
 const BUILDER_LOCAL_LAW_TEXT = [
@@ -1812,14 +1827,17 @@ const BUILDER_PROBE_TEXT = [
 ].join("\n");
 
 const BUILDER_OUTPUT_CONTRACT_TEXT =
-  "Return exactly one envelope per templates/builder-return-envelope.md. The canonical schema lives in references/builder-dispatch.md#return-envelope.";
+  "Return exactly one envelope per templates/builder-return-envelope.md. Resolve `cli.ts scaffold builder-return-envelope --json` before returning output. The canonical schema lives in references/builder-dispatch.md#return-envelope.";
 
 const PROPOSER_LOCAL_LAW_POINTER =
   "See references/builder-dispatch.md#authority-and-local-law.";
 const PROPOSER_HELPER_POINTER =
   "See references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree.";
 const PROPOSER_SCRATCH_POINTER =
-  "See templates/patch-proposal.md.";
+  "See templates/patch-proposal.md and resolve `cli.ts scaffold patch-proposal-candidate-batch --json` before returning candidate patch-batch output.";
+
+const RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE =
+  "Runtime scaffold lookup: resolve every `cli.ts scaffold <id> --json` command named in this packet before returning output that uses that scaffold. Use the CLI response body as the field shape.";
 
 // ----- ce-plan template body extractor --------------------------------
 

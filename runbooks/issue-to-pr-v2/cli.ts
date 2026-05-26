@@ -3,7 +3,7 @@
 /**
  * Issue-to-PR v2 CLI front door (U4).
  *
- * Deterministic CLI that emits **facts**, not orchestration. Five
+ * Deterministic CLI that emits **facts**, not orchestration. Seven
  * JSON-only commands:
  *
  *   cli.ts state <ledger> --json
@@ -11,6 +11,8 @@
  *   cli.ts contract <slice> --json
  *   cli.ts diagnose <ledger> --json
  *   cli.ts packet <role> --json [role flags]
+ *   cli.ts scaffold <id> --json
+ *   cli.ts ledger-init --issue-number <N> --ac <text> --json
  *
  * Every command writes exactly one `CliSuccessEnvelope<TData>` or
  * `CliErrorEnvelope` to stdout (newline-terminated). Diagnostics — when
@@ -25,12 +27,19 @@ import { argv, exit, stderr, stdout } from "node:process";
 
 import {
   BATCH_STATUSES,
+  BUILDER_ATTEMPT_FIELDS,
   BUILDER_ATTEMPT_STATUSES,
+  BUILDER_ATTEMPT_TYPE_VALUES,
+  CANDIDATE_BATCH_FIELDS,
   CONFIRMATION_STATES,
   EXECUTION_MODES,
   FINAL_VERDICTS,
+  FINDING_FIELDS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  LEDGER_SCHEMA_POINTER_SLICES,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
   RUNBOOK_VERSION_SKEW_STATES,
   TERMINAL_BATCH_STATUSES,
 } from "./lib/contract";
@@ -60,13 +69,29 @@ import {
   withFailMode,
 } from "./lib/ledger";
 import {
+  LEDGER_INIT_ERROR_CODES,
+  type LedgerInitErrorCode,
+  LedgerInitRenderError,
+  isAcSource,
+  renderLedgerInit,
+} from "./lib/ledger-init";
+import {
+  PACKET_ROLES,
+  type PacketRole,
   PacketRenderError,
+  isPacketRole,
   renderBuilderPacket,
   renderCePlanPacket,
   renderPatchProposalPacket,
   renderProposerPacket,
   renderValidatorPacket,
 } from "./lib/packets";
+import {
+  SCAFFOLD_IDS,
+  getScaffoldCatalog,
+  isScaffoldId,
+  renderScaffold,
+} from "./lib/scaffolds";
 import {
   BLOCKING_GATE_FIELD_NAMES,
   blockingGatesFor,
@@ -76,17 +101,26 @@ import {
   installedArtifactPresence,
   ROUTE_IDS,
   requiredReferenceIdsFor,
+  routeRequiredReferenceEntries,
 } from "./lib/route";
 
 const CONTRACT_SLICES = [
   "batch_statuses",
+  "candidate_batch_fields",
+  "ledger_batch_lifecycle_fields",
+  "ledger_schema_pointer_slices",
+  "builder_attempt_fields",
   "builder_attempt_statuses",
+  "builder_attempt_types",
   "confirmation_states",
   "execution_modes",
   "final_verdicts",
+  "finding_fields",
   "finding_severities",
   "finding_statuses",
+  "orchestrator_inline_attempt_fields",
   "route_ids",
+  "route_required_references",
   "terminal_batch_statuses",
   // F005 fix: agent-discoverable enums from lib/cli-envelope.ts +
   // lib/cli-diagnostics.ts so --help consumers can enumerate every error
@@ -111,6 +145,12 @@ const CONTRACT_SLICES = [
   // without grepping route.ts. `ordering: catalog` because the order
   // mirrors the precedence walk inside `blockingGatesFor`.
   "blocking_gate_field_names",
+  "scaffold_ids",
+  // U3 (2026-05-27 plan): expose every scaffold id with its runtime
+  // source, output kind, ordering, and marker metadata in one slice so
+  // agents discover the catalog without fan-out scaffold calls or
+  // template scraping.
+  "scaffold_catalog",
 ] as const;
 type ContractSlice = (typeof CONTRACT_SLICES)[number];
 
@@ -150,9 +190,29 @@ const EXIT_CODES = [
 
 const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   batch_statuses: { values: [...BATCH_STATUSES].sort(), ordering: "sorted" },
+  candidate_batch_fields: {
+    values: [...CANDIDATE_BATCH_FIELDS],
+    ordering: "catalog",
+  },
+  ledger_batch_lifecycle_fields: {
+    values: [...LEDGER_BATCH_LIFECYCLE_FIELDS],
+    ordering: "catalog",
+  },
+  ledger_schema_pointer_slices: {
+    values: [...LEDGER_SCHEMA_POINTER_SLICES],
+    ordering: "catalog",
+  },
+  builder_attempt_fields: {
+    values: [...BUILDER_ATTEMPT_FIELDS],
+    ordering: "catalog",
+  },
   builder_attempt_statuses: {
     values: [...BUILDER_ATTEMPT_STATUSES].sort(),
     ordering: "sorted",
+  },
+  builder_attempt_types: {
+    values: [...BUILDER_ATTEMPT_TYPE_VALUES],
+    ordering: "catalog",
   },
   confirmation_states: {
     values: [...CONFIRMATION_STATES].sort(),
@@ -160,6 +220,10 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   },
   execution_modes: { values: [...EXECUTION_MODES].sort(), ordering: "sorted" },
   final_verdicts: { values: [...FINAL_VERDICTS].sort(), ordering: "sorted" },
+  finding_fields: {
+    values: [...FINDING_FIELDS],
+    ordering: "catalog",
+  },
   finding_severities: {
     values: [...FINDING_SEVERITIES].sort(),
     ordering: "sorted",
@@ -168,7 +232,15 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
     values: [...FINDING_STATUSES].sort(),
     ordering: "sorted",
   },
+  orchestrator_inline_attempt_fields: {
+    values: [...ORCHESTRATOR_INLINE_ATTEMPT_FIELDS],
+    ordering: "catalog",
+  },
   route_ids: { values: [...ROUTE_IDS], ordering: "catalog" },
+  route_required_references: {
+    values: routeRequiredReferenceEntries(),
+    ordering: "catalog",
+  },
   terminal_batch_statuses: {
     values: [...TERMINAL_BATCH_STATUSES].sort(),
     ordering: "sorted",
@@ -197,7 +269,7 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
     ordering: "catalog",
   },
   packet_roles: {
-    values: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
+    values: [...PACKET_ROLES],
     ordering: "catalog",
   },
   runbook_version_skew_states: {
@@ -206,6 +278,14 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
   },
   blocking_gate_field_names: {
     values: [...BLOCKING_GATE_FIELD_NAMES],
+    ordering: "catalog",
+  },
+  scaffold_ids: {
+    values: [...SCAFFOLD_IDS],
+    ordering: "catalog",
+  },
+  scaffold_catalog: {
+    values: getScaffoldCatalog().map((entry) => ({ ...entry })),
     ordering: "catalog",
   },
 };
@@ -253,8 +333,17 @@ const ERROR_CODES = [
   { code: "unknown-command", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "open_docs" } },
   { code: "unknown-contract-slice", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "unknown-packet-role", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "unknown-scaffold-id", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "missing-packet-flag", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "packet-render-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
+  { code: "ledger-init-render-failed", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-issue-number", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "missing-required-input", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-control-characters", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-started-at", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "invalid-ac-source", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "missing-acceptance-criteria", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
+  { code: "empty-acceptance-criterion", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "ledger-validation-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
   { code: "unexpected-error", exit_code: 70, severity: "fatal", recoverability: "unrecoverable", retryable: false, hint: { action: "contact_support" } },
 ] as const satisfies readonly ErrorCodeEntry[];
@@ -280,7 +369,7 @@ const HELP_DATA = {
     {
       name: "contract",
       summary:
-        "Emit a runtime contract slice from lib/contract.ts (see `contract_slices`).",
+        "Emit a runtime contract slice (see `contract_slices`).",
       argv: ["contract", "<slice>", "--json"],
     },
     {
@@ -295,8 +384,39 @@ const HELP_DATA = {
         "Render a complete role packet (Builder, Proposer, Validator, patch-proposal, ce-plan) from templates + ledger state. Read-only; returns the packet body plus dispatch evidence shape. U6 owns the ledger Notes write.",
       argv: ["packet", "<role>", "--ledger", "<ledger-path>", "--json"],
     },
+    {
+      name: "scaffold",
+      summary:
+        "Render a runtime-owned scaffold view by id. Read-only; returns the scaffold body and source metadata.",
+      argv: ["scaffold", "<id>", "--json"],
+    },
+    {
+      name: "ledger-init",
+      summary:
+        "Render the complete initial per-issue ledger from explicit Stage 1 facts. Read-only; returns ledger_markdown plus deterministic metadata.",
+      argv: [
+        "ledger-init",
+        "--issue-number",
+        "<N>",
+        "--issue-title",
+        "<title>",
+        "--issue-url",
+        "<url>",
+        "--target-repo",
+        "<owner/repo>",
+        "--started-at",
+        "<ISO-8601>",
+        "--ac-source",
+        "<source>",
+        "--ac",
+        "<confirmed AC>",
+        "--json",
+      ],
+    },
   ],
-  packet_roles: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
+  scaffold_ids: SCAFFOLD_IDS,
+  scaffold_catalog: getScaffoldCatalog(),
+  packet_roles: [...PACKET_ROLES],
   packet_flags: {
     "--ledger": "Path to issue-N ledger (required for builder, proposer, validator, patch-proposal).",
     "--batch": "Batch id (builder, validator).",
@@ -430,11 +550,36 @@ const HELP_DATA = {
   // responses so agents can route without invoking the command first.
   contract_slice_response_shape: {
     slice: "string (one of contract_slices)",
-    values: "array of primitives or {code, meaning}-style records",
+    values:
+      "array of primitives or structured records. Field-set and enum slices emit string arrays; `route_required_references` entries are { route_id, required_reference_ids }; `scaffold_ids` emits scaffold ids; `scaffold_catalog` emits { scaffold_id, output_kind, source, ordering, marker? } records (the same shape as `scaffold <id> --json` minus `body`).",
     ordering: {
       sorted: "alphabetical; set semantics; order is not contractual",
       catalog: "source-declared order is contractually significant (precedence, stage progression, severity escalation)",
     },
+  },
+  scaffold_response_shape: {
+    scaffold_id: "string (one of scaffold_ids)",
+    output_kind: "yaml",
+    source: "runtime owner for the rendered scaffold",
+    ordering: "catalog",
+    marker:
+      "HTML comment marker string for marker-aware Notes evidence scaffold ids; omitted for YAML-only scaffold ids",
+    body: "rendered scaffold body; no filesystem mutation is performed",
+  },
+  ledger_init_flags: {
+    "--issue-number": "Positive integer GitHub issue number.",
+    "--issue-title": "Issue title.",
+    "--issue-url": "Issue URL.",
+    "--target-repo": "owner/repo target repository.",
+    "--started-at": "Explicit ISO-8601 timestamp used for started_at and ac_confirmed_at.",
+    "--ac-source": "gold-standard | variant-heading | loose-checkbox-block | numbered-requirements | pasted | drafted.",
+    "--ac": "Repeatable confirmed acceptance criterion. At least one required.",
+  },
+  ledger_init_response_shape: {
+    ledger_markdown:
+      "Complete initial ledger document body. Rendered only to stdout; caller owns destination path and file write.",
+    metadata:
+      "{ runbook_version, ac_digest, acceptance_criteria_count, section_order } deterministic anchors for verification.",
   },
   error_codes: ERROR_CODES,
   exit_codes: EXIT_CODES,
@@ -505,7 +650,7 @@ export function run(options: RunOptions): RunResult {
         startedAtMs,
         code: "missing-command",
         message:
-          "no command provided; this CLI is agent-only and requires one of state | next | contract | diagnose with --json",
+          "no command provided; this CLI is agent-only and requires one of state | next | contract | diagnose | packet | scaffold | ledger-init with --json",
         exitCode: 64,
         hint: {
           summary:
@@ -582,6 +727,22 @@ export function run(options: RunOptions): RunResult {
       });
     case "packet":
       return runPacketCommand({
+        ...options,
+        runId,
+        startedAtMs,
+        args: remaining.slice(1),
+        diagnosticOptions,
+      });
+    case "scaffold":
+      return runScaffoldCommand({
+        ...options,
+        runId,
+        startedAtMs,
+        args: remaining.slice(1),
+        diagnosticOptions,
+      });
+    case "ledger-init":
+      return runLedgerInitCommand({
         ...options,
         runId,
         startedAtMs,
@@ -832,14 +993,247 @@ function runDiagnoseCommand(ctx: CommandContext): RunResult {
   }
 }
 
-const PACKET_ROLES = [
-  "builder",
-  "proposer",
-  "validator",
-  "patch-proposal",
-  "ce-plan",
-] as const;
-type PacketRoleArg = (typeof PACKET_ROLES)[number];
+function runScaffoldCommand(ctx: CommandContext): RunResult {
+  const scaffoldId = expectOneArg(ctx, "scaffold", "scaffold id");
+  if (scaffoldId === null) return { exit_code: 64 };
+
+  if (!isScaffoldId(scaffoldId)) {
+    writeJson(
+      ctx.stdoutWriter,
+      createErrorEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        code: "unknown-scaffold-id",
+        message: `unknown scaffold id "${scaffoldId}"; allowed: ${SCAFFOLD_IDS.join(", ")}`,
+        exitCode: 64,
+        hint: {
+          summary: "Pass one of the catalogued scaffold ids.",
+          action: "change_input",
+        },
+      }),
+    );
+    return { exit_code: 64 };
+  }
+
+  try {
+    const rendered = renderScaffold(scaffoldId);
+    writeJson(
+      ctx.stdoutWriter,
+      createSuccessEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        data: rendered,
+      }),
+    );
+    return { exit_code: 0 };
+  } catch (error) {
+    // renderScaffold dispatches through exhaustive `switch (field)` defaults
+    // that throw ScaffoldRenderError if a contract constants array ever
+    // diverges from its switch coverage at runtime. Routing through
+    // emitErrorFromException keeps the `every command writes one envelope to
+    // stdout` contract intact and gives the agent an `unexpected-error`
+    // exit_code 70 instead of a raw thrown stack trace.
+    return emitErrorFromException(ctx, "scaffold", error);
+  }
+}
+
+function runLedgerInitCommand(ctx: CommandContext): RunResult {
+  try {
+    const flags = parseLedgerInitFlags(ctx.args);
+    const rendered = renderLedgerInit({
+      issueNumber: flags.issueNumber,
+      issueTitle: flags.issueTitle,
+      issueUrl: flags.issueUrl,
+      targetRepo: flags.targetRepo,
+      startedAt: flags.startedAt,
+      acSource: flags.acSource,
+      acceptanceCriteria: flags.acceptanceCriteria,
+    });
+    writeJson(
+      ctx.stdoutWriter,
+      createSuccessEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        data: rendered,
+      }),
+    );
+    return { exit_code: 0 };
+  } catch (error) {
+    return emitLedgerInitError(ctx, error);
+  }
+}
+
+type LedgerInitFlags = {
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  targetRepo: string;
+  startedAt: string;
+  acSource: Parameters<typeof renderLedgerInit>[0]["acSource"];
+  acceptanceCriteria: string[];
+};
+
+function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
+  const flags: Partial<LedgerInitFlags> & { acceptanceCriteria: string[] } = {
+    acceptanceCriteria: [],
+  };
+  const consumeValue = (flag: string, i: number): string => {
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new LedgerInitFlagError(
+        "missing-required-arg",
+        `ledger-init ${flag} requires a value`,
+      );
+    }
+    return value;
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    switch (arg) {
+      case "--issue-number": {
+        const raw = consumeValue(arg, i);
+        const issueNumber = Number.parseInt(raw, 10);
+        if (!/^[0-9]+$/.test(raw) || issueNumber <= 0) {
+          throw new LedgerInitFlagError(
+            "invalid-issue-number",
+            "ledger-init --issue-number requires a positive integer",
+          );
+        }
+        flags.issueNumber = issueNumber;
+        i++;
+        break;
+      }
+      case "--issue-title": flags.issueTitle = consumeValue(arg, i); i++; break;
+      case "--issue-url": flags.issueUrl = consumeValue(arg, i); i++; break;
+      case "--target-repo": flags.targetRepo = consumeValue(arg, i); i++; break;
+      case "--started-at": flags.startedAt = consumeValue(arg, i); i++; break;
+      case "--ac-source": {
+        const acSource = consumeValue(arg, i);
+        if (!isAcSource(acSource)) {
+          throw new LedgerInitFlagError(
+            "invalid-ac-source",
+            "ledger-init --ac-source is not in the runtime AC source catalog",
+          );
+        }
+        flags.acSource = acSource;
+        i++;
+        break;
+      }
+      case "--ac": flags.acceptanceCriteria.push(consumeValue(arg, i)); i++; break;
+      default:
+        throw new LedgerInitFlagError(
+          "missing-required-arg",
+          `unknown ledger-init flag ${arg}`,
+        );
+    }
+  }
+
+  for (const required of [
+    "issueNumber",
+    "issueTitle",
+    "issueUrl",
+    "targetRepo",
+    "startedAt",
+    "acSource",
+  ] as const) {
+    if (flags[required] === undefined) {
+      throw new LedgerInitFlagError(
+        "missing-required-arg",
+        `ledger-init requires --${kebabCase(required)}`,
+      );
+    }
+  }
+
+  return flags as LedgerInitFlags;
+}
+
+/**
+ * Routeable code for a `LedgerInitFlagError`. `missing-required-arg` is the
+ * generic parser channel for absent/unknown flags; `invalid-issue-number`
+ * and `invalid-ac-source` are the public renderer codes the parser shares
+ * so its early rejection still surfaces under the documented contract.
+ */
+type LedgerInitFlagErrorCode =
+  | "missing-required-arg"
+  | "invalid-issue-number"
+  | "invalid-ac-source";
+
+class LedgerInitFlagError extends Error {
+  readonly code: LedgerInitFlagErrorCode;
+
+  constructor(code: LedgerInitFlagErrorCode, message: string) {
+    super(message);
+    this.name = "LedgerInitFlagError";
+    this.code = code;
+  }
+}
+
+function emitLedgerInitError(
+  ctx: CommandContext,
+  error: unknown,
+): RunResult {
+  if (error instanceof LedgerInitFlagError) {
+    writeJson(
+      ctx.stdoutWriter,
+      createErrorEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        code: error.code,
+        message: error.message,
+        exitCode: 64,
+        hint: {
+          summary:
+            error.code === "missing-required-arg"
+              ? "Pass all required ledger-init flags with non-empty values."
+              : "Pass a value that matches the documented ledger-init catalog.",
+          action: "change_input",
+        },
+      }),
+    );
+    return { exit_code: 64 };
+  }
+  if (error instanceof LedgerInitRenderError) {
+    const publicCode = mapLedgerInitErrorCode(error.code);
+    writeJson(
+      ctx.stdoutWriter,
+      createErrorEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        code: publicCode,
+        message: error.message,
+        exitCode: 64,
+        hint: {
+          summary: "Repair the ledger-init input flags and retry.",
+          action: "change_input",
+        },
+      }),
+    );
+    return { exit_code: 64 };
+  }
+  return emitErrorFromException(ctx, "ledger-init", error);
+}
+
+/**
+ * Map an internal `LedgerInitRenderError.code` to a public catalog code.
+ * Today every internal code is in `LEDGER_INIT_ERROR_CODES`, so the fallback
+ * `ledger-init-render-failed` is a defensive reserve: if a future
+ * renderer adds a new internal code without updating the public union, the
+ * mapper preserves the JSON envelope contract by emitting the fallback
+ * instead of leaking the unmapped string. Exported for direct unit coverage.
+ */
+export function mapLedgerInitErrorCode(
+  code: string,
+): LedgerInitErrorCode | "ledger-init-render-failed" {
+  return (LEDGER_INIT_ERROR_CODES as readonly string[]).includes(code)
+    ? (code as LedgerInitErrorCode)
+    : "ledger-init-render-failed";
+}
+
+function kebabCase(value: string): string {
+  return value.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
+}
+
+type PacketRoleArg = PacketRole;
 
 /**
  * `packet <role>` dispatcher. Stays thin per R3 / U4 F020: argv parsing
@@ -995,7 +1389,7 @@ function dispatchPacketRender(role: PacketRoleArg, flags: PacketFlags) {
       requireFlag(flags.ledger, "builder", "--ledger");
       requireFlag(flags.batch, "builder", "--batch");
       requireFlag(flags.attemptType, "builder", "--attempt-type");
-      const attemptType = flags.attemptType as "implementation" | "repair";
+      const attemptType = flags.attemptType;
       if (attemptType !== "implementation" && attemptType !== "repair") {
         throw new PacketFlagError(
           `--attempt-type must be "implementation" or "repair"`,
@@ -1223,10 +1617,6 @@ function emitPacketError(
     return { exit_code: 70 };
   }
   throw error;
-}
-
-function isPacketRole(value: string): value is PacketRoleArg {
-  return (PACKET_ROLES as readonly string[]).includes(value);
 }
 
 function emitErrorFromException(

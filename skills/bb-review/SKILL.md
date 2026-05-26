@@ -24,6 +24,11 @@ See [comment-style.md](comment-style.md) for the exact voice spec. Read it befor
 
 - Invoke the `bitbucket-pr:bb-pr` skill to load the `bb-api.ts` path and command set.
 - `pr-view $1`, `pr-comments $1`, `pr-diffstat $1`. Read the description and the existing comment threads. The existing threads are the voice reference and may contain unresolved debates you should resolve rather than re-raise.
+- **Interpreting an inbound comment: read the anchored line before deciding what it means.**
+  - Each comment's `inline.path` + `inline.line` points at a specific diff line; resolve it via the Git-read MCP flow (JSON output) or the Bitbucket diff API when it exposes the hunk.
+  - Let the *changed code* tell you the topic. A comment on `checkbox.stories.tsx:1` is about whatever changed on line 1 (e.g. an import source), not whatever the file is "about".
+  - Do not infer the topic from the filename or from prior conversation.
+  - A reply that answers the wrong question costs a correction on the thread.
 
 ### 2. Switch to the PR branch (safely)
 

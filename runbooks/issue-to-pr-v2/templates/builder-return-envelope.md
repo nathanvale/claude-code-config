@@ -11,61 +11,39 @@ the row in `## Batches[].builder_attempts`. See also:
 [`references/builder-dispatch.md`](../references/builder-dispatch.md),
 [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md).
 
-This file is a sibling of `builder-work-packet.md` per the U2 plan's
-tree sketch (U4-deferred, U5-landed). The **canonical schema** is owned
-by
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope);
-this template cross-references that schema rather than re-declaring it,
-so a single source of truth for status enums and required fields lives
-in one place.
+This file is a sibling of `builder-work-packet.md`. Runtime scaffold output
+owns concrete field lists; Builder dispatch prose owns role and transition
+rules.
 
 ## Authoritative source
 
-The schema, the `status` enum (`committed`, `fail-stop-preflight`,
-`fail-stop-out-of-scope`, `fail-stop-execution-mode-mismatch`,
-`fail-stop-read-failed`, `fail-stop-other`), and the rule that
-`suggested_validator_focus` is required live in
+Concrete envelope shape:
+`cli.ts scaffold builder-return-envelope --json`.
+
+Status transitions and the rule that `suggested_validator_focus` is required
+live in
 [`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope).
 This envelope is Builder-only. It does not carry Orchestrator-inline attempt
 fields; inline evidence is recorded through the separate ledger lane owned by
 the Stage 4 batch-loop contract.
 
-## Envelope shape (mirror of the canonical schema)
+## Envelope shape
 
-```yaml
-attempt_type: <implementation | repair>
-target_finding_signature: <signature | null>
-status: <committed | fail-stop-*>
-commit_sha: <sha | null>
-files_touched: []
-route_hint: <string | null>
-blockers: []
-probe_results: []
-suggested_scope_changes: []
-implementation_steps: []
-existing_seams_used: []
-tests_run: []
-assumptions: []
-risks: []
-deferred: []
-suggested_validator_focus: []
-notes: ""
-```
+Resolve the runtime-owned shape through
+`cli.ts scaffold builder-return-envelope --json` before returning the envelope.
 
 ## What the Orchestrator records
 
-Only the eight compact fields persist into `## Batches[].builder_attempts`
-(`attempt_type`, `status`, `commit_sha`, `files_touched`, `route_hint`,
-`blockers`, `probe_results`, `notes`). The remaining seven evidence arrays
-(`implementation_steps`, `existing_seams_used`, `tests_run`,
-`assumptions`, `risks`, `deferred`, `suggested_validator_focus`) flow
-into the next Validator packet via the
-[validator-envelope.md](validator-envelope.md) `builder_evidence` slot.
-They do **not** flow back into a subsequent Builder packet (the U5
-Builder packet's `prior_builder_attempts` only carries the compact
-ledger-persisted Builder shape). Orchestrator-inline attempt rows are not
-Builder prior attempts and must not be copied into this envelope or the next
-Builder packet.
+Compact persisted row: `cli.ts scaffold builder-attempt-compact --json`.
+
+Validator Builder-evidence input:
+`cli.ts scaffold validator-builder-evidence --json`.
+
+Rich evidence flows into the next Validator packet through
+[validator-envelope.md](validator-envelope.md) `builder_evidence`. It does
+**not** flow back into a subsequent Builder packet. Orchestrator-inline rows
+are not Builder prior attempts and must not be copied into this envelope or
+the next Builder packet.
 
 ## See also
 

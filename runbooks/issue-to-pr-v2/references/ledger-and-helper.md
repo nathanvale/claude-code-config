@@ -1,8 +1,10 @@
 # Ledger and helper reference
 
 **Contract owner:** this reference owns stage framing, helper execution
-context, turn protocol, ledger schema, acceptance criteria, batches YAML,
-findings YAML, notes evidence, and runbook-version skew handling.
+context, turn protocol, ledger authoring guidance, acceptance criteria,
+batches YAML purpose, findings YAML purpose, notes evidence, and
+runbook-version skew handling. Ledger schema facts live in runtime contract
+slices.
 
 **Read trigger:** open this reference when starting or resuming a turn (to
 re-read durable confirmation state), when writing or updating ledger YAML
@@ -58,9 +60,10 @@ memory. The four-state confirmation semantics live in `lib/contract.ts`
 
 For richer diagnosis (per-axis digest drift, expected reference list,
 install presence) the same shape is available via `cli.ts diagnose
-<ledger-path> --json`; for the legal route-id list use `cli.ts
-contract route_ids --json`. (Command surface and installed path live
-in [`README.md`](../README.md#file-map).)
+<ledger-path> --json`; for route facts use `cli.ts contract route_ids
+--json` and `cli.ts contract route_required_references --json`.
+(Command surface and installed path live in
+[`README.md`](../README.md#file-map).)
 
 ## Helper execution context
 
@@ -100,12 +103,11 @@ steps is [first-run-gotchas.md](first-run-gotchas.md) recipe 2.3
 (`blocked-digests-stale`).
 
 **Immutable batch contract fields covered by `batch_contract_digest`.** The
-digest is recomputed over the confirmed batch contract: `id`, `name`, `goal`,
-`files`, `depends_on`, optional `supersedes`, `execution_mode`,
-`acceptance_tests`, `ac_mapping`, and optional `rationale`. Runtime
-lifecycle fields (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`) are
-mutated by Stage 4 and are **not** part of the digest.
+digest is recomputed over the confirmed candidate batch contract. Query
+`cli.ts contract candidate_batch_fields --json` for digest-covered fields.
+Runtime lifecycle fields from
+`cli.ts contract ledger_batch_lifecycle_fields --json` are mutated by Stage 4
+and are **not** part of the digest.
 
 ## Ledger schema overview
 
@@ -136,6 +138,48 @@ Frontmatter digest fields (`plan_digest`, `ac_digest`, `batch_contract_digest`)
 are recomputed via `decompose.ts --plan-digest`, `--ac-digest`, and
 `--batch-contract-digest`.
 
+### Runtime-owned schema facts
+
+Ledger field-set and finite enum membership live in runtime code and are
+discoverable through `cli.ts contract <slice> --json`.
+
+Ledger schema slices:
+
+- `cli.ts contract candidate_batch_fields --json`
+- `cli.ts contract ledger_batch_lifecycle_fields --json`
+- `cli.ts contract builder_attempt_fields --json`
+- `cli.ts contract orchestrator_inline_attempt_fields --json`
+- `cli.ts contract finding_fields --json`
+- `cli.ts contract builder_attempt_types --json`
+
+Related existing slices:
+
+- `cli.ts contract execution_modes --json`
+- `cli.ts contract batch_statuses --json`
+- `cli.ts contract builder_attempt_statuses --json`
+- `cli.ts contract finding_severities --json`
+- `cli.ts contract finding_statuses --json`
+- `cli.ts contract final_verdicts --json`
+- `cli.ts contract confirmation_states --json`
+
+Ledger scaffold surfaces:
+
+- Empty batches: `cli.ts scaffold ledger-empty-batches --json`
+
+- Lifecycle defaults: `cli.ts scaffold ledger-batch-lifecycle-defaults --json`
+
+- Empty findings data: `cli.ts scaffold ledger-empty-findings-data --json`
+
+- Finding row: `cli.ts scaffold ledger-finding-row --json`
+
+- Notes checkpoint: `cli.ts scaffold notes-implementation-attempt-checkpoint --json`
+
+- Notes Validator wave: `cli.ts scaffold notes-validator-wave-completed --json`
+
+- Notes version-skew continuation: `cli.ts scaffold notes-runbook-version-skew-continuation --json`
+
+- Empty workflow learnings: `cli.ts scaffold workflow-learnings-empty --json`
+
 ### Frontmatter fields
 
 Required fields (set at Stage 1 unless noted):
@@ -164,52 +208,44 @@ Required fields (set at Stage 1 unless noted):
 
 ### `## Batches` entry fields
 
-Each batch entry must include:
+Candidate batch field membership is
+`cli.ts contract candidate_batch_fields --json`. `files` are non-empty
+repo-relative paths. `depends_on` may be `[]`. `supersedes` is audit metadata
+for replacement batches; it never satisfies dependencies. `execution_mode`
+membership is `cli.ts contract execution_modes --json`. `acceptance_tests`
+is non-empty; `ac_mapping` is non-empty unless this is a `patch-*` batch.
+`rationale` is required when execution-mode and path combinations need an
+explicit exception prefix.
 
-- `id`, `name`, `goal`, `files` (non-empty repo-relative paths), `depends_on`
-  (may be `[]`).
-- Optional `supersedes` (only when this is a replacement batch superseding a
-  blocked original).
-- `execution_mode`: exactly one of `tdd`, `proof_first`, `change_first`.
-- `acceptance_tests` (non-empty), `ac_mapping` (non-empty unless this is a
-  `patch-*` batch).
-- Optional `rationale` (required when execution_mode and path combinations
-  need an explicit exception prefix).
+Lifecycle field membership is
+`cli.ts contract ledger_batch_lifecycle_fields --json`. `status` membership
+is `cli.ts contract batch_statuses --json`. Stage 4 mutates lifecycle fields
+at runtime. `iterations` counts well-formed Builder attempts plus committed
+Orchestrator-inline attempts seen so far. Builder infrastructure failures are
+outside both attempt lanes and outside the iteration cap. `builder_commits`
+records commit SHAs from successful Builder attempts on this batch.
 
-Stage 4 mutates batch entries at runtime to add:
+`builder_attempts` are compact records, one per well-formed Builder envelope.
+Field membership is `cli.ts contract builder_attempt_fields --json`;
+`attempt_type` membership is `cli.ts contract builder_attempt_types --json`;
+`status` membership is `cli.ts contract builder_attempt_statuses --json`.
+`blockers` and `probe_results` are YAML lists of compact strings (`[]` when
+empty); `notes` is a single string. Rich envelope evidence is **not**
+persisted here; it lives in Notes or is passed to Validators.
 
-- `status`: `pending | in-progress | converged | accepted-risk | blocked`.
-- `iterations`: number of well-formed Builder attempts plus committed
-  Orchestrator-inline attempts seen so far. Builder infrastructure failures
-  are outside both attempt lanes and outside the iteration cap.
-- `builder_commits`: list of commit SHAs from successful Builder attempts on
-  this batch.
-- `builder_attempts`: compact records, one per well-formed Builder envelope,
-  each with `attempt_type`, `status`, `commit_sha`, `files_touched`,
-  `route_hint`, `blockers`, `probe_results`, `notes`. `blockers` and
-  `probe_results` are YAML lists of compact strings (`[]` when empty);
-  `notes` is a single string. Rich envelope evidence
-  (implementation steps, tests run, assumptions, risks, deferred, suggested
-  Validator focus) is **not** persisted here; it lives in Notes or is passed to
-  Validators.
-- `orchestrator_inline_attempts`: compact records, one per committed
-  Orchestrator-inline `change_first` attempt, initialized to `[]` on current
-  batch rows. Each record contains exactly `commit_sha`, `files_touched`, and
-  `notes`; Builder-only fields such as `attempt_type`, `status`,
-  `route_hint`, `blockers`, and `probe_results` are not allowed. Inline rows
-  are committed-only evidence: if a dispatch trigger appears before the inline
-  implementation commit, append no inline row and route the work to Builder
-  dispatch. Inline commits are found through this lane, not through
-  `builder_commits`. Every batch row a `"3"` runtime emits carries this field,
-  so a field-lacking row originates from a pre-`"3"` runtime. The
-  runbook-version skew gate (not per-batch tolerance of the absent field) is
-  what protects such legacy ledgers from being silently reinterpreted under
-  the inline-lane meaning: it keys on frontmatter `runbook_version`, so a
-  ledger still declaring an old version classifies as `missing` or
-  `mismatched` and only proceeds once an operator supplies continuation
-  evidence. Migrating historical ledgers to the inline-lane meaning is out of
-  scope; the gate keeps the old and new meanings from mixing.
-- `final_verdict`: `converged | accepted-risk | blocked-for-user`.
+`orchestrator_inline_attempts` are compact records, one per committed
+Orchestrator-inline `change_first` attempt. Field membership is
+`cli.ts contract orchestrator_inline_attempt_fields --json`. Inline rows are
+committed-only evidence: if a dispatch trigger appears before the inline
+implementation commit, append no inline row and route the work to Builder
+dispatch. Inline commits are found through this lane, not through
+`builder_commits`. Every batch row a `"3"` runtime emits carries this field,
+so a field-lacking row originates from a pre-`"3"` runtime. The
+runbook-version skew gate protects such legacy ledgers from being silently
+reinterpreted under the inline-lane meaning.
+
+`final_verdict` records the terminal Stage 4 outcome; membership is
+`cli.ts contract final_verdicts --json`.
 
 ### `## Notes` implementation evidence
 
@@ -217,14 +253,15 @@ Stage 4 records two structured Notes rows around every committed
 implementation attempt before a current-version batch may be terminal:
 
 - `implementation_attempt_checkpoint` is ledger-only evidence written before
-  Validator packet rendering. It cites `batch_id`, `implementation_commit`,
-  `attempt_lane` (`builder_attempts` or `orchestrator_inline_attempts`), and
-  `timestamp`.
+  Validator packet rendering.
 - `validator_wave_completed` is durable evidence written after the full
-  Validator wave. It cites the same `batch_id`, `implementation_commit`, and
-  `attempt_lane`, plus the `personas` set, packet `dispatch_evidence`
-  (`role: validator`, `target_id: <batch>@<commit>`, and
-  `cli_route_id: packet.validator`), `outcome`, and `findings`.
+  Validator wave.
+
+Scaffolds:
+
+- `cli.ts scaffold notes-implementation-attempt-checkpoint --json`
+
+- `cli.ts scaffold notes-validator-wave-completed --json`
 
 Both rows MUST cite a single resolved commit ref for `implementation_commit`
 and (for `validator_wave_completed`) for the `target_id` `<commit>` slot — not
@@ -240,19 +277,19 @@ Builder or Orchestrator-inline attempt.
 
 ### `## Findings data` field requirements
 
-Each finding row is YAML with `id`, `batch_id`, `signature`, `persona`,
-`severity`, `status`, `summary`, and `resolution`. Constraints:
+Each finding row is YAML. Field membership is
+`cli.ts contract finding_fields --json`. Constraints:
 
 - `id` is unique within the ledger.
 - `batch_id` must be one of `stage-3`, `final`, or a confirmed batch id from
   `## Batches`.
 - `signature` is a stable kebab-case dedupe key; the same finding from
   multiple personas shares one signature.
-- `severity` is one of `P0`, `P1`, `P2`, `P3` (from the persona's own rubric;
-  the runbook does not re-rank).
-- `status` is one of `open`, `fixed`, `accepted-risk`, `deferred-P2`,
-  `deferred-P3`, `out-of-scope-for-this-issue`, `ADR-contradicts-<id>`,
-  `superseded`.
+- `severity` membership is `cli.ts contract finding_severities --json` (from
+  the persona's own rubric; the runbook does not re-rank).
+- finite `status` membership is `cli.ts contract finding_statuses --json`.
+  Parameterized `ADR-contradicts-<id>` handling lives in
+  [findings-and-validators.md](findings-and-validators.md).
 - `summary` text is verbatim what the rendered `## Findings` table will show
   (helper validation enforces no drift).
 - `resolution` matches the status per the allowed status/resolution pairs in
@@ -278,29 +315,14 @@ canonical lifecycle metadata and dedupe; the ledger never duplicates the
 registry's canonical or lifecycle fields. Each ledger entry is a per-run
 evidence reference plus a `signature` cross-reference into the registry.
 
-Required entry fields:
+Runtime validation owns the required run-scoped evidence keys, optional keys,
+and closed-key whitelist for ledger entries. Canonical and lifecycle fields
+(`summary`, `owner`, `retirement_condition`, `disposition`, `status`,
+`confidence`, `follow_up`) are registry-only and must never appear in a ledger
+entry. The valid empty case is `workflow_learnings: []`: a run with no observed
+workflow learnings is the common path and must not block.
 
-- `signature` (string) — `sha256:<hex>` or stable slug. Resolves to the
-  canonical entry in the cross-run registry.
-- `affected_surface` (string) — which workflow surface the learning concerns;
-  matches the registry's evidence key of the same name.
-- `what_was_wrong` (string) — the observation captured during the run.
-
-Optional entry fields (capture what is known; absence is fine):
-
-- `discovery_method` — how the issue was found during the run.
-- `root_cause` — why it happened.
-- `scope` — blast radius or where else this would surface.
-- `proposed_fix` — suggested change at observation time.
-- `verification_idea` — how a later fix would be confirmed.
-
-Canonical and lifecycle fields (`summary`, `owner`, `retirement_condition`,
-`disposition`, `status`, `confidence`, `follow_up`) are registry-only and
-must never appear in a ledger entry. `decompose.ts
---validate-workflow-learnings` enforces this with a closed-key whitelist
-symmetric with the registry's `ALLOWED_EVIDENCE_KEYS` plus the `signature`
-cross-reference. The valid empty case is `workflow_learnings: []`: a run
-with no observed workflow learnings is the common path and must not block.
+Empty-state scaffold: `cli.ts scaffold workflow-learnings-empty --json`.
 
 ## Acceptance criteria and batches contract
 
@@ -310,11 +332,9 @@ confirmation; changes after confirmation route through helper validation and
 re-confirmation.
 
 `## Batches` is a fenced YAML block (no XML-style wrapping) with one entry per
-batch. Each entry includes `id`, `name`, `goal`, `files`, `depends_on`,
-optional `supersedes`, `execution_mode` (`tdd | proof_first | change_first`),
-`acceptance_tests`, `ac_mapping`, optional `rationale`, plus run-time fields
-populated by Stage 4 (`status`, `iterations`, `builder_commits`,
-`builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`).
+batch. Candidate and lifecycle field membership is runtime-owned; query
+`cli.ts contract candidate_batch_fields --json` and
+`cli.ts contract ledger_batch_lifecycle_fields --json`.
 
 The acceptance criteria list and batches block jointly drive
 `decompose.ts --validate-ac-coverage`: every AC index must appear in at least
@@ -353,62 +373,21 @@ ids are **facts** about where the workflow currently sits, not imperative
 instructions — ADR 0002. The hot router (U7) consumes a route id and
 decides what to do next; the CLI never says "run X" or "execute Y".
 
-The executable source of truth is the `ROUTE_IDS` const in
-`runbooks/issue-to-pr-v2/lib/route.ts`. The catalog below mirrors that
-const verbatim; drift between code and this section is a P1 finding per
-the U4 audit prompt.
+Runtime owners:
 
-### Stage route ids (happy path)
-
-| Route id | When the CLI emits it |
-| --- | --- |
-| `pick-issue` | Ledger exists but the derived `confirmation_state.acceptance_criteria` is not `confirmed` — either `ac_confirmation_status` is not `confirmed`, or it is `confirmed` with a null `ac_digest`, so Stage 1 has not yet committed a digest-anchored AC checkpoint. A non-null but mismatched `ac_digest` is `stale`, which routes to `blocked-acceptance-criteria-stale` (see the blocked-route table below), not `pick-issue`. |
-| `plan` | AC is confirmed but `frontmatter.plan_path` is null; Stage 2 has not yet recorded a plan file. |
-| `decompose` | Plan path present but `batch_contract_confirmation_status` is not `confirmed`, or no batches have been written to `## Batches`. |
-| `batch-loop` | Batch contract confirmed and at least one batch exists, but not every batch is in a terminal status (`converged` or `accepted-risk`). |
-| `final-review` | Every batch is terminal but `frontmatter.final_reviewed_at` is null; Stage 5 has not yet committed the cumulative-diff review checkpoint. |
-| `ship` | Final review complete but `frontmatter.pr_url` is null; Stage 6 has not yet recorded the PR URL. |
-| `shipped` | `frontmatter.pr_url` is set and `frontmatter.status` is `shipped`. Terminal success state. |
+- Route catalog and precedence: `ROUTE_IDS`, `BLOCKED_ROUTE_IDS`, and
+  `classifyRoute` in `runbooks/issue-to-pr-v2/lib/route.ts`.
+- Full route catalog: `cli.ts contract route_ids --json`.
+- Route/reference map: `cli.ts contract route_required_references --json`.
+- Per-route references for current turn: `data.required_reference_ids`.
 
 ### Blocked route ids
 
-| Route id | When the CLI emits it |
-| --- | --- |
-| `blocked-frontmatter-blocked-reason` | `frontmatter.status` is the literal `blocked`. Highest-precedence blocked state. |
-| `blocked-runbook-version-skew` | `runbook_version` skew classification is `mismatched` or `missing` (U6). A `continuation-evidence-present` classification suppresses this id and routing falls through to the happy-path stage. |
-| `blocked-acceptance-criteria-stale` | `ac_confirmation_status` is `blocked` or the stored AC digest no longer matches the ledger's `## Acceptance criteria` content. |
-| `blocked-stage-3` | `batch_contract_confirmation_status` is `blocked` because Stage 3 Contract Review surfaced an open P0/P1 finding. |
-| `blocked-batch-contract-stale` | The stored batch contract digest no longer matches the ledger's `## Batches` content. |
-| `blocked-digests-stale` | One of `plan_digest`, `ac_digest`, or `batch_contract_digest` no longer matches the source content but the individual `*_confirmation_status` fields haven't been flipped yet. |
-
-For symptom-first recovery recipes for these blocked routes (exact command,
-JSON fields, what they prove, and the recovery action), see
+Blocked route semantics live in `classifyRoute` and `blockingGatesFor`.
+Use `data.blocking_gates` and sibling state fields for the proximate
+cause. For symptom-first recovery recipes (exact command, JSON fields,
+what they prove, recovery action), see
 [first-run-gotchas.md](first-run-gotchas.md).
-
-### Special route ids
-
-| Route id | When the CLI emits it |
-| --- | --- |
-| `no-ledger` | The ledger file does not exist on disk. The CLI never advances past this point; the consuming router must invoke Stage 1 to create the ledger. |
-
-### Precedence order
-
-`classifyRoute` in `lib/route.ts` walks the inputs in this fixed precedence
-order, returning the first match:
-
-1. `no-ledger` — ledger file absent.
-2. `blocked-frontmatter-blocked-reason` — explicit user decision wins
-   over any derived state.
-3. `blocked-runbook-version-skew` — version mismatch must be resolved
-   before any other gate.
-4. `blocked-*` durable states (AC blocked, Stage 3 blocked).
-5. `blocked-*` stale states (AC stale, batch contract stale, digests
-   stale).
-6. `shipped` (when both `pr_url` and `frontmatter.status: shipped` are
-   set).
-7. Happy-path stage progression in stage order.
-
-Tests at `runbooks/issue-to-pr-v2/lib/route.test.ts` pin every branch.
 
 ## Runbook version skew (U6)
 
@@ -442,24 +421,11 @@ rendered against a contract the runbook no longer honors.
 ### Continuation evidence shape (U6)
 
 Operators record continuation evidence in `## Notes` using a fenced YAML
-block prefixed by an HTML comment marker. Every field is required; a
-missing field disqualifies the row and the snapshot reports the
-underlying `missing` or `mismatched` skew.
+block prefixed by an HTML comment marker. Scaffold:
+`cli.ts scaffold notes-runbook-version-skew-continuation --json`.
 
-```text
-<!-- runbook-version-skew-continuation -->
-```
-
-```yaml
-runbook_version_skew_continuation:
-  ledger_version: "<value | null>"     # what the ledger says (or null)
-  runtime_version: "<value>"            # the RUNBOOK_VERSION the run is using
-  operator_decision: "<actor>"          # e.g. "Nathan @ 2026-05-22T19:00"
-  timestamp: "<ISO 8601>"
-  route_context: "<route id at the time of decision>"
-  reference_context: "<reference file the operator consulted>"
-  accepted_risk: "<one-line reason>"
-```
+Every scaffold field is required; a missing field disqualifies the row and the
+snapshot reports the underlying `missing` or `mismatched` skew.
 
 The parser additionally requires that `ledger_version` matches the
 actual ledger frontmatter value (or both are null) AND that

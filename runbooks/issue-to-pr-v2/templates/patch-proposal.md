@@ -48,39 +48,16 @@ The rendered scratch **MUST NOT** include more than one `patch_batches`
 entry, wildcard paths, non-empty `ac_mapping`, or findings beyond the
 cited `final_finding`.
 
-The scratch file is a fenced YAML document (no XML-style wrapping). Exactly
-one entry under `patch_batches`. Concrete paths only; no wildcards.
+The submitted scratch file is one fenced YAML document (no XML-style
+wrapping). Runtime rendering owns the full `final_finding:` shape and the
+single `patch_batches:` entry. Use values from the cited `## Findings data`
+row. Concrete paths only; no wildcards.
 
-```yaml
-final_finding:
-  id: <ledger finding id>
-  signature: <stable kebab-case signature>
-  persona: <reviewer name>
-  severity: <P0 | P1>
-  summary: "<verbatim from ## Findings data>"
+Candidate patch-batch scaffold fragment:
+`cli.ts scaffold patch-proposal-candidate-batch --json`.
 
-patch_batches:
-  - id: patch-<NNN>            # incrementing; helper rejects collisions with existing ledger ids
-    name: "<Title>"
-    goal: "<one-sentence outcome that addresses final_finding.signature>"
-    files:
-      - <repo-relative path>   # must already be in some confirmed batch's files
-                               # OR carry an explicit rationale prefix (see below)
-    depends_on:
-      - <terminal ledger-backed batch id>   # converged or accepted-risk
-    execution_mode: <tdd | proof_first | change_first>
-    acceptance_tests:
-      - "AC <i> holds: <verifiable behaviour>"
-    ac_mapping: []   # patch batches do not map to ACs by design
-    rationale: |
-      <free-form prose; may start with one of:
-       - new-file-patch-exception: <reason>
-       - high-risk-new-file-patch-exception: <reason>
-       - contract-softening-exception: <reason>
-       - change_first-exception: <reason>
-       - high-risk-change_first-exception: <reason>
-       when the helper rules require it>
-```
+Resolve the fragment at use time and paste it after `final_finding:` in the
+same fenced YAML block. Do not submit it as a second fence.
 
 ## Rationale prefixes
 
@@ -98,7 +75,7 @@ patch_batches:
 - `change_first-exception:` / `high-risk-change_first-exception:` —
   required when `execution_mode: change_first` lands on non-doc paths or
   high-risk paths respectively.
-- `replacement-contract:` — recommended (per v2 ledger template) when the
+- `replacement-contract:` — recommended when the
   replacement batch flow ([builder-dispatch.md](../references/builder-dispatch.md))
   supersedes a blocked original and the rationale documents the contract
   delta.

@@ -4,9 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BufferWriter } from "./lib/cli-envelope";
-import { RUNBOOK_VERSION } from "./lib/contract";
-import { ROUTE_IDS } from "./lib/route";
-import { run } from "./cli";
+import {
+  BUILDER_ATTEMPT_FIELDS,
+  BUILDER_ATTEMPT_TYPE_VALUES,
+  CANDIDATE_BATCH_FIELDS,
+  FINDING_FIELDS,
+  LEDGER_BATCH_LIFECYCLE_FIELDS,
+  LEDGER_SCHEMA_POINTER_SLICES,
+  ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+  RUNBOOK_VERSION,
+} from "./lib/contract";
+import {
+  requiredReferenceIdsFor,
+  ROUTE_IDS,
+  type RouteId,
+} from "./lib/route";
+import {
+  SCAFFOLD_IDS,
+  renderScaffold,
+} from "./lib/scaffolds";
+import { mapLedgerInitErrorCode, run } from "./cli";
 
 /**
  * Process-boundary tests for the v2 CLI front door (U4).
@@ -86,6 +103,33 @@ function invoke(argv: readonly string[]): {
     envelope,
     exit_code: result.exit_code,
   };
+}
+
+type RouteRequiredReferenceRecord = {
+  route_id: RouteId;
+  required_reference_ids: string[];
+};
+
+function contractRouteRequiredReferences(): RouteRequiredReferenceRecord[] {
+  const { envelope } = invoke([
+    "contract",
+    "route_required_references",
+    "--json",
+  ]);
+  const data = envelope.data as {
+    values: RouteRequiredReferenceRecord[];
+  };
+  return data.values;
+}
+
+function requiredReferencesFromContractFor(routeId: string): string[] {
+  const record = contractRouteRequiredReferences().find(
+    (entry) => entry.route_id === routeId,
+  );
+  if (!record) {
+    throw new Error(`missing route_required_references entry for ${routeId}`);
+  }
+  return record.required_reference_ids;
 }
 
 function minimalConfirmedLedger(extra: { final_reviewed_at?: string; pr_url?: string; status?: string } = {}): string {
@@ -394,7 +438,7 @@ describe("AC4: diagnose reports the documented diagnostic shape", () => {
 
 // ---------------- AC5: contract emits runtime contract slices ----------------
 
-describe("AC5: contract emits runtime contract slices from lib/contract.ts", () => {
+describe("AC5: contract emits runtime contract slices", () => {
   test("execution_modes slice returns the tdd | proof_first | change_first set", () => {
     const { envelope } = invoke(["contract", "execution_modes", "--json"]);
     expect(envelope.status).toBe("ok");
@@ -412,11 +456,193 @@ describe("AC5: contract emits runtime contract slices from lib/contract.ts", () 
     expect(data.values).toEqual([...ROUTE_IDS]);
   });
 
+  test("route_required_references slice returns the catalog-ordered route/reference mapping", () => {
+    const { envelope } = invoke([
+      "contract",
+      "route_required_references",
+      "--json",
+    ]);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      slice: string;
+      values: RouteRequiredReferenceRecord[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("route_required_references");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.route_id)).toEqual([...ROUTE_IDS]);
+    for (const entry of data.values) {
+      expect(entry.required_reference_ids).toEqual(
+        [...requiredReferenceIdsFor(entry.route_id)],
+      );
+      expect(entry.required_reference_ids).not.toContain(
+        "first-run-gotchas.md",
+      );
+    }
+    expect(
+      data.values.find((entry) => entry.route_id === "shipped")
+        ?.required_reference_ids,
+    ).toEqual([]);
+  });
+
   test("finding_severities slice returns P0/P1/P2/P3", () => {
     const { envelope } = invoke(["contract", "finding_severities", "--json"]);
     expect(new Set((envelope.data as { values: string[] }).values)).toEqual(
       new Set(["P0", "P1", "P2", "P3"]),
     );
+  });
+
+  test("ledger schema field-set slices return the ordered runtime facts", () => {
+    const cases = [
+      ["candidate_batch_fields", CANDIDATE_BATCH_FIELDS],
+      ["ledger_batch_lifecycle_fields", LEDGER_BATCH_LIFECYCLE_FIELDS],
+      ["builder_attempt_fields", BUILDER_ATTEMPT_FIELDS],
+      [
+        "orchestrator_inline_attempt_fields",
+        ORCHESTRATOR_INLINE_ATTEMPT_FIELDS,
+      ],
+      ["finding_fields", FINDING_FIELDS],
+      ["builder_attempt_types", BUILDER_ATTEMPT_TYPE_VALUES],
+      ["ledger_schema_pointer_slices", LEDGER_SCHEMA_POINTER_SLICES],
+    ] as const;
+
+    for (const [slice, expected] of cases) {
+      const { envelope } = invoke(["contract", slice, "--json"]);
+      expect(envelope.status).toBe("ok");
+      const data = envelope.data as {
+        slice: string;
+        values: readonly string[];
+        ordering: string;
+      };
+      expect(data.slice).toBe(slice);
+      expect(data.ordering).toBe("catalog");
+      expect(data.values).toEqual([...expected]);
+    }
+  });
+
+  test("scaffold_ids slice returns the catalog-ordered scaffold ids", () => {
+    const { envelope } = invoke(["contract", "scaffold_ids", "--json"]);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      slice: string;
+      values: readonly string[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("scaffold_ids");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values).toEqual([...SCAFFOLD_IDS]);
+    expect(data.values).toEqual([
+      "ce-plan-candidate-batch",
+      "replacement-candidate-batch",
+      "patch-proposal-candidate-batch",
+      "builder-return-envelope",
+      "builder-attempt-compact",
+      "validator-builder-evidence",
+      "validator-inline-evidence",
+      "proposer-success-envelope",
+      "proposer-fail-stop-envelope",
+      "validator-return-envelope",
+      "ledger-empty-batches",
+      "ledger-empty-findings-data",
+      "ledger-batch-lifecycle-defaults",
+      "ledger-finding-row",
+      "notes-implementation-attempt-checkpoint",
+      "notes-validator-wave-completed",
+      "notes-runbook-version-skew-continuation",
+      "workflow-learnings-empty",
+    ]);
+  });
+
+  test("scaffold_catalog slice returns structured records in catalog order", () => {
+    const { envelope } = invoke(["contract", "scaffold_catalog", "--json"]);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      slice: string;
+      values: readonly {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+      }[];
+      ordering: string;
+    };
+    expect(data.slice).toBe("scaffold_catalog");
+    expect(data.ordering).toBe("catalog");
+    expect(data.values.map((entry) => entry.scaffold_id)).toEqual([
+      ...SCAFFOLD_IDS,
+    ]);
+    for (const entry of data.values) {
+      expect(entry.output_kind).toBe("yaml");
+      expect(entry.ordering).toBe("catalog");
+      expect(entry.source).toBe(
+        `runbooks/issue-to-pr-v2/lib/scaffolds.ts#${entry.scaffold_id}`,
+      );
+    }
+    const markered = data.values.find(
+      (entry) => entry.scaffold_id === "notes-implementation-attempt-checkpoint",
+    );
+    expect(markered?.marker).toBeDefined();
+    expect(typeof markered?.marker).toBe("string");
+    const unmarkered = data.values.find(
+      (entry) => entry.scaffold_id === "ledger-empty-batches",
+    );
+    expect(unmarkered).toBeDefined();
+    expect(unmarkered).not.toHaveProperty("marker");
+  });
+
+  test("scaffold_catalog entry agrees with scaffold <id> --json for that id", () => {
+    const { envelope: catalogEnvelope } = invoke([
+      "contract",
+      "scaffold_catalog",
+      "--json",
+    ]);
+    const catalogData = catalogEnvelope.data as {
+      values: readonly {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+      }[];
+    };
+
+    for (const id of SCAFFOLD_IDS) {
+      const catalogEntry = catalogData.values.find(
+        (entry) => entry.scaffold_id === id,
+      );
+      if (!catalogEntry) {
+        throw new Error(`scaffold_catalog missing entry for ${id}`);
+      }
+
+      const { envelope: scaffoldEnvelope } = invoke(["scaffold", id, "--json"]);
+      const scaffoldData = scaffoldEnvelope.data as {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        marker?: string;
+        body: string;
+      };
+      expect(scaffoldData.scaffold_id).toBe(catalogEntry.scaffold_id);
+      expect(scaffoldData.output_kind).toBe(catalogEntry.output_kind);
+      expect(scaffoldData.source).toBe(catalogEntry.source);
+      expect(scaffoldData.ordering).toBe(catalogEntry.ordering);
+      expect(scaffoldData.marker).toBe(catalogEntry.marker);
+    }
+  });
+
+  test("--help advertises the scaffold_catalog contract slice and HELP_DATA snapshot", () => {
+    const { envelope } = invoke(["--help", "--json"]);
+    expect(envelope.status).toBe("ok");
+    const help = envelope.data as {
+      contract_slices: readonly string[];
+      scaffold_catalog: readonly { scaffold_id: string }[];
+    };
+    expect(help.contract_slices).toContain("scaffold_catalog");
+    expect(help.scaffold_catalog.map((entry) => entry.scaffold_id)).toEqual([
+      ...SCAFFOLD_IDS,
+    ]);
   });
 
   test("unknown slice returns unknown-contract-slice error", () => {
@@ -490,6 +716,73 @@ describe("AC5: contract emits runtime contract slices from lib/contract.ts", () 
     ).values;
     expect(values.find((v) => v.code === 0)?.meaning).toBe("success");
     expect(values.find((v) => v.code === 64)?.meaning).toContain("usage error");
+  });
+});
+
+describe("route_required_references parity with state and diagnose", () => {
+  function expectStateAndDiagnoseMatchContract(ledger: string): void {
+    const state = invoke(["state", ledger, "--json"]);
+    const stateData = state.envelope.data as {
+      route_id: string;
+      required_reference_ids: string[];
+    };
+    const expectedStateRefs = requiredReferencesFromContractFor(
+      stateData.route_id,
+    );
+    expect(stateData.required_reference_ids).toEqual(expectedStateRefs);
+    expect(stateData.required_reference_ids).not.toContain(
+      "first-run-gotchas.md",
+    );
+
+    const diagnose = invoke(["diagnose", ledger, "--json"]);
+    const diagnoseData = diagnose.envelope.data as {
+      inferred_route_id: string;
+      expected_reference_ids: string[];
+    };
+    const expectedDiagnoseRefs = requiredReferencesFromContractFor(
+      diagnoseData.inferred_route_id,
+    );
+    expect(diagnoseData.expected_reference_ids).toEqual(expectedDiagnoseRefs);
+    expect(diagnoseData.expected_reference_ids).not.toContain(
+      "first-run-gotchas.md",
+    );
+  }
+
+  test("no-ledger state and diagnose match the no-ledger contract record", () => {
+    expectStateAndDiagnoseMatchContract(nonExistentLedgerPath());
+  });
+
+  test("stage-route state and diagnose match the emitted contract record", () => {
+    expectStateAndDiagnoseMatchContract(minimalConfirmedLedger());
+  });
+
+  test("blocked frontmatter state and diagnose match the emitted contract record", () => {
+    expectStateAndDiagnoseMatchContract(
+      minimalConfirmedLedger({ status: "blocked" }),
+    );
+  });
+
+  test("blocked version-skew state and diagnose match the emitted contract record", () => {
+    const ledger = writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        "status: in-progress",
+        "ac_confirmation_status: confirmed",
+        "batch_contract_confirmation_status: confirmed",
+        "plan_path: docs/plans/2026-05-22-001-feat-thing.md",
+        'runbook_version: "1"',
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+      ].join("\n"),
+    );
+    expectStateAndDiagnoseMatchContract(ledger);
   });
 });
 
@@ -758,11 +1051,55 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     expect(data.commands.map((c) => c.name).sort()).toEqual([
       "contract",
       "diagnose",
+      "ledger-init",
       "next",
       "packet",
+      "scaffold",
       "state",
     ]);
     expect(data.contract_slices.length).toBeGreaterThan(0);
+    expect(data.contract_slices).toContain("route_required_references");
+    expect(data.contract_slices).toContain("candidate_batch_fields");
+    expect(data.contract_slices).toContain("ledger_batch_lifecycle_fields");
+    expect(data.contract_slices).toContain("ledger_schema_pointer_slices");
+    expect(data.contract_slices).toContain("builder_attempt_fields");
+    expect(data.contract_slices).toContain(
+      "orchestrator_inline_attempt_fields",
+    );
+    expect(data.contract_slices).toContain("finding_fields");
+    expect(data.contract_slices).toContain("builder_attempt_types");
+    expect(data.contract_slices).toContain("scaffold_ids");
+  });
+
+  test("--help documents scaffold ids and response shape", () => {
+    const { envelope } = invoke(["--help"]);
+    const data = envelope.data as {
+      scaffold_ids: readonly string[];
+      scaffold_response_shape: Record<string, string>;
+    };
+    expect(data.scaffold_ids).toEqual([...SCAFFOLD_IDS]);
+    expect(data.scaffold_ids).toContain("ce-plan-candidate-batch");
+    expect(data.scaffold_ids).toContain("replacement-candidate-batch");
+    expect(data.scaffold_ids).toContain("patch-proposal-candidate-batch");
+    expect(data.scaffold_ids).toContain("builder-return-envelope");
+    expect(data.scaffold_ids).toContain("builder-attempt-compact");
+    expect(data.scaffold_ids).toContain("validator-builder-evidence");
+    expect(data.scaffold_ids).toContain("validator-inline-evidence");
+    expect(data.scaffold_ids).toContain("ledger-empty-batches");
+    expect(data.scaffold_ids).toContain("ledger-empty-findings-data");
+    expect(data.scaffold_ids).toContain("ledger-batch-lifecycle-defaults");
+    expect(data.scaffold_ids).toContain("ledger-finding-row");
+    expect(data.scaffold_ids).toContain(
+      "notes-implementation-attempt-checkpoint",
+    );
+    expect(data.scaffold_ids).toContain("notes-validator-wave-completed");
+    expect(data.scaffold_ids).toContain(
+      "notes-runbook-version-skew-continuation",
+    );
+    expect(data.scaffold_ids).toContain("workflow-learnings-empty");
+    expect(data.scaffold_response_shape.scaffold_id).toContain("scaffold_ids");
+    expect(data.scaffold_response_shape.body).toContain("rendered scaffold");
+    expect(data.scaffold_response_shape.marker).toContain("Notes evidence");
   });
 
   test("F005 fix: --help exposes the full error and exit-code discovery surface", () => {
@@ -876,6 +1213,204 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     // No human-style prose on stderr — the error envelope on stdout is
     // the single source of truth for agents.
     expect(stderr).toBe("");
+  });
+
+  test("--help documents ledger-init flags and response shape", () => {
+    const { envelope } = invoke(["--help"]);
+    const data = envelope.data as {
+      ledger_init_flags: Record<string, string>;
+      ledger_init_response_shape: Record<string, string>;
+    };
+
+    expect(data.ledger_init_flags["--issue-number"]).toContain("integer");
+    expect(data.ledger_init_flags["--ac"]).toContain("Repeatable");
+    expect(data.ledger_init_response_shape.ledger_markdown).toContain(
+      "Complete initial ledger",
+    );
+    expect(data.ledger_init_response_shape.metadata).toContain("ac_digest");
+  });
+});
+
+// ---------------- ledger-init command ----------------
+
+describe("ledger-init command", () => {
+  const argv = [
+    "ledger-init",
+    "--issue-number",
+    "77",
+    "--issue-title",
+    'Quote "safe" title',
+    "--issue-url",
+    "https://github.com/acme/widgets/issues/77",
+    "--target-repo",
+    "acme/widgets",
+    "--started-at",
+    "2026-05-26T10:30:00+10:00",
+    "--ac-source",
+    "gold-standard",
+    "--ac",
+    "First confirmed behaviour",
+    "--ac",
+    "Second confirmed behaviour",
+    "--json",
+  ] as const;
+
+  test("emits a success envelope without writing a file", () => {
+    const { envelope, exit_code } = invoke(argv);
+    const data = envelope.data as {
+      ledger_markdown: string;
+      metadata: {
+        runbook_version: string;
+        ac_digest: string;
+        section_order: string[];
+      };
+    };
+
+    expect(envelope.status).toBe("ok");
+    expect(exit_code).toBe(0);
+    expect(data.ledger_markdown).toContain('issue_number: 77');
+    expect(data.ledger_markdown).toContain('issue_title: "Quote \\"safe\\" title"');
+    expect(data.ledger_markdown).toContain("batches: []");
+    expect(data.ledger_markdown).toContain("findings: []");
+    expect(data.ledger_markdown).toContain("workflow_learnings: []");
+    expect(data.metadata.ac_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(data.metadata.section_order).toEqual([
+      "Acceptance criteria",
+      "Batches",
+      "Findings data",
+      "Findings",
+      "Notes",
+      "Workflow Learnings",
+    ]);
+  });
+
+  test("missing required input returns a usage error envelope", () => {
+    const { envelope, exit_code } = invoke([
+      "ledger-init",
+      "--issue-number",
+      "77",
+      "--json",
+    ]);
+
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  function withArg(
+    flag: string,
+    value: string,
+    base: readonly string[] = argv,
+  ): string[] {
+    const out: string[] = [];
+    let replaced = false;
+    for (let i = 0; i < base.length; i++) {
+      if (base[i] === flag && !replaced) {
+        out.push(flag, value);
+        i += 1;
+        replaced = true;
+      } else {
+        out.push(base[i] as string);
+      }
+    }
+    if (!replaced) out.push(flag, value);
+    return out;
+  }
+
+  test("non-ISO --started-at routes to invalid-started-at public code", () => {
+    const { envelope, exit_code } = invoke(
+      withArg("--started-at", "yesterday"),
+    );
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-started-at",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("embedded newline in --issue-title routes to invalid-control-characters", () => {
+    const { envelope, exit_code } = invoke(
+      withArg("--issue-title", "Title\nwith newline"),
+    );
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-control-characters",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("invalid --ac-source routes through CLI parser to invalid-ac-source", () => {
+    const { envelope, exit_code } = invoke(
+      withArg("--ac-source", "definitely-not-a-source"),
+    );
+    expect(envelope.status).toBe("error");
+    // Parser shares the renderer's public code so an enum mismatch surfaces
+    // under the documented contract regardless of which layer caught it.
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-ac-source",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("non-positive --issue-number routes through CLI parser to invalid-issue-number", () => {
+    const { envelope, exit_code } = invoke(withArg("--issue-number", "0"));
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-issue-number",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("unknown ledger-init flag routes to missing-required-arg", () => {
+    const { envelope, exit_code } = invoke(withArg("--bogus", "x"));
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("mapLedgerInitErrorCode falls back to ledger-init-render-failed for off-catalog codes", () => {
+    // The fallback is a defensive reserve: a future internal renderer code
+    // that lands without updating LEDGER_INIT_ERROR_CODES would route here
+    // instead of leaking the raw string through the public envelope. The
+    // catalog union narrows the constructor, so this test bypasses the type
+    // system intentionally to drive the runtime guard.
+    expect(mapLedgerInitErrorCode("future-internal-code")).toBe(
+      "ledger-init-render-failed",
+    );
+    expect(mapLedgerInitErrorCode("invalid-issue-number")).toBe(
+      "invalid-issue-number",
+    );
+  });
+
+  test("empty --ac value routes to empty-acceptance-criterion", () => {
+    const argvWithEmptyAc = [
+      "ledger-init",
+      "--issue-number",
+      "77",
+      "--issue-title",
+      "Title",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/77",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "gold-standard",
+      "--ac",
+      "   ",
+      "--json",
+    ];
+    const { envelope, exit_code } = invoke(argvWithEmptyAc);
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "empty-acceptance-criterion",
+    );
+    expect(exit_code).toBe(64);
   });
 });
 
@@ -1786,6 +2321,119 @@ describe("U6: contract slice for blocking_gate_field_names", () => {
       "batch_contract_confirmation_status",
       "frontmatter.runbook_version",
     ]);
+  });
+});
+
+// ---------------- scaffold command (issue 114 tracer) ----------------
+
+describe("scaffold command", () => {
+  test("renders the ce-plan candidate batch scaffold with metadata", () => {
+    const { envelope, exit_code } = invoke([
+      "scaffold",
+      "ce-plan-candidate-batch",
+      "--json",
+    ]);
+    expect(exit_code).toBe(0);
+    expect(envelope.status).toBe("ok");
+    const data = envelope.data as {
+      scaffold_id: string;
+      output_kind: string;
+      source: string;
+      ordering: string;
+      body: string;
+    };
+    expect(data.scaffold_id).toBe("ce-plan-candidate-batch");
+    expect(data.output_kind).toBe("yaml");
+    expect(data.ordering).toBe("catalog");
+    expect(data.source).toContain("lib/scaffolds.ts");
+    expect(data.body).toBe(renderScaffold("ce-plan-candidate-batch").body);
+  });
+
+  test("renders every additional scaffold with unchanged envelope shape", () => {
+    for (const scaffoldId of SCAFFOLD_IDS.filter(
+      (id) => id !== "ce-plan-candidate-batch",
+    )) {
+      const { envelope, exit_code } = invoke([
+        "scaffold",
+        scaffoldId,
+        "--json",
+      ]);
+      expect(exit_code).toBe(0);
+      expect(envelope.status).toBe("ok");
+      const data = envelope.data as {
+        scaffold_id: string;
+        output_kind: string;
+        source: string;
+        ordering: string;
+        body: string;
+      };
+      expect(data.scaffold_id).toBe(scaffoldId);
+      expect(data.output_kind).toBe("yaml");
+      expect(data.ordering).toBe("catalog");
+      expect(data.source).toContain("lib/scaffolds.ts");
+      expect(data.body).toBe(renderScaffold(scaffoldId).body);
+    }
+  });
+
+  test("marker-aware Notes scaffolds expose marker metadata additively", () => {
+    for (const scaffoldId of [
+      "notes-implementation-attempt-checkpoint",
+      "notes-validator-wave-completed",
+      "notes-runbook-version-skew-continuation",
+    ] as const) {
+      const { envelope } = invoke(["scaffold", scaffoldId, "--json"]);
+      const data = envelope.data as { marker?: string };
+      expect(data.marker).toBe(renderScaffold(scaffoldId).marker);
+    }
+
+    const { envelope } = invoke(["scaffold", "ledger-empty-batches", "--json"]);
+    expect((envelope.data as { marker?: string }).marker).toBeUndefined();
+  });
+
+  test("unknown scaffold id returns unknown-scaffold-id", () => {
+    const { envelope, exit_code } = invoke([
+      "scaffold",
+      "not-a-scaffold",
+      "--json",
+    ]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "unknown-scaffold-id",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("missing scaffold id returns missing-required-arg", () => {
+    const { envelope, exit_code } = invoke(["scaffold", "--json"]);
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect((envelope.error as { message: string }).message).toContain(
+      "scaffold id",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("scaffold command body wraps renderScaffold in a try/catch routed to emitErrorFromException", async () => {
+    // Source-level regression guard for issue 124 AC8. A future refactor
+    // that removes the try/catch would let a contract-array divergence in
+    // the renderer leak a raw stack trace through stdout and break the
+    // 'every command writes one envelope' invariant. The functional path
+    // is implicitly covered by every existing scaffold success test (each
+    // proves the wrapper does NOT corrupt the envelope on the happy path);
+    // this static check pins the unhappy path that the smoke matrix marks
+    // as 'cannot provoke from the process boundary without lib injection'.
+    const cliSource = await Bun.file(
+      join(import.meta.dir, "cli.ts"),
+    ).text();
+    const start = cliSource.indexOf("function runScaffoldCommand");
+    expect(start).toBeGreaterThan(-1);
+    const body = cliSource.slice(
+      start,
+      cliSource.indexOf("\nfunction ", start + 1),
+    );
+    expect(body).toContain("try {");
+    expect(body).toContain("renderScaffold(scaffoldId)");
+    expect(body).toContain('emitErrorFromException(ctx, "scaffold", error)');
   });
 });
 
