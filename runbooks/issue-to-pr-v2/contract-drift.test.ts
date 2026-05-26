@@ -752,6 +752,23 @@ describe("AC2: command, slice, and packet-role claims from cli.ts positions", ()
     expect(got).toEqual(["builder-return-envelope"]);
   });
 
+  test("ignores `cli.ts scaffold` positions inside HTML comments", () => {
+    const doc = [
+      "`cli.ts scaffold builder-return-envelope --json`",
+      "Visible prose <!-- `cli.ts scaffold hidden-inline --json` --> continues.",
+      "<!--",
+      "`cli.ts scaffold hidden-multiline --json`",
+      "-->",
+    ].join("\n");
+    const claims = extractDocClaims(doc, "doc.md");
+
+    expect(tokens(claims.scaffoldCommands)).toEqual([
+      "builder-return-envelope",
+    ]);
+    expect(tokens(claims.commands).filter((token) => token === "scaffold"))
+      .toHaveLength(1);
+  });
+
   test("does NOT extract a packet role from a template filename or prose noun", () => {
     const doc = [
       "the `builder-work-packet.md` template renders for the Builder.",

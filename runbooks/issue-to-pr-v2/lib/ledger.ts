@@ -358,7 +358,7 @@ function batchFromParsedBlock(parsedBlock: ParsedBlock, blockLabel: string): Bat
 function parsePatchProposalBatchBlocks(text: string): ParsedBlock[] | null {
   const lines = text.split("\n");
   const headerIndex = lines.findIndex((raw) =>
-    /^patch_batches:\s*(?:#.*)?$/.test(raw),
+    /^patch_batches:\s*(?:\[\s*\]\s*)?(?:#.*)?$/.test(raw),
   );
   if (headerIndex === -1) return null;
 

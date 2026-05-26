@@ -676,6 +676,23 @@ function claimAt(text: string, index: number, token: string): DocClaim {
   return { token, line: lineOf(text, index), context: contextOf(text, index) };
 }
 
+function htmlCommentRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const commentRe = /<!--[\s\S]*?(?:-->|$)/g;
+  for (const match of text.matchAll(commentRe)) {
+    const start = match.index ?? 0;
+    ranges.push([start, start + match[0].length]);
+  }
+  return ranges;
+}
+
+function inHtmlComment(
+  index: number,
+  ranges: Array<[number, number]>,
+): boolean {
+  return ranges.some(([start, end]) => index >= start && index < end);
+}
+
 /**
  * Compute the half-open character ranges of `text` that sit inside a
  * **route-catalog context** — the only place a bare backtick kebab bullet may
@@ -845,6 +862,7 @@ function extractCliClaims(text: string): {
   const slices: DocClaim[] = [];
   const packetRoles: DocClaim[] = [];
   const scaffoldCommands: DocClaim[] = [];
+  const commentRanges = htmlCommentRanges(text);
 
   // The token after `cli.ts ` is the command. Allow `<...>` so the
   // placeholder is captured then skipped, rather than silently matching the
@@ -853,6 +871,7 @@ function extractCliClaims(text: string): {
   for (const m of text.matchAll(cliRe)) {
     const command = m[1];
     const index = m.index ?? 0;
+    if (inHtmlComment(index, commentRanges)) continue;
     if (!isPlaceholder(command) && !isFlag(command)) {
       commands.push(claimAt(text, index, command));
     }
@@ -869,8 +888,7 @@ function extractCliClaims(text: string): {
     } else if (command === "packet") {
       packetRoles.push(claimAt(text, index, next));
     } else if (command === "scaffold") {
-      const claim = claimAt(text, index, next);
-      if (!claim.context.startsWith("<!--")) scaffoldCommands.push(claim);
+      scaffoldCommands.push(claimAt(text, index, next));
     }
   }
 
@@ -1511,6 +1529,12 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
 ];
 
+/**
+ * Return scaffold inventory classifications for coverage tests.
+ *
+ * This module owns the inventory; callers receive a read-only view for
+ * inspection, not a second source of truth.
+ */
 export function scaffoldInventoryClassifications(): readonly ScaffoldInventoryEntry[] {
   return SCAFFOLD_INVENTORY;
 }
@@ -2123,11 +2147,21 @@ function extractYamlFences(text: string): YamlFence[] {
   return fences;
 }
 
+/** Options for scaffold inventory drift checks. */
 export type ScaffoldInventoryDriftOptions = {
+  /** Repo root used for scoped doc reads. */
   repoRoot?: string;
+  /** Runtime scaffold ids to compare against; defaults to `SCAFFOLD_IDS`. */
   scaffoldIds?: readonly string[];
 };
 
+/**
+ * Check scaffold inventory entries and pointer-only template surfaces.
+ *
+ * Returns a fresh findings array owned by the caller. Empty means inventory
+ * ids, hidden markers, retired generated blocks, and active template YAML
+ * surfaces match the runtime-owned scaffold contract.
+ */
 export async function checkScaffoldInventoryDrift(
   opts: ScaffoldInventoryDriftOptions = {},
 ): Promise<DriftFinding[]> {
@@ -2363,10 +2397,19 @@ function checkVisibleCommandPointers(
   );
 }
 
+/** Options for generated scaffold and visible pointer drift checks. */
 export type GeneratedScaffoldDriftOptions = {
+  /** Repo root used for scoped doc reads. */
   repoRoot?: string;
 };
 
+/**
+ * Run the full scaffold drift surface for active docs.
+ *
+ * Returns a fresh findings array owned by the caller. Empty means active docs
+ * use visible `cli.ts scaffold` pointers that resolve to runtime scaffold ids,
+ * with no retired generated blocks or hidden pointer markers.
+ */
 export async function checkGeneratedScaffoldBlocksDrift(
   opts: GeneratedScaffoldDriftOptions = {},
 ): Promise<DriftFinding[]> {

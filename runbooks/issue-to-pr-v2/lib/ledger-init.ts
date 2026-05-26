@@ -148,19 +148,56 @@ function hasControlCharacters(value: string): boolean {
   return false;
 }
 
+const ISO_8601_TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2 && isLeapYear(year)) return 29;
+  return DAYS_IN_MONTH[month - 1] ?? 0;
+}
+
 function isIso8601Timestamp(value: string): boolean {
-  // YYYY-MM-DD"T"HH:MM:SS(.fff)?(Z|±HH:MM). Mirrors the format the existing
-  // tests already pass and the format `new Date(...).toISOString()` emits,
-  // plus a numeric offset alternative ("+10:00").
-  if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
-      value,
-    )
-  ) {
-    return false;
+  const match = ISO_8601_TIMESTAMP_PATTERN.exec(value);
+  if (!match) return false;
+
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    zoneText,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
+
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+
+  if (zoneText !== "Z") {
+    const offsetHour = Number(offsetHourText);
+    const offsetMinute = Number(offsetMinuteText);
+
+    if (offsetHour > 23 || offsetMinute > 59) return false;
   }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed);
+
+  return true;
 }
 
 function validateInput(input: LedgerInitInput): void {
@@ -226,4 +263,3 @@ function validateInput(input: LedgerInitInput): void {
 function fencedYaml(body: string): string {
   return ["```yaml", body.trimEnd(), "```"].join("\n");
 }
-

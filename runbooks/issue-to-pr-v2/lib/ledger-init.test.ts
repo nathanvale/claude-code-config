@@ -194,6 +194,44 @@ describe("ledger init validation contract", () => {
     );
   });
 
+  test("calendar-invalid started_at returns invalid-started-at", () => {
+    for (const startedAt of [
+      "2026-00-27T07:00:00+10:00",
+      "2026-13-27T07:00:00+10:00",
+      "2026-02-30T07:00:00+10:00",
+      "2026-04-31T07:00:00+10:00",
+      "2026-05-00T07:00:00+10:00",
+    ]) {
+      expectErrorCode(call({ startedAt }), "invalid-started-at");
+    }
+  });
+
+  test("started_at validates leap-year dates", () => {
+    expect(() =>
+      call({ startedAt: "2024-02-29T07:00:00+10:00" })(),
+    ).not.toThrow();
+    expectErrorCode(
+      call({ startedAt: "2023-02-29T07:00:00+10:00" }),
+      "invalid-started-at",
+    );
+    expectErrorCode(
+      call({ startedAt: "2100-02-29T07:00:00+10:00" }),
+      "invalid-started-at",
+    );
+  });
+
+  test("out-of-range started_at time or offset returns invalid-started-at", () => {
+    for (const startedAt of [
+      "2026-05-27T24:00:00+10:00",
+      "2026-05-27T07:60:00+10:00",
+      "2026-05-27T07:00:60+10:00",
+      "2026-05-27T07:00:00+24:00",
+      "2026-05-27T07:00:00+10:60",
+    ]) {
+      expectErrorCode(call({ startedAt }), "invalid-started-at");
+    }
+  });
+
   test("ISO started_at with Z or numeric offset succeeds", () => {
     expect(() => call({ startedAt: "2026-05-27T07:00:00Z" })()).not.toThrow();
     expect(() =>

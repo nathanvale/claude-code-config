@@ -257,6 +257,30 @@ describe("parse error branches (in-process via withFailMode)", () => {
     ).toThrow(/no fenced yaml blocks/);
   });
 
+  test("patch proposal mode rejects inline empty patch_batches list with contract error", () => {
+    for (const header of ["patch_batches: []", "patch_batches: [ ]"]) {
+      const planPath = writePlan(
+        [
+          "```yaml",
+          "final_finding:",
+          "  id: F-b1-001",
+          "  signature: empty-patch-batches",
+          "  persona: ce-correctness",
+          "  severity: P1",
+          "  summary: patch proposal had no batches",
+          header,
+          "```",
+          "",
+        ].join("\n"),
+      );
+      expect(() =>
+        withFailMode("throw", () =>
+          parse(planPath, { patchProposalMode: true }),
+        ),
+      ).toThrow(/patch_batches must contain at least one batch/);
+    }
+  });
+
   test("fails on a yaml block missing required execution_mode", () => {
     const planPath = writePlan(
       [
