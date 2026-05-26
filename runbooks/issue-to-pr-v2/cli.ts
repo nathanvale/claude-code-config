@@ -1015,15 +1015,26 @@ function runScaffoldCommand(ctx: CommandContext): RunResult {
     return { exit_code: 64 };
   }
 
-  writeJson(
-    ctx.stdoutWriter,
-    createSuccessEnvelope({
-      runId: ctx.runId,
-      startedAtMs: ctx.startedAtMs,
-      data: renderScaffold(scaffoldId),
-    }),
-  );
-  return { exit_code: 0 };
+  try {
+    const rendered = renderScaffold(scaffoldId);
+    writeJson(
+      ctx.stdoutWriter,
+      createSuccessEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        data: rendered,
+      }),
+    );
+    return { exit_code: 0 };
+  } catch (error) {
+    // renderScaffold dispatches through exhaustive `switch (field)` defaults
+    // that throw ScaffoldRenderError if a contract constants array ever
+    // diverges from its switch coverage at runtime. Routing through
+    // emitErrorFromException keeps the `every command writes one envelope to
+    // stdout` contract intact and gives the agent an `unexpected-error`
+    // exit_code 70 instead of a raw thrown stack trace.
+    return emitErrorFromException(ctx, "scaffold", error);
+  }
 }
 
 function runLedgerInitCommand(ctx: CommandContext): RunResult {

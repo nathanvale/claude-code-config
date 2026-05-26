@@ -66,12 +66,7 @@
 import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { execPath } from "node:process";
-import {
-  isScaffoldId,
-  renderScaffold,
-  ScaffoldRenderError,
-  SCAFFOLD_IDS,
-} from "./lib/scaffolds";
+import { isScaffoldId, SCAFFOLD_IDS } from "./lib/scaffolds";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -111,6 +106,12 @@ export type LoadContractFactsOptions = {
    * path; production callers leave it unset.
    */
   cliPath?: string;
+  /**
+   * Override the per-call subprocess deadline (ms). Defaults to
+   * {@link READ_CLI_DEADLINE_MS}. Tests use a small value to drive the
+   * deadline branch deterministically; production callers leave it unset.
+   */
+  readCliDeadlineMs?: number;
 };
 
 /** Shape of a CLI success/error envelope, narrowed to what the loader reads. */
@@ -148,6 +149,7 @@ const READ_CLI_DEADLINE_MS = 10_000;
 async function readCliData(
   cliPath: string,
   args: string[],
+  deadlineMs: number = READ_CLI_DEADLINE_MS,
 ): Promise<Record<string, unknown>> {
   const label = `bun ${cliPath} ${args.join(" ")}`;
   // Spawn inline so Bun's overload narrows stdout/stderr to ReadableStream
@@ -164,10 +166,10 @@ async function readCliData(
       proc.kill();
       reject(
         new Error(
-          `contract-fact loader: "${label}" exceeded ${READ_CLI_DEADLINE_MS}ms deadline; killed.`,
+          `contract-fact loader: "${label}" exceeded ${deadlineMs}ms deadline; killed.`,
         ),
       );
-    }, READ_CLI_DEADLINE_MS);
+    }, deadlineMs);
   });
 
   let stdout: string;
@@ -484,23 +486,24 @@ export async function loadContractFacts(
   options: LoadContractFactsOptions = {},
 ): Promise<ContractFacts> {
   const cliPath = options.cliPath ?? defaultCliPath();
+  const deadlineMs = options.readCliDeadlineMs ?? READ_CLI_DEADLINE_MS;
 
-  const help = await readCliData(cliPath, ["--help", "--json"]);
-  const routeIdData = await readCliData(cliPath, [
-    "contract",
-    "route_ids",
-    "--json",
-  ]);
-  const packetRoleData = await readCliData(cliPath, [
-    "contract",
-    "packet_roles",
-    "--json",
-  ]);
-  const ledgerSchemaPointerData = await readCliData(cliPath, [
-    "contract",
-    "ledger_schema_pointer_slices",
-    "--json",
-  ]);
+  const help = await readCliData(cliPath, ["--help", "--json"], deadlineMs);
+  const routeIdData = await readCliData(
+    cliPath,
+    ["contract", "route_ids", "--json"],
+    deadlineMs,
+  );
+  const packetRoleData = await readCliData(
+    cliPath,
+    ["contract", "packet_roles", "--json"],
+    deadlineMs,
+  );
+  const ledgerSchemaPointerData = await readCliData(
+    cliPath,
+    ["contract", "ledger_schema_pointer_slices", "--json"],
+    deadlineMs,
+  );
 
   const commands = help.commands;
   if (!Array.isArray(commands)) {

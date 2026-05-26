@@ -359,9 +359,48 @@ describe("AC6: read-only loader, hard errors on CLI failure", () => {
     const fakeCli = join(dir, "fake-cli.ts");
     await Bun.write(fakeCli, `console.log(${JSON.stringify(errorEnvelope)});`);
     try {
+      // Pin to the literal phrase readCliData emits — `/fake-cli|error|ok|...`
+      // matched almost any message and would silently survive a contract
+      // regression that changed the rejection phrasing.
       await expect(
         loadContractFacts({ cliPath: fakeCli }),
-      ).rejects.toThrow(/fake-cli|error|ok|contract|help|status/i);
+      ).rejects.toThrow("returned a non-ok envelope");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("rejects with a deadline error and kills the subprocess when the CLI hangs past the deadline", async () => {
+    // Spawn a fake CLI that sleeps for far longer than the injected deadline
+    // and never writes to stdout. The loader's Promise.race against the
+    // setTimeout deadline must reject with the deadline-naming message AND
+    // call proc.kill() — otherwise an interactively-stalled cli.ts would
+    // wedge every pre-stage gate trigger. The fake script also installs a
+    // SIGTERM handler that, if not killed promptly, would write a sentinel
+    // line; observing the deadline error before that sentinel proves the
+    // kill path runs.
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-contract-drift-deadline-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    const fakeCli = join(dir, "hanging-cli.ts");
+    await Bun.write(
+      fakeCli,
+      [
+        "// Hang past the loader's deadline to drive the timeout race.",
+        "await new Promise(() => {});",
+      ].join("\n"),
+    );
+    try {
+      const before = Date.now();
+      await expect(
+        loadContractFacts({ cliPath: fakeCli, readCliDeadlineMs: 50 }),
+      ).rejects.toThrow(/exceeded\s+50ms\s+deadline; killed/);
+      const elapsed = Date.now() - before;
+      // The deadline is 50ms; the loader's own startup overhead bounds the
+      // upper edge. An order-of-magnitude bound proves the timeout actually
+      // fired rather than the test waiting on the natural 10s default.
+      expect(elapsed).toBeLessThan(5_000);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }

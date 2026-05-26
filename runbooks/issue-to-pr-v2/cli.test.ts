@@ -2412,6 +2412,29 @@ describe("scaffold command", () => {
     );
     expect(exit_code).toBe(64);
   });
+
+  test("scaffold command body wraps renderScaffold in a try/catch routed to emitErrorFromException", async () => {
+    // Source-level regression guard for issue 124 AC8. A future refactor
+    // that removes the try/catch would let a contract-array divergence in
+    // the renderer leak a raw stack trace through stdout and break the
+    // 'every command writes one envelope' invariant. The functional path
+    // is implicitly covered by every existing scaffold success test (each
+    // proves the wrapper does NOT corrupt the envelope on the happy path);
+    // this static check pins the unhappy path that the smoke matrix marks
+    // as 'cannot provoke from the process boundary without lib injection'.
+    const cliSource = await Bun.file(
+      join(import.meta.dir, "cli.ts"),
+    ).text();
+    const start = cliSource.indexOf("function runScaffoldCommand");
+    expect(start).toBeGreaterThan(-1);
+    const body = cliSource.slice(
+      start,
+      cliSource.indexOf("\nfunction ", start + 1),
+    );
+    expect(body).toContain("try {");
+    expect(body).toContain("renderScaffold(scaffoldId)");
+    expect(body).toContain('emitErrorFromException(ctx, "scaffold", error)');
+  });
 });
 
 describe("U6: HELP_DATA documents the state + diagnose response shapes", () => {

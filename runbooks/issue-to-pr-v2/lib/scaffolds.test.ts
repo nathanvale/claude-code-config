@@ -448,6 +448,54 @@ describe("scaffolds: runtime renderer parseability", () => {
     }
   });
 
+  // Identity gate (issue 124, AC7): per-id expected root key so a refactor
+  // that swaps two `renderBody` closures (e.g. accidentally maps
+  // `validator-inline-evidence` to the Proposer success envelope) is
+  // surfaced by a failing test instead of riding through every catalog
+  // sanity check on YAML-parseability alone. The map below is the public
+  // contract for `cli.ts scaffold <id> --json` downstream consumers.
+  const EXPECTED_ROOT_KEY: Record<(typeof SCAFFOLD_IDS)[number], string> = {
+    "ce-plan-candidate-batch": "id",
+    "replacement-candidate-batch": "id",
+    "patch-proposal-candidate-batch": "patch_batches",
+    "builder-return-envelope": "attempt_type",
+    "builder-attempt-compact": "attempt_type",
+    "validator-builder-evidence": "builder_evidence",
+    "validator-inline-evidence": "inline_evidence",
+    "proposer-success-envelope": "status",
+    "proposer-fail-stop-envelope": "status",
+    "validator-return-envelope": "reviewer",
+    "ledger-empty-batches": "batches",
+    "ledger-empty-findings-data": "findings",
+    "ledger-batch-lifecycle-defaults": "status",
+    "ledger-finding-row": "id",
+    "notes-implementation-attempt-checkpoint":
+      "implementation_attempt_checkpoint",
+    "notes-validator-wave-completed": "validator_wave_completed",
+    "notes-runbook-version-skew-continuation":
+      "runbook_version_skew_continuation",
+    "workflow-learnings-empty": "workflow_learnings",
+  };
+
+  test("every scaffold id renders a body whose first parsed key matches its expected root", () => {
+    // Iterate the runtime catalog so a new scaffold id forces an EXPECTED_ROOT_KEY
+    // entry (TS would also surface a missing key, but this loop pins runtime).
+    for (const id of SCAFFOLD_IDS) {
+      const { body } = renderScaffold(id);
+      const parsed = YAML.parse(body) as Record<string, unknown> | unknown[];
+      const root = Array.isArray(parsed)
+        ? Object.keys(parsed[0] as Record<string, unknown>)[0]
+        : Object.keys(parsed)[0];
+      expect(root).toBe(EXPECTED_ROOT_KEY[id]);
+    }
+  });
+
+  test("EXPECTED_ROOT_KEY map covers every scaffold id (no silent skip)", () => {
+    const covered = Object.keys(EXPECTED_ROOT_KEY).sort();
+    const expected = [...SCAFFOLD_IDS].sort();
+    expect(covered).toEqual(expected);
+  });
+
   test("ledger-empty-batches parses to a list, not the string 'null'", () => {
     const parsed = YAML.parse(renderScaffold("ledger-empty-batches").body) as {
       batches: unknown;
