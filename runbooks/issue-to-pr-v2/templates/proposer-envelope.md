@@ -71,31 +71,19 @@ The Proposer returns exactly one of the following shapes:
 
 ### Success: one candidate patch-batch
 
-```yaml
-status: candidate-patch-batch
-candidate_patch_batch:
-  <one object matching patch_batches[0] in the patch-proposal candidate scaffold>
-evidence_summary: "<one paragraph: ledger and code evidence consulted; no edits performed>"
-```
+Concrete envelope shape:
+`cli.ts scaffold proposer-success-envelope --json`.
 
-Candidate patch-batch scaffold:
-`cli.ts scaffold patch-proposal-candidate-batch --json`.
-
-The scaffold root `patch_batches:` is scratch-file wrapping only. Proposer
-returns its single list item under `candidate_patch_batch`; Orchestrator wraps
-that object into `patch_batches:` when writing the scratch file.
+The embedded `candidate_patch_batch` object matches one entry from
+`cli.ts scaffold patch-proposal-candidate-batch --json`. The scaffold root
+`patch_batches:` is scratch-file wrapping only. Proposer returns its single
+list item under `candidate_patch_batch`; Orchestrator wraps that object into
+`patch_batches:` when writing the scratch file.
 
 ### Fail-stop
 
-```yaml
-status: fail-stop
-blockers:
-  - "<one short statement per blocker>"
-probe_results:
-  - "<one short statement per probe>"
-route_hint: "<next-owner guidance, not authoritative>"
-notes: ""
-```
+Concrete envelope shape:
+`cli.ts scaffold proposer-fail-stop-envelope --json`.
 
 Allowed fail-stop reasons include (but are not limited to): finding evidence
 does not match the cited ledger or code state; eligible-file count exceeds 2

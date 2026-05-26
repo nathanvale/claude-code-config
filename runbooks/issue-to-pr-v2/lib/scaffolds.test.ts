@@ -37,6 +37,9 @@ const EXPECTED_SCAFFOLD_IDS = [
   "builder-attempt-compact",
   "validator-builder-evidence",
   "validator-inline-evidence",
+  "proposer-success-envelope",
+  "proposer-fail-stop-envelope",
+  "validator-return-envelope",
   "ledger-empty-batches",
   "ledger-empty-findings-data",
   "ledger-batch-lifecycle-defaults",
@@ -348,5 +351,49 @@ describe("scaffolds: Builder return projections", () => {
     for (const forbidden of VALIDATOR_INLINE_EVIDENCE_FIELDS) {
       expect(body).not.toContain(forbidden);
     }
+  });
+});
+
+describe("scaffolds: Proposer and Validator return envelopes", () => {
+  test("Proposer success envelope renders runtime fields in catalog order", () => {
+    const body = renderScaffold("proposer-success-envelope").body;
+    expect(topLevelFieldOrder(body)).toEqual([
+      "status",
+      "candidate_patch_batch",
+      "evidence_summary",
+    ]);
+    expect(scalarValue(body, "status")).toBe("candidate-patch-batch");
+    expect(body).toContain(
+      "cli.ts scaffold patch-proposal-candidate-batch --json",
+    );
+  });
+
+  test("Proposer fail-stop envelope renders the fail-stop shape", () => {
+    const body = renderScaffold("proposer-fail-stop-envelope").body;
+    expect(topLevelFieldOrder(body)).toEqual([
+      "status",
+      "blockers",
+      "probe_results",
+      "route_hint",
+      "notes",
+    ]);
+    expect(scalarValue(body, "status")).toBe("fail-stop");
+    expect(body).toContain("blockers: []");
+    expect(body).toContain("probe_results: []");
+    expect(scalarValue(body, "notes")).toBe('""');
+  });
+
+  test("Validator return envelope renders empty-finding shape with scaffold pointer", () => {
+    const body = renderScaffold("validator-return-envelope").body;
+    expect(topLevelFieldOrder(body)).toEqual([
+      "reviewer",
+      "findings",
+      "residual_risks",
+      "testing_gaps",
+    ]);
+    expect(body).toContain("findings: []");
+    expect(body).toContain("residual_risks: []");
+    expect(body).toContain("testing_gaps: []");
+    expect(body).toContain("cli.ts scaffold ledger-finding-row --json");
   });
 });

@@ -28,8 +28,11 @@ import {
   NOTES_VALIDATOR_WAVE_COMPLETED_MARKER,
   NOTES_VALIDATOR_WAVE_COMPLETED_ROOT_KEY,
   NOTES_VALIDATOR_WAVE_DISPATCH_EVIDENCE_FIELDS,
+  PROPOSER_FAIL_STOP_ENVELOPE_FIELDS,
+  PROPOSER_SUCCESS_ENVELOPE_FIELDS,
   RUNBOOK_VERSION,
   VALIDATOR_INLINE_EVIDENCE_FIELDS,
+  VALIDATOR_RETURN_ENVELOPE_FIELDS,
   VALIDATOR_WAVE_OUTCOMES,
 } from "./contract";
 
@@ -91,6 +94,27 @@ const SCAFFOLD_DEFINITIONS = {
       "runbooks/issue-to-pr-v2/lib/scaffolds.ts#validator-inline-evidence",
     ordering: "catalog",
     renderBody: renderValidatorInlineEvidenceBody,
+  },
+  "proposer-success-envelope": {
+    output_kind: "yaml",
+    source:
+      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#proposer-success-envelope",
+    ordering: "catalog",
+    renderBody: renderProposerSuccessEnvelopeBody,
+  },
+  "proposer-fail-stop-envelope": {
+    output_kind: "yaml",
+    source:
+      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#proposer-fail-stop-envelope",
+    ordering: "catalog",
+    renderBody: renderProposerFailStopEnvelopeBody,
+  },
+  "validator-return-envelope": {
+    output_kind: "yaml",
+    source:
+      "runbooks/issue-to-pr-v2/lib/scaffolds.ts#validator-return-envelope",
+    ordering: "catalog",
+    renderBody: renderValidatorReturnEnvelopeBody,
   },
   "ledger-empty-batches": {
     output_kind: "yaml",
@@ -164,6 +188,9 @@ export const SCAFFOLD_IDS = [
   "builder-attempt-compact",
   "validator-builder-evidence",
   "validator-inline-evidence",
+  "proposer-success-envelope",
+  "proposer-fail-stop-envelope",
+  "validator-return-envelope",
   "ledger-empty-batches",
   "ledger-empty-findings-data",
   "ledger-batch-lifecycle-defaults",
@@ -401,6 +428,107 @@ function renderValidatorInlineEvidenceField(
       throw new ScaffoldRenderError(
         "unknown-validator-inline-evidence-field",
         `unknown Validator inline evidence field "${unknownField}"`,
+      );
+    }
+  }
+}
+
+type ProposerSuccessEnvelopeField =
+  (typeof PROPOSER_SUCCESS_ENVELOPE_FIELDS)[number];
+type ProposerFailStopEnvelopeField =
+  (typeof PROPOSER_FAIL_STOP_ENVELOPE_FIELDS)[number];
+type ValidatorReturnEnvelopeField =
+  (typeof VALIDATOR_RETURN_ENVELOPE_FIELDS)[number];
+
+function renderProposerSuccessEnvelopeBody(): string {
+  return `${PROPOSER_SUCCESS_ENVELOPE_FIELDS.flatMap((field) =>
+    renderProposerSuccessEnvelopeField(field),
+  ).join("\n")}\n`;
+}
+
+function renderProposerSuccessEnvelopeField(
+  field: ProposerSuccessEnvelopeField,
+): string[] {
+  switch (field) {
+    case "status":
+      return ["status: candidate-patch-batch"];
+    case "candidate_patch_batch":
+      return [
+        "candidate_patch_batch:",
+        "  # <one object matching patch_batches[0] in the patch-proposal candidate scaffold>",
+        "  # Resolve via: cli.ts scaffold patch-proposal-candidate-batch --json",
+      ];
+    case "evidence_summary":
+      return [
+        'evidence_summary: "<one paragraph: ledger and code evidence consulted; no edits performed>"',
+      ];
+    default: {
+      const unknownField: never = field;
+      throw new ScaffoldRenderError(
+        "unknown-proposer-success-envelope-field",
+        `unknown Proposer success envelope field "${unknownField}"`,
+      );
+    }
+  }
+}
+
+function renderProposerFailStopEnvelopeBody(): string {
+  return `${PROPOSER_FAIL_STOP_ENVELOPE_FIELDS.flatMap((field) =>
+    renderProposerFailStopEnvelopeField(field),
+  ).join("\n")}\n`;
+}
+
+function renderProposerFailStopEnvelopeField(
+  field: ProposerFailStopEnvelopeField,
+): string[] {
+  switch (field) {
+    case "status":
+      return ["status: fail-stop"];
+    case "blockers":
+      return ["blockers: []  # one short statement per blocker"];
+    case "probe_results":
+      return ["probe_results: []  # one short statement per probe"];
+    case "route_hint":
+      return [
+        'route_hint: "<next-owner guidance, not authoritative>"',
+      ];
+    case "notes":
+      return ['notes: ""'];
+    default: {
+      const unknownField: never = field;
+      throw new ScaffoldRenderError(
+        "unknown-proposer-fail-stop-envelope-field",
+        `unknown Proposer fail-stop envelope field "${unknownField}"`,
+      );
+    }
+  }
+}
+
+function renderValidatorReturnEnvelopeBody(): string {
+  return `${VALIDATOR_RETURN_ENVELOPE_FIELDS.flatMap((field) =>
+    renderValidatorReturnEnvelopeField(field),
+  ).join("\n")}\n`;
+}
+
+function renderValidatorReturnEnvelopeField(
+  field: ValidatorReturnEnvelopeField,
+): string[] {
+  switch (field) {
+    case "reviewer":
+      return ["reviewer: <persona>"];
+    case "findings":
+      return [
+        "findings: []  # each non-empty row matches cli.ts scaffold ledger-finding-row --json",
+      ];
+    case "residual_risks":
+      return ["residual_risks: []"];
+    case "testing_gaps":
+      return ["testing_gaps: []"];
+    default: {
+      const unknownField: never = field;
+      throw new ScaffoldRenderError(
+        "unknown-validator-return-envelope-field",
+        `unknown Validator return envelope field "${unknownField}"`,
       );
     }
   }

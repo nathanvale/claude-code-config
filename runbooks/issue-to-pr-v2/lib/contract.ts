@@ -284,6 +284,39 @@ export const VALIDATOR_INLINE_EVIDENCE_KEYS = new Set<string>(
   VALIDATOR_INLINE_EVIDENCE_FIELDS,
 );
 
+export const PROPOSER_SUCCESS_ENVELOPE_FIELDS = [
+  "status",
+  "candidate_patch_batch",
+  "evidence_summary",
+] as const;
+
+export const PROPOSER_SUCCESS_ENVELOPE_KEYS = new Set<string>(
+  PROPOSER_SUCCESS_ENVELOPE_FIELDS,
+);
+
+export const PROPOSER_FAIL_STOP_ENVELOPE_FIELDS = [
+  "status",
+  "blockers",
+  "probe_results",
+  "route_hint",
+  "notes",
+] as const;
+
+export const PROPOSER_FAIL_STOP_ENVELOPE_KEYS = new Set<string>(
+  PROPOSER_FAIL_STOP_ENVELOPE_FIELDS,
+);
+
+export const VALIDATOR_RETURN_ENVELOPE_FIELDS = [
+  "reviewer",
+  "findings",
+  "residual_risks",
+  "testing_gaps",
+] as const;
+
+export const VALIDATOR_RETURN_ENVELOPE_KEYS = new Set<string>(
+  VALIDATOR_RETURN_ENVELOPE_FIELDS,
+);
+
 export const ORCHESTRATOR_INLINE_ATTEMPT_FIELDS = [
   "commit_sha",
   "files_touched",

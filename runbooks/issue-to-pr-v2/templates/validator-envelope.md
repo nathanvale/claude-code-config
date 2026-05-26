@@ -53,13 +53,8 @@ ledger, Builder fix prose, or any commit-write or ledger-write slot.
 Builder evidence block:
 `cli.ts scaffold validator-builder-evidence --json`.
 
-For an Orchestrator-inline attempt, set:
-
-```yaml
-evidence_source: orchestrator_inline
-```
-
-Inline evidence block:
+For an Orchestrator-inline attempt, set `evidence_source: orchestrator_inline`
+on the rendered packet. Inline evidence block:
 `cli.ts scaffold validator-inline-evidence --json`.
 
 The Orchestrator passes transient sanity concerns only as Validator focus.
@@ -83,12 +78,8 @@ contract is enforced on the consumer side.
 
 ## Return envelope
 
-```yaml
-reviewer: <persona>
-findings: []
-residual_risks: []
-testing_gaps: []
-```
+Concrete envelope shape:
+`cli.ts scaffold validator-return-envelope --json`.
 
 `findings: []`, `{"findings":[]}`, and the full envelope with an empty
 `findings` array all mean "no rows from this persona." If `findings` is
