@@ -1069,7 +1069,10 @@ function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
   const consumeValue = (flag: string, i: number): string => {
     const value = args[i + 1];
     if (value === undefined || value.startsWith("--")) {
-      throw new LedgerInitFlagError(`ledger-init ${flag} requires a value`);
+      throw new LedgerInitFlagError(
+        "missing-required-arg",
+        `ledger-init ${flag} requires a value`,
+      );
     }
     return value;
   };
@@ -1081,6 +1084,7 @@ function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
         const issueNumber = Number.parseInt(raw, 10);
         if (!/^[0-9]+$/.test(raw) || issueNumber <= 0) {
           throw new LedgerInitFlagError(
+            "invalid-issue-number",
             "ledger-init --issue-number requires a positive integer",
           );
         }
@@ -1096,6 +1100,7 @@ function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
         const acSource = consumeValue(arg, i);
         if (!isAcSource(acSource)) {
           throw new LedgerInitFlagError(
+            "invalid-ac-source",
             "ledger-init --ac-source is not in the runtime AC source catalog",
           );
         }
@@ -1105,7 +1110,10 @@ function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
       }
       case "--ac": flags.acceptanceCriteria.push(consumeValue(arg, i)); i++; break;
       default:
-        throw new LedgerInitFlagError(`unknown ledger-init flag ${arg}`);
+        throw new LedgerInitFlagError(
+          "missing-required-arg",
+          `unknown ledger-init flag ${arg}`,
+        );
     }
   }
 
@@ -1119,6 +1127,7 @@ function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
   ] as const) {
     if (flags[required] === undefined) {
       throw new LedgerInitFlagError(
+        "missing-required-arg",
         `ledger-init requires --${kebabCase(required)}`,
       );
     }
@@ -1127,10 +1136,24 @@ function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
   return flags as LedgerInitFlags;
 }
 
+/**
+ * Routeable code for a `LedgerInitFlagError`. `missing-required-arg` is the
+ * generic parser channel for absent/unknown flags; `invalid-issue-number`
+ * and `invalid-ac-source` are the public renderer codes the parser shares
+ * so its early rejection still surfaces under the documented contract.
+ */
+type LedgerInitFlagErrorCode =
+  | "missing-required-arg"
+  | "invalid-issue-number"
+  | "invalid-ac-source";
+
 class LedgerInitFlagError extends Error {
-  constructor(message: string) {
+  readonly code: LedgerInitFlagErrorCode;
+
+  constructor(code: LedgerInitFlagErrorCode, message: string) {
     super(message);
     this.name = "LedgerInitFlagError";
+    this.code = code;
   }
 }
 
@@ -1144,11 +1167,14 @@ function emitLedgerInitError(
       createErrorEnvelope({
         runId: ctx.runId,
         startedAtMs: ctx.startedAtMs,
-        code: "missing-required-arg",
+        code: error.code,
         message: error.message,
         exitCode: 64,
         hint: {
-          summary: "Pass all required ledger-init flags with non-empty values.",
+          summary:
+            error.code === "missing-required-arg"
+              ? "Pass all required ledger-init flags with non-empty values."
+              : "Pass a value that matches the documented ledger-init catalog.",
           action: "change_input",
         },
       }),
@@ -1176,7 +1202,15 @@ function emitLedgerInitError(
   return emitErrorFromException(ctx, "ledger-init", error);
 }
 
-function mapLedgerInitErrorCode(
+/**
+ * Map an internal `LedgerInitRenderError.code` to a public catalog code.
+ * Today every internal code is in `LEDGER_INIT_ERROR_CODES`, so the fallback
+ * `ledger-init-render-failed` is a defensive reserve: if a future
+ * renderer adds a new internal code without updating the public union, the
+ * mapper preserves the JSON envelope contract by emitting the fallback
+ * instead of leaking the unmapped string. Exported for direct unit coverage.
+ */
+export function mapLedgerInitErrorCode(
   code: string,
 ): LedgerInitErrorCode | "ledger-init-render-failed" {
   return (LEDGER_INIT_ERROR_CODES as readonly string[]).includes(code)

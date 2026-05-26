@@ -635,6 +635,85 @@ describe("Block 1: Envelope-shape invariants (cross-command)", () => {
     expect(result.exitCode).toBe(64);
   });
 
+  // Each ledger-init public error code below is driven through the process
+  // boundary so the documented catalog stays reachable. Codes left uncovered
+  // here (`ledger-init-render-failed`) are reserved fallbacks that the CLI
+  // boundary cannot provoke without modifying lib source — they are pinned
+  // separately in the renderer unit tests.
+  function ledgerInitArgs(overrides: Partial<Record<string, string>> = {}): string[] {
+    const defaults: Record<string, string> = {
+      "--issue-number": "88",
+      "--issue-title": "Smoke ledger",
+      "--issue-url": "https://github.com/acme/widgets/issues/88",
+      "--target-repo": "acme/widgets",
+      "--started-at": "2026-05-26T10:30:00+10:00",
+      "--ac-source": "pasted",
+    };
+    const merged = { ...defaults, ...overrides };
+    const args = ["ledger-init"];
+    for (const [flag, value] of Object.entries(merged)) {
+      if (value === "") continue;
+      args.push(flag, value as string);
+    }
+    args.push("--ac", overrides["--ac"] ?? "Smoke AC", "--json");
+    return args;
+  }
+
+  test("ledger-init --issue-number 0 routes to invalid-issue-number at process boundary", async () => {
+    const result = await runCli(ledgerInitArgs({ "--issue-number": "0" }));
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-issue-number");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init whitespace --issue-title routes to missing-required-input at process boundary", async () => {
+    const result = await runCli(
+      ledgerInitArgs({ "--issue-title": "   " }),
+    );
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "missing-required-input");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init unknown --ac-source routes to invalid-ac-source at process boundary", async () => {
+    const result = await runCli(
+      ledgerInitArgs({ "--ac-source": "definitely-not-a-source" }),
+    );
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "invalid-ac-source");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init no --ac flag routes to missing-acceptance-criteria at process boundary", async () => {
+    // ledgerInitArgs always appends --ac; build a no-AC argv inline.
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke ledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "pasted",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "missing-acceptance-criteria");
+    expect(result.exitCode).toBe(64);
+  });
+
+  test("ledger-init whitespace --ac routes to empty-acceptance-criterion at process boundary", async () => {
+    const result = await runCli(ledgerInitArgs({ "--ac": "   " }));
+    expect(result.envelopeParsed).toBe(true);
+    assertErrorEnvelopeShape(result.envelope, "empty-acceptance-criterion");
+    expect(result.exitCode).toBe(64);
+  });
+
   test("envelope schema_version is the literal '1' string for both success and error", async () => {
     const success = await runCli(["contract", "route_ids", "--json"]);
     expect(success.envelope.schema_version).toBe("1");

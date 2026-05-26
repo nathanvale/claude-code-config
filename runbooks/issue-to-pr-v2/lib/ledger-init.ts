@@ -37,9 +37,9 @@ export type LedgerInitResult = {
 };
 
 export class LedgerInitRenderError extends Error {
-  readonly code: string;
+  readonly code: LedgerInitErrorCode;
 
-  constructor(code: string, message: string) {
+  constructor(code: LedgerInitErrorCode, message: string) {
     super(message);
     this.name = "LedgerInitRenderError";
     this.code = code;

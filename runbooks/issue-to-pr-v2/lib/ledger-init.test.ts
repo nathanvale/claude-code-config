@@ -132,7 +132,7 @@ describe("ledger init validation contract", () => {
           `expected LedgerInitRenderError, got ${(error as Error).name}: ${(error as Error).message}`,
         );
       }
-      expect(error.code).toBe(expectedCode);
+      expect(error.code as string).toBe(expectedCode);
       return;
     }
     throw new Error("expected LedgerInitRenderError, got no throw");

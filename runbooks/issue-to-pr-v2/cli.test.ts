@@ -23,7 +23,7 @@ import {
   SCAFFOLD_IDS,
   renderScaffold,
 } from "./lib/scaffolds";
-import { run } from "./cli";
+import { mapLedgerInitErrorCode, run } from "./cli";
 
 /**
  * Process-boundary tests for the v2 CLI front door (U4).
@@ -1341,17 +1341,49 @@ describe("ledger-init command", () => {
     expect(exit_code).toBe(64);
   });
 
-  test("invalid --ac-source routes through CLI parser to missing-required-arg", () => {
+  test("invalid --ac-source routes through CLI parser to invalid-ac-source", () => {
     const { envelope, exit_code } = invoke(
       withArg("--ac-source", "definitely-not-a-source"),
     );
     expect(envelope.status).toBe("error");
-    // Flag-layer rejection: parser owns enum validation, returns its own
-    // diagnostic code rather than the renderer's invalid-ac-source.
+    // Parser shares the renderer's public code so an enum mismatch surfaces
+    // under the documented contract regardless of which layer caught it.
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-ac-source",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("non-positive --issue-number routes through CLI parser to invalid-issue-number", () => {
+    const { envelope, exit_code } = invoke(withArg("--issue-number", "0"));
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "invalid-issue-number",
+    );
+    expect(exit_code).toBe(64);
+  });
+
+  test("unknown ledger-init flag routes to missing-required-arg", () => {
+    const { envelope, exit_code } = invoke(withArg("--bogus", "x"));
+    expect(envelope.status).toBe("error");
     expect((envelope.error as { code: string }).code).toBe(
       "missing-required-arg",
     );
     expect(exit_code).toBe(64);
+  });
+
+  test("mapLedgerInitErrorCode falls back to ledger-init-render-failed for off-catalog codes", () => {
+    // The fallback is a defensive reserve: a future internal renderer code
+    // that lands without updating LEDGER_INIT_ERROR_CODES would route here
+    // instead of leaking the raw string through the public envelope. The
+    // catalog union narrows the constructor, so this test bypasses the type
+    // system intentionally to drive the runtime guard.
+    expect(mapLedgerInitErrorCode("future-internal-code")).toBe(
+      "ledger-init-render-failed",
+    );
+    expect(mapLedgerInitErrorCode("invalid-issue-number")).toBe(
+      "invalid-issue-number",
+    );
   });
 
   test("empty --ac value routes to empty-acceptance-criterion", () => {
