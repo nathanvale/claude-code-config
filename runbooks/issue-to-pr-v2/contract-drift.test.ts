@@ -1574,6 +1574,248 @@ describe("issue 114/115/116/117: scaffold docs stay aligned with runtime rendere
     expect(missing).toEqual([]);
   });
 });
+
+describe("issue 124: contract-drift gates resist near-miss bypasses", () => {
+  const activeTemplates = [
+    cePlanTemplatePath,
+    proposerTemplatePath,
+    patchProposalTemplatePath,
+    builderReturnTemplatePath,
+    builderWorkPacketTemplatePath,
+    validatorEnvelopeTemplatePath,
+  ] as const;
+
+  describe("AC1: fenced YAML gate fires regardless of case/CRLF/info-string", () => {
+    const fenceBypasses: ReadonlyArray<{ label: string; appendix: string }> = [
+      {
+        label: "upper-case YAML language tag",
+        appendix:
+          "\n\n```YAML\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "yml language tag (short form)",
+        appendix:
+          "\n\n```yml\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "info-string suffix after yaml token",
+        appendix:
+          "\n\n```yaml:scaffold\nunowned_runtime_shape:\n  field: value\n```\n",
+      },
+      {
+        label: "CRLF line endings",
+        appendix:
+          "\r\n\r\n```yaml\r\nunowned_runtime_shape:\r\n  field: value\r\n```\r\n",
+      },
+    ];
+
+    for (const template of activeTemplates) {
+      for (const bypass of fenceBypasses) {
+        test(`${template} → ${bypass.label}`, async () => {
+          const dir = await stageDriftSurfaceFixture({
+            [template]: (text) => `${text}${bypass.appendix}`,
+          });
+          try {
+            const findings = await checkGeneratedScaffoldBlocksDrift({
+              repoRoot: dir,
+            });
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                doc: template,
+                kind: "scaffold-inventory",
+                claim: "unclassified-yaml-fence",
+              }),
+            );
+          } finally {
+            await Bun.$`rm -rf ${dir}`.quiet();
+          }
+        });
+      }
+    }
+  });
+
+  describe("AC2: hidden marker gate fires on case/quote/trailing-attr variants", () => {
+    const markerVariants: ReadonlyArray<{ label: string; comment: string }> = [
+      {
+        label: "lowercase canonical (control)",
+        comment:
+          '<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->',
+      },
+      {
+        label: "uppercase marker name",
+        comment:
+          '<!-- Scaffold-Pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->',
+      },
+      {
+        label: "single-quoted source attribute",
+        comment:
+          "<!-- scaffold-pointer id=builder-return-envelope source='cli.ts scaffold builder-return-envelope --json' -->",
+      },
+      {
+        label: "trailing attribute soup",
+        comment:
+          '<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" generated-by="x" -->',
+      },
+    ];
+
+    for (const variant of markerVariants) {
+      test(`scaffold-pointer marker: ${variant.label}`, async () => {
+        const dir = await stageDriftSurfaceFixture({
+          [builderReturnTemplatePath]: (text) =>
+            text.replace(
+              "`cli.ts scaffold builder-return-envelope --json`.",
+              `\`cli.ts scaffold builder-return-envelope --json\`.\n${variant.comment}`,
+            ),
+        });
+        try {
+          const findings = await checkGeneratedScaffoldBlocksDrift({
+            repoRoot: dir,
+          });
+          expect(
+            findings.some(
+              (finding) =>
+                finding.doc === builderReturnTemplatePath &&
+                finding.kind === "scaffold-inventory" &&
+                /scaffold-pointer marker reintroduced/.test(finding.reason),
+            ),
+          ).toBe(true);
+        } finally {
+          await Bun.$`rm -rf ${dir}`.quiet();
+        }
+      });
+    }
+
+    test("uppercase generated-scaffold:start marker is still reported", async () => {
+      const dir = await stageDriftSurfaceFixture({
+        [cePlanTemplatePath]: (text) =>
+          text.replace(
+            "`cli.ts scaffold ce-plan-candidate-batch --json`.",
+            [
+              '<!-- Generated-Scaffold:Start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+              "```yaml",
+              "candidate_batches: []",
+              "```",
+              "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
+            ].join("\n"),
+          ),
+      });
+      try {
+        const findings = await checkGeneratedScaffoldBlocksDrift({
+          repoRoot: dir,
+        });
+        expect(
+          findings.some(
+            (finding) =>
+              finding.doc === cePlanTemplatePath &&
+              finding.kind === "scaffold-inventory" &&
+              /generated-scaffold marker reintroduced/.test(finding.reason),
+          ),
+        ).toBe(true);
+      } finally {
+        await Bun.$`rm -rf ${dir}`.quiet();
+      }
+    });
+
+    test("malformed marker (missing source attribute) surfaces with malformed reason", async () => {
+      const dir = await stageDriftSurfaceFixture({
+        [builderReturnTemplatePath]: (text) =>
+          text.replace(
+            "`cli.ts scaffold builder-return-envelope --json`.",
+            "`cli.ts scaffold builder-return-envelope --json`.\n<!-- scaffold-pointer id=builder-return-envelope -->",
+          ),
+      });
+      try {
+        const findings = await checkGeneratedScaffoldBlocksDrift({
+          repoRoot: dir,
+        });
+        const malformed = findings.find(
+          (finding) =>
+            finding.doc === builderReturnTemplatePath &&
+            finding.kind === "scaffold-inventory" &&
+            finding.reason.includes("malformed marker"),
+        );
+        expect(malformed).toBeDefined();
+        expect(malformed?.reason).toContain("missing `source=...`");
+      } finally {
+        await Bun.$`rm -rf ${dir}`.quiet();
+      }
+    });
+  });
+
+  describe("AC3: removed-surface detector catches idiomatic rewrites", () => {
+    const removedVariants: ReadonlyArray<{
+      label: string;
+      template: (typeof activeTemplates)[number];
+      coordinate: string;
+      injection: string;
+    }> = [
+      {
+        label: "single-quoted scalar for commit_ref_or_range",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: "\n\ncommit_ref_or_range: '<sha | range>'\n",
+      },
+      {
+        label: "no internal spaces in <sha|range>",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range: "<sha|range>"\n',
+      },
+      {
+        label: "tab between colon and quoted value",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range:\t"<sha | range>"\n',
+      },
+      {
+        label: "double space between colon and quoted value",
+        template: validatorEnvelopeTemplatePath,
+        coordinate: "## Packet slots / dynamic Validator packet body",
+        injection: '\n\ncommit_ref_or_range:  "<sha | range>"\n',
+      },
+      {
+        label: "dynamic Builder packet body restored",
+        template: builderWorkPacketTemplatePath,
+        coordinate: "## Packet slots / dynamic Builder packet body",
+        injection: "\n\nbatch_contract:\n  id:  <slug>\n",
+      },
+      {
+        label: "dynamic Proposer packet body restored",
+        template: proposerTemplatePath,
+        coordinate: "## Packet slots / dynamic Proposer packet body",
+        injection: "\n\nfinal_finding_row:\n  id: <finding-id>\n",
+      },
+      {
+        label: "Patch Proposal final_finding fields restored",
+        template: patchProposalTemplatePath,
+        coordinate: "## Scratch file shape / dynamic final_finding member list",
+        injection: "\n\nfinal_finding\tfields:\n",
+      },
+    ];
+
+    for (const variant of removedVariants) {
+      test(variant.label, async () => {
+        const dir = await stageDriftSurfaceFixture({
+          [variant.template]: (text) => `${text}${variant.injection}`,
+        });
+        try {
+          const findings = await checkGeneratedScaffoldBlocksDrift({
+            repoRoot: dir,
+          });
+          expect(findings).toContainEqual(
+            expect.objectContaining({
+              doc: variant.template,
+              kind: "scaffold-inventory",
+              claim: variant.coordinate,
+            }),
+          );
+        } finally {
+          await Bun.$`rm -rf ${dir}`.quiet();
+        }
+      });
+    }
+  });
+});
 describe("F14: route-id and packet-role negative guards", () => {
   test("a non-blocked kebab token in plain PROSE is NOT a route id", () => {
     // No route-catalog context, not a blocked-* token, not a route_id:

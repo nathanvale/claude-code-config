@@ -1217,6 +1217,60 @@ type ScaffoldInventoryEntry = {
   forbiddenText?: string;
 };
 
+/**
+ * Build a structural detector for a `removed` inventory entry's `forbiddenText`
+ * sentinel. The literal `text.includes()` gate was bypassed by trivial idiomatic
+ * rewrites (single-quoted scalars, tab between `key:` and value, double spaces,
+ * `<sha|range>` without internal spaces). The hardened detector:
+ *
+ *   - collapses ASCII whitespace runs to a single match-any-whitespace class,
+ *   - treats `"..."` and `'...'` as interchangeable when the literal contains
+ *     a double-quoted scalar,
+ *   - tolerates optional whitespace around `|` inside angle-bracket placeholders
+ *     (`<sha | range>` ↔ `<sha|range>`).
+ *
+ * Anchored to the byte-level sentinels SCAFFOLD_INVENTORY already encodes; no
+ * structural YAML parsing required for any current entry.
+ */
+function buildForbiddenTextDetector(forbiddenText: string): RegExp {
+  // Tokenise into runs that escape verbatim and runs of whitespace that map to
+  // `\s+`. Then convert `"..."` quoted scalars into `["'][...]["']` so a copy
+  // restored with single quotes still trips the gate. Whitespace that bumps
+  // up against a `|` collapses to optional whitespace, so `<sha | range>` and
+  // `<sha|range>` both match.
+  let pattern = "";
+  let i = 0;
+  while (i < forbiddenText.length) {
+    const ch = forbiddenText[i] ?? "";
+    if (/\s/.test(ch)) {
+      let j = i;
+      while (j < forbiddenText.length && /\s/.test(forbiddenText[j] ?? "")) {
+        j += 1;
+      }
+      const prev = forbiddenText[i - 1] ?? "";
+      const next = forbiddenText[j] ?? "";
+      const adjacentToPipe = prev === "|" || next === "|";
+      pattern += adjacentToPipe ? "\\s*" : "\\s+";
+      i = j;
+      continue;
+    }
+    if (ch === '"') {
+      // Match either quote style at this position.
+      pattern += "[\"']";
+      i += 1;
+      continue;
+    }
+    if (ch === "|") {
+      pattern += "\\s*\\|\\s*";
+      i += 1;
+      continue;
+    }
+    pattern += escapeRegExp(ch);
+    i += 1;
+  }
+  return new RegExp(pattern);
+}
+
 const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
     doc: CE_PLAN_TEMPLATE_REL,
@@ -1839,6 +1893,7 @@ type ScaffoldPointer = {
   id: string;
   source: string;
   line: number;
+  malformedReason?: string;
 };
 type ScaffoldMarker = {
   id: string;
@@ -1851,10 +1906,17 @@ type YamlFence = {
   endIndex: number;
 };
 
-const GENERATED_SCAFFOLD_START_RE =
-  /<!--\s*generated-scaffold:start\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
-const SCAFFOLD_POINTER_RE =
-  /<!--\s*scaffold-pointer\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
+// Marker regexes are intentionally LENIENT — they accept case variants on the
+// marker name, either quote style on the `source=...` attribute, and any
+// trailing attribute soup before the closing `-->`. The point is to refuse to
+// silently ignore a near-match; once captured, `buildScaffoldMarkerSummary`
+// classifies the marker as well-formed or malformed and the inventory check
+// surfaces both as drift findings.
+const GENERATED_SCAFFOLD_START_LOOSE_RE =
+  /<!--\s*generated-scaffold:start\b([^>]*?)-->/gi;
+const SCAFFOLD_POINTER_LOOSE_RE = /<!--\s*scaffold-pointer\b([^>]*?)-->/gi;
+const SCAFFOLD_MARKER_ID_RE = /\bid\s*=\s*([A-Za-z0-9_-]+)\b/i;
+const SCAFFOLD_MARKER_SOURCE_RE = /\bsource\s*=\s*("([^"]*)"|'([^']*)')/i;
 
 function expectedGeneratedScaffoldSource(id: string): string {
   return `cli.ts scaffold ${id} --json`;
@@ -1863,14 +1925,22 @@ function expectedGeneratedScaffoldSource(id: string): string {
 function generatedScaffoldEndRe(id: string): RegExp {
   return new RegExp(
     `<!--\\s*generated-scaffold:end\\s+id=${escapeRegExp(id)}\\s*-->`,
+    "i",
   );
 }
+
+// Active templates must be pointer-only; any fenced YAML body — regardless of
+// language-token casing (` ```YAML `), trailing info-string (` ```yaml:foo `),
+// or CRLF line endings emitted by Windows or GitHub web UIs — is treated as a
+// reintroduction attempt. The detector is case-insensitive on the language tag
+// and accepts `\r?\n` on both fence boundaries.
+const YAML_FENCE_RE = /```ya?ml\b[^\r\n]*\r?\n([\s\S]*?)\r?\n```/gi;
 
 function parseGeneratedScaffoldRegion(region: string): {
   body: string | null;
   malformedReason?: string;
 } {
-  const fenceRe = /```ya?ml\n([\s\S]*?)\n```/g;
+  const fenceRe = new RegExp(YAML_FENCE_RE.source, YAML_FENCE_RE.flags);
   const fences = [...region.matchAll(fenceRe)];
   if (fences.length === 0) {
     return {
@@ -1904,14 +1974,76 @@ function parseGeneratedScaffoldRegion(region: string): {
   return { body: `${fence[1] ?? ""}\n` };
 }
 
+/**
+ * Decompose a loose marker match into its `id`, `source`, and any malformed
+ * reason. Returns:
+ *   - `id` empty string when the marker has no `id=...` attribute (or one with
+ *     non-identifier characters);
+ *   - `source` empty string when no `source=...` attribute is present;
+ *   - `malformedReason` populated when the marker deviates from the canonical
+ *     shape (` <!-- name id=foo source="bar" --> ` with lowercase name and
+ *     double-quoted source). A populated reason still surfaces the marker as a
+ *     finding so contributors get a tripwire instead of silent acceptance.
+ */
+function parseMarkerAttributes(
+  markerName: string,
+  rawMatch: string,
+  attributePayload: string,
+): { id: string; source: string; malformedReason?: string } {
+  const reasons: string[] = [];
+  const idMatch = SCAFFOLD_MARKER_ID_RE.exec(attributePayload);
+  const id = idMatch?.[1] ?? "";
+  if (!idMatch) {
+    reasons.push("missing or non-identifier `id=...`");
+  }
+  const sourceMatch = SCAFFOLD_MARKER_SOURCE_RE.exec(attributePayload);
+  const source = sourceMatch
+    ? (sourceMatch[2] ?? sourceMatch[3] ?? "")
+    : "";
+  if (!sourceMatch) {
+    reasons.push("missing `source=...` attribute");
+  } else if (sourceMatch[3] !== undefined) {
+    reasons.push("source attribute uses single-quoted scalar");
+  }
+  // Detect case drift on the marker name (lowercase is canonical).
+  const nameMatch = new RegExp(`^<!--\\s*(${markerName})\\b`, "i").exec(
+    rawMatch,
+  );
+  if (nameMatch && nameMatch[1] !== markerName) {
+    reasons.push(`marker name "${nameMatch[1]}" must be lowercase`);
+  }
+  // Anything beyond `id` and `source` is unrecognised in pointer-only mode.
+  const leftover = attributePayload
+    .replace(SCAFFOLD_MARKER_ID_RE, "")
+    .replace(SCAFFOLD_MARKER_SOURCE_RE, "")
+    .trim();
+  if (leftover.length > 0) {
+    reasons.push(`unrecognised trailing attribute(s): ${leftover}`);
+  }
+  return {
+    id,
+    source,
+    malformedReason: reasons.length > 0 ? reasons.join("; ") : undefined,
+  };
+}
+
 function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] {
   const blocks: GeneratedScaffoldBlock[] = [];
-  for (const match of text.matchAll(GENERATED_SCAFFOLD_START_RE)) {
-    const id = match[1] ?? "";
-    const source = match[2] ?? "";
+  for (const match of text.matchAll(GENERATED_SCAFFOLD_START_LOOSE_RE)) {
+    const attrs = parseMarkerAttributes(
+      "generated-scaffold:start",
+      match[0] ?? "",
+      match[1] ?? "",
+    );
+    const id = attrs.id;
+    const source = attrs.source;
     const startIndex = match.index ?? 0;
-    const bodyStart = startIndex + match[0].length;
-    const endMatch = generatedScaffoldEndRe(id).exec(text.slice(bodyStart));
+    const bodyStart = startIndex + (match[0]?.length ?? 0);
+    const startReason = attrs.malformedReason;
+    // The end-marker search only runs when we have an id to anchor against.
+    const endMatch = id
+      ? generatedScaffoldEndRe(id).exec(text.slice(bodyStart))
+      : null;
     if (!endMatch || endMatch.index === undefined) {
       blocks.push({
         id,
@@ -1920,7 +2052,8 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
         line: lineOf(text, startIndex),
         startIndex,
         endIndex: text.length,
-        malformedReason: "missing generated-scaffold end marker",
+        malformedReason:
+          startReason ?? "missing generated-scaffold end marker",
       });
       continue;
     }
@@ -1936,7 +2069,7 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
         line: lineOf(text, startIndex),
         startIndex,
         endIndex,
-        malformedReason: parsed.malformedReason,
+        malformedReason: startReason ?? parsed.malformedReason,
       });
       continue;
     }
@@ -1948,6 +2081,7 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
       line: lineOf(text, startIndex),
       startIndex,
       endIndex,
+      malformedReason: startReason,
     });
   }
   return blocks;
@@ -1955,11 +2089,17 @@ function extractGeneratedScaffoldBlocks(text: string): GeneratedScaffoldBlock[] 
 
 function extractScaffoldPointers(text: string): ScaffoldPointer[] {
   const pointers: ScaffoldPointer[] = [];
-  for (const match of text.matchAll(SCAFFOLD_POINTER_RE)) {
+  for (const match of text.matchAll(SCAFFOLD_POINTER_LOOSE_RE)) {
+    const attrs = parseMarkerAttributes(
+      "scaffold-pointer",
+      match[0] ?? "",
+      match[1] ?? "",
+    );
     pointers.push({
-      id: match[1] ?? "",
-      source: match[2] ?? "",
+      id: attrs.id,
+      source: attrs.source,
       line: lineOf(text, match.index ?? 0),
+      malformedReason: attrs.malformedReason,
     });
   }
   return pointers;
@@ -1967,7 +2107,7 @@ function extractScaffoldPointers(text: string): ScaffoldPointer[] {
 
 function extractYamlFences(text: string): YamlFence[] {
   const fences: YamlFence[] = [];
-  const fenceRe = /```ya?ml\n([\s\S]*?)\n```/g;
+  const fenceRe = new RegExp(YAML_FENCE_RE.source, YAML_FENCE_RE.flags);
   for (const match of text.matchAll(fenceRe)) {
     const startIndex = match.index ?? 0;
     fences.push({
@@ -1978,18 +2118,6 @@ function extractYamlFences(text: string): YamlFence[] {
     });
   }
   return fences;
-}
-
-function isInsideGeneratedBlock(
-  fence: YamlFence,
-  block: GeneratedScaffoldBlock,
-): boolean {
-  return fence.startIndex > block.startIndex && fence.endIndex < block.endIndex;
-}
-
-function lineOfFirstText(text: string, needle: string): number | undefined {
-  const index = text.indexOf(needle);
-  return index === -1 ? undefined : lineOf(text, index);
 }
 
 export type ScaffoldInventoryDriftOptions = {
@@ -2032,40 +2160,44 @@ export async function checkScaffoldInventoryDrift(
     const yamlFences = extractYamlFences(text);
 
     for (const block of generatedBlocks) {
+      const suffix = block.malformedReason
+        ? ` (malformed marker: ${block.malformedReason})`
+        : "";
       findings.push({
         doc,
         kind: "scaffold-inventory",
-        claim: block.id,
+        claim: block.id || "<malformed-generated-scaffold-marker>",
         line: block.line,
-        reason:
-          "generated-scaffold marker reintroduced in an active scoped surface; active templates must be pointer-only.",
+        reason: `generated-scaffold marker reintroduced in an active scoped surface; active templates must be pointer-only.${suffix}`,
       });
     }
 
     for (const pointer of hiddenPointers) {
+      const suffix = pointer.malformedReason
+        ? ` (malformed marker: ${pointer.malformedReason})`
+        : "";
       findings.push({
         doc,
         kind: "scaffold-inventory",
-        claim: pointer.id,
+        claim: pointer.id || "<malformed-scaffold-pointer>",
         line: pointer.line,
-        reason:
-          "hidden scaffold-pointer marker reintroduced in an active scoped surface; use a visible `cli.ts scaffold <id> --json` pointer instead.",
+        reason: `hidden scaffold-pointer marker reintroduced in an active scoped surface; use a visible \`cli.ts scaffold <id> --json\` pointer instead.${suffix}`,
       });
     }
 
     for (const entry of entries) {
-      if (
-        entry.classification === "removed" &&
-        entry.forbiddenText &&
-        text.includes(entry.forbiddenText)
-      ) {
-        findings.push({
-          doc,
-          kind: "scaffold-inventory",
-          claim: entry.coordinate,
-          line: lineOfFirstText(text, entry.forbiddenText),
-          reason: `removed scaffold surface reappeared; forbidden text matched: ${entry.forbiddenText}`,
-        });
+      if (entry.classification === "removed" && entry.forbiddenText) {
+        const detector = buildForbiddenTextDetector(entry.forbiddenText);
+        const hit = detector.exec(text);
+        if (hit) {
+          findings.push({
+            doc,
+            kind: "scaffold-inventory",
+            claim: entry.coordinate,
+            line: lineOf(text, hit.index ?? 0),
+            reason: `removed scaffold surface reappeared; structural detector matched (sentinel: ${entry.forbiddenText}).`,
+          });
+        }
       }
     }
 
