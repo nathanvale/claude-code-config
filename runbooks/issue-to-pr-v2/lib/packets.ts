@@ -47,12 +47,25 @@ import {
 
 // ----- shared types -----------------------------------------------------
 
-export type PacketRole =
-  | "builder"
-  | "proposer"
-  | "validator"
-  | "patch-proposal"
-  | "ce-plan";
+/**
+ * Canonical packet-role catalog. Every other surface — the help envelope,
+ * the `contract packet_roles --json` slice, the dispatcher's allow-list,
+ * and the `PacketRole` discriminated union — derives from this tuple. Add
+ * a role here and TypeScript will surface every site that needs an update.
+ */
+export const PACKET_ROLES = [
+  "builder",
+  "proposer",
+  "validator",
+  "patch-proposal",
+  "ce-plan",
+] as const;
+
+export type PacketRole = (typeof PACKET_ROLES)[number];
+
+export function isPacketRole(value: string): value is PacketRole {
+  return (PACKET_ROLES as readonly string[]).includes(value);
+}
 
 /**
  * Dispatch evidence returned with every packet. **Defined here** so the

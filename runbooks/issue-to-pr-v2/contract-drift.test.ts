@@ -1613,7 +1613,7 @@ describe("issue 124: contract-drift gates resist near-miss bypasses", () => {
       for (const bypass of fenceBypasses) {
         test(`${template} → ${bypass.label}`, async () => {
           const dir = await stageDriftSurfaceFixture({
-            [template]: (text) => `${text}${bypass.appendix}`,
+            [template]: (text: string) => `${text}${bypass.appendix}`,
           });
           try {
             const findings = await checkGeneratedScaffoldBlocksDrift({
@@ -1796,7 +1796,7 @@ describe("issue 124: contract-drift gates resist near-miss bypasses", () => {
     for (const variant of removedVariants) {
       test(variant.label, async () => {
         const dir = await stageDriftSurfaceFixture({
-          [variant.template]: (text) => `${text}${variant.injection}`,
+          [variant.template]: (text: string) => `${text}${variant.injection}`,
         });
         try {
           const findings = await checkGeneratedScaffoldBlocksDrift({

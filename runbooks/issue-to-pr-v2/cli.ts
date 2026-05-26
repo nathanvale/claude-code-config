@@ -76,7 +76,10 @@ import {
   renderLedgerInit,
 } from "./lib/ledger-init";
 import {
+  PACKET_ROLES,
+  type PacketRole,
   PacketRenderError,
+  isPacketRole,
   renderBuilderPacket,
   renderCePlanPacket,
   renderPatchProposalPacket,
@@ -266,7 +269,7 @@ const CONTRACT_SLICE_VALUES: Record<ContractSlice, ContractSliceValue> = {
     ordering: "catalog",
   },
   packet_roles: {
-    values: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
+    values: [...PACKET_ROLES],
     ordering: "catalog",
   },
   runbook_version_skew_states: {
@@ -413,7 +416,7 @@ const HELP_DATA = {
   ],
   scaffold_ids: SCAFFOLD_IDS,
   scaffold_catalog: getScaffoldCatalog(),
-  packet_roles: ["builder", "proposer", "validator", "patch-proposal", "ce-plan"],
+  packet_roles: [...PACKET_ROLES],
   packet_flags: {
     "--ledger": "Path to issue-N ledger (required for builder, proposer, validator, patch-proposal).",
     "--batch": "Batch id (builder, validator).",
@@ -1185,14 +1188,7 @@ function kebabCase(value: string): string {
   return value.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
 }
 
-const PACKET_ROLES = [
-  "builder",
-  "proposer",
-  "validator",
-  "patch-proposal",
-  "ce-plan",
-] as const;
-type PacketRoleArg = (typeof PACKET_ROLES)[number];
+type PacketRoleArg = PacketRole;
 
 /**
  * `packet <role>` dispatcher. Stays thin per R3 / U4 F020: argv parsing
@@ -1576,10 +1572,6 @@ function emitPacketError(
     return { exit_code: 70 };
   }
   throw error;
-}
-
-function isPacketRole(value: string): value is PacketRoleArg {
-  return (PACKET_ROLES as readonly string[]).includes(value);
 }
 
 function emitErrorFromException(
