@@ -71,7 +71,11 @@
 import { statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { execPath } from "node:process";
-import { isScaffoldId, renderScaffold } from "./lib/scaffolds";
+import {
+  isScaffoldId,
+  renderScaffold,
+  type ScaffoldId,
+} from "./lib/scaffolds";
 
 /**
  * The authoritative contract facts sourced from the live CLI. Field paths
@@ -1107,6 +1111,9 @@ const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md"
 const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 const CE_PLAN_TEMPLATE_REL =
   "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
+const CE_PLAN_GENERATED_SCAFFOLD_IDS = [
+  "ce-plan-candidate-batch",
+] as const satisfies readonly ScaffoldId[];
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
 
@@ -1513,6 +1520,10 @@ type GeneratedScaffoldBlock = {
 const GENERATED_SCAFFOLD_START_RE =
   /<!--\s*generated-scaffold:start\s+id=([A-Za-z0-9_-]+)\s+source="([^"]+)"\s*-->/g;
 
+function expectedGeneratedScaffoldSource(id: ScaffoldId): string {
+  return `cli.ts scaffold ${id} --json`;
+}
+
 function generatedScaffoldEndRe(id: string): RegExp {
   return new RegExp(
     `<!--\\s*generated-scaffold:end\\s+id=${escapeRegExp(id)}\\s*-->`,
@@ -1576,6 +1587,17 @@ export async function checkGeneratedScaffoldBlocksDrift(
     "contract-drift generated scaffold check",
   );
   const blocks = extractGeneratedScaffoldBlocks(text);
+  const presentScaffoldIds = new Set(blocks.map((block) => block.id));
+
+  for (const scaffoldId of CE_PLAN_GENERATED_SCAFFOLD_IDS) {
+    if (presentScaffoldIds.has(scaffoldId)) continue;
+    findings.push({
+      doc: CE_PLAN_TEMPLATE_REL,
+      kind: "generated-scaffold-block",
+      claim: scaffoldId,
+      reason: `missing generated-scaffold start marker for "${scaffoldId}"; expected source "${expectedGeneratedScaffoldSource(scaffoldId)}".`,
+    });
+  }
 
   for (const block of blocks) {
     if (!isScaffoldId(block.id)) {
@@ -1589,7 +1611,7 @@ export async function checkGeneratedScaffoldBlocksDrift(
       continue;
     }
 
-    const expectedSource = `cli.ts scaffold ${block.id} --json`;
+    const expectedSource = expectedGeneratedScaffoldSource(block.id);
     if (block.source !== expectedSource) {
       findings.push({
         doc: CE_PLAN_TEMPLATE_REL,

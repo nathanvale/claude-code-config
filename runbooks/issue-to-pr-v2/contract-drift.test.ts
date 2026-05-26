@@ -1403,6 +1403,31 @@ describe("issue 114: generated scaffold blocks stay aligned with runtime rendere
     }
   });
 
+  test("missing generated scaffold start marker is reported as drift", async () => {
+    const dir = await stageDriftSurfaceFixture({
+      [cePlanTemplatePath]: (text) =>
+        text.replace(
+          '<!-- generated-scaffold:start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+          "",
+        ),
+    });
+    try {
+      const findings = await checkGeneratedScaffoldBlocksDrift({
+        repoRoot: dir,
+      });
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          doc: cePlanTemplatePath,
+          kind: "generated-scaffold-block",
+          claim: "ce-plan-candidate-batch",
+        }),
+      );
+      expect(findings[0]?.reason).toContain("missing generated-scaffold start");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
   test("checkContractDrift orchestrator surfaces stale scaffold findings", async () => {
     const dir = await stageDriftSurfaceFixture({
       [cePlanTemplatePath]: (text) =>
