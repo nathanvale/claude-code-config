@@ -787,7 +787,7 @@ export function renderCePlanPacket(input: CePlanRenderInput = {}): CePlanPacket 
  *
  * F002 fix: previously this swallowed every DecomposeError, which
  * conflated "no confirmed batches yet" with "Batches block is
- * malformed". The narrow allow message is the v1 helper's literal
+ * malformed". The narrow allow message is the compatibility helper's literal
  * "has no confirmed batch ids" — every other failure mode bubbles.
  */
 function tryReadLedgerBatchContext(
@@ -1812,12 +1812,12 @@ const BUILDER_PROBE_TEXT = [
 ].join("\n");
 
 const BUILDER_OUTPUT_CONTRACT_TEXT =
-  "Return exactly one envelope per templates/builder-return-envelope.md. The canonical schema lives in references/builder-dispatch.md#return-envelope-v1-l184-213.";
+  "Return exactly one envelope per templates/builder-return-envelope.md. The canonical schema lives in references/builder-dispatch.md#return-envelope.";
 
 const PROPOSER_LOCAL_LAW_POINTER =
-  "See references/builder-dispatch.md#authority-and-local-law-v1-l106-131.";
+  "See references/builder-dispatch.md#authority-and-local-law.";
 const PROPOSER_HELPER_POINTER =
-  "See references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886.";
+  "See references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree.";
 const PROPOSER_SCRATCH_POINTER =
   "See templates/patch-proposal.md.";
 

@@ -1,8 +1,7 @@
 # Issue to PR (v2 install — human index)
 
 Maintainer-facing index for the v2 install at
-`runbooks/issue-to-pr-v2/`. v1 stays on disk at
-`~/.claude/runbooks/issue-to-pr/` as a frozen behavior baseline.
+`runbooks/issue-to-pr-v2/`.
 
 This README is a **finder**, not a workflow manual. Agents enter through
 the skill control plane at
@@ -47,8 +46,8 @@ owns the comparison table; do not restate it here.
 ## Per-issue ledger
 
 Each run writes a per-issue ledger in the target repo at
-`docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md` (the path is
-shared with v1). The orchestrator copies
+`docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`. The path is
+the stable per-issue ledger convention. The orchestrator copies
 `issue-N-ledger.template.md` on first turn. Ledger schema, frontmatter
 fields, and the runbook-version skew table all live in
 [`references/ledger-and-helper.md`](references/ledger-and-helper.md).
@@ -149,12 +148,11 @@ directory validates against the wrong git repository — lives in
 
 ## Compatibility notes
 
-- **v1 frozen on disk.** `~/.claude/runbooks/issue-to-pr/` stays
-  available as the behavior baseline the v2 refactor preserves. The
-  `issue-to-pr` skill is the active public entrypoint for the v2 asset
-  set.
-- **Ledger path is shared with v1.** See [Per-issue
-  ledger](#per-issue-ledger) above. The v1-vs-v2 skew rules live in
+- **v2 owns the runnable contract.** The `issue-to-pr` skill is the
+  active public entrypoint; this tree owns helper behavior, routing,
+  references, templates, and drift checks.
+- **Ledger path is stable across the cutover.** See [Per-issue
+  ledger](#per-issue-ledger) above. Version-skew rules live in
   [`references/ledger-and-helper.md`](references/ledger-and-helper.md).
 - **Current workflow contract version.** New v2 ledgers declare
   `runbook_version: "3"`. Version-skew behavior and continuation
@@ -165,8 +163,7 @@ directory validates against the wrong git repository — lives in
 
 ## What this area deliberately does not do
 
-This README is a finder. The owning artifact for each topic the v1
-README used to cover inline:
+This README is a finder. The owning artifact for each topic:
 
 - **Builder dispatch policy** lives in
   [`references/builder-dispatch.md`](references/builder-dispatch.md).
@@ -193,7 +190,6 @@ README used to cover inline:
 
 ## See also
 
-- [v1 install](../issue-to-pr/) — frozen behavior baseline.
 - [Refactor runbook area](../../docs/runbooks/issue-to-pr-v2-refactor/) —
   seam runbooks and ledgers that drove this install.
 - [U8 seam runbook](../../docs/runbooks/issue-to-pr-v2-refactor/u8-readme.md)

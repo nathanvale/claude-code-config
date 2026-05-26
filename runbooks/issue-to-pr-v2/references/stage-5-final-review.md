@@ -1,11 +1,10 @@
 # Stage 5: final-review reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L755-782 (read-only
-final-review gate set-up and `/ce-code-review` invocation), L795-805 (P0/P1
-gate routing), L888-901 (final P2/P3 closure and exit condition); patch-batch
-remediation lives at [stage-4-batch-loop.md](stage-4-batch-loop.md) per the U2
-plan; the Mechanical-diff fallback at L784-793 lives at
-[findings-and-validators.md](findings-and-validators.md).
+**Contract owner:** this reference owns Stage 5 read-only final review,
+P0/P1 gate routing, final P2/P3 closure, and the Stage 5 exit condition.
+Patch-batch remediation lives at
+[stage-4-batch-loop.md](stage-4-batch-loop.md). Mechanical-diff fallback lives
+at [findings-and-validators.md](findings-and-validators.md).
 
 **Read trigger:** open this reference when Stage 4 has fully converged
 (`batch-loop` exit condition satisfied) and the orchestrator is about to
@@ -45,7 +44,7 @@ Explicit lower-priority follow-up deferrals:
 
 Runbook self-heals discovered at final review normally route through the
 `runbook-heal <sha>` closure form on a separate concern
-([findings-and-validators.md](findings-and-validators.md#closing-a-finding-without-fixing-it-v1-l1288-1301)),
+([findings-and-validators.md](findings-and-validators.md#closing-a-finding-without-fixing-it)),
 not onto the issue branch. There is one narrow exception. When a runbook
 **prose** defect actually **blocks the run from continuing** (the prose is the
 sole carrier of a runtime-affecting instruction, e.g. it names a non-existent
@@ -92,7 +91,7 @@ with conversation memory, route from the envelope.
    the fallback cannot cover correctness and testing, fail-stop.
 
    The **Mechanical-diff fallback** lives at
-   [findings-and-validators.md](findings-and-validators.md#mechanical-diff-fallback-v1-l784-793);
+   [findings-and-validators.md](findings-and-validators.md#mechanical-diff-fallback);
    this reference does not restate it.
 
 3. **Write findings.** `ce-code-review` returns findings. Write them into
@@ -107,7 +106,7 @@ with conversation memory, route from the envelope.
      P2/P3 rows as described in step 5, then advance to Stage 6.
    - If open P0/P1 > 0 → enter the **final-review inner loop**, which is the
      patch-batch decision tree owned by
-     [stage-4-batch-loop.md](stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886).
+     [stage-4-batch-loop.md](stage-4-batch-loop.md#final-review-patch-batch-decision-tree).
      Stage 5 hands the finding row to the Proposer; Stage 5 does not author
      edits. After all patch-batches converge, re-invoke `/ce-code-review` from
      the top of Stage 5.

@@ -11,8 +11,6 @@ the addendum body itself is rendered deterministically by the v2 packet
 CLI rather than inlined into stage prose. See also:
 [`references/stage-3-decompose.md`](../references/stage-3-decompose.md).
 
-**v1 source anchor:** `runbooks/issue-to-pr/issue-to-pr.md` L1213-1286.
-
 The addendum body below is the structured-output requirement `/ce-plan` must
 satisfy so `decompose.ts` can parse the resulting plan into a candidate batch
 DAG. The fenced YAML block inside the addendum is helper-validated; it must

@@ -1,6 +1,7 @@
 # Stage 1: pick-issue reference
 
-**v1 source anchor:** `runbooks/issue-to-pr/issue-to-pr.md` L339-464.
+**Contract owner:** this reference owns Stage 1 issue selection, branch
+preflight, acceptance-criteria confirmation, and ledger creation.
 
 **Read trigger:** open this reference when the orchestrator is starting a new
 run on a fresh issue or resuming a Stage 1 turn (before AC confirmation, before
@@ -37,7 +38,7 @@ ledger creation, before branch preflight). See also:
    `state: open`, check labels from step 1:
    - `force-run` present → proceed and document the override in ledger Notes
      after the ledger exists.
-   - `force-run` absent → fail-stop with the canonical message in the v1 source.
+   - `force-run` absent → fail-stop with the canonical message in this reference.
 4. **Branch preflight before durable gate writes.** Ensure the current branch
    is an issue feature branch before creating or changing any ledger file.
    - Resolve the default branch from
@@ -79,8 +80,8 @@ ledger creation, before branch preflight). See also:
    - On `abort`: stop, fail-stop.
 7. Create or resume the ledger at
    `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md` in the target
-   repo. (Ledger paths stay under `docs/runbooks/issue-to-pr/` for the
-   shadow-v2 era; U9 will reassess the directory at public cutover.)
+   repo. Ledger paths stay under `docs/runbooks/issue-to-pr/` as the stable
+   per-issue ledger convention.
    - Concurrent-run guard: if frontmatter `status == in-progress` with
      `started_at` within the last hour, fail-stop with the concurrent-run
      warning.

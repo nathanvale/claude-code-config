@@ -46,7 +46,7 @@ U10 complements, does not replace, the existing test surface:
 | --- | --- | --- |
 | `runbooks/issue-to-pr-v2/cli.test.ts` (~80+ describes / 200+ tests) | Unit-level envelope shape, AC1-AC7 contracts, U6 version-skew, U5 packet rendering | U10 does NOT duplicate these; smoke spawns the CLI as a child process |
 | `runbooks/issue-to-pr-v2/lib/*.test.ts` | lib internals — route classification, packet rendering, ledger parsing, digest, validate | U10 does NOT touch lib internals |
-| `runbooks/issue-to-pr-v2/decompose.test.ts` | v1-compat helper surface (process-boundary) | U10 covers `cli.ts`; `decompose.ts` is the v1-compat layer |
+| `runbooks/issue-to-pr-v2/decompose.test.ts` | Legacy-compat helper surface (process-boundary) | U10 covers `cli.ts`; `decompose.ts` is the legacy-compat layer |
 
 U10 sits *between* unit tests and the operator. Where `cli.test.ts`
 imports CLI functions, U10 spawns `bun cli.ts` as a child process and
@@ -89,7 +89,7 @@ the process exit behaviour.
 - All `runbooks/issue-to-pr-v2/templates/*.md`.
 - `tsconfig.json` (already includes v2 tree from U3/U4).
 - `install.sh` (already surfaces v2 install presence per U6).
-- All `runbooks/issue-to-pr/` files (v1, frozen baseline since U9).
+- Deleted legacy tree (`runbooks/issue-to-pr/`) — do not restore.
 
 **Read-only (anchors — this seam consumes them):**
 
@@ -119,7 +119,8 @@ the process exit behaviour.
   single `probe-cli-smoke-matrix` row. No new sections, no schema
   changes, no edits to existing rows.
 - **No README-level edits beyond the refactor-area README seam-row
-  addition.** v2 README and v1 README both stay frozen.
+  addition.** v2 README stays frozen; do not restore the deleted
+  legacy README.
 - **No process-exit-vs-envelope alignment work.** Writing the smoke
   block disproved the suspected divergence — process exit codes
   already match envelope `exit_code` today. Block 10 pins the

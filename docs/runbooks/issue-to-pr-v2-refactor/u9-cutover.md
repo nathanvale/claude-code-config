@@ -14,15 +14,13 @@ So U9's real job shrinks to two coupled jobs:
    matrix.** Augment every `cli.ts ... --json` row in
    `regression-matrix.md` with the test file path + `it()` description
    verbatim, so a reviewer can trace contract → test in one hop.
-2. **Flip the public entry point from v1 to v2.** Two prose edits —
-   add a legacy-pointer block at the top of
-   `runbooks/issue-to-pr/README.md`, trim the "shadow until U9"
-   caveat from `runbooks/issue-to-pr-v2/README.md`. v1 stays on disk
-   as a frozen baseline; v2 becomes the public runbook.
+2. **Finish the public v2 cutover.** Remove remaining active v1-baseline prose,
+   keep v2 as the public runbook, and preserve historical v1 coordinates only
+   as git-history provenance.
 
-Plus two verifications: the probe suite is green, and no v2 prose
-still names v1 paths (a sweep for stale `~/.claude/runbooks/issue-to-pr/`
-strings inside the v2 tree).
+Plus two verifications: the probe suite is green, and no active v2 prose
+still names the deleted legacy install path
+(`~/.claude/runbooks/issue-to-pr/`).
 
 **Central risk: cutover before proof.** Publishing v2 before the
 deterministic probes pass means promoting a tree whose behavior is
@@ -71,20 +69,13 @@ as a finding before claiming cutover-readiness.
   these are judgment-heavy by design and the matrix already says so.
   No new probe rows; no new probe code.)
 
-**Writable (Phase 2 — cutover, two prose edits + two verifications):**
+**Writable (Phase 2 — cutover prose + verification):**
 
-- `runbooks/issue-to-pr/README.md` (modify: add ONE legacy-pointer
-  blockquote at the top — "frozen v1 reference; active runbook lives
-  at runbooks/issue-to-pr-v2/". Nothing else in v1 changes.)
-- `runbooks/issue-to-pr-v2/README.md` (modify: replace the "shadow
-  until U9" opening sentences with a one-line "v1 stays on disk as a
-  frozen behavior baseline" statement. Preserve U8's finder
-  discipline; do NOT restructure the README beyond that one paragraph.)
+- `runbooks/issue-to-pr-v2/README.md` (modify: remove shadow/baseline
+  caveats; keep U8 finder discipline and v2-owned contract pointers.)
 
 **Read-only (frozen — preserve verbatim):**
 
-- All `runbooks/issue-to-pr/` files except `README.md`'s single
-  legacy-pointer block
 - `runbooks/issue-to-pr-v2/issue-to-pr.md` (U7 hot router)
 - `runbooks/issue-to-pr-v2/cli.ts` (U4/U5/U6 source)
 - `runbooks/issue-to-pr-v2/decompose.ts` (U3 source)
@@ -126,12 +117,9 @@ These belong to other units and must not be implemented here:
   `lib/packets.test.ts`. If the matrix-augmentation step surfaces a
   genuinely missing probe, file it as a finding with risk `high` and
   ask before adding it — do not silently expand U9.
-- **Deleting v1.** v1 stays on disk as a frozen baseline. U9 must
-  NOT delete files under `runbooks/issue-to-pr/`, and must NOT remove
-  `runbooks/issue-to-pr/` from the `tsconfig.json` `include` glob.
-- **Rewriting v1 prose.** The only v1 edit is the single
-  legacy-pointer block at the top of `runbooks/issue-to-pr/README.md`.
-  Any other v1 edit is out of scope.
+- **Historical v1 sources.** Treat `runbooks/issue-to-pr/` references in this
+  runbook as git-history provenance, not live files. Do not reintroduce the
+  deleted tree or restore it to `tsconfig.json`.
 - **Restructuring the v2 README.** U8 owns its layout. U9 trims one
   opening paragraph (the "shadow until U9" caveat). Any other v2
   README edit is out of scope.
@@ -166,8 +154,7 @@ alongside a red `bun_runTests` run as a P0 finding.
 Always-on (every sweep):
 
 - `compound-engineering:ce-correctness-reviewer` — does the
-  legacy-pointer link in v1 README resolve to the right v2 location?
-  Does the v2 README caveat trim preserve U8's finder discipline?
+  v2 README caveat trim preserve U8's finder discipline?
   Does every matrix `test_anchor` point at a test that actually
   exists with the cited `it()` description?
 - `compound-engineering:ce-testing-reviewer` — does matrix coverage
@@ -179,13 +166,11 @@ Always-on (every sweep):
   or route-id-shape drift between matrix prose and `lib/contract.ts`?
 - `compound-engineering:ce-scope-guardian-reviewer` — does the diff
   respect the anti-list? Specifically: no new probe code; no v1
-  edits beyond the single legacy pointer; no hot-router edits; no
-  `lib/*.ts` source edits; no `tsconfig.json` or `install.sh` edits;
-  no v2 README restructure.
+  tree restore; no hot-router edits; no `lib/*.ts` source edits; no
+  `tsconfig.json` or `install.sh` edits; no v2 README restructure.
 - `compound-engineering:ce-maintainability-reviewer` — is the
   regression matrix readable as a contract after the test-anchor
-  column lands? Does the v1 legacy-pointer block convey "this is
-  frozen" without requiring the reader to chase a link first?
+  column lands? Are historical v1 coordinates clearly provenance only?
 
 Conditional:
 
@@ -206,9 +191,8 @@ Conditional:
 - **R10 (preserve U3/U4/U5/U6/U7/U8 split).** No `lib/*.ts` source
   changes; no test edits; no hot-router edits; no U8 README
   restructure.
-- **R12 (cutover safety).** v1 stays on disk and stays type-checked
-  (tsconfig still includes it). The single legacy-pointer block is
-  the only v1 edit.
+- **R12 (cutover safety).** v2 runtime, docs, templates, tests, and drift
+  checks own the contract. Historical v1 coordinates are provenance only.
 - **R13 (probe-before-publish).** Cutover edits gate on a green
   `bun_runTests` run. Treated as P0 if violated.
 
@@ -237,36 +221,15 @@ violation deterministically), the row may be promoted to
 genuinely asserts the invariant. Inflating coverage by pattern-
 matching test names is the U9 central anti-pattern.
 
-### v1 README legacy pointer (MUST include exact shape)
-
-A single blockquote block at the top of
-`runbooks/issue-to-pr/README.md`, above the existing H1:
-
-```markdown
-> **Frozen v1 reference.** The active runbook lives at
-> [`runbooks/issue-to-pr-v2/`](../issue-to-pr-v2/README.md). This v1
-> tree stays on disk as a behavior baseline for the v2 refactor; it
-> is no longer the public entry point.
-```
-
-No other v1 edits. No changes to the existing H1, body sections,
-links, code samples, or formatting.
-
 ### v2 README shadow-caveat trim (MUST include exact shape)
 
 The current `runbooks/issue-to-pr-v2/README.md` opens with:
 
-> Maintainer-facing index for the v2 shadow tree at
-> `runbooks/issue-to-pr-v2/`. The v2 install is in **shadow** until
-> U9 cuts over the public hot-router entry point. The runnable,
-> public reference remains the v1 install at
-> `~/.claude/runbooks/issue-to-pr/` until that cutover lands.
-
-Replace those three sentences with:
-
 > Maintainer-facing index for the v2 install at
-> `runbooks/issue-to-pr-v2/`. v1 stays on disk at
-> `~/.claude/runbooks/issue-to-pr/` as a frozen behavior baseline.
+> `runbooks/issue-to-pr-v2/`.
+
+Keep that shape. Do not reintroduce shadow, baseline, or legacy install
+caveats.
 
 The rest of the v2 README (file map, anti-list, helper execution
 context, etc.) does not change.
@@ -275,7 +238,7 @@ context, etc.) does not change.
 
 After the cutover prose edits land, a sweep over the v2 tree
 (`runbooks/issue-to-pr-v2/`) must surface zero remaining references
-to `~/.claude/runbooks/issue-to-pr/` (the v1 install path) in:
+to `~/.claude/runbooks/issue-to-pr/` (the deleted legacy install path) in:
 
 - `issue-to-pr.md` (hot router) — any hit is a U7 follow-on, not a
   U9 fix; file as a finding with risk `high` and ask.
@@ -292,10 +255,10 @@ owning seam.
 - **No new probe code.** Phase 1's matrix augmentation is the only
   Phase 1 edit. If a probe is found missing, file as a finding and
   ask before adding it.
-- **No CLI/lib source edits.** U9 is matrix + two prose edits.
+- **No CLI/lib source edits.** U9 is matrix + v2 README prose.
 - **No `tsconfig.json` or `install.sh` edits.** Already done.
 - **No v2 README restructure beyond the one-paragraph caveat trim.**
-- **No v1 edits beyond the single legacy-pointer block.**
+- **No deleted legacy-tree restore.**
 
 ## Scoped audit prompt
 
@@ -303,9 +266,7 @@ owning seam.
 Review U9 public cutover. Phase 1 adds a `test_anchor` column to
 `runbooks/issue-to-pr-v2/references/regression-matrix.md` citing the
 existing test that exercises each deterministic probe row. Phase 2
-adds a single legacy-pointer blockquote at the top of
-`runbooks/issue-to-pr/README.md` and trims the shadow-caveat opening
-of `runbooks/issue-to-pr-v2/README.md`.
+trims the shadow-caveat opening of `runbooks/issue-to-pr-v2/README.md`.
 
 Audit items:
 
@@ -316,46 +277,39 @@ Audit items:
    test file?
 3. Does any `Prose-only invariants` row claim
    `automated-probe` without a real test asserting the invariant?
-4. Is the v1 README legacy-pointer block exactly the shape specified
-   in this runbook? Does the link resolve to
-   `runbooks/issue-to-pr-v2/README.md`?
-5. Is the v2 README shadow-caveat trim exactly the shape specified
+4. Is the v2 README shadow-caveat trim exactly the shape specified
    in this runbook? Does U8's finder discipline survive (file map,
    anti-list, helper execution context, See-also sections intact)?
-6. Does the v2 tree contain any remaining references to
-   `~/.claude/runbooks/issue-to-pr/` (the v1 install path) outside
-   the `references/regression-matrix.md` line-map (which legitimately
-   cites v1 source paths)?
-7. Does the diff respect the anti-list? Specifically: no new probe
-   code; no v1 edits beyond the single legacy pointer; no hot-router
-   edits; no `lib/*.ts` source edits; no `tsconfig.json` or
-   `install.sh` edits; no v2 README restructure.
+5. Does the v2 tree contain any remaining references to
+   `~/.claude/runbooks/issue-to-pr/` (the deleted legacy install path)?
+6. Does the diff respect the anti-list? Specifically: no new probe
+   code; no stale active legacy install pointers; no deleted-tree
+   restore; no hot-router edits; no `lib/*.ts` source edits; no
+   `tsconfig.json` or `install.sh` edits; no v2 README restructure.
 8. Did `bun_runTests` pass against
    `runbooks/issue-to-pr-v2/` before any cutover prose edit landed?
 
 Severity:
 
-- P0: cutover edit landed without a green `bun_runTests` run; v1
-  source edit beyond the legacy pointer; hot-router edit; new probe
-  code added; new CLI surface; new packet role; stale v1 path
-  reference left inside the v2 tree.
+- P0: cutover edit landed without a green `bun_runTests` run; deleted
+  legacy tree restored; hot-router edit; new probe code added; new CLI
+  surface; new packet role; stale legacy install path reference left
+  inside the v2 tree.
 - P1: matrix `test_anchor` cites a test that does not exist; matrix
   promotes a prose invariant to `automated-probe` without an actual
-  asserting test; legacy-pointer link wrong; v2 README caveat trim
-  wrong shape.
+  asserting test; v2 README caveat trim wrong shape.
 - P2: matrix `test_anchor` cites a test but description does not
   match verbatim; matrix column header missing on a row.
 - P3: minor formatting; matrix row order drift.
 
 Return findings with stable kebab-case signatures (e.g.
-`matrix-test-anchor-missing`, `v1-legacy-pointer-link-broken`,
-`v2-readme-caveat-trim-wrong-shape`, `stale-v1-path-in-hot-router`).
+`matrix-test-anchor-missing`, `v2-readme-caveat-trim-wrong-shape`,
+`stale-legacy-path-in-v2-tree`).
 
-Do NOT propose new probe code. Do NOT propose edits to v1
-source/helper files beyond the single legacy-pointer block. Do NOT
-propose edits to the U7 hot router. Do NOT propose new CLI commands,
-envelope fields, packet roles, or `lib/*.ts` source. Do NOT propose
-`tsconfig.json` or `install.sh` edits.
+Do NOT propose new probe code. Do NOT propose restoring deleted legacy
+source/helper files. Do NOT propose edits to the U7 hot router. Do NOT
+propose new CLI commands, envelope fields, packet roles, or `lib/*.ts`
+source. Do NOT propose `tsconfig.json` or `install.sh` edits.
 ````
 
 ## Closing a finding without fixing it
@@ -378,20 +332,17 @@ Seam-specific close reasons:
 
 Stop when ALL of the following hold:
 
-1. `bun_runTests` is green across `runbooks/issue-to-pr-v2/` and
-   `runbooks/issue-to-pr/` (the cutover does not bitrot the v1 type
-   surface either).
-2. `tsc_check` is green across both trees.
+1. `bun_runTests` is green across `runbooks/issue-to-pr-v2/`.
+2. `tsc_check` is green across `runbooks/issue-to-pr-v2/`.
 3. `biome_lintCheck` is green across the diff.
 4. `regression-matrix.md` `Deterministic probe targets` table has a
    `test_anchor` value for every row, and each anchor points at a
    real test.
-5. The stale-path sweep returns zero hits in `issue-to-pr.md`,
-   `references/*.md`, and `templates/*.md` (the
-   `references/regression-matrix.md` line-map citing v1 source paths
-   is excluded — it legitimately cites v1 by design).
-6. The v1 legacy-pointer block and the v2 README caveat trim are in
-   place and match the exact shapes specified.
+5. The stale-path sweep returns zero hits for
+   `~/.claude/runbooks/issue-to-pr/` in `issue-to-pr.md`,
+   `references/*.md`, and `templates/*.md`.
+6. The v2 README caveat trim is in place and matches the shape
+   specified.
 7. Two consecutive independent `/ce-code-review` passes each return zero new findings (see the README Convergence protocol).
 8. Every ledger row is `fixed` or `closed`.
 

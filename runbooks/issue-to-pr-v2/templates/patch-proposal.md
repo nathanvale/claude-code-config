@@ -11,7 +11,7 @@ validate it before the user confirmation gate. The Proposer itself returns
 the envelope and performs no filesystem write; the Orchestrator translates
 that return into this scratch file. See also:
 [proposer-envelope.md](proposer-envelope.md),
-[`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886),
+[`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree),
 [`references/stage-5-final-review.md`](../references/stage-5-final-review.md).
 
 The scratch file is **Orchestrator-owned audit context** captured from the
@@ -26,7 +26,7 @@ Invoke `decompose.ts <patch-proposal-path> --patch-proposal <ledger-path>`.
 The canonical helper invocation path lives in
 [`references/ledger-and-helper.md`](../references/ledger-and-helper.md). The
 full validation list is owned by
-[`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886):
+[`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree):
 exact fields, concrete paths, terminal ledger-backed dependencies, exactly
 one patch batch, files already in confirmed ledger scope unless
 `new-file-patch-exception:` is present, high-risk new files only when
@@ -98,7 +98,7 @@ patch_batches:
 - `change_first-exception:` / `high-risk-change_first-exception:` —
   required when `execution_mode: change_first` lands on non-doc paths or
   high-risk paths respectively.
-- `replacement-contract:` — recommended (per v1 ledger template) when the
+- `replacement-contract:` — recommended (per v2 ledger template) when the
   replacement batch flow ([builder-dispatch.md](../references/builder-dispatch.md))
   supersedes a blocked original and the rationale documents the contract
   delta.
@@ -128,7 +128,7 @@ Stage 4 to converge the patch-batch.
 
 - [proposer-envelope.md](proposer-envelope.md) — Proposer dispatch envelope
   that produces this scratch file.
-- [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886) —
+- [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree) —
   authoritative decision tree and helper validation list.
 - [`references/stage-5-final-review.md`](../references/stage-5-final-review.md) —
   read-only final-review gate that routes the cited finding here.

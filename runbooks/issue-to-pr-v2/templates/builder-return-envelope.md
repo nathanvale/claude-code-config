@@ -14,7 +14,7 @@ the row in `## Batches[].builder_attempts`. See also:
 This file is a sibling of `builder-work-packet.md` per the U2 plan's
 tree sketch (U4-deferred, U5-landed). The **canonical schema** is owned
 by
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope-v1-l184-213);
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope);
 this template cross-references that schema rather than re-declaring it,
 so a single source of truth for status enums and required fields lives
 in one place.
@@ -25,7 +25,7 @@ The schema, the `status` enum (`committed`, `fail-stop-preflight`,
 `fail-stop-out-of-scope`, `fail-stop-execution-mode-mismatch`,
 `fail-stop-read-failed`, `fail-stop-other`), and the rule that
 `suggested_validator_focus` is required live in
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope-v1-l184-213).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope).
 This envelope is Builder-only. It does not carry Orchestrator-inline attempt
 fields; inline evidence is recorded through the separate ledger lane owned by
 the Stage 4 batch-loop contract.

@@ -1,7 +1,8 @@
 # Stage 3: decompose reference
 
-**v1 source anchor:** `runbooks/issue-to-pr/issue-to-pr.md` L514-681; Stage 3
-Contract Review behavior is sourced from
+**Contract owner:** this reference owns Stage 3 decomposition, AC coverage,
+batch-contract confirmation, and stale-contract routing. Stage 3 Contract
+Review behavior is sourced from
 `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
 
 **Read trigger:** open this reference when Stage 2 has committed the plan
@@ -65,7 +66,7 @@ responsibility, not a CLI command.
    `decompose.ts <plan-path> --validate-ac-coverage <ledger-path>`. Every AC
    index (1..N) in the ledger's `## Acceptance criteria` section must appear
    in at least one batch's `ac_mapping`. Any AC not covered triggers fail-stop
-   with the canonical message in the v1 source.
+   with the canonical message in this reference.
 5. **Surface rationales.** If any batch has a non-null `rationale` field,
    print it alongside that batch in the confirm prompt.
 6. Compute candidate digests for the plan file, the ledger's
@@ -76,7 +77,7 @@ responsibility, not a CLI command.
 7. **Run Contract Review before batch confirmation.** Dispatch a read-only
    Contract Reviewer with the authored plan file path and content, the
    user-confirmed AC list, the parsed candidate DAG, the candidate contract
-   digest, and the v1 rubric (catch plan/DAG drift, missing AC coverage not
+   digest, and the contract-review rubric (catch plan/DAG drift, missing AC coverage not
    visible to the helper, unsafe dependencies, stale file ownership,
    mode/rationale drift, and batch boundaries that would push plan-wide
    decisions into Builder Preflight).
@@ -164,7 +165,7 @@ confirmed the digest triple, DAG, and execution modes;
 `--confirmation-state` reports all three states `confirmed`; working tree
 clean.
 
-## Failure modes (v1 L665-681)
+## Failure modes
 
 - Cyclic DAG → fail-stop, print the cycle, ask user to revise.
   `blocked_reason: cyclic-dag`.

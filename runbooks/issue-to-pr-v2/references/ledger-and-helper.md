@@ -1,10 +1,8 @@
 # Ledger and helper reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L295-305, L314-337
-(stage preconditions and helper execution context);
-`runbooks/issue-to-pr/issue-N-ledger.template.md` L28-61 (acceptance criteria
-and batches YAML); `runbooks/issue-to-pr/README.md` L161-175, L239-258, L348-414
-(helper execution context, shared turn protocol, ledger schema overview).
+**Contract owner:** this reference owns stage framing, helper execution
+context, turn protocol, ledger schema, acceptance criteria, batches YAML,
+findings YAML, notes evidence, and runbook-version skew handling.
 
 **Read trigger:** open this reference when starting or resuming a turn (to
 re-read durable confirmation state), when writing or updating ledger YAML
@@ -14,7 +12,7 @@ helper command output during a stage transition. See also:
 [stage-3-decompose.md](stage-3-decompose.md),
 [findings-and-validators.md](findings-and-validators.md).
 
-## Stages framing (v1 L295-305)
+## Stages framing
 
 Six stages, walked in order: `pick-issue`, `plan`, `decompose`, `batch-loop`,
 `final-review`, `ship`. Each turn advances exactly one stage, commits one
@@ -88,7 +86,7 @@ by hand. The `--validate-ledger-batches`, `--validate-ac-coverage`,
 checks; they exit non-zero on a violation and the agent must surface the
 violation as a finding or fail-stop rather than overwrite the helper output.
 
-**Stage-transition digest recheck (v1 L315-326).** Before every stage
+**Stage-transition digest recheck.** Before every stage
 transition after Stage 3, recompute the current `plan_digest`,
 `batch_contract_digest`, and `ac_digest` values via `--plan-digest`,
 `--batch-contract-digest`, and `--ac-digest`, and compare them with the
@@ -109,7 +107,7 @@ lifecycle fields (`status`, `iterations`, `builder_commits`,
 `builder_attempts`, `orchestrator_inline_attempts`, `final_verdict`) are
 mutated by Stage 4 and are **not** part of the digest.
 
-## Ledger schema overview (v1 README L348-414)
+## Ledger schema overview
 
 Per-issue ledger paths follow `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`
 in the target repo. Frontmatter declares run-level state. Body sections in
@@ -258,7 +256,7 @@ Each finding row is YAML with `id`, `batch_id`, `signature`, `persona`,
 - `summary` text is verbatim what the rendered `## Findings` table will show
   (helper validation enforces no drift).
 - `resolution` matches the status per the allowed status/resolution pairs in
-  [findings-and-validators.md](findings-and-validators.md#closing-a-finding-without-fixing-it-v1-l1288-1301).
+  [findings-and-validators.md](findings-and-validators.md#closing-a-finding-without-fixing-it).
 
 ### Dedupe and canonical-finding rule
 
@@ -304,7 +302,7 @@ symmetric with the registry's `ALLOWED_EVIDENCE_KEYS` plus the `signature`
 cross-reference. The valid empty case is `workflow_learnings: []`: a run
 with no observed workflow learnings is the common path and must not block.
 
-## Acceptance criteria and batches contract (v1 ledger template L28-61)
+## Acceptance criteria and batches contract
 
 `## Acceptance criteria` lists each AC verbatim from the source issue, numbered
 1-based. The list is confirmed by the user at Stage 1 and is read-only after
@@ -429,7 +427,7 @@ four states:
 | Skew state | When |
 | --- | --- |
 | `matched` | Frontmatter `runbook_version` equals `RUNBOOK_VERSION`. |
-| `missing` | Frontmatter has no `runbook_version` field (legacy v1 ledger). |
+| `missing` | Frontmatter has no `runbook_version` field (legacy ledger). |
 | `mismatched` | Frontmatter has a value but it does NOT equal `RUNBOOK_VERSION` (a prior contract such as `"2"` authored before the inline-attempt lane, legacy v0, future v4, or a typo). Since the live version is `"3"`, every ledger created before that bump classifies here. |
 | `continuation-evidence-present` | Skew detected (missing or mismatched) BUT a complete continuation evidence row exists in `## Notes` for the current runtime version. |
 

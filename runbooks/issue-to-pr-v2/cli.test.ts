@@ -588,7 +588,7 @@ describe("AC7: stale and blocked ledger scenarios", () => {
   test("F017 partial: ledger with confirmed-but-no-digest frontmatter falls back to pick-issue (real happy-path stages need digest writes, deferred to U6+)", () => {
     // Without a stored ac_digest in frontmatter, readAcceptanceCriteriaState
     // computes `pending` even when ac_confirmation_status: confirmed is
-    // declared. This is correct per the v1 contract — confirmation is
+    // declared. This is correct per the v2 contract — confirmation is
     // anchored to the digest, not the status string. Real happy-path
     // routes (plan, decompose, batch-loop, ...) need digest write helpers
     // that U4 does not own. Documented in U4 ledger as residual coverage.
@@ -1489,7 +1489,7 @@ describe("U6: runbook_version surfaced on state command", () => {
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
       '  reference_context: "references/ledger-and-helper.md"',
-      '  accepted_risk: "v1 ledger resumed"',
+      '  accepted_risk: "legacy ledger resumed"',
       "```",
       "",
     ];
@@ -1681,7 +1681,7 @@ describe("U6: verbatim runbook_version + skew determinism", () => {
         '  timestamp: "2026-05-22T19:00:00+10:00"',
         '  route_context: "batch-loop"',
         '  reference_context: "references/ledger-and-helper.md"',
-        '  accepted_risk: "v1 ledger resumed"',
+        '  accepted_risk: "legacy ledger resumed"',
         "```",
         "",
       ].join("\n"),

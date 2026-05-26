@@ -18,8 +18,7 @@
  * records. The two streams are strictly separated per ADR 0002.
  *
  * The CLI never mutates ledger state, never invokes git mutations, never
- * calls into v1 `runbooks/issue-to-pr/decompose.ts`. It is a read-only
- * fact emitter.
+ * shells out to the compatibility helper. It is a read-only fact emitter.
  */
 
 import { argv, exit, stderr, stdout } from "node:process";

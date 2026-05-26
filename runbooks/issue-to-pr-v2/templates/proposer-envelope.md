@@ -5,7 +5,7 @@
 **Read trigger:** the Orchestrator fills this template in when Stage 5 final
 review has surfaced an open P0/P1 finding whose fix appears eligible for the
 bounded patch-batch path
-([`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886)).
+([`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree)).
 The proposal-only Builder sub-agent (the Proposer) reads this template on
 entry. See also: [`references/stage-5-final-review.md`](../references/stage-5-final-review.md),
 [patch-proposal.md](patch-proposal.md),
@@ -81,7 +81,7 @@ envelopes, full ledger contents, or whole-plan replanning prompts.
    constraint that Builder reads but does not write outside a confirmed batch
    contract. Apply the read order to the cited finding's files before
    proposing.
-2. [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886) —
+2. [`references/stage-4-batch-loop.md`](../references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree) —
    the patch-batch decision tree, including the ≤2-files eligibility rule,
    `new-file-patch-exception:` and `high-risk-new-file-patch-exception:`
    rationale prefixes, and the smallest-contract-patch heuristic.

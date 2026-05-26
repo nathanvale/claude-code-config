@@ -1,11 +1,10 @@
 /**
  * Digest payload construction and hashing for the Issue-to-PR v2 helper.
  *
- * Lifted from v1 `runbooks/issue-to-pr/decompose.ts` lines 834-858 (U3 slice
- * S2). Only the pure primitives live here — `contractDigest` and
- * `sha256Digest`. The emit wrappers (`emitContractDigest`, `emitPlanDigest`,
- * `emitAcDigest`) stay in `decompose.ts` because they perform stdout writes
- * and depend on ledger-parsing helpers that land in `lib/ledger.ts`.
+ * Owns the pure primitives: `contractDigest` and `sha256Digest`. The emit
+ * wrappers (`emitContractDigest`, `emitPlanDigest`, `emitAcDigest`) stay in
+ * `decompose.ts` because they perform stdout writes and depend on
+ * ledger-parsing helpers in `lib/ledger.ts`.
  *
  * Why this is its own slice: AC3 of issue #51 requires that lifecycle-only
  * ledger changes do not change the digest. `contractDigest` enforces that

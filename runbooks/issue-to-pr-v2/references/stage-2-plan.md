@@ -1,6 +1,7 @@
 # Stage 2: plan reference
 
-**v1 source anchor:** `runbooks/issue-to-pr/issue-to-pr.md` L466-513.
+**Contract owner:** this reference owns Stage 2 planning handoff,
+plan-path checkpointing, and the `/ce-plan` addendum trigger.
 
 **Read trigger:** open this reference when Stage 1 has committed the AC
 checkpoint and the orchestrator is about to invoke `/ce-plan`, or when

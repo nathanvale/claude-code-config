@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import type { ConfirmationState } from "./contract";
 
 /**
- * Happy-path stage routes. These map 1:1 to the six v1 stages plus a
+ * Happy-path stage routes. These map 1:1 to the six workflow stages plus a
  * terminal `shipped` state.
  */
 export const STAGE_ROUTE_IDS = [

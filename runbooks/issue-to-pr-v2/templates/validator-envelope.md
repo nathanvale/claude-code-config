@@ -136,7 +136,7 @@ Missing `findings`, non-array `findings`, malformed JSON or YAML, or a
 partial finding row is malformed. The Orchestrator reruns that persona once
 with the envelope contract. If it is still malformed, the Orchestrator treats
 the persona as unavailable per the unavailable-persona rule in
-[`references/findings-and-validators.md`](../references/findings-and-validators.md#validator-invocation-rules-v1-l1110-1195)
+[`references/findings-and-validators.md`](../references/findings-and-validators.md#validator-invocation-rules)
 and records the malformed shape in Notes.
 
 ## See also

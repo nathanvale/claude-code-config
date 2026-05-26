@@ -1,9 +1,7 @@
 /**
  * Runtime contract values for the Issue-to-PR v2 helper.
  *
- * Initially lifted from v1 `runbooks/issue-to-pr/decompose.ts` lines 99-181
- * (U3 slice S1), then evolved as v2 added durable lifecycle lanes. These are
- * the load-bearing string sets, key sets, prefix constants, and the numeric
+ * Runtime-owned string sets, key sets, prefix constants, and the numeric
  * `MAX_BUILDER_ATTEMPTS` cap that the rest of the helper validates against.
  * Keeping them in executable code (not just erased TypeScript types or prose)
  * is acceptance criterion AC2 of issue #51.
@@ -32,7 +30,7 @@ export type RunbookVersion = typeof RUNBOOK_VERSION;
  * spec's `LedgerSnapshot.runbook_version_skew` enumeration:
  *
  * 1. `matched` — frontmatter equals `RUNBOOK_VERSION`.
- * 2. `missing` — frontmatter has no value (legacy v1 ledger).
+ * 2. `missing` — frontmatter has no value (legacy ledger).
  * 3. `mismatched` — frontmatter has a value but it does not equal
  *    `RUNBOOK_VERSION`.
  * 4. `continuation-evidence-present` — skew detected but operator-

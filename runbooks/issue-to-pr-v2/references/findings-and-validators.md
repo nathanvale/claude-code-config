@@ -1,11 +1,9 @@
 # Findings and Validators reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L22-41 (reviewers
-and ADR guardrails), L267-272 (scoped audit prompt is not declared here),
-L784-793 (Mechanical-diff fallback), L982-1016 (Persona selector and broad
-reviewer fallback), L1110-1195 (Validator invocation rules), L1288-1313 (close
-reasons and `/loop` fallback); `runbooks/issue-to-pr/README.md` L260-346 (fix
-protocol, risk classification, glossary).
+**Contract owner:** this reference owns reviewer selection, ADR guardrails,
+Mechanical-diff fallback, Validator invocation, finding persistence, finding
+closure, fix protocol, risk classification, glossary entries, and loop
+fallback.
 
 **Read trigger:** open this reference when Stage 4 batch-loop is about to
 dispatch Validator personas after a committed implementation attempt (Builder
@@ -17,7 +15,7 @@ status/resolution pairs. See also:
 [stage-4-batch-loop.md](stage-4-batch-loop.md),
 [stage-5-final-review.md](stage-5-final-review.md).
 
-## Reviewers and ADR guardrails (v1 L22-41)
+## Reviewers and ADR guardrails
 
 ### Always-on reviewer set
 
@@ -42,7 +40,7 @@ escape hatch fires (the escape-hatch behaviour itself is owned by
 [stage-4-batch-loop.md](stage-4-batch-loop.md), which links back here for the
 validate-time trigger).
 
-## No local audit prompt (v1 L267-272)
+## No local audit prompt
 
 This reference does not declare a `/ce-code-review` prompt body. The
 final-review stage invokes `/ce-code-review` once over the cumulative diff;
@@ -50,7 +48,7 @@ that prompt is generated from the `ce-code-review` skill body, not declared
 here. This is the U2 invariant captured by the
 `issue-to-pr-scoped-audit-prompt` row in the regression matrix.
 
-## Mechanical-diff fallback (v1 L784-793)
+## Mechanical-diff fallback
 
 When the cumulative diff at Stage 5 is dominated by mechanical changes (>80%
 of changed lines are pure renames, identifier substitutions, or doc-pointer
@@ -62,7 +60,7 @@ only NEW findings. This is not a cap fallback; it is a cost-and-time choice
 for diffs where the full reviewer suite would re-litigate already-closed
 surfaces. Record the choice (and the >80% mechanical-line estimate) in Notes.
 
-## Persona selector (v1 L982-1016)
+## Persona selector
 
 After every committed implementation attempt, compute the conditional persona
 list from touched file names, the batch contract, and the real attempt evidence
@@ -97,7 +95,7 @@ validators regardless of Builder suggestion; the orchestrator stops only for
 authority breaches or malformed attempt evidence; correctness concerns become
 transient Validator focus, not orchestrator-authored findings.
 
-### Selector table (v1 L1003-1016)
+### Selector table
 
 | Selector signal | Persona dispatched |
 | --- | --- |
@@ -113,7 +111,7 @@ transient Validator focus, not orchestrator-authored findings.
 | Files matching `*.ts`/`*.tsx` AND no other language reviewer fired | `ce-kieran-typescript-reviewer` |
 | The PR (if pre-existing) has prior review comments OR the issue body links a prior PR | `ce-previous-comments-reviewer` |
 
-## Validator invocation rules (v1 L1110-1195)
+## Validator invocation rules
 
 1. Resolve each persona skill name against the host's available-skills list
    before dispatching. Use the exact listed name, including plugin namespace.
@@ -197,7 +195,7 @@ transient Validator focus, not orchestrator-authored findings.
    deferrals include `fr5-001` binding, `fr5-004` reachability, and `fr5-005`
    shared-reader extraction.
 
-## Ledger findings tables (v1 ledger template L63-93)
+## Ledger findings tables
 
 `## Findings data` is the authoritative YAML store; the rendered `## Findings`
 table is derived. Helper validation rejects drift between them. Notes accumulate
@@ -205,7 +203,7 @@ non-authoritative evidence (host omissions, malformed persona output, decisions
 that did not produce a finding). The full ledger schema lives with
 [ledger-and-helper.md](ledger-and-helper.md).
 
-## Closing a finding without fixing it (v1 L1288-1301)
+## Closing a finding without fixing it
 
 Allowed statuses and resolutions:
 
@@ -232,10 +230,10 @@ the batch is still `in-progress` fails `--validate-findings` with "fixed commit
 must be recorded in a terminal ledger batch". This is the same
 atomic-at-convergence pattern the P2/P3 auto-close uses.
 
-## Fix protocol (v1 README L260-279)
+## Fix protocol
 
 Fixes happen inside `batch-loop`'s **inner loop** (see
-[stage-4-batch-loop.md](stage-4-batch-loop.md#inner-loop-v1-l1017-1035)). They
+[stage-4-batch-loop.md](stage-4-batch-loop.md#inner-loop)). They
 are NOT cross-batch. Each batch's inner loop:
 
 **A finding whose fix belongs to a different batch.** When a validator wave on
@@ -274,7 +272,7 @@ not Proposer/patch-batch work. The named lower-priority final-review deferrals
 are `fr5-001` binding, `fr5-004` reachability, and `fr5-005` shared-reader
 extraction.
 
-## Risk classification (v1 README L281-300)
+## Risk classification
 
 Not applicable in the data-table-review sense. The persona suite returns
 severity (P0/P1/P2/P3) per their existing agent contracts. The runbook gates
@@ -296,7 +294,7 @@ A batch is **high-risk** when any of these hold:
 High-risk batches trigger the `risk-high-finding` escape hatch on any open
 P0/P1: stop, summarise, ask the user before any inner-loop fix.
 
-## Local glossary (v1 README L302-346)
+## Local glossary
 
 These terms are local to the Issue-to-PR workflow until another workflow
 needs them.
@@ -342,17 +340,17 @@ needs them.
   [host-adapters.md](host-adapters.md).
 - **Mechanic Discipline**: the Builder rules that keep implementation local,
   reviewable, and non-architectural. Rule body lives in
-  [builder-dispatch.md](builder-dispatch.md#mechanic-discipline-v1-l133-138).
+  [builder-dispatch.md](builder-dispatch.md#mechanic-discipline).
 - **Route hint**: a non-authoritative next-owner hint in a Builder fail-stop
   envelope. Status owns workflow transition; `route_hint` owns routing
   advice.
 
-## /loop fallback (v1 L1302-1313)
+## /loop fallback
 
 If `/goal` is unavailable, use:
 
 ```text
-/loop 60 Follow ~/.claude/runbooks/issue-to-pr/issue-to-pr.md. Target issue
+/loop 60 Follow ~/.claude/runbooks/issue-to-pr-v2/issue-to-pr.md. Target issue
 is {issue-number} in {target-repo}. Re-read the runbook and the per-issue
 ledger at docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md at the
 start of every turn. Walk the six stages in order. Echo the ledger
@@ -360,9 +358,8 @@ frontmatter + batches YAML + findings data + findings table inline at end of
 every turn. Stop when ledger frontmatter status is `shipped` or `blocked`.
 ```
 
-(The `~/.claude/runbooks/issue-to-pr/issue-to-pr.md` runbook path is the
-v1-era hot-router location; U7 will update the path to the v2 hot router
-when the cutover lands.)
+(The `~/.claude/runbooks/issue-to-pr-v2/issue-to-pr.md` path is the installed
+v2 hot-router support file.)
 
 ## Packet rendering contract (U5)
 

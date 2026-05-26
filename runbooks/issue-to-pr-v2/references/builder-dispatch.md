@@ -11,10 +11,9 @@ full list of `change_first` dispatch triggers, see
 [stage-4-batch-loop.md](stage-4-batch-loop.md#builder-dispatch-policy)
 (single source of truth).
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L13-22 (file scope),
-L44-74 (role boundaries), L78-290 (Builder dispatch contract), L1093-1146
-(Builder execution rules); `runbooks/issue-to-pr/README.md` L35-166
-(compatibility and Builder overview).
+**Contract owner:** this reference owns Builder authority boundaries, work
+packet semantics, local law, preflight, allowed probes, return envelope,
+execution rules, and replacement-batch mechanics.
 
 **Read trigger:** open this reference when Stage 4 batch-loop is about to
 dispatch a Builder sub-agent, when Stage 5 patch-batch flow requests a
@@ -34,7 +33,7 @@ Stage 4 batch-loop reference owns the dispatch-policy decision; this file owns
 the Builder-specific Work Packet, authority boundary, preflight rules, and
 return envelope.
 
-## Role boundaries (v1 L43-65)
+## Role boundaries
 
 The role language is executable contract language:
 
@@ -56,7 +55,7 @@ The role language is executable contract language:
 - Validator personas are read-only reviewers. They do not fix, choose modes,
   or re-rank severity.
 
-## Builder Work Packet (v1 L74-104)
+## Builder Work Packet
 
 The Orchestrator sends Builder one batch-only Work Packet:
 
@@ -99,7 +98,7 @@ the Orchestrator must materialize the needed authority summary from the
 confirmed batch contract or decomposition output before dispatch. Builder
 must not infer that authority by reading the full plan or full ledger.
 
-## Authority and Local Law (v1 L106-131)
+## Authority and Local Law
 
 The ledger remains the source of authority. Builder may edit only files listed
 in `batch.files`, may create a missing path only when that path is already
@@ -126,7 +125,7 @@ nearby tests, deterministic probes, and equivalent literal probes named by the
 batch goal, rationale, or acceptance tests. Edits remain limited to
 `batch.files`. Whole-repo archaeology routes to a fail-stop.
 
-## Mechanic Discipline (v1 L133-138)
+## Mechanic Discipline
 
 Builder finds an existing seam before editing, makes the smallest coherent
 diff, avoids opportunistic cleanup, avoids speculative abstractions, avoids
@@ -134,21 +133,21 @@ generic helper dumping grounds, avoids dependency changes unless explicitly
 scoped, preserves local domain/system language, runs targeted checks where
 possible, and reports uncertainty instead of hiding it.
 
-## Public Contract Rule (v1 L139-144)
+## Public Contract Rule
 
 Builder may change exported symbols, API shapes, CLI flags/output, schemas,
 event payloads, config shapes, environment-variable expectations, migration
 manifests, or package boundaries only when the confirmed batch contract
 explicitly names the public surface and includes checks/proofs for the change.
 
-## Domain Language Rule (v1 L145-149)
+## Domain Language Rule
 
 Builder preserves existing target-repo language from local law, nearby tests,
 and nearby code. Unowned terms may appear provisionally in the envelope only.
 If missing language affects ownership, API, behaviour, or durable meaning,
 Builder fail-stops.
 
-## Builder Preflight Checklist (v1 L150-167)
+## Builder Preflight Checklist
 
 Preflight is required before any Builder edit. Builder verifies that:
 
@@ -166,7 +165,7 @@ Preflight is required before any Builder edit. Builder verifies that:
 No readiness, no build. If readiness fails, Builder returns a fail-stop
 envelope before editing or committing.
 
-## Probe Catalog (v1 L168-178)
+## Probe Catalog
 
 Builder may run only deterministic probes from this catalog, plus equivalent
 literal probes named by the batch goal, rationale, or acceptance tests:
@@ -184,7 +183,7 @@ expand scope opportunistically. It returns `status: fail-stop-preflight` with
 blockers, probe results, route hint, and optional non-authoritative scope
 suggestions.
 
-## Return envelope (v1 L184-213)
+## Return envelope
 
 Builder returns one structured envelope. Status is one of `committed`,
 `fail-stop-preflight`, `fail-stop-out-of-scope`,
@@ -218,7 +217,7 @@ fail-stop `builder_attempts` record with `commit_sha: null`, increment
 `iterations`, and route repair through a replacement batch when the contract
 is stale or unsafe.
 
-## Builder execution rules (v1 L1056-1109)
+## Builder execution rules
 
 Apply every iteration:
 
@@ -243,7 +242,7 @@ Apply every iteration:
 4. **Follow `execution_mode`.** The confirmed ledger chooses the execution
    discipline. Builder follows it or fail-stops if the contract is unsafe or
    stale after reading the files (`tdd`, `proof_first`, `change_first` with the
-   guardrails declared in the v1 source).
+   guardrails declared in this reference).
 5. **Pin behaviour first.** Where a finding is "test missing", or where
    `execution_mode` is `tdd`, Builder writes the behaviour test first (red),
    then the fix (green).
@@ -254,7 +253,7 @@ Apply every iteration:
 7. **Read before writing.** Builder reads every file in the batch's `files`
    list before the first edit.
 
-## Replacement batches and `supersedes` (v1 L215-265)
+## Replacement batches and `supersedes`
 
 Replacement-batch behavior is sourced from
 `docs/brainstorms/2026-05-21-issue-to-pr-builder-sub-agent-requirements.md`.
@@ -269,7 +268,7 @@ index from the superseded batch's `ac_mapping`, include rationale prose when
 `files`, `acceptance_tests`, or `execution_mode` differ from the superseded
 batch, and go through helper validation, digest recomputation, and user
 confirmation before Stage 4 continues. The recommended rationale prefix for
-a replacement batch is `replacement-contract: <reason>` (per the v1 ledger
+a replacement batch is `replacement-contract: <reason>` (per the v2 ledger
 template recommendation).
 
 When a replacement supersedes a blocked batch, pending downstream batches that

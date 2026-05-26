@@ -80,7 +80,7 @@ not Builder envelopes and must not appear there; they may only be summarized in
 ### `<local_law_read_order>` framing
 
 Fill the tag with the six-step Local Law Read Order from
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law-v1-l106-131).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law).
 The tag exists so Builder runs the read order before any edit; the canonical
 rule body still lives in the reference.
 
@@ -99,7 +99,7 @@ rule body still lives in the reference.
 ### `<authority_boundary>` framing
 
 Fill the tag with the Builder-only authority summary from
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law-v1-l106-131).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law).
 The tag exists so Builder can see the edit boundary without reading unrelated
 ledger or plan state.
 
@@ -117,7 +117,7 @@ Repair attempts target exactly one open P0/P1 finding by signature; Builder fixe
 ### `<preflight_checklist>` framing
 
 Fill the tag with the nine-item checklist from
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#builder-preflight-checklist-v1-l150-167).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#builder-preflight-checklist).
 Builder verifies every item before any edit; missing readiness routes to a
 `fail-stop-preflight` envelope.
 
@@ -139,7 +139,7 @@ Builder verifies every item before any edit; missing readiness routes to a
 ### `<allowed_probes>` framing
 
 Fill the tag with the Probe Catalog from
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#probe-catalog-v1-l168-178).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#probe-catalog).
 Builder may run only these five probe shapes plus equivalent literal probes
 named by the batch goal, rationale, or acceptance tests. Probe matches outside
 `batch_contract.files` route to `fail-stop-preflight` rather than expanding
@@ -161,7 +161,7 @@ scope.
 
 Fill the tag with a pointer to the return envelope schema below; the
 canonical schema and required `suggested_validator_focus` field rule live in
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope-v1-l184-213).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope).
 The tag's job is to remind the Builder sub-agent that only the envelope below
 constitutes valid output.
 
@@ -187,14 +187,14 @@ The authority boundary is rendered into the `<authority_boundary>` framing tag
 above (filled from `BUILDER_AUTHORITY_BOUNDARY_TEXT` in
 [`../lib/packets.ts`](../lib/packets.ts)). The canonical rule body it mirrors
 lives in
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law-v1-l106-131).
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#authority-and-local-law).
 This template does not restate the MUST-NOT list a third time; read the framing
 tag above or the canonical reference.
 
 ## Preflight on entry
 
 Run the nine-item Preflight Checklist in
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#builder-preflight-checklist-v1-l150-167)
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#builder-preflight-checklist)
 before any edit. No readiness, no build. If preflight fails, return a
 `fail-stop-preflight` envelope (see Return envelope below).
 
@@ -202,7 +202,7 @@ before any edit. No readiness, no build. If preflight fails, return a
 
 Builder returns exactly one structured envelope at the end of the attempt.
 See
-[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope-v1-l184-213)
+[`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope)
 for the full schema, the status enum (`committed`, `fail-stop-preflight`,
 `fail-stop-out-of-scope`, `fail-stop-execution-mode-mismatch`,
 `fail-stop-read-failed`, `fail-stop-other`), and the rule that

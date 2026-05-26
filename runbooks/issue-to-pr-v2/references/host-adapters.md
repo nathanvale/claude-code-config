@@ -1,18 +1,9 @@
 # Host adapters reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` — the
-"Stage 4: batch-loop" outer-loop step "Verify host Builder readiness for the
-selected eligible batch" (pre-implementation host-readiness check in Stage 4);
-the "Inner loop" "Before every Stage 4 implementation attempt" readiness
-paragraph (pre-implementation repeat for `host-builder-tools-unavailable`); and
-the "If Builder dispatch begins but timeout" paragraph that follows it
-(post-dispatch `builder-infrastructure-failure`). `runbooks/issue-to-pr/README.md`
-— the blocked-reason outcome summary beginning "If host readiness fails before a
-Stage 4 implementation attempt", and the "Host Builder readiness failure" /
-"Builder infrastructure failure" glossary entries (definitional cross-references
-that point back to the canonical rules here). Anchors are cited by named v1
-section, not line number, per `.claude/rules/code-citations.md`: line numbers
-drift silently when the v1 runbook is reworded.
+**Contract owner:** this reference owns the Stage 4 host-readiness boundary.
+Stage 4 loop prose links here for the pre-implementation gate; Builder dispatch
+links here for post-dispatch infrastructure failure; findings docs link here
+for blocked-reason definitions.
 
 **Read trigger:** open this reference before every Stage 4 implementation
 attempt (Builder dispatch or bounded Orchestrator-inline) and after every
@@ -25,10 +16,9 @@ infrastructure failure classification). See also:
 ## Host-readiness vs infrastructure-failure boundary
 
 The v2 hot router treats these two failure modes as distinct routing outcomes.
-The boundary is the canonical rule body; the v1 README glossary keeps a
-two-line pointer to this reference.
+This section is the canonical rule body.
 
-### Pre-implementation: host Builder readiness check (v1 Stage 4 step 3 + inner-loop readiness repeat)
+### Pre-implementation: host readiness check
 
 Before any batch status mutation or resumed Stage 4 implementation attempt,
 verify host Builder readiness for the selected or in-progress batch. The host
@@ -63,10 +53,9 @@ The same check repeats before every Stage 4 implementation attempt inside the
 inner loop, including Builder dispatch, bounded Orchestrator-inline work, and
 resumed repair dispatches. When readiness is unavailable on a resumed inner-loop
 attempt, the Orchestrator records the same `host-builder-tools-unavailable`
-evidence above and additionally asks the user to retry or abandon (per the v1
-inner-loop "ask the user to retry or abandon" clause).
+evidence above and asks the user to retry or abandon.
 
-### Post-dispatch: builder-infrastructure-failure (v1 inner-loop "If Builder dispatch begins" rule)
+### Post-dispatch: builder-infrastructure-failure
 
 If Builder dispatch begins but timeout, permission, tool, serialization,
 schema, or malformed-envelope failure prevents a well-formed Builder envelope:
@@ -96,12 +85,10 @@ audit trails until the next well-formed Builder envelope or committed
 Orchestrator-inline attempt arrives. The v2 Builder dispatch contract enumerates
 the two strings (see [builder-dispatch.md](builder-dispatch.md)).
 
-## Glossary cross-reference (v1 README "Host Builder readiness failure" / "Builder infrastructure failure" entries)
+## Glossary cross-reference
 
-The v1 README glossary keeps a two-line entry for each blocked_reason value
-that points back to the rule body above. The v2
-[findings-and-validators.md](findings-and-validators.md) glossary keeps the
-same pointer.
+The [findings-and-validators.md](findings-and-validators.md) glossary points
+back to the rule body above for both blocked_reason values.
 
 ## Install-artifact presence (U6)
 

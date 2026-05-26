@@ -3,12 +3,12 @@
 /**
  * Issue-to-PR v2 helper compatibility entrypoint (U3 slice S5).
  *
- * This file is a thin dispatcher over the modules in `./lib/`. Behavior
- * matches v1 `runbooks/issue-to-pr/decompose.ts` byte-for-byte: same flags,
- * same stdout/stderr shape, same exit codes, same argument handling. The
- * char suite at `./decompose.test.ts` is the regression net.
+ * This file is a thin dispatcher over the modules in `./lib/`. It preserves
+ * the legacy helper flag surface: same stdout/stderr shape, same exit codes,
+ * same argument handling. The char suite at `./decompose.test.ts` is the
+ * regression net.
  *
- * Public flags (unchanged from v1):
+ * Public compatibility flags:
  *   decompose.ts --plan-digest <plan-path>
  *   decompose.ts --ac-digest <ledger-path>
  *   decompose.ts --confirmation-state <ledger-path>
@@ -22,7 +22,7 @@
  *   decompose.ts <plan-path> --validate-ac-coverage <ledger-path>
  *   decompose.ts <plan-path> --patch-proposal <ledger-path>
  *
- * v2-only flags (no v1 counterpart):
+ * v2-only flags:
  *   decompose.ts --assert-stage5-readonly <ledger-path> <commit-ref>
  */
 

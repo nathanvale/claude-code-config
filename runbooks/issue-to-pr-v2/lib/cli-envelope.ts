@@ -171,7 +171,7 @@ export function createSuccessEnvelope<TData>(input: {
 
 /**
  * Wrap a failed command into a `CliErrorEnvelope` with a structured
- * runtime error. Defaults exit_code to 1 (the v1 helper's exit code),
+ * runtime error. Defaults exit_code to 1 (the compatibility helper's exit code),
  * severity to "error", recoverability to "user-action-required", and
  * retryable to false — every caller may override.
  */

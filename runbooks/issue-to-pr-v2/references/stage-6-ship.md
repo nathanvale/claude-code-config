@@ -1,6 +1,7 @@
 # Stage 6: ship reference
 
-**v1 source anchor:** `runbooks/issue-to-pr/issue-to-pr.md` L903-978.
+**Contract owner:** this reference owns Stage 6 local checks, residual finding
+gate, PR creation, PR URL recording, and shipped-ledger checkpointing.
 
 **Read trigger:** open this reference when Stage 5's exit condition has been
 met (`frontmatter.final_reviewed_at` is set; all `batch_id == final` rows are
@@ -35,9 +36,9 @@ envelope instead of forcing Stage 6.
      only as the last fallback.
 
    MCP runner path rejection is a valid "does not fit" case when the file or
-   repo is outside the active harness repository (such as runbook helper tests
-   under `~/.claude/runbooks/issue-to-pr/` or disposable smoke repos under
-   `/tmp`). Some MCP runner schemas also have no `cwd`, so they cannot target
+   repo is outside the active harness repository (such as installed runbook
+   helper tests or disposable smoke repos under `/tmp`). Some MCP runner
+   schemas also have no `cwd`, so they cannot target
    a scratch repo that is not the active harness repo. In those cases, shell
    fallback is expected and allowed. Record the rejected runner and the shell
    command that replaced it.

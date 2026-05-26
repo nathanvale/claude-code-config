@@ -85,8 +85,7 @@ describe("contractDigest", () => {
   test("legacy compat: null supersedes is omitted from the digest payload", () => {
     // A row written before replacement-batch support has no supersedes
     // field at all. A row written after, with supersedes: null, must
-    // produce the same digest. This is the legacy-stability rule from v1
-    // line 841.
+    // produce the same digest. This is the compatibility stability rule.
     const base = makeBatch();
     const { supersedes: _omit, ...beforeSupersedesField } = base;
     const afterSupersedesNull = makeBatch({ supersedes: null });

@@ -15,8 +15,7 @@ Frontmatter declares `runbook_version: "3"`.
 The public host-neutral control plane lives at
 `skills/issue-to-pr/SKILL.md`. This file remains the installed v2
 hot-router support artifact and Claude Code compatibility reference.
-The runnable v1 hot file at `~/.claude/runbooks/issue-to-pr/` stays
-available as the frozen behavior baseline.
+The v2 tree owns the runnable contract.
 
 ## Core invariants
 
@@ -396,7 +395,7 @@ reference, then walk the steps.
 
 Stage 5 routes every open P0/P1 final-review finding through the
 patch-batch decision tree owned by
-[`references/stage-4-batch-loop.md`](references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree-v1-l806-886).
+[`references/stage-4-batch-loop.md`](references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree).
 The orchestrator hands the cited finding row to the Proposer (via
 `cli.ts packet proposer --ledger <path> --finding <id> --json`),
 validates the returned candidate via

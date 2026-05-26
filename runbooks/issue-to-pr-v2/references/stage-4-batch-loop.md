@@ -1,10 +1,9 @@
 # Stage 4: batch-loop reference
 
-**v1 source anchors:** `runbooks/issue-to-pr/issue-to-pr.md` L708-786
-(outer loop, lifecycle checkpoints, convergence, accepted risk, batch-loop
-exit); L1053-1070 (inner-loop diagram); L838-901 (final-review patch-batch
-decision tree, moved here during the v2 reference split); L877-884
-(smallest-contract-patch heuristic).
+**Contract owner:** this reference owns Stage 4 batch selection, lifecycle
+checkpoints, implementation-attempt policy, convergence, accepted risk,
+final-review patch-batch remediation, and the smallest-contract-patch
+heuristic.
 
 **Read trigger:** open this reference when entering or resuming `batch-loop`,
 before selecting the next pending batch, before any Stage 4 implementation
@@ -139,7 +138,7 @@ route the work to Builder dispatch. Inline commits are never copied into
 For the Builder Work Packet, authority boundary, Preflight Checklist, and
 return envelope, see [builder-dispatch.md](builder-dispatch.md).
 
-## Outer loop (v1 L692-753)
+## Outer loop
 
 1. **Select the next batch.** First batch in YAML order where
    `status == pending` AND every batch in `depends_on` has terminal-success
@@ -198,7 +197,7 @@ return envelope, see [builder-dispatch.md](builder-dispatch.md).
 Every batch has `status: converged` (or `accepted-risk` with user
 confirmation); working tree clean.
 
-## Inner loop (v1 L1017-1035)
+## Inner loop
 
 For each batch:
 
@@ -252,7 +251,7 @@ carrying both `packet` (machine-readable) and `packet_markdown`
 - Patch-proposal candidate persistence:
   `cli.ts packet patch-proposal --ledger <ledger-path> --finding <finding-id> --patch-id <patch-NNN> --patch-name <title> --patch-goal <sentence> --patch-execution-mode <mode> --patch-rationale <text> [--patch-file <path> ...] [--patch-depends-on <batch-id> ...] [--patch-acceptance-test <text> ...] --json`
 
-## Final-review patch-batch decision tree (v1 L806-886)
+## Final-review patch-batch decision tree
 
 Stage 5 routes every open P0/P1 finding from `/ce-code-review` back to this
 section. Stage 5 itself is read-only ([stage-5-final-review.md](stage-5-final-review.md));
@@ -326,7 +325,7 @@ bounded patch-batch path or must fail-stop for user re-planning.
     commit is recorded in a terminal ledger batch) before evaluating the
     Stage 5 exit condition.
 
-### Smallest contract patch heuristic (v1 L872-879)
+### Smallest contract patch heuristic
 
 - **If the finding's fix touches >2 files** → first ask whether a smaller
   patch exists that adjusts the *contract* the finding cites (a documentation

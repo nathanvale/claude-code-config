@@ -46,7 +46,7 @@ describe("ROUTE_IDS catalog", () => {
     expect(new Set(ROUTE_IDS).size).toBe(ROUTE_IDS.length);
   });
 
-  test("STAGE_ROUTE_IDS enumerates the six v1 stages + shipped", () => {
+  test("STAGE_ROUTE_IDS enumerates the six workflow stages + shipped", () => {
     expect(STAGE_ROUTE_IDS).toEqual([
       "pick-issue",
       "plan",

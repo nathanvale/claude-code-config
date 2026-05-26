@@ -2,12 +2,10 @@
  * Ledger parsing, validation, and integrity checks for the Issue-to-PR v2
  * helper.
  *
- * Lifted verbatim from v1 `runbooks/issue-to-pr/decompose.ts` lines 182-2106
- * (U3 slices S3 + S4). All function bodies are byte-identical to v1; only
- * the surrounding scaffolding changed:
+ * Owns the parser and validation bodies behind the compatibility helper.
  *
- * - Constants and types moved to `./contract.ts` and are imported here.
- * - Digest primitives moved to `./digest.ts` and are imported here.
+ * - Constants and types live in `./contract.ts` and are imported here.
+ * - Digest primitives live in `./digest.ts` and are imported here.
  * - `parse`, `validateFindingsData`, `validateLedgerBatches`, `validateAcCoverage`,
  *   `emit`, `emitContractDigest`, `emitPlanDigest`, `emitAcDigest`,
  *   `emitConfirmationState`, `emitLedgerBatchContractDigest`,
@@ -195,9 +193,9 @@ let failMode: FailMode = "exit";
  * validator failures into a structured `CliErrorEnvelope` instead of
  * killing the process.
  *
- * **`decompose.ts` (the v1-compatible entrypoint) leaves the default
- * `"exit"` mode in place** so its CLI semantics remain byte-for-byte
- * identical to v1. `cli.ts` (U4 v2 CLI front door) wraps its validator
+ * **`decompose.ts` (the compatibility entrypoint) leaves the default
+ * `"exit"` mode in place** so its CLI semantics remain stable. `cli.ts`
+ * (U4 v2 CLI front door) wraps its validator
  * calls in `withFailMode("throw", () => …)` to catch the
  * `DecomposeError` and surface it as a `CliErrorEnvelope`.
  */
@@ -212,7 +210,7 @@ export function fail(msg: string): never {
  * previous value (including via uncaught exceptions) on exit. Returns
  * whatever `fn` returns.
  *
- * Use this from `cli.ts` to convert v1's exit-on-fail semantics into a
+ * Use this from `cli.ts` to convert exit-on-fail semantics into a
  * structured-error path. Example:
  *
  * ```ts
@@ -866,7 +864,7 @@ function topoSortOrFail(batches: Batch[]): Batch[] {
 /**
  * Print the validated batch list as YAML to stdout (the default `decompose.ts`
  * dispatch). Used by Stage 3 to render the candidate DAG into the ledger
- * `## Batches` section. Each batch includes the v1 runtime lifecycle
+ * `## Batches` section. Each batch includes the runtime lifecycle
  * defaults (`status: pending`, `iterations: 0`, etc.) so the output can be
  * pasted directly into the ledger.
  */
@@ -999,7 +997,7 @@ export type LedgerSnapshot = {
   pr_url: string | null;
   /**
    * Frontmatter `status` field. `in-progress` by default; transitions to
-   * `blocked` or `shipped` per the v1 stage rules.
+   * `blocked` or `shipped` per the workflow stage rules.
    */
   frontmatter_status: "in-progress" | "blocked" | "shipped" | null;
   /**
@@ -1071,7 +1069,7 @@ export function readLedgerSnapshot(ledgerPath: string): LedgerSnapshot {
   const prUrl = readFrontmatterPath(frontmatter, "pr_url");
 
   // Frontmatter status: validate against the known set and pass through
-  // any unrecognised value as null (the v1 ledger schema only allows the
+  // any unrecognised value as null (legacy ledgers only allow the
   // three documented values, but parsing must not invent new ones).
   const rawStatus = frontmatter.status;
   let frontmatterStatus:

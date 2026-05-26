@@ -7,8 +7,6 @@ const u1PolicyDocs = [
   "docs/adr/0001-stage-4-context-isolation.md",
   "docs/adr/0003-stage-4-keeps-always-on-validator-wave.md",
   "skills/issue-to-pr/SKILL.md",
-  "runbooks/issue-to-pr/README.md",
-  "runbooks/issue-to-pr/issue-to-pr.md",
   "runbooks/issue-to-pr-v2/issue-to-pr.md",
   "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md",
   "runbooks/issue-to-pr-v2/references/builder-dispatch.md",
@@ -150,12 +148,6 @@ describe("Stage 4 policy drift guards", () => {
         "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md",
       ),
     );
-    const v1Runbook = compact(
-      await readRepoFile("runbooks/issue-to-pr/issue-to-pr.md"),
-    );
-    const v1Template = compact(
-      await readRepoFile("runbooks/issue-to-pr/issue-N-ledger.template.md"),
-    );
     const v2Template = compact(
       await readRepoFile("runbooks/issue-to-pr-v2/issue-N-ledger.template.md"),
     );
@@ -180,16 +172,8 @@ describe("Stage 4 policy drift guards", () => {
     expect(host).toContain(
       "Before any batch status mutation or resumed Stage 4 implementation attempt",
     );
-    // Section anchors are pinned by named v1 section, not line number, so a
-    // reword of the v1 runbook that shifts lines does not silently invalidate
-    // the citation (and a correction here is not punished by this test). See
-    // .claude/rules/code-citations.md.
-    expect(host).toContain(
-      "Pre-implementation: host Builder readiness check (v1 Stage 4 step 3 + inner-loop readiness repeat)",
-    );
-    expect(host).toContain(
-      'Post-dispatch: builder-infrastructure-failure (v1 inner-loop "If Builder dispatch begins" rule)',
-    );
+    expect(host).toContain("Pre-implementation: host readiness check");
+    expect(host).toContain("Post-dispatch: builder-infrastructure-failure");
     expect(host).toContain(
       "including Builder dispatch, bounded Orchestrator-inline work, and resumed repair dispatches",
     );
@@ -235,30 +219,6 @@ describe("Stage 4 policy drift guards", () => {
           "pre-implementation gate",
           "every Stage 4 implementation attempt",
           "host-adapters.md",
-        ],
-      },
-      {
-        context: "v1 runbook",
-        text: v1Runbook,
-        snippets: [
-          "Before every Stage 4 implementation attempt",
-          "bounded Orchestrator-inline",
-          "host-builder-tools-unavailable",
-          // U3-co-located tail (occurs once, only in the inner-loop
-          // host-readiness clause): "do not dispatch Validators" alone occurs
-          // 4x in this file, so pin the discriminating run to prove the
-          // no-Validators + no-inline-fallback consequences live on THIS path.
-          "do not dispatch Validators, do not fall back to",
-        ],
-      },
-      {
-        context: "v1 ledger template",
-        text: v1Template,
-        snippets: [
-          "host-builder-tools-unavailable",
-          "Stage 4 implementation attempt",
-          "bounded Orchestrator-inline",
-          "dispatch no Validators",
         ],
       },
       {

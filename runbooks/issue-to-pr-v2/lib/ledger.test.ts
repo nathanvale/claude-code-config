@@ -630,7 +630,7 @@ describe("readLedgerSnapshot: runbook_version_skew continuation evidence", () =>
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
       '  reference_context: "references/ledger-and-helper.md"',
-      '  accepted_risk: "v1 ledger resumed; v2 changes are additive"',
+      '  accepted_risk: "legacy ledger resumed; v2 changes are additive"',
       "```",
       "",
     ];
@@ -662,7 +662,7 @@ describe("readLedgerSnapshot: runbook_version_skew continuation evidence", () =>
 
   test("evidence with mismatched ledger_version field is rejected", () => {
     // Evidence row claims it documents a v0 ledger, but the actual ledger
-    // is v1. The parser refuses to apply v0 evidence to a v1 ledger.
+    // is version 1. The parser refuses to apply v0 evidence to a version-1 ledger.
     const ledgerPath = writeLedgerWithFrontmatter(
       ['runbook_version: "1"'],
       completeEvidenceBlock({ ledger_version: "0" }),
@@ -732,7 +732,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
       '  reference_context: "references/ledger-and-helper.md"',
-      '  accepted_risk: "v1 ledger resumed; v2 changes are additive"',
+      '  accepted_risk: "legacy ledger resumed; v2 changes are additive"',
       "```",
       "",
     ]);
@@ -744,7 +744,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       timestamp: "2026-05-22T19:00:00+10:00",
       route_context: "batch-loop",
       reference_context: "references/ledger-and-helper.md",
-      accepted_risk: "v1 ledger resumed; v2 changes are additive",
+      accepted_risk: "legacy ledger resumed; v2 changes are additive",
     });
   });
 
@@ -759,7 +759,7 @@ describe("parseRunbookVersionContinuationEvidence", () => {
       '  timestamp: "2026-05-22T19:00:00+10:00"',
       '  route_context: "batch-loop"',
       '  reference_context: "references/ledger-and-helper.md"',
-      '  accepted_risk: "legacy v1 ledger, no version field"',
+      '  accepted_risk: "legacy ledger, no version field"',
       "```",
       "",
     ]);
