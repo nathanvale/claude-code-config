@@ -2439,7 +2439,7 @@ ${currentCommitFilesYaml(6)}
       - "AC 1 holds"
     ac_mapping:
       - 1
-    rationale: null
+    rationale: "change_first-exception: bounded inline edit, non-docs path approved at stage 3 gate"
     status: pending
     builder_commits: []
     builder_attempts: []
@@ -2465,7 +2465,7 @@ ${currentCommitFilesYaml(6)}
       - "AC 1 holds"
     ac_mapping:
       - 1
-    rationale: null
+    rationale: "change_first-exception: bounded inline edit, non-docs path approved at stage 3 gate"
     status: converged
     builder_commits: []
     builder_attempts: []
@@ -2496,7 +2496,7 @@ ${currentCommitFilesYaml(6)}
       - "AC 1 holds"
     ac_mapping:
       - 1
-    rationale: null
+    rationale: "change_first-exception: bounded inline edit, non-docs path approved at stage 3 gate"
     status: converged
     builder_commits: []
     builder_attempts:
@@ -2555,7 +2555,7 @@ ${currentCommitFilesYaml(6)}
       - "AC 1 holds"
     ac_mapping:
       - 1
-    rationale: null
+    rationale: "change_first-exception: bounded inline edit, non-docs path approved at stage 3 gate"
     status: converged
     builder_commits: []
     builder_attempts: []

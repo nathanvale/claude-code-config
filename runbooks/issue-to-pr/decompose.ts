@@ -1578,6 +1578,7 @@ function validateLedgerBatchAttemptInvariants(row: Record<string, unknown>, batc
     if (committedAttemptCommits.has(resolved)) {
       fail(`${context} has duplicate committed builder_attempts for commit "${attempt.commit_sha}"`);
     }
+    assertContentBearingAttemptCommit(attempt.commit_sha, resolved, `${context} builder_attempts commit`);
     committedAttemptCommits.set(resolved, attempt);
 
     const persistedFiles = attempt.files_touched.map((file) => validateRepoRelativePath(file, batch.id));
@@ -1602,6 +1603,7 @@ function validateLedgerBatchAttemptInvariants(row: Record<string, unknown>, batc
     if (builderCommitSet.has(resolved)) {
       fail(`${context} orchestrator_inline_attempts commit "${attempt.commit_sha}" is recorded in builder_commits`);
     }
+    assertContentBearingAttemptCommit(attempt.commit_sha, resolved, `${context} orchestrator_inline_attempts commit`);
     inlineAttemptCommits.set(resolved, attempt);
 
     const persistedFiles = attempt.files_touched.map((file) => validateRepoRelativePath(file, batch.id));
@@ -1661,6 +1663,58 @@ function touchedFilesForCommit(ref: string, context: string): string[] {
     for (const file of touched) files.add(validateRepoRelativePath(file, context));
   }
   return [...files];
+}
+
+function parentCountForCommit(ref: string, context: string): number {
+  const parents = spawnSync("git", ["rev-list", "--parents", "-n", "1", ref], { encoding: "utf8" });
+  if (parents.status !== 0) fail(`${context} "${ref}" parents could not be read from git`);
+  const parts = parents.stdout.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) fail(`${context} "${ref}" parents could not be read from git`);
+  return parts.length - 1;
+}
+
+function rawDiffForCommit(ref: string, context: string): string {
+  const diff = spawnSync("git", ["diff-tree", "--no-commit-id", "--raw", "-r", "--root", "-M", ref], {
+    encoding: "utf8",
+  });
+  if (diff.status !== 0) fail(`${context} "${ref}" raw diff could not be read from git`);
+  return diff.stdout;
+}
+
+function rawDiffHasContentBearingChange(rawDiffOutput: string): boolean {
+  for (const raw of rawDiffOutput.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const tabIndex = line.indexOf("\t");
+    if (tabIndex < 0) continue;
+    const meta = line.slice(0, tabIndex).replace(/^:/, "").trim().split(/\s+/);
+    if (meta.length < 5) continue;
+    const oldSha = meta[2];
+    const newSha = meta[3];
+    const status = meta[4];
+    // Only a pure mode-only modification (status M with unchanged blob SHA) is
+    // non-content-bearing; A/D/R/C/T or M with a changed SHA is a real change.
+    const modeOnly = status.startsWith("M") && oldSha === newSha;
+    if (!modeOnly) return true;
+  }
+  return false;
+}
+
+/**
+ * Vacuous-proof guard for a committed implementation attempt (Builder or
+ * Orchestrator-inline): the cited commit must carry a real tree change. A merge
+ * commit (>1 parent) or a content-empty commit (`--allow-empty` or mode-only)
+ * proves no implementation and is rejected, so a terminal batch cannot satisfy
+ * "at least one committed implementation attempt" with no real work. Mirrors the
+ * v2 helper of the same name.
+ */
+function assertContentBearingAttemptCommit(ref: string, resolvedRef: string, context: string): void {
+  if (parentCountForCommit(resolvedRef, context) > 1) {
+    fail(`${context} "${ref}" is a merge commit; a committed implementation attempt must cite a single-parent commit`);
+  }
+  if (!rawDiffHasContentBearingChange(rawDiffForCommit(resolvedRef, context))) {
+    fail(`${context} "${ref}" carries no content change (empty / mode-only); a committed implementation attempt must change content`);
+  }
 }
 
 function validateReachableCommit(ref: string, context: string): string {

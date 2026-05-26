@@ -1559,6 +1559,213 @@ describe("validateLedgerBatches: Validator-wave evidence", () => {
     ).not.toThrow();
   });
 
+  // F3 (skew-gate-widens-evidence-bypass), Round-1 final-integrated hardening.
+  // A `continuation-evidence-present` ledger carries an OLD frontmatter
+  // runbook_version but an operator-authored continuation row that authorizes
+  // the CURRENT runtime, so `classifyRoute` lets it proceed. The wave-evidence
+  // floor (R5/R6, ADR 0003 always-on) must therefore apply to it too. The bug:
+  // `ledgerUsesCurrentRunbookVersion` compared the raw frontmatter string to
+  // RUNBOOK_VERSION, so a continued ledger (frontmatter still old) silently
+  // skipped the floor — disarming the always-on wave for exactly the ledgers an
+  // operator deliberately re-opened. These two tests pin that the floor is now
+  // keyed on the skew CLASSIFICATION, not raw frontmatter equality.
+  function continuationLedger(
+    batchLines: string[],
+    extraNotesLines: string[],
+  ): string {
+    // An OLD contract version (derived to be guaranteed != RUNBOOK_VERSION, so
+    // a future RUNBOOK_VERSION bump can never collapse this fixture into the
+    // `matched` case and silently stop exercising continuation-evidence-present)
+    // plus a complete continuation row for the current runtime
+    // => skew classifies as continuation-evidence-present => router proceeds.
+    const OLD_VERSION = `${RUNBOOK_VERSION}-prior`;
+    return writeLedger(
+      [
+        "---",
+        "issue_number: 1",
+        `runbook_version: "${OLD_VERSION}"`,
+        "---",
+        "",
+        "# Issue 1",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] AC 1",
+        "",
+        "## Batches",
+        "",
+        ...batchLines,
+        "",
+        "## Notes",
+        "",
+        "<!-- runbook-version-skew-continuation -->",
+        "```yaml",
+        "runbook_version_skew_continuation:",
+        `  ledger_version: "${OLD_VERSION}"`,
+        `  runtime_version: "${RUNBOOK_VERSION}"`,
+        '  operator_decision: "Nathan @ 2026-05-26T09:00"',
+        '  timestamp: "2026-05-26T09:00:00+10:00"',
+        '  route_context: "batch-loop"',
+        '  reference_context: "references/ledger-and-helper.md"',
+        '  accepted_risk: "v2 ledger resumed under current runtime; changes additive"',
+        "```",
+        "",
+        ...extraNotesLines,
+      ].join("\n"),
+    );
+  }
+
+  test("enforces wave-evidence floor on a continuation-evidence ledger missing wave evidence (F3)", () => {
+    // Before the fix this returned without throwing (raw frontmatter "2" !==
+    // RUNBOOK_VERSION => early return). The router proceeds on
+    // continuation-evidence-present, so the floor must NOT be skipped.
+    const ledgerPath = continuationLedger(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      [
+        "<!-- implementation-attempt-checkpoint -->",
+        "```yaml",
+        "implementation_attempt_checkpoint:",
+        '  batch_id: "b1"',
+        `  implementation_commit: "${RUNBOOK_HEAL_CONTROL_PLANE_SHA}"`,
+        '  attempt_lane: "builder_attempts"',
+        '  timestamp: "2026-05-26T09:05:00+10:00"',
+        "```",
+        "",
+        // intentionally NO validator-wave-completed row
+      ],
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/missing completed Validator-wave evidence/);
+  });
+
+  test("accepts a continuation-evidence ledger with complete wave evidence (F3)", () => {
+    // The floor is enforced AND satisfiable on a continued ledger: the wave
+    // evidence rows are appended after the continuation row in the same Notes.
+    // validatorEvidenceNotes leads with its own "## Notes" header; drop every
+    // line up to and including it so the evidence rows append under the
+    // continuation section's existing Notes. Robust to changes in the helper's
+    // leading-line count (a bare slice(N) would silently break on a reorder).
+    const waveNotes = validatorEvidenceNotes(
+      RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+      "builder_attempts",
+    );
+    const notesHeaderIndex = waveNotes.indexOf("## Notes");
+    const ledgerPath = continuationLedger(
+      terminalBatchRecording(
+        RUNBOOK_HEAL_CONTROL_PLANE_SHA,
+        RUNBOOK_HEAL_CONTROL_PLANE_FILES,
+      ),
+      waveNotes.slice(notesHeaderIndex + 1),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).not.toThrow();
+  });
+
+  // F2 (vacuous-proof), Round-1 final-integrated hardening. A committed
+  // implementation attempt's commit is the durable proof real work happened, so
+  // it must carry a real tree change. A merge commit (>1 parent, empty default
+  // diff) or a content-empty commit previously satisfied the terminal
+  // "at least one committed implementation attempt" requirement with
+  // files_touched: [] passing the parity check vacuously. The guard
+  // (assertContentBearingAttemptCommit) now rejects both, on BOTH the
+  // builder_attempts and orchestrator_inline_attempts lanes. dc6868a is a real
+  // reachable merge commit whose diff-tree against its first parent is empty.
+  function mergeCommitTerminalBuilderBatch(): string[] {
+    return [
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      `      - "${RUNBOOK_HEAL_CONTROL_PLANE_FILES[0]}"`,
+      "    depends_on: []",
+      "    execution_mode: tdd",
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    rationale: null",
+      "    status: converged",
+      "    builder_commits:",
+      `      - "${RUNBOOK_HEAL_MERGE_COMMIT_SHA}"`,
+      "    builder_attempts:",
+      "      - attempt_type: implementation",
+      "        status: committed",
+      `        commit_sha: "${RUNBOOK_HEAL_MERGE_COMMIT_SHA}"`,
+      "        files_touched: []",
+      '        route_hint: "validator-wave"',
+      "        blockers: []",
+      "        probe_results: []",
+      '        notes: "merge commit fixture"',
+      "    orchestrator_inline_attempts: []",
+      "    iterations: 1",
+      "    final_verdict: converged",
+      "```",
+    ];
+  }
+
+  function mergeCommitTerminalInlineBatch(): string[] {
+    return [
+      "```yaml",
+      "batches:",
+      '  - id: "b1"',
+      '    name: "B1"',
+      '    goal: "AC 1"',
+      "    files:",
+      `      - "${RUNBOOK_HEAL_CONTROL_PLANE_FILES[0]}"`,
+      "    depends_on: []",
+      "    execution_mode: change_first",
+      '    rationale: "change_first-exception: bounded inline edit, non-docs path approved at stage 3 gate"',
+      "    acceptance_tests:",
+      '      - "AC 1 holds"',
+      "    ac_mapping:",
+      "      - 1",
+      "    status: converged",
+      "    builder_commits: []",
+      "    builder_attempts: []",
+      "    orchestrator_inline_attempts:",
+      `      - commit_sha: "${RUNBOOK_HEAL_MERGE_COMMIT_SHA}"`,
+      "        files_touched: []",
+      '        notes: "merge commit inline fixture"',
+      "    iterations: 1",
+      "    final_verdict: converged",
+      "```",
+    ];
+  }
+
+  test("rejects a committed builder_attempts merge commit as vacuous proof (F2)", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      mergeCommitTerminalBuilderBatch(),
+      validatorEvidenceNotes(RUNBOOK_HEAL_MERGE_COMMIT_SHA, "builder_attempts"),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/builder_attempts commit .* is a merge commit/);
+  });
+
+  test("rejects a committed orchestrator_inline_attempts merge commit as vacuous proof (F2)", () => {
+    const ledgerPath = ledgerWithCurrentRunbookVersion(
+      mergeCommitTerminalInlineBatch(),
+      validatorEvidenceNotes(
+        RUNBOOK_HEAL_MERGE_COMMIT_SHA,
+        "orchestrator_inline_attempts",
+      ),
+    );
+
+    expect(() =>
+      withFailMode("throw", () => validateLedgerBatches(ledgerPath)),
+    ).toThrow(/orchestrator_inline_attempts commit .* is a merge commit/);
+  });
+
   test("rejects an inline terminal attempt when checkpoint+wave evidence is wrongly labeled builder_attempts", () => {
     // The Round-1 testing angle flagged that cross-lane confusion has no
     // negative coverage: dedup keys include lane, but a regression that

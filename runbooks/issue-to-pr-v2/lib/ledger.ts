@@ -2508,6 +2508,7 @@ function validateLedgerBatchAttemptInvariants(row: Record<string, unknown>, batc
     if (committedAttemptCommits.has(resolved)) {
       fail(`${context} has duplicate committed builder_attempts for commit "${attempt.commit_sha}"`);
     }
+    assertContentBearingAttemptCommit(attempt.commit_sha, resolved, `${context} builder_attempts commit`);
     committedAttemptCommits.set(resolved, attempt);
 
     const persistedFiles = attempt.files_touched.map((file) => validateRepoRelativePath(file, batch.id));
@@ -2532,6 +2533,7 @@ function validateLedgerBatchAttemptInvariants(row: Record<string, unknown>, batc
     if (builderCommitSet.has(resolved)) {
       fail(`${context} orchestrator_inline_attempts commit "${attempt.commit_sha}" is recorded in builder_commits`);
     }
+    assertContentBearingAttemptCommit(attempt.commit_sha, resolved, `${context} orchestrator_inline_attempts commit`);
     inlineAttemptCommits.set(resolved, attempt);
 
     const persistedFiles = attempt.files_touched.map((file) => validateRepoRelativePath(file, batch.id));
@@ -2605,10 +2607,35 @@ function validateTerminalValidatorWaveEvidence(
   }
 }
 
+/**
+ * True when the run is proceeding under the CURRENT runtime contract, so the
+ * Validator-wave evidence floor (R5/R6, ADR 0003) applies. This gates
+ * `validateTerminalValidatorWaveEvidence`: skip enforcement only for genuinely
+ * legacy ledgers the router blocks anyway.
+ *
+ * Keyed on the skew CLASSIFICATION, not raw frontmatter equality. A
+ * `continuation-evidence-present` ledger carries an old frontmatter
+ * `runbook_version` string but an operator-authored continuation row that
+ * authorizes the current runtime — `classifyRoute` lets it proceed, so the
+ * always-on wave floor must apply to it too. Comparing the raw frontmatter
+ * string to `RUNBOOK_VERSION` would silently disarm the floor for exactly the
+ * ledgers an operator deliberately re-opened (the skew-gate-widens-evidence-bypass
+ * seam): the signal that authorizes continuing was invisible to the floor.
+ *
+ * `missing` / `mismatched` return false: the router returns
+ * `blocked-runbook-version-skew` for those, so they never reach a terminal
+ * converged batch through the happy path, and a pre-evidence-machinery legacy
+ * ledger should not be retroactively failed for fields that did not exist when
+ * it was authored.
+ */
 function ledgerUsesCurrentRunbookVersion(ledgerPath: string): boolean {
   const frontmatter = nonExiting(() => readFrontmatter(ledgerPath));
   if (frontmatter === null) return false;
-  return readFrontmatterRunbookVersion(frontmatter) === RUNBOOK_VERSION;
+  const ledgerVersion = readFrontmatterRunbookVersion(frontmatter);
+  const skew = nonExiting(() =>
+    classifyRunbookVersionSkew(ledgerVersion, ledgerPath),
+  );
+  return skew === "matched" || skew === "continuation-evidence-present";
 }
 
 function indexImplementationAttemptCheckpoints(
@@ -3184,6 +3211,36 @@ function rawDiffForCommit(ref: string, context: string): string {
   });
   if (diff.status !== 0) fail(`${context} "${ref}" raw diff could not be read from git`);
   return diff.stdout;
+}
+
+/**
+ * Vacuous-proof guard for a committed implementation attempt (Builder or
+ * Orchestrator-inline). A committed attempt's commit is the durable evidence
+ * that real implementation happened, so it must carry a real tree change.
+ *
+ * Two commits prove nothing and are rejected:
+ * - a MERGE commit (>1 parent): `diff-tree` condenses merges by default, so a
+ *   merge can emit an empty diff against its first parent — touched-file parity
+ *   would then pass vacuously against `files_touched: []`.
+ * - a content-empty commit (an `--allow-empty` commit, or one whose only change
+ *   is a mode-bit flip): `rawDiffHasContentBearingChange` returns false.
+ *
+ * Without this guard a terminal batch could converge citing an empty or merge
+ * commit as its sole "implementation attempt" and satisfy the
+ * "at least one committed implementation attempt" terminal requirement with no
+ * real work (the vacuous-proof seam). Mirrors the same guards
+ * `validateControlPlaneOnlyCommit` applies on the runbook-heal resolution path.
+ *
+ * `resolvedRef` is the git-resolved SHA from `validateReachableCommit`; `ref` is
+ * the operator-facing commit string used in diagnostics.
+ */
+function assertContentBearingAttemptCommit(ref: string, resolvedRef: string, context: string): void {
+  if (parentCountForCommit(resolvedRef, context) > 1) {
+    fail(`${context} "${ref}" is a merge commit; a committed implementation attempt must cite a single-parent commit`);
+  }
+  if (!rawDiffHasContentBearingChange(rawDiffForCommit(resolvedRef, context))) {
+    fail(`${context} "${ref}" carries no content change (empty / mode-only); a committed implementation attempt must change content`);
+  }
 }
 
 /**
