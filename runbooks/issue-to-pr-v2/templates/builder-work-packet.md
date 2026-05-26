@@ -180,33 +180,9 @@ for transition semantics and the rule that `suggested_validator_focus` is
 required. Concrete shape is generated from
 `cli.ts scaffold builder-return-envelope --json`.
 
-<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
-
 (The sibling [`builder-return-envelope.md`](builder-return-envelope.md) points
 at the same runtime-owned scaffold for readers who arrive at the return
 contract directly.)
-
-<!-- generated-scaffold:start id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
-```yaml
-attempt_type: implementation  # implementation | repair
-target_finding_signature: null  # string for repair; null for implementation
-status: committed  # committed | fail-stop-preflight | fail-stop-out-of-scope | fail-stop-execution-mode-mismatch | fail-stop-read-failed | fail-stop-other
-commit_sha: "<commit-sha>"
-files_touched: []
-route_hint: null
-blockers: []
-probe_results: []
-suggested_scope_changes: []
-implementation_steps: []
-existing_seams_used: []
-tests_run: []
-assumptions: []
-risks: []
-deferred: []
-suggested_validator_focus: []
-notes: "<attempt summary>"
-```
-<!-- generated-scaffold:end id=builder-return-envelope -->
 
 ## See also
 

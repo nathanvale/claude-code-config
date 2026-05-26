@@ -1411,12 +1411,12 @@ describe("parseRunbookVersionContinuationEvidence: walker edge cases", () => {
     expect(evidence).toBe(null);
   });
 
-  test("template-documented blank line between marker and yaml fence is honored", () => {
-    // The template at issue-N-ledger.template.md explicitly says blank
-    // lines are allowed between the marker comment and the opening
-    // yaml fence. This regression test pins the walker against the
-    // sweep-2 finding where the immediate-previous-line check would
-    // have silently dropped the legitimate row.
+  test("documented blank line between marker and yaml fence is honored", () => {
+    // Ledger Notes evidence permits blank lines between the marker
+    // comment and the opening yaml fence. This regression test pins
+    // the walker against the sweep-2 finding where the
+    // immediate-previous-line check would have silently dropped the
+    // legitimate row.
     const ledgerPath = ledgerWithRawNotes([
       "<!-- runbook-version-skew-continuation -->",
       "",

@@ -20,8 +20,6 @@ rules.
 Concrete envelope shape:
 `cli.ts scaffold builder-return-envelope --json`.
 
-<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
-
 Status transitions and the rule that `suggested_validator_focus` is required
 live in
 [`references/builder-dispatch.md`](../references/builder-dispatch.md#return-envelope).
@@ -31,38 +29,15 @@ the Stage 4 batch-loop contract.
 
 ## Envelope shape
 
-<!-- generated-scaffold:start id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
-```yaml
-attempt_type: implementation  # implementation | repair
-target_finding_signature: null  # string for repair; null for implementation
-status: committed  # committed | fail-stop-preflight | fail-stop-out-of-scope | fail-stop-execution-mode-mismatch | fail-stop-read-failed | fail-stop-other
-commit_sha: "<commit-sha>"
-files_touched: []
-route_hint: null
-blockers: []
-probe_results: []
-suggested_scope_changes: []
-implementation_steps: []
-existing_seams_used: []
-tests_run: []
-assumptions: []
-risks: []
-deferred: []
-suggested_validator_focus: []
-notes: "<attempt summary>"
-```
-<!-- generated-scaffold:end id=builder-return-envelope -->
+Resolve the runtime-owned shape through
+`cli.ts scaffold builder-return-envelope --json` before returning the envelope.
 
 ## What the Orchestrator records
 
 Compact persisted row: `cli.ts scaffold builder-attempt-compact --json`.
 
-<!-- scaffold-pointer id=builder-attempt-compact source="cli.ts scaffold builder-attempt-compact --json" -->
-
 Validator Builder-evidence input:
 `cli.ts scaffold validator-builder-evidence --json`.
-
-<!-- scaffold-pointer id=validator-builder-evidence source="cli.ts scaffold validator-builder-evidence --json" -->
 
 Rich evidence flows into the next Validator packet through
 [validator-envelope.md](validator-envelope.md) `builder_evidence`. It does

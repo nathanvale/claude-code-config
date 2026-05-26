@@ -956,6 +956,7 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     expect(data.commands.map((c) => c.name).sort()).toEqual([
       "contract",
       "diagnose",
+      "ledger-init",
       "next",
       "packet",
       "scaffold",
@@ -1117,6 +1118,90 @@ describe("Help flag emits a machine-readable JSON envelope (agents, not humans)"
     // No human-style prose on stderr — the error envelope on stdout is
     // the single source of truth for agents.
     expect(stderr).toBe("");
+  });
+
+  test("--help documents ledger-init flags and response shape", () => {
+    const { envelope } = invoke(["--help"]);
+    const data = envelope.data as {
+      ledger_init_flags: Record<string, string>;
+      ledger_init_response_shape: Record<string, string>;
+    };
+
+    expect(data.ledger_init_flags["--issue-number"]).toContain("integer");
+    expect(data.ledger_init_flags["--ac"]).toContain("Repeatable");
+    expect(data.ledger_init_response_shape.ledger_markdown).toContain(
+      "Complete initial ledger",
+    );
+    expect(data.ledger_init_response_shape.metadata).toContain("ac_digest");
+  });
+});
+
+// ---------------- ledger-init command ----------------
+
+describe("ledger-init command", () => {
+  const argv = [
+    "ledger-init",
+    "--issue-number",
+    "77",
+    "--issue-title",
+    'Quote "safe" title',
+    "--issue-url",
+    "https://github.com/acme/widgets/issues/77",
+    "--target-repo",
+    "acme/widgets",
+    "--started-at",
+    "2026-05-26T10:30:00+10:00",
+    "--ac-source",
+    "gold-standard",
+    "--ac",
+    "First confirmed behaviour",
+    "--ac",
+    "Second confirmed behaviour",
+    "--json",
+  ] as const;
+
+  test("emits a success envelope without writing a file", () => {
+    const { envelope, exit_code } = invoke(argv);
+    const data = envelope.data as {
+      ledger_markdown: string;
+      metadata: {
+        runbook_version: string;
+        ac_digest: string;
+        section_order: string[];
+      };
+    };
+
+    expect(envelope.status).toBe("ok");
+    expect(exit_code).toBe(0);
+    expect(data.ledger_markdown).toContain('issue_number: 77');
+    expect(data.ledger_markdown).toContain('issue_title: "Quote \\"safe\\" title"');
+    expect(data.ledger_markdown).toContain("batches: []");
+    expect(data.ledger_markdown).toContain("findings: []");
+    expect(data.ledger_markdown).toContain("workflow_learnings: []");
+    expect(data.metadata.ac_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(data.metadata.section_order).toEqual([
+      "Acceptance criteria",
+      "Batches",
+      "Findings data",
+      "Findings",
+      "Notes",
+      "Workflow Learnings",
+    ]);
+  });
+
+  test("missing required input returns a usage error envelope", () => {
+    const { envelope, exit_code } = invoke([
+      "ledger-init",
+      "--issue-number",
+      "77",
+      "--json",
+    ]);
+
+    expect(envelope.status).toBe("error");
+    expect((envelope.error as { code: string }).code).toBe(
+      "missing-required-arg",
+    );
+    expect(exit_code).toBe(64);
   });
 });
 

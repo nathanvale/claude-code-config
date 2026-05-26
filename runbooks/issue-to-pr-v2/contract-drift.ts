@@ -42,15 +42,14 @@
  *
  *  - Main SCOPE is `SCOPED_DOCS`. It does NOT validate other Issue-to-PR
  *    references (stage-*.md, host-adapters.md, etc.). Narrow add-ons also
- *    cross-check ledger template schema-slice pointers, runtime scaffold
- *    generated blocks, and checked scaffold pointers.
+ *    cross-check ledger schema-slice pointers, runtime scaffold generated
+ *    blocks, hidden pointer compatibility, and visible scaffold commands.
  *  - It checks ONLY the contract-token kinds from AC1-AC4: route ids, `cli.ts`
  *    command names, `contract <slice>` names, packet roles (ONLY in explicit
  *    `cli.ts packet <role>` command positions), `data.*` response-field paths,
  *    and the scoped recovery/control-plane links (the first-run-gotchas
- *    relationship). The ledger add-on checks only lifecycle field-name
- *    presence in the template plus emitted schema-slice pointers in the
- *    ledger helper reference.
+ *    relationship). The ledger add-on checks emitted schema-slice pointers in
+ *    the ledger helper reference.
  *    It does NOT judge prose truth, broad docs consistency, or any token kind
  *    beyond these.
  *  - It adds NO external dependency and generates NO docs. Runtime contract
@@ -1182,7 +1181,6 @@ const GOTCHAS_GUIDE_REL = "runbooks/issue-to-pr-v2/references/first-run-gotchas.
 const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
 const ISSUE_TO_PR_DOC_REL = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
-const LEDGER_TEMPLATE_REL = "runbooks/issue-to-pr-v2/issue-N-ledger.template.md";
 const CE_PLAN_TEMPLATE_REL =
   "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
 const PROPOSER_TEMPLATE_REL =
@@ -1210,6 +1208,7 @@ type ScaffoldSurface = {
 type ScaffoldInventoryClassification =
   | "generated-block"
   | "checked-pointer"
+  | "visible-command-pointer"
   | "prose-owned-shape"
   | "removed";
 
@@ -1244,14 +1243,14 @@ const PREREQUISITE_SCAFFOLD_IDS = [
 const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
     doc: CE_PLAN_TEMPLATE_REL,
-    coordinate: "## Addendum body / candidate batch scaffold",
-    classification: "generated-block",
+    coordinate: "## Structured-output requirement (issue-to-pr workflow) / candidate batch pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "ce-plan-candidate-batch",
   },
   {
     doc: PATCH_PROPOSAL_TEMPLATE_REL,
-    coordinate: "## Scratch file shape / patch batch scaffold",
-    classification: "generated-block",
+    coordinate: "## Scratch file shape / patch batch pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "patch-proposal-candidate-batch",
   },
   {
@@ -1263,25 +1262,19 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
     doc: BUILDER_RETURN_TEMPLATE_REL,
     coordinate: "## Authoritative source / return envelope pointer",
-    classification: "checked-pointer",
-    scaffoldId: "builder-return-envelope",
-  },
-  {
-    doc: BUILDER_RETURN_TEMPLATE_REL,
-    coordinate: "## Envelope shape / return envelope scaffold",
-    classification: "generated-block",
+    classification: "visible-command-pointer",
     scaffoldId: "builder-return-envelope",
   },
   {
     doc: BUILDER_RETURN_TEMPLATE_REL,
     coordinate: "## What the Orchestrator records / compact attempt pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "builder-attempt-compact",
   },
   {
     doc: BUILDER_RETURN_TEMPLATE_REL,
     coordinate: "## What the Orchestrator records / Validator evidence pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "validator-builder-evidence",
   },
   {
@@ -1293,31 +1286,25 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
     doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
     coordinate: "## Return envelope / Builder return pointer",
-    classification: "checked-pointer",
-    scaffoldId: "builder-return-envelope",
-  },
-  {
-    doc: BUILDER_WORK_PACKET_TEMPLATE_REL,
-    coordinate: "## Return envelope / Builder return scaffold",
-    classification: "generated-block",
+    classification: "visible-command-pointer",
     scaffoldId: "builder-return-envelope",
   },
   {
     doc: BUILDER_DISPATCH_REL,
     coordinate: "## Return envelope / Builder return pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "builder-return-envelope",
   },
   {
     doc: BUILDER_DISPATCH_REL,
     coordinate: "## Return envelope / compact attempt pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "builder-attempt-compact",
   },
   {
     doc: BUILDER_DISPATCH_REL,
-    coordinate: "## Replacement batches and supersedes / replacement pointer",
-    classification: "checked-pointer",
+    coordinate: "## Replacement batches and `supersedes` / replacement pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "replacement-candidate-batch",
   },
   {
@@ -1334,8 +1321,8 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: PROPOSER_TEMPLATE_REL,
-    coordinate: "Candidate patch-batch pointer",
-    classification: "checked-pointer",
+    coordinate: "### Success: one candidate patch-batch / Candidate patch-batch pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "patch-proposal-candidate-batch",
   },
   {
@@ -1352,8 +1339,8 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
-    coordinate: "Builder evidence block",
-    classification: "generated-block",
+    coordinate: "## Packet slots (orchestrator → Validator) / Builder evidence pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "validator-builder-evidence",
   },
   {
@@ -1364,8 +1351,8 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
-    coordinate: "Inline evidence block",
-    classification: "generated-block",
+    coordinate: "## Packet slots (orchestrator → Validator) / Inline evidence pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "validator-inline-evidence",
   },
   {
@@ -1383,133 +1370,67 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   {
     doc: VALIDATOR_ENVELOPE_TEMPLATE_REL,
     coordinate: "### Finding row schema",
-    classification: "generated-block",
+    classification: "visible-command-pointer",
     scaffoldId: "ledger-finding-row",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "frontmatter ledger metadata",
-    classification: "prose-owned-shape",
-    requiredText: 'runbook_version: "3"',
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Batches / replacement row pointer",
-    classification: "checked-pointer",
-    scaffoldId: "replacement-candidate-batch",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Batches / lifecycle defaults pointer",
-    classification: "checked-pointer",
-    scaffoldId: "ledger-batch-lifecycle-defaults",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Batches / empty section scaffold",
-    classification: "generated-block",
-    scaffoldId: "ledger-empty-batches",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Findings data / finding row pointer",
-    classification: "checked-pointer",
-    scaffoldId: "ledger-finding-row",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Findings data / empty section scaffold",
-    classification: "generated-block",
-    scaffoldId: "ledger-empty-findings-data",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Notes / implementation attempt checkpoint pointer",
-    classification: "checked-pointer",
-    scaffoldId: "notes-implementation-attempt-checkpoint",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Notes / Validator wave pointer",
-    classification: "checked-pointer",
-    scaffoldId: "notes-validator-wave-completed",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Notes / version-skew continuation pointer",
-    classification: "checked-pointer",
-    scaffoldId: "notes-runbook-version-skew-continuation",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Workflow Learnings / member list",
-    classification: "removed",
-    forbiddenText: "Required entry fields:",
-  },
-  {
-    doc: LEDGER_TEMPLATE_REL,
-    coordinate: "## Workflow Learnings / empty state scaffold",
-    classification: "generated-block",
-    scaffoldId: "workflow-learnings-empty",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / empty batches pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "ledger-empty-batches",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / lifecycle defaults pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "ledger-batch-lifecycle-defaults",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / empty findings pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "ledger-empty-findings-data",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / finding row pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "ledger-finding-row",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / Notes checkpoint pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "notes-implementation-attempt-checkpoint",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / Notes Validator wave pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "notes-validator-wave-completed",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / Notes version-skew pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "notes-runbook-version-skew-continuation",
   },
   {
     doc: LEDGER_DOC_REL,
     coordinate: "### Runtime-owned schema facts / workflow learnings pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "workflow-learnings-empty",
   },
   {
     doc: LEDGER_DOC_REL,
-    coordinate: "### Notes implementation evidence / checkpoint pointer",
-    classification: "checked-pointer",
+    coordinate: "### `## Notes` implementation evidence / checkpoint pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "notes-implementation-attempt-checkpoint",
   },
   {
     doc: LEDGER_DOC_REL,
-    coordinate: "### Notes implementation evidence / Validator wave pointer",
-    classification: "checked-pointer",
+    coordinate: "### `## Notes` implementation evidence / Validator wave pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "notes-validator-wave-completed",
   },
   {
@@ -1520,38 +1441,38 @@ const SCAFFOLD_INVENTORY: readonly ScaffoldInventoryEntry[] = [
   },
   {
     doc: LEDGER_DOC_REL,
-    coordinate: "### Workflow Learnings / empty state pointer",
-    classification: "checked-pointer",
+    coordinate: "### `## Workflow Learnings` entry fields / empty state pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "workflow-learnings-empty",
   },
   {
     doc: LEDGER_DOC_REL,
-    coordinate: "### Continuation evidence shape / version-skew pointer",
-    classification: "checked-pointer",
+    coordinate: "### Continuation evidence shape (U6) / version-skew pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "notes-runbook-version-skew-continuation",
   },
   {
     doc: STAGE_4_BATCH_LOOP_REL,
     coordinate: "### Packet rendering for Stage 4 dispatch / patch proposal pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "patch-proposal-candidate-batch",
   },
   {
     doc: FINDINGS_AND_VALIDATORS_REL,
     coordinate: "## Validator invocation rules / Builder evidence pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "validator-builder-evidence",
   },
   {
     doc: FINDINGS_AND_VALIDATORS_REL,
     coordinate: "## Validator invocation rules / inline evidence pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "validator-inline-evidence",
   },
   {
     doc: FINDINGS_AND_VALIDATORS_REL,
     coordinate: "## Validator invocation rules / finding row pointer",
-    classification: "checked-pointer",
+    classification: "visible-command-pointer",
     scaffoldId: "ledger-finding-row",
   },
   {
@@ -1567,7 +1488,10 @@ export function scaffoldInventoryClassifications(): readonly ScaffoldInventoryEn
 }
 
 function scaffoldSurfacesFromInventory(
-  classification: "generated-block" | "checked-pointer",
+  classification:
+    | "generated-block"
+    | "checked-pointer"
+    | "visible-command-pointer",
 ): ScaffoldSurface[] {
   const byDoc = new Map<string, string[]>();
   for (const entry of SCAFFOLD_INVENTORY) {
@@ -1583,6 +1507,8 @@ const GENERATED_SCAFFOLD_SURFACES =
   scaffoldSurfacesFromInventory("generated-block");
 const SCAFFOLD_POINTER_SURFACES =
   scaffoldSurfacesFromInventory("checked-pointer");
+const VISIBLE_SCAFFOLD_COMMAND_SURFACES =
+  scaffoldSurfacesFromInventory("visible-command-pointer");
 
 /**
  * Returns the set of scaffold ids referenced across any drift-check surface
@@ -1599,6 +1525,9 @@ export function scaffoldIdsCoveredBySurfaces(): Set<string> {
   for (const surface of SCAFFOLD_POINTER_SURFACES) {
     for (const id of surface.ids) covered.add(id);
   }
+  for (const surface of VISIBLE_SCAFFOLD_COMMAND_SURFACES) {
+    for (const id of surface.ids) covered.add(id);
+  }
   return covered;
 }
 
@@ -1612,6 +1541,7 @@ const SCAFFOLD_COMMAND_SURFACE_RELS = [
   ...new Set([
     ...GENERATED_SCAFFOLD_SURFACES.map((surface) => surface.doc),
     ...SCAFFOLD_POINTER_SURFACES.map((surface) => surface.doc),
+    ...VISIBLE_SCAFFOLD_COMMAND_SURFACES.map((surface) => surface.doc),
   ]),
 ] as const;
 /** Just the guide's basename, for matching markdown links to it. */
@@ -1826,6 +1756,18 @@ function markdownSectionByHeadingPattern(
   text: string,
   headingPattern: RegExp,
 ): string | null {
+  return markdownSectionRegionByHeadingPattern(text, headingPattern)?.body ?? null;
+}
+
+type MarkdownSectionRegion = {
+  body: string;
+  startLine: number;
+};
+
+function markdownSectionRegionByHeadingPattern(
+  text: string,
+  headingPattern: RegExp,
+): MarkdownSectionRegion | null {
   const lines = text.split("\n");
   let start = -1;
   let level = 0;
@@ -1844,7 +1786,7 @@ function markdownSectionByHeadingPattern(
     if (closingRe.test(lines[i] ?? "")) break;
     body.push(lines[i] ?? "");
   }
-  return body.join("\n");
+  return { body: body.join("\n"), startLine: start + 1 };
 }
 
 /** Extract a markdown section body by exact heading label, or `null`. */
@@ -1863,21 +1805,6 @@ function regionMentionsContractSliceCommand(
     `cli\\.ts\\s+contract\\s+${escapeRegExp(slice)}\\s+--json`,
   );
   return commandRe.test(region);
-}
-
-function ledgerLifecycleSliceName(facts: ContractFacts): string {
-  const slice = facts.contractSlices.find(
-    (candidate) =>
-      candidate.includes("ledger") &&
-      candidate.includes("lifecycle") &&
-      candidate.endsWith("_fields"),
-  );
-  if (!slice) {
-    throw new Error(
-      "contract-drift ledger schema check: live CLI help has no ledger lifecycle field slice.",
-    );
-  }
-  return slice;
 }
 
 /**
@@ -1899,8 +1826,8 @@ export type LedgerLifecycleFieldDriftOptions = {
  * Cross-check ledger schema docs against live CLI facts.
  *
  * @param opts - Optional repo root override for fixture tests.
- * @returns Drift findings. Empty means the template still points at the
- * lifecycle field slice and the helper reference points at emitted slices.
+ * @returns Drift findings. Empty means the helper reference points at emitted
+ * schema slices.
  *
  * @example
  * ```typescript
@@ -1915,29 +1842,14 @@ export async function checkLedgerLifecycleFieldDrift(
   const cliPath = opts.cliPath ?? defaultCliPath();
   const findings: DriftFinding[] = [];
   const facts = await loadContractFacts({ cliPath });
-  const lifecycleSlice = ledgerLifecycleSliceName(facts);
   const pointerSlices = facts.ledgerSchemaPointerSlices;
 
-  const templateText = await readScopedDocOrThrow(
-    join(repoRoot, LEDGER_TEMPLATE_REL),
-    LEDGER_TEMPLATE_REL,
-    "contract-drift ledger lifecycle field check",
-  );
   const ledgerText = await readScopedDocOrThrow(
     join(repoRoot, LEDGER_DOC_REL),
     LEDGER_DOC_REL,
     "contract-drift ledger lifecycle field check",
   );
 
-  const templateBatchSection = markdownSection(templateText, "Batches");
-  if (templateBatchSection === null) {
-    findings.push({
-      doc: LEDGER_TEMPLATE_REL,
-      kind: "ledger-schema-slice-pointer",
-      claim: "## Batches",
-      reason: `ledger template is missing the canonical \`## Batches\` section; lifecycle slice pointer drift cannot be checked.`,
-    });
-  }
   const schemaFactsSection = markdownSectionByHeadingPattern(
     ledgerText,
     /runtime-owned schema facts/i,
@@ -1950,31 +1862,8 @@ export async function checkLedgerLifecycleFieldDrift(
       reason: `ledger-and-helper.md is missing the runtime-owned schema facts section; ledger schema slice pointers cannot be checked.`,
     });
   }
-  if (
-    templateBatchSection !== null &&
-    !regionMentionsContractSliceCommand(templateBatchSection, lifecycleSlice)
-  ) {
-    findings.push({
-      doc: LEDGER_TEMPLATE_REL,
-      kind: "ledger-schema-slice-pointer",
-      claim: lifecycleSlice,
-      reason: `ledger template Batches section does not point to \`cli.ts contract ${lifecycleSlice} --json\`.`,
-    });
-  }
 
   for (const slice of pointerSlices) {
-    if (
-      slice !== lifecycleSlice &&
-      !regionMentionsContractSliceCommand(templateText, slice)
-    ) {
-      findings.push({
-        doc: LEDGER_TEMPLATE_REL,
-        kind: "ledger-schema-slice-pointer",
-        claim: slice,
-        reason: `ledger template does not point to \`cli.ts contract ${slice} --json\`.`,
-      });
-    }
-
     if (
       schemaFactsSection !== null &&
       !regionMentionsContractSliceCommand(schemaFactsSection, slice)
@@ -2184,7 +2073,8 @@ export async function checkScaffoldInventoryDrift(
   for (const entry of SCAFFOLD_INVENTORY) {
     if (
       (entry.classification === "generated-block" ||
-        entry.classification === "checked-pointer") &&
+        entry.classification === "checked-pointer" ||
+        entry.classification === "visible-command-pointer") &&
       entry.scaffoldId &&
       !runtimeScaffoldIds.has(entry.scaffoldId)
     ) {
@@ -2215,7 +2105,12 @@ export async function checkScaffoldInventoryDrift(
       (entry) =>
         entry.classification === "prose-owned-shape" && entry.fenceContains,
     );
+    const checkedPointerIds = entries
+      .filter((entry) => entry.classification === "checked-pointer")
+      .map((entry) => entry.scaffoldId)
+      .filter((id): id is string => typeof id === "string");
     const generatedBlocks = extractGeneratedScaffoldBlocks(text);
+    const hiddenPointers = extractScaffoldPointers(text);
     const yamlFences = extractYamlFences(text);
 
     for (const block of generatedBlocks) {
@@ -2227,6 +2122,18 @@ export async function checkScaffoldInventoryDrift(
         line: block.line,
         reason:
           "generated-scaffold marker is not classified in the scaffold inventory.",
+      });
+    }
+
+    for (const pointer of hiddenPointers) {
+      if (checkedPointerIds.includes(pointer.id)) continue;
+      findings.push({
+        doc,
+        kind: "scaffold-inventory",
+        claim: pointer.id,
+        line: pointer.line,
+        reason:
+          "hidden scaffold-pointer marker is not classified in the scaffold inventory; use a visible `cli.ts scaffold <id> --json` pointer instead.",
       });
     }
 
@@ -2344,6 +2251,95 @@ function checkVisibleScaffoldCommands(
   }
 
   return findings;
+}
+
+function headingLabelFromCoordinate(coordinate: string): string {
+  const raw = coordinate.split("/")[0]?.trim() ?? coordinate.trim();
+  return raw.replace(/^#{1,6}\s+/, "").trim();
+}
+
+function visibleCommandSourceMatches(context: string, scaffoldId: string): boolean {
+  const commandRe = new RegExp(
+    `\\bcli\\.ts\\s+scaffold\\s+${escapeRegExp(scaffoldId)}\\s+--json\\b`,
+  );
+  return commandRe.test(context);
+}
+
+function checkVisibleCommandPointerEntry(
+  text: string,
+  entry: ScaffoldInventoryEntry,
+): DriftFinding[] {
+  if (!entry.scaffoldId) return [];
+
+  const headingLabel = headingLabelFromCoordinate(entry.coordinate);
+  const section = markdownSectionRegionByHeadingPattern(
+    text,
+    new RegExp(`^${escapeRegExp(headingLabel)}$`, "i"),
+  );
+  if (section === null) {
+    return [
+      {
+        doc: entry.doc,
+        kind: "scaffold-command",
+        claim: entry.scaffoldId,
+        reason: `visible scaffold command pointer at ${entry.coordinate} is missing its owning section "${headingLabel}".`,
+      },
+    ];
+  }
+
+  const sectionClaims = extractDocClaims(section.body, entry.doc)
+    .scaffoldCommands
+    .map((claim) => ({
+      ...claim,
+      line: claim.line + section.startLine - 1,
+    }));
+  const expectedSource = expectedGeneratedScaffoldSource(entry.scaffoldId);
+  const matching = sectionClaims.find(
+    (claim) =>
+      claim.token === entry.scaffoldId &&
+      visibleCommandSourceMatches(claim.context, entry.scaffoldId ?? ""),
+  );
+  if (matching) return [];
+
+  const sameIdWrongSource = sectionClaims.find(
+    (claim) => claim.token === entry.scaffoldId,
+  );
+  if (sameIdWrongSource) {
+    return [
+      {
+        doc: entry.doc,
+        kind: "scaffold-command",
+        claim: entry.scaffoldId,
+        line: sameIdWrongSource.line,
+        reason: `visible scaffold command pointer at ${entry.coordinate} names "${entry.scaffoldId}" but does not match expected source "${expectedSource}".`,
+      },
+    ];
+  }
+
+  const otherScaffold = sectionClaims[0];
+  return [
+    {
+      doc: entry.doc,
+      kind: "scaffold-command",
+      claim: otherScaffold?.token ?? entry.scaffoldId,
+      line: otherScaffold?.line,
+      reason:
+        otherScaffold === undefined
+          ? `visible scaffold command pointer at ${entry.coordinate} is missing expected source "${expectedSource}".`
+          : `visible scaffold command pointer at ${entry.coordinate} names "${otherScaffold.token}", expected "${entry.scaffoldId}".`,
+    },
+  ];
+}
+
+function checkVisibleCommandPointers(
+  text: string,
+  entries: readonly ScaffoldInventoryEntry[],
+): DriftFinding[] {
+  return entries.flatMap((entry) =>
+    entry.classification === "visible-command-pointer"
+      ? checkVisibleCommandPointerEntry(text, entry)
+      : [],
+  );
 }
 
 export type GeneratedScaffoldDriftOptions = {
@@ -2486,6 +2482,20 @@ export async function checkGeneratedScaffoldBlocksDrift(
         });
       }
     }
+  }
+
+  for (const surface of VISIBLE_SCAFFOLD_COMMAND_SURFACES) {
+    const text = await readScopedDocOrThrow(
+      join(repoRoot, surface.doc),
+      surface.doc,
+      "contract-drift visible scaffold command pointer check",
+    );
+    const entries = SCAFFOLD_INVENTORY.filter(
+      (entry) =>
+        entry.doc === surface.doc &&
+        entry.classification === "visible-command-pointer",
+    );
+    findings.push(...checkVisibleCommandPointers(text, entries));
   }
 
   for (const doc of SCAFFOLD_COMMAND_SURFACE_RELS) {

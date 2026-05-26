@@ -3,7 +3,7 @@
 /**
  * Issue-to-PR v2 CLI front door (U4).
  *
- * Deterministic CLI that emits **facts**, not orchestration. Five
+ * Deterministic CLI that emits **facts**, not orchestration. Seven
  * JSON-only commands:
  *
  *   cli.ts state <ledger> --json
@@ -11,6 +11,8 @@
  *   cli.ts contract <slice> --json
  *   cli.ts diagnose <ledger> --json
  *   cli.ts packet <role> --json [role flags]
+ *   cli.ts scaffold <id> --json
+ *   cli.ts ledger-init --issue-number <N> --ac <text> --json
  *
  * Every command writes exactly one `CliSuccessEnvelope<TData>` or
  * `CliErrorEnvelope` to stdout (newline-terminated). Diagnostics — when
@@ -66,6 +68,11 @@ import {
   readLedgerSnapshot,
   withFailMode,
 } from "./lib/ledger";
+import {
+  LedgerInitRenderError,
+  isAcSource,
+  renderLedgerInit,
+} from "./lib/ledger-init";
 import {
   PacketRenderError,
   renderBuilderPacket,
@@ -314,6 +321,7 @@ const ERROR_CODES = [
   { code: "unknown-scaffold-id", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "missing-packet-flag", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "packet-render-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
+  { code: "ledger-init-render-failed", exit_code: 64, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "change_input" } },
   { code: "ledger-validation-failed", exit_code: 1, severity: "error", recoverability: "user-action-required", retryable: false, hint: { action: "repair_state" } },
   { code: "unexpected-error", exit_code: 70, severity: "fatal", recoverability: "unrecoverable", retryable: false, hint: { action: "contact_support" } },
 ] as const satisfies readonly ErrorCodeEntry[];
@@ -359,6 +367,29 @@ const HELP_DATA = {
       summary:
         "Render a runtime-owned scaffold view by id. Read-only; returns the scaffold body and source metadata.",
       argv: ["scaffold", "<id>", "--json"],
+    },
+    {
+      name: "ledger-init",
+      summary:
+        "Render the complete initial per-issue ledger from explicit Stage 1 facts. Read-only; returns ledger_markdown plus deterministic metadata.",
+      argv: [
+        "ledger-init",
+        "--issue-number",
+        "<N>",
+        "--issue-title",
+        "<title>",
+        "--issue-url",
+        "<url>",
+        "--target-repo",
+        "<owner/repo>",
+        "--started-at",
+        "<ISO-8601>",
+        "--ac-source",
+        "<source>",
+        "--ac",
+        "<confirmed AC>",
+        "--json",
+      ],
     },
   ],
   scaffold_ids: SCAFFOLD_IDS,
@@ -512,6 +543,21 @@ const HELP_DATA = {
       "HTML comment marker string for marker-aware Notes evidence scaffold ids; omitted for YAML-only scaffold ids",
     body: "rendered scaffold body; no filesystem mutation is performed",
   },
+  ledger_init_flags: {
+    "--issue-number": "Positive integer GitHub issue number.",
+    "--issue-title": "Issue title.",
+    "--issue-url": "Issue URL.",
+    "--target-repo": "owner/repo target repository.",
+    "--started-at": "Explicit ISO-8601 timestamp used for started_at and ac_confirmed_at.",
+    "--ac-source": "gold-standard | variant-heading | loose-checkbox-block | numbered-requirements | pasted | drafted.",
+    "--ac": "Repeatable confirmed acceptance criterion. At least one required.",
+  },
+  ledger_init_response_shape: {
+    ledger_markdown:
+      "Complete initial ledger document body. Rendered only to stdout; caller owns destination path and file write.",
+    metadata:
+      "{ runbook_version, ac_digest, acceptance_criteria_count, section_order } deterministic anchors for verification.",
+  },
   error_codes: ERROR_CODES,
   exit_codes: EXIT_CODES,
   agent_hint_actions: AGENT_HINT_ACTIONS,
@@ -581,7 +627,7 @@ export function run(options: RunOptions): RunResult {
         startedAtMs,
         code: "missing-command",
         message:
-          "no command provided; this CLI is agent-only and requires one of state | next | contract | diagnose | packet | scaffold with --json",
+          "no command provided; this CLI is agent-only and requires one of state | next | contract | diagnose | packet | scaffold | ledger-init with --json",
         exitCode: 64,
         hint: {
           summary:
@@ -666,6 +712,14 @@ export function run(options: RunOptions): RunResult {
       });
     case "scaffold":
       return runScaffoldCommand({
+        ...options,
+        runId,
+        startedAtMs,
+        args: remaining.slice(1),
+        diagnosticOptions,
+      });
+    case "ledger-init":
+      return runLedgerInitCommand({
         ...options,
         runId,
         startedAtMs,
@@ -947,6 +1001,159 @@ function runScaffoldCommand(ctx: CommandContext): RunResult {
     }),
   );
   return { exit_code: 0 };
+}
+
+function runLedgerInitCommand(ctx: CommandContext): RunResult {
+  try {
+    const flags = parseLedgerInitFlags(ctx.args);
+    const rendered = renderLedgerInit({
+      issueNumber: flags.issueNumber,
+      issueTitle: flags.issueTitle,
+      issueUrl: flags.issueUrl,
+      targetRepo: flags.targetRepo,
+      startedAt: flags.startedAt,
+      acSource: flags.acSource,
+      acceptanceCriteria: flags.acceptanceCriteria,
+    });
+    writeJson(
+      ctx.stdoutWriter,
+      createSuccessEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        data: rendered,
+      }),
+    );
+    return { exit_code: 0 };
+  } catch (error) {
+    return emitLedgerInitError(ctx, error);
+  }
+}
+
+type LedgerInitFlags = {
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl: string;
+  targetRepo: string;
+  startedAt: string;
+  acSource: Parameters<typeof renderLedgerInit>[0]["acSource"];
+  acceptanceCriteria: string[];
+};
+
+function parseLedgerInitFlags(args: readonly string[]): LedgerInitFlags {
+  const flags: Partial<LedgerInitFlags> & { acceptanceCriteria: string[] } = {
+    acceptanceCriteria: [],
+  };
+  const consumeValue = (flag: string, i: number): string => {
+    const value = args[i + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new LedgerInitFlagError(`ledger-init ${flag} requires a value`);
+    }
+    return value;
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    switch (arg) {
+      case "--issue-number": {
+        const raw = consumeValue(arg, i);
+        const issueNumber = Number.parseInt(raw, 10);
+        if (!/^[0-9]+$/.test(raw) || issueNumber <= 0) {
+          throw new LedgerInitFlagError(
+            "ledger-init --issue-number requires a positive integer",
+          );
+        }
+        flags.issueNumber = issueNumber;
+        i++;
+        break;
+      }
+      case "--issue-title": flags.issueTitle = consumeValue(arg, i); i++; break;
+      case "--issue-url": flags.issueUrl = consumeValue(arg, i); i++; break;
+      case "--target-repo": flags.targetRepo = consumeValue(arg, i); i++; break;
+      case "--started-at": flags.startedAt = consumeValue(arg, i); i++; break;
+      case "--ac-source": {
+        const acSource = consumeValue(arg, i);
+        if (!isAcSource(acSource)) {
+          throw new LedgerInitFlagError(
+            "ledger-init --ac-source is not in the runtime AC source catalog",
+          );
+        }
+        flags.acSource = acSource;
+        i++;
+        break;
+      }
+      case "--ac": flags.acceptanceCriteria.push(consumeValue(arg, i)); i++; break;
+      default:
+        throw new LedgerInitFlagError(`unknown ledger-init flag ${arg}`);
+    }
+  }
+
+  for (const required of [
+    "issueNumber",
+    "issueTitle",
+    "issueUrl",
+    "targetRepo",
+    "startedAt",
+    "acSource",
+  ] as const) {
+    if (flags[required] === undefined) {
+      throw new LedgerInitFlagError(
+        `ledger-init requires --${kebabCase(required)}`,
+      );
+    }
+  }
+
+  return flags as LedgerInitFlags;
+}
+
+class LedgerInitFlagError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LedgerInitFlagError";
+  }
+}
+
+function emitLedgerInitError(
+  ctx: CommandContext,
+  error: unknown,
+): RunResult {
+  if (error instanceof LedgerInitFlagError) {
+    writeJson(
+      ctx.stdoutWriter,
+      createErrorEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        code: "missing-required-arg",
+        message: error.message,
+        exitCode: 64,
+        hint: {
+          summary: "Pass all required ledger-init flags with non-empty values.",
+          action: "change_input",
+        },
+      }),
+    );
+    return { exit_code: 64 };
+  }
+  if (error instanceof LedgerInitRenderError) {
+    writeJson(
+      ctx.stdoutWriter,
+      createErrorEnvelope({
+        runId: ctx.runId,
+        startedAtMs: ctx.startedAtMs,
+        code: "ledger-init-render-failed",
+        message: error.message,
+        exitCode: 64,
+        hint: {
+          summary: "Repair the ledger-init input flags and retry.",
+          action: "change_input",
+        },
+      }),
+    );
+    return { exit_code: 64 };
+  }
+  return emitErrorFromException(ctx, "ledger-init", error);
+}
+
+function kebabCase(value: string): string {
+  return value.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
 }
 
 const PACKET_ROLES = [

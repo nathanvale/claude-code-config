@@ -120,12 +120,14 @@ transient Validator focus, not orchestrator-authored findings.
    findings, and the real attempt evidence source. Builder-dispatched attempts
    include Builder evidence from the envelope.
 
-   <!-- scaffold-pointer id=validator-builder-evidence source="cli.ts scaffold validator-builder-evidence --json" -->
+   Builder evidence scaffold:
+   `cli.ts scaffold validator-builder-evidence --json`.
 
    Orchestrator-inline attempts include inline evidence from the matching
    scaffold.
 
-   <!-- scaffold-pointer id=validator-inline-evidence source="cli.ts scaffold validator-inline-evidence --json" -->
+   Inline evidence scaffold:
+   `cli.ts scaffold validator-inline-evidence --json`.
 
    Transient Orchestrator sanity concerns are passed only as Validator focus;
    they are not persisted as ledger entries or Orchestrator-authored findings.
@@ -138,8 +140,6 @@ transient Validator focus, not orchestrator-authored findings.
      ledger-ready findings are copied.
    - A non-empty finding is ledger-ready only when it matches the runtime-owned
      finding-row scaffold: `cli.ts scaffold ledger-finding-row --json`.
-
-     <!-- scaffold-pointer id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
 
    - Missing `findings`, non-array `findings`, malformed JSON or YAML, or a
      partial finding is malformed output. Rerun that persona once with the

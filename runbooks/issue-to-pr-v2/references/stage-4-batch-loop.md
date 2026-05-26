@@ -253,8 +253,6 @@ carrying both `packet` (machine-readable) and `packet_markdown`
 - Patch-proposal candidate scaffold:
   `cli.ts scaffold patch-proposal-candidate-batch --json`
 
-  <!-- scaffold-pointer id=patch-proposal-candidate-batch source="cli.ts scaffold patch-proposal-candidate-batch --json" -->
-
 ## Final-review patch-batch decision tree
 
 Stage 5 routes every open P0/P1 finding from `/ce-code-review` back to this

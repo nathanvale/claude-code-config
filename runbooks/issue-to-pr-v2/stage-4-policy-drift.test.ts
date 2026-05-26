@@ -150,9 +150,6 @@ describe("Stage 4 policy drift guards", () => {
         "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md",
       ),
     );
-    const v2Template = compact(
-      await readRepoFile("runbooks/issue-to-pr-v2/issue-N-ledger.template.md"),
-    );
     const hotRouter = compact(
       await readRepoFile("runbooks/issue-to-pr-v2/issue-to-pr.md"),
     );
@@ -221,16 +218,6 @@ describe("Stage 4 policy drift guards", () => {
           "pre-implementation gate",
           "every Stage 4 implementation attempt",
           "host-adapters.md",
-        ],
-      },
-      {
-        context: "v2 ledger template",
-        text: v2Template,
-        snippets: [
-          "host-builder-tools-unavailable",
-          "Stage 4 implementation attempt",
-          "bounded Orchestrator-inline",
-          "dispatch no Validators",
         ],
       },
       {

@@ -561,6 +561,32 @@ describe("Block 1: Envelope-shape invariants (cross-command)", () => {
     assertSuccessEnvelopeShape(result.envelope);
   });
 
+  test("ledger-init --json returns a success envelope with all required top-level fields", async () => {
+    const result = await runCli([
+      "ledger-init",
+      "--issue-number",
+      "88",
+      "--issue-title",
+      "Smoke ledger",
+      "--issue-url",
+      "https://github.com/acme/widgets/issues/88",
+      "--target-repo",
+      "acme/widgets",
+      "--started-at",
+      "2026-05-26T10:30:00+10:00",
+      "--ac-source",
+      "pasted",
+      "--ac",
+      "Smoke AC",
+      "--json",
+    ]);
+    expect(result.envelopeParsed).toBe(true);
+    assertSuccessEnvelopeShape(result.envelope);
+    expect((result.envelope.data as { ledger_markdown: string }).ledger_markdown).toContain(
+      "## Acceptance criteria",
+    );
+  });
+
   test("envelope schema_version is the literal '1' string for both success and error", async () => {
     const success = await runCli(["contract", "route_ids", "--json"]);
     expect(success.envelope.schema_version).toBe("1");
@@ -586,7 +612,11 @@ describe("Block 2: Every command × --json requirement", () => {
           ? ["contract", "route_ids"]
           : cmd === "packet"
             ? ["packet", "builder"]
-            : [cmd, nonExistentLedgerPath()];
+            : cmd === "scaffold"
+              ? ["scaffold", "builder-return-envelope"]
+              : cmd === "ledger-init"
+                ? ["ledger-init"]
+                : [cmd, nonExistentLedgerPath()];
       const result = await runCli(args);
       if (!result.envelopeParsed) {
         throw new Error(
@@ -1099,6 +1129,7 @@ describe("Block 8: Every documented error_code", () => {
     expect(codes).toEqual(
       [
         "ledger-validation-failed",
+        "ledger-init-render-failed",
         "missing-command",
         "missing-json-flag",
         "missing-packet-flag",

@@ -47,9 +47,10 @@ owns the comparison table; do not restate it here.
 
 Each run writes a per-issue ledger in the target repo at
 `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`. The path is
-the stable per-issue ledger convention. The orchestrator copies
-`issue-N-ledger.template.md` on first turn. Ledger schema, frontmatter
-fields, and the runbook-version skew table all live in
+the stable per-issue ledger convention. First turn renders the starting
+document with `cli.ts ledger-init --json`; the orchestrator writes the
+returned `ledger_markdown` payload. Ledger schema, frontmatter fields, and the
+runbook-version skew table all live in
 [`references/ledger-and-helper.md`](references/ledger-and-helper.md).
 
 ## File map
@@ -74,6 +75,7 @@ The artifacts a maintainer needs to find, in this order:
      ledger state.
    - `scaffold` - render a runtime-owned scaffold view by id, including
      candidate-batch, Builder return-envelope, and Validator evidence views.
+   - `ledger-init` - render the initial per-issue ledger body for Stage 1.
 
    Every command requires `--json` and writes one envelope to stdout.
    The CLI is a fact emitter and never says "run X" (ADR 0002). For the
@@ -97,8 +99,8 @@ The artifacts a maintainer needs to find, in this order:
    usage string in its error path.
 5. **`contract-drift.ts`** - the read-only drift check for operator
    docs against the live CLI contract. It also reads live ledger schema
-   slices, checks the ledger template lifecycle scaffold, and requires
-   `ledger-and-helper.md` to point at the emitted slice commands.
+   slices and requires `ledger-and-helper.md` to point at the emitted
+   slice commands.
 6. **`lib/`** - implementation modules behind `cli.ts` and
    `decompose.ts`. One-line role per module:
    - `contract.ts` - runtime contract constants shared across the CLI
@@ -131,8 +133,6 @@ The artifacts a maintainer needs to find, in this order:
    serves is encoded in its filename; the validator persona model lives
    in
    [`references/findings-and-validators.md`](references/findings-and-validators.md).
-9. **`issue-N-ledger.template.md`** - the current ledger template (see
-   [Per-issue ledger](#per-issue-ledger) above).
 
 ## Helper execution context
 
@@ -176,8 +176,8 @@ This README is a finder. The owning artifact for each topic:
 - **Risk classification** lives in
   [`references/findings-and-validators.md`](references/findings-and-validators.md).
 - **Ledger schema** lives in
-  [`references/ledger-and-helper.md`](references/ledger-and-helper.md)
-  and `issue-N-ledger.template.md`.
+  [`references/ledger-and-helper.md`](references/ledger-and-helper.md);
+  initial ledger rendering lives in `cli.ts ledger-init --json`.
 - **Glossary terms** live in each owning artifact (no central
   glossary).
 - **Persona selector and broad-reviewer fallback** live in

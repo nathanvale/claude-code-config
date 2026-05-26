@@ -24,6 +24,16 @@
 export const RUNBOOK_VERSION = "3" as const;
 export type RunbookVersion = typeof RUNBOOK_VERSION;
 
+export const AC_SOURCE_VALUES = [
+  "gold-standard",
+  "variant-heading",
+  "loose-checkbox-block",
+  "numbered-requirements",
+  "pasted",
+  "drafted",
+] as const;
+export type AcSource = (typeof AC_SOURCE_VALUES)[number];
+
 /**
  * The four-state enum the U6 runbook-version skew classifier returns
  * (alongside `null` for the no-ledger case). Ordered to match the U6

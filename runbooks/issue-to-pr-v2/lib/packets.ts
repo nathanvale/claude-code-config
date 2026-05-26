@@ -1446,6 +1446,8 @@ function renderBuilderMarkdown(data: BuilderPacketData): string {
   return [
     "# Builder Work Packet (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromBuilder(data),
     "```",
@@ -1539,6 +1541,8 @@ function renderProposerMarkdown(data: ProposerPacketData): string {
   return [
     "# Proposer envelope (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromProposer(data),
     "```",
@@ -1593,9 +1597,13 @@ function renderValidatorMarkdown(data: ValidatorPacketData): string {
   return [
     "# Validator envelope (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromValidator(data),
     "```",
+    "",
+    "Finding row scaffold: `cli.ts scaffold ledger-finding-row --json`.",
     "",
   ].join("\n");
 }
@@ -1679,9 +1687,13 @@ function renderPatchProposalMarkdown(data: PatchProposalPacketData): string {
   return [
     "# Patch proposal scratch file (rendered)",
     "",
+    RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE,
+    "",
     "```yaml",
     yamlFromPatchProposal(data),
     "```",
+    "",
+    "Patch batch scaffold: `cli.ts scaffold patch-proposal-candidate-batch --json`.",
     "",
   ].join("\n");
 }
@@ -1812,14 +1824,17 @@ const BUILDER_PROBE_TEXT = [
 ].join("\n");
 
 const BUILDER_OUTPUT_CONTRACT_TEXT =
-  "Return exactly one envelope per templates/builder-return-envelope.md. The canonical schema lives in references/builder-dispatch.md#return-envelope.";
+  "Return exactly one envelope per templates/builder-return-envelope.md. Resolve `cli.ts scaffold builder-return-envelope --json` before returning output. The canonical schema lives in references/builder-dispatch.md#return-envelope.";
 
 const PROPOSER_LOCAL_LAW_POINTER =
   "See references/builder-dispatch.md#authority-and-local-law.";
 const PROPOSER_HELPER_POINTER =
   "See references/stage-4-batch-loop.md#final-review-patch-batch-decision-tree.";
 const PROPOSER_SCRATCH_POINTER =
-  "See templates/patch-proposal.md.";
+  "See templates/patch-proposal.md and resolve `cli.ts scaffold patch-proposal-candidate-batch --json` before returning candidate patch-batch output.";
+
+const RUNTIME_SCAFFOLD_LOOKUP_PREAMBLE =
+  "Runtime scaffold lookup: resolve every `cli.ts scaffold <id> --json` command named in this packet before returning output that uses that scaffold. Use the CLI response body as the field shape.";
 
 // ----- ce-plan template body extractor --------------------------------
 

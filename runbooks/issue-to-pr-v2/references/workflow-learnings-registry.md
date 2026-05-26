@@ -6,9 +6,9 @@ references, CLI/observability surface, contracts, and gotchas) that survive
 across individual issue runs. It exists per PRD #88 and is scaffolded by issue
 #90.
 
-The registry is deliberately distinct from the per-issue ledger
-(`issue-N-ledger.template.md`). The ledger's required `## Workflow Learnings`
-section holds **what this run observed** — per-run evidence references with
+The registry is deliberately distinct from each per-issue ledger. The ledger's
+required `## Workflow Learnings` section holds **what this run observed** —
+per-run evidence references with
 a `signature` cross-reference that points at the canonical registry row. The
 registry holds the **cross-run lifecycle and dedupe layer**: each learning is
 recorded once, deduped by stable `signature`, carries a disposition and status
@@ -35,9 +35,9 @@ already exists before filing a new one, or when updating a learning's lifecycle
 fields (disposition, status, confidence, follow-up) as it moves from observed to
 filed to resolved or retired.
 
-The registry is human-readable Markdown with a single fenced YAML block. The
-documented-block pattern mirrors `issue-N-ledger.template.md`: prose explains the
-schema, and exactly one fenced `yaml` block holds the authoritative data. The
+The registry is human-readable Markdown with a single fenced YAML block. Prose
+explains the schema, and exactly one fenced `yaml` block holds the
+authoritative data. The
 registry helper extracts that single block with a stricter fenced-yaml scan
 than the ledger helper: the closing fence must be line-anchored (the closing
 backticks must start at column 0 on their own line), so an inline backtick

@@ -8,8 +8,8 @@ routing decision is made off the CLI's emitted facts, never from
 conversation memory.
 
 **Ledger:** `docs/runbooks/issue-to-pr/issue-{issue-number}-ledger.md`
-in the target repo. Template at
-`~/.claude/runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.
+in the target repo. First run renders the starting document through
+`~/.claude/runbooks/issue-to-pr-v2/cli.ts ledger-init --json`.
 Frontmatter declares `runbook_version: "3"`.
 
 The public host-neutral control plane lives at

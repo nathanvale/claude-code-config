@@ -1505,13 +1505,12 @@ function markedYamlBlocksFromNotes(
       const fence = fenceMatch[1];
       if (openFence === null) {
         // Look backward past blank lines for the legitimate marker →
-        // yaml pair. The template at `issue-N-ledger.template.md`
-        // explicitly permits blank lines between the marker comment
-        // and the opening yaml fence; require column-zero marker and
-        // column-zero fence but otherwise tolerate the blank-line
-        // gap. If the immediate-previous-non-blank line is the marker
-        // (and we are not currently inside another fenced region),
-        // treat this fence as the evidence opener.
+        // yaml pair. Ledger Notes evidence permits blank lines between
+        // the marker comment and the opening yaml fence; require
+        // column-zero marker and column-zero fence but otherwise
+        // tolerate the blank-line gap. If the previous non-blank line
+        // is the marker (and we are not currently inside another
+        // fenced region), treat this fence as the evidence opener.
         const previousMarkerFound = findPrecedingMarker(lines, i, markerName);
         if (fence === "```" && /^```yaml/.test(line) && previousMarkerFound) {
           const body = consumeMarkedYamlFence(lines, i);

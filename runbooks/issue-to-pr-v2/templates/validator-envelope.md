@@ -51,19 +51,7 @@ Validator focus. It must not include findings from other batches, the full
 ledger, Builder fix prose, or any commit-write or ledger-write slot.
 
 Builder evidence block:
-
-<!-- generated-scaffold:start id=validator-builder-evidence source="cli.ts scaffold validator-builder-evidence --json" -->
-```yaml
-builder_evidence:
-  implementation_steps: []
-  existing_seams_used: []
-  tests_run: []
-  assumptions: []
-  risks: []
-  deferred: []
-  suggested_validator_focus: []
-```
-<!-- generated-scaffold:end id=validator-builder-evidence -->
+`cli.ts scaffold validator-builder-evidence --json`.
 
 For an Orchestrator-inline attempt, set:
 
@@ -72,16 +60,7 @@ evidence_source: orchestrator_inline
 ```
 
 Inline evidence block:
-
-<!-- generated-scaffold:start id=validator-inline-evidence source="cli.ts scaffold validator-inline-evidence --json" -->
-```yaml
-inline_evidence:
-  implementation_commit: "<commit-sha>"
-  touched_files: []
-  inline_validity_note: "<why inline eligibility still held>"
-  user_confirmed_exception_note: null
-```
-<!-- generated-scaffold:end id=validator-inline-evidence -->
+`cli.ts scaffold validator-inline-evidence --json`.
 
 The Orchestrator passes transient sanity concerns only as Validator focus.
 The Orchestrator must not persist them as ledger entries or
@@ -118,18 +97,8 @@ Extra envelope metadata is not copied into `## Findings data`.
 
 ### Finding row schema
 
-<!-- generated-scaffold:start id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
-```yaml
-id: <finding-id>
-batch_id: <batch-id | stage-3 | final>
-signature: <stable-kebab-signature>
-persona: <reviewer>
-severity: P2  # P0 | P1 | P2 | P3
-status: open  # open | fixed | accepted-risk | deferred-P2 | deferred-P3 | out-of-scope-for-this-issue | superseded | ADR-contradicts-<id>
-summary: "<verbatim table summary>"
-resolution: null
-```
-<!-- generated-scaffold:end id=ledger-finding-row -->
+Resolve `cli.ts scaffold ledger-finding-row --json` before writing any
+non-empty finding row.
 
 When a persona's output suggests a fix in prose, the Orchestrator ignores the
 suggestion text and records only the finding row.

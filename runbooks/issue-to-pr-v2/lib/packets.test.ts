@@ -927,6 +927,13 @@ describe("Builder packet", () => {
       expect(packet.data.preflight_checklist).toContain("acceptance criteria");
       expect(packet.data.allowed_probes).toContain("rename path probe");
       expect(packet.data.output_contract).toContain("builder-dispatch.md");
+      expect(packet.data.output_contract).toContain(
+        "cli.ts scaffold builder-return-envelope --json",
+      );
+      expect(packet.packet_markdown).toContain("Runtime scaffold lookup");
+      expect(packet.packet_markdown).toContain(
+        "cli.ts scaffold builder-return-envelope --json",
+      );
       expect(packet.packet_markdown).toContain("<local_law_read_order>");
       expect(packet.packet_markdown).toContain("<authority_boundary>");
       expect(packet.packet_markdown).toContain("<preflight_checklist>");
@@ -1607,6 +1614,10 @@ describe("Validator packet", () => {
       expect(packet.data.acceptance_tests).toHaveLength(1);
       expect(packet.data.ac_mapping).toEqual([1]);
       expect(packet.data.evidence_source).toBe("builder");
+      expect(packet.packet_markdown).toContain("Runtime scaffold lookup");
+      expect(packet.packet_markdown).toContain(
+        "cli.ts scaffold ledger-finding-row --json",
+      );
       if (packet.data.evidence_source !== "builder") {
         throw new Error("expected Builder evidence source");
       }
@@ -1987,6 +1998,10 @@ describe("Patch proposal packet", () => {
         renderScaffold("patch-proposal-candidate-batch").body,
       );
 
+      expect(packet.packet_markdown).toContain("Runtime scaffold lookup");
+      expect(packet.packet_markdown).toContain(
+        "cli.ts scaffold patch-proposal-candidate-batch --json",
+      );
       expect(scaffoldFields).toEqual(
         CANDIDATE_BATCH_FIELDS.filter((field) => field !== "supersedes"),
       );
@@ -2036,16 +2051,16 @@ describe("ce-plan packet", () => {
       expect(blob).toContain("execution_mode");
     });
 
-    test("includes the generated ce-plan candidate scaffold block", () => {
+    test("includes the ce-plan candidate scaffold command pointer", () => {
       const packet = renderCePlanPacket({ now: FROZEN_TIME });
       const blob = packet.data.addendum_body;
-      expect(blob).toContain(
-        '<!-- generated-scaffold:start id=ce-plan-candidate-batch source="cli.ts scaffold ce-plan-candidate-batch --json" -->',
+      expect(blob).toContain("runtime-owned candidate batch scaffold");
+      expect(blob).toContain("cli.ts scaffold ce-plan-candidate-batch --json");
+      expect(blob).not.toContain("generated-scaffold:start");
+      expect(blob).not.toContain("generated-scaffold:end");
+      expect(blob).not.toContain(
+        renderScaffold("ce-plan-candidate-batch").body.trimEnd(),
       );
-      expect(blob).toContain(
-        "<!-- generated-scaffold:end id=ce-plan-candidate-batch -->",
-      );
-      expect(blob).toContain(renderScaffold("ce-plan-candidate-batch").body.trimEnd());
     });
   });
 

@@ -12,9 +12,25 @@ _Avoid_: helper invocation contract, command contract, runner path, package-runn
 A workflow-guide pattern that pairs a confusing operator state with the observable CLI facts that identify it and the recovery meaning of those facts. Use this for Issue-to-PR gotchas where the operator needs evidence from the CLI, not memory or inference.
 _Avoid_: evidence proof, proof recipe, CLI proof
 
+**Git Evidence**:
+Runtime-owned Issue-to-PR commit fact source. It emits normalized git facts; ledger validation and Stage 5 decide workflow policy.
+_Avoid_: git proof, commit proof, git utility, ledger evidence row, CLI evidence recipe
+
 **Runtime contract drift check**:
 A focused Issue-to-PR validation that keeps prose claims about CLI-owned facts aligned with the runtime contract the helper emits. It covers mechanically checkable facts and the control-plane links needed for operator recovery, not broad documentation quality.
 _Avoid_: public docs drift check, general docs audit, markdown link crawler, gotchas-only safeguard
+
+**Section-coordinate scaffold pointer**:
+A visible scaffold command that satisfies drift only when it appears at its inventoried section or anchor, not merely somewhere in the same document.
+_Avoid_: doc-level scaffold pointer, hidden scaffold-pointer comment, loose scaffold mention
+
+**Runtime scaffold lookup**:
+Agent-use boundary where an agent resolves a visible scaffold command through the CLI at the moment it needs the deterministic shape.
+_Avoid_: embedded packet YAML, hand-maintained scaffold example, stale rendered scaffold body
+
+**Implementation slice**:
+A thin, independently verifiable unit of issue work produced during planning before Stage 3 confirmation; represented at runtime as a candidate batch.
+_Avoid_: task, phase, horizontal slice, generic plan step
 
 **Ledger schema contract**:
 Runtime-owned Issue-to-PR ledger field sets and allowed values emitted through CLI contract slices and enforced by helper validators. It defines allowed and required members, not authoring intent, operator judgment, or section purpose.
@@ -25,8 +41,12 @@ Prose-owned Issue-to-PR guidance for why ledger sections exist, who writes them,
 _Avoid_: ledger schema contract, runtime field list, schema owner
 
 **Ledger template scaffold**:
-Concrete per-issue ledger starting shape that shows the fields an operator must instantiate. It is a repeated handoff artifact, not the durable schema source of truth.
-_Avoid_: generated schema doc, prose schema, contract owner
+Legacy committed template that showed the per-issue ledger starting shape before runtime rendering owned initial ledger creation.
+_Avoid_: initial ledger render, generated schema doc, prose schema, contract owner
+
+**Initial ledger render**:
+Runtime-emitted complete starting ledger document created after acceptance criteria confirmation; read-only output, not a committed template or filesystem mutation.
+_Avoid_: ledger template scaffold, generated schema doc, mutable ledger init
 
 **Capability**:
 A registry-managed skill or agent, together with the files owned by that skill or agent. In v1, runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins are not capabilities.
@@ -104,11 +124,59 @@ Domain expert: "No. The helper command contract is only about how the helper is 
 Dev: "Should a runtime contract drift check scan every Issue-to-PR markdown link?"
 Domain expert: "No. A runtime contract drift check compares prose claims with CLI-owned facts and only checks recovery links that affect the control plane."
 
+Dev: "Is Git Evidence the same thing as a ledger evidence row?"
+Domain expert: "No. Git Evidence is the runtime commit fact source. Ledger rows and Stage 5 decide what those facts mean for workflow policy."
+
+Dev: "Can any visible scaffold command in a document satisfy the pointer?"
+Domain expert: "No. A section-coordinate scaffold pointer must appear inside the inventoried heading section; moving it to another section is drift."
+
+Dev: "Should rendered packets embed scaffold YAML so agents have a fillable form?"
+Domain expert: "No. Rendered packets stay pointer-only; agents use runtime scaffold lookup to fetch deterministic shapes before returning output."
+
+Dev: "Where does the agent learn to resolve scaffold pointers?"
+Domain expert: "Each rendered packet carries one shared lookup preamble so the rule appears at the moment of use without role-specific prose drift."
+
+Dev: "Should scaffold pointers use top-of-file aliases like `$RETURN_ENVELOPE`?"
+Domain expert: "No. Put the direct scaffold command in the owning section; avoid alias mini-languages unless repetition proves unavoidable."
+
+Dev: "Is `/ce-plan` producing implementation tasks or candidate batches?"
+Domain expert: "It produces implementation slices for human planning, represented as candidate batches once the runtime parses and validates them."
+
+Dev: "Should the `/ce-plan` addendum become TypeScript strings once runtime owns scaffold YAML?"
+Domain expert: "No. Keep it as the editable implementation-slice reference workflow seed; agents resolve its section-coordinate scaffold pointer through runtime scaffold lookup."
+
 Dev: "Does `ledger-and-helper.md` own the ledger schema?"
 Domain expert: "No. Runtime code owns the ledger schema contract. `ledger-and-helper.md` owns ledger authoring guidance and points to emitted contract slices."
 
 Dev: "Can the ledger template still show concrete batch fields?"
-Domain expert: "Yes. The ledger template scaffold shows the repeated starting shape, but runtime contract slices remain the source of truth for schema members."
+Domain expert: "Only during migration. The initial ledger render owns the concrete starting document; runtime contract slices remain the source of truth for schema members."
+
+Dev: "Should `issue-N-ledger.template.md` remain as a pointer-only compatibility file?"
+Domain expert: "No. Once `ledger-init` renders and tests the initial ledger, retire the template and point Stage 1/docs at the CLI surface."
+
+Dev: "After retiring the ledger template, where do policy checks prove initial ledger content?"
+Domain expert: "They render `ledger-init` output and inspect the artifact agents actually use, not a compatibility template."
+
+Dev: "Is initial ledger render a packet role?"
+Domain expert: "No. It is a top-level read-only `ledger-init` CLI surface because it renders a starting ledger document, not an agent dispatch packet."
+
+Dev: "Should `ledger-init` return only Markdown?"
+Domain expert: "No. Return `ledger_markdown` plus small metadata for deterministic anchors, not a full parallel ledger schema."
+
+Dev: "Should `ledger-init` return a destination path hint?"
+Domain expert: "No. Stage 1 owns the ledger path convention; `ledger-init` renders content only."
+
+Dev: "Can initial ledger render emit placeholder acceptance criteria?"
+Domain expert: "No. It receives confirmed acceptance criteria as repeatable `--ac` flags and renders the matching checkbox list plus digest anchor."
+
+Dev: "Does initial ledger render choose `started_at` from command time?"
+Domain expert: "No. The caller supplies `--started-at`; same input flags must produce the same ledger body."
+
+Dev: "Can initial ledger render set future-stage frontmatter fields?"
+Domain expert: "No. It accepts only Stage 1 facts and defaults the ledger to the post-AC-confirmation state ready for planning."
+
+Dev: "Does Stage 1 prose own the `ac_source` value list?"
+Domain expert: "No. Once initial ledger render writes `ac_source`, runtime owns the finite source enum and Stage 1 prose explains only how values are chosen."
 
 Dev: "Should `one-password` include the exact npm token item name?"
 Domain expert: "No. `one-password` defines the safe `op` workflow. The npm-owning skill supplies the exact item and field names."

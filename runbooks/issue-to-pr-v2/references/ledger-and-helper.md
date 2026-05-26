@@ -165,28 +165,20 @@ Related existing slices:
 Ledger scaffold surfaces:
 
 - Empty batches: `cli.ts scaffold ledger-empty-batches --json`
-<!-- scaffold-pointer id=ledger-empty-batches source="cli.ts scaffold ledger-empty-batches --json" -->
 
 - Lifecycle defaults: `cli.ts scaffold ledger-batch-lifecycle-defaults --json`
-<!-- scaffold-pointer id=ledger-batch-lifecycle-defaults source="cli.ts scaffold ledger-batch-lifecycle-defaults --json" -->
 
 - Empty findings data: `cli.ts scaffold ledger-empty-findings-data --json`
-<!-- scaffold-pointer id=ledger-empty-findings-data source="cli.ts scaffold ledger-empty-findings-data --json" -->
 
 - Finding row: `cli.ts scaffold ledger-finding-row --json`
-<!-- scaffold-pointer id=ledger-finding-row source="cli.ts scaffold ledger-finding-row --json" -->
 
 - Notes checkpoint: `cli.ts scaffold notes-implementation-attempt-checkpoint --json`
-<!-- scaffold-pointer id=notes-implementation-attempt-checkpoint source="cli.ts scaffold notes-implementation-attempt-checkpoint --json" -->
 
 - Notes Validator wave: `cli.ts scaffold notes-validator-wave-completed --json`
-<!-- scaffold-pointer id=notes-validator-wave-completed source="cli.ts scaffold notes-validator-wave-completed --json" -->
 
 - Notes version-skew continuation: `cli.ts scaffold notes-runbook-version-skew-continuation --json`
-<!-- scaffold-pointer id=notes-runbook-version-skew-continuation source="cli.ts scaffold notes-runbook-version-skew-continuation --json" -->
 
 - Empty workflow learnings: `cli.ts scaffold workflow-learnings-empty --json`
-<!-- scaffold-pointer id=workflow-learnings-empty source="cli.ts scaffold workflow-learnings-empty --json" -->
 
 ### Frontmatter fields
 
@@ -268,10 +260,8 @@ implementation attempt before a current-version batch may be terminal:
 Scaffolds:
 
 - `cli.ts scaffold notes-implementation-attempt-checkpoint --json`
-<!-- scaffold-pointer id=notes-implementation-attempt-checkpoint source="cli.ts scaffold notes-implementation-attempt-checkpoint --json" -->
 
 - `cli.ts scaffold notes-validator-wave-completed --json`
-<!-- scaffold-pointer id=notes-validator-wave-completed source="cli.ts scaffold notes-validator-wave-completed --json" -->
 
 Both rows MUST cite a single resolved commit ref for `implementation_commit`
 and (for `validator_wave_completed`) for the `target_id` `<commit>` slot — not
@@ -333,8 +323,6 @@ entry. The valid empty case is `workflow_learnings: []`: a run with no observed
 workflow learnings is the common path and must not block.
 
 Empty-state scaffold: `cli.ts scaffold workflow-learnings-empty --json`.
-
-<!-- scaffold-pointer id=workflow-learnings-empty source="cli.ts scaffold workflow-learnings-empty --json" -->
 
 ## Acceptance criteria and batches contract
 
@@ -435,8 +423,6 @@ rendered against a contract the runbook no longer honors.
 Operators record continuation evidence in `## Notes` using a fenced YAML
 block prefixed by an HTML comment marker. Scaffold:
 `cli.ts scaffold notes-runbook-version-skew-continuation --json`.
-
-<!-- scaffold-pointer id=notes-runbook-version-skew-continuation source="cli.ts scaffold notes-runbook-version-skew-continuation --json" -->
 
 Every scaffold field is required; a missing field disqualifies the row and the
 snapshot reports the underlying `missing` or `mismatched` skew.

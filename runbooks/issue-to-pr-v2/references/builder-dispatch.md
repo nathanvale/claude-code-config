@@ -191,8 +191,6 @@ Builder returns one structured envelope. Status is one of `committed`,
 
 Concrete envelope shape: `cli.ts scaffold builder-return-envelope --json`.
 
-<!-- scaffold-pointer id=builder-return-envelope source="cli.ts scaffold builder-return-envelope --json" -->
-
 Required array fields may be empty; missing `suggested_validator_focus` is
 malformed. Status owns workflow transition; `route_hint` is only next-owner
 guidance. The Builder envelope has no inline-only fields; Orchestrator-inline
@@ -203,7 +201,7 @@ Well-formed Builder fail-stops count as Builder attempts in workflow language.
 Every well-formed Builder envelope appends one compact ledger
 `builder_attempts` record.
 
-<!-- scaffold-pointer id=builder-attempt-compact source="cli.ts scaffold builder-attempt-compact --json" -->
+Compact row scaffold: `cli.ts scaffold builder-attempt-compact --json`.
 
 Persisted `blockers` and `probe_results` are YAML lists of compact string
 summaries (`[]` when empty), not raw envelope object arrays; `notes` is a
@@ -273,8 +271,6 @@ template recommendation).
 
 Replacement row scaffold:
 `cli.ts scaffold replacement-candidate-batch --json`.
-
-<!-- scaffold-pointer id=replacement-candidate-batch source="cli.ts scaffold replacement-candidate-batch --json" -->
 
 When a replacement supersedes a blocked batch, pending downstream batches that
 depend on the blocked original must have `depends_on` rewritten from the

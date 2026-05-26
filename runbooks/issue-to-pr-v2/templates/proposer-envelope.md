@@ -81,8 +81,6 @@ evidence_summary: "<one paragraph: ledger and code evidence consulted; no edits 
 Candidate patch-batch scaffold:
 `cli.ts scaffold patch-proposal-candidate-batch --json`.
 
-<!-- scaffold-pointer id=patch-proposal-candidate-batch source="cli.ts scaffold patch-proposal-candidate-batch --json" -->
-
 The scaffold root `patch_batches:` is scratch-file wrapping only. Proposer
 returns its single list item under `candidate_patch_batch`; Orchestrator wraps
 that object into `patch_batches:` when writing the scratch file.

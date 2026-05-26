@@ -56,26 +56,8 @@ row. Concrete paths only; no wildcards.
 Candidate patch-batch scaffold fragment:
 `cli.ts scaffold patch-proposal-candidate-batch --json`.
 
-Paste the fragment below after `final_finding:` in the same fenced YAML block.
-Do not submit it as a second fence.
-
-<!-- generated-scaffold:start id=patch-proposal-candidate-batch source="cli.ts scaffold patch-proposal-candidate-batch --json" -->
-```yaml
-patch_batches:
-  - id: patch-<NNN>
-    name: "<Title>"
-    goal: "<one-sentence outcome that addresses the final-review finding>"
-    files:
-      - <repo-relative path>
-    depends_on:
-      - <terminal ledger-backed batch id>
-    execution_mode: tdd  # tdd | proof_first | change_first
-    acceptance_tests:
-      - "AC <i> holds: <verifiable behaviour>"
-    ac_mapping: []
-    rationale: "<may begin with new-file-patch-exception: | high-risk-new-file-patch-exception: | contract-softening-exception: | change_first-exception: | high-risk-change_first-exception: when applicable>"
-```
-<!-- generated-scaffold:end id=patch-proposal-candidate-batch -->
+Resolve the fragment at use time and paste it after `final_finding:` in the
+same fenced YAML block. Do not submit it as a second fence.
 
 ## Rationale prefixes
 
@@ -93,7 +75,7 @@ patch_batches:
 - `change_first-exception:` / `high-risk-change_first-exception:` —
   required when `execution_mode: change_first` lands on non-doc paths or
   high-risk paths respectively.
-- `replacement-contract:` — recommended (per v2 ledger template) when the
+- `replacement-contract:` — recommended when the
   replacement batch flow ([builder-dispatch.md](../references/builder-dispatch.md))
   supersedes a blocked original and the rationale documents the contract
   delta.
