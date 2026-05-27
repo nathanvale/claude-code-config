@@ -2644,13 +2644,18 @@ describe("Workflow Learning Scan relationship check", () => {
     "## Actions",
     "",
     "1. After PR URL confirmation, run the read-only [workflow-learning-scan.md](workflow-learning-scan.md). Load it before final ship metadata.",
+    "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body.",
+    "3. Run `decompose.ts --assert-final-metadata-scope <ledger-path>` before committing.",
+    "4. Run `decompose.ts --assert-final-metadata-commit <ledger-path> HEAD` after committing.",
+    "5. On helper failure, fail-stop in Stage 6 with `local-check-failure-final-metadata-commit`.",
+    "6. Include the scan-owned final learning summary: counts plus attention items only.",
   ].join("\n");
 
   const validScanDoc = [
     "# Workflow Learning Scan",
     "",
     "See [workflow-learnings-registry.md](workflow-learnings-registry.md) and `lib/learnings.ts`.",
-    "Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert`.",
+    "Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert-batch`.",
     "Use `cli.ts scaffold workflow-learnings-empty --json`.",
     "Do not recreate `runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.",
     "",
@@ -2658,6 +2663,16 @@ describe("Workflow Learning Scan relationship check", () => {
     "",
     "Do not patch skills, runbook references, CLI/source code, docs, target deliverables, or gotchas content.",
     "Allowed writes: per-issue ledger and Workflow Learnings registry.",
+    "",
+    "## Final Learning Summary",
+    "",
+    "Counts come from `learnings-registry.ts --upsert-batch` output.",
+    "Attention items come from candidate facts, disposition, confidence, and closure context.",
+    "Exclude full registry entries. Exclude full ledger `## Workflow Learnings` entries.",
+    "",
+    "## Ship-Time Scan",
+    "",
+    "`small-fix` never blocks. High-confidence `file-follow-up` blocks only when resume, unblock, or honest closure depends on it.",
     "",
     "## Gotchas Relationship",
     "",
@@ -2760,7 +2775,8 @@ describe("Workflow Learning Scan relationship check", () => {
         findings.filter(
           (f) =>
             f.doc ===
-            "runbooks/issue-to-pr-v2/references/stage-6-ship.md",
+              "runbooks/issue-to-pr-v2/references/stage-6-ship.md" &&
+            f.claim === "workflow-learning-scan.md",
         ),
       ).toHaveLength(1);
     } finally {
@@ -2781,8 +2797,104 @@ describe("Workflow Learning Scan relationship check", () => {
         findings.filter(
           (f) =>
             f.doc ===
-            "runbooks/issue-to-pr-v2/references/stage-6-ship.md",
+              "runbooks/issue-to-pr-v2/references/stage-6-ship.md" &&
+            f.claim === "workflow-learning-scan.md",
         ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 missing final metadata helper routing reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "3. Run `decompose.ts --assert-final-metadata-scope <ledger-path>` before committing.\n",
+        "",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "final-metadata-helper-routing"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 PR body Workflow Learnings wording reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "Never append Workflow Learnings to the PR body.",
+        "Append Workflow Learnings to the PR body.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "pr-body-omits-workflow-learnings"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 contradictory PR body Workflow Learnings wording reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body.",
+        "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body. Append Workflow Learnings to the PR body.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "pr-body-omits-workflow-learnings"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan missing final-response counts and attention shape reports one finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(
+        /## Final Learning Summary[\s\S]*?## Ship-Time Scan/,
+        "## Ship-Time Scan",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "final-learning-summary-shape"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan weakened blocking rules report one finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(
+        "`small-fix` never blocks. High-confidence `file-follow-up` blocks only when resume, unblock, or honest closure depends on it.",
+        "`small-fix` may block. High-confidence `file-follow-up` always blocks.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "ship-time-blocking-rules"),
       ).toHaveLength(1);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
@@ -2822,7 +2934,23 @@ describe("Workflow Learning Scan relationship check", () => {
 
   test("scan missing runtime helper citations reports a finding", async () => {
     const dir = await stageScanFixture({
-      scan: validScanDoc.replace("Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert`.", ""),
+      scan: validScanDoc.replace("Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert-batch`.", ""),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "runtime-owner-citations")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan that regresses to single-entry upsert reports a finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(/--upsert-batch/g, "--upsert"),
     });
     try {
       const findings = await checkWorkflowLearningScanRelationship({

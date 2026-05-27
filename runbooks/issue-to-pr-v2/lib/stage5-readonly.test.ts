@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execPath } from "node:process";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 /**
  * Process-boundary tests for the Stage 5 read-only enforcement gate
@@ -120,6 +121,248 @@ describe("decompose.ts --assert-stage5-readonly", () => {
 	});
 });
 
+describe("decompose.ts final metadata gates", () => {
+	test("pre-commit scope passes for ledger plus registry changes", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			await appendFile(repo, ISSUE_71_LEDGER, "\nledger update\n");
+			await appendFile(
+				repo,
+				"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+				"\nregistry update\n",
+			);
+
+			const result = await runDecompose(
+				["--assert-final-metadata-scope", ISSUE_71_LEDGER],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("pre-commit scope rejects third modified, staged, and untracked paths", async () => {
+		const cases = [
+			async (repo: string) => appendFile(repo, "src/app.ts", "\nmodified\n"),
+			async (repo: string) => {
+				await appendFile(repo, "src/app.ts", "\nstaged\n");
+				await Bun.spawn(["git", "add", "src/app.ts"], { cwd: repo }).exited;
+			},
+			async (repo: string) => appendFile(repo, "notes.md", "untracked\n"),
+		];
+
+		for (const setup of cases) {
+			const repo = await makeFinalMetadataRepo();
+			try {
+				await setup(repo);
+				const result = await runDecompose(
+					["--assert-final-metadata-scope", ISSUE_71_LEDGER],
+					{ cwd: repo },
+				);
+
+				expect(result.exitCode).toBe(1);
+				expect(result.stderr).toContain("final metadata scope gate");
+			} finally {
+				await Bun.spawn(["rm", "-rf", repo]).exited;
+			}
+		}
+	});
+
+	test("pre-commit scope rejects deleting the registry", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			await Bun.spawn(
+				[
+					"git",
+					"rm",
+					"-q",
+					"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+				],
+				{ cwd: repo },
+			).exited;
+
+			const result = await runDecompose(
+				["--assert-final-metadata-scope", ISSUE_71_LEDGER],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("staged changes delete");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("pre-commit scope rejects staged registry deletion even when working tree has a restored copy", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			const registryPath =
+				"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md";
+			await Bun.spawn(["git", "rm", "-q", registryPath], { cwd: repo }).exited;
+			await writeFixtureFile(
+				repo,
+				registryPath,
+				"# Workflow Learnings registry\n\n```yaml\nlearnings: []\n```\n",
+			);
+
+			const result = await runDecompose(
+				["--assert-final-metadata-scope", ISSUE_71_LEDGER],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("staged changes delete");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("pre-commit scope validates an untracked registry", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			const registryPath =
+				"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md";
+			await Bun.spawn(["git", "rm", "-q", registryPath], { cwd: repo }).exited;
+			await Bun.spawn(["git", "commit", "-q", "-m", "delete registry"], {
+				cwd: repo,
+			}).exited;
+			await writeFixtureFile(
+				repo,
+				registryPath,
+				"# Workflow Learnings registry\n\n```yaml\nlearnings:\n```\n",
+			);
+
+			const result = await runDecompose(
+				["--assert-final-metadata-scope", ISSUE_71_LEDGER],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("Workflow Learnings registry");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("post-commit gate passes for ledger and registry commit", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			await appendFile(repo, ISSUE_71_LEDGER, "\nledger update\n");
+			await appendFile(
+				repo,
+				"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+				"\nregistry update\n",
+			);
+			await commitAll(repo, "metadata");
+
+			const result = await runDecompose(
+				["--assert-final-metadata-commit", ISSUE_71_LEDGER, "HEAD"],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("post-commit gate rejects a third touched path and merge commit", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			await appendFile(repo, "src/app.ts", "\nsource update\n");
+			await commitAll(repo, "source");
+			const thirdPath = await runDecompose(
+				["--assert-final-metadata-commit", ISSUE_71_LEDGER, "HEAD"],
+				{ cwd: repo },
+			);
+			expect(thirdPath.exitCode).toBe(1);
+			expect(thirdPath.stderr).toContain("non-metadata path");
+
+			await Bun.spawn(["git", "checkout", "-q", "-b", "side"], {
+				cwd: repo,
+			}).exited;
+			await appendFile(repo, ISSUE_71_LEDGER, "\nside\n");
+			await commitAll(repo, "side");
+			await Bun.spawn(["git", "checkout", "-q", "main"], { cwd: repo }).exited;
+			await appendFile(
+				repo,
+				"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+				"\nmain\n",
+			);
+			await commitAll(repo, "main");
+			await Bun.spawn(["git", "merge", "--no-ff", "-m", "merge side", "side"], {
+				cwd: repo,
+			}).exited;
+
+			const merge = await runDecompose(
+				["--assert-final-metadata-commit", ISSUE_71_LEDGER, "HEAD"],
+				{ cwd: repo },
+			);
+			expect(merge.exitCode).toBe(1);
+			expect(merge.stderr).toContain("merge commit");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("post-commit gate rejects deleting the registry", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			await Bun.spawn(
+				[
+					"git",
+					"rm",
+					"-q",
+					"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+				],
+				{ cwd: repo },
+			).exited;
+			await Bun.spawn(["git", "commit", "-q", "-m", "delete registry"], {
+				cwd: repo,
+			}).exited;
+
+			const result = await runDecompose(
+				["--assert-final-metadata-commit", ISSUE_71_LEDGER, "HEAD"],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("deletes the Workflow Learnings registry");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
+	test("final metadata gates can emit machine-readable JSON", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			await appendFile(repo, "src/app.ts", "\nsource update\n");
+			const result = await runDecompose(
+				["--assert-final-metadata-scope", ISSUE_71_LEDGER, "--json"],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(1);
+			const payload = JSON.parse(result.stdout) as {
+				ok: boolean;
+				gate: string;
+				offending_path: string;
+			};
+			expect(payload).toMatchObject({
+				ok: false,
+				gate: "final-metadata-scope",
+				offending_path: "src/app.ts",
+			});
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+});
+
 async function makeEmptyCommitRepo(): Promise<string> {
 	const dir = new TextDecoder()
 		.decode(Bun.spawnSync(["mktemp", "-d"]).stdout)
@@ -133,4 +376,63 @@ async function makeEmptyCommitRepo(): Promise<string> {
 	await run(["git", "config", "user.name", "Test"]);
 	await run(["git", "commit", "-q", "--allow-empty", "-m", "empty checkpoint"]);
 	return dir;
+}
+
+async function makeFinalMetadataRepo(): Promise<string> {
+	const dir = new TextDecoder()
+		.decode(Bun.spawnSync(["mktemp", "-d"]).stdout)
+		.trim();
+	const run = async (args: string[]) => {
+		const p = Bun.spawn(args, { cwd: dir, stderr: "pipe", stdout: "pipe" });
+		await p.exited;
+	};
+	await run(["git", "init", "-q", "-b", "main"]);
+	await run(["git", "config", "user.email", "test@example.com"]);
+	await run(["git", "config", "user.name", "Test"]);
+	await writeFixtureFile(dir, ISSUE_71_LEDGER, "ledger\n");
+	await writeFixtureFile(
+		dir,
+		"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+		"# Workflow Learnings registry\n\n```yaml\nlearnings: []\n```\n",
+	);
+	await writeFixtureFile(dir, "src/app.ts", "source\n");
+	await run(["git", "add", ISSUE_71_LEDGER]);
+	await run([
+		"git",
+		"add",
+		"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+	]);
+	await run(["git", "add", "src/app.ts"]);
+	await run(["git", "commit", "-q", "-m", "base"]);
+	return dir;
+}
+
+async function writeFixtureFile(
+	repo: string,
+	path: string,
+	content: string,
+): Promise<void> {
+	const fullPath = join(repo, path);
+	mkdirSync(dirname(fullPath), { recursive: true });
+	await Bun.write(fullPath, content);
+}
+
+async function appendFile(repo: string, path: string, content: string): Promise<void> {
+	const fullPath = join(repo, path);
+	const existing = await Bun.file(fullPath).text().catch(() => "");
+	await Bun.write(fullPath, `${existing}${content}`);
+}
+
+async function commitAll(repo: string, message: string): Promise<void> {
+	await Bun.spawn(
+		[
+			"git",
+			"add",
+			ISSUE_71_LEDGER,
+			"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md",
+			"src/app.ts",
+		],
+		{ cwd: repo },
+	).exited;
+	await Bun.spawn(["git", "commit", "-q", "-m", message], { cwd: repo }).exited;
 }

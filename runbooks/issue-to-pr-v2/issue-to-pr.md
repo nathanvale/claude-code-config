@@ -229,8 +229,9 @@ classification to `blocked-frontmatter-blocked-reason`.
   smallest-contract-patch heuristic allows.
 - `local-check-failure-<check-name>` — Stage 6 local check failed;
   routed back to Stage 5 as a synthetic P0 finding.
-- `local-check-failure-final-ledger-commit` — Stage 6 final ledger
-  commit included a non-ledger path; routed back to Stage 5.
+- `local-check-failure-final-metadata-commit` — Stage 6 final metadata
+  checkpoint helper found a non-metadata path or merge commit; fail-stop in
+  Stage 6.
 
 For any fail-stop that reveals a workflow-level learning, load
 [`references/workflow-learning-scan.md`](references/workflow-learning-scan.md)
@@ -357,13 +358,13 @@ the references loaded from `data.required_reference_ids`.
   in `smoke-direct` mode), record `pr_url`, run the read-only
   Workflow Learning Scan, append `## Residual Review Findings` to the
   PR body, set `frontmatter.status: shipped`, commit the final
-  metadata update with explicit pathspecs, assert the commit contains
-  only the ledger and Workflow Learnings registry before pushing.
+  metadata update with explicit pathspecs, run the final metadata scope and
+  commit helpers before pushing.
 - **Exit condition:** `pr_url` set; `status: shipped`; tree clean;
   next `cli.ts state --json` reports `route_id: "shipped"`.
 - **Stop conditions:** `local-check-failure-*` (routed via Stage 5,
-  not Stage 6), `local-check-failure-final-ledger-commit` (final
-  ledger commit included a non-ledger path), `smoke-direct` requested
+  not Stage 6), `local-check-failure-final-metadata-commit` (final
+  metadata helper found scope contamination), `smoke-direct` requested
   on a non-disposable repo.
 
 ## Patch-batch playbook

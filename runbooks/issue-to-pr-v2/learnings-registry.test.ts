@@ -93,18 +93,27 @@ function makeForbiddenFile(relativePath: string, content: string): string {
 
 /** Write a valid candidate JSON file to a tmp dir. */
 function makeCandidate(): string {
-  const candidate = {
+  const candidate = candidateObject("sha256:write-scope-test");
+  const dir = mkdtempSync(join(tmpdir(), "issue-90-candidate-"));
+  tempDirs.push(dir);
+  const path = join(dir, "candidate.json");
+  writeFileSync(path, JSON.stringify(candidate, null, 2));
+  return path;
+}
+
+function candidateObject(signature: string, run = "issue-90") {
+  return {
     summary: "a one-line learning statement",
     owner: "runbook-reference",
     retirement_condition: "retired when the reference documents the gate",
-    signature: "sha256:write-scope-test",
+    signature,
     disposition: "needs-evidence",
     status: "open",
     confidence: "medium",
     follow_up: null,
     canonical_update: false,
     evidence: {
-      run: "issue-90",
+      run,
       affected_surface: "the reference",
       what_was_wrong: "missing gate",
       discovery_method: "observed during run",
@@ -114,10 +123,13 @@ function makeCandidate(): string {
       verification_idea: "re-read the reference",
     },
   };
+}
+
+function makeBatch(candidates: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), "issue-90-candidate-"));
   tempDirs.push(dir);
-  const path = join(dir, "candidate.json");
-  writeFileSync(path, JSON.stringify(candidate, null, 2));
+  const path = join(dir, "batch.json");
+  writeFileSync(path, JSON.stringify({ candidates }, null, 2));
   return path;
 }
 
@@ -521,5 +533,148 @@ describe("learnings-registry.ts --upsert write-scope (integration)", () => {
     );
     // Candidate file is byte-identical (read-only).
     expect(readFileSync(candidatePath, "utf8")).toBe(candidateBytes);
+  });
+});
+
+describe("learnings-registry.ts --upsert-batch", () => {
+  test("refuses forbidden registry targets and leaves the target unchanged", async () => {
+    const target = makeForbiddenFile(
+      "skills/issue-to-pr/SKILL.md",
+      "# Skill\n\nDo not batch-write here.\n",
+    );
+    const before = readFileSync(target, "utf8");
+    const batchPath = makeBatch([candidateObject("sha256:batch-forbidden")]);
+
+    const result = await runRegistry(["--upsert-batch", target, batchPath]);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(target);
+    expect(readFileSync(target, "utf8")).toBe(before);
+  });
+
+  test("accepts multiple candidates and emits per-candidate outcomes plus counts", async () => {
+    const registryPath = makeCanonicalRegistry(emptyRegistryDoc());
+    const batchPath = makeBatch([
+      candidateObject("sha256:batch-created"),
+      candidateObject("sha256:batch-created", "issue-91"),
+      candidateObject("sha256:batch-second"),
+    ]);
+
+    const result = await runRegistry([
+      "--upsert-batch",
+      registryPath,
+      batchPath,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      outcomes: { signature: string; outcome: string; candidate?: unknown }[];
+      counts: { created: number; updated: number; unchanged: number; total: number };
+    };
+    expect(payload.outcomes.map(({ signature, outcome }) => ({ signature, outcome }))).toEqual([
+      { signature: "sha256:batch-created", outcome: "created" },
+      { signature: "sha256:batch-created", outcome: "updated" },
+      { signature: "sha256:batch-second", outcome: "created" },
+    ]);
+    expect(payload.outcomes[0]).toMatchObject({
+      candidate: {
+        disposition: "needs-evidence",
+        confidence: "medium",
+        evidence: {
+          affected_surface: "the reference",
+          what_was_wrong: "missing gate",
+        },
+      },
+    });
+    expect(payload.counts).toEqual({
+      created: 2,
+      updated: 1,
+      unchanged: 0,
+      total: 3,
+    });
+    expect(readFileSync(registryPath, "utf8")).toContain("sha256:batch-second");
+  });
+
+  test("emits unchanged when applying a batch leaves serialized registry bytes unchanged", async () => {
+    const registryPath = makeCanonicalRegistry(emptyRegistryDoc());
+    const candidate = candidateObject("sha256:batch-unchanged");
+    const seedPath = makeBatch([candidate]);
+    const first = await runRegistry(["--upsert-batch", registryPath, seedPath]);
+    expect(first.exitCode).toBe(0);
+    const before = readFileSync(registryPath, "utf8");
+
+    const secondPath = makeBatch([candidate]);
+    const second = await runRegistry([
+      "--upsert-batch",
+      registryPath,
+      secondPath,
+    ]);
+
+    expect(second.exitCode).toBe(0);
+    const payload = JSON.parse(second.stdout) as {
+      counts: { created: number; updated: number; unchanged: number; total: number };
+    };
+    expect(payload.counts).toEqual({
+      created: 0,
+      updated: 0,
+      unchanged: 1,
+      total: 1,
+    });
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
+  });
+
+  test("emits unchanged per candidate in a mixed batch", async () => {
+    const registryPath = makeCanonicalRegistry(emptyRegistryDoc());
+    const unchanged = candidateObject("sha256:mixed");
+    const seedPath = makeBatch([unchanged]);
+    const first = await runRegistry(["--upsert-batch", registryPath, seedPath]);
+    expect(first.exitCode).toBe(0);
+
+    const batchPath = makeBatch([
+      unchanged,
+      candidateObject("sha256:mixed", "issue-91"),
+    ]);
+    const result = await runRegistry([
+      "--upsert-batch",
+      registryPath,
+      batchPath,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      outcomes: { signature: string; outcome: string; candidate?: unknown }[];
+      counts: { created: number; updated: number; unchanged: number; total: number };
+    };
+    expect(payload.outcomes.map(({ signature, outcome }) => ({ signature, outcome }))).toEqual([
+      { signature: "sha256:mixed", outcome: "unchanged" },
+      { signature: "sha256:mixed", outcome: "updated" },
+    ]);
+    expect(payload.counts).toEqual({
+      created: 0,
+      updated: 1,
+      unchanged: 1,
+      total: 2,
+    });
+  });
+
+  test("rejects the whole batch and leaves registry bytes unchanged when any candidate is invalid", async () => {
+    const registryPath = makeCanonicalRegistry(emptyRegistryDoc());
+    const before = readFileSync(registryPath, "utf8");
+    const invalid = candidateObject("sha256:batch-invalid");
+    invalid.disposition = "bogus";
+    const batchPath = makeBatch([
+      candidateObject("sha256:batch-valid"),
+      invalid,
+    ]);
+
+    const result = await runRegistry([
+      "--upsert-batch",
+      registryPath,
+      batchPath,
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("candidate #2");
+    expect(readFileSync(registryPath, "utf8")).toBe(before);
   });
 });

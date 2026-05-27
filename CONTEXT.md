@@ -20,6 +20,30 @@ _Avoid_: git proof, commit proof, git utility, ledger evidence row, CLI evidence
 A focused Issue-to-PR validation that keeps prose claims about CLI-owned facts aligned with the runtime contract the helper emits. It covers mechanically checkable facts and the control-plane links needed for operator recovery, not broad documentation quality.
 _Avoid_: public docs drift check, general docs audit, markdown link crawler, gotchas-only safeguard
 
+**Workflow Learning Scan**:
+A read-only Issue-to-PR reflection pass that captures workflow-level learnings from ship-time or fail-stop evidence. It records learning metadata through ledger and registry surfaces; it does not repair skills, runbooks, CLI code, docs, or deliverables.
+_Avoid_: self-repair pass, learning audit, workflow repair scan, meta-work pass
+
+**Final metadata checkpoint**:
+The Stage 6 Issue-to-PR checkpoint that records shipped run metadata after a PR URL exists. It may contain the per-issue ledger and Workflow Learnings registry metadata only; it is not a deliverable commit or control-plane repair.
+_Avoid_: final ledger commit, ship-tail cleanup commit, metadata dump
+
+**Final metadata checkpoint contamination**:
+A Stage 6 hygiene failure where changed, staged, untracked, or committed paths exceed the final metadata checkpoint allowlist. It is fixed by cleaning the ship-tail state and rerunning Stage 6, not by routing through product review.
+_Avoid_: final-review finding, residual finding, product diff issue
+
+**Registry candidate**:
+A proposed Workflow Learnings registry input prepared for validation or upsert by the registry helper. It is not a stored registry entry, ledger evidence row, or Issue-to-PR finding.
+_Avoid_: learning record, learning finding, registry row, finding
+
+**Workflow Learning upsert outcome**:
+The runtime-emitted result of applying a Registry candidate to the Workflow Learnings registry. Final learning-summary counts come from helper facts, not prose inference.
+_Avoid_: learning count, scan count, inferred summary, registry status
+
+**Workflow Learning attention item**:
+A scan-selected Workflow Learning that deserves explicit final-summary visibility because it affects this delivery's closure or follow-up understanding. Attention-item selection is judgment over runtime facts, disposition, confidence, and delivery context; it is not a raw registry helper output.
+_Avoid_: interesting learning, registry result, all follow-ups, warning
+
 **Section-coordinate scaffold pointer**:
 A visible scaffold command that satisfies drift only when it appears at its inventoried section or anchor, not merely somewhere in the same document.
 _Avoid_: doc-level scaffold pointer, hidden scaffold-pointer comment, loose scaffold mention
@@ -135,6 +159,18 @@ Domain expert: "No. Rendered packets stay pointer-only; agents use runtime scaff
 
 Dev: "Where does the agent learn to resolve scaffold pointers?"
 Domain expert: "Each rendered packet carries one shared lookup preamble so the rule appears at the moment of use without role-specific prose drift."
+
+Dev: "Can the final metadata checkpoint include a tiny docs fix discovered during shipping?"
+Domain expert: "No. The final metadata checkpoint may contain only shipped run metadata. Docs fixes are control-plane repairs and need their own workflow path."
+
+Dev: "Should final metadata checkpoint contamination go back through final review?"
+Domain expert: "No. It is a Stage 6 hygiene failure, not a product diff finding. Clean the ship-tail state and rerun Stage 6."
+
+Dev: "Can the final learning summary count registry entries by reading the markdown?"
+Domain expert: "No. It uses Workflow Learning upsert outcomes emitted by the registry helper: created, updated, or unchanged."
+
+Dev: "Is every file-follow-up a Workflow Learning attention item?"
+Domain expert: "No. The scan selects attention items by judging the runtime facts, confidence, disposition, and whether the item affects this delivery's closure or follow-up understanding."
 
 Dev: "Should scaffold pointers use top-of-file aliases like `$RETURN_ENVELOPE`?"
 Domain expert: "No. Put the direct scaffold command in the owning section; avoid alias mini-languages unless repetition proves unavoidable."

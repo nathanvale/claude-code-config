@@ -283,7 +283,7 @@ Only one Stage 4 subroute is the visible action per turn. Orchestrator routes + 
 - Inputs: final review complete, clean tree, no open P0/P1.
 - One visible action: run local checks, create/push the PR, run the read-only Workflow Learning Scan after PR URL confirmation, or persist the final shipped ledger checkpoint.
 - Exit: `pr_url` is set, ledger status is `shipped`, tree clean, next state routes to `shipped`.
-- Stop: local check failure, unsafe final ledger commit, unsupported smoke-direct request, PR creation failure requiring operator input.
+- Stop: local check failure, unsafe final metadata checkpoint, unsupported smoke-direct request, PR creation failure requiring operator input.
 
 </stage_shells>
 
@@ -316,7 +316,7 @@ when follow-up is needed to resume, unblock, or honestly close this delivery.
 | Patch-batch confirmation required | Validated patch-batch proposal awaiting user decision | User confirms the patch batch (returns to Stage 4) or declines and replans; see `stage-4-batch-loop.md` |
 | Final review needs replan | Finding that exceeds patch-batch scope | User replans or narrows the contract |
 | Local check failure | Check name and failing summary | Synthetic P0 routes through Stage 5 and is closed |
-| Unsafe final ledger commit | Non-ledger path in final ledger commit | Commit is repaired so only the ledger checkpoint is included |
+| Unsafe final metadata checkpoint | Non-metadata path in final metadata checkpoint | Commit is repaired so only ledger/registry metadata is included |
 | Unsupported smoke-direct request | Requested `smoke-direct` on a non-disposable repo | Target repo and checkout are disposable, or the standard ship path is used; see `stage-6-ship.md` |
 | PR creation failure | Failing `gh pr create` / push evidence | Operator resolves the failure and the PR URL is recorded; see `stage-6-ship.md` |
 
