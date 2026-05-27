@@ -22,6 +22,7 @@ import {
   checkGotchasRelationship,
   checkLedgerLifecycleFieldDrift,
   checkScaffoldInventoryDrift,
+  checkWorkflowLearningScanRelationship,
   compareClaimsToFacts,
   extractDocClaims,
   finiteChildKeys,
@@ -2617,6 +2618,191 @@ describe("AC4: first-run-gotchas relationship check", () => {
   });
 });
 
+describe("Workflow Learning Scan relationship check", () => {
+  const repoRoot = join(import.meta.dir, "..", "..");
+
+  const validSkillScanDoc = [
+    "# Skill",
+    "",
+    "7. Load every reference listed in `data.required_reference_ids`.",
+    "7c. When `data.route_id` is `ship` after PR URL confirmation, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+  ].join("\n");
+
+  const validIssueToPrScanDoc = [
+    "# Issue to PR",
+    "",
+    "## Start every turn",
+    "",
+    "6. **Load the references listed in `data.required_reference_ids`.**",
+    "   When ship has a confirmed PR URL, or a fail-stop exposes a workflow-level learning, load",
+    "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+  ].join("\n");
+
+  const validStageSixScanDoc = [
+    "# Stage 6",
+    "",
+    "## Actions",
+    "",
+    "1. Confirm PR URL.",
+    "2. Run the read-only [workflow-learning-scan.md](workflow-learning-scan.md).",
+  ].join("\n");
+
+  const validScanDoc = [
+    "# Workflow Learning Scan",
+    "",
+    "See [workflow-learnings-registry.md](workflow-learnings-registry.md) and `lib/learnings.ts`.",
+    "Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert`.",
+    "Use `cli.ts scaffold workflow-learnings-empty --json`.",
+    "Do not recreate `runbooks/issue-to-pr-v2/issue-N-ledger.template.md`.",
+    "",
+    "## Read-Only Boundary",
+    "",
+    "Do not patch skills, runbook references, CLI/source code, docs, target deliverables, or gotchas content.",
+    "Allowed writes: per-issue ledger and Workflow Learnings registry.",
+    "",
+    "## Gotchas Relationship",
+    "",
+    "`first-run-gotchas.md` remains recovery guidance. Workflow Learnings owns cross-run dedupe lifecycle.",
+  ].join("\n");
+
+  async function stageScanFixture(
+    overrides: {
+      skill?: string;
+      issueToPr?: string;
+      stageSix?: string;
+      scan?: string;
+      writeScan?: boolean;
+    } = {},
+  ): Promise<string> {
+    const dir = join(
+      import.meta.dir,
+      `../../.tmp-scan-${process.pid}-${Math.random().toString(36).slice(2)}`,
+    );
+    await Bun.write(
+      join(dir, "skills/issue-to-pr/SKILL.md"),
+      overrides.skill ?? validSkillScanDoc,
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/issue-to-pr.md"),
+      overrides.issueToPr ?? validIssueToPrScanDoc,
+    );
+    await Bun.write(
+      join(dir, "runbooks/issue-to-pr-v2/references/stage-6-ship.md"),
+      overrides.stageSix ?? validStageSixScanDoc,
+    );
+    if (overrides.writeScan ?? true) {
+      await Bun.write(
+        join(dir, "runbooks/issue-to-pr-v2/references/workflow-learning-scan.md"),
+        overrides.scan ?? validScanDoc,
+      );
+    }
+    return dir;
+  }
+
+  test("live scan relationship returns zero findings", async () => {
+    const findings = await checkWorkflowLearningScanRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("missing scan reference reports one blocking finding", async () => {
+    const dir = await stageScanFixture({ writeScan: false });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.claim).toBe("workflow-learning-scan.md");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing skill pointer reports one finding", async () => {
+    const dir = await stageScanFixture({ skill: "# Skill\n\nNo scan load.\n" });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.doc === "skills/issue-to-pr/SKILL.md"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing hot-router pointer reports one finding", async () => {
+    const dir = await stageScanFixture({
+      issueToPr: "# Issue to PR\n\n## Start every turn\n\nNo scan load.\n",
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter(
+          (f) => f.doc === "runbooks/issue-to-pr-v2/issue-to-pr.md",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing Stage 6 ship-time pointer reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: "# Stage 6\n\n## Actions\n\n1. Confirm PR URL only.\n",
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter(
+          (f) =>
+            f.doc ===
+            "runbooks/issue-to-pr-v2/references/stage-6-ship.md",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan missing runtime helper citations reports a finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace("Run `learnings-registry.ts --validate` and `learnings-registry.ts --upsert`.", ""),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "runtime-owner-citations")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("scan missing read-only boundary reports a finding", async () => {
+    const dir = await stageScanFixture({
+      scan: validScanDoc.replace(
+        /## Read-Only Boundary[\s\S]*?## Gotchas Relationship/,
+        "## Gotchas Relationship",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "read-only-boundary")).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+});
+
 describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => {
   const repoRoot = join(import.meta.dir, "..", "..");
   const liveDocs = [
@@ -2670,6 +2856,11 @@ describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => 
 
   test("the live gotchas relationship check returns zero findings", async () => {
     const findings = await checkGotchasRelationship({ repoRoot });
+    expect(findings).toEqual([]);
+  });
+
+  test("the live Workflow Learning Scan relationship check returns zero findings", async () => {
+    const findings = await checkWorkflowLearningScanRelationship({ repoRoot });
     expect(findings).toEqual([]);
   });
 });

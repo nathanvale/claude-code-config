@@ -86,6 +86,9 @@ time.
    When `data.route_id` begins with `blocked-`, also load
    [`references/first-run-gotchas.md`](references/first-run-gotchas.md)
    before any blocked-route stop.
+   When ship has a confirmed PR URL, or a fail-stop exposes a workflow-level
+   learning, load
+   [`references/workflow-learning-scan.md`](references/workflow-learning-scan.md).
 7. **Honour remaining pre-stage gates** before entering stage work.
 8. **Execute one visible action** per the matched stage shell below.
 9. **Commit the lifecycle checkpoint** the stage requires (Stage 4
@@ -229,6 +232,12 @@ classification to `blocked-frontmatter-blocked-reason`.
 - `local-check-failure-final-ledger-commit` — Stage 6 final ledger
   commit included a non-ledger path; routed back to Stage 5.
 
+For any fail-stop that reveals a workflow-level learning, load
+[`references/workflow-learning-scan.md`](references/workflow-learning-scan.md)
+as a read-only reflection pass. Capture evidence through ledger/registry
+metadata only. Ask for follow-up confirmation only when the follow-up is
+needed to resume, unblock, or honestly close this delivery.
+
 ## Stage shells
 
 Each shell is short by design: inputs, CLI facts to consume, action
@@ -345,11 +354,11 @@ the references loaded from `data.required_reference_ids`.
   preferred, shell fallback last); on any failure route the
   `local-check-failure-<check-name>` synthetic P0 back to Stage 5.
   On all-green: invoke `/ce-commit-push-pr` (or `gh pr create` only
-  in `smoke-direct` mode), record `pr_url`, append
-  `## Residual Review Findings` to the PR body, set
-  `frontmatter.status: shipped`, commit the final ledger update with
-  an explicit ledger pathspec, assert the commit contains only the
-  ledger path before pushing.
+  in `smoke-direct` mode), record `pr_url`, run the read-only
+  Workflow Learning Scan, append `## Residual Review Findings` to the
+  PR body, set `frontmatter.status: shipped`, commit the final
+  metadata update with explicit pathspecs, assert the commit contains
+  only the ledger and Workflow Learnings registry before pushing.
 - **Exit condition:** `pr_url` set; `status: shipped`; tree clean;
   next `cli.ts state --json` reports `route_id: "shipped"`.
 - **Stop conditions:** `local-check-failure-*` (routed via Stage 5,

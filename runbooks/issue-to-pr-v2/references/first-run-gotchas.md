@@ -63,6 +63,12 @@ with **Owner** and **Retire when** lines. The keep test for every entry:
 restates canonical reference material, it belongs in a reference or a
 follow-up issue, not here.
 
+Workflow Learnings are the cross-run attention, lifecycle, dedupe, confidence,
+follow-up, and retirement layer. Use
+[workflow-learning-scan.md](workflow-learning-scan.md) when a gotcha or
+fail-stop reveals a workflow-level learning worth recording. Do not turn this
+guide into the registry.
+
 Owner classifications:
 
 | If the gotcha shows... | Owner classification |

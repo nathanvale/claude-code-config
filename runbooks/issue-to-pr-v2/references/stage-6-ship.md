@@ -1,7 +1,8 @@
 # Stage 6: ship reference
 
 **Contract owner:** this reference owns Stage 6 local checks, residual finding
-gate, PR creation, PR URL recording, and shipped-ledger checkpointing.
+gate, PR creation, PR URL recording, ship-time Workflow Learning Scan
+placement, and shipped metadata checkpointing.
 
 **Read trigger:** open this reference when Stage 5's exit condition has been
 met (`frontmatter.final_reviewed_at` is set; all `batch_id == final` rows are
@@ -10,7 +11,8 @@ checks and the ship path, or when re-entering Stage 6 after a
 `local-check-failure-*` finding was rerouted through Stage 5. See also:
 [stage-5-final-review.md](stage-5-final-review.md),
 [findings-and-validators.md](findings-and-validators.md),
-[ledger-and-helper.md](ledger-and-helper.md).
+[ledger-and-helper.md](ledger-and-helper.md), and
+[workflow-learning-scan.md](workflow-learning-scan.md).
 
 ## Inputs
 
@@ -71,31 +73,42 @@ envelope instead of forcing Stage 6.
    re-run `gh pr view --json number,url,state` to confirm the PR URL. Record
    it in ledger frontmatter as `pr_url`.
 
-4. **Append `## Residual Review Findings` to the PR body.** List every P2
+4. **Run the read-only Workflow Learning Scan.** Load
+   [workflow-learning-scan.md](workflow-learning-scan.md), scan completed run
+   evidence, and record learning metadata only when useful. Validate registry
+   candidates with `learnings-registry.ts --validate` and upsert through
+   `learnings-registry.ts --upsert`. Use
+   `cli.ts scaffold workflow-learnings-empty --json` for empty ledger section
+   shape when needed. Do not patch skills, runbook references, CLI/source code,
+   docs, target deliverables, or gotchas content during the ship tail.
+
+5. **Append `## Residual Review Findings` to the PR body.** List every P2
    finding with `status: deferred-P2`, formatted as
    `- <persona>: <summary> (<signature>)`. If >5 P3 findings exist, append a
    one-liner `N P3 advisory findings logged in ledger.`. This heading matches
    the one `/lfg` uses, so the PR body shape is consistent across both
    autopilot paths.
 
-5. Set `frontmatter.status = shipped`.
+6. Set `frontmatter.status = shipped`.
 
-6. **Commit and push the final ledger update.** The update contains `pr_url`,
-   residual findings, `ship_mode`, and `status: shipped`. Before committing,
+7. **Commit and push the final metadata update.** The update contains `pr_url`,
+   residual findings, `ship_mode`, `status: shipped`, and any Workflow Learning
+   Scan ledger/registry metadata. Before committing,
    require `git diff --name-only`, `git diff --cached --name-only`, and
    `git ls-files --others --exclude-standard` to contain only the per-issue
-   ledger path, or be empty. Stage and commit with an explicit ledger
-   pathspec, never a broad add or broad commit. Any other changed, staged, or
-   untracked path creates a `local-check-failure-final-ledger-commit` P0
-   finding and returns to Stage 5. After committing, assert
-   `git show --name-only --format= HEAD` contains only the per-issue ledger
-   path before any push. If this changes the PR body contents, update the PR
-   body again. Echo the final ledger inline.
+   ledger path and Workflow Learnings registry, or be empty. Stage and commit
+   with explicit pathspecs, never a broad add or broad commit. Any other
+   changed, staged, or untracked path creates a
+   `local-check-failure-final-ledger-commit` P0 finding and returns to Stage 5.
+   After committing, assert `git show --name-only --format= HEAD` contains only
+   the per-issue ledger path and Workflow Learnings registry before any push.
+   If this changes the PR body contents, update the PR body again. Echo the
+   final ledger inline.
 
 ## Exit condition
 
 Ledger frontmatter has `pr_url`; `status: shipped`; working tree clean; final
-ledger update pushed. Goal met.
+metadata update pushed. Goal met.
 
 ## See also
 
@@ -105,3 +118,5 @@ ledger update pushed. Goal met.
   `local-check-failure-*` finding shape and close-reason semantics.
 - [ledger-and-helper.md](ledger-and-helper.md) for the helper command context
   and ledger schema.
+- [workflow-learning-scan.md](workflow-learning-scan.md) for ship-time learning
+  capture and read-only scan boundary.

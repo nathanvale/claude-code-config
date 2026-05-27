@@ -1026,6 +1026,7 @@ export type DriftKind =
   | "generated-scaffold-block"
   | "scaffold-pointer"
   | "scaffold-inventory"
+  | "workflow-learning-scan"
   // A doc the SCOPE marks as carrying contract tokens that extracted ZERO
   // contract claims (F21): a likely extractor regression or a doc rewrite that
   // stripped structural markers, which would otherwise silently disarm that
@@ -1199,9 +1200,15 @@ export type GotchasRelationshipOptions = {
  * structural file coordinates (Key Decision 7), not contract values.
  */
 const GOTCHAS_GUIDE_REL = "runbooks/issue-to-pr-v2/references/first-run-gotchas.md";
+const WORKFLOW_LEARNING_SCAN_REL =
+  "runbooks/issue-to-pr-v2/references/workflow-learning-scan.md";
 const SKILL_DOC_REL = "skills/issue-to-pr/SKILL.md";
 const ISSUE_TO_PR_DOC_REL = "runbooks/issue-to-pr-v2/issue-to-pr.md";
 const LEDGER_DOC_REL = "runbooks/issue-to-pr-v2/references/ledger-and-helper.md";
+const STAGE_6_SHIP_REL =
+  "runbooks/issue-to-pr-v2/references/stage-6-ship.md";
+const WORKFLOW_LEARNINGS_REGISTRY_REL =
+  "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md";
 const CE_PLAN_TEMPLATE_REL =
   "runbooks/issue-to-pr-v2/templates/ce-plan-addendum.md";
 const PROPOSER_TEMPLATE_REL =
@@ -1572,6 +1579,7 @@ const SCAFFOLD_COMMAND_SURFACE_RELS = [
 ] as const;
 /** Just the guide's basename, for matching markdown links to it. */
 const GOTCHAS_GUIDE_BASENAME = "first-run-gotchas.md";
+const WORKFLOW_LEARNING_SCAN_BASENAME = "workflow-learning-scan.md";
 
 /**
  * A `blocked-` route TRIGGER. Matched as the literal `blocked-` prefix with a
@@ -2562,6 +2570,231 @@ export async function checkGotchasRelationship(
   return findings;
 }
 
+export type WorkflowLearningScanRelationshipOptions = {
+  repoRoot?: string;
+};
+
+function regionMentionsWorkflowLearningScan(region: string): boolean {
+  return (
+    region.includes(WORKFLOW_LEARNING_SCAN_REL) ||
+    region.includes(WORKFLOW_LEARNING_SCAN_BASENAME)
+  );
+}
+
+function skillRoutesToWorkflowLearningScan(text: string): boolean {
+  const steps = numberedStepBlocks(text);
+  return steps.some(
+    (step) =>
+      /\bload(?:s|ed|ing)?\b/i.test(step.body) &&
+      regionMentionsWorkflowLearningScan(step.body) &&
+      /\bship\b/i.test(step.body) &&
+      /fail-stop|fail_stop/i.test(step.body),
+  );
+}
+
+function hotRouterRoutesToWorkflowLearningScan(text: string): boolean {
+  const startSection = markdownSection(text, "Start every turn");
+  return (
+    startSection !== null &&
+    /\bload(?:s|ed|ing)?\b/i.test(startSection) &&
+    regionMentionsWorkflowLearningScan(startSection) &&
+    /\bPR URL\b|\bpr_url\b/i.test(startSection) &&
+    /fail-stop|fail_stop/i.test(startSection)
+  );
+}
+
+function stageSixPointsToWorkflowLearningScan(text: string): boolean {
+  const actions = markdownSection(text, "Actions");
+  return (
+    actions !== null &&
+    regionMentionsWorkflowLearningScan(actions) &&
+    /\bPR URL\b|\bpr_url\b/i.test(actions) &&
+    /\bread-only\b/i.test(actions)
+  );
+}
+
+function scanCitesRuntimeOwners(text: string): boolean {
+  return (
+    text.includes(WORKFLOW_LEARNINGS_REGISTRY_REL) ||
+    text.includes("workflow-learnings-registry.md")
+  ) &&
+    text.includes("lib/learnings.ts") &&
+    /learnings-registry\.ts\s+--validate/.test(text) &&
+    /learnings-registry\.ts\s+--upsert/.test(text);
+}
+
+function scanPreservesReadOnlyBoundary(text: string): boolean {
+  const boundary = markdownSection(text, "Read-Only Boundary");
+  if (boundary === null) return false;
+  return (
+    /\bdo not patch\b/i.test(boundary) &&
+    /\bskills\b/i.test(boundary) &&
+    /\brunbook references\b/i.test(boundary) &&
+    /\bCLI\/source code\b|\bCLI code\b/i.test(boundary) &&
+    /\bdocs\b/i.test(boundary) &&
+    /\btarget deliverables\b/i.test(boundary) &&
+    /\bgotchas\b/i.test(boundary) &&
+    /\bper-issue ledger\b/i.test(boundary) &&
+    /\bWorkflow Learnings registry\b/i.test(boundary)
+  );
+}
+
+function scanPreservesRuntimeScaffoldBaseline(text: string): boolean {
+  return (
+    /cli\.ts\s+scaffold\s+workflow-learnings-empty\s+--json/.test(text) &&
+    text.includes("issue-N-ledger.template.md") &&
+    /do not recreate/i.test(text)
+  );
+}
+
+function scanPreservesGotchasRelationship(text: string): boolean {
+  const gotchas = markdownSection(text, "Gotchas Relationship");
+  return (
+    gotchas?.includes(GOTCHAS_GUIDE_BASENAME) === true &&
+    /\brecovery\b/i.test(gotchas) &&
+    /\bcross-run\b/i.test(gotchas) &&
+    /\bdedupe\b/i.test(gotchas)
+  );
+}
+
+/**
+ * Verify the Workflow Learning Scan has one prose owner, routes from the hot
+ * Issue-to-PR control plane, and delegates deterministic behavior to runtime
+ * helpers.
+ */
+export async function checkWorkflowLearningScanRelationship(
+  opts: WorkflowLearningScanRelationshipOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = [];
+
+  const scanPath = join(repoRoot, WORKFLOW_LEARNING_SCAN_REL);
+  if (!(await pathExists(scanPath))) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: WORKFLOW_LEARNING_SCAN_BASENAME,
+      reason: "Workflow Learning Scan reference is missing.",
+    });
+    return findings;
+  }
+
+  const skillText = await readScopedDocOrThrow(
+    join(repoRoot, SKILL_DOC_REL),
+    SKILL_DOC_REL,
+    "contract-drift workflow learning scan check",
+  );
+  const issueToPrText = await readScopedDocOrThrow(
+    join(repoRoot, ISSUE_TO_PR_DOC_REL),
+    ISSUE_TO_PR_DOC_REL,
+    "contract-drift workflow learning scan check",
+  );
+  const stageSixText = await readScopedDocOrThrow(
+    join(repoRoot, STAGE_6_SHIP_REL),
+    STAGE_6_SHIP_REL,
+    "contract-drift workflow learning scan check",
+  );
+  const scanText = await readScopedDocOrThrow(
+    scanPath,
+    WORKFLOW_LEARNING_SCAN_REL,
+    "contract-drift workflow learning scan check",
+  );
+
+  if (!skillRoutesToWorkflowLearningScan(skillText)) {
+    findings.push({
+      doc: SKILL_DOC_REL,
+      kind: "workflow-learning-scan",
+      claim: WORKFLOW_LEARNING_SCAN_BASENAME,
+      reason:
+        "SKILL.md must load workflow-learning-scan.md for ship-time PR URL confirmation and fail-stop learning capture.",
+    });
+  }
+
+  if (!hotRouterRoutesToWorkflowLearningScan(issueToPrText)) {
+    findings.push({
+      doc: ISSUE_TO_PR_DOC_REL,
+      kind: "workflow-learning-scan",
+      claim: WORKFLOW_LEARNING_SCAN_BASENAME,
+      reason:
+        "issue-to-pr.md must route ship-time PR URL confirmation and fail-stop learning capture to workflow-learning-scan.md.",
+    });
+  }
+
+  if (!stageSixPointsToWorkflowLearningScan(stageSixText)) {
+    findings.push({
+      doc: STAGE_6_SHIP_REL,
+      kind: "workflow-learning-scan",
+      claim: WORKFLOW_LEARNING_SCAN_BASENAME,
+      reason:
+        "stage-6-ship.md must point to workflow-learning-scan.md in the ship path after PR URL confirmation.",
+    });
+  }
+
+  if (!scanCitesRuntimeOwners(scanText)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "runtime-owner-citations",
+      reason:
+        "workflow-learning-scan.md must cite the registry reference, lib/learnings.ts, and learnings-registry validate/upsert helpers for deterministic behavior.",
+    });
+  }
+
+  if (!scanPreservesReadOnlyBoundary(scanText)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "read-only-boundary",
+      reason:
+        "workflow-learning-scan.md must preserve the read-only boundary and limit writes to ledger/registry metadata.",
+    });
+  }
+
+  if (!scanPreservesRuntimeScaffoldBaseline(scanText)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "runtime-owned-scaffold-baseline",
+      reason:
+        "workflow-learning-scan.md must point to the workflow-learnings-empty scaffold and preserve the PR #125 pointer-only template baseline.",
+    });
+  }
+
+  if (!scanPreservesGotchasRelationship(scanText)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: GOTCHAS_GUIDE_BASENAME,
+      reason:
+        "workflow-learning-scan.md must keep first-run-gotchas.md recovery-focused and keep Workflow Learnings as the lifecycle/dedupe layer.",
+    });
+  }
+
+  for (const [relDoc, text] of [
+    [SKILL_DOC_REL, skillText],
+    [ISSUE_TO_PR_DOC_REL, issueToPrText],
+    [STAGE_6_SHIP_REL, stageSixText],
+    [WORKFLOW_LEARNING_SCAN_REL, scanText],
+  ] as const) {
+    for (const link of extractScopedLinks(text, relDoc)) {
+      if (!link.resolvedTarget.endsWith(WORKFLOW_LEARNING_SCAN_BASENAME)) {
+        continue;
+      }
+      if (!(await pathExists(join(repoRoot, link.resolvedTarget)))) {
+        findings.push({
+          doc: relDoc,
+          kind: "workflow-learning-scan",
+          claim: link.resolvedTarget,
+          line: link.line,
+          reason: `link to workflow-learning-scan.md resolves to \`${link.resolvedTarget}\`, which does not exist on disk.`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Batch 4: orchestrator + runnable entry
 // ---------------------------------------------------------------------------
@@ -2736,6 +2969,7 @@ export async function checkContractDrift(
 
   // The deterministic control-plane relationship the workflow relies on.
   findings.push(...(await checkGotchasRelationship({ repoRoot })));
+  findings.push(...(await checkWorkflowLearningScanRelationship({ repoRoot })));
   findings.push(
     ...(await checkLedgerLifecycleFieldDrift({
       repoRoot,
@@ -2768,7 +3002,7 @@ if (import.meta.main) {
   const result = await checkContractDrift();
   if (result.ok) {
     console.log(
-      `contract-drift: OK — the ${SCOPED_DOCS.length} scoped docs are in sync with the live CLI contract.`,
+      `contract-drift: OK — the ${SCOPED_DOCS.length} scoped docs and relationship checks are in sync with the live CLI contract.`,
     );
   } else {
     console.error(
