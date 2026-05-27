@@ -86,8 +86,8 @@ time.
    When `data.route_id` begins with `blocked-`, also load
    [`references/first-run-gotchas.md`](references/first-run-gotchas.md)
    before any blocked-route stop.
-   When ship has a confirmed PR URL, or a fail-stop exposes a workflow-level
-   learning, load
+   When PR URL confirmation has happened on the ship path, or a fail-stop
+   exposes a workflow-level learning, load
    [`references/workflow-learning-scan.md`](references/workflow-learning-scan.md).
 7. **Honour remaining pre-stage gates** before entering stage work.
 8. **Execute one visible action** per the matched stage shell below.

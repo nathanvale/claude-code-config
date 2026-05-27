@@ -93,7 +93,7 @@ Start every turn in this order:
 6. Route from `data.route_id`. Unknown route IDs = findings against `runbooks/issue-to-pr-v2/lib/route.ts`, not prose routes.
 7. Load every reference listed in `data.required_reference_ids`. Action templates load only when preparing that packet/handoff.
 7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` on top of `data.required_reference_ids` before any blocked-route stop.
-7c. When `data.route_id` is `ship` after PR URL confirmation, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.
+7c. When PR URL confirmation has happened on `data.route_id: ship`, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.
 8. Apply remaining pre-stage gates before entering a stage.
 9. Execute exactly one visible workflow action: advance a stage, commit one lifecycle checkpoint, run one implementation attempt, record one implementation-attempt checkpoint, run one Validator wave, converge one batch, or fail-stop with a specific question.
 10. Commit any required lifecycle checkpoint before turn-end when the stage requires durable state. Working tree must be committed + clean before any state-changing stage transition, not only at stages whose exit conditions restate it.

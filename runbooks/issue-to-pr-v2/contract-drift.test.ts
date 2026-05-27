@@ -2625,7 +2625,7 @@ describe("Workflow Learning Scan relationship check", () => {
     "# Skill",
     "",
     "7. Load every reference listed in `data.required_reference_ids`.",
-    "7c. When `data.route_id` is `ship` after PR URL confirmation, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+    "7c. When PR URL confirmation has happened on `data.route_id: ship`, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
   ].join("\n");
 
   const validIssueToPrScanDoc = [
@@ -2634,7 +2634,7 @@ describe("Workflow Learning Scan relationship check", () => {
     "## Start every turn",
     "",
     "6. **Load the references listed in `data.required_reference_ids`.**",
-    "   When ship has a confirmed PR URL, or a fail-stop exposes a workflow-level learning, load",
+    "   When PR URL confirmation has happened on the ship path, or a fail-stop exposes a workflow-level learning, load",
     "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
   ].join("\n");
 
@@ -2643,8 +2643,7 @@ describe("Workflow Learning Scan relationship check", () => {
     "",
     "## Actions",
     "",
-    "1. Confirm PR URL.",
-    "2. Run the read-only [workflow-learning-scan.md](workflow-learning-scan.md).",
+    "1. After PR URL confirmation, run the read-only [workflow-learning-scan.md](workflow-learning-scan.md). Load it before final ship metadata.",
   ].join("\n");
 
   const validScanDoc = [
@@ -2764,6 +2763,58 @@ describe("Workflow Learning Scan relationship check", () => {
             "runbooks/issue-to-pr-v2/references/stage-6-ship.md",
         ),
       ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("Stage 6 scan before PR URL confirmation reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix:
+        "# Stage 6\n\n## Actions\n\n1. Run the read-only [workflow-learning-scan.md](workflow-learning-scan.md).\n2. Confirm PR URL.\n",
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter(
+          (f) =>
+            f.doc ===
+            "runbooks/issue-to-pr-v2/references/stage-6-ship.md",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("split ship and fail-stop scan steps pass", async () => {
+    const dir = await stageScanFixture({
+      skill: [
+        "# Skill",
+        "",
+        "7. Load every reference listed in `data.required_reference_ids`.",
+        "7c. When PR URL confirmation has happened on `data.route_id: ship`, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+        "7d. When a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+      ].join("\n"),
+      issueToPr: [
+        "# Issue to PR",
+        "",
+        "## Start every turn",
+        "",
+        "6. **Load the references listed in `data.required_reference_ids`.**",
+        "   When PR URL confirmation has happened on the ship path, load",
+        "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+        "7. When a fail-stop exposes a workflow-level learning, load",
+        "   [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+      ].join("\n"),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(findings).toEqual([]);
     } finally {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
@@ -2932,6 +2983,20 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
 
   test("AC1: over the real drift surfaces the check returns ok:true with no findings", async () => {
     const result = await checkContractDrift({ repoRoot: realRepoRoot });
+    if (!result.ok) {
+      throw new Error(
+        `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("AC1: live opt-in scan relationship returns ok:true with no findings", async () => {
+    const result = await checkContractDrift({
+      repoRoot: realRepoRoot,
+      includeWorkflowLearningScanRelationship: true,
+    });
     if (!result.ok) {
       throw new Error(
         `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,

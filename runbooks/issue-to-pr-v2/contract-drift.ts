@@ -2581,36 +2581,49 @@ function regionMentionsWorkflowLearningScan(region: string): boolean {
   );
 }
 
-function skillRoutesToWorkflowLearningScan(text: string): boolean {
-  const steps = numberedStepBlocks(text);
-  return steps.some(
-    (step) =>
-      /\bload(?:s|ed|ing)?\b/i.test(step.body) &&
-      regionMentionsWorkflowLearningScan(step.body) &&
-      /\bship\b/i.test(step.body) &&
-      /fail-stop|fail_stop/i.test(step.body),
+function firstMatchIndex(text: string, pattern: RegExp): number {
+  return text.search(pattern);
+}
+
+function orderedMatch(text: string, first: RegExp, second: RegExp): boolean {
+  const firstIndex = firstMatchIndex(text, first);
+  const secondIndex = firstMatchIndex(text, second);
+  return firstIndex !== -1 && secondIndex !== -1 && firstIndex < secondIndex;
+}
+
+function shipScanStep(step: string): boolean {
+  return (
+    /\bload(?:s|ed|ing)?\b/i.test(step) &&
+    regionMentionsWorkflowLearningScan(step) &&
+    orderedMatch(step, /\bPR URL\b|\bpr_url\b/i, /\bship\b|\bread-only\b/i)
   );
+}
+
+function failStopScanStep(step: string): boolean {
+  return (
+    /\bload(?:s|ed|ing)?\b/i.test(step) &&
+    regionMentionsWorkflowLearningScan(step) &&
+    /fail-stop|fail_stop/i.test(step)
+  );
+}
+
+function skillRoutesToWorkflowLearningScan(text: string): boolean {
+  const steps = numberedStepBlocks(text).map((step) => step.body);
+  return steps.some(shipScanStep) && steps.some(failStopScanStep);
 }
 
 function hotRouterRoutesToWorkflowLearningScan(text: string): boolean {
   const startSection = markdownSection(text, "Start every turn");
-  return (
-    startSection !== null &&
-    /\bload(?:s|ed|ing)?\b/i.test(startSection) &&
-    regionMentionsWorkflowLearningScan(startSection) &&
-    /\bPR URL\b|\bpr_url\b/i.test(startSection) &&
-    /fail-stop|fail_stop/i.test(startSection)
-  );
+  if (startSection === null) return false;
+  const steps = numberedStepBlocks(startSection).map((step) => step.body);
+  return steps.some(shipScanStep) && steps.some(failStopScanStep);
 }
 
 function stageSixPointsToWorkflowLearningScan(text: string): boolean {
   const actions = markdownSection(text, "Actions");
-  return (
-    actions !== null &&
-    regionMentionsWorkflowLearningScan(actions) &&
-    /\bPR URL\b|\bpr_url\b/i.test(actions) &&
-    /\bread-only\b/i.test(actions)
-  );
+  if (actions === null) return false;
+  const steps = numberedStepBlocks(actions).map((step) => step.body);
+  return steps.some(shipScanStep);
 }
 
 function scanCitesRuntimeOwners(text: string): boolean {
@@ -2862,6 +2875,8 @@ export type CheckContractDriftOptions = {
   scopedDocs?: readonly (string | ScopedDoc)[];
   /** CLI path forwarded to `loadContractFacts`. Defaults to sibling cli.ts. */
   cliPath?: string;
+  /** Include newer scan relationship docs in addition to legacy drift surfaces. */
+  includeWorkflowLearningScanRelationship?: boolean;
 };
 
 /** The orchestrator result: `ok` is true exactly when there are no findings. */
@@ -2969,7 +2984,9 @@ export async function checkContractDrift(
 
   // The deterministic control-plane relationship the workflow relies on.
   findings.push(...(await checkGotchasRelationship({ repoRoot })));
-  findings.push(...(await checkWorkflowLearningScanRelationship({ repoRoot })));
+  if (opts.includeWorkflowLearningScanRelationship === true) {
+    findings.push(...(await checkWorkflowLearningScanRelationship({ repoRoot })));
+  }
   findings.push(
     ...(await checkLedgerLifecycleFieldDrift({
       repoRoot,
@@ -2999,7 +3016,9 @@ function formatFinding(f: DriftFinding): string {
 // (Bun's import.meta.main is true for the entry script). Read-only: it prints a
 // human-readable report and sets the exit code; it writes no files (AC6).
 if (import.meta.main) {
-  const result = await checkContractDrift();
+  const result = await checkContractDrift({
+    includeWorkflowLearningScanRelationship: true,
+  });
   if (result.ok) {
     console.log(
       `contract-drift: OK — the ${SCOPED_DOCS.length} scoped docs and relationship checks are in sync with the live CLI contract.`,

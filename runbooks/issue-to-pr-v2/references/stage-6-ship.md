@@ -73,7 +73,7 @@ envelope instead of forcing Stage 6.
    re-run `gh pr view --json number,url,state` to confirm the PR URL. Record
    it in ledger frontmatter as `pr_url`.
 
-4. **Run the read-only Workflow Learning Scan.** Load
+4. **After PR URL confirmation, run the read-only Workflow Learning Scan.** Load
    [workflow-learning-scan.md](workflow-learning-scan.md), scan completed run
    evidence, and record learning metadata only when useful. Validate registry
    candidates with `learnings-registry.ts --validate` and upsert through
