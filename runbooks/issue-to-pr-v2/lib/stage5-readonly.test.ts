@@ -220,6 +220,33 @@ describe("decompose.ts final metadata gates", () => {
 		}
 	});
 
+	test("pre-commit scope validates an untracked registry", async () => {
+		const repo = await makeFinalMetadataRepo();
+		try {
+			const registryPath =
+				"runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md";
+			await Bun.spawn(["git", "rm", "-q", registryPath], { cwd: repo }).exited;
+			await Bun.spawn(["git", "commit", "-q", "-m", "delete registry"], {
+				cwd: repo,
+			}).exited;
+			await writeFixtureFile(
+				repo,
+				registryPath,
+				"# Workflow Learnings registry\n\n```yaml\nlearnings:\n```\n",
+			);
+
+			const result = await runDecompose(
+				["--assert-final-metadata-scope", ISSUE_71_LEDGER],
+				{ cwd: repo },
+			);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("Workflow Learnings registry");
+		} finally {
+			await Bun.spawn(["rm", "-rf", repo]).exited;
+		}
+	});
+
 	test("post-commit gate passes for ledger and registry commit", async () => {
 		const repo = await makeFinalMetadataRepo();
 		try {

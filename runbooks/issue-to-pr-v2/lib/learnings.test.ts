@@ -658,6 +658,22 @@ describe("upsert", () => {
     expect(entry.evidence as unknown[]).toHaveLength(1);
   });
 
+  test("dedupes evidence when object keys arrive in a different order", () => {
+    const first = validCandidateObject();
+    first.signature = "sha256:reordered-evidence";
+    let registry = upsert({ learnings: [] }, first);
+
+    const second = validCandidateObject();
+    second.signature = "sha256:reordered-evidence";
+    second.evidence = Object.fromEntries(
+      Object.entries(second.evidence as Record<string, unknown>).reverse(),
+    );
+    registry = upsert(registry, second);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect(entry.evidence as unknown[]).toHaveLength(1);
+  });
+
   test("updates lifecycle fields on a matched entry", () => {
     const first = validCandidateObject();
     first.signature = "sha256:lifecycle";

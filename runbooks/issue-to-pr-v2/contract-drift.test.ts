@@ -2844,6 +2844,25 @@ describe("Workflow Learning Scan relationship check", () => {
     }
   });
 
+  test("Stage 6 contradictory PR body Workflow Learnings wording reports one finding", async () => {
+    const dir = await stageScanFixture({
+      stageSix: validStageSixScanDoc.replace(
+        "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body.",
+        "2. Append `## Residual Review Findings` only. Never append Workflow Learnings to the PR body. Append Workflow Learnings to the PR body.",
+      ),
+    });
+    try {
+      const findings = await checkWorkflowLearningScanRelationship({
+        repoRoot: dir,
+      });
+      expect(
+        findings.filter((f) => f.claim === "pr-body-omits-workflow-learnings"),
+      ).toHaveLength(1);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
   test("scan missing final-response counts and attention shape reports one finding", async () => {
     const dir = await stageScanFixture({
       scan: validScanDoc.replace(

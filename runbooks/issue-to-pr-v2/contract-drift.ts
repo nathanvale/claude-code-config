@@ -2654,10 +2654,17 @@ function stageSixRoutesFinalMetadataHelpers(text: string): boolean {
 
 function stageSixKeepsPrBodyResidualOnly(text: string): boolean {
   const actions = markdownSection(text, "Actions");
+  const actionsWithoutRequiredOmission = actions?.replace(
+    /Never append Workflow Learnings to the PR body\.?/gi,
+    "",
+  );
   return (
     actions !== null &&
     /Residual Review Findings/.test(actions) &&
-    /Never append Workflow Learnings to the PR body/i.test(actions)
+    /Never append Workflow Learnings to the PR body/i.test(actions) &&
+    !/\bappend Workflow Learnings to the PR body\b/i.test(
+      actionsWithoutRequiredOmission ?? "",
+    )
   );
 }
 

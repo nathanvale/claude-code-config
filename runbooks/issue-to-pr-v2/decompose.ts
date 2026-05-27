@@ -222,6 +222,9 @@ function assertFinalMetadataScope(ledgerPath: string): FinalMetadataGateResult {
     ["ls-files", "--others", "--exclude-standard"],
     context,
   );
+  const untrackedRegistry = untracked.find(
+    (file) => normalizePath(file) === WORKFLOW_LEARNINGS_REGISTRY_PATH,
+  );
 
   for (const file of [
     ...changed.map((change) => change.path),
@@ -252,6 +255,11 @@ function assertFinalMetadataScope(ledgerPath: string): FinalMetadataGateResult {
     if (changedRegistry.status.startsWith("D")) {
       return finalMetadataFailure("final-metadata-scope", ledgerPath, WORKFLOW_LEARNINGS_REGISTRY_PATH, "working tree changes delete the Workflow Learnings registry");
     }
+    const registryError = validateWorkingTreeRegistry();
+    if (registryError !== undefined) {
+      return finalMetadataFailure("final-metadata-scope", ledgerPath, WORKFLOW_LEARNINGS_REGISTRY_PATH, registryError);
+    }
+  } else if (untrackedRegistry !== undefined) {
     const registryError = validateWorkingTreeRegistry();
     if (registryError !== undefined) {
       return finalMetadataFailure("final-metadata-scope", ledgerPath, WORKFLOW_LEARNINGS_REGISTRY_PATH, registryError);
