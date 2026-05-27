@@ -65,6 +65,16 @@ export interface Registry {
   learnings: unknown[];
 }
 
+/** Registry upsert result category emitted by helper-owned mutation paths. */
+export type UpsertOutcome = "created" | "updated" | "unchanged";
+
+/** Pure upsert result before serialized-byte comparison can mark unchanged. */
+export interface UpsertResult {
+  registry: Registry;
+  signature: string;
+  outcome: Exclude<UpsertOutcome, "unchanged">;
+}
+
 /** The required scalar/string fields every entry must carry. */
 const REQUIRED_STRING_FIELDS = [
   "summary",
@@ -108,7 +118,7 @@ const ENUM_FIELDS: ReadonlyArray<{
 ];
 
 /** Repo-relative canonical registry path the helper owns and may write. */
-const CANONICAL_REGISTRY_RELATIVE_PATH =
+export const CANONICAL_REGISTRY_RELATIVE_PATH =
   "runbooks/issue-to-pr-v2/references/workflow-learnings-registry.md";
 
 /** The bare filename of the canonical registry, used for tail comparisons. */
@@ -907,7 +917,7 @@ export function signatureFor(candidate: unknown): string {
  * If an entry matches, three things happen:
  *
  * 1. The candidate's evidence record is APPENDED to the entry's `evidence`
- *    list (prior records retained in order).
+ *    list when it is not already present (prior records retained in order).
  * 2. Lifecycle fields (`disposition`, `status`, `confidence`, `follow_up`)
  *    OVERWRITE from the candidate.
  * 3. Canonical fields (`summary`, `owner`, `retirement_condition`) are
@@ -916,6 +926,21 @@ export function signatureFor(candidate: unknown): string {
  *    silent (no error, no append outside the evidence list).
  */
 export function upsert(registry: Registry, candidate: unknown): Registry {
+  return upsertWithOutcome(registry, candidate).registry;
+}
+
+/**
+ * Pure-function upsert plus created/updated classification.
+ *
+ * `unchanged` is intentionally not emitted here. The contract defines
+ * unchanged as "serialized registry bytes did not change", and only the
+ * dispatcher has the original Markdown bytes plus the post-upsert serialization
+ * needed to decide that without duplicating serializer behavior.
+ */
+export function upsertWithOutcome(
+  registry: Registry,
+  candidate: unknown,
+): UpsertResult {
   const validationErrors = validateCandidate(candidate);
   if (validationErrors.length > 0) {
     throw new Error(`upsert: candidate is invalid: ${validationErrors.join("; ")}`);
@@ -938,11 +963,16 @@ export function upsert(registry: Registry, candidate: unknown): Registry {
       const existing = rawEntry as Record<string, unknown>;
       const merged: Record<string, unknown> = { ...existing };
 
-      // Append-only evidence: preserve prior order, append the new record.
+      // Append-only evidence: preserve prior order, append only new evidence.
       const priorEvidence = Array.isArray(existing.evidence)
         ? (existing.evidence as unknown[])
         : [];
-      merged.evidence = [...priorEvidence, evidenceRecord];
+      const hasEvidence = priorEvidence.some((record) =>
+        deepEqual(record, evidenceRecord),
+      );
+      merged.evidence = hasEvidence
+        ? priorEvidence
+        : [...priorEvidence, evidenceRecord];
 
       // Lifecycle fields always overwrite from the candidate.
       for (const field of LIFECYCLE_FIELDS) {
@@ -980,7 +1010,12 @@ export function upsert(registry: Registry, candidate: unknown): Registry {
     next.push(created);
   }
 
-  return { learnings: next };
+  const outcome = matched ? "updated" : "created";
+  return { registry: { learnings: next }, signature: sig, outcome };
+}
+
+function deepEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 /**

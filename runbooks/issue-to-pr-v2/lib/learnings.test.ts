@@ -14,6 +14,7 @@ import {
   serializeRegistry,
   signatureFor,
   upsert,
+  upsertWithOutcome,
   validateCandidate,
   validateRegistry,
 } from "./learnings";
@@ -605,6 +606,20 @@ describe("upsert", () => {
     expect(entry.canonical_update).toBeUndefined();
   });
 
+  test("reports created vs updated from the pure upsert path", () => {
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:outcome";
+    const created = upsertWithOutcome({ learnings: [] }, candidate);
+    expect(created.outcome).toBe("created");
+
+    const second = validCandidateObject();
+    second.signature = "sha256:outcome";
+    (second.evidence as Record<string, unknown>).run = "issue-91";
+    const updated = upsertWithOutcome(created.registry, second);
+    expect(updated.outcome).toBe("updated");
+    expect(updated.signature).toBe("sha256:outcome");
+  });
+
   test("does not mutate the input registry (immutable-style)", () => {
     const registry = { learnings: [] as unknown[] };
     const candidate = validCandidateObject();
@@ -630,6 +645,17 @@ describe("upsert", () => {
     // Order preserved: first observation first.
     expect(evidence[0].run).toBe("issue-90");
     expect(evidence[1].run).toBe("issue-91");
+  });
+
+  test("does not append duplicate evidence to an unchanged matched entry", () => {
+    const candidate = validCandidateObject();
+    candidate.signature = "sha256:duplicate-evidence";
+    let registry = upsert({ learnings: [] }, candidate);
+
+    registry = upsert(registry, candidate);
+
+    const entry = registry.learnings[0] as Record<string, unknown>;
+    expect(entry.evidence as unknown[]).toHaveLength(1);
   });
 
   test("updates lifecycle fields on a matched entry", () => {
@@ -666,6 +692,7 @@ describe("upsert", () => {
     second.owner = "cli-observability";
     second.retirement_condition = "DIFFERENT condition";
     second.status = "filed";
+    (second.evidence as Record<string, unknown>).run = "issue-91";
     // No canonical_update marker (or explicitly false).
     second.canonical_update = false;
     registry = upsert(registry, second);

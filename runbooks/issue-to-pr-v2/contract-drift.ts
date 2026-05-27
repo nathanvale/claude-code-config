@@ -2633,7 +2633,67 @@ function scanCitesRuntimeOwners(text: string): boolean {
   ) &&
     text.includes("lib/learnings.ts") &&
     /learnings-registry\.ts\s+--validate/.test(text) &&
-    /learnings-registry\.ts\s+--upsert/.test(text);
+    /learnings-registry\.ts\s+--upsert-batch/.test(text);
+}
+
+function stageSixRoutesFinalMetadataHelpers(text: string): boolean {
+  const actions = markdownSection(text, "Actions");
+  return (
+    actions !== null &&
+    /decompose\.ts\s+--assert-final-metadata-scope\s+<ledger-path>/.test(
+      actions,
+    ) &&
+    /decompose\.ts\s+--assert-final-metadata-commit\s+<ledger-path>\s+HEAD/.test(
+      actions,
+    ) &&
+    /local-check-failure-final-metadata-commit/.test(actions) &&
+    /fail-stop in\s+Stage 6/i.test(actions) &&
+    !/local-check-failure-final-ledger-commit/.test(actions)
+  );
+}
+
+function stageSixKeepsPrBodyResidualOnly(text: string): boolean {
+  const actions = markdownSection(text, "Actions");
+  return (
+    actions !== null &&
+    /Residual Review Findings/.test(actions) &&
+    /Never append Workflow Learnings to the PR body/i.test(actions)
+  );
+}
+
+function scanOwnsFinalSummaryShape(text: string): boolean {
+  const summary = markdownSection(text, "Final Learning Summary");
+  return (
+    summary !== null &&
+    /\bcounts\b/i.test(summary) &&
+    /\battention items\b/i.test(summary) &&
+    /--upsert-batch/.test(summary) &&
+    /\bcandidate facts\b/i.test(summary) &&
+    /\bdisposition\b/i.test(summary) &&
+    /\bconfidence\b/i.test(summary) &&
+    /\bclosure context\b/i.test(summary) &&
+    /\bExclude full registry entries\b/i.test(summary) &&
+    /\bExclude full ledger\b/i.test(summary)
+  );
+}
+
+function stageSixRoutesToScanOwnedSummary(stageSix: string): boolean {
+  const actions = markdownSection(stageSix, "Actions");
+  return (
+    actions !== null &&
+    /\bscan-owned final learning summary\b/i.test(actions) &&
+    /\bcounts plus attention items only\b/i.test(actions)
+  );
+}
+
+function scanPreservesBlockingRules(text: string): boolean {
+  return (
+    /small-fix`?\s+never blocks/i.test(text) &&
+    /High-confidence\s+`?file-follow-up`?\s+blocks only when/i.test(text) &&
+    /\bresume\b/i.test(text) &&
+    /\bunblock\b/i.test(text) &&
+    /\bhonest closure\b/i.test(text)
+  );
 }
 
 function scanPreservesReadOnlyBoundary(text: string): boolean {
@@ -2743,6 +2803,36 @@ export async function checkWorkflowLearningScanRelationship(
     });
   }
 
+  if (!stageSixRoutesFinalMetadataHelpers(stageSixText)) {
+    findings.push({
+      doc: STAGE_6_SHIP_REL,
+      kind: "workflow-learning-scan",
+      claim: "final-metadata-helper-routing",
+      reason:
+        "stage-6-ship.md must route final metadata scope and commit checks through decompose.ts helper gates and fail-stop in Stage 6 with local-check-failure-final-metadata-commit.",
+    });
+  }
+
+  if (!stageSixKeepsPrBodyResidualOnly(stageSixText)) {
+    findings.push({
+      doc: STAGE_6_SHIP_REL,
+      kind: "workflow-learning-scan",
+      claim: "pr-body-omits-workflow-learnings",
+      reason:
+        "stage-6-ship.md must keep PR body handling residual-review-only and explicitly omit Workflow Learnings.",
+    });
+  }
+
+  if (!stageSixRoutesToScanOwnedSummary(stageSixText)) {
+    findings.push({
+      doc: STAGE_6_SHIP_REL,
+      kind: "workflow-learning-scan",
+      claim: "scan-owned-final-learning-summary",
+      reason:
+        "stage-6-ship.md must route final response learning content to the scan-owned counts-plus-attention summary.",
+    });
+  }
+
   if (!scanCitesRuntimeOwners(scanText)) {
     findings.push({
       doc: WORKFLOW_LEARNING_SCAN_REL,
@@ -2750,6 +2840,26 @@ export async function checkWorkflowLearningScanRelationship(
       claim: "runtime-owner-citations",
       reason:
         "workflow-learning-scan.md must cite the registry reference, lib/learnings.ts, and learnings-registry validate/upsert helpers for deterministic behavior.",
+    });
+  }
+
+  if (!scanOwnsFinalSummaryShape(scanText)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "final-learning-summary-shape",
+      reason:
+        "workflow-learning-scan.md must own final-response counts plus attention items, sourced from helper output and scan judgment, without full registry or ledger entries.",
+    });
+  }
+
+  if (!scanPreservesBlockingRules(scanText)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "ship-time-blocking-rules",
+      reason:
+        "workflow-learning-scan.md must preserve ship-time blocking rules: small-fix never blocks and high-confidence file-follow-up blocks only when this delivery's closure depends on it.",
     });
   }
 

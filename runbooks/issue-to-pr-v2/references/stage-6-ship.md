@@ -75,35 +75,39 @@ envelope instead of forcing Stage 6.
 
 4. **After PR URL confirmation, run the read-only Workflow Learning Scan.** Load
    [workflow-learning-scan.md](workflow-learning-scan.md), scan completed run
-   evidence, and record learning metadata only when useful. Validate registry
-   candidates with `learnings-registry.ts --validate` and upsert through
-   `learnings-registry.ts --upsert`. Use
+   evidence, and record learning metadata only when useful. Validate the existing
+   registry with `learnings-registry.ts --validate`; validate and write ship-time
+   candidate batches through `learnings-registry.ts --upsert-batch`. Use
    `cli.ts scaffold workflow-learnings-empty --json` for empty ledger section
    shape when needed. Do not patch skills, runbook references, CLI/source code,
    docs, target deliverables, or gotchas content during the ship tail.
+   `small-fix` never blocks the final metadata checkpoint. High-confidence
+   `file-follow-up` blocks only when this delivery's resume, unblock, or honest
+   closure depends on it. Include the scan-owned final learning summary in the
+   operator response: helper-emitted counts plus attention items only.
 
 5. **Append `## Residual Review Findings` to the PR body.** List every P2
    finding with `status: deferred-P2`, formatted as
    `- <persona>: <summary> (<signature>)`. If >5 P3 findings exist, append a
    one-liner `N P3 advisory findings logged in ledger.`. This heading matches
    the one `/lfg` uses, so the PR body shape is consistent across both
-   autopilot paths.
+   autopilot paths. Never append Workflow Learnings to the PR body.
 
 6. Set `frontmatter.status = shipped`.
 
 7. **Commit and push the final metadata update.** The update contains `pr_url`,
    residual findings, `ship_mode`, `status: shipped`, and any Workflow Learning
-   Scan ledger/registry metadata. Before committing,
-   require `git diff --name-only`, `git diff --cached --name-only`, and
-   `git ls-files --others --exclude-standard` to contain only the per-issue
-   ledger path and Workflow Learnings registry, or be empty. Stage and commit
-   with explicit pathspecs, never a broad add or broad commit. Any other
-   changed, staged, or untracked path creates a
-   `local-check-failure-final-ledger-commit` P0 finding and returns to Stage 5.
-   After committing, assert `git show --name-only --format= HEAD` contains only
-   the per-issue ledger path and Workflow Learnings registry before any push.
-   If this changes the PR body contents, update the PR body again. Echo the
-   final ledger inline.
+   Scan ledger/registry metadata. Before committing, run
+   `decompose.ts --assert-final-metadata-scope <ledger-path>`. The helper owns
+   allowed paths, third-path rejection, untracked-path rejection, staged-path
+   rejection, and registry presence/shape validation. Stage and commit with
+   explicit pathspecs, never a broad add or broad commit. After committing, run
+   `decompose.ts --assert-final-metadata-commit <ledger-path> HEAD` before any
+   push. Use `--json` when the caller needs a machine-readable gate envelope.
+   If either helper fails, set `frontmatter.status: blocked` and
+   `blocked_reason: local-check-failure-final-metadata-commit`; fail-stop in
+   Stage 6, do not route through Stage 5 final review. If this changes the PR
+   body contents, update the PR body again. Echo the final ledger inline.
 
 ## Exit condition
 

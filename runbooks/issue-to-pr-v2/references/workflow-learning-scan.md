@@ -57,8 +57,7 @@ When a learning exists, capture only run metadata:
 - Registry candidate with canonical and lifecycle metadata validated by the
   helper: summary, owner, retirement condition, signature, disposition, status,
   confidence, follow-up, evidence.
-- Final attention summary: count new/updated/ignored learnings; list every
-  `file-follow-up` item.
+- Final learning summary: helper-emitted counts plus attention items only.
 
 Owner, disposition, and confidence are scan proposals from evidence. Allowed
 values and upsert behavior live in `lib/learnings.ts` and
@@ -66,8 +65,10 @@ values and upsert behavior live in `lib/learnings.ts` and
 
 ## Runtime Pointers
 
-- Validate registry candidates with `learnings-registry.ts --validate`.
-- Upsert registry entries with `learnings-registry.ts --upsert`.
+- Validate the existing registry with `learnings-registry.ts --validate`.
+- Upsert one registry entry with `learnings-registry.ts --upsert`.
+- Validate and upsert ship-time candidate batches with
+  `learnings-registry.ts --upsert-batch`.
 - Discover empty ledger section scaffold with
   `cli.ts scaffold workflow-learnings-empty --json`.
 - Keep PR #125 baseline pointer-only: do not recreate
@@ -96,10 +97,23 @@ During scan handling, do not patch:
 Allowed writes, only when a learning exists:
 
 - current per-issue ledger workflow-learning evidence;
-- Workflow Learnings registry via `learnings-registry.ts --upsert`.
+- Workflow Learnings registry via `learnings-registry.ts --upsert-batch`.
 
 Follow-up issue shaping stays outside the scan. Use `to-issues` only after
 explicit approval.
+
+## Final Learning Summary
+
+Owned here. Stage 6 routes to this shape; do not define a parallel summary in
+Stage 6.
+
+- Counts: use `learnings-registry.ts --upsert-batch` JSON `counts` output.
+- Attention items: scan judgment over the helper's per-candidate facts,
+  disposition, confidence, and this delivery's closure context.
+- Include high-confidence `file-follow-up` items that affect resume, unblock,
+  or honest closure.
+- Exclude full registry entries.
+- Exclude full ledger `## Workflow Learnings` entries.
 
 ## Ship-Time Scan
 
@@ -111,13 +125,16 @@ Flow:
 2. Run this read-only scan against the completed run evidence.
 3. If learning found, append ledger evidence and validate/upsert the registry
    through the helper.
-4. Include every `file-follow-up` item in the final attention summary.
+4. Include the final learning summary in the operator response.
 5. Commit only final run metadata: per-issue ledger and Workflow Learnings
    registry.
 
-`file-follow-up` blocks the final checkpoint only when follow-up is required to
-resume, unblock, or avoid closing the run with a known workflow defect still
-affecting this delivery.
+- `small-fix` never blocks the final metadata checkpoint.
+- High-confidence `file-follow-up` blocks only when follow-up is required to
+  resume, unblock, or avoid closing the run with a known workflow defect still
+  affecting this delivery.
+- Lower-confidence, `needs-evidence`, `already-covered`, and `ignore` outcomes
+  record without blocking delivery.
 
 ## Fail-Stop Scan
 
