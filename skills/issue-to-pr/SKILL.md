@@ -93,6 +93,7 @@ Start every turn in this order:
 6. Route from `data.route_id`. Unknown route IDs = findings against `runbooks/issue-to-pr-v2/lib/route.ts`, not prose routes.
 7. Load every reference listed in `data.required_reference_ids`. Action templates load only when preparing that packet/handoff.
 7b. When `data.route_id` begins with `blocked-`, also load `runbooks/issue-to-pr-v2/references/first-run-gotchas.md` on top of `data.required_reference_ids` before any blocked-route stop.
+7c. When PR URL confirmation has happened on `data.route_id: ship`, or when a fail-stop exposes a workflow-level learning, load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.
 8. Apply remaining pre-stage gates before entering a stage.
 9. Execute exactly one visible workflow action: advance a stage, commit one lifecycle checkpoint, run one implementation attempt, record one implementation-attempt checkpoint, run one Validator wave, converge one batch, or fail-stop with a specific question.
 10. Commit any required lifecycle checkpoint before turn-end when the stage requires durable state. Working tree must be committed + clean before any state-changing stage transition, not only at stages whose exit conditions restate it.
@@ -152,6 +153,17 @@ If a route needs a reference that `data.required_reference_ids` does not name, f
 - On non-blocked but cryptic first-run states: **discretionary** — a recovery overlay the operator loads on judgment when a valid state is confusing.
 
 Either way, the load is a skill-loop decision, not because `data.required_reference_ids` named it.
+
+`workflow-learning-scan.md` has an attention trigger:
+- Ship-time: load after PR URL confirmation and before the final shipped
+  checkpoint.
+- Fail-stop: load when the stop evidence reveals a workflow-level learning
+  worth recording.
+
+The scan remains outside `data.required_reference_ids` by design. It records
+run metadata through the ledger and registry helper only; it does not patch
+skills, runbooks, CLI code, docs, gotchas, or deliverables while shipping or
+recovering.
 
 </reference_loading_policy>
 
@@ -269,7 +281,7 @@ Only one Stage 4 subroute is the visible action per turn. Orchestrator routes + 
 **Stage 6: ship**
 
 - Inputs: final review complete, clean tree, no open P0/P1.
-- One visible action: run local checks, create/push the PR, or persist the final shipped ledger checkpoint.
+- One visible action: run local checks, create/push the PR, run the read-only Workflow Learning Scan after PR URL confirmation, or persist the final shipped ledger checkpoint.
 - Exit: `pr_url` is set, ledger status is `shipped`, tree clean, next state routes to `shipped`.
 - Stop: local check failure, unsafe final ledger commit, unsupported smoke-direct request, PR creation failure requiring operator input.
 
@@ -278,6 +290,11 @@ Only one Stage 4 subroute is the visible action per turn. Orchestrator routes + 
 <fail_stops>
 
 When a fail-stop fires: record durable state when the stage requires it, surface the smallest useful evidence to the user, name the resume condition.
+
+If fail-stop evidence reveals a workflow-level learning, load
+`runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`. The scan may
+record ledger/registry metadata, but follow-up confirmation is required only
+when follow-up is needed to resume, unblock, or honestly close this delivery.
 
 | Condition | Record or surface | Resume condition |
 | --- | --- | --- |
