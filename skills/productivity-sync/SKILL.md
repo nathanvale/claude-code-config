@@ -408,7 +408,7 @@ For each message, decide if it carries a directive or commitment worth surfacing
 - Drop messages in channels not relevant to the project (use `.productivity.yml` channel allowlist if present, else just the configured project's channels)
 
 **Cross-reference rules:**
-- **Ticket-key mentions** — for every `POS-NNNN` found, check if the ticket appears in TASKS.md. If yes and the message implies a status change ("done", "merged", "in test"), surface as drift. If no and the directive is "pull in", propose a Watch-list → active move.
+- **Ticket-key mentions** — for every `POS-NNNN` found, check if the ticket appears in TASKS.md. If yes and the message implies a status change ("done", "merged", "in test"), surface as drift. If no and the directive is "pull in", **first verify the ticket is in the open sprint**. If yes, propose adding to 🔥 Now. If no, surface as an "Ask <PM>" question — never propose a Watch-list write. TASKS.md is sprint-only.
 - **Verbatim quote capture** — for high-stakes directives ("X outranks Y", "deadline is Friday"), preserve the exact quote with speaker + timestamp. Match the existing `feedback_verify_quote_speaker_with_nathan.md` rule — surface back to user before writing it into a sprint doc.
 - **Multi-channel duplication** — same directive in DM + channel = single ask, not two.
 - **Transcript misclassification** — if any one of the transcript-detection heuristics above hits, route to Meetings persistence BEFORE extraction. Never extract action items from a meeting transcript via the chat path. Even if the signals look identical to chat directives, the source has different evidentiary weight and must land in `docs/meetings/` first.
@@ -526,7 +526,7 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
   - **deadline** — explicit dates (`by Friday`, `before regression`) or relative phrases. Normalise to absolute date when possible.
   - **ticket key** — any `POS-NNNN` (or configured `ticket-prefix`-NNNN) mention in the surrounding bullet.
 - **Filter out** items where `owner != currentUser` AND there's no `Nathan` / `me` mention nearby. Other people's actions are tracked in the `🔗 Dependencies → I'm waiting on` section, not as your own todos.
-- **Deduplicate** against TASKS.md by fuzzy match on the verb+object string. Skip items that already appear in `🔥 Now`, `🎯 Ordered queue`, or any project file's open-checkbox list. If a near-match exists in `📋 Backlog`, surface as "already backlogged — promote?"
+- **Deduplicate** against TASKS.md by fuzzy match on the verb+object string. Skip items that already appear in `🔥 Now`, `🎯 Ordered queue`, or any project file's open-checkbox list. Do NOT assume TASKS.md has a `📋 Backlog` or `⏸ Watch-list` section — these are anti-patterns per Sonny's Operating Manual rule "sprint board is the source of truth." If a ticket isn't in sprint, Jira's backlog is its home, not TASKS.md.
 
 **Ticket key verification gate (mandatory before any durable write):**
 
@@ -545,10 +545,12 @@ Notion / Teams / Zoom transcripts are unreliable for ticket numbers. Speakers mi
 
 | Item shape | Destination |
 |---|---|
-| Has a sprint-active ticket key | `🔥 Now` section under that ticket's existing entry, or as a new entry if none |
-| Has a non-active ticket key (backlog / watch-list) | `⏸ Watch-list` annotation: "from <meeting>: <action>" |
+| Has a sprint-active ticket key (verified against open-sprint query) | `🔥 Now` section under that ticket's existing entry, or as a new entry if none |
+| Has a ticket key, **NOT in active sprint** | **`❓ Ask <PM>` section** as a pull-in question. Never write to 🔥 Now. Even if the transcript says "Nathan to start X" — if X isn't in sprint, surface the conflict to the user before any write |
+| Has a ticket key that doesn't exist in Jira | Surface as "ticket key TBC" — see ticket-key verification gate |
 | No ticket key, fits an active project | `memory/projects/<project>.md` under an `## Open follow-ups` section |
-| No ticket key, no project anchor | TASKS.md `🔥 Now` as a free-text item |
+| No ticket key, no project anchor, **non-sprint work** | Surface to user — ask whether to write at all. Do NOT auto-route to 🔥 Now |
+| No ticket key, no project anchor, **clearly sprint-relevant** (e.g., logistics, deploy step) | TASKS.md `🔥 Now` as a free-text item |
 | Cross-project commitment to a person | `memory/people/<person>.md` `## Open Threads` section |
 | Personal / non-work | Skip — surface to user, don't write to repo task surface |
 
@@ -603,8 +605,23 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ **Using the Notion page title or transcript speaker names to determine who was in a meeting.** Notion AI generates the page title from the meeting *topic*, not from the *participants*. A 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Always use the calendar event attendees list as the authoritative participant source. If calendar is unavailable, flag the attendees as unverified in the meeting note.
 - ❌ **Writing a transcript-extracted ticket key directly into TASKS.md / meeting notes without verifying against Jira's open-sprint query.** Transcripts misattribute ticket keys constantly (4154 ↔ 4155, 4160 ↔ 4116, etc.). Always cross-check via the open-sprint query; if the key isn't there, run an adjacent-digit lookup. Use `(ticket TBC)` placeholders rather than committing a wrong key.
 - ❌ **Stopping the project-tracker step after the my-assignee query because "everything I own is already in TASKS.md."** The my-assignee query alone doesn't surface tickets mentioned in meeting transcripts that are owned by other team members, sibling tickets in the same epic, or just-filed release-train / regression-prep tickets that signal next-sprint shape. The open-sprint query is mandatory, not optional.
+- ❌ **Writing an out-of-sprint ticket into `🔥 Now` because the meeting transcript named it as Nathan's next pickup.** Transcripts often surface "I'll start X next" without speakers checking sprint membership. The skill MUST verify against the open-sprint query before any 🔥 Now write. POS-3275 sat in 🔥 Now for two sync cycles because of this exact failure mode (resolved 2026-05-28 when Sonny explicitly confirmed in standup the ticket was not in sprint).
+- ❌ **Letting `⏸ Watch-list`, `📋 Backlog`, "Smaller items", or "Housekeeping" sections accumulate in TASKS.md.** TASKS.md is sprint-only; Jira's backlog is the backlog. On every run, propose removal of these sections if found.
+- ❌ **Skipping the TASKS.md sprint-membership audit when "nothing has changed."** Drift accumulates exactly when nothing has changed: tickets fall out of sprint at sprint boundaries, transcripts mention things that don't make the cut. The audit must fire every run.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
+
+**Sprint-only TASKS.md contract (READ FIRST):**
+
+TASKS.md is intended to mirror the **active sprint only** — not Jira's full backlog. Per Sonny's Operating Manual (POS Yellow standard) and the durable rule in `feedback_sprint_board_workflow.md`: "Sprint board is the source of truth. Only work tickets currently in the active sprint."
+
+This means productivity-sync MUST:
+
+1. **Never write a non-sprint ticket into `🔥 Now` / `🎯 Queue`** under any code path, even when a meeting transcript says "Nathan to start X" — out-of-sprint commitments surface to "Ask <PM>" instead.
+2. **Audit TASKS.md against open-sprint membership on every run** (see "Mandatory pre-diff audit" below).
+3. **Refuse to create `⏸ Watch-list` or `📋 Backlog` sections** in TASKS.md. If the user already has them, propose removal on the next cleanup pass.
+
+If `feedback_sprint_board_workflow.md` does not exist in the project's memory, the rule still applies — it's the universal "sprint board owns reality" pattern. Document the exception only if the project explicitly disclaims it (and ask the user before assuming).
 
 Run **two** queries in the project-tracker step, not one. Each has a different job:
 
@@ -613,9 +630,25 @@ Run **two** queries in the project-tracker step, not one. Each has a different j
 
 **Always diff both queries against TASKS.md** — don't stop after the my-assignee query just because "everything I own is already in TASKS.md." The open-sprint query is the load-bearing drift detector.
 
+**Mandatory pre-diff audit: TASKS.md sprint-membership check**
+
+Before running the diff table below, extract every `POS-NNNN` (or configured ticket-prefix-NNNN) reference from TASKS.md's active sections (`🔥 Now`, `🎯 Ordered queue`, `⏸ Watch-list`, `📋 Backlog`, `🟡 Watch / Blocked`, `🔗 Dependencies → I'm waiting on`). For each, cross-check against the open-sprint query results. Buckets:
+
+| Where in TASKS.md | In open-sprint? | Action |
+|---|---|---|
+| `🔥 Now` / `🎯 Queue` | Yes | Keep (legitimate active work) |
+| `🔥 Now` / `🎯 Queue` | **No** | **DRIFT** — propose move out of active section. Ask: "POS-NNNN is in 🔥 Now but not in active sprint. Move to Ask <PM> / remove?" |
+| `🌐 Surrounding work` | Yes, assignee ≠ user | Keep (visibility-only is the right surface) |
+| `🌐 Surrounding work` | No | Stale — propose removal |
+| `⏸ Watch-list` / `📋 Backlog` (any) | n/a | **PROPOSE REMOVAL** — TASKS.md should be sprint-only per Sonny's Operating Manual. Jira backlog IS the backlog. |
+
+Surface drift to the user explicitly: do not let out-of-sprint tickets sit in 🔥 Now silently. This audit fires on every sync run, not just when transcripts mention tickets.
+
+Then run the diff table below.
+
 | External task | TASKS.md match? | Action |
 |---------------|-----------------|--------|
-| Found in my-assignee, not in TASKS.md | No match | Offer to add |
+| Found in my-assignee, not in TASKS.md | No match | Offer to add IF in open-sprint; else surface as "assigned but not in active sprint — backlog only, do not add" |
 | Found in my-assignee, already in TASKS.md | Match by title (fuzzy) | Skip |
 | In TASKS.md, not in either query | No match | Flag as potentially stale |
 | Completed externally (Done in my-assignee) | In active section | Offer to mark done |
