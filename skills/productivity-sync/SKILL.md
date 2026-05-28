@@ -608,6 +608,8 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ **Writing an out-of-sprint ticket into `🔥 Now` because the meeting transcript named it as Nathan's next pickup.** Transcripts often surface "I'll start X next" without speakers checking sprint membership. The skill MUST verify against the open-sprint query before any 🔥 Now write. POS-3275 sat in 🔥 Now for two sync cycles because of this exact failure mode (resolved 2026-05-28 when Sonny explicitly confirmed in standup the ticket was not in sprint).
 - ❌ **Letting `⏸ Watch-list`, `📋 Backlog`, "Smaller items", or "Housekeeping" sections accumulate in TASKS.md.** TASKS.md is sprint-only; Jira's backlog is the backlog. On every run, propose removal of these sections if found.
 - ❌ **Skipping the TASKS.md sprint-membership audit when "nothing has changed."** Drift accumulates exactly when nothing has changed: tickets fall out of sprint at sprint boundaries, transcripts mention things that don't make the cut. The audit must fire every run.
+- ❌ **Trusting the sprint id/name written in TASKS.md's header without verifying against `jira_get_sprints_from_board(state="active")`.** The header is human-edited prose, not a query result, and drifts at every sprint boundary. The pre-diff audit must validate it as step 0 (active-sprint identity check) before the bucket audit; silent header drift means every downstream check runs against a stale frame even when ticket-level queries return correct results. Failure mode observed 2026-05-28: TASKS.md header said `FY2625 id 25194` while the live active sprint was `FY2624 id 25140` — 25194 was a *future* sprint, so every "open-sprint" query was returning correct data, but the header label was wrong and stayed wrong across multiple syncs.
+- ❌ **Treating Nathan-assigned tickets in Ready/To Do as "either auto-add to 🔥 Now or send to backlog."** A third bucket exists: assigned to me + in the active sprint + not in the planning commit. That's an open question for the PM ("stretch card or remove?"), not a directive. The diff-table row was previously permissive; the status-aware split (in-flight → 🔥 Now drift; Ready/To Do → Ask PM drift) is mandatory.
 
 **Project tracker** (if configured -- per `.productivity.yml`):
 
@@ -632,7 +634,22 @@ Run **two** queries in the project-tracker step, not one. Each has a different j
 
 **Mandatory pre-diff audit: TASKS.md sprint-membership check**
 
-Before running the diff table below, extract every `POS-NNNN` (or configured ticket-prefix-NNNN) reference from TASKS.md's active sections (`🔥 Now`, `🎯 Ordered queue`, `⏸ Watch-list`, `📋 Backlog`, `🟡 Watch / Blocked`, `🔗 Dependencies → I'm waiting on`). For each, cross-check against the open-sprint query results. Buckets:
+**0. Active-sprint identity check (run BEFORE the bucket audit):**
+
+Parse TASKS.md's header lines for the active-sprint id and name. Regex hints: `id\s+(\d+)` for the numeric id, `FY\d{4}` or `Sprint\s+\d+` for the label. Cross-check against the result of `jira_get_sprints_from_board(board_id=<configured board>, state="active")` (the only sprint marked `"state": "active"` is the live one).
+
+If the header's id or name **does not match** the live active sprint:
+
+- Surface as a top-priority drift item in the report: `"TASKS.md header says <header id/name>; Jira live active sprint is <live id/name>."`
+- Propose patching the header to the live values via `AskUserQuestion`. Show both sides: `"TASKS.md header → FY2625 id 25194; Jira live → FY2624 id 25140."`
+- Do NOT auto-write the header — every header rewrite passes through user confirmation like any other durable write.
+- This is the load-bearing detector for "the wrong sprint was named when the doc was written and never rebased." Without it, every downstream check still runs against ticket-level queries that work in isolation, so the stale header survives invisibly.
+
+Then run the bucket audit below.
+
+**1. Per-ticket bucket audit:**
+
+Extract every `POS-NNNN` (or configured ticket-prefix-NNNN) reference from TASKS.md's active sections (`🔥 Now`, `🎯 Ordered queue`, `⏸ Watch-list`, `📋 Backlog`, `🟡 Watch / Blocked`, `🔗 Dependencies → I'm waiting on`). For each, cross-check against the open-sprint query results. Buckets:
 
 | Where in TASKS.md | In open-sprint? | Action |
 |---|---|---|
@@ -648,7 +665,9 @@ Then run the diff table below.
 
 | External task | TASKS.md match? | Action |
 |---------------|-----------------|--------|
-| Found in my-assignee, not in TASKS.md | No match | Offer to add IF in open-sprint; else surface as "assigned but not in active sprint — backlog only, do not add" |
+| Found in my-assignee + in open-sprint + status ∈ {In Progress, In Review, In Test} | Not in TASKS.md | **DRIFT** — propose adding to `🔥 Now` (assignee + in-flight in active sprint is the strongest signal a ticket belongs in TASKS.md) |
+| Found in my-assignee + in open-sprint + status ∈ {Ready, To Do, On Hold} | Not in TASKS.md | **DRIFT** — surface to `❓ Ask <PM>` with note: "assigned but unscheduled in active sprint — confirm: stretch card to commit to this sprint, or remove from sprint board?" Do NOT auto-add to `🔥 Now` (the May 20 planning commit is the source of truth for what's in scope; an unspoken-for assigned ticket is an open question, not a directive). |
+| Found in my-assignee + **NOT** in open-sprint | Not in TASKS.md | "Assigned but not in active sprint — backlog only, do not add" |
 | Found in my-assignee, already in TASKS.md | Match by title (fuzzy) | Skip |
 | In TASKS.md, not in either query | No match | Flag as potentially stale |
 | Completed externally (Done in my-assignee) | In active section | Offer to mark done |
