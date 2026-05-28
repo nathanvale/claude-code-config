@@ -167,7 +167,13 @@ Read `.productivity-sync-cursor.json` from the owning repo root. This file persi
       "defer_count": 1,
       "deferred_at": "2026-05-20T10:00:00+10:00"
     }
-  ]
+  ],
+  "post_run_drift_check": {
+    "enabled_until": "2026-06-11",
+    "first_enabled_at": "2026-05-28",
+    "consecutive_clean_runs": 0,
+    "last_sentinel_seen": "v1-2026-05-28"
+  }
 }
 ```
 
@@ -210,7 +216,36 @@ Target cap: 50 open entries. Prune `resolved` and `dismissed` entries first when
 ```
 Items auto-expire when `defer_count >= 2` at re-surface time (see auto-expiry rule above in section 1). The 3rd re-surface fires expiry after the item has been deferred twice. Cap: ~10 items (they expire within 3 syncs by design).
 
-**Cursor migration note:** When `commitments` or `pending` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with empty arrays (`[]`). Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
+`post_run_drift_check` (top-level) — training-wheels state for the post-run TASKS.md drift recheck (see Step 11):
+```
+{
+  enabled_until: string,           // ISO date; while now < enabled_until, the post-run check runs
+  first_enabled_at: string,        // ISO date when the check was first enabled
+  consecutive_clean_runs: number,  // starts at 0; increments each clean run; resets to 0 on drift
+  last_sentinel_seen: string       // version sentinel of SKILL.md the last time the check ran
+}
+```
+
+Auto-disable when either condition holds:
+- `now >= enabled_until` (the 14-day window has elapsed), OR
+- `consecutive_clean_runs >= 6` (six successful drift-free runs — training wheels off early)
+
+Auto-re-enable when `SKILL.md`'s current `post_run_drift_check_sentinel` differs from `last_sentinel_seen` (the skill was healed again; re-run training wheels on the new ruleset).
+
+**Current sentinel:** `v1-2026-05-28`. Bump this string in SKILL.md (search anchor: `post-run-drift-check-sentinel:`) whenever the post-run drift check's logic or scope changes — the bump re-enables training wheels for one fresh 14-day window on the next run.
+
+<!-- post-run-drift-check-sentinel: v1-2026-05-28 -->
+
+**Cursor migration note:** When `commitments`, `pending`, or `post_run_drift_check` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with empty arrays / objects. For `post_run_drift_check`, the initial shape on first run after a sentinel-bump is:
+```json
+{
+  "enabled_until": "<now + 14 days, ISO>",
+  "first_enabled_at": "<now, ISO>",
+  "consecutive_clean_runs": 0,
+  "last_sentinel_seen": "<current sentinel from SKILL.md>"
+}
+```
+Write the initialised shape in the next normal (non-brief) atomic cursor write. No explicit migration step required.
 
 **Parse-error recovery:** If `JSON.parse` of the cursor file throws (truncated bytes, manual edit corruption, OS crash between flush and rename), treat the cursor as missing for this run (wide-window fallback per Step 1a). Emit one line to the report: `cursor file malformed: treating as first run`. Rename the corrupt file to `.productivity-sync-cursor.json.corrupt.<iso-timestamp>` before writing the next clean cursor. The rename preserves the corrupt content for post-mortem without blocking sync continuation.
 
@@ -1214,6 +1249,8 @@ Update complete (delta sync, cursor: 2026-05-08T07:20+10:00 → 2026-05-11T10:35
 
 Only show connectors with less than 100% success rate in the health trend line. Connectors with 7/7 or all-green history show ✅ without a score. Suppress the line entirely if all connectors are green and have sufficient history.
 
+**Post-run drift trailer (rendered at the very bottom, after Step 10's deep-scan nudge):** when training wheels are still on, Step 11 appends either a one-line clean trailer or a `### Self-check: drift still present` block. See Step 11 for the exact rules. The trailer is suppressed when training wheels are off (auto-disabled by elapsed window or 6 consecutive clean runs).
+
 ### 10. Suggest Deep Scan
 
 If memory gaps remain or sources were skipped:
@@ -1221,6 +1258,91 @@ If memory gaps remain or sources were skipped:
 Some gaps remain. Run /productivity-sync --deep for a comprehensive scan
 of chat, sent email, and documents.
 ```
+
+### 11. Post-run drift recheck (training wheels)
+
+**Purpose:** verify that the changes proposed/applied this run actually closed the TASKS.md drift. If drift remains, surface a `/heal-skill productivity-sync` recommendation with the specific finding embedded as the skill argument. The check is self-disabling — once the skill demonstrates it can hold TASKS.md in sync, the trailer stops firing automatically.
+
+**When to run:**
+
+This step runs at the very end of the sync (after Step 10's deep-scan nudge) on non-brief runs only. Skip entirely when:
+- `--brief` mode is active (brief runs don't mutate TASKS.md, so nothing to recheck)
+- The project-tracker connector failed pre-flight or errored mid-run (can't recheck without live sprint data)
+- TASKS.md doesn't exist in the owning repo
+
+**Gating logic — should this run perform the recheck?**
+
+1. Read `cursor.post_run_drift_check`. If absent, initialise per the schema migration note above, then proceed (this is the first run after a sentinel bump).
+2. Read the current `post-run-drift-check-sentinel` from SKILL.md (HTML comment near the schema section). If `cursor.post_run_drift_check.last_sentinel_seen != current_sentinel`, **re-enable**: set `enabled_until = now + 14 days`, `first_enabled_at = now`, `consecutive_clean_runs = 0`, `last_sentinel_seen = current_sentinel`. Emit one line in the report: `Post-run drift check: re-enabled (sentinel <old> → <new>); 14-day training-wheels window restarted.`
+3. Evaluate the disable conditions:
+   - If `now >= cursor.post_run_drift_check.enabled_until` → **skip the recheck**, do not emit any trailer.
+   - If `cursor.post_run_drift_check.consecutive_clean_runs >= 6` → **skip the recheck**, do not emit any trailer.
+4. Otherwise → **run the recheck below**.
+
+**The recheck itself:**
+
+Re-run the three drift detectors from Step 2's project-tracker substep, against the post-sync state of TASKS.md and a fresh Jira query (do not reuse the earlier in-memory snapshot — TASKS.md may have been edited mid-run, and the user may have answered AskUserQuestion prompts that changed durable state):
+
+1. **Active-sprint identity check** — parse TASKS.md header for sprint id/name; cross-check against `jira_get_sprints_from_board(state="active")`. Mismatch → drift.
+2. **Per-ticket bucket audit** — for every `<prefix>-NNNN` in TASKS.md's active sections, verify open-sprint membership matches the section it sits in. Bucket violations (e.g. ticket in `🔥 Now` but not in open sprint) → drift.
+3. **My-assignee + open-sprint diff** — re-run the my-assignee + open-sprint queries; check that any in-flight tickets assigned to me are reflected in TASKS.md, and that Ready/To Do unscheduled tickets surface in `❓ Ask <PM>`. Missing entries → drift.
+
+Collect findings into a list of `{type, summary, suggested_fix}` records. Examples:
+```
+{
+  type: "active-sprint-identity",
+  summary: "TASKS.md header → FY2625 id 25194; Jira live → FY2624 id 25140",
+  suggested_fix: "patch TASKS.md header to FY2624 id 25140"
+}
+{
+  type: "unsurfaced-assignee-ticket",
+  summary: "POS-3034 (Ready, assigned Nathan) in open sprint, not in TASKS.md",
+  suggested_fix: "add to ❓ Ask <PM> as 'stretch card or remove?'"
+}
+```
+
+**Report rendering:**
+
+If findings is **empty** (clean run):
+1. Increment `cursor.post_run_drift_check.consecutive_clean_runs` by 1.
+2. If `consecutive_clean_runs >= 6` after increment, emit:
+   ```
+   Post-run drift check: 6 consecutive clean runs — training wheels off. The post-run recheck will no longer fire unless /heal-skill productivity-sync bumps the sentinel.
+   ```
+3. Otherwise emit:
+   ```
+   Post-run drift check: clean (<N>/6 toward training wheels off, window ends <enabled_until>).
+   ```
+
+If findings is **non-empty** (drift remains):
+1. Reset `cursor.post_run_drift_check.consecutive_clean_runs = 0`.
+2. Render a `### Self-check: drift still present` section at the bottom of the report:
+   ```
+   ### Self-check: drift still present
+   The post-run recheck found <N> drift item(s) that this sync did not close. This usually means the skill's drift detectors have a gap — consider healing them.
+
+   Findings:
+   - <type>: <summary>
+     → Suggested fix: <suggested_fix>
+   - <type>: <summary>
+     → Suggested fix: <suggested_fix>
+
+   Recommended:
+     /heal-skill productivity-sync — <one-line summary of the most load-bearing finding>
+
+   Training wheels: <consecutive_clean_runs>/6 reset to 0. Window ends <enabled_until>.
+   ```
+3. Do **not** auto-launch `/heal-skill` — the recommendation is informational. The user runs it deliberately.
+
+**Atomic cursor write:** all `post_run_drift_check` mutations land in the same atomic cursor write as Step 9's other cursor advancements (per Step 1a's "Cursor write rules"). On user abort, do not advance.
+
+**Anti-patterns specific to this step:**
+
+- ❌ Running the recheck when the project-tracker connector failed — the comparison would be against stale data, generating false-positive drift findings
+- ❌ Auto-invoking `/heal-skill` — the recommendation is surfaced; the user chooses when to heal. Auto-invocation breaks the human-in-the-loop contract that every other write in this skill respects
+- ❌ Letting `consecutive_clean_runs` increment on a run where TASKS.md was not actually modified by sync (no PR data, no Jira changes, no meeting transcripts). The recheck must still verify state, but the increment is meaningful: it says "the skill held drift at zero across N real runs," not "the skill ran N times without doing anything." Implementation note: increment is gated only on `findings.length == 0`, not on whether the run mutated anything — a no-op run that confirms zero drift IS a successful clean run by design
+- ❌ Continuing to fire the trailer after `enabled_until` has passed — the gate is mandatory; silently keeping training wheels on forever defeats the purpose of the auto-disable
+- ❌ Surfacing every drift finding equally — the `Recommended` line should name the single most load-bearing finding (typically active-sprint-identity > unsurfaced-assignee-ticket > section-mismatch). The user clicks `/heal-skill` once per session, not once per finding
 
 ## Deep Mode (`--deep`)
 
