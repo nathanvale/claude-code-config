@@ -40,7 +40,6 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "opus",
   "enableAllProjectMcpServers": true,
   "disabledMcpjsonServers": [],
   "hooks": {
@@ -179,6 +178,10 @@
       }
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "bash /Users/nathanvale/.claude/statusline-command.sh"
+  },
   "enabledPlugins": {
     "example-skills@anthropic-agent-skills": false,
     "document-skills@anthropic-agent-skills": true,
@@ -203,13 +206,9 @@
     }
   },
   "alwaysThinkingEnabled": false,
-  "effortLevel": "xhigh",
+  "effortLevel": "high",
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
   "autoCompactEnabled": false,
-  "skipAutoPermissionPrompt": true,
-  "statusLine": {
-    "type": "command",
-    "command": "bash /Users/nathanvale/.claude/statusline-command.sh"
-  }
+  "skipAutoPermissionPrompt": true
 }
