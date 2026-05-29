@@ -36,7 +36,7 @@ Trigger on:
 
 Do **not** trigger on:
 - Mid-sprint task tweaks (single-ticket edits, status changes) → use `productivity-tasks` instead
-- General memory updates → use `productivity-sync` or `memory-capture`
+- General memory updates → use `productivity-sync` or `/capture`
 - Adding a single ticket → just edit TASKS.md directly
 
 ## Prerequisites

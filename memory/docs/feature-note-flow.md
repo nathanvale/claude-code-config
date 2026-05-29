@@ -136,7 +136,7 @@ Use these starter templates:
 
 These templates affect the surrounding skills like this:
 
-### `/capture` and `memory-capture`
+### `/capture`
 
 Use as the front door for new material.
 
