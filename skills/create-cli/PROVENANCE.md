@@ -28,4 +28,8 @@ was missing a named front-end for. Use create-cli when adding/redesigning a comm
 side-quest plugin (browser-automation, bun-runner, biome-runner, tsc-runner, etc.), then implement
 against the facade.
 
+**Integration design** (the create-cli spec → `CommandFacadeContract` field mapping, and the
+"make create-cli emit the contract skeleton directly" next step) is captured in
+side-quest-engineering: `docs/brainstorms/2026-05-29-002-facade-aware-create-cli-integration.md`.
+
 Upstream rubric: https://clig.dev/
