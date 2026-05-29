@@ -44,6 +44,14 @@ _Avoid_: learning count, scan count, inferred summary, registry status
 A scan-selected Workflow Learning that deserves explicit final-summary visibility because it affects this delivery's closure or follow-up understanding. Attention-item selection is judgment over runtime facts, disposition, confidence, and delivery context; it is not a raw registry helper output.
 _Avoid_: interesting learning, registry result, all follow-ups, warning
 
+**Resume-blocking Workflow Learning**:
+A Workflow Learning whose unresolved workflow defect prevents safe Issue-to-PR continuation or honest closure of the current delivery. It is narrower than `file-follow-up`; general cleanup, future DX work, and non-blocking workflow debt are not resume-blocking. Every Resume-blocking Workflow Learning is a Workflow Learning attention item.
+_Avoid_: blocking follow-up, required follow-up, must-fix learning, resume-needed follow-up
+
+**Workflow Learning metadata safety failure**:
+A Workflow Learning Scan failure where the metadata lane cannot safely validate or write ledger/registry evidence because the helper command is missing, the helper contract is ambiguous, or the registry write target is unsafe. It is not the same as weak evidence, no learning found, or a non-blocking upsert inconvenience.
+_Avoid_: scan capture failure, registry safety failure, metadata failure, final metadata checkpoint contamination
+
 **Section-coordinate scaffold pointer**:
 A visible scaffold command that satisfies drift only when it appears at its inventoried section or anchor, not merely somewhere in the same document.
 _Avoid_: doc-level scaffold pointer, hidden scaffold-pointer comment, loose scaffold mention

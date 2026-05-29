@@ -160,10 +160,15 @@ Either way, the load is a skill-loop decision, not because `data.required_refere
 - Fail-stop: load when the stop evidence reveals a workflow-level learning
   worth recording.
 
-The scan remains outside `data.required_reference_ids` by design. It records
-run metadata through the ledger and registry helper only; it does not patch
-skills, runbooks, CLI code, docs, gotchas, or deliverables while shipping or
-recovering.
+The scan remains outside `data.required_reference_ids` by design. On
+fail-stops, record durable blocked state first when required, surface blocker
+and resume condition, then consider scan evidence as part of the same visible
+fail-stop action. Use the scan-owned Fail-Stop Scan contract for learning
+judgment and output shape.
+
+The scan records run metadata through the ledger and registry helper only. It
+does not patch skills, runbooks, CLI code, docs, gotchas, deliverables, or
+workflow contracts while shipping or recovering.
 
 </reference_loading_policy>
 
@@ -293,8 +298,9 @@ When a fail-stop fires: record durable state when the stage requires it, surface
 
 If fail-stop evidence reveals a workflow-level learning, load
 `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`. The scan may
-record ledger/registry metadata, but follow-up confirmation is required only
-when follow-up is needed to resume, unblock, or honestly close this delivery.
+record ledger/registry metadata as part of the same visible fail-stop action.
+Use the scan-owned Fail-Stop Scan contract for learning judgment and output
+shape; do not restate it here.
 
 | Condition | Record or surface | Resume condition |
 | --- | --- | --- |

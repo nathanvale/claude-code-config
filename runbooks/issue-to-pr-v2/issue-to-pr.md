@@ -235,9 +235,10 @@ classification to `blocked-frontmatter-blocked-reason`.
 
 For any fail-stop that reveals a workflow-level learning, load
 [`references/workflow-learning-scan.md`](references/workflow-learning-scan.md)
-as a read-only reflection pass. Capture evidence through ledger/registry
-metadata only. Ask for follow-up confirmation only when the follow-up is
-needed to resume, unblock, or honestly close this delivery.
+as a read-only reflection pass after required blocked state is durable. Capture
+evidence through ledger/registry metadata only, inside the same visible
+fail-stop action. Use the scan-owned Fail-Stop Scan contract for learning
+judgment and output shape; do not restate it here.
 
 ## Stage shells
 

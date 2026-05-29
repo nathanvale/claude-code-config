@@ -141,12 +141,48 @@ Flow:
 When a fail-stop exposes a workflow-level learning, capture evidence without
 obscuring the resume condition.
 
-- Surface the concrete blocker first.
-- Run the scan as reflection over the blocker evidence.
-- Record learning metadata only when useful.
-- Ask for follow-up confirmation only when follow-up is needed to resume,
-  unblock, or honestly close this delivery.
-- Do not write full follow-up issue text inside the scan.
+Flow:
+
+1. Record durable blocked state first when the stage requires it.
+2. Surface the concrete blocker and resume condition.
+3. If blocker evidence shows a workflow-level learning, run this scan as
+   read-only reflection over the stop evidence.
+4. Capture ledger evidence and registry metadata through helper surfaces when
+   safe.
+5. Ask before continuing only for a Resume-blocking Workflow Learning.
+6. Stop with blocker/resume condition plus any Workflow Learning attention
+   items.
+
+Resume-blocking Workflow Learning: unresolved workflow defect that prevents
+safe resume, unblock, or honest closure of this delivery. Examples: missing
+helper command, ambiguous route contract, unsafe registry write target, docs
+contradiction that prevents choosing the next route, or equivalent workflow
+defect.
+
+- `small-fix` records without blocking fail-stop recovery.
+- `needs-evidence` records as weak evidence without blocking by default.
+- `needs-evidence` is not a Workflow Learning attention item by default.
+- High-confidence `file-follow-up` records without blocking when the follow-up
+  is not needed to resume, unblock, or honestly close this delivery.
+- Needed-to-resume `file-follow-up` is Resume-blocking and requires an ask
+  before continuing.
+- Workflow Learning metadata safety failure is Resume-blocking when registry
+  target, helper command, or helper contract cannot safely preserve evidence.
+- Weak evidence, no-learning outcomes, and ordinary upsert friction do not
+  block resume.
+- Every Resume-blocking Workflow Learning is a Workflow Learning attention item.
+
+Fail-stop output:
+
+- Lead with blocker and resume condition.
+- Include only Workflow Learning attention items after recovery context.
+- Suppress routine counts, no-learning capture status, and weak-evidence noise.
+- Exclude full ledger entries, full registry entries, issue drafts, and
+  `to-issues` invocation.
+
+Do not repair during fail-stop scan handling. Do not patch skills, runbook
+references, CLI/source code, docs, gotchas, target deliverables, or workflow
+contracts as part of scan capture.
 
 ## Gotchas Relationship
 

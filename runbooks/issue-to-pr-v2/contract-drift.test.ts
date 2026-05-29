@@ -18,6 +18,7 @@ import {
   type DocClaims,
   type DriftFinding,
   checkContractDrift,
+  checkFailStopWorkflowLearningScan,
   checkGeneratedScaffoldBlocksDrift,
   checkGotchasRelationship,
   checkLedgerLifecycleFieldDrift,
@@ -1021,6 +1022,10 @@ const findingsAndValidatorsPath =
   "runbooks/issue-to-pr-v2/references/findings-and-validators.md";
 const stage4BatchLoopPath =
   "runbooks/issue-to-pr-v2/references/stage-4-batch-loop.md";
+const stage6ShipPath =
+  "runbooks/issue-to-pr-v2/references/stage-6-ship.md";
+const workflowLearningScanPath =
+  "runbooks/issue-to-pr-v2/references/workflow-learning-scan.md";
 const scopedDocRels = [
   skillDocPath,
   readmeDocPath,
@@ -1039,6 +1044,8 @@ const driftSurfaceRels = [
   builderDispatchPath,
   findingsAndValidatorsPath,
   stage4BatchLoopPath,
+  stage6ShipPath,
+  workflowLearningScanPath,
 ] as const;
 
 /** Read one scoped doc's text by its repo-relative path. */
@@ -2679,6 +2686,43 @@ describe("Workflow Learning Scan relationship check", () => {
     "`first-run-gotchas.md` remains recovery guidance. Workflow Learnings owns cross-run dedupe lifecycle.",
   ].join("\n");
 
+  const validFailStopSkillDoc = [
+    "# Skill",
+    "",
+    "When a fail-stop reveals a workflow-level learning, keep scan capture in the same visible fail-stop action.",
+    "Load `runbooks/issue-to-pr-v2/references/workflow-learning-scan.md`.",
+    "Use the scan-owned Fail-Stop Scan contract for learning judgment and output shape.",
+  ].join("\n");
+
+  const validFailStopIssueToPrDoc = [
+    "# Issue to PR",
+    "",
+    "For any fail-stop that reveals a workflow-level learning, keep scan capture in the same visible fail-stop action.",
+    "Load [workflow-learning-scan.md](references/workflow-learning-scan.md).",
+    "Use the scan-owned Fail-Stop Scan contract for learning judgment and output shape.",
+  ].join("\n");
+
+  const validFailStopScanDoc = [
+    "# Workflow Learning Scan",
+    "",
+    "## Fail-Stop Scan",
+    "",
+    "Resume-blocking Workflow Learning prevents safe resume.",
+    "Examples: missing helper command, ambiguous route contract, unsafe registry write target, docs contradiction.",
+    "`small-fix` records without blocking fail-stop recovery.",
+    "`needs-evidence` records as weak evidence without blocking by default.",
+    "`needs-evidence` is not a Workflow Learning attention item by default.",
+    "High-confidence `file-follow-up` records without blocking when the follow-up is not needed to resume.",
+    "Needed-to-resume `file-follow-up` is Resume-blocking and requires an ask before continuing.",
+    "Workflow Learning metadata safety failure is Resume-blocking when registry target, helper command, or helper contract cannot safely preserve evidence.",
+    "Lead with blocker and resume condition.",
+    "Include only Workflow Learning attention items.",
+    "Suppress routine counts, no-learning capture status, and weak-evidence noise.",
+    "Exclude full ledger entries, full registry entries, issue drafts, and `to-issues` invocation.",
+    "Do not repair during fail-stop scan handling.",
+    "Do not patch skills, runbook references, CLI/source code, docs, gotchas, target deliverables, or workflow contracts.",
+  ].join("\n");
+
   async function stageScanFixture(
     overrides: {
       skill?: string;
@@ -2980,6 +3024,268 @@ describe("Workflow Learning Scan relationship check", () => {
       await Bun.$`rm -rf ${dir}`.quiet();
     }
   });
+
+  test("fail-stop scan fixture with resume-aware blocking passes", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings).toEqual([]);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan weakened Resume-blocking examples reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Examples: missing helper command, ambiguous route contract, unsafe registry write target, docs contradiction.",
+        "Examples: confusing prose or future cleanup.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some(
+          (f) => f.claim === "fail-stop-resume-blocking-definition",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan that blocks weak evidence reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "`needs-evidence` records as weak evidence without blocking by default.",
+        "`needs-evidence` asks before continuing.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-non-blocking-scenarios"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan additive weak-evidence contradiction reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: `${validFailStopScanDoc}\n- \`needs-evidence\` blocks by default during fail-stop recovery.\n`,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-non-blocking-scenarios"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan that blocks non-resume file-follow-up reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "High-confidence `file-follow-up` records without blocking when the follow-up is not needed to resume.",
+        "High-confidence `file-follow-up` always blocks.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-non-blocking-scenarios"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan missing needed-to-resume ask reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Needed-to-resume `file-follow-up` is Resume-blocking and requires an ask before continuing.",
+        "Needed-to-resume `file-follow-up` records quietly.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-resume-blocking-ask"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop scan all-of metadata safety wording reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Workflow Learning metadata safety failure is Resume-blocking when registry target, helper command, or helper contract cannot safely preserve evidence.",
+        "Workflow Learning metadata safety failure is Resume-blocking only when registry target, helper command, and helper contract are all missing.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-resume-blocking-ask"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop output shape regression reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Suppress routine counts, no-learning capture status, and weak-evidence noise.",
+        "Show routine counts and all capture status.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "fail-stop-output-shape")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop additive output contradiction reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: `${validFailStopScanDoc}\nInclude full registry entries, issue drafts, and \`to-issues\` invocation.\n`,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings.some((f) => f.claim === "fail-stop-output-shape")).toBe(
+        true,
+      );
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop read-only boundary regression reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc.replace(
+        "Do not repair during fail-stop scan handling.",
+        "Repair during fail-stop scan handling when the fix is obvious.",
+      ),
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-read-only-repair-boundary"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop additive repair-boundary exception reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc,
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: `${validFailStopScanDoc}\nException: patch skills, runbook references, docs, or workflow contracts when the fix is obvious.\n`,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some((f) => f.claim === "fail-stop-read-only-repair-boundary"),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("fail-stop control-plane pointer regression reports a finding", async () => {
+    const dir = await stageScanFixture({
+      skill: validFailStopSkillDoc.replace(
+        "Use the scan-owned Fail-Stop Scan contract for learning judgment and output shape.",
+        "Restate the fail-stop learning judgment locally.",
+      ),
+      issueToPr: validFailStopIssueToPrDoc,
+      scan: validFailStopScanDoc,
+    });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(
+        findings.some(
+          (f) =>
+            f.doc === "skills/issue-to-pr/SKILL.md" &&
+            f.claim === "fail-stop-control-plane-summary",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing fail-stop scan reference returns a finding", async () => {
+    const dir = await stageScanFixture({ writeScan: false });
+    try {
+      const findings = await checkFailStopWorkflowLearningScan({
+        repoRoot: dir,
+      });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.claim).toBe("workflow-learning-scan.md");
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("live fail-stop scan check returns zero findings", async () => {
+    const findings = await checkFailStopWorkflowLearningScan({ repoRoot });
+    expect(findings).toEqual([]);
+  });
 });
 
 describe("Live clean-pass: real scoped docs produce ZERO drift findings", () => {
@@ -3132,6 +3438,76 @@ describe("AC1/AC6/AC7: checkContractDrift orchestrator", () => {
     }
     expect(result.ok).toBe(true);
     expect(result.findings).toEqual([]);
+  });
+
+  test("AC1: live opt-in fail-stop scan check returns ok:true with no findings", async () => {
+    const result = await checkContractDrift({
+      repoRoot: realRepoRoot,
+      includeFailStopWorkflowLearningScan: true,
+    });
+    if (!result.ok) {
+      throw new Error(
+        `expected clean pass, got: ${JSON.stringify(result.findings, null, 2)}`,
+      );
+    }
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("workflow scan relationship opt-in does not include fail-stop semantic checks", async () => {
+    const dir = await stageFixtureRepo();
+    const scan = join(dir, workflowLearningScanPath);
+    const original = await Bun.file(scan).text();
+    await Bun.write(
+      scan,
+      original.replace(
+        "## Gotchas Relationship",
+        "- `needs-evidence` blocks by default during fail-stop recovery.\n\n## Gotchas Relationship",
+      ),
+    );
+    try {
+      const relationshipOnly = await checkContractDrift({
+        repoRoot: dir,
+        includeWorkflowLearningScanRelationship: true,
+      });
+      expect(relationshipOnly.findings.some((f) =>
+        f.claim.startsWith("fail-stop-"),
+      )).toBe(false);
+
+      const withFailStop = await checkContractDrift({
+        repoRoot: dir,
+        includeFailStopWorkflowLearningScan: true,
+      });
+      expect(withFailStop.ok).toBe(false);
+      expect(
+        withFailStop.findings.some(
+          (f) => f.claim === "fail-stop-non-blocking-scenarios",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
+  });
+
+  test("missing workflow scan with fail-stop opt-in returns findings instead of throwing", async () => {
+    const dir = await stageFixtureRepo();
+    await Bun.$`rm -f ${join(dir, workflowLearningScanPath)}`.quiet();
+    try {
+      const result = await checkContractDrift({
+        repoRoot: dir,
+        includeFailStopWorkflowLearningScan: true,
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) =>
+            f.doc === workflowLearningScanPath &&
+            f.claim === "workflow-learning-scan.md",
+        ),
+      ).toBe(true);
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
   });
 
   test("AC7: a fixture doc with a stale route-ID claim makes the check fail, naming the token", async () => {

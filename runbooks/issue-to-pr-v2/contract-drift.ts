@@ -2574,6 +2574,10 @@ export type WorkflowLearningScanRelationshipOptions = {
   repoRoot?: string;
 };
 
+export type FailStopWorkflowLearningScanOptions = {
+  repoRoot?: string;
+};
+
 function regionMentionsWorkflowLearningScan(region: string): boolean {
   return (
     region.includes(WORKFLOW_LEARNING_SCAN_REL) ||
@@ -2735,6 +2739,286 @@ function scanPreservesGotchasRelationship(text: string): boolean {
     /\bcross-run\b/i.test(gotchas) &&
     /\bdedupe\b/i.test(gotchas)
   );
+}
+
+function failStopScanSection(text: string): string | null {
+  return markdownSection(text, "Fail-Stop Scan");
+}
+
+function failStopDefinesResumeBlocking(section: string): boolean {
+  return (
+    /\bResume-blocking Workflow Learning\b/i.test(section) &&
+    /\bprevents\s+safe\s+resume\b/i.test(section) &&
+    /\bmissing\s+helper\s+command\b/i.test(section) &&
+    /\bambiguous\s+route\s+contract\b/i.test(section) &&
+    /\bunsafe\s+registry\s+write\s+target\b/i.test(section) &&
+    /\bdocs\s+contradiction\b/i.test(section)
+  );
+}
+
+function failStopPreservesNonBlockingScenarios(section: string): boolean {
+  return (
+    /`small-fix`\s+records without blocking/i.test(section) &&
+    /`needs-evidence`\s+records .*without blocking by default/i.test(section) &&
+    /`needs-evidence`\s+is not a Workflow Learning attention item by default/i.test(
+      section,
+    ) &&
+    /High-confidence\s+`file-follow-up`\s+records without blocking when the follow-up\s+is not needed to resume/i.test(
+      section,
+    ) &&
+    !failStopContradictsNonBlockingScenarios(section)
+  );
+}
+
+function failStopRequiresAskForResumeBlocking(section: string): boolean {
+  return (
+    /Needed-to-resume\s+`file-follow-up`\s+is Resume-blocking/i.test(section) &&
+    /\brequires an ask\s+before continuing\b/i.test(section) &&
+    /Workflow Learning metadata safety failure is Resume-blocking/i.test(
+      section,
+    ) &&
+    /\bregistry\s+target\b/i.test(section) &&
+    /\bhelper command\b/i.test(section) &&
+    /\bhelper contract\b/i.test(section) &&
+    !failStopContradictsMetadataSafety(section)
+  );
+}
+
+function failStopOwnsOutputShape(section: string): boolean {
+  return (
+    /\bLead with blocker and resume condition\b/i.test(section) &&
+    /\bonly Workflow Learning attention items\b/i.test(section) &&
+    /\bSuppress routine counts\b/i.test(section) &&
+    /\bno-learning capture status\b/i.test(section) &&
+    /\bweak-evidence noise\b/i.test(section) &&
+    /\bExclude full ledger entries\b/i.test(section) &&
+    /\bfull registry entries\b/i.test(section) &&
+    /\bissue drafts\b/i.test(section) &&
+    /`to-issues`\s+invocation/i.test(section) &&
+    !failStopContradictsOutputShape(section)
+  );
+}
+
+function failStopPreservesReadOnlyRepairBoundary(section: string): boolean {
+  return (
+    /\bDo\s+not\s+repair\b/i.test(section) &&
+    /\bDo\s+not\s+patch\b/i.test(section) &&
+    /\bskills\b/i.test(section) &&
+    /\brunbook\s+references\b/i.test(section) &&
+    /\bCLI\b/i.test(section) &&
+    /\bsource code\b/i.test(section) &&
+    /\bdocs\b/i.test(section) &&
+    /\bgotchas\b/i.test(section) &&
+    /\btarget deliverables\b/i.test(section) &&
+    /\bworkflow\s+contracts\b/i.test(section) &&
+    !failStopContradictsRepairBoundary(section)
+  );
+}
+
+function failStopControlPlanePreservesSummaryShape(text: string): boolean {
+  return (
+    regionMentionsWorkflowLearningScan(text) &&
+    /\bsame\s+visible\s+fail-stop\s+action\b/i.test(text) &&
+    /\bscan-owned\s+Fail-Stop Scan\b/i.test(text)
+  );
+}
+
+function failStopSentences(section: string): string[] {
+  return section
+    .split(/\n|(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function failStopContradictsNonBlockingScenarios(section: string): boolean {
+  return failStopSentences(section).some((sentence) => {
+    if (!/`?needs-evidence`?|\bweak evidence\b/i.test(sentence)) return false;
+    if (
+      /\bwithout blocking\b|\bnot\b[\s\S]{0,40}\battention item\b|\bdo(?:es)? not\b[\s\S]{0,20}\bblock/i.test(
+        sentence,
+      )
+    ) {
+      return false;
+    }
+    return /\bblocks?\b|\bblocking\b|\basks?\b|\brequires?\b|\bfollow-up confirmation\b/i.test(
+      sentence,
+    );
+  }) ||
+    failStopSentences(section).some(
+      (sentence) =>
+        /`?file-follow-up`?/i.test(sentence) &&
+        /\balways blocks?\b|\bautomatically blocks?\b|\bblocks? by default\b/i.test(
+          sentence,
+        ),
+    );
+}
+
+function failStopContradictsMetadataSafety(section: string): boolean {
+  return failStopSentences(section).some(
+    (sentence) =>
+      /Workflow Learning metadata safety failure/i.test(sentence) &&
+      (/\bonly when\b/i.test(sentence) ||
+        /\ball\b[\s\S]{0,40}\b(?:missing|fail|unsafe|ambiguous)\b/i.test(
+          sentence,
+        ) ||
+        /\bregistry target\b[\s\S]{0,80}\band\b[\s\S]{0,40}\bhelper contract\b/i.test(
+          sentence,
+        )),
+  );
+}
+
+function failStopContradictsOutputShape(section: string): boolean {
+  return failStopSentences(section).some((sentence) => {
+    if (
+      !/\bfull (?:ledger|registry) entries\b|\bissue drafts\b|`?to-issues`?/i.test(
+        sentence,
+      )
+    ) {
+      return false;
+    }
+    if (/\bexclude\b|\bomit\b|\bsuppress\b|\bdo not\b|\bnever\b/i.test(sentence)) {
+      return false;
+    }
+    return /\binclude\b|\bshow\b|\bappend\b|\bsurface\b|\bemit\b|\bprint\b|\bdisplay\b/i.test(
+      sentence,
+    );
+  });
+}
+
+function failStopContradictsRepairBoundary(section: string): boolean {
+  return failStopSentences(section).some((sentence) => {
+    if (/\bDo\s+not\b/i.test(sentence)) return false;
+    const namesProtectedSurface =
+      /\bskills?\b|\brunbook references\b|\bCLI\b|\bsource code\b|\bdocs\b|\bgotchas\b|\btarget deliverables\b|\bworkflow contracts\b/i.test(
+        sentence,
+      );
+    if (!namesProtectedSurface) return false;
+    return /\bexception\b|\ballow\b|\ballowed\b|\bmay\b|\bcan\b|\bpermitted\b|\bpatch\b|\brepair\b|\bedit\b|\bmutate\b/i.test(
+      sentence,
+    );
+  });
+}
+
+/**
+ * Verify fail-stop Workflow Learning capture keeps resume-aware blocking
+ * narrow, output recovery-focused, and scan handling read-only.
+ */
+export async function checkFailStopWorkflowLearningScan(
+  opts: FailStopWorkflowLearningScanOptions = {},
+): Promise<DriftFinding[]> {
+  const repoRoot = opts.repoRoot ?? defaultRepoRoot();
+  const findings: DriftFinding[] = [];
+
+  const scanPath = join(repoRoot, WORKFLOW_LEARNING_SCAN_REL);
+  if (!(await pathExists(scanPath))) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: WORKFLOW_LEARNING_SCAN_BASENAME,
+      reason: "Workflow Learning Scan reference is missing.",
+    });
+    return findings;
+  }
+
+  const scanText = await readScopedDocOrThrow(
+    scanPath,
+    WORKFLOW_LEARNING_SCAN_REL,
+    "contract-drift fail-stop workflow learning scan check",
+  );
+  const skillText = await readScopedDocOrThrow(
+    join(repoRoot, SKILL_DOC_REL),
+    SKILL_DOC_REL,
+    "contract-drift fail-stop workflow learning scan check",
+  );
+  const issueToPrText = await readScopedDocOrThrow(
+    join(repoRoot, ISSUE_TO_PR_DOC_REL),
+    ISSUE_TO_PR_DOC_REL,
+    "contract-drift fail-stop workflow learning scan check",
+  );
+
+  const section = failStopScanSection(scanText);
+  if (section === null) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-scan-section",
+      reason:
+        "workflow-learning-scan.md must define a Fail-Stop Scan section for resume-aware capture.",
+    });
+    return findings;
+  }
+
+  if (!failStopDefinesResumeBlocking(section)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-resume-blocking-definition",
+      reason:
+        "Fail-Stop Scan must define Resume-blocking Workflow Learning narrowly with missing helper command, ambiguous route contract, unsafe registry write target, and docs contradiction examples.",
+    });
+  }
+
+  if (!failStopPreservesNonBlockingScenarios(section)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-non-blocking-scenarios",
+      reason:
+        "Fail-Stop Scan must keep small-fix, needs-evidence, and non-resume-critical high-confidence file-follow-up non-blocking.",
+    });
+  }
+
+  if (!failStopRequiresAskForResumeBlocking(section)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-resume-blocking-ask",
+      reason:
+        "Fail-Stop Scan must ask before continuing for needed-to-resume file-follow-up and Workflow Learning metadata safety failures.",
+    });
+  }
+
+  if (!failStopOwnsOutputShape(section)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-output-shape",
+      reason:
+        "Fail-Stop Scan output must lead with blocker/resume condition, include attention items only, and exclude routine counts, weak-evidence noise, full entries, issue drafts, and to-issues.",
+    });
+  }
+
+  if (!failStopPreservesReadOnlyRepairBoundary(section)) {
+    findings.push({
+      doc: WORKFLOW_LEARNING_SCAN_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-read-only-repair-boundary",
+      reason:
+        "Fail-Stop Scan must preserve the read-only boundary and forbid scan-time repair of skills, runbooks, CLI code, docs, gotchas, deliverables, or workflow contracts.",
+    });
+  }
+
+  if (!failStopControlPlanePreservesSummaryShape(skillText)) {
+    findings.push({
+      doc: SKILL_DOC_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-control-plane-summary",
+      reason:
+        "SKILL.md fail-stop guidance must keep scan capture in the same visible fail-stop action and expose only attention items after blocker/resume condition.",
+    });
+  }
+
+  if (!failStopControlPlanePreservesSummaryShape(issueToPrText)) {
+    findings.push({
+      doc: ISSUE_TO_PR_DOC_REL,
+      kind: "workflow-learning-scan",
+      claim: "fail-stop-control-plane-summary",
+      reason:
+        "issue-to-pr.md fail-stop guidance must keep scan capture in the same visible fail-stop action and expose only attention items after blocker/resume condition.",
+    });
+  }
+
+  return findings;
 }
 
 /**
@@ -2994,6 +3278,8 @@ export type CheckContractDriftOptions = {
   cliPath?: string;
   /** Include newer scan relationship docs in addition to legacy drift surfaces. */
   includeWorkflowLearningScanRelationship?: boolean;
+  /** Include fail-stop Workflow Learning Scan semantic drift checks. */
+  includeFailStopWorkflowLearningScan?: boolean;
 };
 
 /** The orchestrator result: `ok` is true exactly when there are no findings. */
@@ -3104,6 +3390,9 @@ export async function checkContractDrift(
   if (opts.includeWorkflowLearningScanRelationship === true) {
     findings.push(...(await checkWorkflowLearningScanRelationship({ repoRoot })));
   }
+  if (opts.includeFailStopWorkflowLearningScan === true) {
+    findings.push(...(await checkFailStopWorkflowLearningScan({ repoRoot })));
+  }
   findings.push(
     ...(await checkLedgerLifecycleFieldDrift({
       repoRoot,
@@ -3135,6 +3424,7 @@ function formatFinding(f: DriftFinding): string {
 if (import.meta.main) {
   const result = await checkContractDrift({
     includeWorkflowLearningScanRelationship: true,
+    includeFailStopWorkflowLearningScan: true,
   });
   if (result.ok) {
     console.log(
