@@ -8,7 +8,7 @@ A lens is "what to scrutinise in THIS unit and why" — not a generic checklist.
 - The commit diff for the unit.
 
 ## How to derive
-1. **Risk surface** → from Files + Approach. Picks the persona (SKILL.md table).
+1. **Risk surface** → from Files + Approach. Maps to a persona via the canonical table in `SKILL.md` (Persona → risk surface) — that table is the single source; do not restate its rows here.
 2. **Named hazards** → any KTD/CL/Risk row that cites this unit becomes a lens bullet ("verify X holds"). These are the bugs the planner already feared.
 3. **Edge cases** → from the diff: boundaries, null/empty, concurrency, failure paths the happy-path code skips.
 4. **Test adequacy** → do the unit's tests cover the categories that apply (happy/edge/error/integration), or just the easy ones?

@@ -1,6 +1,6 @@
 ---
 name: ship-by-unit
-description: "Execute a plan one implementation unit at a time, each unit a fresh-context agent landing exactly one commit, so the branch becomes unit-review-compatible. Triggers on 'ship by unit', 'execute the plan unit by unit', 'one commit per unit', 'make this branch reviewable by unit'. Pairs with the unit-review skill."
+description: "Triggers on 'ship by unit', 'execute the plan unit by unit', 'one commit per unit', 'make this branch reviewable by unit'. Executes a ce-plan one implementation unit at a time, each unit landing exactly one U-ID-tagged commit so the branch becomes unit-review-compatible."
 ---
 
 # Ship by Unit
@@ -29,15 +29,11 @@ Per-unit review is only efficient when each unit is one reviewable commit. If ex
 
 ## Flow
 
-1. **Parse the plan** → ordered unit list with U-IDs, files, dependencies, verification, execution notes (test-first / characterization-first).
-2. **Per unit, in dependency order:**
-   a. Dispatch a fresh-context agent (via `ce-work`'s serial-subagent mechanism) scoped to ONE unit: its Goal, Files, Approach, Patterns, Test scenarios, Verification, and any resolved deferred questions. Fresh context per unit prevents cross-unit context bleed.
-   b. Review the returned diff against the unit's `Files` + scope. Catch scope creep here.
-   c. Run the unit's verification (tests/lint/types). Red → fix before committing; never commit a red unit.
-   d. Stage only that unit's files (never `git add .`). Commit with the U-ID-tagged conventional message.
-   e. Update the task tracker. Move to the next unit.
-3. **Parallel units** (independent, no shared files) may use worktree isolation per `ce-work`'s parallel-safety check — but each still lands its own single U-ID commit; merge in dependency order.
-4. **On completion**, the branch is unit-review-compatible. Offer to run `/unit-review`.
+`ce-work` owns execution — subagent dispatch, serial vs parallel, worktree isolation, the parallel-safety check, per-unit staging/commit, and test-as-you-go. Do not restate or re-derive that here. This skill runs `/ce-work` against the plan and enforces the contract above on its output.
+
+1. **Parse the plan** → ordered unit list with U-IDs, files, dependencies, verification.
+2. **Run `/ce-work`** to execute the plan. It already executes units in dependency order with fresh-context subagents and incremental commits. The one thing it does NOT guarantee is the strict one-commit-per-unit + U-ID-in-subject invariant — that is what this skill adds: before each unit's commit, confirm the commit covers exactly one unit and its subject carries the U-ID; after the run, confirm commit count == unit count (or documented splits).
+3. **On completion**, verify the branch passes the `unit-review` gate (commits map 1:1 to units, U-IDs present). Offer to run `/unit-review`.
 
 ## Boundary cases
 

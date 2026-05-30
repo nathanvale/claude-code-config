@@ -1,6 +1,6 @@
 ---
 name: unit-review
-description: "Review a feature branch by fanning out persona-matched reviewers per implementation unit, verifying findings, then consolidating one report. Triggers on 'unit review', 'review each unit', 'per-unit review', 'review this branch by unit'. Auto-falls-back to plain whole-diff review when the branch isn't unit-structured."
+description: "Triggers on 'unit review', 'review each unit', 'per-unit review', 'review this branch by unit'. Fans out persona-matched reviewers per implementation unit, verifies each finding, then consolidates one report. Gated: falls back to whole-diff review when the branch isn't unit-structured."
 ---
 
 # Unit Review
@@ -12,7 +12,7 @@ Use only when the win is real: a multi-unit feature on a branch with clean per-u
 ## Stop conditions (fail closed)
 
 - Diff < 50 changed lines OR ≤ 2 files → do NOT fan out. Run a single plain review and say so.
-- Not unit-structured (see Gate) → do NOT fan out. Fall back to `/code-review` (or one whole-diff reviewer) and say why.
+- Not unit-structured (see Gate) → do NOT fan out. Fall back to `/ce-code-review` (its multi-persona model is the right tool for a substantial whole-diff branch; `/review` for a tiny diff) and say why. This skill is ADDITIVE over `ce-code-review` — it adds per-unit scoping, the cross-seam pass, and the verify pass; it does not replace it.
 - Read-only. This skill reviews; it never edits source. Findings are claims until the verify pass confirms them.
 
 ## Gate — is this branch unit-structured?
@@ -33,7 +33,7 @@ If only one holds, treat as NOT unit-structured. Don't invent unit boundaries fr
 5. **Build the do-not-flag list** from the plan's confirmed decisions / convergence log / accepted risks, so reviewers don't re-litigate settled choices. A short, sharp do-not-flag list is what keeps signal high.
 6. **Fan out reviewers in parallel** — one per unit, persona matched to risk surface (table below). Read-only. Each returns findings in the fixed format.
 7. **Cross-seam reviewer** — one extra reviewer sees the WHOLE diff to catch bugs living *between* units (a type that drifts across the U4→U5→U6 seam). Per-unit scoping cannot catch these.
-8. **Verify pass** — for each blocker/major, dispatch a refuter that tries to prove the finding WRONG against the code. Drop or downgrade findings that don't survive. This is the precision gate; skipping it ships hallucinated lines.
+8. **Verify pass** — for each blocker/major, dispatch a refuter that tries to prove the finding WRONG against the code. This is the precision gate; skipping it ships hallucinated lines. The refuter contract (input bundle, `{ validated, reason }` output, and the conservative-on-failure rule — a refuter that errors/times out DROPS the finding, never passes it through) is in `references/verify-pass.md`. Honor it.
 9. **Consolidate** — one report: verdict roll-up table, findings by severity (verified only, with cross-unit themes merged), confirmed-clean list, recommended fix order (smallest blast radius first). See `references/report-template.md`.
 
 ## Persona → risk surface
@@ -64,7 +64,8 @@ Fan-out spends real tokens (≈40-80k per reviewer). Justified for a multi-unit 
 
 Write the consolidated report to the OS temp dir (or `docs/reviews/` only if the user asks). Never commit it. The skill produces findings, not fixes — hand the report to a remediation flow (`/ce-resolve-pr-feedback`-style) if the user wants changes applied.
 
-## References
+## References (load on demand)
 
-- `references/lenses.md` — how to derive a per-unit lens from plan + diff; worked examples.
-- `references/report-template.md` — the consolidated report shape.
+- `references/verify-pass.md` — refuter contract for step 8. Load before the verify pass.
+- `references/lenses.md` — lens-derivation worked examples. Load only if step 4 needs them (the persona table above is canonical; lenses.md links to it, never restates it).
+- `references/report-template.md` — full consolidated-report shape. Load at step 9 if the inline summary isn't enough.
