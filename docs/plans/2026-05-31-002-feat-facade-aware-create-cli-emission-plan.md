@@ -10,12 +10,21 @@ origin: side-quest-engineering/docs/brainstorms/2026-05-29-002-facade-aware-crea
 
 ## Summary
 
-Close the hand-translation gap between the `create-cli` skill (design front-end)
+Narrow the hand-translation gap between the `create-cli` skill (design front-end)
 and `@side-quest/cli-command-facade` (enforcement runtime). Today create-cli
 emits a markdown CLI spec and a human hand-translates it into a typed
-`CommandFacadeContract`. This slice makes the skill's *deliverable* a ready-to-drop
-contract skeleton + `defineCommandFacadeContract` wire-up, so design → contract →
-enforcement is one continuous flow.
+`CommandFacadeContract`. This slice makes a ready-to-drop contract skeleton +
+`defineCommandFacadeContract` wire-up *available and canonical in the facade
+reference*, reachable via the skill's existing pointer — so an author or agent who
+follows the pointer goes design → contract → enforcement in one flow.
+
+**Honest boundary (see R1):** this slice makes the contract deliverable *reachable
+and canonical in the reference*, NOT the body's default output — the verbatim
+upstream body still instructs "emit a markdown spec" and is frozen. Closing the gap
+*by default* (so the body itself emits a contract) is the deferred upstream fork
+(ADR 0007). And live validation of the emitted skeleton is link-gated — see the v1
+portability boundary in Deferred; off-machine, an autonomous agent gets a portable
+skeleton it cannot self-validate until the package is published/vendored.
 
 The slice is **skill-side only** (this repo, `claude-code-config`). The facade
 foundation it consumes — `parse`/`defineCommandFacadeContract`, the three contract
@@ -42,10 +51,12 @@ and (b) show generated code how to consume the package.
 hand-translates it into a `CommandFacadeContract`. There's a manual translation gap
 where the markdown spec and the typed contract can silently diverge.
 
-**Goal:** create-cli's deliverable is the contract object + the few wire-up lines
-that hand it to the facade. `defineCommandFacadeContract` then validates the
-contract at construction (GAP A, already shipped), so a subtly-broken spec can't
-ship silently. Design → Contract → Enforcement, one flow.
+**Goal:** create-cli's *recommended deliverable* (canonical in the facade reference,
+reachable via the pointer) is the contract object + the few wire-up lines that hand
+it to the facade. Where the link is live, `defineCommandFacadeContract` validates the
+contract at construction (GAP A, already shipped), so a subtly-broken spec can't ship
+silently. Design → Contract → Enforcement, one flow — for an author/agent who follows
+the pointer, on a machine with the link.
 
 **What this is NOT:** GAP B (a verify-behavior-out helper that asserts a running
 command matches its authored contract) is an explicit follow-on, not this slice
@@ -82,10 +93,15 @@ contract) is deferred — one-way for v1.
   validator coverage the real drift checker doesn't provide (e.g. `--json` is
   deliberately NOT reserved). (origin: "Caveat resolved")
 
-**Success criteria:** A user (or agent) running create-cli on a CLI design gets, as
-output, a contract object they can paste into a `scripts/command-contract.ts` and
-have it type-check + validate against the linked facade with zero hand-translation.
-The upstream core remains byte-diffable against steipete/agent-scripts.
+**Success criteria:** A user (or agent) who follows the skill's pointer to the facade
+reference finds a ready-to-drop contract skeleton they can paste into a
+`scripts/command-contract.ts`; *on a machine with the link live* it type-checks +
+validates against the facade with no hand-translation. The reference is canonical for
+*what to emit* — the verbatim body's default output is unchanged. Off-machine (no
+link), the skeleton is still emittable as portable text but is not live-validated
+(v1 portability boundary). The upstream core remains byte-diffable against
+steipete/agent-scripts (path-scoped verification this slice; full content-diff
+deferred — no local upstream).
 
 ---
 
@@ -154,7 +170,7 @@ The upstream core remains byte-diffable against steipete/agent-scripts.
   live-validation guard (typecheck + `define()`-throws) requires the machine-local
   npm link to the *private* `@side-quest/cli-command-facade`. So validation runs
   where the link exists (this machine, this session's `ce-work`) but NOT on a fresh
-  agent, CI, a teammate, or — pointedly — the autonomous Mode-2 agent building a tool
+  agent, CI, a teammate, or — pointedly — the autonomous agent building a tool
   on another machine. **v1 boundary:** the skill *emits* a portable contract skeleton
   (R4 holds — the shape is tool-neutral text); *live validation of that skeleton* is
   link-gated and not portable. Closing it needs the package published or vendored so
@@ -254,67 +270,32 @@ can run — surfaced by prototype 2026-05-31). Facade foundation already merged.
 - Mirror the real adapter shape (`MemoryOsCommandContract` typing pattern) so the
   skeleton matches a known-good in-repo consumer, not an invented shape.
 - Keep R7 honest: do NOT show `--json` as reserved; show it as a declared, author-
-  owned flag (the reference already states this in "Facade owns the diagnostic
-  flags" — keep consistent).
-- **Document the `AUTH_*` env-var gotcha (prototype-surfaced 2026-05-31).** The
-  facade's secret-name gate (`matchSensitiveEnvVarName`) splits on `_` and rejects any
-  whole segment in `{SECRET, TOKEN, PASSWORD, … AUTH}`. So `AUTH_REGION` is *rejected*
-  even though a region isn't a secret — a deliberate fail-safe (the facade source
-  documents it; `AUTHOR_NAME` passes because AUTHOR≠AUTH as a segment). Agents
-  predictably hit this. The skeleton's `envVars` example should name benign vars
-  plainly (`REGION`, `DEPLOY_ENV`) and the prose should note: a rejected name isn't a
-  bug — read the `action`, rename, re-parse (the self-correction loop handles it).
-  *Second gotcha (prototype round 2):* the gate only matches underscore-separated
-  segments, so a FUSED secret name (`APITOKEN`) evades it and **leaks**, while
-  `API_TOKEN` is caught. The skeleton's env-var guidance must tell agents to use
-  SCREAMING_SNAKE_CASE — the gate protects `API_TOKEN`, not `APITOKEN`. (Both gotchas
-  are documented limitations in the facade source, not bugs to fix here.)
-- **Document the free-text injection boundary (security gauntlet 2026-05-31, 20
-  angles).** The facade scans env-var *names* but does NOT validate the free-text
-  discovery fields (`summary`, `usage`, flag `description`, `script`) — prototype
-  confirmed prompt-injection (`"...IGNORE PREVIOUS INSTRUCTIONS..."`), ANSI/control
-  chars, and path-traversal `script` values ALL project to the agent catalog
-  verbatim. Since those fields are read by *other agents*, this is a second-order
-  prompt-injection surface. The skeleton's prose must warn: never put untrusted text,
-  secrets, or instruction-shaped content in projected fields. This is a *facade-side*
-  gap (tracked: side-quest-engineering #61) — NOT fixed by this slice (KTD1); the
-  reference documents it so authors/agents don't walk into it. The gauntlet also
-  confirmed the defenses that DO hold: all 5 classic secret env names blocked,
-  lowercase secret blocked on the shape rule, invented audience/sideEffect blocked,
-  and governance commands correctly hidden from the agent catalog.
-- Add one framing sentence: "create-cli's deliverable is this object + the
-  `define()` line — design and enforcement in one artifact, no hand-translation."
-- **Skeleton is a starting shape, not the full field list (plan-review finding
-  2026-05-31).** The contract also has `alias?` (with `command-alias-*` validators),
-  `actionAffordances?`, and `resultContract?` — real optional features the minimal
-  skeleton won't show. Don't restate the full field catalog in the reference (AGENTS
-  deterministic-contracts rule — the facade source is the canonical list); instead add
-  one line: "this skeleton is the minimal legal shape; the full optional field set
-  (`alias`, `actionAffordances`, `resultContract`, …) lives in the package source —
-  emit minimal, enrich as the design needs." Also reconcile the reference's existing
-  "there is no nesting field" prose with the real `alias` field — aliases are a
-  declared field, not just naming; make sure the skeleton guidance doesn't deny a
-  field the contract actually has.
-- **Wire the skeleton to the existing self-correction loop.** The facade ships NO
-  retry/repair helper — `parseCommandFacadeContract` returns all drift `{category,
-  action}` issues at once (each `action` an imperative fix), and the consumer writes
-  the `parse → apply action → re-parse` loop. The reference already documents this in
-  its "Self-correction loop (autonomous mode)" section. U1 must explicitly connect
-  the emitted skeleton TO that section: the skeleton is the loop's *seed input*, the
-  loop is what heals shape-drift (a mirror gone stale against a renamed field) in 1-2
-  passes — but only where the link is live (see Q2 portability boundary). This is the
-  real drift defense; `satisfies` typing is the compile-time half, the parse-loop is
-  the runtime half.
-- **Skeleton must always include `flags` + `exitCodes` (prototype-surfaced 2026-05-31).**
-  Omitting `flags` or `exitCodes` makes `parseCommandFacadeContract` *crash* with a raw
-  TypeError (`Object.entries` on `undefined`) rather than return a recoverable
-  `{action}` issue — so the self-correction loop CANNOT heal it (no action string, just
-  a stack trace). Only `audience` among the required fields is runtime-enforced with a
-  clean `command-audience-missing`; the rest pass silently (tsc-only). The skeleton
-  must therefore always show `flags: {}` and `exitCodes: { "0": … }` present, and the
-  prose should note: emit at least the minimal required set, because a missing `flags`/
-  `exitCodes` crashes the validator instead of self-correcting. (Validator-hardening to
-  turn these crashes into drift findings is a facade-side candidate, not this slice.)
+  owned flag (the reference already states this in "Facade owns the diagnostic flags").
+- Add one framing sentence: "create-cli's recommended deliverable is this object + the
+  `define()` line — design and enforcement in one artifact, no hand-translation (for an
+  author/agent who follows the pointer, on a machine with the link)."
+- **Wire the skeleton to the reference's existing "Self-correction loop (autonomous
+  mode)" section** as its drift-healing mechanism: the skeleton is the loop's seed
+  input; `parse()` returns `{category, action}` fixes the consumer applies and re-runs
+  (the facade ships no repair helper). `satisfies` is the compile-time drift half, the
+  parse-loop is the runtime half — both only where the link is live.
+- **Skeleton must include `flags: {}` + `exitCodes: { "0": … }` always** — omitting
+  either *crashes* `parse()` (TypeError, no recoverable `{action}`), so the loop can't
+  heal it. Show them present and note the minimal-required-set rule.
+- **Gotchas the reference PROSE must carry** (mechanisms detailed in Risks + Sources —
+  do not re-explain them in this plan body; one line each in the reference):
+  - env-var names: use SCREAMING_SNAKE_CASE; the secret gate has an `AUTH_*`
+    false-positive *and* a fused-name (`APITOKEN`) leak — name benign vars plainly
+    (`REGION`), and a rejected name self-corrects via the `action`.
+  - never put untrusted / instruction-shaped text, secrets, or dangerous `script`
+    paths in projected free-text fields — they reach the agent catalog unscanned
+    (facade gap #61); this is a warning to the cooperative author, not a control.
+  - declare `sideEffects` honestly — an under-declared value silently disables the
+    high-stakes guard.
+  - the skeleton is the *minimal legal shape*; the full optional field set (`alias`,
+    `actionAffordances`, `resultContract`, …) lives in the package source — emit
+    minimal, enrich as the design needs. Reconcile the reference's existing "no nesting
+    field" prose with the real `alias` field (aliases ARE a declared field).
 
 **Patterns to follow:**
 - `side-quest-engineering/plugins/memory-os-legacy/scripts/command-contract.ts`
@@ -329,7 +310,7 @@ can run — surfaced by prototype 2026-05-31). Facade foundation already merged.
   scripts/tsconfig.json` over the pasted skeleton passes. **Prototype-confirmed
   (2026-05-31):** `as const satisfies CommandFacadeContract<…>` makes a drifted field
   a hard compile error — a bad `outputModes` value reports `TS2322: Type '"banana"'
-  is not assignable to '"json" | "plain" | "jsonl"'`. This is Q3's compile-time drift
+  is not assignable to '"json" | "plain" | "jsonl"'`. This is the compile-time drift
   layer, proven real. (Without U5's tsconfig the command is a no-op — the original
   gap.)
 - *Skeleton validates at construction.* Running the skeleton's `define()` call
@@ -445,22 +426,42 @@ U1's compile-time drift guard.
   resolution config and silently no-ops against the linked types — U1's headline test
   could not have run as originally written.
 - Add a minimal tsconfig: `strict`, `noEmit`, `module: esnext`,
-  `moduleResolution: bundler`, `target: esnext`, `skipLibCheck: true`. With it, tsc
-  resolves `@side-quest/cli-command-facade` types and a drifted field becomes a hard
-  `TS2322` (prototype-confirmed).
-- **Finding B (handle, don't ignore):** typechecking the linked package pulls in its
-  `node:async_hooks` / `node:crypto` imports → needs `@types/node` OR scope the
-  typecheck to the contract file (not the dependency's internals). Pick the lean one:
-  scope to the contract file + `skipLibCheck` so the playground typechecks the
-  *skeleton*, not the facade's guts.
+  `moduleResolution: bundler`, `target: esnext`, `skipLibCheck: true`, **`types:
+  ["node"]`**. With it, tsc resolves `@side-quest/cli-command-facade` types and a
+  drifted field becomes a hard `TS2322` (prototype-confirmed).
+- **Finding B — CORRECTED (doc-review reproduced 2026-06-01).** The facade exports
+  raw `.ts` source (no built `dist`), so importing it pulls real `.ts` files into the
+  program. `skipLibCheck` only skips `.d.ts` declaration files — it does NOT suppress
+  the facade's `node:async_hooks` / `node:crypto` import errors, and scoping `include`
+  to one file does not stop tsc following the import edge into the dependency source.
+  The approach that actually works is **`types: ["node"]`**: it resolves the `node:*`
+  specifiers so the typecheck passes clean on a good contract and still emits the
+  headline `TS2322` on a drifted field. (The earlier "scope + skipLibCheck avoids the
+  node:* errors" framing was wrong — verified.)
+- **Declare `@types/node` explicitly.** `types: ["node"]` works today only because tsc
+  resolves `@types/node` from the repo root by accident; the `scripts/` package
+  declares only `@side-quest/cli-command-facade`. Add `@types/node` to
+  `skills/create-cli/scripts/package.json` devDependencies so the typecheck stays a
+  real, portable runnable check — otherwise a fresh install / teammate machine / pruned
+  root dep silently brings the `node:*` errors back, the exact silent-gap class U5
+  exists to close.
+
+**Files (updated):**
+- `skills/create-cli/scripts/tsconfig.json` (create)
+- `skills/create-cli/scripts/package.json` (modify — add `@types/node` devDependency)
 
 **Test scenarios:**
-- *Typecheck resolves linked types.* With the tsconfig present, `tsc --noEmit -p
-  scripts/tsconfig.json` over a known-good contract passes; over a contract with a
-  bad `outputModes` value it fails with `TS2322` naming the invalid literal.
-  (Prototype-confirmed both directions 2026-05-31.)
-- *No dependency-internals noise.* The typecheck reports errors for the contract
-  file, not unrelated `node:*`-import errors from the facade source.
+- *Typecheck resolves linked types.* With the tsconfig present (incl. `types:
+  ["node"]`), `tsc --noEmit -p scripts/tsconfig.json` over a known-good contract
+  passes; over a contract with a bad `outputModes` value it fails with `TS2322` naming
+  the invalid literal. (Prototype-confirmed both directions 2026-05-31; node-types fix
+  confirmed 2026-06-01.)
+- *No spurious `node:*` errors.* With `@types/node` present, the typecheck does not
+  report `node:async_hooks`/`node:crypto` errors from the facade source. Note: tsc
+  still type-checks the dependency's `.ts` (it descends the import edge) — it passes
+  because node types resolve, not because tsc is prevented from reading the facade.
+  True dependency-internals isolation needs a published package shipping `.d.ts` (the
+  deferred portability item), out of scope here.
 
 **Verification:** `tsc --noEmit -p scripts/tsconfig.json` runs cleanly on a valid
 contract and rejects a drifted one with a field-specific error — making U1's
@@ -474,7 +475,7 @@ compile-time drift guard a real, runnable check.
   merged surface; it does not change it. No coordinated release. If the facade later
   renames a field, the skeleton drifts — caught by the `scripts/` playground typecheck
   + the parse-loop *where the link is live*, and only there; off-machine the drift is
-  silent (the Q2 portability boundary). The skeleton is a hand-authored mirror of a
+  silent (the v1 portability boundary). The skeleton is a hand-authored mirror of a
   cross-repo type — see the maintenance-seam Risk.
 - **Consumers:** the create-cli skill is invoked cross-harness (Claude + Codex via
   the shared skills repo). The change is additive prose + a skeleton in a reference
@@ -500,7 +501,7 @@ compile-time drift guard a real, runnable check.
   with a live link heals shape-drift in 1-2 passes via `parse()`'s `{category,
   action}` issues (the facade ships no repair helper — the loop is the consumer's);
   (3) a future published/vendored package + CI typecheck closes the off-machine hole
-  (same boundary as Q2). U1 mirrors the memory-os-legacy adapter (a known-good in-repo
+  (same as the v1 portability boundary). U1 mirrors the memory-os-legacy adapter (a known-good in-repo
   consumer), not an invented shape.
 - **Risk: additive edits creep into the verbatim core.** Mitigation: KTD2 + the
   provenance gate diagram; U2's close-out path-scoped check verifies zero
@@ -523,6 +524,29 @@ compile-time drift guard a real, runnable check.
   catalog and the high-stakes guard key on — declare it honestly; an under-declared
   `sideEffects` silently disables the guard. Cross-check is a facade-side hardening
   candidate, not this slice.
+- **Security posture — prose warnings are NOT a control for the hostile-agent threat
+  model (doc-review, security-lens 2026-06-01).** The three risks above all mitigate
+  via "U1 prose tells the emitting agent to behave." That is a *cooperative-author*
+  aid, not a control: a confused or compromised agent — the threat model the plan
+  itself invokes — will not honor a warning in the artifact it is generating from. The
+  real controls live at the catalog-**read** boundary (a consumer that strips/refuses
+  instruction-shaped or unsafe entries) and in facade fixes, both out of scope here.
+  The plan ships skill guidance while the write-side surface stays unguarded — state
+  that window honestly; do not present prose warnings as security mitigation.
+  Specifics: (a) **the `script` field is an execution vector, not display** —
+  `../../etc/passwd`, `/bin/sh -c …` project verbatim; a consumer that builds a command
+  from `script` without out-of-band verification is a code-exec path, and `script`
+  warrants its own treatment (path allowlist / absolute-path restriction) distinct from
+  the general #61 injection class. (b) **fused-name secret evasion** (`APITOKEN` leaks;
+  `API_TOKEN` caught) is unmitigated for a non-cooperative agent — "use
+  SCREAMING_SNAKE_CASE" only helps the well-behaved case; a normalization pass
+  (camelCase-split before segment match) is the real fix. (c) **off-machine, R5's
+  high-stakes guard is inoperative** — `sideEffects` is unvalidated where the link is
+  absent, so the autonomous path should treat every command as potentially high-stakes
+  until the package is resolvable. **Action (done 2026-06-01):** filed as upstream
+  side-quest-engineering issues alongside #61 — #62 (validator crash on missing
+  `flags`/`exitCodes`), #63 (fused-name secret evasion), #64 (mutation/sideEffects
+  cross-check). No longer living only as create-cli prose.
 - **Dependency (satisfied):** `parse`/`defineCommandFacadeContract` + the 3 fields +
   2-adapter proof on side-quest-engineering main (`1737a7ae`). Verified present.
 - **Dependency (machine-local):** the `scripts/` folder's npm-link to the private
@@ -567,97 +591,32 @@ compile-time drift guard a real, runnable check.
   stays deferred + open; revisit via an ADR if ever pursued.
 - Prior session: explorer reconcile commit `8128ba5` (declare-don't-enforce framing
   this plan stays consistent with).
-- **Pipeline validated end-to-end against the linked package (2026-05-31, throwaway
-  prototypes, since deleted).** Confirmed: a dual agent+human contract emits and
-  validates clean; the facade catches bad `outputModes`/`interactivity` and a
-  secret-implying env-var name (`API_TOKEN` rejected — would leak into agent
-  discovery); `--json` is correctly NOT reserved (R7); the `parse → fix → re-parse`
-  self-correction loop converges in 1 pass and retires gracefully when no fix applies;
-  `as const satisfies` makes a drifted field a hard `TS2322`; a flat 5-command record
-  splits agent vs operator/governance views by `audience`; root `--help` danger
-  markers derive from `sideEffects`. **Surfaced two plan fixes:** `scripts/` had no
-  tsconfig (U1's typecheck couldn't run → new U5), and the typecheck needs node-types
-  scoping (Finding B, handled in U5).
-- **Agent-driven emission, 5-angle prototype (2026-05-31, since deleted).** Simulated
-  an autonomous agent driving create-cli across 5 distinct CLI shapes (read-only
-  query, destructive, auth+env, multi-command+enum, dual human/agent). Result: 4/5
-  emitted a valid contract first-try; the 5th (`AUTH_REGION`) was *correctly* rejected
-  by the secret-name gate and self-corrects from the returned `action`. The
-  high-stakes pause fired on the destructive + auth angles; the audience filter hid
-  the operator-only subcommand from the agent catalog. **Conclusion:** the
-  agent-driven path is robust *because* the facade catches mistakes and hands back
-  applicable fixes — which makes the upstream fork *less* tempting (the reliability
-  the fork would chase already comes from the catch-and-correct loop). Surfaced the
-  `AUTH_*` false-positive gotcha now documented in U1.
-- **Agent-fumble prototype, round 2 (2026-05-31, since deleted).** Stress-tested the
-  failure path with 5 deliberately-malformed agent first-guesses: a reserved flag
-  (`--verbose`), a non-numeric exit code (`"success"`), an invented audience
-  (`developer`), an empty enum, and a fused secret name (`APITOKEN`). Result: 4/4
-  malformed-shape fumbles caught, *every one* with an applicable `action` fix string
-  the self-correction loop can apply; the 5th (`APITOKEN`) passed — the facade's
-  *documented* blind spot (the secret gate matches underscore segments, so `API_TOKEN`
-  is caught but fused `APITOKEN` evades). Both env-var gotchas (`AUTH_*` false-positive
-  + fused-name evasion) now documented in U1's skeleton guidance.
-- **Breadth gauntlet, rounds 3-5 (2026-05-31, since deleted) — 25 angles total.**
-  Extended to a full 25-angle sweep (5 rounds × 5): round 3 structural/field combos
-  (aliases, combined side-effects, executionModes, resultContract, all flag types);
-  round 4 audience projection split four ways (agent / operator / smoke / governance
-  from one flat record); round 5 real tools an agent would be told to build (git-branch
-  wrapper, deploy, db migrate, secrets manager, http client). Rounds 3-5: **15/15
-  clean.** Across all 25: 23 clean, 1 self-corrects (`AUTH_REGION`), 1 documented blind
-  spot (`APITOKEN`). No new findings after round 2 → surface is stable/saturated. The
-  create-cli→facade pairing is proven robust across the whole contract surface, not
-  just easy cases — direct evidence for the agent-builds-CLIs-fully-featured vision.
-- **Security gauntlet, 20 angles / 4 rounds (2026-05-31, since deleted).** Hammered
-  the threat model "what can a confused/compromised agent put in a contract that
-  leaks or injects?" **Defenses confirmed:** all 5 classic secret env names blocked
-  (`API_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `GH_PAT`, `DB_PASSWORD`, `PRIVATE_KEY`);
-  lowercase `api_token` blocked on the SCREAMING_SNAKE_CASE shape rule
-  (defense-in-depth); benign `TENANT_ID`/`AUTHOR_NAME` correctly allowed; invented
-  audience (`root`) and sideEffect (`sudo`) blocked; governance commands hidden from
-  the agent catalog. **Real gap found (the headline):** free-text discovery fields
-  (`summary`/`usage`/`script`) are projected UNVALIDATED — prompt-injection
-  (`"IGNORE PREVIOUS INSTRUCTIONS…"`), ANSI/control chars, and path-traversal
-  `script` values all pass into the agent catalog verbatim → second-order
-  prompt-injection surface. This empirically confirms upstream issue #61 (broader
-  than secrets). **Lesser gap:** `mutation: write` + `sideEffects: [read]` is accepted
-  (danger under-declaration). Both are facade-side; this slice documents them (U1 +
-  Risks), fixes are deferred upstream. **Across the full sweep: 18/20 angles behaved
-  as a secure design demands; 2 are documented facade gaps, not create-cli bugs.**
-  Extended to **55 angles / 11 rounds** to convergence: secret-name evasion
-  (CREDENTIAL/PASSPHRASE/reordered — caught), type confusion (`__proto__` accepted but
-  does NOT pollute `Object.prototype`; object-typed `description` — a #61 variant), DoS
-  (1MB summary / 10k flags — 0-1ms, no blowup), control chars (NUL/RTL — #61 variants),
-  reserved-flag integrity (`--run-id`/`--debug`/`--quiet` blocked), shape edges
-  (spaces/unicode flag names — #61 variants). Rounds 9-11 produced **zero new
-  vulnerability classes** — every finding collapses to #61 (shape enforced, content
-  not) or the shape-vs-content split (caught at the `satisfies`/tsc layer). Hunt
-  stopped on a clear 3-dry-round convergence signal.
-- **5-scope downstream sweep (2026-05-31, since deleted).** Tested the surfaces past
-  construction-time validation: **#1 GAP B (verify-behavior-out)** — built a real
-  command from a contract, ran it, asserted output envelope + exit code match the
-  declared fields (5/5); the deferred follow-on is *buildable*. **#2 real-agent
-  self-correction** — a sub-agent fixed a 5-error broken contract using ONLY the
-  validator's `action` strings (no pre-written repair code), converged in 2 passes;
-  4/5 actions self-correctable from prose alone, but **"Add enum values for --mode" is
-  under-specified** (the agent had to invent a value — the `action` says *that*/*where*
-  but not *which*/*shape*). Facade-side feedback-quality gap for "Add X" categories.
-  **#3 whole-tool surface** — generated `scripts/<cmd>.ts` + a root dispatcher + a
-  contract-derived `--help` (with danger markers) and ran it (unknown cmd → exit 2):
-  the "whole-tool surface is generated" claim is real. **#4 drift simulation** —
-  renamed a field in a local type-copy; the skeleton failed typecheck with `TS2561
-  "did you mean outputModes2?"` — Q3's compile-time drift defense proven against an
-  actual rename. **#5 agent-driven clarify-loop UX** — mostly clean (~5 good taste
-  questions, plumbing correctly inferred) but surfaced two intrinsic model-breakers
-  now in U2: a verb can hide a UX fork (`switch`), and a destructive op is a hybrid
-  (infer the safety floor, ask the policy above it).
-- **Closing 20-angle sweep (2026-05-31, since deleted).** Discovery-projection edges
-  (empty/filtered/flags+enum survive) 5/5; real tools round 2 (log tailer, test runner,
-  scaffolder, browser-automation, governance audit) 5/5; output-writer/wire-up surface
-  all exported (createCliRuntime*, writeJsonEnvelope, projectCommandDiscoveryTree) 5/5.
-  **One robustness finding:** omitting `flags` or `exitCodes` *crashes* the validator
-  (TypeError) instead of returning a recoverable issue — the self-correction loop can't
-  heal a crash. Only `audience` is runtime-enforced with a clean missing-field drift;
-  other required fields pass silently (tsc-only). Captured in U1 (skeleton always
-  includes `flags`+`exitCodes`); validator-hardening to convert these crashes to drift
-  is a facade-side candidate.
+- **Prototype evidence (2026-05-31, throwaway prototypes run against the linked
+  package, since deleted).** ~135 angles across functional / agent-emission / security
+  / downstream / boundary sweeps. Recorded here only as the findings that drove a plan
+  change (per-round angle tallies omitted — validation audit trail, not implementation
+  guidance):
+  - *Pairing works.* A dual agent+human contract emits + validates clean; `as const
+    satisfies` makes a drifted field a hard `TS2322`; the audience filter splits one
+    flat record across agent/operator/smoke/governance; `--help` danger markers derive
+    from `sideEffects`. → backs R1-R4, U1.
+  - *Agent self-correction is real.* A sub-agent fixed a 5-error broken contract from
+    the validator's `{action}` strings alone (no pre-written repair), converging in 2
+    passes — but the `"Add enum values"` action is under-specified (agent had to invent
+    a value). → backs U1's self-correction wiring; "Add X" action-quality is a
+    facade-side gap.
+  - *GAP B is buildable* (built + ran a command, asserted output vs contract);
+    *drift breaks loud* (renamed field → `TS2561`). → de-risks the deferred follow-on
+    + the maintenance-seam Risk.
+  - *Plan fixes surfaced:* `scripts/` had no tsconfig → **U5**; the typecheck needs
+    `@types/node` (the skipLibCheck-scoping framing was wrong) → **U5 corrected**;
+    omitting `flags`/`exitCodes` *crashes* the validator (loop can't heal a crash) →
+    **U1 skeleton-always-includes rule** + upstream issue.
+  - *Security:* all classic secret env names blocked, lowercase + invented
+    audience/sideEffect blocked, governance hidden from agent catalog, no DoS, no
+    prototype pollution. **The gaps** (all facade-side, see Risks): #61 free-text
+    injection (incl. the `script` exec vector), fused-name secret evasion (`APITOKEN`),
+    mutation/sideEffects under-declaration. Security converged after 11 rounds with
+    every finding collapsing to #61 or the shape-vs-content split.
+  - *Clarify-loop UX* (agent-asks-only-taste): mostly clean, two intrinsic
+    model-breakers → **U2 guards** (verb-hides-a-UX-fork; destructive-is-a-hybrid).
