@@ -38,6 +38,8 @@ Read `.productivity.yml` in the project root. If it doesn't exist, tell the user
 No .productivity.yml found. Run /productivity-setup first to configure connectors for this project.
 ```
 
+**Required for the active-sprint identity check:** when `project-tracker: jira`, `.productivity.yml` must also declare `project-tracker-board: <numeric-board-id>`. This is the load-bearing input for the active-sprint identity check (Step 2's pre-diff audit and Step 11's post-run recheck). If the field is absent, the skill runs a one-shot **board-id discovery procedure** (see Step 2's project-tracker substep) and prompts the operator to persist the resolved id back into `.productivity.yml` before continuing. The skill must never guess a board id.
+
 ## Usage
 
 ```
@@ -232,9 +234,9 @@ Auto-disable when either condition holds:
 
 Auto-re-enable when `SKILL.md`'s current `post_run_drift_check_sentinel` differs from `last_sentinel_seen` (the skill was healed again; re-run training wheels on the new ruleset).
 
-**Current sentinel:** `v1-2026-05-28`. Bump this string in SKILL.md (search anchor: `post-run-drift-check-sentinel:`) whenever the post-run drift check's logic or scope changes — the bump re-enables training wheels for one fresh 14-day window on the next run.
+**Current sentinel:** `v2-2026-06-01`. Bump this string in SKILL.md (search anchor: `post-run-drift-check-sentinel:`) whenever the post-run drift check's logic or scope changes — the bump re-enables training wheels for one fresh 14-day window on the next run.
 
-<!-- post-run-drift-check-sentinel: v1-2026-05-28 -->
+<!-- post-run-drift-check-sentinel: v2-2026-06-01 -->
 
 **Cursor migration note:** When `commitments`, `pending`, or `post_run_drift_check` top-level keys are absent, or `run_history` is absent from a connector entry, initialise them in memory with empty arrays / objects. For `post_run_drift_check`, the initial shape on first run after a sentinel-bump is:
 ```json
@@ -664,6 +666,7 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ **Using the Notion page title or transcript speaker names to determine who was in a meeting.** Notion AI generates the page title from the meeting *topic*, not from the *participants*. A 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Always use the calendar event attendees list as the authoritative participant source. If calendar is unavailable, flag the attendees as unverified in the meeting note.
 - ❌ **Writing a transcript-extracted ticket key directly into TASKS.md / meeting notes without verifying against Jira's open-sprint query.** Transcripts misattribute ticket keys constantly (4154 ↔ 4155, 4160 ↔ 4116, etc.). Always cross-check via the open-sprint query; if the key isn't there, run an adjacent-digit lookup. Use `(ticket TBC)` placeholders rather than committing a wrong key.
 - ❌ **Stopping the project-tracker step after the my-assignee query because "everything I own is already in TASKS.md."** The my-assignee query alone doesn't surface tickets mentioned in meeting transcripts that are owned by other team members, sibling tickets in the same epic, or just-filed release-train / regression-prep tickets that signal next-sprint shape. The open-sprint query is mandatory, not optional.
+- ❌ **Guessing a Jira board id when `.productivity.yml` doesn't declare `project-tracker-board:`.** The skill MUST run the board-id discovery procedure (above) and persist the resolved id back to `.productivity.yml` via operator confirmation, not pick a plausible-looking number and hope. A wrong id makes every drift detector run against the wrong sprint and silently return false-clean results. Failure mode observed 2026-06-01: probed board 419 (guessed), got `[]`, surfaced as inconclusive — but if 419 had been a real (wrong) board with an active sprint, the entire identity check would have silently false-passed against a sprint that has nothing to do with the operator's project.
 - ❌ **Writing an out-of-sprint ticket into `🔥 Now` because the meeting transcript named it as Nathan's next pickup.** Transcripts often surface "I'll start X next" without speakers checking sprint membership. The skill MUST verify against the open-sprint query before any 🔥 Now write. POS-3275 sat in 🔥 Now for two sync cycles because of this exact failure mode (resolved 2026-05-28 when Sonny explicitly confirmed in standup the ticket was not in sprint).
 - ❌ **Letting `⏸ Watch-list`, `📋 Backlog`, "Smaller items", or "Housekeeping" sections accumulate in TASKS.md.** TASKS.md is sprint-only; Jira's backlog is the backlog. On every run, propose removal of these sections if found.
 - ❌ **Skipping the TASKS.md sprint-membership audit when "nothing has changed."** Drift accumulates exactly when nothing has changed: tickets fall out of sprint at sprint boundaries, transcripts mention things that don't make the cut. The audit must fire every run.
@@ -691,11 +694,30 @@ Run **two** queries in the project-tracker step, not one. Each has a different j
 
 **Always diff both queries against TASKS.md** — don't stop after the my-assignee query just because "everything I own is already in TASKS.md." The open-sprint query is the load-bearing drift detector.
 
+**Board-id discovery (run once, persist to `.productivity.yml`):**
+
+If `.productivity.yml` lacks `project-tracker-board:`, run the discovery procedure before the active-sprint identity check below. Never guess a board id — a wrong id makes every drift detector run against the wrong sprint and silently return false-clean results.
+
+1. Call `jira_get_agile_boards(project_key=<configured project>, board_type="scrum")` (or the equivalent for the operator's tracker).
+2. If exactly one scrum board is returned, treat it as the candidate.
+3. If more than one, present the boards (id + name) via `AskUserQuestion` and have the operator pick.
+4. Verify the candidate by calling `jira_get_sprints_from_board(board_id=<candidate>, state="active")`. The result must contain a single sprint object whose name or id matches what TASKS.md's header claims. If it does not, the candidate is wrong — re-prompt the operator (don't auto-pick the next board).
+5. After verification, propose adding `project-tracker-board: <id>` to `.productivity.yml` via `AskUserQuestion`. Never silently write the config file — the operator confirms the addition.
+6. Once persisted, continue with the active-sprint identity check below using the new id.
+
+This block only runs when the field is missing. On steady-state runs (field present), skip directly to the identity check.
+
 **Mandatory pre-diff audit: TASKS.md sprint-membership check**
 
 **0. Active-sprint identity check (run BEFORE the bucket audit):**
 
 Parse TASKS.md's header lines for the active-sprint id and name. Regex hints: `id\s+(\d+)` for the numeric id, `FY\d{4}` or `Sprint\s+\d+` for the label. Cross-check against the result of `jira_get_sprints_from_board(board_id=<configured board>, state="active")` (the only sprint marked `"state": "active"` is the live one).
+
+**Empty-result handling:** if `jira_get_sprints_from_board(board_id=<configured board>, state="active")` returns `[]`:
+
+- If `.productivity.yml`'s `project-tracker-board:` is **missing** → this is a discovery failure, not a drift signal. Surface as `"active-sprint-identity probe inconclusive: project-tracker-board not configured"` and trigger the board-id discovery procedure above. Do not treat `[]` as evidence of "no drift."
+- If `project-tracker-board:` is **present** and the result is genuinely `[]` → the project may be between sprints (last sprint just closed, next sprint not yet started). Cross-check by calling the same tool with `state="future"`. If a future sprint exists, surface as `"no active sprint (next sprint <id> starts <date>)"` — informational, not drift. If no future sprint exists either, surface as drift with `"no active or future sprint — board id may be wrong, please verify"`.
+- Never silently increment `consecutive_clean_runs` on an inconclusive identity probe — treat inconclusive as a finding (counter stays at 0).
 
 If the header's id or name **does not match** the live active sprint:
 
@@ -1307,7 +1329,7 @@ This step runs at the very end of the sync (after Step 10's deep-scan nudge) on 
 
 Re-run the three drift detectors from Step 2's project-tracker substep, against the post-sync state of TASKS.md and a fresh Jira query (do not reuse the earlier in-memory snapshot — TASKS.md may have been edited mid-run, and the user may have answered AskUserQuestion prompts that changed durable state):
 
-1. **Active-sprint identity check** — parse TASKS.md header for sprint id/name; cross-check against `jira_get_sprints_from_board(state="active")`. Mismatch → drift.
+1. **Active-sprint identity check** — parse TASKS.md header for sprint id/name; cross-check against `jira_get_sprints_from_board(board_id=<configured board>, state="active")`. Mismatch → drift. Apply the same **empty-result handling** as the Step 2 pre-diff audit: `[]` with no `project-tracker-board:` configured → inconclusive finding (counter does not increment); `[]` with the field configured → cross-check `state="future"` to distinguish between-sprints state vs wrong-board-id drift.
 2. **Per-ticket bucket audit** — for every `<prefix>-NNNN` in TASKS.md's active sections, verify open-sprint membership matches the section it sits in. Bucket violations (e.g. ticket in `🔥 Now` but not in open sprint) → drift.
 3. **My-assignee + open-sprint diff** — re-run the my-assignee + open-sprint queries; check that any in-flight tickets assigned to me are reflected in TASKS.md, and that Ready/To Do unscheduled tickets surface in `❓ Ask <PM>`. Missing entries → drift.
 
