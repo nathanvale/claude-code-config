@@ -4,11 +4,17 @@ Source: [steipete/agent-scripts](https://github.com/steipete/agent-scripts) — 
 License: MIT © 2026 Peter Steinberger (see `LICENSE.upstream`)
 Pulled: 2026-05-29 (sparse checkout of `main`)
 
-## Status: VERBATIM COPY — usable as-is
+## Status: verbatim core + side-quest facade reference
 
-`SKILL.md` + `references/cli-guidelines.md` (a condensed clig.dev rubric). Unlike browser-use /
-one-password / peekaboo, this skill carries NO steipete-specific paths, vaults, or binaries — it's
-pure design methodology, language/runtime-agnostic. No adaptation needed.
+`SKILL.md` body + `references/cli-guidelines.md` (a condensed clig.dev rubric) remain the verbatim
+upstream copy — pure design methodology, language/runtime-agnostic, still diffable against upstream.
+
+Side-quest additions (not upstream): `references/cli-command-facade.md` (maps each clig.dev pattern
+to a `@side-quest/cli-command-facade` field/helper + a TS+Bun wire-up), one pointer line under "Do
+This First", and a `scripts/` folder that npm-links the package. These encourage implementing
+designed CLIs with TypeScript + Bun against the facade. The design philosophy stays agnostic; only
+the recommended *implementation* path is side-quest-flavored and depends on a private, cross-repo
+package (machine-local link).
 
 ## Why it's here — pairs with @side-quest/cli-command-facade
 
