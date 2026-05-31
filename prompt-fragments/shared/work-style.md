@@ -31,6 +31,9 @@ Applies when editing AGENTS.md, CLAUDE.md, `prompt-fragments/`, `rules/`, `conte
 
 ## No parallel policy
 
+- Must: new skill or doc needing an existing skill's mechanics is a thin wrapper that invokes it. Never copy its steps.
+- Must: default to linking the owner. Restating is the exception; justify it in the commit.
+- Compose, don't absorb. Reach for another skill's capability by calling it, not by reproducing it.
 - One canonical owner per policy, workflow, or contract.
 - Other docs link to owner. Don't restate.
 - No parallel policy across AGENTS, README, skills, runbooks, and generated docs.
