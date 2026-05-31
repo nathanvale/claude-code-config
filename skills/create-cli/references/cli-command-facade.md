@@ -22,6 +22,13 @@ it. Design the pattern; let the facade hold it.
   `writeJsonEnvelope` (the machine-stable `{ status, run_id, data }` shape).
 - Exit-code map → `exitCodes: Record<string, string>` (numeric-string keys).
 - `--dry-run` / safety modes → `executionModes: 'normal' | 'check' | 'dry_run'`.
+- `--plain` / line-based output → `outputModes: 'json' | 'plain' | 'jsonl'`
+  (declare the capability; the facade advertises it, you render it).
+- `--no-input` / non-interactive stance → `interactivity: 'required' |
+  'optional' | 'none'` (one stance per command; `'none'` for agent/smoke).
+- Declared environment variables → `envVars: { name, required?, secret?,
+  description? }[]` (names + flags for discovery; the validator rejects names
+  that imply a secret so they never reach the agent catalog).
 - Destructive-op classification → `sideEffects: 'read' | 'check' | 'write' |
   'destructive' | 'auth' | 'network' | 'browser'`.
 - Error shape + recovery → `StructuredRuntimeError` + `AgentHint` (built via
@@ -66,19 +73,26 @@ Contract-enforced:
 - Arguments and flags → typed `flags`.
 - Destructive classification → `sideEffects`; safety modes → `executionModes`.
 - Result schema / follow-ups → `resultContract` / `actionAffordances`.
+- Output: `--plain` / line-based modes → `outputModes` (declare, don't enforce).
+- Interactivity: `--no-input` stance → `interactivity` (declare, don't enforce).
+- Environment variables: declared names + flags → `envVars` (secret-name gated;
+  the facade validates the *form*, the consumer owns whether the var is *set*).
 
 Prose-only (no contract field — keep in the spec, design deliberately):
 
-- Output: `--plain`, color (`NO_COLOR` / `--no-color`), pager.
-- Interactivity: prompts, TTY detection, `--no-input`.
+- Output: color (`NO_COLOR` / `--no-color`), pager.
+- Interactivity: prompts, TTY detection (the runtime behavior, not the stance).
 - Signals: Ctrl-C handling, crash-only recovery.
 - Configuration: flags > env > project > user > system precedence, XDG dirs.
-- Environment variables: names, respected vars, `.env`.
 - Documentation: web docs, man pages.
 - Future-proofing: deprecation paths; Distribution; Naming; Analytics.
 
-Backfilling some of these into the contract (config/env precedence, `--plain`,
-`--no-input`) is tracked upstream: nathanvale/side-quest-engineering#58.
+`outputModes` / `interactivity` / `envVars` *declare* a capability for the
+discovery catalog; the facade never enforces the runtime semantics (no TTY
+detection, no `--plain` rendering, no env-var presence check) — that stays at
+your front door. Config/env precedence remains prose-only (naming config paths
+or an override order is consumer policy, not facade shape) and is still tracked
+upstream: nathanvale/side-quest-engineering#58.
 
 ## Validate at construction — write and check collapse into one step
 
