@@ -511,12 +511,20 @@ compile-time drift guard a real, runnable check.
   U1's R7-honesty scenario; the reference already states `--json` is non-reserved —
   keep the skeleton consistent.
 - **Security risk: free-text injection into the agent catalog (facade gap #61).**
-  Projected fields (`summary`/`usage`/`description`/`script`) are NOT scanned —
-  prompt-injection, ANSI, and path-traversal pass verbatim into the catalog other
-  agents read (20-angle security gauntlet, 2026-05-31). Mitigation here is
-  *documentation only* (KTD1 — no facade changes this slice): U1's skeleton prose
-  warns against untrusted/instruction-shaped text in those fields and names the
-  upstream fix (side-quest-engineering #61). A real fix is facade-side, deferred.
+  On `origin/main` (`1737a7ae`, what this plan's evidence ran against) projected
+  fields (`summary`/`usage`/`description`/`exitCodes`/`envVars[].description`) are NOT
+  scanned — secrets, control chars, and non-string types pass verbatim into the
+  catalog other agents read (20-angle security gauntlet, 2026-05-31). **Status update
+  (2026-06-01): #61's construction-time free-text scan (`command-*-unsafe-text`,
+  `validateSafeRuntimeText`) is implemented on the unmerged branch
+  `feat/scan-projected-free-text-fields` and is about to merge.** Once it lands, the
+  facade scans projected free-text for credentials/control-chars/non-string types at
+  construction — so the skill mitigation moves from "documentation only" to "the facade
+  enforces it." **Residual after #61:** the scan deliberately does NOT detect
+  instruction-shaped prompt-injection (`IGNORE PREVIOUS INSTRUCTIONS`-class), and
+  `script` is not path/exec-validated — those stay author-trusted (the reference's
+  "known boundary" note covers this). KTD1 holds: no facade change in THIS slice; the
+  reference is forward-dated to the imminent #61 merge.
 - **Security risk: under-declared danger (mutation vs sideEffects not cross-checked).**
   A contract can say `mutation: write` while declaring `sideEffects: [read]` — the
   facade accepts the mismatch, so a destructive command can under-advertise its
