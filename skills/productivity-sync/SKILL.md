@@ -496,6 +496,25 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
    - If `transcriptions: notion` and no `transcriptions-db:`: call `mcp__notion__notion-search` with a title/content query + date filter. Less precise — may surface other teams' meetings.
    - If `transcriptions: confluence`: use `mcp__mcp-atlassian__confluence_search` with CQL date filter.
 
+3a. **Skip-rule classifier (fail-closed, mandatory before triage)** -- For each transcription returned by substep 3, classify it against the project's documented skip rules BEFORE surfacing it to the user or any downstream substep. The classifier must fetch transcript content, not rely on title or summary metadata.
+
+   **What counts as a skip rule:** any `feedback_skip_*` memory note in `~/.claude/projects/<project>/memory/` (e.g. `feedback_skip_monash_meetings_entirely.md`) whose body documents content-based exclusion for the current project. The classifier loads these once per run and builds a signal list per rule:
+   - For each skip-rule note, extract the documented trigger signals (named people, project codes, domain terminology). The Monash rule's signals are: SLO2, SLO4, SFA, Ellucian, BSA, Banner, FlyWire, OCI, Ashwini, Rita, Nandini, Zai, Kerry, plus any other markers the rule names.
+
+   **How to classify:**
+   1. Call `mcp__notion__notion-fetch` with `include_transcript: true` on the page ID. **Use the `<transcript>` block, not the `<summary>` block** — the AI summary can omit out-of-scope signals (Monash names, project codes), making in-scope misclassification more likely. The full transcript is the only reliable router.
+   2. Scan the transcript text for any signal from any skip rule (case-insensitive, word-boundary match).
+   3. If ≥1 signal matches: tag the transcript `skip: true`, record `skip_reason` as `"<rule-name>: signals matched [<signal1>, <signal2>, ...]"`, and remove it from the candidate set for substeps 4-7. Add it to the Step 9 report as `Skipped per <rule-name>: <transcript title> (signals: <signal list>)`.
+   4. If 0 signals match: pass through to substep 4.
+
+   **Hard rules:**
+   - The classifier MUST run before any user-facing `AskUserQuestion` about transcript routing. A skipped transcript should never appear in a triage prompt.
+   - The classifier MUST use the raw `<transcript>` block, not the `<summary>` or page title. Surface metadata is unreliable for routing: a Monash sprint discussion can be titled "@Today 4:01 PM (GMT+10)" with no domain markers visible until the transcript loads.
+   - Skip-classification is **content-based, not source-based**. Do not assume "this came from the project's transcriptions-db so it must be in scope" — the same workspace can hold transcripts for multiple engagements when calendars overlap (e.g. Nathan's POS Yellow + Monash parallel work per `project_monash_parallel_engagement.md`).
+   - If `include_transcript: true` returns an empty `<transcript>` block: do NOT default to "in scope." Default to **skip with reason "transcript unavailable for classification"** and surface to the user as `⚠️ Could not classify <title> — transcript empty. Treat as skip until manual review.` Fail closed, never open.
+
+   **Why this exists:** discovered 2026-05-29 — a Monash transcript was surface-classified as POS Yellow because its title was `@Today 4:01 PM (GMT+10)` and its preview mentioned "sprint management and ticket tagging" (a phrase that fits multiple engagements). The skill asked the user whether to persist/extract; the user said yes; the downstream persist sub-agent fetched the full transcript, hit Monash signals, and correctly refused. The user-facing decision was made on top of a wrong route. The fix is to run the content-based classifier upstream so wrong routes never reach the user.
+
 4. **Match transcriptions to events** -- Match by time alignment: extract the time from the transcription title (Notion auto-transcripts use `@Day HH:MM (GMT+TZ)` titles) and match to the calendar event whose start time is closest (within 15 minutes). Confirm by checking that the raw transcript content mentions keywords from the calendar event summary.
 
    Once matched, extract the **authoritative participant list** from the calendar event's `attendees` array (filter out room resources and declined invitees). This is the ground truth for who was in the meeting. The Notion-generated title and transcript speaker names are unreliable for this — Notion AI names the page from the meeting topic, not the participants, so a 1:1 between Nathan and Pri about Nithin's work gets titled "Nithin & Prave". Calendar attendees do not have this problem.
@@ -540,7 +559,9 @@ This substep runs even when calendar is ❌. Calendar enriches matching (attende
 
 6. **Extract action items** -- Collect action items from all newly created meeting notes. These feed into the action item write-back below (substep 7) and the report (Step 9).
 
-   **Ordering rule:** Step 5 (persist meeting note file) must complete before any action-item extraction begins. Never extract signals from a transcript that hasn't been written to disk first — even if the user said "skip Monash meetings" or "release-day mode, defer." In those cases, persist the meeting note to the appropriate repo (or to `~/code/my-second-brain/docs/meetings/` if it's not owned by the current repo) and then skip the extraction. *Skipping a meeting* means deferring signal extraction; it never means losing the transcript.
+   **Ordering rule:** Step 5 (persist meeting note file) must complete before any action-item extraction begins. Never extract signals from a transcript that hasn't been written to disk first — even if the user said "release-day mode, defer." In those cases, persist the meeting note to the appropriate repo (or to `~/code/my-second-brain/docs/meetings/` if it's not owned by the current repo) and then skip the extraction. *Skipping a meeting* means deferring signal extraction; it never means losing the transcript.
+
+   **Skip-rule transcripts are different.** Transcripts tagged `skip: true` by the substep 3a classifier (e.g. Monash transcripts under the skip-entirely rule) are filtered out *before* substep 4, so they never reach this step. They are not persisted, not extracted, not routed — by the time substep 6 runs, they are already gone. Do not treat the "skipping = skip extraction, keep file" rule as applying to skip-rule transcripts; it applies to transcripts that pass the classifier but the user chooses to defer.
 
    After action item extraction, append the enrichment summary to the per-meeting report line: `"1 speaker update proposed, 1 applied, 2 unmatched."` (or `"transcript enrichment skipped (apply-person-update.ts not found)"` on graceful-skip).
 
@@ -628,6 +649,9 @@ The same action can appear in multiple meetings (e.g. "Nathan to respond to Box"
 - ❌ Writing action items directly without user confirmation
 - ❌ Losing a triage item permanently when the user skips — offer defer instead.
 - ❌ **Using the Notion AI `<summary>` block as the transcript source** — always fetch with `include_transcript: true` and use the `<transcript>` block. The AI summary misattributes speakers, omits context, and fabricates action items. This is a hard rule, not a preference.
+- ❌ **Classifying transcript scope (POS Yellow vs Monash vs other) from page title, page preview, or AI summary alone.** The full `<transcript>` block is the only reliable signal source for routing. A Monash sprint discussion can look indistinguishable from a POS Yellow sprint discussion at the metadata level — both mention "sprint", "ticket", "review", "pickup". Domain signals (named people, project codes, product names) only appear reliably in the transcript body. See substep 3a above.
+- ❌ **Asking the user to route a transcript (persist+extract / persist only / skip) before running the skip-rule classifier on its content.** The user-facing triage assumes the transcript is in scope for the current project. Skipped transcripts must be filtered out before the question is asked, otherwise the user makes a routing decision on top of a misclassification (e.g. saying "persist + extract" for a transcript that should never have been surfaced). Failure mode observed 2026-05-29: a Monash transcript reached the routing prompt; only the downstream persist agent's fail-closed read of the transcript prevented memory contamination.
+- ❌ **Defaulting an empty `<transcript>` block to "in scope" for skip-rule classification.** If the transcript is empty, the classifier cannot make a defensible call — default to skip-with-warning rather than passing the transcript through. Fail closed.
 - ❌ Re-extracting action items from already-processed meeting notes on subsequent runs (use cursor + meeting note's `transcription:` frontmatter ID to skip)
 - ❌ Adding other people's actions to the user's TASKS.md (they go in Dependencies / `🔗 I'm waiting on`)
 - ❌ Filing personal-life items into work repos
