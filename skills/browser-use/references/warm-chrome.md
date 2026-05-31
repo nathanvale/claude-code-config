@@ -19,9 +19,9 @@ curl -sf -m2 "http://127.0.0.1:$PORT/json/version" >/dev/null || \
     --remote-debugging-port="$PORT" --user-data-dir="$PROFILE" \
     --no-first-run --no-default-browser-check about:blank &
 
-# agent-browser connects cleanly — "✓ Done", no permission dialog, no GUID hunt
-agent-browser --session "$S" connect "$PORT"
-agent-browser --session "$S" tab list        # real tabs
+# agent-browser pins cleanly — no permission dialog, no GUID hunt
+agent-browser --session "$S" --headed --cdp "$PORT" get cdp-url
+agent-browser --session "$S" --headed --cdp "$PORT" tab list        # real tabs
 ```
 
 `chrome-devtools-mcp` attaches to the same port via
@@ -54,3 +54,5 @@ clash). Same-domain-two-identities would need separate profiles — out of scope
 - Close: `agent-browser close --all`, or quit the warm Chrome.
 - `agent-browser close --all` before re-launching a different browser — the
   daemon is sticky to its first browser.
+- Proof-grade runs pass `--cdp "$PORT"` on every command. `connect <port>` alone
+  can leave later commands on a sticky Chrome for Testing daemon.

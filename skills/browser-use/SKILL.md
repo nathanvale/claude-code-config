@@ -29,7 +29,9 @@ Screenshot/live UI bugs require this warm-Chrome path. `curl`, source inspection
 
 Browser-session-safety rules apply: always `--session <name>` (never default), `--headed`. Session names come from the registry at `~/.config/side-quest/browser-automation/registry.yaml`.
 
-Pre-flight: ensure a warm real Chrome is up on the port, then connect. NEVER let agent-browser auto-launch (it spawns Chrome for Testing). Launch the real binary with classic debug + a dedicated persistent profile:
+Pre-flight: ensure warm real Chrome is up on the port, then pin every command to
+that port. NEVER let agent-browser auto-launch; it spawns Chrome for Testing.
+Launch the real binary with classic debug + a dedicated persistent profile:
 
 ```bash
 PORT=9444; PROFILE="$HOME/.agent-warm-profile"
@@ -39,15 +41,19 @@ curl -sf -m2 "http://127.0.0.1:$PORT/json/version" >/dev/null || \
     --remote-debugging-port="$PORT" --user-data-dir="$PROFILE" \
     --no-first-run --no-default-browser-check about:blank &
 
-agent-browser --session "$S" connect "$PORT"   # ✓ Done, no dialog (classic discovery)
-agent-browser --session "$S" tab list          # real tabs
-agent-browser --session "$S" tab new <url>
-agent-browser --session "$S" snapshot -i       # interactive elements + @refs
-agent-browser --session "$S" click @e3         # act on a ref (re-snapshot after page change)
-agent-browser --session "$S" get attr @e7 id   # resolve ref -> durable selector (capture)
+agent-browser --session "$S" --headed --cdp "$PORT" get cdp-url
+agent-browser --session "$S" --headed --cdp "$PORT" tab list
+agent-browser --session "$S" --headed --cdp "$PORT" tab new <url>
+agent-browser --session "$S" --headed --cdp "$PORT" snapshot -i       # interactive elements + @refs
+agent-browser --session "$S" --headed --cdp "$PORT" click @e3         # act on a ref (re-snapshot after page change)
+agent-browser --session "$S" --headed --cdp "$PORT" get attr @e7 id   # resolve ref -> durable selector (capture)
 ```
 
 Refs (`@e1`...) are reassigned on every snapshot and go stale on any page change — re-snapshot before the next ref interaction. For durable selectors, resolve a ref via `get attr @ref id`/`name`, or `eval` a CSS path. Proven on ASP.NET and Angular portals. See `references/warm-chrome.md` for the full recipe and why the toggle path fails.
+
+`connect <port>` alone can report success while later commands use a sticky
+Chrome for Testing daemon. For proof-grade warm sessions, pass `--cdp "$PORT"`
+on every command and verify `get cdp-url` contains that port.
 
 ## Mode B — chrome-devtools MCP
 
