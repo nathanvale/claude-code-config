@@ -77,6 +77,17 @@ Contract-enforced:
 - Interactivity: `--no-input` stance → `interactivity` (declare, don't enforce).
 - Environment variables: declared names + flags → `envVars` (secret-name gated;
   the facade validates the *form*, the consumer owns whether the var is *set*).
+- Projected free-text values → scanned at construction. Every value projected
+  into the discovery tree — `summary`, `usage[]`, `flags[].description`,
+  `exitCodes` values, `envVars[].description`, `actionAffordances[].summary`,
+  and `resultContract.kind`/`schema_version` — is checked against the facade's
+  unsafe-text patterns (credentials, tenant/account IDs, local paths, debugger
+  URLs, `op://` refs, **shell-command examples** like `bun run x`), plus control
+  characters and non-string types (`command-*-unsafe-text` /
+  `command-discovery-*-unsafe-text` drift). The env-var *name* gate (above) and
+  this free-text *value* scan are separate layers; both run at construction.
+  Note the shell-command-example pattern: an illustrative `bun ...`/`npm ...`
+  invocation inside a `usage[]` string trips the scan — rephrase or omit it.
 
 Prose-only (no contract field — keep in the spec, design deliberately):
 
@@ -93,6 +104,20 @@ detection, no `--plain` rendering, no env-var presence check) — that stays at
 your front door. Config/env precedence remains prose-only (naming config paths
 or an override order is consumer policy, not facade shape) and is still tracked
 upstream: nathanvale/side-quest-engineering#58.
+
+Known boundary — projected free-text is scanned for secrets/control-chars, NOT
+for instruction-shaped text. The construction scan (above) catches credentials,
+control characters, and non-string types in projected fields. It deliberately
+does NOT detect prompt-injection / instruction-shaped content
+(`IGNORE PREVIOUS INSTRUCTIONS`-class). The discovery catalog is read by other
+agents as input, so treat projected free-text as author-trusted: don't put
+untrusted or instruction-shaped text in `summary`, `usage`, descriptions, or
+exit-code messages. The scan is a keyword/structure guard, not entropy- or
+homoglyph-aware: a bare high-entropy secret (raw token, JWT) or a homoglyph-
+spoofed keyword can slip. `script` is also not path/exec-validated yet. Tracked
+upstream: instruction-shaped/`script` boundary at
+nathanvale/side-quest-engineering#61; entropy/homoglyph scanning at
+nathanvale/side-quest-engineering#65.
 
 ## Validate at construction — write and check collapse into one step
 
