@@ -120,6 +120,54 @@ _Avoid_: duplicate copy, second canonical capability, forked alias
 The canonical adapted skill for safe 1Password CLI (`op`) workflows. It owns the generic `op` safety contract, while exact vault, item, field, and service-account details belong in service-specific owning skills.
 _Avoid_: 1password, onepassword, secrets
 
+**browser-use**:
+The browser-driving capability. It owns Chrome connection, inspection, navigation, clicking, filling, and live browser control; it does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge.
+_Avoid_: browse, play, browser orchestrator, browser memory skill
+
+**browser-domain-memory**:
+The compound browser knowledge capability. It owns durable per-domain browser knowledge — auth pointers, dual-mode runbooks, gotchas — and browser capture/distillation plus the two playback modes (prose and deterministic).
+_Avoid_: domain-memory, browser-capture skill
+
+**Browser capture**:
+The `browser-domain-memory` workflow that turns messy browser-run evidence into durable browser knowledge. It may use raw scratch evidence as source material, but durable output is curated memory, not a trace.
+_Avoid_: capture everything, raw trace archive, recording, replay capture, capture skill
+
+**Scratch Evidence**:
+Redacted browser-run source material used by `browser-domain-memory` to distill Durable Browser Knowledge. It may be retained as evidence and may be Recorder-shaped, but it is not trusted memory, a runbook, or a replay artifact. Use timestamped evidence names such as `YYYY-MM-DD-HHMMSS-flow-slug`.
+_Avoid_: recording, trace, tape, replay file, raw history, durable instruction
+
+**Durable Browser Knowledge**:
+Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. It includes auth pointers, prose runbooks, gotchas, and other model-readable notes.
+_Avoid_: scratch, trace archive, replay library, browser automation store
+
+**Auth Pointer**:
+A safe per-domain reference to the 1Password account, vault, item, fields, and login context needed for browser auth. It belongs with Durable Browser Knowledge, points to secrets, and never contains secret values.
+_Avoid_: password note, secret mapping, auth tape, login recording
+
+**Browser Runbook**:
+Durable, dual-output path knowledge for a known browser flow: one capture emits both a model-readable run-book and a Recorder JSON. It may reference an Auth Pointer when login is needed but does not duplicate auth details. Played back in one of two modes (see Prose mode, Deterministic mode), per-domain configurable.
+_Avoid_: automation script, CI fixture, raw trace
+
+**Prose mode**:
+The playback mode where a reasoning agent reads a Browser Runbook and re-drives live Chrome via `browser-use`, resolving each step's selectors with live inspection and judgment. The durable, tool-neutral default. Config value `replayMode=prose`.
+_Avoid_: Agent-playable, manual mode, LLM replay
+
+**Deterministic mode**:
+The playback mode where a Browser Runbook's Recorder JSON replays against the warm Chrome via puppeteer — fast, zero reasoning rounds. The fast opt-in. Config value `replayMode=deterministic`.
+_Avoid_: machine-play, tape execution, CI replay
+
+**Run Outcome**:
+A per-run result record for a Browser Runbook, stored beside it as `<flow>.runs.jsonl`. It tracks date, result, steps healed, drifted selectors, and per-mode value metrics (reasoning rounds / snapshots eliminated, heal rate, wall-clock), and links to timestamped Scratch Evidence. It feeds the staleness policy and lets the user assess which mode earns its keep per flow.
+_Avoid_: test result, execution proof, success metric in prose
+
+**Browser Gotcha**:
+A non-obvious domain fact, fork, trap, warning, label mismatch, slow state, or fragile condition that helps future browser work. Use this broad bucket instead of adding a generic browser note type in v1.
+_Avoid_: note, trivia, ordinary noise, raw observation
+
+**Compound browser knowledge**:
+The loop where browser work produces learning evidence, browser capture distills it into durable dual-mode runbooks, and later runs start from `browser-domain-memory` — replayed deterministically or re-driven in prose. The compounding is the curated-memory loop, not blind capture-everything.
+_Avoid_: raw record/replay everything, browser automation engine
+
 **Reference-only env file**:
 An env-shaped file whose values are 1Password secret references such as `op://...`, not plaintext secret values. It is a safe mapping artifact that may be reviewed or regenerated when every secret-bearing value remains a reference.
 _Avoid_: pointer env file, map file, `.env` with secrets
@@ -242,6 +290,33 @@ Domain expert: "Yes, when it is a direct service-account read for a declared vau
 
 Dev: "Can an agent list vaults to find the right one?"
 Domain expert: "No. It can run targeted metadata checks for declared names, but broad vault or item discovery is outside the `one-password` safety contract."
+
+Dev: "Should `browser-use` remember the login path it just discovered?"
+Domain expert: "No. `browser-use` drives Chrome. `browser-domain-memory` owns browser capture and durable compound browser knowledge."
+
+Dev: "Is browser capture a separate skill?"
+Domain expert: "No. Browser capture is a `browser-domain-memory` workflow that distills messy browser-run evidence into curated domain memory."
+
+Dev: "Is the Chrome Recorder-shaped JSON a recording?"
+Domain expert: "No. Call it Scratch Evidence. It may be retained as evidence for browser capture, but it is not trusted memory or a replay artifact."
+
+Dev: "What does browser capture create?"
+Domain expert: "Durable Browser Knowledge: curated auth pointers, runbooks, gotchas, and notes future `browser-use` runs can trust."
+
+Dev: "Do we need a generic browser note type?"
+Domain expert: "No. In v1 Durable Browser Knowledge has Auth Pointers, Browser Runbooks, and Browser Gotchas. Broaden Browser Gotcha for non-obvious useful facts."
+
+Dev: "Where does the 1Password item path for a portal live?"
+Domain expert: "As an Auth Pointer in Durable Browser Knowledge. `one-password` owns safe access mechanics, not the domain-specific item choice."
+
+Dev: "Should a Browser Runbook repeat the login steps?"
+Domain expert: "No. It may reference the Auth Pointer, but the Auth Pointer owns domain auth context."
+
+Dev: "Can a runbook click through the site next time?"
+Domain expert: "Yes, in two ways. Deterministic mode replays its Recorder JSON via puppeteer; prose mode has the agent re-drive live from the run-book. One capture, both outputs, per-domain config picks the mode."
+
+Dev: "Which mode is the default for a fresh capture?"
+Domain expert: "Prose mode — the durable, tool-neutral default. Deterministic is the fast opt-in. Run Outcomes track per-mode metrics so you can see which earns its keep per flow."
 
 Dev: "Should we import an entire plugin as one capability?"
 Domain expert: "No. Track the selected skill or agent as the capability. The plugin or repository is a source."
