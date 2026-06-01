@@ -74,6 +74,11 @@ export const warmChromeFailureActions = [
 		sideEffects: ["write"],
 	},
 	{
+		id: "enable_remote_debugging",
+		summary: "Enable Chrome remote debugging, then rerun preflight.",
+		sideEffects: ["browser"],
+	},
+	{
 		id: "inspect_listener",
 		summary: "Inspect the current listener before adapter work.",
 		sideEffects: ["check"],
@@ -153,7 +158,7 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			script: "scripts/preflight-warm-chrome.ts",
 			summary: "Launch real Google Chrome if needed, then verify.",
 			usage: [
-				"launch [--port <port>] --profile <dir> [--chrome <path>] [--json|--plain]",
+				"launch [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--chrome <path>] [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",

@@ -25,7 +25,7 @@ Preferred new config shape:
     "-y",
     "chrome-devtools-mcp",
     "--browserUrl",
-    "http://127.0.0.1:9444"
+    "http://127.0.0.1:9222"
   ]
 }
 ```

@@ -35,9 +35,13 @@ import {
 } from "./command-contract";
 
 const VERSION = "0.2.0";
-const DEFAULT_PORT = "9223";
+const DEFAULT_PORT = "9222";
+const DEFAULT_PROFILE_DIR = "~/.agent-warm-profile";
 const DEFAULT_CHROME =
 	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const DEFAULT_STARTUP_URL = "https://example.com/";
+const CHROME_REMOTE_DEBUGGING_DOCS_URL =
+	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
 const BROWSER_ENTRY_EXIT_CODE = 20;
 const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
@@ -96,6 +100,7 @@ type LaunchChromeInput = {
 	chromeBin: string;
 	port: string;
 	profileDir: string;
+	startupUrl: string;
 };
 
 type ParsedPreflightCommand =
@@ -147,6 +152,7 @@ type PreflightRuntimeErrorOptions = {
 	recoverability?: "none" | "retry" | "change_input" | "repair_state";
 	hintSummary?: string;
 	hintAction?: "retry" | "change_input" | "repair_state";
+	hintDocsUrl?: string;
 	severity?: "warning" | "error" | "fatal";
 	failureDomain?: WarmChromeFailureDomain;
 	// Override the per-run primary runtime action when the error code alone is
@@ -229,24 +235,18 @@ export function createDefaultRuntime(
 			await writeFile(path, content, "utf-8");
 		},
 		spawnChrome: async (input: LaunchChromeInput) => {
-			await new Promise<void>((resolve, reject) => {
-				const child = spawn(
-					input.chromeBin,
-					[
-						`--remote-debugging-port=${input.port}`,
-						`--user-data-dir=${input.profileDir}`,
-						"--no-first-run",
-						"--no-default-browser-check",
-						"about:blank",
-					],
-					{ detached: true, stdio: "ignore" },
-				);
-				child.once("error", reject);
-				child.once("spawn", () => {
-					child.unref();
-					resolve();
-				});
-			});
+			const child = spawn(
+				input.chromeBin,
+				[
+					`--remote-debugging-port=${input.port}`,
+					`--user-data-dir=${input.profileDir}`,
+					"--no-first-run",
+					"--no-default-browser-check",
+					input.startupUrl,
+				],
+				{ detached: true, stdio: "ignore" },
+			);
+			await awaitChromeSpawn(child);
 		},
 		sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
 		isTemporaryPath: (path: string) =>
@@ -458,7 +458,7 @@ function parsePreflightArgv(
 	});
 
 	if (commandName === "launch" && !profileInput) {
-		throw usageError("--profile is required for launch");
+		profileInput = DEFAULT_PROFILE_DIR;
 	}
 
 	return {
@@ -584,6 +584,9 @@ async function launchIfNeeded(
 		});
 		return false;
 	}
+	if (parsed.port !== DEFAULT_PORT) {
+		await assertNoHealthyDefaultWarmChrome(runtime);
+	}
 	if (!parsed.profileInput) {
 		throw usageError("--profile is required for launch");
 	}
@@ -592,6 +595,11 @@ async function launchIfNeeded(
 
 	const listener = await runtime.findListener(parsed.port);
 	if (listener) {
+		emitListenerDetected({
+			command: parsed.displayCommandName,
+			port: parsed.port,
+			listener,
+		});
 		validateChromeCommand(listener.command, parsed.port);
 		throw new PreflightRuntimeError(
 			"endpoint_unreachable",
@@ -621,6 +629,7 @@ async function launchIfNeeded(
 		chromeBin: parsed.chromeBin,
 		port: parsed.port,
 		profileDir,
+		startupUrl: DEFAULT_STARTUP_URL,
 	});
 	emitCliDiagnostic("browser-use.warm-chrome", "info", "launch-started", {
 		command: "launch",
@@ -651,6 +660,42 @@ async function launchIfNeeded(
 	);
 }
 
+async function assertNoHealthyDefaultWarmChrome(
+	runtime: PreflightRuntime,
+): Promise<void> {
+	try {
+		const defaultEndpoint = normalizeEndpoint({ port: DEFAULT_PORT, endpoint: "" });
+		await verifyWarmChrome({
+			command: "check",
+			endpoint: defaultEndpoint.endpoint,
+			port: defaultEndpoint.port,
+			profileInput: DEFAULT_PROFILE_DIR,
+			runtime,
+			repair: false,
+			launchPerformed: false,
+		});
+	} catch (error) {
+		if (
+			error instanceof PreflightRuntimeError &&
+			error.code === "profile_mismatch"
+		) {
+			throw error;
+		}
+		return;
+	}
+
+	throw new PreflightRuntimeError(
+		"warm_chrome_already_running",
+		"Primary Warm Chrome is already running; refusing to spawn a competing instance.",
+		{
+			hintSummary: `Use --port ${DEFAULT_PORT}, or stop and inspect the requested port before launching another Chrome.`,
+			hintAction: "change_input",
+			recoverability: "change_input",
+			failureDomain: "input",
+		},
+	);
+}
+
 async function endpointAnswers(
 	endpoint: string,
 	runtime: PreflightRuntime,
@@ -661,6 +706,19 @@ async function endpointAnswers(
 	} catch {
 		return false;
 	}
+}
+
+function emitListenerDetected(input: {
+	command: WarmChromePreflightCommand;
+	port: string;
+	listener: ListenerProcess;
+}): void {
+	emitCliDiagnostic("browser-use.warm-chrome", "debug", "listener-detected", {
+		command: input.command,
+		phase: "inspect_listener",
+		port: input.port,
+		listener_pid: input.listener.pid,
+	});
 }
 
 async function verifyWarmChrome(
@@ -681,6 +739,8 @@ async function verifyWarmChrome(
 		"No Chrome DevTools endpoint answered.",
 		options.profileInput
 			? {}
+			: port === DEFAULT_PORT
+				? {}
 			: inputChangeOptions(
 					"Set --profile or BROWSER_USE_PROFILE_DIR before launching Warm Chrome.",
 				),
@@ -701,6 +761,11 @@ async function verifyWarmChrome(
 			"No local process is listening on the requested CDP port.",
 		);
 	}
+	emitListenerDetected({
+		command: options.command,
+		port,
+		listener,
+	});
 	validateChromeCommand(listener.command, port);
 
 	const inferredProfile = extractUserDataDir(listener.command);
@@ -760,7 +825,7 @@ async function verifyWarmChrome(
 		repairActions.push("profile_permissions");
 	}
 
-	if (options.repair) {
+	if (options.repair || options.command === "launch") {
 		await writeDevToolsActivePort({
 			profileDir: profile.realPath,
 			port,
@@ -1375,6 +1440,7 @@ function emitCliError(input: {
 				hint: {
 					summary: error.hintSummary,
 					action: error.hintAction,
+					...(error.hintDocsUrl ? { docs_url: error.hintDocsUrl } : {}),
 				},
 			},
 			runtime_actions: guidance.runtimeActions,
@@ -1385,6 +1451,25 @@ function emitCliError(input: {
 	return error.exitCode;
 }
 
+// Last-resort net for a rejection or exception that escapes the run boundary.
+// The tool's contract is "every outcome is a structured envelope"; a raw stack
+// dump from an unhandled rejection would break it. Funnel the stray error
+// through the same normalize/guidance machinery so even a catastrophic escape
+// still emits a runtime_failure envelope and a deterministic non-zero exit.
+export function emitUnhandledFailureEnvelope(
+	error: unknown,
+	options: { runId: string; stdout: CliWriter; stderr?: CliWriter },
+): number {
+	return emitCliError({
+		error,
+		outputMode: "json",
+		stdout: options.stdout,
+		stderr: options.stderr ?? quietDiagnosticWriter,
+		runId: options.runId,
+		durationMs: 0,
+	});
+}
+
 function normalizeError(error: unknown): {
 	code: string;
 	message: string;
@@ -1393,6 +1478,7 @@ function normalizeError(error: unknown): {
 	recoverability: "none" | "retry" | "change_input" | "repair_state";
 	hintSummary: string;
 	hintAction: "retry" | "change_input" | "repair_state" | undefined;
+	hintDocsUrl?: string;
 	failureDomain: WarmChromeFailureDomain;
 	primaryActionId?: "inspect_listener";
 	runtimeActions: RuntimeActionGuidance[];
@@ -1428,6 +1514,7 @@ function normalizeError(error: unknown): {
 			recoverability,
 			hintSummary: error.options.hintSummary ?? hint.summary,
 			hintAction: error.options.hintAction ?? hint.action,
+			hintDocsUrl: error.options.hintDocsUrl ?? hint.docsUrl,
 			failureDomain,
 			primaryActionId: error.options.primaryActionId,
 			runtimeActions: [],
@@ -1509,6 +1596,7 @@ function hasSensitiveOptionName(value: string): boolean {
 function hintForPreflightError(error: PreflightRuntimeError): {
 	summary: string;
 	action: "retry" | "change_input" | "repair_state" | undefined;
+	docsUrl?: string;
 	recoverability: "none" | "retry" | "change_input" | "repair_state";
 } {
 	switch (error.code) {
@@ -1559,6 +1647,13 @@ function hintForPreflightError(error: PreflightRuntimeError): {
 				recoverability: "repair_state",
 			};
 		case "endpoint_unreachable":
+			return {
+				summary:
+					"Remote debugging is off; enable it in chrome://inspect/#remote-debugging, then rerun preflight.",
+				action: "repair_state",
+				docsUrl: CHROME_REMOTE_DEBUGGING_DOCS_URL,
+				recoverability: "repair_state",
+			};
 		case "profile_missing":
 			return {
 				summary: "Use preflight-warm-chrome launch with a dedicated persistent profile.",
@@ -1659,8 +1754,7 @@ function primaryRuntimeActionForError(error: ReturnType<typeof normalizeError>):
 		return runtimeAction("inspect_diagnostics");
 	}
 	// An explicit per-error override wins when the code alone is ambiguous
-	// (e.g. endpoint_unreachable: inspect when a listener occupies the port,
-	// launch when nothing answers).
+	// (e.g. endpoint_unreachable after Chrome spawned: inspect that listener).
 	if (error.primaryActionId === "inspect_listener") {
 		return runtimeAction("inspect_listener");
 	}
@@ -1671,6 +1765,8 @@ function primaryRuntimeActionForError(error: ReturnType<typeof normalizeError>):
 		return runtimeAction("change_input");
 	}
 	switch (error.code) {
+		case "endpoint_unreachable":
+			return runtimeAction("enable_remote_debugging");
 		case "unsafe_profile_permissions":
 			return runtimeAction("repair_profile");
 		case "profile_mismatch":
@@ -1759,18 +1855,78 @@ async function ensureProfileDir(path: string): Promise<string> {
 	return realPath;
 }
 
-async function findListenerWithSystemTools(
+// Minimal slice of ChildProcess we depend on, so a plain EventEmitter can drive
+// the lifecycle under test without spawning a real process.
+type SpawnableChild = {
+	once(event: string, listener: (...args: unknown[]) => void): unknown;
+	unref?(): void;
+};
+
+// `child.once("error")` only fires for spawn *failure* (ENOENT, EACCES). A Chrome
+// that spawns then dies milliseconds later emits "exit", not "error" — without an
+// exit listener that death is silent and the caller polls a dead endpoint for the
+// full 15s timeout. Reject on a pre-spawn exit so post-launch death surfaces now.
+export function awaitChromeSpawn(child: SpawnableChild): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		let settled = false;
+		child.once("error", (...args: unknown[]) => {
+			if (settled) return;
+			settled = true;
+			reject(args[0] instanceof Error ? args[0] : new Error("Chrome spawn failed."));
+		});
+		child.once("exit", (...args: unknown[]) => {
+			if (settled) return;
+			settled = true;
+			const code = args[0];
+			reject(
+				new Error(
+					`Chrome exited before its DevTools endpoint came up (exit code ${
+						typeof code === "number" ? code : "unknown"
+					}).`,
+				),
+			);
+		});
+		child.once("spawn", () => {
+			if (settled) return;
+			settled = true;
+			child.unref?.();
+			resolve();
+		});
+	});
+}
+
+type ExecText = (command: string, args: string[]) => Promise<string>;
+
+// An lsof/ps that cannot even run (binary missing, permission denied) is an
+// environmental fault, not the operational "nothing is listening" answer.
+// Collapsing both into null would let a missing lsof masquerade as a free port
+// and poison every downstream decision, so probe failures branch on err.code.
+function isProbeUnavailableError(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException)?.code;
+	return code === "ENOENT" || code === "EACCES" || code === "EPERM";
+}
+
+export async function findListenerWithSystemTools(
 	port: string,
+	exec: ExecText = execText,
 ): Promise<ListenerProcess | null> {
 	let pidOutput = "";
 	try {
-		pidOutput = await execText("lsof", [
+		pidOutput = await exec("lsof", [
 			"-nP",
 			`-iTCP:${port}`,
 			"-sTCP:LISTEN",
 			"-t",
 		]);
-	} catch {
+	} catch (error) {
+		// lsof exits non-zero with no error code when nothing is listening — the
+		// expected negative result. A real ENOENT/EACCES means we never inspected.
+		if (isProbeUnavailableError(error)) {
+			throw new PreflightRuntimeError(
+				"listener_uninspectable",
+				"Could not run the CDP listener probe.",
+			);
+		}
 		return null;
 	}
 	const pidText = pidOutput
@@ -1780,7 +1936,7 @@ async function findListenerWithSystemTools(
 	if (!pidText) return null;
 	let command = "";
 	try {
-		command = await execText("ps", ["-p", pidText, "-o", "command="]);
+		command = await exec("ps", ["-p", pidText, "-o", "command="]);
 	} catch {
 		throw new PreflightRuntimeError(
 			"listener_uninspectable",
@@ -1844,7 +2000,33 @@ export function validateErrorEnvelopeForTest(envelope: unknown): string[] {
 	});
 }
 
+function handleUnhandledFailure(error: unknown): never {
+	// Configure a minimal diagnostic context so the shared error machinery has a
+	// sink; without it emitCliDiagnostic would throw inside the last-resort net.
+	try {
+		configureCliDiagnostics({
+			categoryRoot: "browser-use.warm-chrome",
+			options: parseCliDiagnosticFallbackArgv([]).options,
+			diagnosticWriter: quietDiagnosticWriter,
+		});
+	} catch {
+		// best effort — never let net-of-last-resort setup mask the real error
+	}
+	const runId = process.env.BROWSER_USE_RUN_ID ?? "unhandled";
+	const exitCode = emitUnhandledFailureEnvelope(error, {
+		runId,
+		stdout: process.stdout,
+		stderr: process.stderr,
+	});
+	process.exit(exitCode);
+}
+
 if (import.meta.main) {
+	// Safety net: a rejection or exception escaping runPreflightWarmChromeCli must
+	// still emit the structured envelope this tool's contract promises, not a raw
+	// stack dump with an ambiguous exit code. CLI, not a server — we always exit.
+	process.on("unhandledRejection", (reason) => handleUnhandledFailure(reason));
+	process.on("uncaughtException", (error) => handleUnhandledFailure(error));
 	const exitCode = await runPreflightWarmChromeCli(Bun.argv.slice(2));
 	process.exit(exitCode);
 }
