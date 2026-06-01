@@ -1,6 +1,8 @@
 ---
 name: create-cli
 description: "CLI UX/spec: args, flags, help, output, errors, config, dry-run."
+argument-hint: "[cli description]"
+allowed-tools: "Bash(bun *), Bash(bunx *)"
 ---
 
 # Create CLI
@@ -12,6 +14,7 @@ Design CLI surface area (syntax + behavior), human-first, script-friendly.
 - Read `agent-scripts/skills/create-cli/references/cli-guidelines.md` and apply it as the default rubric.
 - Upstream/full guidelines: https://clig.dev/ (propose changes: https://github.com/cli-guidelines/cli-guidelines)
 - Ask only the minimum clarifying questions needed to lock the interface.
+- Implementing? Emit a `CommandFacadeContract` skeleton (see `references/cli-command-facade.md`) and hand it to `defineCommandFacadeContract`; that object is the deliverable on the facade path, not the markdown spec.
 
 ## Clarify (fast)
 

@@ -1,0 +1,13 @@
+{
+	"name": "create-cli-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Local scratch/scripts area for the create-cli skill. Holds the npm-linked @side-quest/cli-command-facade so generated CommandFacadeContract skeletons can be type-checked and run against the real runtime validator (defineCommandFacadeContract / parseCommandFacadeContract).",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "*"
+	},
+	"devDependencies": {
+		"@types/node": "*"
+	}
+}

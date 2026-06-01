@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>create-cli — interactive explorer</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d; --fg:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --red:#f85149;
+    --purple:#bc8cff; --cyan:#56d4dd;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  html[data-theme="light"]{
+    --bg:#f6f8fa; --panel:#fff; --panel2:#eef1f5; --border:#d0d7de; --fg:#1f2328;
+    --muted:#636c76; --accent:#0969da;
+  }
+  html[data-theme="light"] pre{background:#f6f8fa;color:#1f2328}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.55;transition:background .2s,color .2s}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px 80px}
+  header{padding:34px 24px 16px;border-bottom:1px solid var(--border);
+    background:radial-gradient(1200px 280px at 50% -20%,rgba(88,166,255,.10),transparent)}
+  .htop{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  h1{font-size:1.9rem;margin:0 0 4px;letter-spacing:-.02em}
+  h1 code{font-family:var(--mono);color:var(--accent)}
+  .tagline{color:var(--muted);margin:0;max-width:64ch}
+  .htools{display:flex;gap:6px;flex-wrap:wrap}
+  .btn{font-family:var(--sans);font-size:.8rem;padding:6px 11px;border-radius:8px;cursor:pointer;
+    border:1px solid var(--border);background:var(--panel);color:var(--fg);transition:.12s;white-space:nowrap}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn:active{transform:translateY(1px)}
+  .btn.ok{border-color:var(--green);color:var(--green)}
+  .tabs{position:sticky;top:0;z-index:10;background:rgba(13,17,23,.9);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+  html[data-theme="light"] .tabs{background:rgba(246,248,250,.9)}
+  .tabs .wrap{display:flex;gap:4px;padding:8px 24px;overflow-x:auto}
+  .tab{font-size:.9rem;color:var(--muted);background:none;border:1px solid transparent;border-radius:8px;
+    padding:8px 14px;cursor:pointer;white-space:nowrap;font-family:var(--sans)}
+  .tab:hover{color:var(--fg);background:var(--panel)}
+  .tab.active{color:var(--fg);background:var(--panel);border-color:var(--border)}
+  .view{display:none;margin-top:28px}
+  .view.active{display:block}
+  h2{font-size:1.4rem;margin:0 0 4px}
+  .lead{color:var(--muted);margin:0 0 16px;max-width:74ch}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+  pre,textarea{font-family:var(--mono);font-size:.8rem;line-height:1.5}
+  pre{background:#010409;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-word}
+  code{font-family:var(--mono)}
+  p code,li code,td code{background:var(--panel2);padding:1px 5px;border-radius:5px;color:var(--cyan);font-size:.85em}
+  .play{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:860px){.play{grid-template-columns:1fr}}
+  .editor-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap}
+  .editor-tools{display:flex;gap:6px;flex-wrap:wrap}
+  .stat{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+  .stat b{color:var(--accent);font-weight:600}
+  textarea{width:100%;min-height:420px;background:#010409;color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:14px 16px;resize:vertical;tab-size:2}
+  html[data-theme="light"] textarea{background:#f6f8fa;color:#1f2328}
+  textarea:focus{outline:none;border-color:var(--accent)}
+  .out-block{margin-bottom:14px}
+  .out-block .oh{display:flex;justify-content:space-between;align-items:center;margin:0 0 6px}
+  .out-block h4{margin:0;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .verdict{font-family:var(--mono);font-size:.85rem;padding:10px 14px;border-radius:9px;margin-bottom:14px}
+  .verdict.ok{background:rgba(63,185,80,.1);border:1px solid #1f6f37;color:var(--green)}
+  .verdict.bad{background:rgba(248,81,73,.08);border:1px solid #7a2622;color:var(--red)}
+  .issue{font-family:var(--mono);font-size:.78rem;margin-top:6px;color:var(--fg);display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .issue .cat{color:var(--red)}
+  .preset-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+  .preset{font-size:.76rem;font-family:var(--mono);padding:4px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--border);background:var(--panel2);color:var(--muted)}
+  .preset:hover{color:var(--fg);border-color:var(--accent)}
+  .kbd{font-family:var(--mono);font-size:.68rem;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:1px 5px;background:var(--panel2)}
+  .scorecard{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+  .card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel)}
+  .card .sec{font-weight:600;font-size:.92rem;margin-bottom:4px}
+  .card .det{font-size:.8rem;color:var(--muted)}
+  .card.enforced{border-left:4px solid var(--green)} .card.partial{border-left:4px solid var(--amber)} .card.prose{border-left:4px solid var(--muted)}
+  .card .tag{display:inline-block;font-family:var(--mono);font-size:.68rem;padding:2px 7px;border-radius:6px;margin-top:8px}
+  .tag.enforced{background:rgba(63,185,80,.12);color:var(--green)} .tag.partial{background:rgba(210,153,34,.12);color:var(--amber)}
+  .tag.prose{background:rgba(139,148,158,.12);color:var(--muted)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;font-size:.84rem;color:var(--muted)}
+  .legend b{font-family:var(--mono);font-weight:400}
+  .bar{height:10px;border-radius:6px;display:flex;overflow:hidden;margin:6px 0 20px;border:1px solid var(--border)}
+  .bar span{display:block;height:100%}
+  .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+  .shape{border:1px solid var(--border);border-radius:11px;padding:14px 16px;background:var(--panel);cursor:pointer;transition:.12s}
+  .shape:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .shape h4{margin:0 0 2px;font-size:1rem}
+  .shape .axis{font-family:var(--mono);font-size:.68rem;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+  .shape .note{font-size:.82rem;color:var(--muted);margin:8px 0}
+  .shape .try{font-size:.7rem;color:var(--cyan);margin-top:6px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:.68rem;padding:2px 6px;border-radius:5px;border:1px solid var(--border);margin:2px 3px 0 0}
+  .pill.read{color:var(--green)} .pill.write{color:var(--amber)} .pill.destructive{color:var(--red)}
+  .pill.auth{color:var(--purple)} .pill.network,.pill.browser{color:var(--cyan)}
+  .matrix{width:100%;border-collapse:collapse;font-size:.84rem;margin-top:8px}
+  .matrix th,.matrix td{border:1px solid var(--border);padding:8px 10px;text-align:left}
+  .matrix th{color:var(--muted);font-size:.76rem;text-transform:uppercase}
+  .mat-retry{color:var(--green)} .mat-act{color:var(--amber)} .mat-stop{color:var(--red)}
+  .k{color:var(--red)} .s{color:var(--green)} .n{color:var(--purple)} .c{color:var(--muted);font-style:italic} .pc{color:var(--cyan)}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--green);
+    color:#021;padding:9px 18px;border-radius:10px;font-weight:600;font-size:.85rem;opacity:0;pointer-events:none;transition:.25s;z-index:50}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted);font-size:.8rem}
+  .hint{font-size:.76rem;color:var(--muted);margin-top:4px}
+  .mer-wrap{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px;overflow:auto}
+  .mer-wrap h4{margin:0 0 10px;font-size:.9rem}
+  .mer-fallback{font-family:var(--mono);font-size:.78rem;color:var(--muted);white-space:pre-wrap}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="wrap htop">
+    <div>
+      <h1><code>create-cli</code> · interactive explorer</h1>
+      <p class="tagline">Edit a contract, watch it validate live, break it, auto-fix it, share it. A teaching subset of the facade's drift rules — shape, audience, side-effects, and the #64 high-stakes guard — ported to run in your browser.</p>
+    </div>
+    <div class="htools">
+      <button type="button" class="btn" id="theme-btn" title="Toggle theme">🌓 Theme</button>
+      <button type="button" class="btn" id="share-btn" title="Copy a link that restores this contract">🔗 Share</button>
+      <button type="button" class="btn" id="help-btn" title="Keyboard shortcuts">⌨ Keys</button>
+    </div>
+  </div>
+</header>
+
+<div class="tabs"><div class="wrap">
+  <button type="button" class="tab active" data-view="play">▸ Playground</button>
+  <button type="button" class="tab" data-view="agent">🤖 Agent's Eye</button>
+  <button type="button" class="tab" data-view="doctor">🩺 Drift Doctor</button>
+  <button type="button" class="tab" data-view="boss">🎯 Boss Battles</button>
+  <button type="button" class="tab" data-view="arena">⚔️ Mutation Arena</button>
+  <button type="button" class="tab" data-view="flows">🗺️ Flows</button>
+  <button type="button" class="tab" data-view="dash">▸ clig.dev Coverage</button>
+  <button type="button" class="tab" data-view="gallery">▸ Shape Gallery</button>
+  <button type="button" class="tab" data-view="output">▸ Output Explorer</button>
+</div></div>
+
+<div class="wrap">
+
+<!-- PLAYGROUND -->
+<section class="view active" id="play">
+  <h2>Contract playground</h2>
+  <p class="lead">Edit a <code>CommandFacadeContract</code>. Verdict, generated <code>--help</code>, and <code>agent-context</code> update live. Break it with a preset, then hit <b>Fix it</b> to watch the self-correction loop repair it.</p>
+  <div class="preset-bar">
+    <span class="preset" data-preset="valid">✓ valid</span>
+    <span class="preset" data-preset="enum">✗ empty enum</span>
+    <span class="preset" data-preset="reserved">✗ reserved --verbose</span>
+    <span class="preset" data-preset="exit">✗ named exit code</span>
+    <span class="preset" data-preset="flag">✗ flag without --</span>
+    <span class="preset" data-preset="aud">✗ bad audience</span>
+    <span class="preset" data-preset="multi">✗ 3 bugs at once</span>
+    <button type="button" class="btn" id="random-btn" style="margin-left:auto">🎲 Random shape</button>
+  </div>
+  <div class="play">
+    <div>
+      <div class="editor-head">
+        <span class="stat" id="stat">…</span>
+        <div class="editor-tools">
+          <button type="button" class="btn" id="fix-btn" title="Run the parse→fix→re-parse loop">🔧 Fix it</button>
+          <button type="button" class="btn" id="fmt-btn" title="Prettify JSON">✨ Format</button>
+          <button type="button" class="btn" id="copy-src" title="Copy contract">📋 Copy</button>
+          <button type="button" class="btn" id="reset-btn" title="Reset to valid">↺ Reset</button>
+        </div>
+      </div>
+      <textarea id="src" spellcheck="false"></textarea>
+      <div class="hint"><span class="kbd">⌘/Ctrl + Enter</span> revalidate · <span class="kbd">⌘/Ctrl + K</span> copy · <span class="kbd">⌘/Ctrl + .</span> fix it</div>
+    </div>
+    <div>
+      <div id="verdict" class="verdict ok">…</div>
+      <div class="out-block">
+        <div class="oh"><h4>Generated <code>--help</code></h4><button type="button" class="btn" id="copy-help">📋</button></div>
+        <pre id="help">…</pre>
+      </div>
+      <div class="out-block">
+        <div class="oh"><h4><code>agent-context</code></h4><button type="button" class="btn" id="copy-ctx">📋</button></div>
+        <pre id="ctx">…</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DASHBOARD -->
+<section class="view" id="dash">
+  <h2>clig.dev coverage</h2>
+  <p class="lead">The skill teaches the whole clig.dev rubric. <b style="color:var(--green)">Enforced</b> = the contract holds it end to end (bad value won't ship). <b style="color:var(--amber)">Partial</b> = the contract checks the <i>declaration's shape</i> but the runtime behavior is yours (declare, don't enforce). <b style="color:var(--muted)">Prose-only</b> = no contract field; design it by hand.</p>
+  <div id="cover-score" style="font-family:var(--mono);font-size:1.6rem;font-weight:700;margin:0 0 4px"></div>
+  <div class="bar" id="cover-bar"></div>
+  <div class="legend">
+    <span><b style="color:var(--green)">■</b> enforced</span>
+    <span><b style="color:var(--amber)">■</b> partial</span>
+    <span><b style="color:var(--muted)">■</b> prose-only</span>
+  </div>
+  <div class="scorecard" id="scorecard"></div>
+</section>
+
+<!-- GALLERY -->
+<section class="view" id="gallery">
+  <h2>Shape gallery</h2>
+  <p class="lead">14 structural patterns create-cli can produce. <b>Click any card</b> to load it into the playground and poke it.</p>
+  <div class="gallery" id="gallery-grid"></div>
+</section>
+
+<!-- OUTPUT -->
+<section class="view" id="output">
+  <h2>Output-shape explorer</h2>
+  <p class="lead">What a command emits. The facade <em>writers</em> produce these; the command supplies only the payload.</p>
+  <div class="panel" style="margin-bottom:14px">
+    <h4 style="margin-top:0">Spine is injected — objects, not arrays</h4>
+    <div class="play">
+      <div><pre><span class="c">// object → writer injects run_id + duration_ms</span>
+<span class="pc">{</span> <span class="s">"deployed"</span>: <span class="n">true</span>,
+  <span class="s">"run_id"</span>: <span class="s">"01JRUN…"</span>,    <span class="c">← injected</span>
+  <span class="s">"duration_ms"</span>: <span class="n">42</span> <span class="pc">}</span>      <span class="c">← injected</span></pre></div>
+      <div><pre><span class="c">// array → as-is, NO spine</span>
+<span class="pc">[</span> <span class="s">"item-a"</span>, <span class="s">"item-b"</span> <span class="pc">]</span>
+<span class="c">← prefer objects for correlation</span></pre></div>
+    </div>
+  </div>
+  <div class="panel" style="margin-bottom:14px">
+    <h4 style="margin-top:0">Error envelope</h4>
+<pre><span class="pc">{</span> <span class="s">"status"</span>:<span class="s">"error"</span>, <span class="s">"run_id"</span>:<span class="s">"01JRUN…"</span>,
+  <span class="s">"error"</span>:<span class="pc">{</span> <span class="s">"code"</span>:<span class="s">"AUTH_REQUIRED"</span>, <span class="s">"exit_code"</span>:<span class="n">4</span>, <span class="s">"severity"</span>:<span class="s">"error"</span>,
+           <span class="s">"recoverability"</span>:<span class="s">"authenticate"</span>, <span class="s">"retryable"</span>:<span class="n">false</span>,
+           <span class="s">"hint"</span>:<span class="pc">{</span> <span class="s">"action"</span>:<span class="s">"authenticate"</span> <span class="pc">}</span> <span class="pc">}</span> <span class="pc">}</span></pre>
+  </div>
+  <div class="panel">
+    <h4 style="margin-top:0">Agent decision matrix</h4>
+    <p class="lead" style="margin-bottom:6px"><code>recoverability</code> + <code>retryable</code> tell an autonomous caller: retry, act, or stop.</p>
+    <table class="matrix">
+      <tr><th>recoverability</th><th>retryable</th><th>agent does</th></tr>
+      <tr><td><code>retry</code></td><td><code>true</code></td><td class="mat-retry">retry same input</td></tr>
+      <tr><td><code>authenticate</code></td><td><code>false</code></td><td class="mat-act">auth, then retry</td></tr>
+      <tr><td><code>change_input</code></td><td><code>false</code></td><td class="mat-act">fix input, then retry</td></tr>
+      <tr><td><code>repair_state</code></td><td><code>false</code></td><td class="mat-act">repair state, then retry</td></tr>
+      <tr><td><code>none</code> (<code>fatal</code>)</td><td><code>false</code></td><td class="mat-stop">stop, escalate</td></tr>
+      <tr><td><code>contact_support</code></td><td><code>false</code></td><td class="mat-stop">stop, hand to human</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- AGENT'S EYE -->
+<section class="view" id="agent">
+  <h2>🤖 Agent's Eye View</h2>
+  <p class="lead">Your contract drives a real decision. Pick a runtime outcome → watch an autonomous agent read the structured error and decide: <b class="mat-retry">retry</b>, <b class="mat-act">act</b>, or <b class="mat-stop">stop</b>. This is <em>why</em> the fields exist.</p>
+  <div class="preset-bar">
+    <span class="preset" data-outcome="ok">✅ success</span>
+    <span class="preset" data-outcome="rate">⏳ rate-limited</span>
+    <span class="preset" data-outcome="auth">🔐 auth failed</span>
+    <span class="preset" data-outcome="input">✋ bad input</span>
+    <span class="preset" data-outcome="repair">🔧 corrupt state</span>
+    <span class="preset" data-outcome="fatal">💀 fatal</span>
+  </div>
+  <div class="play">
+    <div class="out-block"><div class="oh"><h4>What the command emits</h4></div><pre id="ag-envelope">…</pre></div>
+    <div>
+      <div class="out-block"><div class="oh"><h4>Agent reasoning</h4></div><pre id="ag-reason">…</pre></div>
+      <div id="ag-decision" class="verdict ok" style="font-size:1.1rem">…</div>
+    </div>
+  </div>
+</section>
+
+<!-- DRIFT DOCTOR -->
+<section class="view" id="doctor">
+  <h2>🩺 Drift Doctor</h2>
+  <p class="lead">Click any field name in the contract → instant X-ray: what it does, what breaks if it's wrong, which drift rule guards it. No doc-hunting.</p>
+  <div class="play">
+    <div class="out-block"><div class="oh"><h4>Contract — click a field</h4></div><pre id="doc-src" style="cursor:pointer"></pre></div>
+    <div id="doc-panel" class="panel"><h4 style="margin-top:0" id="doc-title">👆 click a field</h4><p class="lead" id="doc-body" style="margin:0">Pick any key in the contract on the left to see what it does, how it breaks, and the rule that catches it.</p></div>
+  </div>
+</section>
+
+<!-- BOSS BATTLES -->
+<section class="view" id="boss">
+  <h2>🎯 Boss Battles</h2>
+  <p class="lead">Build a contract that matches the spec — against the clock. Live-scored. Streak saved.</p>
+  <div class="panel" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div><b id="boss-title" style="font-size:1.05rem">Press Start</b><div class="hint" id="boss-spec"></div></div>
+      <div style="text-align:right">
+        <div style="font-family:var(--mono);font-size:1.6rem;font-weight:700" id="boss-timer">--</div>
+        <div class="hint">streak: <b id="boss-streak">0</b> · best: <b id="boss-best">0</b></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+      <button type="button" class="btn" id="boss-start">▶ Start</button>
+      <button type="button" class="btn" id="boss-check">✓ Submit</button>
+      <button type="button" class="btn" id="boss-skip">⤼ Skip</button>
+    </div>
+  </div>
+  <div class="play">
+    <div><textarea id="boss-src" spellcheck="false" style="min-height:340px">{ }</textarea></div>
+    <div><div id="boss-result" class="verdict ok">Press Start to get a spec.</div><pre id="boss-checklist">…</pre></div>
+  </div>
+</section>
+
+<!-- MUTATION ARENA -->
+<section class="view" id="arena">
+  <h2>⚔️ Mutation Arena</h2>
+  <p class="lead">The app secretly breaks a valid contract. <b>Spot the bug before the validator does</b> — click the line you think is wrong. Out-read the linter.</p>
+  <div class="panel" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <b id="arena-status">Press Deal to start a round.</b>
+      <div class="hint">score: <b id="arena-score">0</b> · rounds: <b id="arena-rounds">0</b></div>
+    </div>
+    <div style="margin-top:10px"><button type="button" class="btn" id="arena-deal">🃏 Deal a round</button></div>
+  </div>
+  <pre id="arena-board" style="cursor:pointer;line-height:1.7">Click Deal.</pre>
+</section>
+
+<!-- FLOWS (Mermaid) -->
+<section class="view" id="flows">
+  <h2>🗺️ Flows</h2>
+  <p class="lead">Live diagrams that react to your <b>Playground</b> contract. Edit it there, come back here — the pipeline lights up where it'd pass or break. (Diagrams need internet for the Mermaid renderer; they fall back to text offline.)</p>
+  <div class="preset-bar"><button type="button" class="btn" id="flows-refresh">🔄 Re-render from Playground</button><span class="hint" id="flows-state"></span></div>
+  <div class="mer-wrap"><h4>1 · Live pipeline — where your contract sits (red = where it'd die)</h4><div id="mer-pipeline" class="mermaid"></div><div class="mer-fallback" id="fb-pipeline" hidden></div></div>
+  <div class="mer-wrap"><h4>2 · Contract → discovery tree (green = agent sees it; grey = filtered)</h4><div id="mer-tree" class="mermaid"></div><div class="mer-fallback" id="fb-tree" hidden></div></div>
+  <div class="mer-wrap"><h4>3 · Agent decision tree (the runtime branching)</h4><div id="mer-decision" class="mermaid"></div><div class="mer-fallback" id="fb-decision" hidden></div></div>
+  <div class="mer-wrap"><h4>4 · Self-correction loop (parse → fix → re-parse)</h4><div id="mer-loop" class="mermaid"></div><div class="mer-fallback" id="fb-loop" hidden></div></div>
+</section>
+
+</div>
+<div class="toast" id="toast">copied</div>
+
+<footer>
+  <p>Validator reimplements a <strong>teaching subset</strong> of the facade's drift rules in JS for live feedback: shape/enum checks, missing flags/exitCodes (#67), and the opt-in mutation-vs-sideEffects high-stakes guard (#64). It does <strong>not</strong> reproduce the free-text secret/control-char scan (#66) or the secret env-var-name gate (#69) — those run only in the package. Authoritative source: <code>findCommandFacadeMetadataDrift</code> in <code>@side-quest/cli-command-facade</code>. Coverage gaps tracked at nathanvale/side-quest-engineering#58. Generated 2026-05-31; validator subset refreshed 2026-06-01.</p>
+</footer>
+
+<script>
+const $=s=>document.querySelector(s);
+const toast=(m)=>{const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1100);};
+const copy=(txt,m)=>{navigator.clipboard.writeText(txt).then(()=>toast(m||'copied'),()=>toast('copy blocked'));};
+
+// tabs
+document.querySelectorAll('.tab').forEach(t => { t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => { x.classList.remove('active'); });
+  document.querySelectorAll('.view').forEach(x => { x.classList.remove('active'); });
+  t.classList.add('active');
+  $('#'+t.dataset.view).classList.add('active');
+}); });
+
+// ---- validator (JS port of findCommandFacadeMetadataDrift) ----
+const RESERVED=new Set(['--quiet','--verbose','--debug','--run-id']);
+const AUDIENCES=new Set(['agent','operator','smoke','governance']);
+const SIDE=new Set(['read','check','write','destructive','auth','network','browser']);
+const MODES=new Set(['normal','check','dry_run']);
+// The #64 high-stakes guard is opt-in: the consumer declares which mutation
+// values imply write/destructive intent. This explorer demonstrates the common
+// case (write); the real facade takes this as a `writeImplyingMutations` option.
+const WRITE_IMPLYING=new Set(['write']);
+const WRITE_ESCALATING=new Set(['write','destructive']);
+function validate(contracts){
+  const issues=[];
+  for(const [cmd,c] of Object.entries(contracts)){
+    if(!c.audience) issues.push(['command-audience-missing',`Assign an audience for ${cmd}.`]);
+    else if(!AUDIENCES.has(c.audience)) issues.push(['command-audience-invalid',`Audience for ${cmd} must be agent, operator, smoke, or governance.`]);
+    for(const se of (c.sideEffects||[])) if(!SIDE.has(se)) issues.push(['command-side-effect-invalid',`Side effect for ${cmd} must be a known class.`]);
+    for(const m of (c.executionModes||[])) if(!MODES.has(m)) issues.push(['command-execution-mode-invalid',`Execution mode for ${cmd} must be normal, check, or dry_run.`]);
+    if(c.flags===undefined||c.flags===null) issues.push(['command-flags-missing',`Declare a flags record for ${cmd} (use {} for none).`]);
+    for(const [flag,meta] of Object.entries(c.flags||{})){
+      if(RESERVED.has(flag)) issues.push(['command-reserved-diagnostic-flag',`Rename ${cmd} flag ${flag}; reserved for facade diagnostics.`]);
+      if(!flag.startsWith('--')) issues.push(['command-flag-name-invalid',`Rename ${cmd} flag ${flag} to start with --.`]);
+      if(meta&&meta.type==='enum'&&(!meta.values||meta.values.length===0)) issues.push(['command-enum-flag-values-missing',`Add enum values for ${cmd} ${flag}.`]);
+    }
+    if(c.exitCodes===undefined||c.exitCodes===null) issues.push(['command-exit-codes-missing',`Declare an exitCodes record for ${cmd}.`]);
+    for(const code of Object.keys(c.exitCodes||{})) if(!/^\d+$/.test(code)) issues.push(['command-exit-code-invalid',`Rename ${cmd} exit code ${code} to a numeric string.`]);
+    // #64 high-stakes guard: a write-implying mutation must declare write/destructive sideEffects,
+    // else its danger is under-advertised and the high-stakes pause never fires.
+    if(WRITE_IMPLYING.has(c.mutation)&&!(c.sideEffects||[]).some(se=>WRITE_ESCALATING.has(se)))
+      issues.push(['command-mutation-sideeffect-mismatch',`Declare sideEffects including 'write' or 'destructive' for ${cmd} (its mutation '${c.mutation}' implies write/destructive intent).`]);
+    if(c.alias){
+      if(!contracts[c.alias.command]) issues.push(['command-alias-target-missing',`Point alias ${cmd} at an existing command.`]);
+      if(!c.alias.defaultArgs||c.alias.defaultArgs.length===0) issues.push(['command-alias-default-args-missing',`Declare default args for alias ${cmd}.`]);
+    }
+  }
+  return issues;
+}
+// ---- auto-fixers (the self-correction loop) ----
+const FIXERS={
+  'command-audience-invalid':(c,cmd)=>{c[cmd].audience='agent';return 'audience → agent';},
+  'command-audience-missing':(c,cmd)=>{c[cmd].audience='agent';return 'set audience → agent';},
+  'command-flag-name-invalid':(c,cmd)=>{for(const f of Object.keys(c[cmd].flags)){if(!f.startsWith('--')){c[cmd].flags['--'+f]=c[cmd].flags[f];delete c[cmd].flags[f];return `flag ${f} → --${f}`;}}return '';},
+  'command-reserved-diagnostic-flag':(c,cmd)=>{for(const f of Object.keys(c[cmd].flags)){if(RESERVED.has(f)){delete c[cmd].flags[f];return `dropped reserved ${f}`;}}return '';},
+  'command-enum-flag-values-missing':(c,cmd)=>{for(const [f,m] of Object.entries(c[cmd].flags)){if(m.type==='enum'&&(!m.values||!m.values.length)){m.values=['a','b'];return `filled ${f} enum values`;}}return '';},
+  'command-exit-code-invalid':(c,cmd)=>{const fixed={};let i=0;for(const [k,v] of Object.entries(c[cmd].exitCodes)){fixed[/^\d+$/.test(k)?k:String(i++)]=v;}c[cmd].exitCodes=fixed;return 'exit codes → numeric';},
+  'command-side-effect-invalid':(c,cmd)=>{c[cmd].sideEffects=(c[cmd].sideEffects||[]).filter(s=>SIDE.has(s));return 'dropped invalid side-effect';},
+  'command-flags-missing':(c,cmd)=>{c[cmd].flags={};return `declared empty flags for ${cmd}`;},
+  'command-exit-codes-missing':(c,cmd)=>{c[cmd].exitCodes={"0":"ok"};return `declared exitCodes for ${cmd}`;},
+  'command-mutation-sideeffect-mismatch':(c,cmd)=>{c[cmd].sideEffects=[...(c[cmd].sideEffects||[]),'write'];return `declared write sideEffect for ${cmd}`;},
+};
+let lastFixTrace=null; // captured each Fix-it run; drives the reactive loop diagram
+function autoFix(contracts){
+  const log=[];const fixes=[];let pass=0,outcome='done',stuckOn=null;
+  while(pass++<6){
+    const issues=validate(contracts);
+    if(!issues.length){log.push(`✅ clean after ${pass-1} pass(es)`);break;}
+    let applied=0;
+    for(const [cat] of issues){
+      for(const cmd of Object.keys(contracts)){const f=FIXERS[cat];if(f){const w=f(contracts,cmd);if(w){log.push(`fix: ${w}`);fixes.push(w);applied++;break;}}}
+    }
+    if(!applied){log.push(`🛑 no fixer for: ${issues.map(i=>i[0]).join(', ')} — needs human`);outcome='stuck';stuckOn=issues.map(i=>i[0]);break;}
+  }
+  lastFixTrace={passes:Math.max(0,pass-1),fixes,outcome,stuckOn};
+  return log;
+}
+
+function renderHelp(contracts){
+  const out=[];
+  for(const [cmd,c] of Object.entries(contracts)){
+    const u=(c.usage&&c.usage[0])||cmd;
+    const danger=(c.sideEffects||[]).includes('destructive')?'  ⚠ destructive':(c.sideEffects||[]).includes('auth')?'  ⚿ auth':'';
+    out.push(`Usage: ${u}`,'',`  ${c.summary||''}${danger}`);
+    for(const [f,m] of Object.entries(c.flags||{})){const ev=m.type==='enum'&&m.values?` {${m.values.join('|')}}`:'';out.push(`  ${f}: ${m.type}${ev}${m.required?' (required)':''}`);}
+    const codes=Object.entries(c.exitCodes||{}).map(([k,v])=>`${k}=${v}`).join(', ');if(codes)out.push(`  exit: ${codes}`);
+    out.push('');
+  }
+  return out.join('\n').trim();
+}
+function renderCtx(contracts){
+  const a={};for(const [cmd,c] of Object.entries(contracts)) if(c.audience==='agent') a[cmd]={summary:c.summary,usage:c.usage,json:c.json,mutation:c.mutation,audience:c.audience,side_effects:c.sideEffects,flags:c.flags,exit_codes:c.exitCodes};
+  return Object.keys(a).length?JSON.stringify({schema_version:'agent-context@1',commands:a},null,2):'(no audience:agent commands → empty catalog)';
+}
+
+const src=$('#src'),verdictEl=$('#verdict'),helpEl=$('#help'),ctxEl=$('#ctx'),statEl=$('#stat');
+function parse(){try{return [JSON.parse(src.value),null];}catch(e){return [null,e.message];}}
+function run(){
+  const [contracts,err]=parse();
+  const lines=src.value.split('\n').length,chars=src.value.length;
+  if(err){verdictEl.className='verdict bad';verdictEl.textContent='✗ invalid JSON — '+err;helpEl.textContent='';ctxEl.textContent='';statEl.innerHTML=`<b>${chars}</b> chars · <b>${lines}</b> lines · JSON error`;return;}
+  const cmds=Object.keys(contracts).length;
+  const issues=validate(contracts);
+  if(!issues.length){verdictEl.className='verdict ok';verdictEl.textContent='✅ valid — defineCommandFacadeContract would accept this';}
+  else{verdictEl.className='verdict bad';verdictEl.innerHTML='❌ '+issues.length+' issue(s) — define() would throw:'+issues.map(([c,a])=>`<div class="issue"><span><span class="cat">${c}</span> — ${a}</span></div>`).join('');}
+  helpEl.textContent=renderHelp(contracts);ctxEl.textContent=renderCtx(contracts);
+  statEl.innerHTML=`<b>${chars}</b> chars · <b>${lines}</b> lines · <b>${cmds}</b> command(s) · <b>${issues.length}</b> issue(s)`;
+}
+src.addEventListener('input',run);
+
+const PRESETS={
+  valid:{build:{script:"scripts/build.ts",summary:"Build the project.",usage:["build [--out <path>] [--json] [--dry-run]"],json:true,audience:"agent",mutation:"write",sideEffects:["write"],executionModes:["normal","dry_run"],flags:{"--out":{type:"path"},"--json":{type:"boolean"},"--dry-run":{type:"boolean"}},exitCodes:{"0":"built","1":"failed","2":"usage"}}},
+  enum:{pick:{script:"s.ts",summary:"Pick a mode.",usage:["pick --mode <m>"],json:true,audience:"agent",mutation:"read-only",flags:{"--mode":{type:"enum",values:[]}},exitCodes:{"0":"ok"}}},
+  reserved:{run:{script:"s.ts",summary:"Run.",usage:["run [--verbose]"],json:true,audience:"agent",mutation:"read-only",flags:{"--verbose":{type:"boolean"}},exitCodes:{"0":"ok"}}},
+  exit:{ping:{script:"s.ts",summary:"Ping.",usage:["ping"],json:true,audience:"agent",mutation:"read-only",flags:{},exitCodes:{success:"ok",failure:"bad"}}},
+  flag:{go:{script:"s.ts",summary:"Go.",usage:["go"],json:true,audience:"agent",mutation:"read-only",flags:{mode:{type:"string"}},exitCodes:{"0":"ok"}}},
+  aud:{act:{script:"s.ts",summary:"Act.",usage:["act"],json:true,audience:"robot",mutation:"read-only",flags:{},exitCodes:{"0":"ok"}}},
+  multi:{go:{script:"s.ts",summary:"Go.",usage:["go"],json:true,audience:"robot",mutation:"read-only",flags:{mode:{type:"string"}},exitCodes:{success:"ok"}}}
+};
+function load(obj){src.value=JSON.stringify(obj,null,2);run();}
+document.querySelectorAll('.preset').forEach(p=>{ p.addEventListener('click',()=>load(PRESETS[p.dataset.preset])); });
+
+// ---- feature buttons ----
+$('#fmt-btn').addEventListener('click',()=>{const [c,e]=parse();if(e){toast('fix JSON first');return;}load(c);toast('formatted');});
+$('#copy-src').addEventListener('click',()=>copy(src.value,'contract copied'));
+$('#copy-help').addEventListener('click',()=>copy(helpEl.textContent,'--help copied'));
+$('#copy-ctx').addEventListener('click',()=>copy(ctxEl.textContent,'agent-context copied'));
+$('#reset-btn').addEventListener('click',()=>{load(PRESETS.valid);toast('reset');});
+$('#fix-btn').addEventListener('click',()=>{const [c,e]=parse();if(e){toast('fix JSON first');return;}const log=autoFix(c);load(c);toast(log[log.length-1].startsWith('✅')?'fixed! → see 🗺️ Flows #4':log[log.length-1].slice(0,28));if(typeof renderFlows==='function'&&$('#flows')&&$('#flows').classList.contains('active'))renderFlows();});
+$('#theme-btn').addEventListener('click',()=>{const r=document.documentElement;const next=r.getAttribute('data-theme')==='light'?'dark':'light';r.setAttribute('data-theme',next);try{localStorage.setItem('cli-theme',next);}catch{}});
+$('#share-btn').addEventListener('click',()=>{const [c,e]=parse();if(e){toast('fix JSON first');return;}const h='#c='+encodeURIComponent(btoa(JSON.stringify(c)));copy(location.origin+location.pathname+h,'share link copied');location.hash=h.slice(1);});
+$('#help-btn').addEventListener('click',()=>toast('⌘/Ctrl+Enter validate · +K copy · +. fix'));
+$('#random-btn').addEventListener('click',()=>{const s=SHAPES[Math.floor(Date.now()/100)%SHAPES.length];load(s[4]);toast('loaded: '+s[0]);});
+
+// keyboard shortcuts
+document.addEventListener('keydown',e=>{
+  const mod=e.metaKey||e.ctrlKey;if(!mod)return;
+  if(e.key==='Enter'){e.preventDefault();run();toast('revalidated');}
+  else if(e.key==='k'){e.preventDefault();copy(src.value,'contract copied');}
+  else if(e.key==='.'){e.preventDefault();$('#fix-btn').click();}
+});
+
+// theme restore + share restore
+try{const t=localStorage.getItem('cli-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch{}
+function fromHash(){const m=location.hash.match(/c=([^&]+)/);if(m){try{return JSON.parse(atob(decodeURIComponent(m[1])));}catch{}}return null;}
+
+// ---- dashboard ----
+const COVERAGE=[
+  ['The Basics','exit codes, stdout/stderr','enforced'],['Help','renderCommandUsage','enforced'],
+  ['Output: --json','envelope writers','enforced'],['Errors','StructuredRuntimeError','enforced'],
+  ['Arguments & flags','typed flags','enforced'],['Subcommands','flat record + naming','partial'],
+  ['Robustness','executionModes (--dry-run)','enforced'],['Output: --plain','outputModes — declare, not enforce','partial'],
+  ['Interactivity','interactivity stance — declare, not enforce','partial'],['Environment variables','envVars + name gate — declare, not enforce','partial'],
+  ['Output: color/pager','NO_COLOR, --no-color, pager','prose'],['Signals','Ctrl-C, crash-only','prose'],
+  ['Configuration','flags>env>config precedence','prose'],['Future-proofing','deprecation paths','prose'],
+  ['Completion','shell completion','prose'],['Naming','command naming','prose'],
+  ['Distribution','single binary','prose'],['Analytics','opt-in telemetry','prose'],
+];
+const sc=$('#scorecard');let nE=0,nP=0,nR=0;
+COVERAGE.forEach(([sec,det,kind])=>{
+  if(kind==='enforced')nE++;else if(kind==='partial')nP++;else nR++;
+  const card=document.createElement('div');card.className='card '+kind;
+  card.innerHTML=`<div class="sec">${sec}</div><div class="det">${det}</div><span class="tag ${kind}">${kind==='enforced'?'enforced':kind==='partial'?'partial':'prose-only'}</span>`;
+  sc.appendChild(card);
+});
+const tot=COVERAGE.length;
+$('#cover-bar').innerHTML=`<span style="width:${nE/tot*100}%;background:var(--green)"></span><span style="width:${nP/tot*100}%;background:var(--amber)"></span><span style="width:${nR/tot*100}%;background:var(--muted)"></span>`;
+$('#cover-score').innerHTML=`<span style="color:var(--green)">${nE}</span> enforced · <span style="color:var(--amber)">${nP}</span> partial · <span style="color:var(--muted)">${nR}</span> prose <span style="color:var(--muted);font-size:.9rem;font-weight:400">/ ${tot} sections</span>`;
+
+// ---- gallery (click loads into playground) ----
+const SHAPES=[
+  ['Flat multi-command','structure','Every command a top-level key. The default.',[['status','read'],['sync','write']],{status:{script:"s.ts",summary:"Show status.",usage:["status [--json]"],json:true,audience:"agent",mutation:"read-only",sideEffects:["read"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok","2":"usage"}}}],
+  ['Noun-verb (git-style)','structure','remote:add / remote:list — tree via naming.',[['remote:add','write'],['remote:remove','destructive']],{"remote:add":{script:"s.ts",summary:"Add a remote.",usage:["remote:add <name> <url>"],json:true,audience:"operator",mutation:"write",sideEffects:["write"],flags:{},exitCodes:{"0":"ok","2":"usage"}}}],
+  ['Alias-driven','structure','Canonical + aliases pre-filling default args.',[['run','write'],['run:safe','write']],{run:{script:"s.ts",summary:"Run.",usage:["run --mode <m>"],json:true,audience:"agent",mutation:"write",sideEffects:["write"],flags:{"--mode":{type:"enum",values:["fast","safe"],required:true}},exitCodes:{"0":"ok"}},"run:safe":{script:"s.ts",summary:"Run safe (alias).",usage:["run:safe"],json:true,audience:"agent",mutation:"write",sideEffects:["write"],flags:{},exitCodes:{"0":"ok"},alias:{command:"run",defaultArgs:["--mode","safe"]}}}],
+  ['Agent-hint-forward','feature','Failures carry recoverability + hint action.',[['deploy','auth']],{deploy:{script:"s.ts",summary:"Deploy.",usage:["deploy <env> [--json]"],json:true,audience:"agent",mutation:"write",sideEffects:["write","network","auth"],executionModes:["normal","dry_run"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"deployed","4":"auth required"}}}],
+  ['Safety-mode-forward','feature','executionModes + destructive side-effect.',[['prune','destructive']],{prune:{script:"s.ts",summary:"Delete stale rows.",usage:["prune [--dry-run] [--force]"],json:true,audience:"operator",mutation:"write",sideEffects:["destructive"],executionModes:["normal","check","dry_run"],flags:{"--dry-run":{type:"boolean"},"--force":{type:"boolean"}},exitCodes:{"0":"pruned","3":"refused"}}}],
+  ['Result + affordances','feature','resultContract + safe next-actions.',[['analyze','read']],{analyze:{script:"s.ts",summary:"Analyze a codebase.",usage:["analyze <path> [--json]"],json:true,audience:"agent",mutation:"read-only",sideEffects:["read"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok"},resultContract:{id:"report",kind:"report",schema_version:2}}}],
+  ['Auth manager','archetype','login / logout / whoami.',[['login','auth'],['logout','destructive']],{login:{script:"s.ts",summary:"Authenticate.",usage:["login [--json]"],json:true,audience:"operator",mutation:"write",sideEffects:["auth","network","write"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok","1":"failed"}},whoami:{script:"s.ts",summary:"Current identity.",usage:["whoami [--json]"],json:true,audience:"agent",mutation:"read-only",sideEffects:["read"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok","4":"not authed"}}}],
+  ['Pipeline','composition','fetch→load sharing one resultContract id.',[['fetch','network'],['load','write']],{fetch:{script:"s.ts",summary:"Fetch records.",usage:["fetch <src> [--json]"],json:true,audience:"agent",mutation:"read-only",sideEffects:["read","network"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok"},resultContract:{id:"batch",kind:"dataset",schema_version:3}},load:{script:"s.ts",summary:"Load records.",usage:["load <sink> [--json]"],json:true,audience:"agent",mutation:"write",sideEffects:["write","network"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok"},resultContract:{id:"batch",kind:"dataset",schema_version:3}}}],
+  ['Async job manager','archetype','start / status / cancel — non-blocking.',[['job:start','write'],['job:cancel','destructive']],{"job:start":{script:"s.ts",summary:"Start a job.",usage:["job:start <kind> [--json]"],json:true,audience:"agent",mutation:"write",sideEffects:["write","network"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok"},resultContract:{id:"handle",kind:"handle",schema_version:1}}}],
+  ['Governance suite','archetype','check-only; projects to (none) for agents.',[['audit:deps','check']],{"audit:deps":{script:"s.ts",summary:"Audit deps.",usage:["audit:deps [--json]"],json:true,audience:"governance",mutation:"check-only",sideEffects:["check"],executionModes:["check"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok","1":"violations"}}}],
+  ['Pure-read inspector','side-effect','Read-only; value in resultContract.',[['inspect','read']],{inspect:{script:"s.ts",summary:"Inspect an entity.",usage:["inspect <id> [--json]"],json:true,audience:"agent",mutation:"read-only",sideEffects:["read"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok","1":"not found"},resultContract:{id:"inspection",kind:"report",schema_version:4}}}],
+  ['Type checker','archetype','single read-only command (tsc-runner).',[['type:check','read']],{"type:check":{script:"s.ts",summary:"Type-check.",usage:["type:check [--json]"],json:true,audience:"smoke",mutation:"read-only",sideEffects:["read"],executionModes:["check"],flags:{"--json":{type:"boolean"}},exitCodes:{"0":"ok","2":"errors"}}}],
+  ['Single-verb tool','structure','One job, rich flag surface.',[['convert','write']],{convert:{script:"s.ts",summary:"Convert a file.",usage:["convert <in> --to <fmt>"],json:true,audience:"operator",mutation:"write",sideEffects:["read","write"],flags:{"--to":{type:"enum",values:["json","yaml"],required:true}},exitCodes:{"0":"ok","3":"bad format"}}}],
+  ['Scaffolder','archetype','one write-heavy command + affordances.',[['new:project','write']],{"new:project":{script:"s.ts",summary:"Create from template.",usage:["new:project <name> [--force]"],json:true,audience:"operator",mutation:"write",sideEffects:["write"],executionModes:["normal","dry_run"],flags:{"--force":{type:"boolean"}},exitCodes:{"0":"ok","3":"exists"}}}],
+];
+const gg=$('#gallery-grid');
+SHAPES.forEach((sh,i)=>{const[title,axis,note,cmds]=sh;const el=document.createElement('div');el.className='shape';
+  el.innerHTML=`<div class="axis">${axis}</div><h4>${title}</h4><div class="note">${note}</div>`+cmds.map(([n,se])=>`<span class="pill ${se}">${n} · ${se}</span>`).join('')+`<div class="try">▸ click to load in playground</div>`;
+  el.addEventListener('click',()=>{load(sh[4]);document.querySelector('.tab[data-view="play"]').click();toast('loaded: '+title);});
+  gg.appendChild(el);});
+
+// ---- init: hash > default ----
+// ============ 🤖 AGENT'S EYE VIEW ============
+const OUTCOMES={
+  ok:{label:'success',envelope:{status:'ok',run_id:'01JRUN…',data:{deployed:true},duration_ms:42},reason:['status = "ok" → command succeeded.','run_id correlates this run in logs.','runtime_actions (if any) suggest next steps.'],decision:'✅ PROCEED — success. Continue the workflow.',cls:'ok'},
+  rate:{label:'rate-limited',envelope:{status:'error',run_id:'01JRUN…',error:{code:'RATE_LIMITED',exit_code:5,severity:'warning',recoverability:'retry',retryable:true,hint:{action:'retry',summary:'Wait, then retry.'}}},reason:['status = "error", read the error.','recoverability = "retry" AND retryable = true.','severity = "warning" → transient, not fatal.','hint.action = "retry" confirms: same input is fine.'],decision:'🔁 RETRY — same input, after a short backoff.',cls:'ok'},
+  auth:{label:'auth failed',envelope:{status:'error',run_id:'01JRUN…',error:{code:'AUTH_REQUIRED',exit_code:4,severity:'error',recoverability:'authenticate',retryable:false,hint:{action:'authenticate',summary:'Run the auth flow.'}}},reason:['recoverability = "authenticate", retryable = false.','Retrying the same input will fail again.','hint.action = "authenticate" → do that FIRST.'],decision:'🔐 ACT — run auth flow, THEN retry.',cls:'bad'},
+  input:{label:'bad input',envelope:{status:'error',run_id:'01JRUN…',error:{code:'BAD_ARG',exit_code:2,severity:'error',recoverability:'change_input',retryable:false}},reason:['recoverability = "change_input".','The input itself is wrong — retrying as-is loops.','Fix the argument, then re-run.'],decision:'✋ ACT — fix the input, then retry.',cls:'bad'},
+  repair:{label:'corrupt state',envelope:{status:'error',run_id:'01JRUN…',error:{code:'CACHE_CORRUPT',exit_code:6,severity:'error',recoverability:'repair_state',retryable:false,hint:{action:'repair_state',summary:'Clear cache.'}}},reason:['recoverability = "repair_state".','Local state is broken — input is fine.','Repair (clear cache), then re-run.'],decision:'🔧 ACT — repair state, then retry.',cls:'bad'},
+  fatal:{label:'fatal',envelope:{status:'error',run_id:'01JRUN…',error:{code:'SCHEMA_UNSUPPORTED',exit_code:1,severity:'fatal',recoverability:'none',retryable:false}},reason:['severity = "fatal", recoverability = "none".','retryable = false. Nothing the agent can do.','No hint.action → no recovery path exists.'],decision:'💀 STOP — do not retry. Escalate to a human.',cls:'bad'},
+};
+function showOutcome(o){
+  const d=OUTCOMES[o];if(!d)return;
+  $('#ag-envelope').textContent=JSON.stringify(d.envelope,null,2);
+  $('#ag-reason').textContent=d.reason.map((r,i)=>`${i+1}. ${r}`).join('\n');
+  const dec=$('#ag-decision');dec.className='verdict '+d.cls;dec.textContent=d.decision;
+}
+document.querySelectorAll('[data-outcome]').forEach(b=>{ b.addEventListener('click',()=>showOutcome(b.dataset.outcome)); });
+showOutcome('ok');
+
+// ============ 🩺 DRIFT DOCTOR ============
+const FIELD_DOCS={
+  script:['Path to the command\'s implementation file.','Required. Missing → the contract is structurally incomplete (TS won\'t compile).','—'],
+  summary:['One-line human description; shows in --help and agent-context.','Required. Also projected unscanned into discovery (don\'t put secrets here).','—'],
+  usage:['Array of USAGE synopsis lines, rendered by renderCommandUsage.','Required, non-empty array.','—'],
+  json:['Whether the command emits --json machine output.','Required boolean. Drives the envelope writer.','—'],
+  audience:['Who the command is for: agent | operator | smoke | governance.','A value outside that set fails.','command-audience-invalid'],
+  mutation:['Free-form mutation label (read-only / write / check-only…).','Consumer-owned vocabulary; the facade doesn\'t constrain it.','—'],
+  sideEffects:['What the command touches: read|check|write|destructive|auth|network|browser.','An unknown class fails.','command-side-effect-invalid'],
+  executionModes:['Safety modes: normal | check | dry_run.','An unknown mode fails.','command-execution-mode-invalid'],
+  outputModes:['Output formats advertised: json | plain | jsonl. Declare, don\'t enforce.','An unknown mode fails.','command-output-mode-invalid'],
+  interactivity:['Non-interactive stance: required | optional | none.','An unknown value fails. Scalar, not array.','command-interactivity-invalid'],
+  envVars:['Declared env vars {name,required?,secret?}. Names projected to agents.','A secret-implying NAME (API_TOKEN…) is rejected so it never leaks.','command-env-var-name-sensitive'],
+  flags:['Map of flag → {type,...}. Types: boolean|string|path|json|enum.','--prefix missing → invalid. Reserved diag flags rejected. Empty enum → invalid.','command-flag-name-invalid / -reserved-diagnostic-flag / -enum-flag-values-missing'],
+  exitCodes:['Map of numeric-string code → meaning ("0":"ok").','A non-numeric key ("success") fails.','command-exit-code-invalid'],
+  resultContract:['What the data payload IS: {id,kind?,schema_version?}.','Optional. Shape-validated only.','—'],
+  actionAffordances:['Safe next-actions advertised before run.','Optional discovery metadata.','—'],
+  alias:['Shortcut to a canonical command + pre-filled default args.','Missing target or empty defaultArgs → invalid.','command-alias-target-missing / -default-args-missing'],
+};
+function renderDoctor(){
+  let c;const [pc]=parse();
+  c=(pc&&typeof pc==='object'&&Object.keys(pc).length)?pc:PRESETS.valid;
+  const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const txt=esc(JSON.stringify(c,null,2));
+  // wrap any quoted key whose name has a doc entry in a clickable span
+  const html=txt.replace(/^(\s*)"([a-zA-Z]+)":/gm,(m,sp,key)=>FIELD_DOCS[key]?`${sp}"<span class="dockey" data-key="${key}" style="color:var(--cyan);cursor:pointer;text-decoration:underline;text-decoration-style:dotted">${key}</span>":`:m);
+  $('#doc-src').innerHTML=html;
+  document.querySelectorAll('.dockey').forEach(k=>{ k.addEventListener('click',()=>{
+    const d=FIELD_DOCS[k.dataset.key];$('#doc-title').textContent=k.dataset.key;
+    $('#doc-body').innerHTML=`<b>What:</b> ${d[0]}<br><br><b>Breaks if:</b> ${d[1]}<br><br><b>Guard rule:</b> <code>${d[2]}</code>`;
+  }); });
+}
+
+// ============ 🎯 BOSS BATTLES ============
+const BOSSES=[
+  {title:'Deploy boss',spec:'A command "deploy" — audience agent, sideEffects must include "destructive", executionModes must include "dry_run", at least 3 exitCodes, valid contract.',check:c=>{const d=c.deploy;if(!d)return['add a "deploy" command'];const f=[];if(d.audience!=='agent')f.push('audience must be agent');if(!(d.sideEffects||[]).includes('destructive'))f.push('sideEffects needs "destructive"');if(!(d.executionModes||[]).includes('dry_run'))f.push('executionModes needs "dry_run"');if(Object.keys(d.exitCodes||{}).length<3)f.push('need ≥3 exitCodes');return f;}},
+  {title:'Enum boss',spec:'A command "convert" with a REQUIRED enum flag "--to" (≥2 values), audience operator, valid contract.',check:c=>{const d=c.convert;if(!d)return['add a "convert" command'];const f=[];const fl=(d.flags||{})['--to'];if(!fl||fl.type!=='enum')f.push('--to must be an enum flag');else if(!fl.values||fl.values.length<2)f.push('--to needs ≥2 values');else if(!fl.required)f.push('--to must be required');if(d.audience!=='operator')f.push('audience must be operator');return f;}},
+  {title:'Agent-safe boss',spec:'A read-only "status" command, audience agent, sideEffects ["read"], declares --json, exit codes 0 and 2.',check:c=>{const d=c.status;if(!d)return['add a "status" command'];const f=[];if(d.audience!=='agent')f.push('audience agent');if(JSON.stringify(d.sideEffects)!=='["read"]')f.push('sideEffects exactly ["read"]');if(!d.flags||!d.flags['--json'])f.push('declare --json flag');if(!d.exitCodes||!d.exitCodes['0']||!d.exitCodes['2'])f.push('exit codes 0 and 2');return f;}},
+];
+let bossI=0,bossT=null,bossLeft=0;
+const bossBest=()=>{try{return +localStorage.getItem('boss-best')||0;}catch{return 0;}};
+$('#boss-best').textContent=bossBest();
+function bossLoad(){const b=BOSSES[bossI%BOSSES.length];$('#boss-title').textContent='🎯 '+b.title;$('#boss-spec').textContent=b.spec;$('#boss-result').className='verdict ok';$('#boss-result').textContent='Build it, then Submit. Clock is running.';$('#boss-checklist').textContent='';}
+function bossStart(){bossLoad();bossLeft=90;$('#boss-timer').textContent=bossLeft;if(bossT)clearInterval(bossT);bossT=setInterval(()=>{bossLeft--;$('#boss-timer').textContent=bossLeft;if(bossLeft<=0){clearInterval(bossT);bossFail('⏰ Time!');}},1000);}
+function bossFail(msg){$('#boss-result').className='verdict bad';$('#boss-result').textContent=msg+' Streak reset.';$('#boss-streak').textContent='0';}
+function bossCheck(){
+  let c;try{c=JSON.parse($('#boss-src').value);}catch(e){$('#boss-result').className='verdict bad';$('#boss-result').textContent='✗ invalid JSON';return;}
+  const issues=validate(c);const b=BOSSES[bossI%BOSSES.length];const missing=b.check(c);
+  const lines=[...missing.map(m=>'✗ '+m),...issues.map(i=>'✗ drift: '+i[0])];
+  if(lines.length===0){clearInterval(bossT);const s=(+$('#boss-streak').textContent)+1;$('#boss-streak').textContent=s;if(s>bossBest()){try{localStorage.setItem('boss-best',s);}catch{}$('#boss-best').textContent=s;}$('#boss-result').className='verdict ok';$('#boss-result').textContent=`🏆 CLEARED in ${90-bossLeft}s! Streak ${s}. Next boss →`;$('#boss-checklist').textContent='all requirements met ✓';bossI++;setTimeout(bossStart,1400);}
+  else{$('#boss-result').className='verdict bad';$('#boss-result').textContent=`${lines.length} thing(s) to fix:`;$('#boss-checklist').textContent=lines.join('\n');}
+}
+$('#boss-start').addEventListener('click',bossStart);
+$('#boss-check').addEventListener('click',bossCheck);
+$('#boss-skip').addEventListener('click',()=>{bossI++;bossStart();});
+
+// ============ ⚔️ MUTATION ARENA ============
+const MUTATORS=[
+  {desc:'emptied an enum flag\'s values',apply:c=>{for(const cmd of Object.values(c))for(const f of Object.values(cmd.flags||{}))if(f.type==='enum'){f.values=[];return;}for(const cmd of Object.values(c)){cmd.flags=cmd.flags||{};cmd.flags['--mode']={type:'enum',values:[]};return;}}},
+  {desc:'renamed a flag to drop --',apply:c=>{for(const cmd of Object.values(c)){const ks=Object.keys(cmd.flags||{});if(ks.length){cmd.flags[ks[0].slice(2)]=cmd.flags[ks[0]];delete cmd.flags[ks[0]];return;}cmd.flags={mode:{type:'string'}};return;}}},
+  {desc:'made an exit code non-numeric',apply:c=>{for(const cmd of Object.values(c)){const ec=cmd.exitCodes||{};const k=Object.keys(ec)[0]||'0';ec['success']=ec[k]||'ok';delete ec[k];cmd.exitCodes=ec;return;}}},
+  {desc:'set a bogus audience',apply:c=>{Object.values(c)[0].audience='robot';}},
+  {desc:'declared reserved --verbose',apply:c=>{const cmd=Object.values(c)[0];cmd.flags=cmd.flags||{};cmd.flags['--verbose']={type:'boolean'};}},
+];
+let arenaScore=0,arenaRounds=0,arenaAnswer=null;
+function arenaDeal(){
+  const shape=SHAPES[arenaRounds%SHAPES.length][4];const c=JSON.parse(JSON.stringify(shape));
+  const m=MUTATORS[Math.floor((Date.now()/137+arenaRounds)%MUTATORS.length)];m.apply(c);
+  const issues=validate(c);
+  const txt=JSON.stringify(c,null,2);const lines=txt.split('\n');
+  // figure which line indices are "guilty": those containing a token from the drift action
+  arenaAnswer=issues.length?issues[0][0]:null;
+  $('#arena-board').innerHTML=lines.map((ln,i)=>`<span class="aline" data-i="${i}" style="display:block">${ln.replace(/</g,'&lt;')}</span>`).join('');
+  $('#arena-status').textContent='🔍 One line is broken. Click it. (mutation: hidden)';
+  arenaRounds++;$('#arena-rounds').textContent=arenaRounds;
+  // mark guilty lines by re-validating: a line is guilty if removing nothing — simplest: match known bad tokens
+  const badTokens=['values": []','values":[]','"success"','"robot"','"--verbose"'];
+  const guilty=new Set();lines.forEach((ln,i)=>{if(/"[a-z]+":\s*\{/.test(ln)&&!ln.includes('--'))return;if(badTokens.some(t=>ln.replace(/\s/g,'').includes(t.replace(/\s/g,''))))guilty.add(i);if(/^\s*"[a-z_]+":\s*\{/.test(ln)===false&&/[a-z]+":\s*\{\s*$/.test(ln)){}});
+  // flag a line keyed by a non-"--" flag name (dropped --) : "mode": {
+  lines.forEach((ln,i)=>{if(/^\s*"[a-z][a-z0-9]*":\s*\{\s*type/.test(ln)&&!ln.includes('--'))guilty.add(i);});
+  document.querySelectorAll('.aline').forEach(el=>{ el.addEventListener('click',()=>{
+    const i=+el.dataset.i;const right=guilty.has(i);
+    if(right){arenaScore++;$('#arena-status').innerHTML='✅ Caught it! <span style="color:var(--green)">'+(arenaAnswer||'drift')+'</span>';el.style.background='rgba(63,185,80,.2)';}
+    else{arenaScore=Math.max(0,arenaScore-1);$('#arena-status').innerHTML='❌ Nope — that line\'s fine. The bug was: <span style="color:var(--red)">'+(arenaAnswer||'?')+'</span>';el.style.background='rgba(248,81,73,.15)';[...guilty].forEach(gi=>{const g=document.querySelector('.aline[data-i="'+gi+'"]');if(g)g.style.background='rgba(63,185,80,.2)';});}
+    $('#arena-score').textContent=arenaScore;
+    document.querySelectorAll('.aline').forEach(x=>{x.style.cursor='default';});
+  }); });
+}
+$('#arena-deal').addEventListener('click',arenaDeal);
+
+// refresh doctor whenever play src changes (shared contract)
+src.addEventListener('input',()=>{ if($('#doctor').classList.contains('active')) renderDoctor(); });
+document.querySelector('.tab[data-view="doctor"]').addEventListener('click',renderDoctor);
+
+// ============ 🗺️ FLOWS (Mermaid) ============
+const MER=(typeof mermaid!=='undefined')?mermaid:null;
+if(MER){try{MER.initialize({startOnLoad:false,theme:'dark',securityLevel:'loose'});}catch{}}
+function merOk(node){return /^[A-Za-z][A-Za-z0-9_]*$/.test(node);}
+// build the four diagram sources from the current contract
+function flowSources(){
+  const [c]=parse();const obj=(c&&typeof c==='object')?c:{};
+  const cmds=Object.entries(obj);
+  const issues=cmds.length?validate(obj):[{0:'empty'}].map(()=>['empty-contract','add a command']);
+  const broke=cmds.length?(validate(obj).length>0):true;
+  // 1 — pipeline: design → contract → define gate → projection → agent ; red at gate if broken
+  const gateColor=broke?'fill:#3d1412,stroke:#f85149,color:#f85149':'fill:#0f2e17,stroke:#3fb950,color:#3fb950';
+  const okStage='fill:#0f2e17,stroke:#3fb950,color:#e6edf3';
+  const pipeline=`flowchart LR
+  D["✍️ design<br/>(create-cli)"] --> C["📦 CommandFacadeContract<br/>${cmds.length} command(s)"]
+  C --> G{"🔒 define() gate<br/>${broke?'BLOCKS — '+validate(obj).length+' issue(s)':'passes'}"}
+  G -->|${broke?'✗ throws':'✓ ok'}| P["🌳 projection<br/>agent-context"]
+  P --> A["🤖 agent reads<br/>the catalog"]
+  style D ${okStage}
+  style C ${okStage}
+  style G ${gateColor}
+  style P ${broke?'fill:#1c2330,stroke:#30363d,color:#8b949e':okStage}
+  style A ${broke?'fill:#1c2330,stroke:#30363d,color:#8b949e':okStage}`;
+  // 2 — discovery tree: commands → audience; agent green, others grey
+  let tree='flowchart TD\n  ROOT["CLI"]\n';
+  if(!cmds.length){tree+='  ROOT --> EMPTY["(no commands)"]';}
+  else cmds.forEach(([name,cc],i)=>{
+    const id='N'+i;const agent=cc&&cc.audience==='agent';
+    const safe=name.replace(/[^A-Za-z0-9]/g,'_');
+    tree+=`  ROOT --> ${id}["${name}<br/>${(cc&&cc.audience)||'?'}"]\n`;
+    tree+=`  style ${id} ${agent?'fill:#0f2e17,stroke:#3fb950,color:#3fb950':'fill:#1c2330,stroke:#30363d,color:#8b949e'}\n`;
+  });
+  // 3 — agent decision tree (static logic, always valid)
+  const decision=`flowchart TD
+  S["command result"] --> Q1{"status?"}
+  Q1 -->|ok| OK["✅ proceed"]
+  Q1 -->|error| Q2{"recoverability?"}
+  Q2 -->|retry| R["🔁 retry same input"]
+  Q2 -->|authenticate / change_input / repair_state| ACT["🔧 act, then retry"]
+  Q2 -->|none / contact_support| STOP["💀 stop, escalate"]
+  style OK fill:#0f2e17,stroke:#3fb950,color:#3fb950
+  style R fill:#0f2e17,stroke:#3fb950,color:#3fb950
+  style ACT fill:#2e2410,stroke:#d29922,color:#d29922
+  style STOP fill:#3d1412,stroke:#f85149,color:#f85149`;
+  // 4 — self-correction loop (reactive: replays the last Fix-it run if present)
+  const t=lastFixTrace;
+  const fixLabel=t&&t.fixes.length?`apply action<br/>${t.fixes.slice(0,3).map(f=>'• '+f.slice(0,22)).join('<br/>')}${t.fixes.length>3?'<br/>…+'+(t.fixes.length-3):''}`:'apply action';
+  const dim='fill:#1c2330,stroke:#30363d,color:#8b949e';
+  const grn='fill:#0f2e17,stroke:#3fb950,color:#3fb950';
+  const amb='fill:#2e2410,stroke:#d29922,color:#d29922';
+  const red='fill:#3d1412,stroke:#f85149,color:#f85149';
+  let loop=`flowchart LR
+  E["emit contract"] --> PA["parse()"]
+  PA --> QQ{"issues?"}
+  QQ -->|none| DONE["✅ done"]
+  QQ -->|yes, fixer exists| FIX["${fixLabel}"]
+  FIX -->|"${t&&t.passes>1?'re-parse ('+t.passes+' passes)':'re-parse'}"| PA
+  QQ -->|no fixer| HUMAN["🛑 stop → human${t&&t.outcome==='stuck'&&t.stuckOn?'<br/>'+t.stuckOn[0]:''}"]\n`;
+  if(!t){ // static: neutral colors
+    loop+=`  style DONE ${grn}\n  style FIX ${amb}\n  style HUMAN ${red}`;
+  } else if(t.outcome==='done'){ // converged: light the taken path green, dim the human branch
+    loop+=`  style E ${grn}\n  style PA ${grn}\n  style QQ ${grn}\n  style FIX ${t.fixes.length?amb:dim}\n  style DONE ${grn}\n  style HUMAN ${dim}\n  linkStyle 2 stroke:#3fb950,stroke-width:3px`;
+  } else { // stuck: light the human path red, dim done
+    loop+=`  style E ${amb}\n  style PA ${amb}\n  style QQ ${amb}\n  style FIX ${t.fixes.length?amb:dim}\n  style DONE ${dim}\n  style HUMAN ${red}\n  linkStyle 4 stroke:#f85149,stroke-width:3px`;
+  }
+  return {pipeline,tree,decision,loop,broke,n:cmds.length,trace:t};
+}
+async function renderFlows(){
+  const s=flowSources();
+  const replay=s.trace?` · loop #4 replays last Fix-it: ${s.trace.outcome==='done'?'✅ converged in '+s.trace.passes+' pass(es), '+s.trace.fixes.length+' fix(es)':'🛑 stopped (needs human)'}`:' · run 🔧 Fix it to replay the loop in #4';
+  $('#flows-state').textContent=(s.n?`${s.n} command(s) · ${s.broke?'has issues — see node 1':'valid'}`:'empty contract')+replay;
+  const pairs=[['mer-pipeline','fb-pipeline',s.pipeline],['mer-tree','fb-tree',s.tree],['mer-decision','fb-decision',s.decision],['mer-loop','fb-loop',s.loop]];
+  for(const [mid,fid,srcTxt] of pairs){
+    const node=$('#'+mid);const fb=$('#'+fid);
+    if(!MER){node.hidden=true;fb.hidden=false;fb.textContent=srcTxt;continue;}
+    try{
+      node.hidden=false;fb.hidden=true;node.removeAttribute('data-processed');
+      const {svg}=await MER.render(mid+'-svg-'+Math.floor(performance.now()),srcTxt);
+      node.innerHTML=svg;
+    }catch(e){node.hidden=true;fb.hidden=false;fb.textContent=srcTxt+'\n\n(diagram render failed — showing source)';}
+  }
+}
+$('#flows-refresh').addEventListener('click',renderFlows);
+document.querySelector('.tab[data-view="flows"]').addEventListener('click',()=>{setTimeout(renderFlows,30);});
+
+const restored=fromHash();
+load(restored||PRESETS.valid);
+</script>
+</body>
+</html>

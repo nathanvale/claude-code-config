@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>create-cli — skill visualization</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #30363d;
+    --fg: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950;
+    --amber: #d29922; --red: #f85149; --purple: #bc8cff; --cyan: #56d4dd;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); line-height: 1.6; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px 80px; }
+  header { padding: 56px 24px 32px; border-bottom: 1px solid var(--border);
+    background: radial-gradient(1200px 300px at 50% -10%, rgba(88,166,255,.10), transparent); }
+  header .wrap { padding-bottom: 0; }
+  h1 { font-size: 2.4rem; margin: 0 0 6px; letter-spacing: -.02em; }
+  h1 code { font-family: var(--mono); color: var(--accent); }
+  .tagline { color: var(--muted); font-size: 1.1rem; margin: 0; }
+  .badges { margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: .72rem; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); background: var(--panel); }
+  .badge.green { color: var(--green); border-color: #1f6f37; }
+  .badge.purple { color: var(--purple); border-color: #5a3a8e; }
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(13,17,23,.86);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  nav .wrap { display: flex; gap: 4px; padding: 8px 24px; overflow-x: auto; }
+  nav a { font-size: .82rem; color: var(--muted); text-decoration: none; white-space: nowrap;
+    padding: 6px 11px; border-radius: 7px; }
+  nav a:hover { color: var(--fg); background: var(--panel); }
+  section { margin-top: 48px; scroll-margin-top: 56px; }
+  h2 { font-size: 1.5rem; margin: 0 0 4px; letter-spacing: -.01em; }
+  h2 .num { color: var(--accent); font-family: var(--mono); font-size: 1rem; margin-right: 8px; }
+  .lead { color: var(--muted); margin: 0 0 18px; max-width: 70ch; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; }
+  .panel + .panel { margin-top: 14px; }
+  pre { background: #010409; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px;
+    overflow-x: auto; font-family: var(--mono); font-size: .82rem; line-height: 1.55; margin: 0; }
+  pre.lbl { position: relative; padding-top: 30px; }
+  pre.lbl::before { content: attr(data-lbl); position: absolute; top: 7px; left: 14px;
+    font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  code { font-family: var(--mono); }
+  p code, li code, td code { background: var(--panel2); padding: 1px 5px; border-radius: 5px; font-size: .85em; color: var(--cyan); }
+  .k { color: var(--red); } .s { color: var(--green); } .n { color: var(--purple); }
+  .c { color: var(--muted); font-style: italic; } .p { color: var(--cyan); } .f { color: var(--amber); }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+  tr:last-child td { border-bottom: none; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .pill { display: inline-block; font-family: var(--mono); font-size: .72rem; padding: 2px 7px;
+    border-radius: 6px; border: 1px solid var(--border); margin: 2px 3px 2px 0; }
+  .pill.read { color: var(--green); } .pill.write { color: var(--amber); }
+  .pill.destructive { color: var(--red); } .pill.auth { color: var(--purple); }
+  .pill.network, .pill.browser { color: var(--cyan); }
+  .flow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: .82rem; }
+  .flow .step { background: var(--panel2); border: 1px solid var(--border); padding: 8px 14px; border-radius: 9px; }
+  .flow .arrow { color: var(--accent); font-size: 1.1rem; }
+  .note { border-left: 3px solid var(--amber); padding: 8px 14px; background: rgba(210,153,34,.06);
+    border-radius: 0 8px 8px 0; color: var(--fg); font-size: .9rem; }
+  .note.good { border-color: var(--green); background: rgba(63,185,80,.06); }
+  .tree { font-family: var(--mono); font-size: .84rem; white-space: pre; color: var(--fg); }
+  .tree .dim { color: var(--muted); }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--muted); font-size: .82rem; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; font-size: .88rem; }
+  .kv dt { color: var(--muted); font-family: var(--mono); font-size: .82rem; }
+  .kv dd { margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1><code>create-cli</code></h1>
+    <p class="tagline">Design a CLI's surface — args, flags, help, output, errors, dry-run — then enforce it with a typed runtime contract.</p>
+    <div class="badges">
+      <span class="badge">Claude Code skill</span>
+      <span class="badge green">verbatim core (steipete / clig.dev)</span>
+      <span class="badge purple">side-quest facade reference</span>
+      <span class="badge">TypeScript + Bun</span>
+    </div>
+  </div>
+</header>
+
+<nav><div class="wrap">
+  <a href="#what">What it is</a>
+  <a href="#flow">The pipeline</a>
+  <a href="#clarify">Clarify</a>
+  <a href="#deliverables">Deliverables</a>
+  <a href="#mapping">Pattern → facade</a>
+  <a href="#wireup">Wire-up</a>
+  <a href="#validate">Validate</a>
+  <a href="#output">Output</a>
+  <a href="#tool">Whole tool</a>
+  <a href="#loop">Self-correct</a>
+  <a href="#files">Files</a>
+</div></nav>
+
+<div class="wrap">
+
+<section id="what">
+  <h2><span class="num">01</span>What it is</h2>
+  <p class="lead">A skill that designs a command-line interface <em>human-first, script-friendly</em>, against the clig.dev rubric. The design philosophy stays language-agnostic; the recommended way to <em>build</em> the result is TypeScript + Bun on top of <code>@side-quest/cli-command-facade</code> — the runtime that enforces the patterns you designed, so you never hand-roll flag parsing, exit-code mapping, JSON envelopes, or error shapes.</p>
+  <div class="panel">
+    <dl class="kv">
+      <dt>name</dt><dd><code>create-cli</code></dd>
+      <dt>trigger</dt><dd>"design a CLI", "CLI spec", "args/flags/help/exit codes for…"</dd>
+      <dt>identity</dt><dd>Verbatim copy of steipete/agent-scripts (MIT) + a side-quest facade reference</dd>
+      <dt>output</dt><dd>A compact CLI spec + (for side-quest) a validated <code>CommandFacadeContract</code></dd>
+    </dl>
+  </div>
+</section>
+
+<section id="flow">
+  <h2><span class="num">02</span>The pipeline — design → enforce → guard</h2>
+  <p class="lead">create-cli and the facade are two halves of one flow. They meet at a single typed object.</p>
+  <div class="panel">
+    <div class="flow">
+      <span class="step" style="border-color:var(--accent)">create-cli<br><span style="color:var(--muted)">design the spec</span></span>
+      <span class="arrow">→</span>
+      <span class="step" style="border-color:var(--purple)">CommandFacadeContract<br><span style="color:var(--muted)">one typed object</span></span>
+      <span class="arrow">→</span>
+      <span class="step" style="border-color:var(--green)">cli-command-facade<br><span style="color:var(--muted)">enforce at runtime</span></span>
+      <span class="arrow">→</span>
+      <span class="step" style="border-color:var(--amber)">drift check<br><span style="color:var(--muted)">guard the contract</span></span>
+    </div>
+    <p style="margin:16px 0 0;color:var(--muted);font-size:.9rem">Nothing merges: the skill is prompt (author-time); the facade is code (runtime). The skill produces the spec and shows the generated code how to consume the package.</p>
+  </div>
+</section>
+
+<section id="clarify">
+  <h2><span class="num">03</span>Clarify (fast)</h2>
+  <p class="lead">Ask the minimum to lock the interface, then proceed with best-guess defaults if the user is unsure.</p>
+  <div class="panel">
+    <table>
+      <tr><th>Question</th><th>Why it matters</th></tr>
+      <tr><td>Command name + one-sentence purpose</td><td><code>summary</code> + USAGE</td></tr>
+      <tr><td>Primary user: humans / scripts / both</td><td>drives <code>audience</code> + whether <code>--json</code> is default</td></tr>
+      <tr><td>Input: args vs stdin; files vs URLs; secrets</td><td>flag types; secrets never via flags</td></tr>
+      <tr><td>Output: human text, <code>--json</code>, <code>--plain</code>, exit codes</td><td>the I/O contract</td></tr>
+      <tr><td>Interactivity: prompts? <code>--no-input</code>? confirmations?</td><td>safety + automation</td></tr>
+      <tr><td>Config model: flags/env/file; precedence; XDG</td><td>prose remainder (no contract field yet)</td></tr>
+      <tr><td>Platform/runtime constraints</td><td>single binary vs runtime</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="deliverables">
+  <h2><span class="num">04</span>Deliverables</h2>
+  <div class="grid2">
+    <div class="panel">
+      <strong style="color:var(--green)">Covered by the contract</strong>
+      <ul style="margin:10px 0 0;padding-left:18px;font-size:.9rem">
+        <li>Command tree + USAGE synopsis</li>
+        <li>Args/flags table (types, required)</li>
+        <li><code>--json</code> output rule</li>
+        <li>Error + exit-code map</li>
+        <li>Safety: <code>--dry-run</code> / execution modes</li>
+        <li>Destructive-op classification (side-effects)</li>
+        <li>Result schema + follow-up actions</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <strong style="color:var(--amber)">Stays prose (no contract field)</strong>
+      <ul style="margin:10px 0 0;padding-left:18px;font-size:.9rem">
+        <li>Output: <code>--plain</code>, color (<code>NO_COLOR</code>), pager</li>
+        <li>Interactivity: prompts, TTY, <code>--no-input</code></li>
+        <li>Signals: Ctrl-C, crash-only recovery</li>
+        <li>Config: precedence + XDG dirs; env vars</li>
+        <li>Docs, deprecation, distribution, naming, examples</li>
+      </ul>
+      <p class="note" style="margin-top:12px">The facade has no field for these — design them in the prose spec. Backfilling some (config/env, <code>--plain</code>, <code>--no-input</code>) is tracked as a facade issue.</p>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <strong>clig.dev coverage</strong>
+    <p style="margin:8px 0 0;color:var(--muted);font-size:.9rem">The skill teaches <em>all 16</em> clig.dev sections as design guidance. The typed contract enforces the machine-checkable ~40% (left). The rest is real design work the contract can't yet hold (right) — knowingly prose for v1.</p>
+  </div>
+</section>
+
+<section id="mapping">
+  <h2><span class="num">05</span>Pattern → facade feature</h2>
+  <p class="lead">Each clig.dev convention the skill advocates has a facade field or helper that enforces it. Design the pattern; let the facade hold it.</p>
+  <div class="panel">
+    <table>
+      <tr><th>clig.dev pattern</th><th>CommandFacadeContract field / helper</th></tr>
+      <tr><td>USAGE synopsis</td><td><code>usage: readonly string[]</code> → <code>renderCommandUsage</code></td></tr>
+      <tr><td>Args/flags table</td><td><code>flags: Record&lt;string, CommandFacadeFlag&gt;</code> — <span class="pill">boolean</span><span class="pill">string</span><span class="pill">path</span><span class="pill">json</span><span class="pill">enum</span></td></tr>
+      <tr><td><code>--json</code> output</td><td><code>json: boolean</code> + <code>createCliRuntimeSuccessEnvelope</code> / <code>writeJsonEnvelope</code></td></tr>
+      <tr><td>Exit-code map</td><td><code>exitCodes: Record&lt;string, string&gt;</code> (numeric-string keys)</td></tr>
+      <tr><td><code>--dry-run</code> / safety</td><td><code>executionModes</code>: <span class="pill">normal</span><span class="pill">check</span><span class="pill">dry_run</span></td></tr>
+      <tr><td>Destructive classification</td><td><code>sideEffects</code>: <span class="pill read">read</span><span class="pill">check</span><span class="pill write">write</span><span class="pill destructive">destructive</span><span class="pill auth">auth</span><span class="pill network">network</span><span class="pill browser">browser</span></td></tr>
+      <tr><td>Error shape + recovery</td><td><code>StructuredRuntimeError</code> + <code>AgentHint</code> via <code>createCliRuntimeErrorEnvelope</code></td></tr>
+      <tr><td>Result schema</td><td><code>resultContract: { id, kind?, schema_version? }</code></td></tr>
+      <tr><td>Follow-up actions</td><td><code>actionAffordances</code> / <code>RuntimeActionGuidance</code></td></tr>
+      <tr><td>Discovery projection</td><td><code>projectCommandDiscoveryTree</code></td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="wireup">
+  <h2><span class="num">06</span>Wire-up — copy, adjust names</h2>
+  <p class="lead">The deliverable is a flat record of contracts plus the few lines that hand them to the facade. <code>defineCommandFacadeContract</code> validates at module load and throws on drift.</p>
+  <div class="panel">
+<pre class="lbl" data-lbl="scripts/command-contract.ts"><span class="k">import</span> {
+  <span class="k">type</span> CommandFacadeContract,
+  defineCommandFacadeContract,
+} <span class="k">from</span> <span class="s">"@side-quest/cli-command-facade"</span>;
+
+<span class="k">type</span> CommandName = <span class="s">"build"</span>;
+<span class="k">type</span> CommandMutation = <span class="s">"read"</span> | <span class="s">"write"</span>;
+<span class="k">type</span> ToolCommandContract = CommandFacadeContract&lt;
+  CommandName,
+  <span class="s">"agent"</span> | <span class="s">"operator"</span>,
+  CommandMutation
+&gt;;
+
+<span class="c">// Key each (sub)command by name — the contract record is flat.</span>
+<span class="k">const</span> contracts = {
+  build: {
+    script: <span class="s">"scripts/build.ts"</span>,
+    summary: <span class="s">"Build the project."</span>,
+    usage: [<span class="s">"build [--out &lt;path&gt;] [--json] [--dry-run]"</span>],
+    json: <span class="n">true</span>,
+    audience: <span class="s">"agent"</span>,
+    mutation: <span class="s">"write"</span>,
+    sideEffects: [<span class="s">"write"</span>],
+    executionModes: [<span class="s">"normal"</span>, <span class="s">"dry_run"</span>],
+    outputModes: [<span class="s">"json"</span>, <span class="s">"plain"</span>],
+    interactivity: <span class="s">"optional"</span>,
+    envVars: [{ name: <span class="s">"GIT_DIR"</span> }],
+    flags: {
+      <span class="s">"--out"</span>: { type: <span class="s">"path"</span> },
+      <span class="s">"--json"</span>: { type: <span class="s">"boolean"</span> },
+      <span class="s">"--dry-run"</span>: { type: <span class="s">"boolean"</span> },
+    },
+    exitCodes: {
+      <span class="s">"0"</span>: <span class="s">"build succeeded"</span>,
+      <span class="s">"1"</span>: <span class="s">"build failed"</span>,
+      <span class="s">"2"</span>: <span class="s">"usage error"</span>,
+    },
+  },
+} <span class="k">as const satisfies</span> Record&lt;CommandName, ToolCommandContract&gt;;
+
+<span class="c">// Throws at load if the contract drifts. writeImplyingMutations arms the</span>
+<span class="c">// #64 high-stakes guard: a write-ish mutation must declare write/destructive.</span>
+<span class="f">defineCommandFacadeContract</span>(contracts, {
+  path: <span class="s">"scripts/command-contract.ts"</span>,
+  writeImplyingMutations: <span class="k">new</span> Set([<span class="s">"write"</span>]),
+});</pre>
+    <p style="margin:14px 0 0;color:var(--muted);font-size:.85rem;font-family:var(--mono)">$ bun run scripts/command-contract.ts &nbsp;·&nbsp; bunx --bun tsc --noEmit -p scripts/tsconfig.json</p>
+  </div>
+</section>
+
+<section id="validate">
+  <h2><span class="num">07</span>Validate at construction</h2>
+  <p class="lead">Write-and-check collapse into one un-skippable step. The validator enforces <em>shape</em>, not judgment — a minimal legal contract needs only <code>script, summary, usage, json, audience, mutation, flags, exitCodes</code>.</p>
+  <div class="panel">
+    <table>
+      <tr><th>Mistake</th><th>Drift category caught</th></tr>
+      <tr><td>enum flag, empty <code>values</code></td><td><code>command-enum-flag-values-missing</code></td></tr>
+      <tr><td>flag key without <code>--</code></td><td><code>command-flag-name-invalid</code></td></tr>
+      <tr><td>declares a reserved diagnostic flag</td><td><code>command-reserved-diagnostic-flag</code></td></tr>
+      <tr><td>exit code keyed <code>"success"</code> not <code>"0"</code></td><td><code>command-exit-code-invalid</code></td></tr>
+      <tr><td>audience outside the closed set</td><td><code>command-audience-invalid</code></td></tr>
+      <tr><td>alias at missing target / empty args</td><td><code>command-alias-*</code></td></tr>
+    </table>
+    <p class="note" style="margin-top:14px"><strong>Diagnostic flags are facade-owned</strong> — <code>--quiet</code>, <code>--verbose</code>, <code>--debug</code>, <code>--run-id</code> are consumed before your command sees argv; declaring one is rejected. <code>--json</code> is <em>not</em> reserved — you declare it and own its rendering.</p>
+  </div>
+</section>
+
+<section id="output">
+  <h2><span class="num">08</span>What command output actually looks like</h2>
+  <p class="lead">The facade <em>writers</em> produce the output; the command supplies only the payload. The observability spine (<code>run_id</code>, <code>duration_ms</code>) is injected by the writer.</p>
+  <div class="grid2">
+    <div class="panel">
+<pre class="lbl" data-lbl="--json success (object)"><span class="p">{</span>
+  <span class="s">"deployed"</span>: <span class="n">true</span>,
+  <span class="s">"run_id"</span>: <span class="s">"01JRUN…RUNID"</span>,   <span class="c">← injected</span>
+  <span class="s">"duration_ms"</span>: <span class="n">42</span>          <span class="c">← injected</span>
+<span class="p">}</span></pre>
+    </div>
+    <div class="panel">
+<pre class="lbl" data-lbl="--json success (array — NOT wrapped)"><span class="p">[</span>
+  <span class="s">"item-a"</span>,
+  <span class="s">"item-b"</span>,
+  <span class="s">"item-c"</span>
+<span class="p">]</span>  <span class="c">← no run_id/duration spine</span></pre>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+<pre class="lbl" data-lbl="--json error (exit 4)"><span class="p">{</span>
+  <span class="s">"status"</span>: <span class="s">"error"</span>,
+  <span class="s">"run_id"</span>: <span class="s">"01JRUN…RUNID"</span>,
+  <span class="s">"error"</span>: <span class="p">{</span>
+    <span class="s">"code"</span>: <span class="s">"AUTH_REQUIRED"</span>,
+    <span class="s">"message"</span>: <span class="s">"Not authenticated for 'prod'."</span>,
+    <span class="s">"exit_code"</span>: <span class="n">4</span>,
+    <span class="s">"severity"</span>: <span class="s">"error"</span>,
+    <span class="s">"recoverability"</span>: <span class="s">"authenticate"</span>,   <span class="c">← agent acts on this</span>
+    <span class="s">"retryable"</span>: <span class="n">false</span>,
+    <span class="s">"hint"</span>: <span class="p">{</span> <span class="s">"summary"</span>: <span class="s">"Run the auth flow, then retry."</span>,
+             <span class="s">"action"</span>: <span class="s">"authenticate"</span>,
+             <span class="s">"docs_url"</span>: <span class="s">"https://docs.example.com/auth"</span> <span class="p">}</span>
+  <span class="p">}</span>
+<span class="p">}</span></pre>
+    <p class="note" style="margin-top:14px"><code>severity</code> / <code>recoverability</code> / <code>retryable</code> drive agent behavior: <code>retry</code>+<code>retryable:true</code> → retry same input; <code>authenticate</code>/<code>change_input</code>/<code>repair_state</code> → act first; <code>fatal</code>+<code>none</code> → stop, escalate. A result trying to own top-level <code>run_id</code>/<code>duration_ms</code> makes the writer throw <code>CliWriterContractError</code> (exit 70).</p>
+  </div>
+</section>
+
+<section id="tool">
+  <h2><span class="num">09</span>The whole-tool surface — generated from the contracts</h2>
+  <p class="lead">For a multi-command tool, the contract record is the single source for the directory, the human help, and the machine catalog.</p>
+  <div class="grid2">
+    <div class="panel">
+      <strong>Directory (flat; tree is naming)</strong>
+<div class="tree" style="margin-top:10px">dq<span class="dim">/</span>
+├── package.json
+├── dq.ts          <span class="dim"># entry: dispatch</span>
+└── scripts<span class="dim">/</span>
+     ├── status.ts
+     ├── deploy.ts
+     ├── data-export.ts
+     ├── data-prune.ts
+     └── agent-context.ts</div>
+    </div>
+    <div class="panel">
+      <strong>Root <code>--help</code> (generated)</strong>
+<pre style="margin-top:10px;font-size:.78rem">dq — deploy + data ops
+
+Commands:
+  status        Show status.
+  deploy        Deploy.        <span class="f">⚿ auth</span>
+  data:export   Export data.
+  data:prune    Delete rows.   <span class="k">⚠ destructive</span>
+  agent-context Machine catalog.
+
+Global: -h, --version, --json
+Diagnostics: --quiet --verbose
+             --debug --run-id</pre>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <strong><code>agent-context --json</code> — the audience filter made visible</strong>
+    <p style="margin:8px 0 0;color:var(--muted);font-size:.9rem"><code>projectCommandDiscoveryTree</code> with an <code>audience</code> filter is the machine catalog an agent reads. <code>dq</code> has 5 commands; agent-context shows only the 3 <code>audience:agent</code> ones — <code>deploy</code> and <code>data:prune</code> (operator) are absent. <strong>That filter IS the "agent view vs human view" split.</strong></p>
+  </div>
+</section>
+
+<section id="loop">
+  <h2><span class="num">10</span>Self-correction loop (autonomous mode)</h2>
+  <p class="lead">When an agent emits a contract, pair it with a <code>parse → fix → re-parse</code> loop. <code>parseCommandFacadeContract</code> returns <em>all</em> issues at once, so one pass fixes a batch and re-runs.</p>
+  <div class="panel">
+    <div class="flow">
+      <span class="step">emit contract</span>
+      <span class="arrow">→</span>
+      <span class="step" style="border-color:var(--accent)">parse()</span>
+      <span class="arrow">→</span>
+      <span class="step" style="border-color:var(--green)">ok? ✓ done</span>
+      <span class="arrow">·</span>
+      <span class="step" style="border-color:var(--amber)">issues? apply each action</span>
+      <span class="arrow">↺</span>
+      <span class="step" style="border-color:var(--red)">no fixer? STOP → human</span>
+    </div>
+    <p class="note good" style="margin-top:16px">Converges in 1–2 passes for shape errors. <strong>Bound it:</strong> if a pass applies no fix, stop and hand the <code>action</code> string to a human — the build-time analog of the high-stakes pause. Never spin.</p>
+  </div>
+</section>
+
+<section id="files">
+  <h2><span class="num">11</span>Skill files</h2>
+  <div class="panel">
+<div class="tree">skills/create-cli<span class="dim">/</span>
+├── SKILL.md                     <span class="dim"># verbatim body + 1 facade pointer line</span>
+├── PROVENANCE.md                <span class="dim"># verbatim core + side-quest reference</span>
+├── LICENSE.upstream             <span class="dim"># MIT © steipete</span>
+├── references<span class="dim">/</span>
+│   ├── cli-guidelines.md        <span class="dim"># condensed clig.dev rubric (verbatim)</span>
+│   └── cli-command-facade.md    <span class="dim"># the folded findings — THE deliverable</span>
+└── scripts<span class="dim">/</span>
+    ├── package.json
+    └── node_modules<span class="dim">/  → npm-linked @side-quest/cli-command-facade</span></div>
+  </div>
+</section>
+
+<footer>
+  <p>create-cli — Claude Code skill. Core: steipete/agent-scripts (MIT) + clig.dev rubric. Implementation path: <code>@side-quest/cli-command-facade</code> (private, side-quest-engineering).</p>
+  <p>This page is a static export of the skill's structure and the findings validated by 70 throwaway prototype contracts (since deleted; conclusions live in <code>references/cli-command-facade.md</code>). Generated 2026-05-31.</p>
+</footer>
+
+</div>
+</body>
+</html>
