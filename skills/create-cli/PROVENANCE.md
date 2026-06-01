@@ -10,11 +10,12 @@ Pulled: 2026-05-29 (sparse checkout of `main`)
 upstream copy — pure design methodology, language/runtime-agnostic, still diffable against upstream.
 
 Side-quest additions (not upstream): `references/cli-command-facade.md` (maps each clig.dev pattern
-to a `@side-quest/cli-command-facade` field/helper + a TS+Bun wire-up), one pointer line under "Do
-This First", and a `scripts/` folder that npm-links the package. These encourage implementing
-designed CLIs with TypeScript + Bun against the facade. The design philosophy stays agnostic; only
-the recommended *implementation* path is side-quest-flavored and depends on a private, cross-repo
-package (machine-local link).
+to a `@side-quest/cli-command-facade` field/helper, the canonical contract-emission skeleton, and
+dual-mode / high-stakes-guard guidance), one pointer line under "Do This First" sharpened to name
+the contract deliverable, and a `scripts/` folder that npm-links the package. These encourage
+implementing designed CLIs with TypeScript + Bun against the facade. The design philosophy stays
+agnostic; only the recommended *implementation* path is side-quest-flavored and depends on a
+private, cross-repo package (machine-local link).
 
 ## Why it's here — pairs with @side-quest/cli-command-facade
 

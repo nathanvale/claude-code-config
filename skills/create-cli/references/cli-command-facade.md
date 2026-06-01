@@ -41,7 +41,7 @@ it. Design the pattern; let the facade hold it.
 ## Recommended structure (validated by prototype, 2026-05-31)
 
 - **Default to flat multi-command.** The facade record is flat — every command
-  is a top-level key. There is no nesting field.
+  is a top-level key. `alias` exists, but nested subcommands do not.
 - **"Command trees" are naming + projection, not nesting.** Express a tree with
   `noun:verb` command names (`remote:add`, `remote:list`) plus `audience`-driven
   discovery projection (`projectCommandDiscoveryTree`). Escalate to noun-verb
@@ -105,6 +105,14 @@ your front door. Config/env precedence remains prose-only (naming config paths
 or an override order is consumer policy, not facade shape) and is still tracked
 upstream: nathanvale/side-quest-engineering#58.
 
+Env-var names: use `SCREAMING_SNAKE_CASE`; name benign vars plainly (`REGION`).
+The secret-name gate can false-positive on `AUTH_*` and still has fused-name
+blind spots; a rejected name self-corrects through the returned `action`.
+
+Declare `sideEffects` honestly. Under-declared write/destructive effects can
+silently disable the high-stakes guard unless the consumer passes
+`writeImplyingMutations`.
+
 Known boundary — projected free-text is scanned for secrets/control-chars, NOT
 for instruction-shaped text. The construction scan (above) catches credentials,
 control characters, and non-string types in projected fields. It deliberately
@@ -150,6 +158,19 @@ converges in 1–2 passes for shape errors. Bound it: if a pass applies no fix
 (an issue with no known correction), STOP and hand the `action` string to a
 human — this is the build-time analog of the high-stakes pause. Never spin.
 
+## Two ways to drive this
+
+Human-led and agent-led builds use the same seam: emit the
+`CommandFacadeContract`, then validate it. Only the clarify loop changes. Human
+mode asks the operator; autonomous mode defaults through low-stakes scaffolding
+and self-corrects facade drift from `parseCommandFacadeContract`.
+
+Pause an autonomous build when `sideEffects` includes `destructive` or `auth`:
+that is a design fork, not a taste choice. Verbs like `switch`, `cd`, and `open`
+also hide UX forks (print, eval, subshell, spawn); ask before inferring the
+mechanic. Destructive ops split: infer the safety floor (`--force` plus
+confirmation), ask about policy above it (dirty state, rollback, retention).
+
 ## What command output actually looks like
 
 The facade *writers* produce the output; the command supplies only the payload.
@@ -179,7 +200,13 @@ For a multi-command tool, the contract record is the single source for:
   the machine catalog an agent reads. The filter IS the "agent view vs human view"
   split — `audience:operator|governance` commands are absent from the agent catalog.
 
-## Wire-up (copy, adjust names)
+## Wire-up (canonical emit target)
+
+create-cli's recommended deliverable is this object plus the `define()` line:
+design and enforcement in one artifact, no hand-translation on machines where
+the facade link is live. Use the object as the self-correction loop seed;
+`satisfies` catches compile-time drift, `parseCommandFacadeContract` returns
+runtime `{ category, action }` fixes.
 
 ```ts
 import {
@@ -188,6 +215,12 @@ import {
 } from "@side-quest/cli-command-facade";
 
 type CommandName = "build";
+type CommandMutation = "read" | "write";
+type ToolCommandContract = CommandFacadeContract<
+  CommandName,
+  "agent" | "operator",
+  CommandMutation
+>;
 
 // Key each (sub)command by name — the contract record is flat.
 const contracts = {
@@ -200,6 +233,13 @@ const contracts = {
     mutation: "write",
     sideEffects: ["write"],
     executionModes: ["normal", "dry_run"],
+    outputModes: ["json", "plain"],
+    interactivity: "optional",
+    envVars: [
+      {
+        name: "GIT_DIR",
+      },
+    ],
     flags: {
       "--out": { type: "path" },
       "--json": { type: "boolean" },
@@ -211,15 +251,18 @@ const contracts = {
       "2": "usage error",
     },
   },
-} as const satisfies Record<CommandName, CommandFacadeContract<CommandName>>;
+} as const satisfies Record<CommandName, ToolCommandContract>;
 
 // Throws at load if the contract drifts. Called for its throw; the widened
 // return is ignored so the per-key `as const` narrowing above stays intact.
-defineCommandFacadeContract(contracts, { path: "scripts/command-contract.ts" });
+defineCommandFacadeContract(contracts, {
+  path: "scripts/command-contract.ts",
+  writeImplyingMutations: new Set(["write"]),
+});
 ```
 
 Run/typecheck with Bun: `bun run scripts/command-contract.ts`,
-`bunx --bun tsc --noEmit`.
+`bunx --bun tsc --noEmit -p scripts/tsconfig.json`.
 
 ## Local link
 

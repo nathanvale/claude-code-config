@@ -1,0 +1,13 @@
+{
+	"compilerOptions": {
+		"strict": true,
+		"noEmit": true,
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"target": "esnext",
+		"skipLibCheck": true,
+		"types": ["node"],
+		"tsBuildInfoFile": "node_modules/.cache/tsconfig.tsbuildinfo"
+	},
+	"include": ["*.ts"]
+}
