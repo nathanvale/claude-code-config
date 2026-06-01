@@ -27,11 +27,13 @@ skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json
 - Parse stdout envelope. Treat stderr as diagnostics only.
 - Success: choose adapter and pin it to verified endpoint.
 - Failure with `runtime_actions[].id=needs_browser_entry`: hard stop.
-- Per-run `runtime_actions` outrank static affordances; `runtime_actions[0]` is the primary safe next step.
+- Per-run `runtime_actions` outrank static affordances.
+- Take the first `runtime_actions` entry whose id is not `needs_browser_entry` or `do_not_fallback` as the primary safe next step.
 - Do not switch adapters, cold-launch, or fall back to prose after preflight failure.
 - A login/MFA wall hit after preflight passes is an app step, not browser entry: complete it in the warm profile, do not rerun preflight.
 - Use `repair` or `launch` only when explicitly preparing Warm Chrome entry.
-- Contract owner: `skills/browser-use/scripts/command-contract.ts`. Precedence and auth boundary: `references/warm-chrome.md`.
+- Contract owner: `skills/browser-use/scripts/command-contract.ts`.
+- Precedence and auth boundary: `references/warm-chrome.md`.
 
 Human health:
 

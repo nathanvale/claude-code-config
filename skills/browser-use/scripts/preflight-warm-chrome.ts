@@ -131,7 +131,7 @@ type PreflightRuntimeErrorOptions = {
 	// Override the per-run primary runtime action when the error code alone is
 	// ambiguous. `endpoint_unreachable` means "launch" when nothing answers but
 	// "inspect" when a real Chrome already occupies the port without CDP.
-	primaryActionId?: "inspect_listener" | "launch_warm_chrome";
+	primaryActionId?: "inspect_listener";
 };
 
 class PreflightRuntimeError extends Error {
@@ -912,10 +912,19 @@ function readCommandFlagValue(args: string, flag: string): string | null {
 		const after = args[flagIndex + flag.length];
 		const startsToken = flagIndex === 0 || /\s/.test(before);
 		if (startsToken && (after === "=" || (after && /\s/.test(after)))) {
-			const valueStart =
-				after === "="
-					? flagIndex + flag.length + 1
-					: skipWhitespace(args, flagIndex + flag.length);
+			if (after === "=") {
+				// Equals form: the bytes after = are the value verbatim, even if
+				// they begin with "--" (a profile path may legitimately do so).
+				const value = readCommandValue(args, flagIndex + flag.length + 1);
+				return value === "" ? null : value;
+			}
+			// Space-separated form: if the next token is itself a "--" flag, the
+			// flag had no value (e.g. `--user-data-dir --no-first-run`). Do not
+			// consume the following flag as the value.
+			const valueStart = skipWhitespace(args, flagIndex + flag.length);
+			if (args.slice(valueStart).startsWith("--")) {
+				return null;
+			}
 			const value = readCommandValue(args, valueStart);
 			return value === "" ? null : value;
 		}
@@ -952,13 +961,6 @@ function readCommandValue(input: string, start: number): string {
 			value += char;
 		}
 		return value;
-	}
-	// An unquoted value position that itself begins a "--" flag token means the
-	// flag had no value (e.g. `--user-data-dir --no-first-run`). Do not consume
-	// the following flag as the value. Quoted profile paths and paths that
-	// merely contain "--" inside quotes are handled by the quote branch above.
-	if (input.slice(start).startsWith("--")) {
-		return "";
 	}
 	const nextFlagIndex = findNextCommandFlag(input, start);
 	return input.slice(start, nextFlagIndex ?? input.length).trim();
@@ -1294,7 +1296,7 @@ function normalizeError(error: unknown): {
 	recoverability: "none" | "retry" | "change_input" | "repair_state";
 	hintSummary: string;
 	hintAction: "retry" | "change_input" | "repair_state" | undefined;
-	primaryActionId?: "inspect_listener" | "launch_warm_chrome";
+	primaryActionId?: "inspect_listener";
 	runtimeActions: RuntimeActionGuidance[];
 } {
 	if (error instanceof CliUsageError) {

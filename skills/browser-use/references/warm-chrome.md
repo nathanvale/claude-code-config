@@ -70,7 +70,7 @@ skills/browser-use/scripts/preflight-warm-chrome.sh launch --port "$PORT" --prof
 One safe next step per run. Read it from the current run, not from static lists.
 
 - Per-run `runtime_actions` outrank static `actionAffordances`. The static contract names possible actions for discovery; the run picks the current set.
-- `runtime_actions[0]` is the primary safe next action. Guard actions such as `do_not_fallback` constrain what must not happen; they do not replace the primary action.
+- The primary safe next action is the first `runtime_actions` entry whose id is neither `needs_browser_entry` nor `do_not_fallback`. On a browser-entry failure the array leads with the `needs_browser_entry` stop and ends with the `do_not_fallback` guard; the primary action sits between them. Guard actions constrain what must not happen; they do not replace the primary action.
 - After a preflight failure, do not switch adapters or fall back to a cold browser. Repair Warm Chrome, then rerun.
 - Action membership lives in `scripts/command-contract.ts` and runtime code. This doc states precedence, not the action list.
 

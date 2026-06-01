@@ -834,6 +834,34 @@ describe("check", () => {
 		expect(envelope.error.code).toBe("invalid_cdp_version");
 	});
 
+	test("accepts a browser-level websocket discovery path", async () => {
+		// Positive guard for the /devtools/browser/ check: the valid browser
+		// target shape must still pass alongside the page-path rejection above.
+		const profile = await makeProfile(0o700);
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version")) {
+						return cdpVersion({
+							port: "9444",
+							webSocketDebuggerUrl:
+								"ws://127.0.0.1:9444/devtools/browser/real-browser-guid",
+						});
+					}
+					return [{ id: "page-1" }];
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.web_socket_debugger_url).toBe(
+			"ws://127.0.0.1:9444/devtools/browser/real-browser-guid",
+		);
+	});
+
 	test("fails when Chrome was launched without a dedicated user data dir", async () => {
 		const result = await runForTest(
 			["check", "--port", "9444", "--json"],
@@ -885,6 +913,26 @@ describe("check", () => {
 			testRuntime({
 				profile,
 				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir="${profile}" --no-first-run`,
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.profile_dir).toBe(await realpath(profile));
+	});
+
+	test("honors an equals-form --user-data-dir value that begins with --", async () => {
+		// The empty-value guard applies only to the space-separated form. In the
+		// equals form the bytes after = are the value verbatim, even with a
+		// leading "--"; dropping it as missing_profile would be a regression.
+		const parent = await makeDir();
+		const profile = join(parent, "--dash-prefixed-profile");
+		await mkdir(profile, { recursive: true, mode: 0o700 });
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=${profile} --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -2146,9 +2194,12 @@ describe("status", () => {
 		// is not "retry" (which would invite blind same-input rerun).
 		expect(envelope.error.retryable).toBe(false);
 		expect(envelope.error.recoverability).not.toBe("retry");
-		// runtime_actions[0] is the browser-entry stop; the primary action that
-		// follows is the safe inspect step, not a blind retry.
-		expect(envelope.runtime_actions[1].id).toBe("inspect_listener");
+		// Browser-entry failures lead with the needs_browser_entry stop, carry
+		// the safe primary action in the middle, and end with the do_not_fallback
+		// guard. Assert the full ordering so the slot contract is pinned.
+		expect(
+			envelope.runtime_actions.map((action: { id: string }) => action.id),
+		).toEqual(["needs_browser_entry", "inspect_listener", "do_not_fallback"]);
 	});
 
 	test("invalid CDP websocket aligns retry signals", async () => {
@@ -2172,6 +2223,9 @@ describe("status", () => {
 		expect(envelope.error.code).toBe("invalid_cdp_version");
 		expect(envelope.error.retryable).toBe(false);
 		expect(envelope.error.recoverability).not.toBe("retry");
+		expect(
+			envelope.runtime_actions.map((action: { id: string }) => action.id),
+		).toEqual(["needs_browser_entry", "inspect_listener", "do_not_fallback"]);
 	});
 
 	test("plain output names the same primary action as the first JSON runtime action", async () => {
@@ -2184,8 +2238,15 @@ describe("status", () => {
 			testRuntime({ findListener: async () => null }),
 		);
 		const envelope = JSON.parse(jsonResult.stdout);
-		const primary = envelope.runtime_actions[1].id;
+		// Derive the primary action the same way the docs instruct an agent to:
+		// the first runtime action that is neither the stop nor the guard. The
+		// plain stderr must name that same action, not a different one.
+		const primary = envelope.runtime_actions.find(
+			(action: { id: string }) =>
+				action.id !== "needs_browser_entry" && action.id !== "do_not_fallback",
+		).id;
 
+		expect(primary).toBe("inspect_listener");
 		expect(plainResult.stderr).toContain(`action=${primary}`);
 	});
 
