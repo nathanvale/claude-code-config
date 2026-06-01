@@ -2131,6 +2131,64 @@ describe("status", () => {
 		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
 	});
 
+	test("inspect-first failures align retry signals and lead with inspect action", async () => {
+		// listener_missing: CDP answers but no local process owns the port.
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				findListener: async () => null,
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(envelope.error.code).toBe("listener_missing");
+		// No contradictory retry signal: retryable is false and recoverability
+		// is not "retry" (which would invite blind same-input rerun).
+		expect(envelope.error.retryable).toBe(false);
+		expect(envelope.error.recoverability).not.toBe("retry");
+		// runtime_actions[0] is the browser-entry stop; the primary action that
+		// follows is the safe inspect step, not a blind retry.
+		expect(envelope.runtime_actions[1].id).toBe("inspect_listener");
+	});
+
+	test("invalid CDP websocket aligns retry signals", async () => {
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version")) {
+						return cdpVersion({
+							port: "9444",
+							webSocketDebuggerUrl:
+								"ws://127.0.0.1:9444/devtools/page/test-page",
+						});
+					}
+					return [];
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(envelope.error.code).toBe("invalid_cdp_version");
+		expect(envelope.error.retryable).toBe(false);
+		expect(envelope.error.recoverability).not.toBe("retry");
+	});
+
+	test("plain output names the same primary action as the first JSON runtime action", async () => {
+		const jsonResult = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({ findListener: async () => null }),
+		);
+		const plainResult = await runForTest(
+			["check", "--port", "9444", "--plain"],
+			testRuntime({ findListener: async () => null }),
+		);
+		const envelope = JSON.parse(jsonResult.stdout);
+		const primary = envelope.runtime_actions[1].id;
+
+		expect(plainResult.stderr).toContain(`action=${primary}`);
+	});
+
 	test("last output flag wins for status", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(

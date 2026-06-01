@@ -128,6 +128,10 @@ type PreflightRuntimeErrorOptions = {
 	hintSummary?: string;
 	hintAction?: "retry" | "change_input" | "repair_state";
 	severity?: "warning" | "error" | "fatal";
+	// Override the per-run primary runtime action when the error code alone is
+	// ambiguous. `endpoint_unreachable` means "launch" when nothing answers but
+	// "inspect" when a real Chrome already occupies the port without CDP.
+	primaryActionId?: "inspect_listener" | "launch_warm_chrome";
 };
 
 class PreflightRuntimeError extends Error {
@@ -556,8 +560,9 @@ async function launchIfNeeded(
 			{
 				hintSummary:
 					"Stop and inspect the existing listener before launching another Chrome.",
-				hintAction: "retry",
-				recoverability: "retry",
+				hintAction: "repair_state",
+				recoverability: "repair_state",
+				primaryActionId: "inspect_listener",
 			},
 		);
 	}
@@ -1289,6 +1294,7 @@ function normalizeError(error: unknown): {
 	recoverability: "none" | "retry" | "change_input" | "repair_state";
 	hintSummary: string;
 	hintAction: "retry" | "change_input" | "repair_state" | undefined;
+	primaryActionId?: "inspect_listener" | "launch_warm_chrome";
 	runtimeActions: RuntimeActionGuidance[];
 } {
 	if (error instanceof CliUsageError) {
@@ -1316,6 +1322,7 @@ function normalizeError(error: unknown): {
 			recoverability,
 			hintSummary: error.options.hintSummary ?? hint.summary,
 			hintAction: error.options.hintAction ?? hint.action,
+			primaryActionId: error.options.primaryActionId,
 			runtimeActions: [],
 		};
 	}
@@ -1429,8 +1436,8 @@ function hintForPreflightError(error: PreflightRuntimeError): {
 		case "listener_missing":
 			return {
 				summary: "Inspect the requested port; CDP answered but no local listener was found.",
-				action: "retry",
-				recoverability: "retry",
+				action: "repair_state",
+				recoverability: "repair_state",
 			};
 		case "endpoint_unreachable":
 		case "profile_missing":
@@ -1444,8 +1451,8 @@ function hintForPreflightError(error: PreflightRuntimeError): {
 		case "listener_uninspectable":
 			return {
 				summary: "Stop and inspect the CDP listener before adapter work.",
-				action: "retry",
-				recoverability: "retry",
+				action: "repair_state",
+				recoverability: "repair_state",
 			};
 		default:
 			return {
@@ -1500,17 +1507,20 @@ function primaryRuntimeActionForError(error: ReturnType<typeof normalizeError>):
 	summary: string;
 	side_effects: RuntimeActionGuidance["side_effects"];
 } {
+	// An explicit per-error override wins when the code alone is ambiguous
+	// (e.g. endpoint_unreachable: inspect when a listener occupies the port,
+	// launch when nothing answers).
+	if (error.primaryActionId === "inspect_listener") {
+		return {
+			id: "inspect_listener",
+			summary: "Inspect the current listener before launching or selecting an adapter.",
+			side_effects: ["check"] as const,
+		};
+	}
 	if (error.recoverability === "change_input") {
 		return {
 			id: "change_input",
 			summary: "Correct the endpoint/profile inputs and rerun preflight.",
-			side_effects: ["check"] as const,
-		};
-	}
-	if (error.recoverability === "retry") {
-		return {
-			id: "inspect_listener",
-			summary: "Inspect the current listener before launching or selecting an adapter.",
 			side_effects: ["check"] as const,
 		};
 	}
