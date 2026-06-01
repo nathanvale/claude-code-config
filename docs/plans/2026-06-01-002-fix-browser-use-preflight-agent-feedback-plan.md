@@ -1,7 +1,7 @@
 ---
 title: "fix: Harden browser-use preflight agent feedback"
 type: fix
-status: active
+status: completed
 date: 2026-06-01
 issue: 135
 ---
