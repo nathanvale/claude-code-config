@@ -88,6 +88,28 @@ code. steipete's strongest examples:
 For state/memory skills: name the store in a `## Source` block (`DB:` / `Pages:` / `CLI:`), provide a
 refresh verb, do not invent a bespoke persistence format inside the skill.
 
+## Skill composability — explicit handoff, not auto-firing
+
+Lean skills compose by a thin **driver** handing off explicitly — not by skills auto-firing off each
+other's descriptions. Research finding: no documented case of one skill auto-triggering another via
+description matching; single-skill auto-activation is ~20-50% reliable from a description alone, and
+only 84-100% with a lifecycle hook. So emergent peer-to-peer routing is a phantom — design for
+explicit handoff. See `docs/research/2026-05-30-skill-composability-handoff-observability.md`.
+
+- **One lean driver holds the flow and hands off with an explicit `Skill(name)` call.** The driver is
+  a thin skill making a couple of calls — not a framework. It holds no domain knowledge.
+- **Use a lifecycle hook for situational firing** (e.g. a Stop hook fires a capture skill at
+  end-of-run). A hook reliably knows "a run finished"; a description-trigger does not.
+- A `description` is a **trigger phrase for discovery** — it helps the model and the human find the
+  skill. Treat it as discovery, not guaranteed routing.
+- A handed-to skill does ONE job, then **hands back to the driver** (strong default). Whether it may
+  call a third skill is unresolved — leave fan-out to the driver until a brainstorm settles it.
+- Skill = discoverable front-door + handback; the read/write underneath is a script or ledger op
+  (the create-cli ↔ cli-command-facade seam). Mechanical lookups go to code, not re-reasoned prose.
+
+The system behaviour emerges from composition, but no single skill is complex — the antidote to the
+one-mega-skill BA-plugin failure.
+
 ## Refuse-in-prose, do not engineer-around
 
 When review surfaces a hole (an edge case, a failure mode), the default fix is **refuse it in prose**
