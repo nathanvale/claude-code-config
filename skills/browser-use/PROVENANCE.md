@@ -4,32 +4,34 @@ Source: [steipete/agent-scripts](https://github.com/steipete/agent-scripts) — 
 License: MIT © 2026 Peter Steinberger (see `LICENSE.upstream`)
 Pulled: 2026-05-29 (sparse checkout of `main`)
 
-## Status: VERBATIM COPY — adaptation pending
+## Status: ADAPTED
 
-`SKILL.md` and `mcporter-config.md` are unmodified upstream copies. Do not treat them as
-finished for this repo yet — they carry steipete's personal specifics that need adapting:
+`SKILL.md`, `references/warm-chrome.md`, and `mcporter-config.md` now carry this repo's
+adapter-neutral Warm Chrome contract.
 
-- `mcporter-config.md` hardcodes `/Users/steipete/Library/Application Support/Google/Chrome`.
-  Nathan's Chrome profile path differs; the agent-browser config already uses
-  `~/.cache/chrome-agent` (debug port 9223). Reconcile before relying on it.
-- The skill is hardwired to `chrome-devtools-mcp` via `mcporter`. Nathan also has an
-  `agent-browser` CLI (wrapped by the side-quest browser-automation BSS). Open work: make the
-  skill backend-agnostic (chrome-devtools-mcp OR agent-browser) per the record-replay thesis at
-  `side-quest-engineering/docs/brainstorms/2026-05-29-001-two-skill-browser-automation-thesis.md`.
+- Canonical owner: `browser-use`.
+- Contract: real Google Chrome binary, dedicated persistent profile, loopback CDP, no Chrome for Testing.
+- Current proven adapter: Chrome DevTools MCP / `mcporter`.
+- Optional adapters: `agent-browser` and `puppeteer-core`, only when they satisfy the same contract.
 
 ## Why it's here
 
-steipete's `browser-use` + `one-password` are the lean-substrate existence proof behind the
-two-skill record-then-replay design direction: thin skill over CDP + op-inject creds, reattach to
-existing logged-in Chrome, no governance machinery. Kept as the substrate to build on; the
-record/replay layer (the tape) is the net-new bet added on top.
+steipete's `browser-use` + `one-password` are the lean-substrate existence proof: thin skill over
+CDP + op-inject creds, reattach to existing logged-in Chrome, no governance machinery. This repo keeps
+that substrate and adds a local Warm Chrome contract so browser-memory work consumes one owner.
 
 ## Local additions (not from upstream)
 
-- `scripts/launch-agent-chrome.sh` — step-zero launcher. `--auto-connect` attaches but does not
-  launch; this starts the agent Chrome on a known port (default 9223) against
-  `~/.cache/chrome-agent` and writes a fresh `DevToolsActivePort` so chrome-devtools-mcp can attach.
-  Idempotent (reuses a live browser). Added 2026-05-29 after proving the auth chain live on Oncore.
+- `scripts/preflight-warm-chrome.sh` — thin Warm Chrome Preflight wrapper.
+- `scripts/preflight-warm-chrome.ts` — Bun CLI runtime. `check` is read-only; `status` shows human
+  health; `repair` owns safe profile repair; `launch` starts real Google Chrome only when needed.
+- `scripts/command-contract.ts` — `create-cli` / facade contract for command surface, side effects,
+  result contract, and action affordances.
+- `scripts/preflight-warm-chrome.test.ts` — focused CLI behavior tests.
+- `scripts/launch-agent-chrome.sh` — older step-zero launcher. `--auto-connect` attaches but does not
+  launch; this starts real Google Chrome on a known port and writes `DevToolsActivePort` for
+  chrome-devtools-mcp. Treat it as legacy helper under the Warm Chrome contract, not the contract.
+- `references/warm-chrome.md` — canonical Warm Chrome contract.
 
 ## Validated 2026-05-29
 
@@ -40,9 +42,35 @@ authenticated dashboard ("Welcome: Nathan David Vale"). See
 ("Validated live, end-to-end") incl. the hard finding: the secret fill must stay inside the auth
 boundary (never route a password through an MCP tool call).
 
-## What this repo will change (track edits here as they land)
+## Validated 2026-06-01
 
-- [ ] De-hardcode the Chrome userDataDir / make it config-driven.
-- [ ] Add an agent-browser CLI backend path alongside the mcporter/chrome-devtools-mcp path.
-- [ ] (thesis) Add record-to-JSON-tape + replay; separate auth runbook; self-healing on DOM drift.
-- [x] Step-zero launch script (`scripts/launch-agent-chrome.sh`).
+Evaluation confirmed:
+
+- `9444`: real Google Chrome, `~/.agent-warm-profile`, CDP responds.
+- `9223`: real Google Chrome, actual profile `~/.agent-prose-replay-profile`.
+- `mcporter` CLI was not on the shell path, but a `mcporter daemon` plus `chrome-devtools-mcp`
+  process were running.
+- Existing Chrome processes were not relaunched or killed.
+- `preflight-warm-chrome.sh` spike proved facade-shaped JSON and live endpoint checks.
+- Spike `check` repaired `~/.agent-warm-profile` from `0755` → `0700`; current CLI fixes that split.
+
+CLI hardening confirmed:
+
+- `command-contract.ts` validates through `defineCommandFacadeContract`.
+- Error envelopes validate with `validateStructuredRuntimeError`.
+- Focused Bun tests cover 108 public CLI cases across command contract, check, repair, launch,
+  status, observability, usage failures, and edge recovery.
+- Observability tests cover stdout envelope discipline, LogTape JSONL stderr diagnostics, quiet mode,
+  error flush, and redaction-safe diagnostic context.
+- `check` is read-only.
+- `repair` owns safe `chmod` and `DevToolsActivePort` rewrite.
+- `launch` does not spawn when endpoint already validates.
+- `launch` validates persistent profile safety before spawning.
+- Explicit `--endpoint` derives its own port when `--port` is absent.
+- Runtime/dependency failures route to `inspect_diagnostics`, not browser-entry repair loops.
+- Browser-entry failures emit specific recovery affordances alongside the hard-stop action.
+
+## Open Work
+
+- [ ] Verify `agent-browser` against the Warm Chrome contract before documenting it as a default.
+- [ ] Keep browser-domain-memory consuming this contract rather than duplicating it.

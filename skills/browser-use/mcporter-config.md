@@ -1,18 +1,22 @@
-# mcporter Chrome Config
+# mcporter / Chrome DevTools MCP Config
 
-Use when Chrome DevTools MCP attaches to a blank/isolated browser, cannot see the user's real tabs, or errors around `DevToolsActivePort`.
+Use when Chrome DevTools MCP attaches to a blank/isolated browser, cannot see the warm profile's real tabs, or errors around `DevToolsActivePort`.
+
+Canonical contract: `references/warm-chrome.md`.
+
+Do not repair a working setup just because paths look surprising. Verify the CDP endpoint first.
 
 ## Expected Setup
 
-Home config owns the default:
+Home config usually owns the default:
 
 ```bash
 mcporter config get chrome-devtools --json
 ```
 
-Check the `source.path` in that output. If it points at a repo `config/mcporter.json`, project config is overriding home config. Either run from a neutral cwd such as `$HOME` for browser automation, or update the project override with `--scope project` too.
+If `mcporter` is not on this shell path but Chrome DevTools MCP is already available in the harness, use the available MCP surface and do not churn config.
 
-Expected entry:
+Preferred new config shape:
 
 ```json
 {
@@ -20,14 +24,19 @@ Expected entry:
   "args": [
     "-y",
     "chrome-devtools-mcp",
-    "--auto-connect",
-    "--userDataDir",
-    "/Users/steipete/Library/Application Support/Google/Chrome"
+    "--browserUrl",
+    "http://127.0.0.1:9444"
   ]
 }
 ```
 
-`chrome-devtools` means reattach to existing Chrome. `chrome-isolated` is the explicit fresh-session escape hatch.
+Existing `--auto-connect --userDataDir <dir>` config is acceptable only when `<dir>/DevToolsActivePort` resolves to a verified loopback Warm Chrome endpoint. Do not point it at the everyday default Chrome profile.
+
+Observed 2026-06-01:
+
+- `9444`: real Google Chrome, `~/.agent-warm-profile`, CDP responds.
+- `9223`: real Google Chrome, actual profile `~/.agent-prose-replay-profile`.
+- `~/.cache/chrome-agent/DevToolsActivePort` may point at `9223`; treat it as a pointer, not proof.
 
 ## Verify
 
@@ -35,21 +44,21 @@ Expected entry:
 mcporter call chrome-devtools.list_pages --args '{}' --output text
 ```
 
-Pass: output lists the user's visible tabs.
+Pass: output lists the warm profile's expected tabs.
 
-Fail: output shows only `about:blank`, a single empty tab, or a page set that does not match Chrome.
+Fail: output shows only `about:blank`, a single empty tab, Chrome for Testing, or a page set that does not match the warm profile.
 
-## Fix Default Config
+## Fix Config
 
 ```bash
 mcporter config add chrome-isolated --scope home --command npx --arg -y --arg chrome-devtools-mcp --description "Chrome DevTools MCP - isolated browser for explicit fresh-session tests"
-mcporter config add chrome-devtools --scope home --command npx --arg -y --arg chrome-devtools-mcp --arg --auto-connect --arg --userDataDir --arg "$HOME/Library/Application Support/Google/Chrome" --description "Chrome DevTools MCP - reattach existing Chrome profile"
+mcporter config add chrome-devtools --scope home --command npx --arg -y --arg chrome-devtools-mcp --arg --browserUrl --arg "http://127.0.0.1:$PORT" --description "Chrome DevTools MCP - warm Chrome CDP"
 ```
 
 If `mcporter config get chrome-devtools --json` reports a project `source.path`, repair that project override too:
 
 ```bash
-mcporter config add chrome-devtools --scope project --command npx --arg -y --arg chrome-devtools-mcp --arg --auto-connect --arg --userDataDir --arg "$HOME/Library/Application Support/Google/Chrome" --description "Chrome DevTools MCP - reattach existing Chrome profile"
+mcporter config add chrome-devtools --scope project --command npx --arg -y --arg chrome-devtools-mcp --arg --browserUrl --arg "http://127.0.0.1:$PORT" --description "Chrome DevTools MCP - warm Chrome CDP"
 ```
 
 Then verify again:
@@ -63,11 +72,12 @@ mcporter call chrome-devtools.list_pages --args '{}' --output text
 If `DevToolsActivePort` or connection startup fails:
 
 ```bash
+skills/browser-use/scripts/preflight-warm-chrome.sh repair --port "$PORT" --profile "$PROFILE" --plain
 mcporter daemon restart
 mcporter call chrome-devtools.list_pages --args '{}' --output text
 ```
 
-Retry once. If still broken, ask the user to restart Chrome or the DevTools bridge. Do not switch to AppleScript, Playwright, Puppeteer, or `chrome-isolated` unless the user explicitly asks for a fresh browser.
+Retry once. If still broken, ask before restarting Chrome or changing config. Do not switch to AppleScript, Playwright, Puppeteer, or `chrome-isolated` unless the user explicitly asks for a fresh browser.
 
 ## Source Notes
 

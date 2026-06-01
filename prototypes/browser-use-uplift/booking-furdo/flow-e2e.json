@@ -1,0 +1,17 @@
+{
+  "title": "Urban Furdo — full E2E booking (choose groom → availability → time → checkout, STOPS before Book)",
+  "_note": "Captured live 2026-05-30 via agent-browser. The full path: pick service → Add → Next → next-available → time slot → CHECKOUT page (with the 'Book appointment' button visible). The final 'Book appointment' click + the personal-details form are DELIBERATELY OMITTED — this reaches the confirmation/checkout page but never creates a real appointment. Square dynamic classes are unstable, so button steps use Recorder text/ selectors (stable across re-renders) — a key finding for the memory-skill capture contract.",
+  "steps": [
+    { "type": "setViewport", "width": 1200, "height": 900, "deviceScaleFactor": 1, "isMobile": false, "hasTouch": false, "isLandscape": false },
+    {
+      "type": "navigate",
+      "url": "https://book.squareup.com/appointments/4homoxayt60xtz/location/LVD8TBPTXNCK8/services",
+      "assertedEvents": [{ "type": "navigation" }]
+    },
+    { "type": "click", "selectors": [[".service-row"]], "offsetX": 20, "offsetY": 20 },
+    { "type": "click", "selectors": [["text/Add"]], "offsetX": 5, "offsetY": 5 },
+    { "type": "click", "selectors": [["text/Next"]], "offsetX": 5, "offsetY": 5,
+      "assertedEvents": [{ "type": "navigation" }] },
+    { "type": "click", "selectors": [["text/Go to next available"]], "offsetX": 5, "offsetY": 5 }
+  ]
+}

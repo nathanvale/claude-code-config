@@ -3,8 +3,11 @@ title: "browse + play — lean record/replay browser skills (brainstorm seed)"
 type: brainstorm
 status: seed
 updated: 2026-05-30
-summary: "Seed for a fresh /ce-brainstorm: two lean skills in claude-code-config — browse (freestyle + record a session) and play (replay it). Built on the steipete browser-use skill, NOT the side-quest BA plugin. Tape format deliberately left open."
+summary: "Seed for a fresh /ce-brainstorm: two lean skills in claude-code-config — browse (freestyle + record a session) and play (replay it). Built on the steipete browser-use skill, NOT the side-quest BA plugin. Tape format RESOLVED by research: deterministic JSON tape + variable slots + tiered self-heal with human-review gate."
 related:
+  - docs/research/2026-05-30-tape-format-record-replay-browser-automation.md
+  - docs/research/2026-05-30-skill-composability-handoff-observability.md
+  - docs/brainstorms/2026-05-30-skill-composability-handoff-principle.md
   - skills/browser-use/SKILL.md
   - skills/browser-use/scripts/launch-agent-chrome.sh
   - skills/one-password/SKILL.md
@@ -39,19 +42,32 @@ managed-domain contracts, preflight, migration forks, BSS). The whole point is t
    agent Chrome). The new skills add the **record/replay layer** on top — they don't re-implement
    browser driving.
 
-## The big OPEN question (the reason this is a brainstorm, not a build)
+## Tape format — RESOLVED by research (2026-05-30)
 
-**What does a recorded session/tape look like, and who reads it on replay?** Deliberately left open.
-The two poles from the thesis:
-- **Plain JSON step list** — lean, hand-readable, replayed by a thin script walking steps
-  (navigate/click/fill/wait + success check). No LLM on replay (the "compiler" win). Hard part:
-  selector stability + parameterizing values (this-week's dates).
-- **Claude-driven replay** — tape is a structured record, but replay is Claude re-reading it and
-  re-driving via MCP. Simpler to build; replay still costs LLM calls.
-- (Or a hybrid: deterministic steps with LLM fallback on a failed step — the "self-healing" pattern
-  the research found in Stagehand/Skyvern.)
+Was the big open question; the newsroom sweep is decision-grade. Full evidence:
+`docs/research/2026-05-30-tape-format-record-replay-browser-automation.md`.
 
-Resolve this in the brainstorm. It determines almost everything downstream.
+**Answer: hybrid, deterministic JSON tape as the spine.** Not pure-deterministic (too brittle), not
+LLM-replay (peer-reviewed: temp=0 LLMs vary ~15%/run → true LLM-loop replay is impossible + costly).
+The consensus heuristic: "have an agent write a deterministic program, then run that" = browse writes
+the tape once, play replays it deterministically.
+
+Design the tape this way:
+- **Format:** deterministic JSON step list (Chrome Recorder / `@puppeteer/replay` shape: navigate /
+  click / change / waitForElement). Readable, editable, thin runner.
+- **Selectors:** capture the **fallback array** (AX/aria first — most drift-resistant), not one CSS path.
+- **Parameters:** add a **variable-slot layer** the base schema lacks (dates/hours as `{{vars}}`,
+  resolved at replay) — the timesheet-date problem. (Workflow Use's "variable slots" is prior art.)
+- **Replay:** deterministic fast-path, **zero LLM** on the happy path.
+- **On failure:** tier-2 deterministic re-heal (AX-tree re-resolve) → tier-3 LLM only if that fails →
+  **flag the healed step + ask the human. Never silent-substitute** (the dominant industry failure
+  mode: a "close-enough" element keeps the run green while clicking the wrong control).
+
+So the brainstorm's job shifts from "pick a format" to **"design the tape schema + variable-slot +
+the tiered-heal-with-human-gate"** against this resolved direction.
+
+Reference implementations to study: Skyvern (compile-to-Playwright), Workflow Use (record→variable
+slots), AgentRR (two-level experience store), arXiv 2603.20358 (zero-cost AX-tree self-heal).
 
 ## Proven substrate to build on (all validated live 2026-05-29)
 
@@ -82,6 +98,36 @@ Resolve this in the brainstorm. It determines almost everything downstream.
   reference implementations): `side-quest-engineering/docs/research/2026-05-29-lean-record-replay-browser-automation.md`
 - create-cli ↔ cli-command-facade pattern (skill produces spec, package enforces): same repo's
   `docs/brainstorms/2026-05-29-002-facade-aware-create-cli-integration.md`
+
+## Skill choreography — browse + domain-checker + capture-run (Nathan, 2026-05-30; corrected by research)
+
+browse stays a lean driver holding NO domain knowledge; the other two are thin skills over one
+per-domain ledger. **Wiring corrected by research** (`docs/research/2026-05-30-skill-composability-handoff-observability.md`):
+skills do NOT reliably auto-trigger each other from descriptions (~0-50%; no documented skill→skill
+auto-handoff exists). So handoff is **explicit `Skill()` from the driver + a Stop hook for
+end-of-run** — NOT emergent peer-to-peer auto-firing.
+
+```
+You: "go to <site> and fill my timesheet"
+  → browse (freestyle; = browser-use, already exists) drives
+  → hits a domain → browse EXPLICITLY calls Skill(domain-checker):
+       "ledger entry for this domain? auth pointer / runbook tape / selectors?"
+       → hands back → browse keeps driving (auth via one-password closed box)
+  → run finishes → capture-run fires on a STOP HOOK (reliable; a description-trigger is ~20-50%)
+       → records the run → feeds the ledger
+  → next run: domain-checker finds more. Loop compounds.
+```
+
+- **browse** — the driver (browser-use). Holds no domain knowledge. Makes the explicit handoff call.
+- **domain-checker** — invoked by browse when a domain appears; reads the per-domain ledger (auth
+  pointer, flow tape, selectors); hands back. Thin skill over a deterministic ledger read.
+- **capture-run** — fired by a Stop hook at end-of-run; writes what happened into the ledger. Thin
+  skill over a deterministic ledger write. (Hook, not description-trigger — a hook reliably knows a
+  run finished.)
+
+The ledger is the **same per-domain substrate** as the tape work above (auth pointer + `<flow>.json`
+tapes + selector ledger). Three skills read/write one ledger; the loop compounds. Keep the skill
+count low — there's a ~15k-char metadata budget; too many skills degrade routing (cap ~8-12).
 
 ## Open questions for the brainstorm (beyond tape format)
 
