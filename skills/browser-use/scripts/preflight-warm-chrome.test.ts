@@ -144,6 +144,25 @@ describe("CLI front door", () => {
 		expect(touchedBrowser).toBe(false);
 	});
 
+	test("shell wrapper passes through --version without browser work", async () => {
+		const proc = Bun.spawn(
+			["bash", join(import.meta.dir, "preflight-warm-chrome.sh"), "--version"],
+			{
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+
+		expect(exitCode).toBe(0);
+		expect(stdout).toMatch(/^preflight-warm-chrome 0\.2\.0\n$/);
+		expect(stderr).toBe("");
+	});
+
 	test("uses BROWSER_USE_RUN_ID when --run-id is absent", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
@@ -722,6 +741,32 @@ describe("check", () => {
 		expect(envelope.error.code).toBe("non_loopback_websocket");
 	});
 
+	test("accepts websocket discovery on localhost loopback", async () => {
+		const profile = await makeProfile(0o700);
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version")) {
+						return cdpVersion({
+							port: "9444",
+							webSocketDebuggerUrl:
+								"ws://localhost:9444/devtools/browser/test-browser",
+						});
+					}
+					return [{ id: "page-1" }];
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.web_socket_debugger_url).toBe(
+			"ws://localhost:9444/devtools/browser/test-browser",
+		);
+	});
+
 	test("rejects malformed websocket discovery URLs", async () => {
 		const result = await runForTest(
 			["check", "--port", "9444", "--json"],
@@ -765,6 +810,30 @@ describe("check", () => {
 		expect(envelope.error.code).toBe("non_loopback_websocket");
 	});
 
+	test("rejects non-browser websocket discovery paths", async () => {
+		const profile = await makeProfile(0o700);
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version")) {
+						return cdpVersion({
+							port: "9444",
+							webSocketDebuggerUrl:
+								"ws://127.0.0.1:9444/devtools/page/test-page",
+						});
+					}
+					return [{ id: "page-1" }];
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("invalid_cdp_version");
+	});
+
 	test("fails when Chrome was launched without a dedicated user data dir", async () => {
 		const result = await runForTest(
 			["check", "--port", "9444", "--json"],
@@ -777,6 +846,34 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("missing_profile");
+	});
+
+	test("treats present but empty --user-data-dir values as missing profile", async () => {
+		const scenarios = [
+			{
+				name: "empty equals form",
+				listenerCommand:
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir= --no-first-run",
+			},
+			{
+				name: "separate flag without value",
+				listenerCommand:
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir --no-first-run",
+			},
+		];
+
+		for (const scenario of scenarios) {
+			const result = await runForTest(
+				["check", "--port", "9444", "--json"],
+				testRuntime({
+					listenerCommand: scenario.listenerCommand,
+				}),
+			);
+			const envelope = JSON.parse(result.stdout);
+
+			expect(result.exitCode, scenario.name).toBe(20);
+			expect(envelope.error.code, scenario.name).toBe("missing_profile");
+		}
 	});
 
 	test("handles quoted --user-data-dir paths containing argument-looking text", async () => {
@@ -811,6 +908,37 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("default_profile");
+	});
+
+	test("rejects a listener profile symlinked into the everyday default profile", async () => {
+		const home = await makeDir();
+		const defaultRoot = join(home, "Library/Application Support/Google/Chrome");
+		const realProfile = join(defaultRoot, "Profile 1");
+		await mkdir(realProfile, { recursive: true, mode: 0o700 });
+		const linkRoot = join(await makeDir(), "default-profile-link");
+		await symlink(defaultRoot, linkRoot);
+		const profile = join(linkRoot, "Profile 1");
+		let chmodCount = 0;
+		let writeCount = 0;
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				home,
+				profile,
+				chmod: async () => {
+					chmodCount += 1;
+				},
+				writeTextFile: async () => {
+					writeCount += 1;
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("default_profile");
+		expect(chmodCount).toBe(0);
+		expect(writeCount).toBe(0);
 	});
 
 	test("fails when inferred listener profile is missing", async () => {
@@ -1138,6 +1266,37 @@ describe("repair", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("profile_missing");
+		expect(chmodCount).toBe(0);
+		expect(writeCount).toBe(0);
+	});
+
+	test("repair rejects a listener profile symlinked into the everyday default profile without writing", async () => {
+		const home = await makeDir();
+		const defaultRoot = join(home, "Library/Application Support/Google/Chrome");
+		const realProfile = join(defaultRoot, "Profile 1");
+		await mkdir(realProfile, { recursive: true, mode: 0o700 });
+		const linkRoot = join(await makeDir(), "default-profile-link");
+		await symlink(defaultRoot, linkRoot);
+		const profile = join(linkRoot, "Profile 1");
+		let chmodCount = 0;
+		let writeCount = 0;
+		const result = await runForTest(
+			["repair", "--port", "9444", "--json"],
+			testRuntime({
+				home,
+				profile,
+				chmod: async () => {
+					chmodCount += 1;
+				},
+				writeTextFile: async () => {
+					writeCount += 1;
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("default_profile");
 		expect(chmodCount).toBe(0);
 		expect(writeCount).toBe(0);
 	});
@@ -1621,6 +1780,33 @@ describe("launch", () => {
 		);
 	});
 
+	test("launch rejects unsafe CHROME_BIN before spawning after restart", async () => {
+		const profile = await makeProfile(0o700);
+		let spawnCount = 0;
+		const result = await runForTest(
+			["launch", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				env: {
+					CHROME_BIN:
+						"/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+				},
+				fetchJson: async () => {
+					throw new Error("offline");
+				},
+				findListener: async () => null,
+				spawnChrome: async () => {
+					spawnCount += 1;
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(spawnCount).toBe(0);
+		expect(envelope.error.code).toBe("not_real_google_chrome");
+	});
+
 	test("lets --chrome override CHROME_BIN when launching", async () => {
 		const profile = await makeProfile(0o700);
 		let endpointReady = false;
@@ -1921,6 +2107,30 @@ describe("status", () => {
 		expect(result.stderr).toContain("run_id=status-fail");
 	});
 
+	test("failure can emit a JSON envelope with browser-entry actions", async () => {
+		const result = await runForTest(
+			["status", "--port", "9", "--json", "--run-id", "status-json-fail"],
+			testRuntime({
+				fetchJson: async () => {
+					throw new Error("offline");
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.status).toBe("error");
+		expect(envelope.run_id).toBe("status-json-fail");
+		expect(envelope.error.code).toBe("endpoint_unreachable");
+		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
+			"needs_browser_entry",
+			"launch_warm_chrome",
+			"do_not_fallback",
+		]);
+		expect(result.stderr).not.toContain("needs_browser_entry endpoint_unreachable");
+		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
+	});
+
 	test("last output flag wins for status", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
@@ -2139,6 +2349,45 @@ describe("usage failures", () => {
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toContain("needs_browser_entry endpoint_unreachable");
 		expect(result.stderr).toContain("run_id=plain-error");
+	});
+
+	test("plain errors include the primary recovery action", async () => {
+		const scenarios = [
+			{
+				name: "endpoint unreachable",
+				argv: ["check", "--port", "9", "--plain"],
+				runtime: testRuntime({
+					fetchJson: async () => {
+						throw new Error("offline");
+					},
+				}),
+				expectedAction: "launch_warm_chrome",
+			},
+			{
+				name: "listener missing",
+				argv: ["check", "--port", "9444", "--plain"],
+				runtime: testRuntime({
+					findListener: async () => null,
+				}),
+				expectedAction: "inspect_listener",
+			},
+			{
+				name: "invalid usage",
+				argv: ["check", "--port", "0", "--plain"],
+				runtime: testRuntime(),
+				expectedAction: "change_input",
+			},
+		];
+
+		for (const scenario of scenarios) {
+			const result = await runForTest(scenario.argv, scenario.runtime);
+
+			expect(result.exitCode, scenario.name).not.toBe(0);
+			expect(result.stdout, scenario.name).toBe("");
+			expect(result.stderr, scenario.name).toContain(
+				`action=${scenario.expectedAction}`,
+			);
+		}
 	});
 
 	test("returns runtime failure on unsupported platforms", async () => {
