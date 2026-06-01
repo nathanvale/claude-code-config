@@ -51,6 +51,34 @@ it. Design the pattern; let the facade hold it.
   `runtime_actions` on success *and* error. That payoff (not the structure
   choice) is the create-cli-meets-facade value over a hand-rolled CLI.
 
+## Runtime continuation design prompts
+
+When a command emits `runtime_actions`, the facade also requires a
+`continuation` — the one authoritative signal that tells a fresh agent whether
+and how to continue (ADR-0016, an ADR-0010 amendment). Design it while you
+design the command, not after. Answer these five at author time:
+
+- **Primary safe action.** What is the single safe next action this invocation
+  points at, and does it map to a `runtime_actions` id?
+- **Same-input retry.** Is retrying the same input safe here? (drives
+  `recoverability` + `retryable`, which now imply each other for `retry`.)
+- **Forbidden fallback or side effects.** Is there a fallback this run must NOT
+  take, or a side-effect class (browser, auth, write, destructive) it must
+  avoid? Those become continuation constraints, not a fake positive action.
+- **Operator-stop reason.** If the run can't continue autonomously, what does
+  the agent tell the operator? An operator stop must carry that reason as a
+  constraint summary.
+- **Failure domain + redaction owner.** What package-owned `failure_domain`
+  routing label fits, and who owns redaction for any recovery examples you keep
+  outside the facade projection?
+
+Static `actionAffordances` are discovery vocabulary; per-run `runtime_actions`
+plus `continuation` are the runtime authority. The facade owns the shape and
+validation; your package owns action meanings, fallback semantics, operator
+policy, `failure_domain` values, and executable recovery examples. For the
+exact field shape, see ADR-0016 and the facade package source (linked in
+**Reference** below).
+
 ## Facade owns the diagnostic flags — don't declare them
 
 `--quiet`, `--verbose`, `--debug`, `--run-id` are facade-reserved (consumed
