@@ -1,8 +1,9 @@
 ---
 title: "fix: Harden browser-use preflight agent feedback"
 type: fix
-status: active
+status: completed
 date: 2026-06-01
+issue: 135
 ---
 
 # fix: Harden browser-use preflight agent feedback
@@ -10,6 +11,8 @@ date: 2026-06-01
 ## Summary
 
 Patch the Warm Chrome preflight CLI so a fresh agent gets one safe continuation path from each run. The work fixes the current red audit tests, removes conflicting retry signals, and documents the contract boundary between static affordances and per-run recovery actions.
+
+This plan also closes the remaining open work on issue #135 ("Ship Warm Chrome Preflight for browser-use"). The preflight CLI, success envelope, repair, and adapter-routing docs already ship and are green; #135's open acceptance criteria are exactly the audit fixes here plus the auth-versus-browser-entry boundary clarification in R12.
 
 ---
 
@@ -42,6 +45,7 @@ Those are agent-continuation risks. A fresh agent should not need to infer which
 
 - R10. `SKILL.md` and `references/warm-chrome.md` explain the continuation contract in one place: stdout JSON first, per-run actions over static affordances, no adapter fallback after preflight failure.
 - R11. Docs avoid a second hand-maintained recovery table. Deterministic action membership stays in `scripts/command-contract.ts` and runtime code.
+- R12. Docs state that downstream auth, MFA, and portal-login failures are not Warm Chrome browser-entry failures, so an agent that hits a login wall after preflight passes does not re-run preflight or switch adapters to escape it. (Closes #135 acceptance criterion: "Auth/MFA/portal login failures are not treated as browser-entry failures.")
 
 ---
 
@@ -179,26 +183,27 @@ The implementation keeps the facade envelope shape stable. Agent-facing specific
 
 ### U5. Static Contract and Runtime Action Precedence Docs
 
-- **Goal:** Make a fresh agent consume the right contract surface without inferring from static affordances.
-- **Requirements:** R6, R7, R8, R10, R11
+- **Goal:** Make a fresh agent consume the right contract surface without inferring from static affordances, and stop it from mistaking a downstream login wall for a browser-entry failure.
+- **Requirements:** R6, R7, R8, R10, R11, R12
 - **Files:**
   - `skills/browser-use/SKILL.md`
   - `skills/browser-use/references/warm-chrome.md`
   - `skills/browser-use/scripts/command-contract.ts`
   - `skills/browser-use/scripts/preflight-warm-chrome.test.ts`
-- **Approach:** Add short guidance that `runtime_actions` from the current run outrank static `actionAffordances`. Document that the first runtime action is the primary safe next action, and guard actions such as `do_not_fallback` constrain what must not happen. Keep the static contract as vocabulary and capability discovery. Avoid duplicating the full action list in prose.
+- **Approach:** Add short guidance that `runtime_actions` from the current run outrank static `actionAffordances`. Document that the first runtime action is the primary safe next action, and guard actions such as `do_not_fallback` constrain what must not happen. Keep the static contract as vocabulary and capability discovery. Avoid duplicating the full action list in prose. Add one short boundary note (R12): the preflight proves Chrome readiness only; auth, MFA, and portal-login failures occur downstream after preflight passes and must not be treated as `needs_browser_entry` or trigger a preflight re-run or adapter switch. The preflight already has no auth concept, so this is a precedence/boundary clarification in docs, not new preflight code.
 - **Test Scenarios:**
   - Static contract still lists all known failure actions for discovery.
   - JSON failure for a browser-entry case orders the primary action before guard action.
   - JSON failure for usage does not include static browser-entry actions.
   - Docs contain one concise precedence rule and no copied recovery table.
+  - Docs state the auth/MFA/login-versus-browser-entry boundary once, in `references/warm-chrome.md`, without adding a parallel auth table.
   - Skill frontmatter remains YAML-parseable after edits.
-- **Verification:** Focused preflight test file covers action ordering; doc scan confirms no parallel recovery table.
+- **Verification:** Focused preflight test file covers action ordering; doc scan confirms no parallel recovery table and that the auth-versus-browser-entry boundary is stated.
 
 ### U6. Regression Verification and Handoff Notes
 
 - **Goal:** Prove the patch lands cleanly and leaves future agent work obvious.
-- **Requirements:** R1, R2, R3, R4, R5, R6, R9, R10
+- **Requirements:** R1, R2, R3, R4, R5, R6, R9, R10, R12
 - **Files:**
   - `skills/browser-use/scripts/preflight-warm-chrome.test.ts`
   - `skills/browser-use/scripts/preflight-warm-chrome.ts`
@@ -222,6 +227,7 @@ The implementation keeps the facade envelope shape stable. Agent-facing specific
 - AE3. Given the listener command contains `--user-data-dir --no-first-run`, when `check` runs, then it exits `20` with `missing_profile`, not `profile_missing`.
 - AE4. Given an inspect-listener failure, when JSON output is requested, then `retryable` does not invite blind same-input retry and `runtime_actions[0]` names the safe inspection action.
 - AE5. Given a browser-entry failure, when a fresh agent reads stdout JSON, then it sees a current-run action path plus `do_not_fallback` and does not switch adapters.
+- AE6. Given preflight has passed and a downstream portal then shows a login or MFA wall, when a fresh agent consults the docs, then it treats the login wall as an application-level step, not a Warm Chrome browser-entry failure, and does not re-run preflight or switch adapters to escape it.
 
 ---
 
@@ -246,6 +252,7 @@ The implementation keeps the facade envelope shape stable. Agent-facing specific
 
 ## Sources
 
+- Issue: `https://github.com/nathanvale/claude-code-config/issues/135` (this plan closes its open acceptance criteria).
 - `skills/browser-use/SKILL.md`
 - `skills/browser-use/references/warm-chrome.md`
 - `skills/browser-use/scripts/command-contract.ts`

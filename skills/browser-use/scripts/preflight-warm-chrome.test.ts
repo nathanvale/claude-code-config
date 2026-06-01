@@ -586,6 +586,22 @@ describe("check", () => {
 		expect(envelope.error.code).toBe("not_real_google_chrome");
 	});
 
+	test("rejects an executable that is a superstring of the real Chrome path", async () => {
+		// `Google Chrome Helper` (and similar) start with the real Chrome path but
+		// are not the stable browser binary. The prefix must not certify them.
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				listenerCommand:
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper --remote-debugging-port=9444 --user-data-dir=/Users/tester/.agent-warm-profile",
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("not_real_google_chrome");
+	});
+
 	test("does not reject real Chrome when profile path looks like an automation bundle", async () => {
 		const parent = await makeDir();
 		const profile = join(parent, "chrome-mac", "Chromium.app", "warm-profile");
@@ -834,6 +850,34 @@ describe("check", () => {
 		expect(envelope.error.code).toBe("invalid_cdp_version");
 	});
 
+	test("accepts a browser-level websocket discovery path", async () => {
+		// Positive guard for the /devtools/browser/ check: the valid browser
+		// target shape must still pass alongside the page-path rejection above.
+		const profile = await makeProfile(0o700);
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version")) {
+						return cdpVersion({
+							port: "9444",
+							webSocketDebuggerUrl:
+								"ws://127.0.0.1:9444/devtools/browser/real-browser-guid",
+						});
+					}
+					return [{ id: "page-1" }];
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.web_socket_debugger_url).toBe(
+			"ws://127.0.0.1:9444/devtools/browser/real-browser-guid",
+		);
+	});
+
 	test("fails when Chrome was launched without a dedicated user data dir", async () => {
 		const result = await runForTest(
 			["check", "--port", "9444", "--json"],
@@ -885,6 +929,49 @@ describe("check", () => {
 			testRuntime({
 				profile,
 				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir="${profile}" --no-first-run`,
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.profile_dir).toBe(await realpath(profile));
+	});
+
+	test("certifies the last --user-data-dir when the flag repeats (Chrome last-wins)", async () => {
+		// Chrome resolves repeated switches last-wins. A listener command with a
+		// decoy profile first and the real profile last must certify the real one,
+		// not the decoy, or the proof reports the wrong profile (and repair would
+		// write DevToolsActivePort into the decoy).
+		const parent = await makeDir();
+		const decoy = join(parent, "decoy-profile");
+		const real = join(parent, "real-profile");
+		await mkdir(decoy, { recursive: true, mode: 0o700 });
+		await mkdir(real, { recursive: true, mode: 0o700 });
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", real, "--json"],
+			testRuntime({
+				profile: real,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=${decoy} --user-data-dir=${real} --no-first-run`,
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.profile_dir).toBe(await realpath(real));
+	});
+
+	test("honors an equals-form --user-data-dir value that begins with --", async () => {
+		// The empty-value guard applies only to the space-separated form. In the
+		// equals form the bytes after = are the value verbatim, even with a
+		// leading "--"; dropping it as missing_profile would be a regression.
+		const parent = await makeDir();
+		const profile = join(parent, "--dash-prefixed-profile");
+		await mkdir(profile, { recursive: true, mode: 0o700 });
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({
+				profile,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=${profile} --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -2129,6 +2216,77 @@ describe("status", () => {
 		]);
 		expect(result.stderr).not.toContain("needs_browser_entry endpoint_unreachable");
 		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
+	});
+
+	test("inspect-first failures align retry signals and lead with inspect action", async () => {
+		// listener_missing: CDP answers but no local process owns the port.
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				findListener: async () => null,
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(envelope.error.code).toBe("listener_missing");
+		// No contradictory retry signal: retryable is false and recoverability
+		// is not "retry" (which would invite blind same-input rerun).
+		expect(envelope.error.retryable).toBe(false);
+		expect(envelope.error.recoverability).not.toBe("retry");
+		// Browser-entry failures lead with the needs_browser_entry stop, carry
+		// the safe primary action in the middle, and end with the do_not_fallback
+		// guard. Assert the full ordering so the slot contract is pinned.
+		expect(
+			envelope.runtime_actions.map((action: { id: string }) => action.id),
+		).toEqual(["needs_browser_entry", "inspect_listener", "do_not_fallback"]);
+	});
+
+	test("invalid CDP websocket aligns retry signals", async () => {
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version")) {
+						return cdpVersion({
+							port: "9444",
+							webSocketDebuggerUrl:
+								"ws://127.0.0.1:9444/devtools/page/test-page",
+						});
+					}
+					return [];
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(envelope.error.code).toBe("invalid_cdp_version");
+		expect(envelope.error.retryable).toBe(false);
+		expect(envelope.error.recoverability).not.toBe("retry");
+		expect(
+			envelope.runtime_actions.map((action: { id: string }) => action.id),
+		).toEqual(["needs_browser_entry", "inspect_listener", "do_not_fallback"]);
+	});
+
+	test("plain output names the same primary action as the first JSON runtime action", async () => {
+		const jsonResult = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({ findListener: async () => null }),
+		);
+		const plainResult = await runForTest(
+			["check", "--port", "9444", "--plain"],
+			testRuntime({ findListener: async () => null }),
+		);
+		const envelope = JSON.parse(jsonResult.stdout);
+		// Derive the primary action the same way the docs instruct an agent to:
+		// the first runtime action that is neither the stop nor the guard. The
+		// plain stderr must name that same action, not a different one.
+		const primary = envelope.runtime_actions.find(
+			(action: { id: string }) =>
+				action.id !== "needs_browser_entry" && action.id !== "do_not_fallback",
+		).id;
+
+		expect(primary).toBe("inspect_listener");
+		expect(plainResult.stderr).toContain(`action=${primary}`);
 	});
 
 	test("last output flag wins for status", async () => {
