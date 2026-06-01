@@ -5,7 +5,7 @@ import {
 
 export const WARM_CHROME_PREFLIGHT_CONTRACT_ID =
 	"browser-use.warm-chrome-preflight" as const;
-export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "1" as const;
+export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "2" as const;
 
 export type WarmChromePreflightCommand =
 	| "check"
@@ -62,12 +62,7 @@ const resultContract = {
 	schema_version: WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 } as const satisfies NonNullable<WarmChromeCommandContract["resultContract"]>;
 
-const failureActions = [
-	{
-		id: "needs_browser_entry",
-		summary: "Prepare or repair Warm Chrome before browser entry.",
-		sideEffects: ["browser", "write"],
-	},
+export const warmChromeFailureActions = [
 	{
 		id: "launch_warm_chrome",
 		summary: "Launch real Google Chrome with a dedicated persistent profile.",
@@ -93,14 +88,9 @@ const failureActions = [
 		summary: "Correct CLI arguments, endpoint, port, or profile.",
 		sideEffects: ["check"],
 	},
-	{
-		id: "do_not_fallback",
-		summary: "Do not switch adapters after preflight failure.",
-		sideEffects: ["check"],
-	},
 ] as const;
 
-const successActions = [
+export const warmChromeSuccessActions = [
 	{
 		id: "use_verified_endpoint",
 		summary: "Pass verified endpoint to the selected browser adapter.",
@@ -131,8 +121,8 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			envVars: commonEnvVars,
 			resultContract,
 			actionAffordances: {
-				success: successActions,
-				failure: failureActions,
+				success: warmChromeSuccessActions,
+				failure: warmChromeFailureActions,
 			},
 			flags: readFlags,
 			exitCodes,
@@ -153,8 +143,8 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			envVars: commonEnvVars,
 			resultContract,
 			actionAffordances: {
-				success: successActions,
-				failure: failureActions,
+				success: warmChromeSuccessActions,
+				failure: warmChromeFailureActions,
 			},
 			flags: readFlags,
 			exitCodes,
@@ -175,8 +165,8 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			envVars: commonEnvVars,
 			resultContract,
 			actionAffordances: {
-				success: successActions,
-				failure: failureActions,
+				success: warmChromeSuccessActions,
+				failure: warmChromeFailureActions,
 			},
 			flags: writeFlags,
 			exitCodes,
@@ -197,8 +187,8 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			envVars: commonEnvVars,
 			resultContract,
 			actionAffordances: {
-				success: successActions,
-				failure: failureActions,
+				success: warmChromeSuccessActions,
+				failure: warmChromeFailureActions,
 			},
 			flags: readFlags,
 			exitCodes,

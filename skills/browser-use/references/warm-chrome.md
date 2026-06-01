@@ -22,15 +22,11 @@ Sources:
 - One warm Chrome = one cookie jar.
 - Adapter must fail loud on blank/isolated Chrome or Chrome for Testing.
 
-## Current Known Endpoints
+## Endpoint Authority
 
-Observed 2026-06-01 during read-only evaluation:
-
-- `9444`: real Google Chrome, `~/.agent-warm-profile`, CDP responds.
-- `9223`: real Google Chrome, actual profile `~/.agent-prose-replay-profile`.
-- `~/.cache/chrome-agent/DevToolsActivePort` may point at `9223`; verify the endpoint, not the path.
-
-Do not relaunch or rewrite working Chrome setup just because paths differ.
+- Use current preflight `check` / `status` output as endpoint authority.
+- Treat observed ports in research docs as provenance, not instructions.
+- Do not relaunch or rewrite working Chrome setup just because paths differ.
 
 ## Preflight CLI
 
@@ -59,10 +55,11 @@ skills/browser-use/scripts/preflight-warm-chrome.sh launch --port "$PORT" --prof
 - `launch`: validates persistent profile safety, then starts real Google Chrome only when endpoint is missing.
 - stdout: program envelope or plain status.
 - stderr: diagnostics only. Do not parse as contract.
-- `runtime_actions[].id=needs_browser_entry`: hard stop; prepare browser entry before adapter work.
-- Specific recovery actions may include `launch_warm_chrome`, `repair_profile`, `inspect_listener`,
-  `inspect_diagnostics`, or `change_input`.
-- `error.hint`: next safe recovery move.
+- `schema_version: "2"`: `continuation` is runtime authority; guard action ids are gone.
+- `continuation.next_action_id`: safe action for this run.
+- `runtime_actions`: summaries and side effects for action ids emitted in this run.
+- `continuation.constraints`: negative guidance, such as adapter fallback stops.
+- `error.hint`: coarse recovery class, not primary recovery.
 - Current runtime: macOS only.
 
 ### Continuation contract
@@ -70,11 +67,15 @@ skills/browser-use/scripts/preflight-warm-chrome.sh launch --port "$PORT" --prof
 One safe next step per run. Read it from the current run, not from static lists.
 
 - Per-run `runtime_actions` outrank static `actionAffordances`. The static contract names possible actions for discovery; the run picks the current set.
-- The primary safe next action is the first `runtime_actions` entry whose id is neither `needs_browser_entry` nor `do_not_fallback`. On a browser-entry failure the array leads with the `needs_browser_entry` stop and ends with the `do_not_fallback` guard; the primary action sits between them. Guard actions constrain what must not happen; they do not replace the primary action.
-- After a preflight failure, do not switch adapters or fall back to a cold browser. Repair Warm Chrome, then rerun.
+- Follow `continuation.next_action_id`; use `runtime_actions` only to inspect that action's summary and side effects.
+- Obey `continuation.constraints` before choosing adapters.
+- Profileless endpoint failures ask for input; `launch_warm_chrome` requires a supplied profile source.
+- Browser Entry Handoff constraints stop adapter fallback and cold-browser fallback.
+- `forbidden_action_ids` in a constraint names behaviours to skip, not `runtime_actions` ids. No lookup; obey them directly.
+- Read each emitted action's meaning from its `runtime_actions[].summary`, not from this doc.
 - Action membership lives in `scripts/command-contract.ts` and runtime code. This doc states precedence, not the action list.
 
-Auth is not browser entry. The preflight proves Chrome readiness only. A portal login, MFA prompt, or session-expiry wall hit *after* preflight passes is an application step, not a `needs_browser_entry` failure. Do not rerun preflight or switch adapters to escape a login wall; complete the login in the warm profile (cookies persist).
+Auth is not browser entry. The preflight proves Chrome readiness only. A portal login, MFA prompt, or session-expiry wall hit *after* preflight passes is an application step, not a Warm Chrome readiness failure. Do not rerun preflight or switch adapters to escape a login wall; complete the login in the warm profile (cookies persist).
 
 Observability:
 
