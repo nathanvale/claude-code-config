@@ -528,6 +528,11 @@ async function launchIfNeeded(
 	parsed: Extract<ParsedPreflightCommand, { kind: "execute" }>,
 	runtime: PreflightRuntime,
 ): Promise<boolean> {
+	// Validate the requested launch binary before any reuse early return. A
+	// healthy endpoint proves the *running* Chrome is usable, but it does not
+	// prove the operator-supplied --chrome / CHROME_BIN value is safe; reusing
+	// the endpoint without this check would silently accept Canary/Beta/CfT.
+	validateLaunchChromeBinary(parsed.chromeBin);
 	if (await endpointAnswers(parsed.endpoint, runtime)) {
 		emitCliDiagnostic("browser-use.warm-chrome", "debug", "launch-reuse", {
 			command: "launch",
@@ -539,7 +544,6 @@ async function launchIfNeeded(
 	if (!parsed.profileInput) {
 		throw usageError("--profile is required for launch");
 	}
-	validateLaunchChromeBinary(parsed.chromeBin);
 	const expandedProfile = expandHome(parsed.profileInput, runtime);
 	await validateProfilePath(expandedProfile, runtime);
 
