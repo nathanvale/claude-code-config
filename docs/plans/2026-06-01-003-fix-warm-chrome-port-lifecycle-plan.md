@@ -10,7 +10,7 @@ issue: 149
 
 ## Summary
 
-Make `browser-use` find the running warm Chrome instead of guessing a CDP port. A resolver replaces the three disagreeing port defaults (`preflight DEFAULT_PORT=9223`, `launch-agent-chrome.sh PORT=9223`, docs `9444`) with one precedence chain: explicit input, then a verified port hint, then known bootstrap candidates probed through the existing Warm Chrome proof. `launch` scans for an existing healthy warm Chrome before spawning and refuses to mint a redundant competitor.
+Make `browser-use` find the running warm Chrome instead of guessing a CDP port. A resolver replaces the three disagreeing port defaults (`preflight DEFAULT_PORT`, `launch-agent-chrome.sh PORT`, docs) with one precedence chain: explicit input, then a verified port hint, then the fixed warm-CDP port `9222` probed through the existing Warm Chrome proof. `launch` scans for an existing healthy warm Chrome before spawning and refuses to mint a redundant competitor.
 
 This fixes issue #149 by collapsing the defaults into resolver-owned candidates and adding a scan-before-spawn guard. It is deliberately **stateless beyond a lightweight hint**: no persisted ownership record, no mutation lock, no port-allocation range. Durable per-session port ownership is real future work but belongs to the browser-domain-memory lifecycle epic, not this single-operator fix.
 
@@ -20,9 +20,9 @@ This fixes issue #149 by collapsing the defaults into resolver-owned candidates 
 
 Warm Chrome already has a strong per-command safety proof: real Google Chrome, loopback CDP, dedicated persistent profile, owner-only permissions, browser-level websocket discovery. The missing layer is that nothing makes the tool *find* the warm instance — the operator must already know the port.
 
-Issue #149's live incident: operator ran `check --port 9222` (matched nothing), `check` failed `endpoint_unreachable`, operator followed `launch` with an invented profile, and a **redundant empty Chrome** spawned while the real warm instance sat healthy on `9444`. Root cause: three disagreeing port defaults and no resolver that prefers a discovered, proven warm endpoint.
+Issue #149's live incident: operator ran `check` against a guessed port (matched nothing), `check` failed `endpoint_unreachable`, operator followed `launch` with an invented profile, and a **redundant empty Chrome** spawned while the real warm instance sat healthy on the warm port. Root cause: three disagreeing port defaults and no resolver that prefers a discovered, proven warm endpoint.
 
-The fix is resolution, not ownership: probe known candidate ports through the existing proof path, prefer the verified one, and make `launch` reuse it instead of spawning. `9444`/`9223` become resolver-owned bootstrap candidates rather than competing constants.
+The fix is resolution, not ownership: probe the fixed warm-CDP port through the existing proof path, prefer the verified endpoint, and make `launch` reuse it instead of spawning. The disagreeing defaults collapse into one resolver-owned bootstrap port (`9222`) rather than competing constants.
 
 ### Why no durable binding (scope decision)
 
@@ -65,7 +65,7 @@ An earlier draft of this plan added a persisted `Warm Chrome Binding` file plus 
 
 ### Single Source of Truth
 
-- R23. The 9223/9444 disagreement collapses into one resolver-owned bootstrap candidate list (`9444` preferred, then `9223`).
+- R23. The disagreeing port defaults collapse into one resolver-owned bootstrap port (`9222`).
 - R24. `launch-agent-chrome.sh` becomes a thin compatibility wrapper that delegates to the preflight launch command and stops owning a separate port/profile default.
 - R25. The exact candidate list and default profile path are code-owned, not restated as authority in hand-maintained docs.
 - R26. `BROWSER_USE_CDP_PORT` and `BROWSER_USE_PROFILE_DIR` remain bootstrap hints only when no verified endpoint resolves.
@@ -107,7 +107,7 @@ An earlier draft of this plan added a persisted `Warm Chrome Binding` file plus 
 
 - **Resolution, not ownership.** The running Chrome's CDP listener is the authority for which port is warm. The resolver discovers and proves it; it does not persist an authoritative binding. The hint is a probe shortcut only.
 - **Hint is advisory, never fail-closed.** A present-but-stale hint falls through to discovery for every command, including read-only ones. This avoids the stale-binding paradox where a hint would make `check` fail and route to `launch` when a healthy Chrome exists on the other candidate.
-- **Fail loud on candidate exhaustion.** When no warm Chrome exists and both `9444`/`9223` are occupied by non-Warm-Chrome, `launch` fails with a clear message rather than allocating a range port. On a single-user machine, both agent ports busy is exceptional and worth surfacing; range allocation would strand a warm Chrome on a port discovery can't find later (the very reason a durable binding would then be needed).
+- **Fail loud on port occupation.** When no warm Chrome exists and `9222` is occupied by non-Warm-Chrome, `launch` fails with a clear message rather than allocating a range port. On a single-user machine, the agent port busy is exceptional and worth surfacing; range allocation would strand a warm Chrome on a port discovery can't find later (the very reason a durable binding would then be needed).
 - **Reuse the existing proof path for discovery.** Discovery probes candidate ports, but a candidate becomes authoritative only after `verifyWarmChrome` proves real Chrome, loopback CDP, browser-level websocket, and a safe dedicated profile. Call it as a probe: `repair: false`, catch `PreflightRuntimeError`, treat a throw as "not this candidate." Do not build a second listener-only verifier.
 - **Relax the hard `--profile` guard for resolver-provided profiles.** Current code throws `usageError("--profile is required for launch")` unconditionally. Cold launch with a code-owned default profile (R27) requires conditionalizing that guard: profile required unless the resolver (hint or code-owned default) supplies one.
 - **Explicit profile is expectation, not rebind.** If `--profile` conflicts with the verified warm profile, fail with profile mismatch instead of spawning a competitor or silently returning a different profile. This must evaluate against the *discovered/verified* warm profile, not only a hint, so it holds on the first (no-hint) run — the literal #149 reproduction.
@@ -153,12 +153,12 @@ Read paths discover and return a verified candidate without writing the hint. On
 - **Files:**
   - `skills/browser-use/scripts/preflight-warm-chrome.ts`
   - `skills/browser-use/scripts/preflight-warm-chrome.test.ts`
-- **Approach:** Add a resolver near `normalizeEndpoint`. Precedence: explicit `--endpoint`/`--port` (current-run only) → hint (read, verify as a probe) → env hints → bootstrap candidates (`9444`, then `9223`) probed via `verifyWarmChrome` with `repair: false` in a try/catch. A throw means "not this candidate," not a CLI failure. Read-only commands never write the hint. Keep candidate constants in runtime code, not docs.
+- **Approach:** Add a resolver near `normalizeEndpoint`. Precedence: explicit `--endpoint`/`--port` (current-run only) → hint (read, verify as a probe) → env hints → fixed bootstrap port `9222` probed via `verifyWarmChrome` with `repair: false` in a try/catch. A throw means "not warm," not a CLI failure. Read-only commands never write the hint. Keep the port constant in runtime code, not docs.
 - **Patterns to follow:** Existing `normalizeEndpoint`, `verifyWarmChrome`, `endpointAnswers`, and `PreflightRuntime` injection.
 - **Test Scenarios:**
   - Bare `check --json` with a valid hint returns its port/profile.
-  - Bare `check --json` with no hint discovers the verified warm candidate on `9444` without writing state.
-  - Bare `check --json` falls through to `9223` when `9444` is not warm but `9223` is.
+  - Bare `check --json` with no hint discovers the verified warm endpoint on `9222` without writing state.
+  - Bare `check --json` fails cleanly when `9222` is not warm (no hint, nothing to discover).
   - Stale/absent hint falls through to discovery for `check`/`status` (no failure, no write).
   - Explicit `--port` overrides hint and discovery for the current run.
   - Explicit `--endpoint` overrides hint and env for the current run.
@@ -177,17 +177,17 @@ Read paths discover and return a verified candidate without writing the hint. On
 - **Files:**
   - `skills/browser-use/scripts/preflight-warm-chrome.ts`
   - `skills/browser-use/scripts/preflight-warm-chrome.test.ts`
-- **Approach:** Before spawning, `launch` validates `--chrome`/profile safety, resolves the endpoint, and scans bootstrap candidates for healthy warm via the proof path. If a healthy candidate exists (resolved or discovered elsewhere), return the existing `browser_ready` shape with `launch_performed=false`. If explicit `--profile` conflicts with the verified warm profile, fail with mismatch. If both candidates are occupied by non-Warm-Chrome and none verify, fail loud. Otherwise spawn on the free preferred candidate, verify, then write the hint. Relax the hard `--profile`-required guard so a resolver-provided default profile is allowed (R27). Add small injected `readHint`/`writeHint` primitives to `PreflightRuntime`; no lock, no atomic-rename ceremony beyond a plain write.
+- **Approach:** Before spawning, `launch` validates `--chrome`/profile safety, resolves the endpoint, and probes the bootstrap port `9222` for healthy warm via the proof path. If a healthy warm Chrome exists (resolved or discovered), return the existing `browser_ready` shape with `launch_performed=false`. If explicit `--profile` conflicts with the verified warm profile, fail with mismatch. If `9222` is occupied by non-Warm-Chrome and does not verify, fail loud. Otherwise spawn on the free port, verify, then write the hint. Relax the hard `--profile`-required guard so a resolver-provided default profile is allowed (R27). Add small injected `readHint`/`writeHint` primitives to `PreflightRuntime`; no lock, no atomic-rename ceremony beyond a plain write.
 - **Patterns to follow:** Existing `launchIfNeeded` reuse branch, `use_verified_endpoint` success action, `PreflightRuntime` test doubles.
 - **Test Scenarios:**
   - `launch --port {wrong}` returns the existing verified warm endpoint when one is healthy on a candidate and no conflicting profile is supplied (`launch_performed=false`).
-  - The #149 reproduction: `launch --port 9222 --profile {invented}` with warm Chrome live on `9444` and no hint — fails with profile mismatch, spawns nothing.
+  - The #149 reproduction: `launch --profile {invented}` with warm Chrome live on `9222` and no hint — fails with profile mismatch, spawns nothing.
   - `launch` with a valid hint reuses it and spawns nothing.
-  - First cold `launch` (no candidate warm, preferred free) spawns once on `9444`, proves, writes the hint.
+  - First cold `launch` (no warm Chrome, `9222` free) spawns once on `9222`, proves, writes the hint.
   - First cold `launch` uses the code-owned default dedicated profile path (application-support, not cache) when no profile is supplied.
-  - `launch` with both candidates occupied by non-Warm-Chrome fails loud and spawns nothing.
+  - `launch` with `9222` occupied by non-Warm-Chrome fails loud and spawns nothing.
   - `launch --port {occupied-by-non-warm}` fails and spawns nothing.
-  - `launch` adopts a healthy candidate discovered on `9223` and reports `launch_performed=false`.
+  - `launch` adopts a healthy warm Chrome discovered on `9222` and reports `launch_performed=false`.
   - Unsafe `--chrome` (Chrome for Testing / non-stable) stays rejected before any reuse success.
   - Failed spawn or failed proof writes no hint.
   - Existing profile directories are not moved or copied into the default profile path.
@@ -203,7 +203,7 @@ Read paths discover and return a verified candidate without writing the hint. On
   - `skills/browser-use/scripts/preflight-warm-chrome.sh`
   - `skills/browser-use/scripts/command-contract.ts`
   - `skills/browser-use/scripts/preflight-warm-chrome.test.ts`
-- **Approach:** Make `launch-agent-chrome.sh` a thin wrapper that delegates to the preflight launch command instead of carrying `PORT=9223` / `PROFILE_DIR=~/.cache/chrome-agent`. Preserve positional `PORT` / `PROFILE_DIR` as explicit per-run inputs mapped to preflight flags, not wrapper defaults. Update command usage text only where the CLI changed. Note the cache→application-support profile move.
+- **Approach:** Make `launch-agent-chrome.sh` a thin compatibility wrapper that delegates to the preflight launch command instead of carrying its own `PORT` / `PROFILE_DIR` defaults. Preserve positional `PORT` / `PROFILE_DIR` as explicit per-run inputs mapped to preflight flags, not wrapper defaults. The fixed warm-CDP port (`9222`) and the dedicated default profile live in resolver code, not the wrapper. Update command usage text only where the CLI changed. Note the cache→application-support profile move.
 - **Patterns to follow:** Existing shell wrapper pass-through tests; existing command-contract tests.
 - **Test Scenarios:**
   - `launch-agent-chrome.sh` no longer hardcodes a default port/profile pair that can drift from preflight.
@@ -211,7 +211,7 @@ Read paths discover and return a verified candidate without writing the hint. On
   - Shell invocation still launches or reuses Warm Chrome through the preflight command.
   - Command-contract env-var descriptions stay truthful and do not claim env vars are authority.
   - Help text does not hardcode the default profile path or a literal current port.
-- **Verification:** Shell wrapper tests pass; a source scan finds no independent `9223`/`9444`/cache-profile default owner outside resolver code.
+- **Verification:** Shell wrapper tests pass; a source scan finds no independent port/cache-profile default owner outside resolver code.
 
 ### U4. Warm Chrome Documentation Update
 
@@ -253,14 +253,14 @@ Read paths discover and return a verified candidate without writing the hint. On
 
 ## Acceptance Examples
 
-- AE1. Given a healthy Warm Chrome on `9444` and a valid hint, when an agent runs bare `check --json`, then the result points at `9444` and emits `use_verified_endpoint`.
-- AE2. Given no hint but a healthy Warm Chrome on `9444`, when an agent runs bare `check --json`, then discovery verifies and returns `9444` without spawning or writing state.
-- AE3. Given a stale hint pointing at a dead port but a healthy Warm Chrome on `9223`, when an agent runs bare `check --json`, then it falls through to discovery and returns `9223` (does not fail and route to `launch`).
-- AE4. The #149 reproduction: given a healthy Warm Chrome on `9444`, no hint, when an operator runs `launch --port 9222 --profile {invented}`, then the command fails with profile mismatch and spawns nothing.
-- AE5. Given a healthy Warm Chrome on `9444`, when an operator runs `launch --port 9222` with no conflicting profile, then the command returns the verified `9444` endpoint with `launch_performed=false` and spawns nothing.
-- AE6. Given no warm Chrome anywhere and `9444` free, when an operator runs `launch`, then it spawns one real Chrome on `9444`, proves it, writes the hint, and returns `browser_ready`.
-- AE7. Given no warm Chrome and both `9444` and `9223` occupied by non-Warm-Chrome listeners, when an operator runs `launch`, then it fails loud (names the occupied ports, suggests explicit `--port`) and spawns nothing.
-- AE8. Given a healthy Warm Chrome on a bootstrap candidate, when an operator runs `launch` with no port, then it adopts that endpoint, reports `launch_performed=false`, and writes the hint.
+- AE1. Given a healthy Warm Chrome on `9222` and a valid hint, when an agent runs bare `check --json`, then the result points at `9222` and emits `use_verified_endpoint`.
+- AE2. Given no hint but a healthy Warm Chrome on `9222`, when an agent runs bare `check --json`, then discovery verifies and returns `9222` without spawning or writing state.
+- AE3. Given a stale hint pointing at a dead port but a healthy Warm Chrome on `9222`, when an agent runs bare `check --json`, then it falls through to discovery and returns `9222` (does not fail and route to `launch`).
+- AE4. The #149 reproduction: given a healthy Warm Chrome on `9222`, no hint, when an operator runs `launch --profile {invented}`, then the command fails with profile mismatch and spawns nothing.
+- AE5. Given a healthy Warm Chrome on `9222`, when an operator runs `launch` with no conflicting profile, then the command returns the verified `9222` endpoint with `launch_performed=false` and spawns nothing.
+- AE6. Given no warm Chrome anywhere and `9222` free, when an operator runs `launch`, then it spawns one real Chrome on `9222`, proves it, writes the hint, and returns `browser_ready`.
+- AE7. Given no warm Chrome and `9222` occupied by a non-Warm-Chrome listener, when an operator runs `launch`, then it fails loud (names the occupied port, suggests explicit `--port`) and spawns nothing.
+- AE8. Given a healthy Warm Chrome on `9222`, when an operator runs `launch` with no port, then it adopts that endpoint, reports `launch_performed=false`, and writes the hint.
 
 ---
 

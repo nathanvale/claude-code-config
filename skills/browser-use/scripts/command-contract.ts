@@ -158,7 +158,7 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			script: "scripts/preflight-warm-chrome.ts",
 			summary: "Launch real Google Chrome if needed, then verify.",
 			usage: [
-				"launch [--port <port>] [--profile <dir>] [--chrome <path>] [--json|--plain]",
+				"launch [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--chrome <path>] [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",
