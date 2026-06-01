@@ -1004,11 +1004,20 @@ function hasRemoteDebuggingPort(args: string, port: string): boolean {
 
 function parseProcessCommand(command: string): { executable: string; args: string } {
 	const trimmed = command.trim();
+	// Fast-path only on an exact match, or when the Chrome path is followed by
+	// flag arguments (whitespace then a "--" token). Without this, a superstring
+	// executable like `.../Google Chrome Helper` starts with DEFAULT_CHROME and
+	// would be pinned to DEFAULT_CHROME, certifying a non-stable binary as real
+	// Chrome. A trailing bare word (`Helper`) means a different executable, so
+	// fall through to the generic parse where the `!== DEFAULT_CHROME` check fires.
+	if (trimmed === DEFAULT_CHROME) {
+		return { executable: DEFAULT_CHROME, args: "" };
+	}
 	if (trimmed.startsWith(DEFAULT_CHROME)) {
-		return {
-			executable: DEFAULT_CHROME,
-			args: trimmed.slice(DEFAULT_CHROME.length).trim(),
-		};
+		const rest = trimmed.slice(DEFAULT_CHROME.length);
+		if (/^\s+--/.test(rest)) {
+			return { executable: DEFAULT_CHROME, args: rest.trim() };
+		}
 	}
 	const quoted = parseQuotedCommandExecutable(trimmed);
 	if (quoted) return quoted;

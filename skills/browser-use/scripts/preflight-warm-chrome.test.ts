@@ -586,6 +586,22 @@ describe("check", () => {
 		expect(envelope.error.code).toBe("not_real_google_chrome");
 	});
 
+	test("rejects an executable that is a superstring of the real Chrome path", async () => {
+		// `Google Chrome Helper` (and similar) start with the real Chrome path but
+		// are not the stable browser binary. The prefix must not certify them.
+		const result = await runForTest(
+			["check", "--port", "9444", "--json"],
+			testRuntime({
+				listenerCommand:
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper --remote-debugging-port=9444 --user-data-dir=/Users/tester/.agent-warm-profile",
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("not_real_google_chrome");
+	});
+
 	test("does not reject real Chrome when profile path looks like an automation bundle", async () => {
 		const parent = await makeDir();
 		const profile = join(parent, "chrome-mac", "Chromium.app", "warm-profile");
