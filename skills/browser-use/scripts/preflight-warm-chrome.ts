@@ -833,6 +833,16 @@ function validateLoopbackWebSocket(url: string, port: string): void {
 			"CDP websocket URL is not pinned to the requested loopback port.",
 		);
 	}
+	// /json/version must advertise the browser-level DevTools target. A page
+	// target (/devtools/page/<id>) or any other endpoint is a loopback socket
+	// but not browser readiness proof; accepting it would certify a non-browser
+	// connection as Warm Chrome.
+	if (!parsed.pathname.startsWith("/devtools/browser/")) {
+		throw new PreflightRuntimeError(
+			"invalid_cdp_version",
+			"CDP websocket URL is not a browser-level DevTools target.",
+		);
+	}
 }
 
 function validateChromeCommand(command: string, port: string): void {
