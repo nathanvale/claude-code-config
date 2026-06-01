@@ -11,15 +11,16 @@ Canonical home for durable per-domain browser knowledge.
 
 - Planned capability; runtime implementation pending.
 - Active plan: `docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md`.
-- No `skills/browser-domain-memory/scripts/` CLI has landed.
+- Only the prerequisite gate has landed under `skills/browser-domain-memory/scripts/`.
 - No durable reads, writes, replay, config, locks, auth, gates, or promotion routes are available yet.
 - Do not treat this stub as runtime proof.
 
 ## Start Work
 
-- Read the active plan first.
-- Start with first vertical slice: U0, U0a, U0b, U0c, U1, U1a.
-- Restore prototype sources or record a concrete immutable artifact path before lifting code.
+- Run the prerequisite gate first: `skills/browser-domain-memory/scripts/browser-domain-memory-prerequisites.sh --json`.
+- Stop if it exits non-zero. The result names the missing prototype source, replay dependency, or facade link and the repair action. Do not start runtime units on a red gate.
+- The gate owns the prototype/dependency inventory (`prerequisites.ts`). Do not re-list those paths in prose.
+- Read the active plan, then start the first vertical slice: U0, U0a, U0b, U0c, U1, U1a.
 - Run `create-cli` before authoring CLI contracts.
 - Build code under `skills/browser-domain-memory/scripts/`.
 - Mirror `skills/browser-use/scripts/` for facade CLI topology.
