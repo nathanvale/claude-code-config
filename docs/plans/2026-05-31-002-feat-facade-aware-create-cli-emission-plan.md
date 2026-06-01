@@ -626,8 +626,10 @@ compile-time drift guard a real, runnable check.
   autonomous create-cli path is unblocked), #68 (AUTH_* false-positive — deferred),
   #70 (usage-grammar false-positive: the #66 scanner rejects legitimate parsed flag
   names like `--scope-cwd`/`--secret-ref` in `usage[]`; split out of #64, same class
-  as #68 — deferred), prefix-fused residual (still untracked — now scopeable since #64
-  is done; file when convenient).
+  as #68 — deferred), prefix-fused residual (**now tracked: #63 re-scoped 2026-06-01** —
+  #69 closed the suffix-fused half; #63 now owns prefix-fused noun-leads `TOKENFILE`/
+  `KEYSTORE` + unlisted/compound-prefix `XEROSECRET`/`APIACCESSTOKEN`. Re-confirmed live
+  by the 20-angle stress-test, which converged with zero decision-changing findings).
 - **Dependency (satisfied):** `parse`/`defineCommandFacadeContract` + the 3 fields +
   2-adapter proof on side-quest-engineering main (`1737a7ae`). Verified present.
 - **Dependency (machine-local):** the `scripts/` folder's npm-link to the private
