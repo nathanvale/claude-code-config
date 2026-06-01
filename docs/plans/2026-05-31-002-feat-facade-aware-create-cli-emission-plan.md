@@ -579,13 +579,19 @@ compile-time drift guard a real, runnable check.
   note): instruction-shaped prompt-injection (`IGNORE PREVIOUS INSTRUCTIONS`-class) and
   `script` path/exec — those stay author-trusted. KTD1 holds: no facade change in this
   slice; the reference describes the now-shipped scan.
-- **Security risk: under-declared danger (mutation vs sideEffects not cross-checked).**
-  A contract can say `mutation: write` while declaring `sideEffects: [read]` — the
-  facade accepts the mismatch, so a destructive command can under-advertise its
-  danger. Mitigation: U1's prose tells authors `sideEffects` is the danger signal the
-  catalog and the high-stakes guard key on — declare it honestly; an under-declared
-  `sideEffects` silently disables the guard. Cross-check is a facade-side hardening
-  candidate, not this slice.
+- **Security risk: under-declared danger (mutation vs sideEffects) — LANDED via
+  side-quest-engineering #64 (PR #71, squash `29ab153a`).** A contract could say
+  `mutation: write` while declaring `sideEffects: [read]` and the facade accepted the
+  mismatch, so a destructive command could under-advertise its danger. **This is now a
+  facade-enforced control, not prose:** the validator takes an opt-in
+  `writeImplyingMutations` set and emits a `command-mutation-sideeffect-mismatch` drift
+  finding at construction when a write-implying `mutation` declares `sideEffects` lacking
+  both `write` and `destructive`. `mutation` stays an opaque generic string — the
+  consumer supplies which values are write-implying (Browser Automation is the first
+  adopter). U1's prose still tells authors to declare `sideEffects` honestly, but the
+  guard no longer depends on cooperation where the consumer opts in. **Caveat (off-machine):
+  the guard is opt-in and runs at construction, so on a machine without the link the
+  autonomous path still cannot rely on it — see the off-machine residual (c) below.**
 - **Security posture — prose warnings are NOT a control for the hostile-agent threat
   model (doc-review, security-lens 2026-06-01).** The three risks above all mitigate
   via "U1 prose tells the emitting agent to behave." That is a *cooperative-author*
@@ -615,8 +621,13 @@ compile-time drift guard a real, runnable check.
   treat every command as potentially high-stakes until the package is resolvable.
   **Filed upstream:** #62 (validator crash → **landed**), #61/#66 (free-text scan →
   **landed**), #63 (fused-name → **landed via #69**), #64 (mutation/sideEffects
-  cross-check — **open, the remaining real prerequisite**), #68 (AUTH_* false-positive
-  — deferred), prefix-fused residual (untracked — file when #64 is scoped).
+  cross-check → **LANDED via PR #71, `29ab153a`** — was the remaining real
+  prerequisite; with it merged the facade-enforced security floor is complete and the
+  autonomous create-cli path is unblocked), #68 (AUTH_* false-positive — deferred),
+  #70 (usage-grammar false-positive: the #66 scanner rejects legitimate parsed flag
+  names like `--scope-cwd`/`--secret-ref` in `usage[]`; split out of #64, same class
+  as #68 — deferred), prefix-fused residual (still untracked — now scopeable since #64
+  is done; file when convenient).
 - **Dependency (satisfied):** `parse`/`defineCommandFacadeContract` + the 3 fields +
   2-adapter proof on side-quest-engineering main (`1737a7ae`). Verified present.
 - **Dependency (machine-local):** the `scripts/` folder's npm-link to the private
