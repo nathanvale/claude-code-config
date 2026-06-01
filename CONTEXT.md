@@ -129,7 +129,7 @@ A reusable authenticated browser environment that `browser-use` drives for login
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
 
 **Warm Chrome Binding**:
-A `browser-use` lifecycle record that pairs one CDP port with one dedicated Warm Chrome profile. It names the candidate endpoint/profile for Warm Chrome Preflight to verify; it is not readiness proof, Browser Adapter state, or Chrome's `DevToolsActivePort` hint.
+A planned `browser-use` lifecycle record that pairs one CDP port with one dedicated Warm Chrome profile. It names the candidate endpoint/profile for Warm Chrome Preflight to verify; it is not readiness proof, Browser Adapter state, or Chrome's `DevToolsActivePort` hint.
 _Avoid_: default port, port lock, DevToolsActivePort, endpoint registry
 
 **Warm Chrome Preflight**:

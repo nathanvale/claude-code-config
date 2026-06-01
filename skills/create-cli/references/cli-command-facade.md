@@ -53,31 +53,19 @@ it. Design the pattern; let the facade hold it.
 
 ## Runtime continuation design prompts
 
-When a command emits `runtime_actions`, the facade also requires a
-`continuation` — the one authoritative signal that tells a fresh agent whether
-and how to continue (ADR-0016, an ADR-0010 amendment). Design it while you
-design the command, not after. Answer these five at author time:
+When a command emits `runtime_actions`, design continuation at the same time.
+The facade and ADR-0016 own field shape; package docs own action meaning.
 
-- **Primary safe action.** What is the single safe next action this invocation
-  points at, and does it map to a `runtime_actions` id?
-- **Same-input retry.** Is retrying the same input safe here? (drives
-  `recoverability` + `retryable`, which now imply each other for `retry`.)
-- **Forbidden fallback or side effects.** Is there a fallback this run must NOT
-  take, or a side-effect class (browser, auth, write, destructive) it must
-  avoid? Those become continuation constraints, not a fake positive action.
-- **Operator-stop reason.** If the run can't continue autonomously, what does
-  the agent tell the operator? An operator stop must carry that reason as a
-  constraint summary.
-- **Failure domain + redaction owner.** What package-owned `failure_domain`
-  routing label fits, and who owns redaction for any recovery examples you keep
-  outside the facade projection?
+Ask:
 
-Static `actionAffordances` are discovery vocabulary; per-run `runtime_actions`
-plus `continuation` are the runtime authority. The facade owns the shape and
-validation; your package owns action meanings, fallback semantics, operator
-policy, `failure_domain` values, and executable recovery examples. For the
-exact field shape, see ADR-0016 and the facade package source (linked in
-**Reference** below).
+- Which single current-run action can a fresh agent follow?
+- Is same-input retry safe?
+- Which fallback or side effect must this run forbid?
+- Does autonomous continuation need an operator stop?
+- Which package-owned routing label and redaction boundary apply?
+
+Static `actionAffordances` are discovery vocabulary. Per-run output is runtime
+authority. See ADR-0016 and facade package source for exact fields.
 
 ## Facade owns the diagnostic flags — don't declare them
 
@@ -207,10 +195,11 @@ The facade *writers* produce the output; the command supplies only the payload.
   `duration_ms` into your object: `{ ...data, run_id, duration_ms }`.
 - `--json` success (array payload) → written as-is, **NOT wrapped** — arrays get
   no `run_id`/`duration_ms` spine. Prefer object payloads when you want correlation.
-- `--json` error → `{ status: "error", run_id, error, runtime_actions? }` where
+- `--json` error → `{ status: "error", run_id, error, runtime_actions?, continuation? }` where
   `error` is the full `StructuredRuntimeError`. `severity`/`recoverability`/
   `retryable` drive agent behavior: `retry`+`retryable:true` → retry same input;
   `authenticate`/`change_input`/`repair_state` → act first; `fatal`+`none` → stop.
+  Emit `continuation` whenever you emit `runtime_actions`.
 - a result trying to own top-level `run_id` or `duration_ms` makes the writer
   throw `CliWriterContractError` (exit 70) — those fields are facade-owned in
   output too.

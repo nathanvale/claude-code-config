@@ -9,6 +9,7 @@ import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
 	type RuntimeActionGuidance,
+	type RuntimeContinuationGuidance,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
 	createCliRuntimeErrorEnvelope,
@@ -28,7 +29,9 @@ import {
 	WARM_CHROME_PREFLIGHT_CONTRACT_ID,
 	WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 	type WarmChromePreflightCommand,
+	warmChromeFailureActions,
 	warmChromePreflightContracts,
+	warmChromeSuccessActions,
 } from "./command-contract";
 
 const VERSION = "0.2.0";
@@ -44,6 +47,23 @@ const quietDiagnosticWriter: CliWriter = {
 
 type OutputMode = "json" | "plain";
 type CommandToExecute = Exclude<WarmChromePreflightCommand, "status">;
+type WarmChromeFailureDomain =
+	| "browser_entry_handoff"
+	| "input"
+	| "runtime_diagnostics";
+type WarmChromeRuntimeActionId =
+	| (typeof warmChromeFailureActions)[number]["id"]
+	| (typeof warmChromeSuccessActions)[number]["id"];
+type WarmChromeRuntimeActionGuidance = RuntimeActionGuidance & {
+	id: WarmChromeRuntimeActionId;
+};
+const warmChromeRuntimeActions = [
+	...warmChromeFailureActions,
+	...warmChromeSuccessActions,
+] as const;
+const warmChromeRuntimeActionById = new Map(
+	warmChromeRuntimeActions.map((action) => [action.id, action]),
+);
 
 export type ListenerProcess = {
 	pid: number;
@@ -128,11 +148,30 @@ type PreflightRuntimeErrorOptions = {
 	hintSummary?: string;
 	hintAction?: "retry" | "change_input" | "repair_state";
 	severity?: "warning" | "error" | "fatal";
+	failureDomain?: WarmChromeFailureDomain;
 	// Override the per-run primary runtime action when the error code alone is
 	// ambiguous. `endpoint_unreachable` means "launch" when nothing answers but
 	// "inspect" when a real Chrome already occupies the port without CDP.
 	primaryActionId?: "inspect_listener";
 };
+
+type ProfilePathValidationOptions = {
+	failureDomain?: WarmChromeFailureDomain;
+};
+
+function inputChangeOptions(
+	hintSummary: string,
+): Pick<
+	PreflightRuntimeErrorOptions,
+	"failureDomain" | "hintAction" | "hintSummary" | "recoverability"
+> {
+	return {
+		failureDomain: "input",
+		hintSummary,
+		hintAction: "change_input",
+		recoverability: "change_input",
+	};
+}
 
 class PreflightRuntimeError extends Error {
 	constructor(
@@ -549,7 +588,7 @@ async function launchIfNeeded(
 		throw usageError("--profile is required for launch");
 	}
 	const expandedProfile = expandHome(parsed.profileInput, runtime);
-	await validateProfilePath(expandedProfile, runtime);
+	await validateProfilePath(expandedProfile, runtime, { failureDomain: "input" });
 
 	const listener = await runtime.findListener(parsed.port);
 	if (listener) {
@@ -567,8 +606,17 @@ async function launchIfNeeded(
 		);
 	}
 
-	const profileDir = await runtime.ensureProfileDir(expandedProfile);
-	await validateProfilePath(profileDir, runtime);
+	let profileDir: string;
+	try {
+		profileDir = await runtime.ensureProfileDir(expandedProfile);
+	} catch {
+		throw new PreflightRuntimeError(
+			"invalid_profile_path",
+			"Warm Chrome launch profile must be a directory path that can be created.",
+			inputChangeOptions("Choose a dedicated persistent profile directory."),
+		);
+	}
+	await validateProfilePath(profileDir, runtime, { failureDomain: "input" });
 	await runtime.spawnChrome({
 		chromeBin: parsed.chromeBin,
 		port: parsed.port,
@@ -590,6 +638,16 @@ async function launchIfNeeded(
 	throw new PreflightRuntimeError(
 		"endpoint_unreachable",
 		"Real Google Chrome did not expose a DevTools endpoint in time.",
+		{
+			// Chrome already spawned; relaunching is wrong. Inspect the listener
+			// that came up but never exposed CDP rather than fall through to the
+			// default launch_warm_chrome action.
+			hintSummary:
+				"Inspect the spawned Chrome's listener before relaunching.",
+			hintAction: "repair_state",
+			recoverability: "repair_state",
+			primaryActionId: "inspect_listener",
+		},
 	);
 }
 
@@ -621,6 +679,11 @@ async function verifyWarmChrome(
 		runtime,
 		"endpoint_unreachable",
 		"No Chrome DevTools endpoint answered.",
+		options.profileInput
+			? {}
+			: inputChangeOptions(
+					"Set --profile or BROWSER_USE_PROFILE_DIR before launching Warm Chrome.",
+				),
 	);
 	const browser = stringField(version, "Browser", "invalid_cdp_version");
 	const userAgent = stringField(version, "User-Agent", "invalid_cdp_version");
@@ -662,6 +725,7 @@ async function verifyWarmChrome(
 				hintSummary: "Correct --profile or choose the matching CDP port.",
 				hintAction: "change_input",
 				recoverability: "change_input",
+				failureDomain: "input",
 			},
 		);
 		if (provided.realPath !== profile.realPath) {
@@ -672,7 +736,11 @@ async function verifyWarmChrome(
 		}
 	}
 
-	await validateProfilePath(profile.realPath, runtime);
+	await validateProfilePath(
+		profile.realPath,
+		runtime,
+		options.profileInput ? { failureDomain: "input" } : {},
+	);
 	const repairActions: string[] = [];
 	if (options.repair) {
 		await assertCurrentUserOwnsProfile(profile, runtime);
@@ -761,6 +829,7 @@ async function assertCurrentUserOwnsProfile(
 			hintSummary: "Choose a Warm Chrome profile owned by the current user.",
 			hintAction: "change_input",
 			recoverability: "change_input",
+			failureDomain: "input",
 		},
 	);
 }
@@ -778,12 +847,13 @@ async function fetchObject(
 	runtime: PreflightRuntime,
 	code: string,
 	message: string,
+	options: PreflightRuntimeErrorOptions = {},
 ): Promise<Record<string, unknown>> {
 	let value: unknown;
 	try {
 		value = await runtime.fetchJson(url);
 	} catch {
-		throw new PreflightRuntimeError(code, message);
+		throw new PreflightRuntimeError(code, message, options);
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new PreflightRuntimeError(
@@ -877,12 +947,24 @@ function validateLaunchChromeBinary(chromeBin: string): void {
 		throw new PreflightRuntimeError(
 			"chrome_for_testing",
 			"Warm Chrome requires real Google Chrome, not Chrome for Testing.",
+			{
+				hintSummary: "Use the stable Google Chrome app binary.",
+				hintAction: "change_input",
+				recoverability: "change_input",
+				failureDomain: "input",
+			},
 		);
 	}
 	if (chromeBin !== DEFAULT_CHROME) {
 		throw new PreflightRuntimeError(
 			"not_real_google_chrome",
 			"Warm Chrome launch requires the stable Google Chrome app binary.",
+			{
+				hintSummary: "Use the stable Google Chrome app binary.",
+				hintAction: "change_input",
+				recoverability: "change_input",
+				failureDomain: "input",
+			},
 		);
 	}
 }
@@ -1105,9 +1187,18 @@ function tokenizeCommandArgs(input: string): string[] {
 async function validateProfilePath(
 	profilePath: string,
 	runtime: PreflightRuntime,
+	options: ProfilePathValidationOptions = {},
 ): Promise<void> {
 	const comparisonPath = await pathForComparison(profilePath, runtime);
 	const home = runtime.env.HOME;
+	let errorOptions: PreflightRuntimeErrorOptions = {};
+	if (options.failureDomain === "input") {
+		errorOptions = inputChangeOptions(
+			"Choose a dedicated persistent Warm Chrome profile.",
+		);
+	} else if (options.failureDomain) {
+		errorOptions = { failureDomain: options.failureDomain };
+	}
 	if (home) {
 		const defaultProfileRoot = await pathForComparison(
 			join(home, "Library/Application Support/Google/Chrome"),
@@ -1120,6 +1211,7 @@ async function validateProfilePath(
 			throw new PreflightRuntimeError(
 				"default_profile",
 				"Warm Chrome cannot use the everyday default Chrome profile.",
+				errorOptions,
 			);
 		}
 	}
@@ -1127,6 +1219,7 @@ async function validateProfilePath(
 		throw new PreflightRuntimeError(
 			"throwaway_profile",
 			"Warm Chrome profile must be persistent.",
+			errorOptions,
 		);
 	}
 }
@@ -1232,18 +1325,12 @@ function writeSuccess(
 			run_id: runtime.runId,
 			data: proof,
 			runtime_actions: [
-				{
-					id: "use_verified_endpoint",
-					summary:
-						"Pass the verified endpoint and port to the selected Browser Adapter.",
-					side_effects: ["browser"],
-				},
-				{
-					id: "rerun_preflight_before_adapter_action",
-					summary: "Rerun Warm Chrome Preflight before the next adapter acts.",
-					side_effects: ["check"],
-				},
+				runtimeAction("use_verified_endpoint"),
+				runtimeAction("rerun_preflight_before_adapter_action"),
 			],
+			continuation: {
+				next_action_id: "use_verified_endpoint",
+			},
 		}),
 		runtime,
 	);
@@ -1263,17 +1350,13 @@ function emitCliError(input: {
 		exit_code: error.exitCode,
 		duration_ms: getCliDiagnosticDurationMs(),
 	});
+	const guidance = guidanceForError(error);
 
 	if (input.outputMode === "plain") {
-		const line = `${domainActionFor(error)} ${error.code}: ${error.message} action=${plainRecoveryActionFor(error)} (run_id=${input.runId})\n`;
+		const line = `${guidance.failureDomain} ${error.code}: ${error.message} action=${guidance.continuation.next_action_id} (run_id=${input.runId})\n`;
 		input.stderr.write(line);
 		return error.exitCode;
 	}
-
-	const runtimeActions =
-		error.runtimeActions.length > 0
-			? error.runtimeActions
-			: runtimeActionsForError(error);
 
 	writeJsonEnvelope(
 		input.stdout,
@@ -1288,12 +1371,14 @@ function emitCliError(input: {
 				severity: error.severity,
 				recoverability: error.recoverability,
 				retryable: false,
+				failure_domain: guidance.failureDomain,
 				hint: {
 					summary: error.hintSummary,
 					action: error.hintAction,
 				},
 			},
-			runtime_actions: runtimeActions,
+			runtime_actions: guidance.runtimeActions,
+			continuation: guidance.continuation,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1308,6 +1393,7 @@ function normalizeError(error: unknown): {
 	recoverability: "none" | "retry" | "change_input" | "repair_state";
 	hintSummary: string;
 	hintAction: "retry" | "change_input" | "repair_state" | undefined;
+	failureDomain: WarmChromeFailureDomain;
 	primaryActionId?: "inspect_listener";
 	runtimeActions: RuntimeActionGuidance[];
 } {
@@ -1322,20 +1408,27 @@ function normalizeError(error: unknown): {
 			recoverability: "change_input",
 			hintSummary: "Fix CLI arguments, then rerun preflight.",
 			hintAction: "change_input",
+			failureDomain: "input",
 			runtimeActions: [],
 		};
 	}
 	if (error instanceof PreflightRuntimeError) {
 		const hint = hintForPreflightError(error);
 		const recoverability = error.options.recoverability ?? hint.recoverability;
+		const failureDomain =
+			error.options.failureDomain ?? failureDomainForPreflightError(error);
+		const exitCode =
+			error.options.exitCode ??
+			(failureDomain === "input" ? USAGE_EXIT_CODE : error.exitCode);
 		return {
 			code: error.code,
 			message: error.message,
-			exitCode: error.exitCode,
+			exitCode,
 			severity: error.options.severity ?? "error",
 			recoverability,
 			hintSummary: error.options.hintSummary ?? hint.summary,
 			hintAction: error.options.hintAction ?? hint.action,
+			failureDomain,
 			primaryActionId: error.options.primaryActionId,
 			runtimeActions: [],
 		};
@@ -1348,14 +1441,26 @@ function normalizeError(error: unknown): {
 		recoverability: "none",
 		hintSummary: "Stop and inspect diagnostics.",
 		hintAction: undefined,
+		failureDomain: "runtime_diagnostics",
 		runtimeActions: [
-			{
-				id: "inspect_diagnostics",
-				summary: "Stop and inspect diagnostics; this is not a browser-entry repair.",
-				side_effects: ["check"] as const,
-			},
+			runtimeAction("inspect_diagnostics"),
 		],
 	};
+}
+
+function failureDomainForPreflightError(
+	error: PreflightRuntimeError,
+): WarmChromeFailureDomain {
+	if (error.exitCode === RUNTIME_FAILURE_EXIT_CODE) {
+		return "runtime_diagnostics";
+	}
+	switch (error.code) {
+		case "non_loopback_endpoint":
+		case "profile_mismatch":
+			return "input";
+		default:
+			return "browser_entry_handoff";
+	}
 }
 
 function sanitizeUsageMessage(message: string): string {
@@ -1429,8 +1534,8 @@ function hintForPreflightError(error: PreflightRuntimeError): {
 		case "throwaway_profile":
 			return {
 				summary: "Choose a dedicated persistent Warm Chrome profile.",
-				action: "change_input",
-				recoverability: "change_input",
+				action: "repair_state",
+				recoverability: "repair_state",
 			};
 		case "unsafe_profile_permissions":
 			return {
@@ -1477,125 +1582,114 @@ function hintForPreflightError(error: PreflightRuntimeError): {
 	}
 }
 
-function runtimeActionsForError(
-	error: ReturnType<typeof normalizeError>,
-): RuntimeActionGuidance[] {
-	if (error.exitCode === USAGE_EXIT_CODE) {
-		return [
-			{
-				id: "change_input",
-				summary: "Correct CLI arguments and rerun preflight.",
-				side_effects: ["check"] as const,
-			},
-		];
-	}
-	if (error.exitCode === RUNTIME_FAILURE_EXIT_CODE || error.recoverability === "none") {
-		return [
-			{
-				id: "inspect_diagnostics",
-				summary: "Stop and inspect diagnostics; this is not a browser-entry repair.",
-				side_effects: ["check"] as const,
-			},
-		];
-	}
+// Wrong-browser readiness failures: a non-Google Chrome is the thing the agent
+// would run. These can land in the `input` domain (the caller supplied a bad
+// --chrome/CHROME_BIN) yet still carry the same cold-browser/adapter-fallback
+// temptation as a browser_entry_handoff. Guard them regardless of domain so an
+// agent never reads "input was wrong" as permission to drive the wrong Chrome.
+const WRONG_BROWSER_CODES = new Set(["chrome_for_testing", "not_real_google_chrome"]);
 
-	const primary = primaryRuntimeActionForError(error);
-	return [
-		{
-			id: "needs_browser_entry",
-			summary:
-				"Browser entry is blocked until Warm Chrome readiness is repaired.",
-			side_effects: ["browser", "write"] as const,
+// Single predicate that owns the no_adapter_fallback decision. The constraint
+// is a property of "preflight failed and there's a tempting wrong browser to
+// fall back to", not of the failure_domain label alone.
+function forbidsAdapterFallback(error: ReturnType<typeof normalizeError>): boolean {
+	return (
+		error.failureDomain === "browser_entry_handoff" ||
+		WRONG_BROWSER_CODES.has(error.code)
+	);
+}
+
+function guidanceForError(error: ReturnType<typeof normalizeError>): {
+	failureDomain: WarmChromeFailureDomain;
+	runtimeActions: RuntimeActionGuidance[];
+	continuation: RuntimeContinuationGuidance & { next_action_id: string };
+} {
+	const runtimeActions =
+		error.runtimeActions.length > 0
+			? error.runtimeActions
+			: [primaryRuntimeActionForError(error)];
+	const nextActionId = runtimeActions[0]?.id;
+	if (!nextActionId) {
+		throw new Error("Warm Chrome guidance must emit one runtime action.");
+	}
+	return {
+		failureDomain: error.failureDomain,
+		runtimeActions,
+		continuation: {
+			next_action_id: nextActionId,
+			...(forbidsAdapterFallback(error)
+				? {
+						constraints: [
+							{
+								id: "no_adapter_fallback",
+								summary:
+									"Do not switch adapters or use a cold browser after Warm Chrome preflight failure.",
+								forbidden_action_ids: [
+									"adapter_fallback",
+									"cold_browser_fallback",
+								],
+							},
+						],
+					}
+				: {}),
 		},
-		primary,
-		{
-			id: "do_not_fallback",
-			summary: "Do not switch adapters or use a cold browser after preflight failure.",
-			side_effects: ["check"] as const,
-		},
-	];
+	};
+}
+
+function runtimeAction(
+	id: WarmChromeRuntimeActionId,
+): WarmChromeRuntimeActionGuidance {
+	const action = warmChromeRuntimeActionById.get(id);
+	if (!action) {
+		throw new Error(`Unknown Warm Chrome runtime action: ${id}`);
+	}
+	return {
+		id,
+		summary: action.summary,
+		side_effects: [...action.sideEffects] as RuntimeActionGuidance["side_effects"],
+	};
 }
 
 function primaryRuntimeActionForError(error: ReturnType<typeof normalizeError>): {
-	id: string;
+	id: WarmChromeRuntimeActionId;
 	summary: string;
 	side_effects: RuntimeActionGuidance["side_effects"];
 } {
+	if (error.failureDomain === "runtime_diagnostics") {
+		return runtimeAction("inspect_diagnostics");
+	}
 	// An explicit per-error override wins when the code alone is ambiguous
 	// (e.g. endpoint_unreachable: inspect when a listener occupies the port,
 	// launch when nothing answers).
 	if (error.primaryActionId === "inspect_listener") {
-		return {
-			id: "inspect_listener",
-			summary: "Inspect the current listener before launching or selecting an adapter.",
-			side_effects: ["check"] as const,
-		};
+		return runtimeAction("inspect_listener");
 	}
-	if (error.recoverability === "change_input") {
-		return {
-			id: "change_input",
-			summary: "Correct the endpoint/profile inputs and rerun preflight.",
-			side_effects: ["check"] as const,
-		};
+	if (
+		error.recoverability === "change_input" &&
+		error.failureDomain === "input"
+	) {
+		return runtimeAction("change_input");
 	}
 	switch (error.code) {
 		case "unsafe_profile_permissions":
-			return {
-				id: "repair_profile",
-				summary: "Run preflight-warm-chrome repair with the same port and profile.",
-				side_effects: ["write"] as const,
-			};
+			return runtimeAction("repair_profile");
 		case "profile_mismatch":
+		case "non_loopback_endpoint":
+			return runtimeAction("change_input");
+		case "listener_missing":
+		case "chrome_for_testing":
 		case "default_profile":
 		case "throwaway_profile":
-		case "non_loopback_endpoint":
-			return {
-				id: "change_input",
-				summary: "Correct the endpoint/profile inputs and rerun preflight.",
-				side_effects: ["check"] as const,
-			};
-		case "listener_missing":
 		case "invalid_cdp_version":
+		case "missing_profile":
 		case "non_loopback_websocket":
 		case "listener_uninspectable":
 		case "not_real_google_chrome":
 		case "port_mismatch":
-			return {
-				id: "inspect_listener",
-				summary: "Inspect the current listener before launching or selecting an adapter.",
-				side_effects: ["check"] as const,
-			};
-		case "chrome_for_testing":
-			return {
-				id: "launch_warm_chrome",
-				summary:
-					"Launch real Google Chrome with a dedicated persistent profile.",
-				side_effects: ["browser", "write"] as const,
-			};
+			return runtimeAction("inspect_listener");
 		default:
-			return {
-				id: "launch_warm_chrome",
-				summary:
-					"Use preflight-warm-chrome launch with a dedicated persistent profile.",
-				side_effects: ["browser", "write"] as const,
-			};
+			return runtimeAction("launch_warm_chrome");
 	}
-}
-
-function domainActionFor(error: ReturnType<typeof normalizeError>): string {
-	if (error.exitCode === USAGE_EXIT_CODE) return "change_input";
-	if (error.exitCode === RUNTIME_FAILURE_EXIT_CODE || error.recoverability === "none") {
-		return "inspect_diagnostics";
-	}
-	return "needs_browser_entry";
-}
-
-function plainRecoveryActionFor(error: ReturnType<typeof normalizeError>): string {
-	if (error.exitCode === USAGE_EXIT_CODE) return "change_input";
-	if (error.exitCode === RUNTIME_FAILURE_EXIT_CODE || error.recoverability === "none") {
-		return "inspect_diagnostics";
-	}
-	return primaryRuntimeActionForError(error).id;
 }
 
 function renderHelp(command?: WarmChromePreflightCommand): string {

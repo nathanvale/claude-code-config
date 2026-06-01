@@ -1,7 +1,7 @@
 ---
 title: "fix: Apply runtime continuation guidance to Warm Chrome preflight"
 type: fix
-status: active
+status: completed
 date: 2026-06-01
 ---
 
@@ -94,7 +94,7 @@ The current Warm Chrome code already validates launch binary inputs before endpo
 - **Mirror failure domain in plain output.** Plain errors should start with the same domain label JSON emits, such as `browser_entry_handoff endpoint_unreachable`, then include the concrete `action=` that matches `continuation.next_action_id`.
 - **Keep runtime action summaries non-executable.** Do not add command templates or local file paths to runtime action summaries or docs URLs to runtime actions in this local skill. No stable public-safe docs URL exists for these repo-local docs.
 - **Do not add browser-use-only envelope fields.** No top-level `next_action`, `agent_policy`, or custom guard booleans. Use the facade-owned `continuation` shape.
-- **Do not change process behavior.** Preserve exit codes, success payload shape, plain success output, and existing redaction posture while migrating continuation semantics.
+- **Classify input failures as usage.** Preserve success payload shape, plain success output, and redaction posture. Let caller-controlled input failures exit with usage code `2`.
 - **Keep same-input retry rare.** Warm Chrome listener and profile failures require inspection, repair, or input changes before rerun. They should not use `recoverability: "retry"` unless `retryable: true` is also correct.
 - **Let implementation pressure decide small helper shape.** Rename `runtimeActionsForError` once it owns broader guidance, likely to `guidanceForError`. Keep `primaryRuntimeActionForError` private only while it carries real branch logic. Prefer an explicit `switch` for branchy routing, but allow a tiny typed map when it is plainly clearer.
 
@@ -131,7 +131,8 @@ flowchart TB
 - **Test Scenarios:**
   - Success JSON includes `continuation.next_action_id: "use_verified_endpoint"`.
   - Success JSON includes no `continuation.constraints`.
-  - Missing endpoint JSON includes `continuation.next_action_id: "launch_warm_chrome"`.
+  - Missing endpoint JSON with a profile source includes `continuation.next_action_id: "launch_warm_chrome"`.
+  - Missing endpoint JSON without a profile source includes `continuation.next_action_id: "change_input"`.
   - `status --json` uses the same continuation semantics as `check --json`.
   - Listener inspection JSON includes `continuation.next_action_id: "inspect_listener"`.
   - Usage JSON includes `continuation.next_action_id: "change_input"`.
@@ -168,7 +169,8 @@ flowchart TB
   - `non_loopback_websocket` carries `failure_domain: "browser_entry_handoff"` and `continuation.next_action_id: "inspect_listener"`.
   - Listener missing `--user-data-dir` carries `failure_domain: "browser_entry_handoff"`.
   - Ambiguous listener/CDP failures use `inspect_listener`, not `launch_warm_chrome`.
-  - Endpoint-missing failures use `launch_warm_chrome` only when no usable endpoint answers.
+  - Endpoint-missing failures use `launch_warm_chrome` only when no usable endpoint answers and a profile source exists.
+  - Endpoint-missing failures without a profile source use `change_input`.
   - `repair_profile` is used only for owner/perms proof repair.
   - `change_input` is used only for caller-controlled input mistakes.
   - Runtime and dependency failures carry `failure_domain: "runtime_diagnostics"`.
@@ -243,7 +245,8 @@ flowchart TB
 ## Acceptance Examples
 
 - AE1. Given a healthy Warm Chrome endpoint, when `check --json` succeeds, then stdout includes `runtime_actions` and `continuation.next_action_id: "use_verified_endpoint"`.
-- AE2. Given no endpoint answers, when `check --json` fails, then stdout includes `failure_domain: "browser_entry_handoff"`, `runtime_actions` with `launch_warm_chrome`, and `continuation.next_action_id: "launch_warm_chrome"`.
+- AE2. Given no endpoint answers and a profile source exists, when `check --json` fails, then stdout includes `failure_domain: "browser_entry_handoff"`, `runtime_actions` with `launch_warm_chrome`, and `continuation.next_action_id: "launch_warm_chrome"`.
+- AE2b. Given no endpoint answers and no profile source exists, when `check --json` fails, then stdout includes `failure_domain: "input"` and `continuation.next_action_id: "change_input"`.
 - AE3. Given `/json/version` returns a page websocket, when `check --json` fails, then stdout includes `continuation.next_action_id: "inspect_listener"` and no `do_not_fallback` runtime action.
 - AE4. Given invalid CLI input, when `check --json` fails, then stdout includes `continuation.next_action_id: "change_input"` and no browser-entry repair actions.
 - AE5. Given a runtime failure, when JSON is emitted, then `continuation.next_action_id` points at `inspect_diagnostics` and retry fields do not invite same-input retry.

@@ -12,7 +12,10 @@ import {
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { warmChromePreflightContracts } from "./command-contract";
+import {
+	WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
+	warmChromePreflightContracts,
+} from "./command-contract";
 import {
 	createDefaultRuntime,
 	runForTest,
@@ -27,6 +30,68 @@ afterEach(async () => {
 		cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })),
 	);
 });
+
+function actionIds(envelope: {
+	runtime_actions?: readonly { id: string }[];
+}): string[] {
+	return envelope.runtime_actions?.map((action) => action.id) ?? [];
+}
+
+function expectContinuation(
+	envelope: {
+		runtime_actions?: readonly { id: string }[];
+		continuation?: {
+			next_action_id?: string;
+			requires_operator?: boolean;
+			constraints?: readonly {
+				id: string;
+				summary: string;
+				forbidden_action_ids?: readonly string[];
+				forbidden_side_effects?: readonly string[];
+			}[];
+		};
+	},
+	nextActionId: string,
+): void {
+	expect(envelope.continuation?.next_action_id).toBe(nextActionId);
+	expect(envelope.continuation?.requires_operator).toBeUndefined();
+	expect(actionIds(envelope)).toContain(nextActionId);
+}
+
+function expectBrowserEntryConstraint(envelope: {
+	continuation?: {
+		constraints?: readonly {
+			id: string;
+			summary: string;
+			forbidden_action_ids?: readonly string[];
+			forbidden_side_effects?: readonly string[];
+		}[];
+	};
+}): void {
+	const constraint = envelope.continuation?.constraints?.find(
+		(entry) => entry.id === "no_adapter_fallback",
+	);
+	expect(constraint?.forbidden_action_ids).toEqual([
+		"adapter_fallback",
+		"cold_browser_fallback",
+	]);
+	expect(constraint?.summary).toContain("Do not switch adapters");
+	expect(constraint?.summary).toContain("cold browser");
+	expect(constraint?.forbidden_side_effects).toBeUndefined();
+}
+
+function expectNoContinuationConstraints(envelope: {
+	continuation?: { constraints?: readonly unknown[] };
+}): void {
+	expect(envelope.continuation?.constraints).toBeUndefined();
+}
+
+function expectNoGuardRuntimeActions(envelope: {
+	runtime_actions?: readonly { id: string }[];
+}): void {
+	expect(actionIds(envelope)).not.toContain("needs_browser_entry");
+	expect(actionIds(envelope)).not.toContain("do_not_fallback");
+}
 
 describe("Warm Chrome command contract", () => {
 	test("declares honest side effects for check, repair, and launch", () => {
@@ -49,7 +114,8 @@ describe("Warm Chrome command contract", () => {
 			contracts.every(
 				(contract) =>
 					contract.resultContract?.id === "browser-use.warm-chrome-preflight" &&
-					contract.resultContract.schema_version === "1",
+					contract.resultContract.schema_version ===
+						WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 			),
 		).toBe(true);
 	});
@@ -82,13 +148,30 @@ describe("Warm Chrome command contract", () => {
 				(action) => action.id,
 			) ?? [];
 
-		expect(failureIds).toContain("needs_browser_entry");
-		expect(failureIds).toContain("launch_warm_chrome");
-		expect(failureIds).toContain("repair_profile");
-		expect(failureIds).toContain("inspect_listener");
-		expect(failureIds).toContain("inspect_diagnostics");
-		expect(failureIds).toContain("change_input");
-		expect(failureIds).toContain("do_not_fallback");
+		expect(failureIds).toEqual([
+			"launch_warm_chrome",
+			"repair_profile",
+			"inspect_listener",
+			"inspect_diagnostics",
+			"change_input",
+		]);
+	});
+
+	test("docs teach continuation precedence without guard-action ordering", async () => {
+		const skill = await readFile(join(import.meta.dir, "../SKILL.md"), "utf-8");
+		const reference = await readFile(
+			join(import.meta.dir, "../references/warm-chrome.md"),
+			"utf-8",
+		);
+		const docs = `${skill}\n${reference}`;
+
+		expect(docs).toContain("continuation.next_action_id");
+		expect(docs).toContain("continuation.constraints");
+		expect(docs).toContain("adapter fallback and cold-browser fallback");
+		expect(docs).toContain("login/MFA wall hit after preflight passes");
+		expect(docs).not.toContain("do_not_fallback");
+		expect(docs).not.toContain("first `runtime_actions`");
+		expect(docs).not.toContain("requires_operator");
 	});
 });
 
@@ -240,16 +323,36 @@ describe("check", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.status).toBe("error");
 		expect(envelope.run_id).toBe("missing-endpoint");
 		expect(envelope.error.code).toBe("endpoint_unreachable");
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
-			"needs_browser_entry",
-			"launch_warm_chrome",
-			"do_not_fallback",
-		]);
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
+		expectNoGuardRuntimeActions(envelope);
 		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
+	});
+
+	test("points at launch when endpoint is missing and a profile source exists", async () => {
+		const profile = await makeProfile(0o700);
+		const result = await runForTest(
+			["check", "--port", "9", "--profile", profile, "--json"],
+			testRuntime({
+				fetchJson: async () => {
+					throw new Error("offline");
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("endpoint_unreachable");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["launch_warm_chrome"]);
+		expectContinuation(envelope, "launch_warm_chrome");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("fails non-loopback endpoints before network access", async () => {
@@ -265,8 +368,10 @@ describe("check", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("non_loopback_endpoint");
+		expect(envelope.error.failure_domain).toBe("input");
+		expectContinuation(envelope, "change_input");
 		expect(fetched).toBe(false);
 	});
 
@@ -283,9 +388,9 @@ describe("check", () => {
 		expect(envelope.data.action).toBe("browser_ready");
 		expect(envelope.data.profile_permissions).toBe("700");
 		expect(envelope.data.repair_actions).toEqual([]);
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toContain(
-			"use_verified_endpoint",
-		);
+		expect(actionIds(envelope)).toContain("use_verified_endpoint");
+		expectContinuation(envelope, "use_verified_endpoint");
+		expect(envelope.continuation.constraints).toBeUndefined();
 	});
 
 	test("plain success writes stable human output", async () => {
@@ -312,7 +417,7 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(envelope.data.contract).toBe("browser-use.warm-chrome-preflight");
-		expect(envelope.data.schema_version).toBe("1");
+		expect(envelope.data.schema_version).toBe(WARM_CHROME_PREFLIGHT_SCHEMA_VERSION);
 	});
 
 	test("json success returns adapter recovery actions", async () => {
@@ -324,10 +429,11 @@ describe("check", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
+		expect(actionIds(envelope)).toEqual([
 			"use_verified_endpoint",
 			"rerun_preflight_before_adapter_action",
 		]);
+		expectContinuation(envelope, "use_verified_endpoint");
 	});
 
 	test("fails when the supplied profile does not match the listener", async () => {
@@ -339,7 +445,7 @@ describe("check", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("profile_mismatch");
 	});
 
@@ -352,11 +458,13 @@ describe("check", () => {
 		const envelope = JSON.parse(result.stdout);
 		const actions = envelope.runtime_actions.map((action: { id: string }) => action.id);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("profile_missing");
+		expect(envelope.error.failure_domain).toBe("input");
 		expect(envelope.error.hint.action).toBe("change_input");
 		expect(actions).toContain("change_input");
 		expect(actions).not.toContain("launch_warm_chrome");
+		expectContinuation(envelope, "change_input");
 	});
 
 	test("does not chmod or write DevToolsActivePort", async () => {
@@ -369,6 +477,11 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("unsafe_profile_permissions");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["repair_profile"]);
+		expectContinuation(envelope, "repair_profile");
+		expectBrowserEntryConstraint(envelope);
+		expectNoGuardRuntimeActions(envelope);
 		expect(await fileMode(profile)).toBe("755");
 		await expect(readFile(join(profile, "DevToolsActivePort"), "utf-8")).rejects.toThrow();
 	});
@@ -385,6 +498,11 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("chrome_for_testing");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
+		expectNoGuardRuntimeActions(envelope);
 	});
 
 	test("rejects the everyday default Chrome profile", async () => {
@@ -400,6 +518,29 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("default_profile");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
+	});
+
+	test("treats explicitly supplied unsafe profiles as input", async () => {
+		const home = await makeDir();
+		const defaultRoot = join(home, "Library/Application Support/Google/Chrome");
+		const profile = join(defaultRoot, "Profile 1");
+		await mkdir(profile, { recursive: true, mode: 0o700 });
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", profile, "--json"],
+			testRuntime({ home, profile }),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(2);
+		expect(envelope.error.code).toBe("default_profile");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
 	});
 
 	test("uses BROWSER_USE_CDP_PORT and BROWSER_USE_PROFILE_DIR defaults", async () => {
@@ -570,6 +711,10 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("not_real_google_chrome");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("rejects non-Chrome listeners that mention Chrome in arguments", async () => {
@@ -660,6 +805,10 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("port_mismatch");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("fails when CDP answers but no local listener can be inspected", async () => {
@@ -689,6 +838,10 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("invalid_cdp_version");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("fails when CDP version misses required fields", async () => {
@@ -733,6 +886,10 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("non_loopback_websocket");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("rejects websocket discovery on the wrong port", async () => {
@@ -890,6 +1047,8 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("missing_profile");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expectContinuation(envelope, "inspect_listener");
 	});
 
 	test("treats present but empty --user-data-dir values as missing profile", async () => {
@@ -917,6 +1076,7 @@ describe("check", () => {
 
 			expect(result.exitCode, scenario.name).toBe(20);
 			expect(envelope.error.code, scenario.name).toBe("missing_profile");
+			expectContinuation(envelope, "inspect_listener");
 		}
 	});
 
@@ -1105,8 +1265,12 @@ describe("check", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("throwaway_profile");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
 	});
 });
 
@@ -1171,7 +1335,7 @@ describe("observability", () => {
 		const diagnostics = parseJsonObjects(result.stderr);
 		const events = diagnostics.map((entry) => entry.event);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(JSON.parse(result.stdout).error.code).toBe("endpoint_unreachable");
 		expect(events).toContain("command-start");
 		expect(events).toContain("preflight-check");
@@ -1207,7 +1371,7 @@ describe("observability", () => {
 			}),
 		);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(JSON.parse(result.stdout).run_id).toBe("quiet-error");
 		expect(result.stderr).toBe("");
 	});
@@ -1407,9 +1571,9 @@ describe("repair", () => {
 
 		expect(result.exitCode).toBe(1);
 		expect(envelope.error.code).toBe("runtime_failure");
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
-			"inspect_diagnostics",
-		]);
+		expect(envelope.error.failure_domain).toBe("runtime_diagnostics");
+		expect(actionIds(envelope)).toEqual(["inspect_diagnostics"]);
+		expectContinuation(envelope, "inspect_diagnostics");
 		expect(writeCount).toBe(0);
 	});
 
@@ -1442,11 +1606,13 @@ describe("repair", () => {
 		const envelope = JSON.parse(result.stdout);
 		const actions = envelope.runtime_actions.map((action: { id: string }) => action.id);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("unsafe_profile_permissions");
+		expect(envelope.error.failure_domain).toBe("input");
 		expect(envelope.error.hint.action).toBe("change_input");
-		expect(actions).toContain("change_input");
-		expect(actions).not.toContain("repair_profile");
+		expect(actions).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
 		expect(await fileMode(profile)).toBe("755");
 		await expect(readFile(join(profile, "DevToolsActivePort"), "utf-8")).rejects.toThrow();
 	});
@@ -1467,7 +1633,7 @@ describe("repair", () => {
 		const envelope = JSON.parse(result.stdout);
 		const actions = envelope.runtime_actions.map((action: { id: string }) => action.id);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("unsafe_profile_permissions");
 		expect(envelope.error.hint.action).toBe("change_input");
 		expect(actions).toContain("change_input");
@@ -1665,7 +1831,7 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("non_loopback_endpoint");
 	});
@@ -1689,7 +1855,7 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("default_profile");
 		await expect(stat(profile)).rejects.toThrow();
@@ -1712,9 +1878,13 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(1);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
-		expect(envelope.error.code).toBe("runtime_failure");
+		expect(envelope.error.code).toBe("invalid_profile_path");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
 	});
 
 	test("launch rejects Chrome for Testing before spawning", async () => {
@@ -1744,9 +1914,15 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("chrome_for_testing");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		// Wrong-browser readiness failure: input domain keeps the honest
+		// "fix --chrome" signal, but still forbids adapter/cold-browser fallback.
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("launch rejects non-stable Google Chrome before spawning", async () => {
@@ -1773,9 +1949,11 @@ describe("launch", () => {
 			);
 			const envelope = JSON.parse(result.stdout);
 
-			expect(result.exitCode, chromeBin).toBe(20);
+			expect(result.exitCode, chromeBin).toBe(2);
 			expect(spawnCount, chromeBin).toBe(0);
 			expect(envelope.error.code, chromeBin).toBe("not_real_google_chrome");
+			expect(envelope.error.failure_domain, chromeBin).toBe("input");
+			expectContinuation(envelope, "change_input");
 		}
 	});
 
@@ -1797,9 +1975,11 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("not_real_google_chrome");
+		expect(envelope.error.failure_domain).toBe("input");
+		expectContinuation(envelope, "change_input");
 	});
 
 	test("spawn failure during launch surfaces runtime failure", async () => {
@@ -1889,9 +2069,11 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("not_real_google_chrome");
+		expect(envelope.error.failure_domain).toBe("input");
+		expectContinuation(envelope, "change_input");
 	});
 
 	test("lets --chrome override CHROME_BIN when launching", async () => {
@@ -1951,9 +2133,13 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("throwaway_profile");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
 	});
 
 	test("launch rejects a default-profile target through a symlinked parent before creating it", async () => {
@@ -1979,9 +2165,13 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("default_profile");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
 		await expect(stat(profile)).rejects.toThrow();
 	});
 
@@ -2027,9 +2217,11 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("not_real_google_chrome");
+		expect(envelope.error.failure_domain).toBe("input");
+		expectContinuation(envelope, "change_input");
 	});
 
 	test("launch rejects unsafe CHROME_BIN even when the endpoint already validates", async () => {
@@ -2050,9 +2242,11 @@ describe("launch", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("not_real_google_chrome");
+		expect(envelope.error.failure_domain).toBe("input");
+		expectContinuation(envelope, "change_input");
 	});
 
 	test("does not hide a port clash behind launch", async () => {
@@ -2119,11 +2313,10 @@ describe("launch", () => {
 		expect(result.exitCode).toBe(20);
 		expect(spawnCount).toBe(0);
 		expect(envelope.error.code).toBe("endpoint_unreachable");
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
-			"needs_browser_entry",
-			"inspect_listener",
-			"do_not_fallback",
-		]);
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("surfaces launch timeout when Chrome never exposes CDP", async () => {
@@ -2147,6 +2340,71 @@ describe("launch", () => {
 		expect(result.exitCode).toBe(20);
 		expect(sleeps).toBe(30);
 		expect(envelope.error.code).toBe("endpoint_unreachable");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		// Chrome already spawned but never exposed CDP. Relaunching is wrong;
+		// the agent must inspect the listener that came up. (Not launch_warm_chrome.)
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
+	});
+
+	// Invariant: a wrong-browser readiness failure must ALWAYS forbid adapter /
+	// cold-browser fallback, no matter which failure_domain it lands in. The
+	// constraint tracks the "a wrong Chrome is present and tempting" risk, not
+	// the domain label. If a future change drops the guard for any wrong-browser
+	// path (e.g. a supplied --chrome routed to the input domain), this fails.
+	test("wrong-browser readiness failures forbid adapter fallback in every domain", async () => {
+		const profile = await makeProfile(0o700);
+		const cft =
+			"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+		const scenarios = [
+			{
+				name: "supplied Chrome for Testing (input domain)",
+				expectedCode: "chrome_for_testing",
+				expectedDomain: "input",
+				argv: ["launch", "--port", "9444", "--profile", profile, "--chrome", cft, "--json"],
+				runtime: testRuntime({
+					profile,
+					fetchJson: async () => {
+						throw new Error("offline");
+					},
+					findListener: async () => null,
+				}),
+			},
+			{
+				name: "supplied non-stable Chrome (input domain)",
+				expectedCode: "not_real_google_chrome",
+				expectedDomain: "input",
+				argv: ["launch", "--port", "9444", "--profile", profile, "--chrome", "/bin/echo", "--json"],
+				runtime: testRuntime({
+					profile,
+					fetchJson: async () => {
+						throw new Error("offline");
+					},
+					findListener: async () => null,
+				}),
+			},
+			{
+				name: "discovered Chrome for Testing listener (browser_entry_handoff domain)",
+				expectedCode: "chrome_for_testing",
+				expectedDomain: "browser_entry_handoff",
+				argv: ["check", "--port", "9444", "--json"],
+				runtime: testRuntime({
+					listenerCommand: `${cft} --remote-debugging-port=9444 --user-data-dir=/tmp/profile`,
+				}),
+			},
+		];
+
+		for (const scenario of scenarios) {
+			const result = await runForTest(scenario.argv, scenario.runtime);
+			const envelope = JSON.parse(result.stdout);
+
+			expect(envelope.error.code, scenario.name).toBe(scenario.expectedCode);
+			expect(envelope.error.failure_domain, scenario.name).toBe(
+				scenario.expectedDomain,
+			);
+			// The invariant under test: guard present regardless of domain.
+			expectBrowserEntryConstraint(envelope);
+		}
 	});
 });
 
@@ -2188,13 +2446,14 @@ describe("status", () => {
 			}),
 		);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(result.stdout).toBe("");
-		expect(result.stderr).toContain("needs_browser_entry endpoint_unreachable");
+		expect(result.stderr).toContain("input endpoint_unreachable");
+		expect(result.stderr).toContain("action=change_input");
 		expect(result.stderr).toContain("run_id=status-fail");
 	});
 
-	test("failure can emit a JSON envelope with browser-entry actions", async () => {
+	test("profileless failure asks for input in JSON", async () => {
 		const result = await runForTest(
 			["status", "--port", "9", "--json", "--run-id", "status-json-fail"],
 			testRuntime({
@@ -2205,16 +2464,15 @@ describe("status", () => {
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(envelope.status).toBe("error");
 		expect(envelope.run_id).toBe("status-json-fail");
 		expect(envelope.error.code).toBe("endpoint_unreachable");
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
-			"needs_browser_entry",
-			"launch_warm_chrome",
-			"do_not_fallback",
-		]);
-		expect(result.stderr).not.toContain("needs_browser_entry endpoint_unreachable");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+		expectNoContinuationConstraints(envelope);
+		expect(result.stderr).not.toContain("input endpoint_unreachable");
 		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
 	});
 
@@ -2229,16 +2487,12 @@ describe("status", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(envelope.error.code).toBe("listener_missing");
-		// No contradictory retry signal: retryable is false and recoverability
-		// is not "retry" (which would invite blind same-input rerun).
 		expect(envelope.error.retryable).toBe(false);
 		expect(envelope.error.recoverability).not.toBe("retry");
-		// Browser-entry failures lead with the needs_browser_entry stop, carry
-		// the safe primary action in the middle, and end with the do_not_fallback
-		// guard. Assert the full ordering so the slot contract is pinned.
-		expect(
-			envelope.runtime_actions.map((action: { id: string }) => action.id),
-		).toEqual(["needs_browser_entry", "inspect_listener", "do_not_fallback"]);
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
+		expectBrowserEntryConstraint(envelope);
 	});
 
 	test("invalid CDP websocket aligns retry signals", async () => {
@@ -2262,12 +2516,11 @@ describe("status", () => {
 		expect(envelope.error.code).toBe("invalid_cdp_version");
 		expect(envelope.error.retryable).toBe(false);
 		expect(envelope.error.recoverability).not.toBe("retry");
-		expect(
-			envelope.runtime_actions.map((action: { id: string }) => action.id),
-		).toEqual(["needs_browser_entry", "inspect_listener", "do_not_fallback"]);
+		expect(actionIds(envelope)).toEqual(["inspect_listener"]);
+		expectContinuation(envelope, "inspect_listener");
 	});
 
-	test("plain output names the same primary action as the first JSON runtime action", async () => {
+	test("plain output names the same action as JSON continuation", async () => {
 		const jsonResult = await runForTest(
 			["check", "--port", "9444", "--json"],
 			testRuntime({ findListener: async () => null }),
@@ -2277,16 +2530,11 @@ describe("status", () => {
 			testRuntime({ findListener: async () => null }),
 		);
 		const envelope = JSON.parse(jsonResult.stdout);
-		// Derive the primary action the same way the docs instruct an agent to:
-		// the first runtime action that is neither the stop nor the guard. The
-		// plain stderr must name that same action, not a different one.
-		const primary = envelope.runtime_actions.find(
-			(action: { id: string }) =>
-				action.id !== "needs_browser_entry" && action.id !== "do_not_fallback",
-		).id;
+		const primary = envelope.continuation.next_action_id;
 
 		expect(primary).toBe("inspect_listener");
 		expect(plainResult.stderr).toContain(`action=${primary}`);
+		expect(plainResult.stderr).toContain("browser_entry_handoff listener_missing");
 	});
 
 	test("last output flag wins for status", async () => {
@@ -2366,9 +2614,9 @@ describe("usage failures", () => {
 
 		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("invalid_usage");
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
-			"change_input",
-		]);
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
 	});
 
 	test("rejects nonnumeric ports before browser work", async () => {
@@ -2475,7 +2723,18 @@ describe("usage failures", () => {
 
 			expect(result.exitCode, argv.join(" ")).toBe(2);
 			expect(envelope.error.code, argv.join(" ")).toBe("invalid_usage");
-			expect(result.stdout, argv.join(" ")).not.toContain("/Users/tester/profile");
+			expect(envelope.error.message, argv.join(" ")).not.toContain(
+				"/Users/tester/profile",
+			);
+			expect(envelope.error.message, argv.join(" ")).not.toContain("op://");
+			expect(envelope.error.message, argv.join(" ")).not.toContain("password");
+			expect(envelope.error.message, argv.join(" ")).not.toContain("abc");
+			// Whole-envelope guard: no unsafe input may leak through the newer
+			// continuation.constraints[].summary or runtime_actions[].summary
+			// fields, not just error.message.
+			expect(result.stdout, argv.join(" ")).not.toContain(
+				"/Users/tester/profile",
+			);
 			expect(result.stdout, argv.join(" ")).not.toContain("op://");
 			expect(result.stdout, argv.join(" ")).not.toContain("password");
 			expect(result.stdout, argv.join(" ")).not.toContain("abc");
@@ -2503,9 +2762,10 @@ describe("usage failures", () => {
 			}),
 		);
 
-		expect(result.exitCode).toBe(20);
+		expect(result.exitCode).toBe(2);
 		expect(result.stdout).toBe("");
-		expect(result.stderr).toContain("needs_browser_entry endpoint_unreachable");
+		expect(result.stderr).toContain("input endpoint_unreachable");
+		expect(result.stderr).toContain("action=change_input");
 		expect(result.stderr).toContain("run_id=plain-error");
 	});
 
@@ -2519,7 +2779,7 @@ describe("usage failures", () => {
 						throw new Error("offline");
 					},
 				}),
-				expectedAction: "launch_warm_chrome",
+				expectedAction: "change_input",
 			},
 			{
 				name: "listener missing",
@@ -2557,9 +2817,9 @@ describe("usage failures", () => {
 
 		expect(result.exitCode).toBe(1);
 		expect(envelope.error.code).toBe("unsupported_platform");
-		expect(envelope.runtime_actions.map((action: { id: string }) => action.id)).toEqual([
-			"inspect_diagnostics",
-		]);
+		expect(envelope.error.failure_domain).toBe("runtime_diagnostics");
+		expect(actionIds(envelope)).toEqual(["inspect_diagnostics"]);
+		expectContinuation(envelope, "inspect_diagnostics");
 	});
 
 	test("browser-entry failures include specific recovery hints", async () => {
@@ -2573,16 +2833,20 @@ describe("usage failures", () => {
 			{
 				name: "profile mismatch",
 				expectedCode: "profile_mismatch",
+				expectedFailureDomain: "input",
 				expectedAction: "change_input",
 				expectedRuntimeAction: "change_input",
+				expectedExitCode: 2,
 				argv: ["check", "--port", "9444", "--profile", await makeProfile(0o700), "--json"],
 				runtime: testRuntime({ profile }),
 			},
 			{
 				name: "Chrome for Testing",
 				expectedCode: "chrome_for_testing",
+				expectedFailureDomain: "browser_entry_handoff",
 				expectedAction: "repair_state",
-				expectedRuntimeAction: "launch_warm_chrome",
+				expectedRuntimeAction: "inspect_listener",
+				expectedExitCode: 20,
 				argv: ["check", "--port", "9444", "--json"],
 				runtime: testRuntime({
 					listenerCommand:
@@ -2592,30 +2856,41 @@ describe("usage failures", () => {
 			{
 				name: "default profile",
 				expectedCode: "default_profile",
-				expectedAction: "change_input",
-				expectedRuntimeAction: "change_input",
-					argv: ["check", "--port", "9444", "--json"],
-					runtime: testRuntime({
-						home: profile,
-						profile: defaultProfile,
-					}),
-				},
+				expectedFailureDomain: "browser_entry_handoff",
+				expectedAction: "repair_state",
+				expectedRuntimeAction: "inspect_listener",
+				expectedExitCode: 20,
+				argv: ["check", "--port", "9444", "--json"],
+				runtime: testRuntime({
+					home: profile,
+					profile: defaultProfile,
+				}),
+			},
 		];
 
 		for (const scenario of scenarios) {
 			const result = await runForTest(scenario.argv, scenario.runtime);
 			const envelope = JSON.parse(result.stdout);
 
-			expect(result.exitCode, scenario.name).toBe(20);
+			expect(result.exitCode, scenario.name).toBe(scenario.expectedExitCode);
 			expect(envelope.error.code, scenario.name).toBe(scenario.expectedCode);
+			expect(envelope.error.failure_domain, scenario.name).toBe(
+				scenario.expectedFailureDomain,
+			);
 			expect(envelope.error.hint.action, scenario.name).toBe(scenario.expectedAction);
-			expect(
-				envelope.runtime_actions.map((action: { id: string }) => action.id),
-				scenario.name,
-			).toContain(scenario.expectedRuntimeAction);
+			expect(actionIds(envelope), scenario.name).toEqual([
+				scenario.expectedRuntimeAction,
+			]);
+			expectContinuation(envelope, scenario.expectedRuntimeAction);
+			if (scenario.expectedFailureDomain === "browser_entry_handoff") {
+				expectBrowserEntryConstraint(envelope);
+			} else {
+				expectNoContinuationConstraints(envelope);
+			}
+			expectNoGuardRuntimeActions(envelope);
 		}
 	});
-});
+	});
 
 function testRuntime(
 	overrides: {

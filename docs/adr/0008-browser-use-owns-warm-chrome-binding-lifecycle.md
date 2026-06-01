@@ -1,16 +1,16 @@
 ---
-status: accepted
+status: proposed
 date: 2026-06-01
 ---
 
 # browser-use Owns Warm Chrome Binding Lifecycle
 
-`browser-use` owns the singleton `Warm Chrome Binding`: user-machine state that pairs one
-CDP port with one dedicated Warm Chrome profile. The binding lives outside the Chrome
-profile in the XDG state path, and Warm Chrome Preflight must verify it before any Browser
-Adapter acts. The binding is a pointer, not readiness proof.
+`browser-use` should own the singleton `Warm Chrome Binding`: user-machine state that
+pairs one CDP port with one dedicated Warm Chrome profile. The binding would live outside
+the Chrome profile in the XDG state path, and Warm Chrome Preflight would verify it before
+any Browser Adapter acts. The binding is a pointer, not readiness proof.
 
-## Decision
+## Proposed Decision
 
 Only `launch` writes or replaces the `Warm Chrome Binding`. `check` and `status` stay
 read-only. `repair` stays target-bound: it may fix profile proof such as owner-only
