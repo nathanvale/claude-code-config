@@ -112,7 +112,7 @@
   <div class="wrap htop">
     <div>
       <h1><code>create-cli</code> · interactive explorer</h1>
-      <p class="tagline">Edit a contract, watch it validate live, break it, auto-fix it, share it. The real facade drift rules, ported to run in your browser.</p>
+      <p class="tagline">Edit a contract, watch it validate live, break it, auto-fix it, share it. A teaching subset of the facade's drift rules — shape, audience, side-effects, and the #64 high-stakes guard — ported to run in your browser.</p>
     </div>
     <div class="htools">
       <button type="button" class="btn" id="theme-btn" title="Toggle theme">🌓 Theme</button>
@@ -321,7 +321,7 @@
 <div class="toast" id="toast">copied</div>
 
 <footer>
-  <p>Validator reimplements the facade's drift rules in JS for live feedback. Authoritative source: <code>findCommandFacadeMetadataDrift</code> in <code>@side-quest/cli-command-facade</code>. Coverage gaps tracked at nathanvale/side-quest-engineering#58. Generated 2026-05-31.</p>
+  <p>Validator reimplements a <strong>teaching subset</strong> of the facade's drift rules in JS for live feedback: shape/enum checks, missing flags/exitCodes (#67), and the opt-in mutation-vs-sideEffects high-stakes guard (#64). It does <strong>not</strong> reproduce the free-text secret/control-char scan (#66) or the secret env-var-name gate (#69) — those run only in the package. Authoritative source: <code>findCommandFacadeMetadataDrift</code> in <code>@side-quest/cli-command-facade</code>. Coverage gaps tracked at nathanvale/side-quest-engineering#58. Generated 2026-05-31; validator subset refreshed 2026-06-01.</p>
 </footer>
 
 <script>
@@ -342,6 +342,11 @@ const RESERVED=new Set(['--quiet','--verbose','--debug','--run-id']);
 const AUDIENCES=new Set(['agent','operator','smoke','governance']);
 const SIDE=new Set(['read','check','write','destructive','auth','network','browser']);
 const MODES=new Set(['normal','check','dry_run']);
+// The #64 high-stakes guard is opt-in: the consumer declares which mutation
+// values imply write/destructive intent. This explorer demonstrates the common
+// case (write); the real facade takes this as a `writeImplyingMutations` option.
+const WRITE_IMPLYING=new Set(['write']);
+const WRITE_ESCALATING=new Set(['write','destructive']);
 function validate(contracts){
   const issues=[];
   for(const [cmd,c] of Object.entries(contracts)){
@@ -349,12 +354,18 @@ function validate(contracts){
     else if(!AUDIENCES.has(c.audience)) issues.push(['command-audience-invalid',`Audience for ${cmd} must be agent, operator, smoke, or governance.`]);
     for(const se of (c.sideEffects||[])) if(!SIDE.has(se)) issues.push(['command-side-effect-invalid',`Side effect for ${cmd} must be a known class.`]);
     for(const m of (c.executionModes||[])) if(!MODES.has(m)) issues.push(['command-execution-mode-invalid',`Execution mode for ${cmd} must be normal, check, or dry_run.`]);
+    if(c.flags===undefined||c.flags===null) issues.push(['command-flags-missing',`Declare a flags record for ${cmd} (use {} for none).`]);
     for(const [flag,meta] of Object.entries(c.flags||{})){
       if(RESERVED.has(flag)) issues.push(['command-reserved-diagnostic-flag',`Rename ${cmd} flag ${flag}; reserved for facade diagnostics.`]);
       if(!flag.startsWith('--')) issues.push(['command-flag-name-invalid',`Rename ${cmd} flag ${flag} to start with --.`]);
       if(meta&&meta.type==='enum'&&(!meta.values||meta.values.length===0)) issues.push(['command-enum-flag-values-missing',`Add enum values for ${cmd} ${flag}.`]);
     }
+    if(c.exitCodes===undefined||c.exitCodes===null) issues.push(['command-exit-codes-missing',`Declare an exitCodes record for ${cmd}.`]);
     for(const code of Object.keys(c.exitCodes||{})) if(!/^\d+$/.test(code)) issues.push(['command-exit-code-invalid',`Rename ${cmd} exit code ${code} to a numeric string.`]);
+    // #64 high-stakes guard: a write-implying mutation must declare write/destructive sideEffects,
+    // else its danger is under-advertised and the high-stakes pause never fires.
+    if(WRITE_IMPLYING.has(c.mutation)&&!(c.sideEffects||[]).some(se=>WRITE_ESCALATING.has(se)))
+      issues.push(['command-mutation-sideeffect-mismatch',`Declare sideEffects including 'write' or 'destructive' for ${cmd} (its mutation '${c.mutation}' implies write/destructive intent).`]);
     if(c.alias){
       if(!contracts[c.alias.command]) issues.push(['command-alias-target-missing',`Point alias ${cmd} at an existing command.`]);
       if(!c.alias.defaultArgs||c.alias.defaultArgs.length===0) issues.push(['command-alias-default-args-missing',`Declare default args for alias ${cmd}.`]);
@@ -371,6 +382,9 @@ const FIXERS={
   'command-enum-flag-values-missing':(c,cmd)=>{for(const [f,m] of Object.entries(c[cmd].flags)){if(m.type==='enum'&&(!m.values||!m.values.length)){m.values=['a','b'];return `filled ${f} enum values`;}}return '';},
   'command-exit-code-invalid':(c,cmd)=>{const fixed={};let i=0;for(const [k,v] of Object.entries(c[cmd].exitCodes)){fixed[/^\d+$/.test(k)?k:String(i++)]=v;}c[cmd].exitCodes=fixed;return 'exit codes → numeric';},
   'command-side-effect-invalid':(c,cmd)=>{c[cmd].sideEffects=(c[cmd].sideEffects||[]).filter(s=>SIDE.has(s));return 'dropped invalid side-effect';},
+  'command-flags-missing':(c,cmd)=>{c[cmd].flags={};return `declared empty flags for ${cmd}`;},
+  'command-exit-codes-missing':(c,cmd)=>{c[cmd].exitCodes={"0":"ok"};return `declared exitCodes for ${cmd}`;},
+  'command-mutation-sideeffect-mismatch':(c,cmd)=>{c[cmd].sideEffects=[...(c[cmd].sideEffects||[]),'write'];return `declared write sideEffect for ${cmd}`;},
 };
 let lastFixTrace=null; // captured each Fix-it run; drives the reactive loop diagram
 function autoFix(contracts){

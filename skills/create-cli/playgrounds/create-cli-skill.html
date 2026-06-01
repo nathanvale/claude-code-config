@@ -212,6 +212,12 @@
 } <span class="k">from</span> <span class="s">"@side-quest/cli-command-facade"</span>;
 
 <span class="k">type</span> CommandName = <span class="s">"build"</span>;
+<span class="k">type</span> CommandMutation = <span class="s">"read"</span> | <span class="s">"write"</span>;
+<span class="k">type</span> ToolCommandContract = CommandFacadeContract&lt;
+  CommandName,
+  <span class="s">"agent"</span> | <span class="s">"operator"</span>,
+  CommandMutation
+&gt;;
 
 <span class="c">// Key each (sub)command by name — the contract record is flat.</span>
 <span class="k">const</span> contracts = {
@@ -224,6 +230,9 @@
     mutation: <span class="s">"write"</span>,
     sideEffects: [<span class="s">"write"</span>],
     executionModes: [<span class="s">"normal"</span>, <span class="s">"dry_run"</span>],
+    outputModes: [<span class="s">"json"</span>, <span class="s">"plain"</span>],
+    interactivity: <span class="s">"optional"</span>,
+    envVars: [{ name: <span class="s">"GIT_DIR"</span> }],
     flags: {
       <span class="s">"--out"</span>: { type: <span class="s">"path"</span> },
       <span class="s">"--json"</span>: { type: <span class="s">"boolean"</span> },
@@ -235,11 +244,15 @@
       <span class="s">"2"</span>: <span class="s">"usage error"</span>,
     },
   },
-} <span class="k">as const satisfies</span> Record&lt;CommandName, CommandFacadeContract&lt;CommandName&gt;&gt;;
+} <span class="k">as const satisfies</span> Record&lt;CommandName, ToolCommandContract&gt;;
 
-<span class="c">// Throws at load if the contract drifts.</span>
-<span class="f">defineCommandFacadeContract</span>(contracts, { path: <span class="s">"scripts/command-contract.ts"</span> });</pre>
-    <p style="margin:14px 0 0;color:var(--muted);font-size:.85rem;font-family:var(--mono)">$ bun run scripts/command-contract.ts &nbsp;·&nbsp; bunx --bun tsc --noEmit</p>
+<span class="c">// Throws at load if the contract drifts. writeImplyingMutations arms the</span>
+<span class="c">// #64 high-stakes guard: a write-ish mutation must declare write/destructive.</span>
+<span class="f">defineCommandFacadeContract</span>(contracts, {
+  path: <span class="s">"scripts/command-contract.ts"</span>,
+  writeImplyingMutations: <span class="k">new</span> Set([<span class="s">"write"</span>]),
+});</pre>
+    <p style="margin:14px 0 0;color:var(--muted);font-size:.85rem;font-family:var(--mono)">$ bun run scripts/command-contract.ts &nbsp;·&nbsp; bunx --bun tsc --noEmit -p scripts/tsconfig.json</p>
   </div>
 </section>
 
