@@ -1,65 +1,40 @@
 ---
 name: browser-domain-memory
-description: "Read or capture durable browser knowledge for known domains."
+description: "Plan or build durable browser-domain-memory. Triggers on browser memory, Browser Runbooks, replay modes, or capture."
 ---
 
 # Browser Domain Memory
 
-Own durable browser knowledge for repeated domain work.
+Canonical home for durable per-domain browser knowledge.
 
-Use when `browser-use` reaches a friction point on a known domain, or when the user asks to save browser learning.
+## Status
 
-## Modes
+- Planned capability; runtime implementation pending.
+- Active plan: `docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md`.
+- No `skills/browser-domain-memory/scripts/` CLI has landed.
+- No durable reads, writes, replay, config, locks, auth, gates, or promotion routes are available yet.
+- Do not treat this stub as runtime proof.
 
-### Read Mode
+## Start Work
 
-Input: domain, target flow when known, and redacted stuck point when relevant.
+- Read the active plan first.
+- Start with first vertical slice: U0, U0a, U0b, U0c, U1, U1a.
+- Restore prototype sources or record a concrete immutable artifact path before lifting code.
+- Run `create-cli` before authoring CLI contracts.
+- Build code under `skills/browser-domain-memory/scripts/`.
+- Mirror `skills/browser-use/scripts/` for facade CLI topology.
+- Use `browser-use` Warm Chrome Preflight for browser entry.
+- Do not duplicate Warm Chrome readiness policy.
 
-Return useful context only:
+## Planned Surface
 
-- Auth Pointer presence.
-- Relevant Browser Runbook names.
-- Relevant Browser Gotchas.
-- Recent Run Outcome notes when available.
-- Graceful empty result when nothing exists.
+- Durable store: Auth Pointers, Browser Runbooks, Recorder JSON, Browser Gotchas, Run Outcomes, selective Scratch Evidence.
+- Playback modes: `prose`, `runbook`, `deterministic`; `auto` resolves to `prose` in v1.
+- First CLI routes: `read`, `status`, `config:get`, `config:explain`, `config:set`.
+- Later CLI routes: `capture`, replay, promotion, saved workflow surfaces per active plan.
+- Safety: no secret values on disk; auth/config/mode writes need human approval.
 
-If auth looks needed, return `auth needed` plus the Auth Pointer shape. Do not fetch secrets.
+## Runtime Requests
 
-Hand back to `browser-use` after returning context.
-
-### Browser Capture Mode
-
-Input: short redacted summary from `browser-use`, domain, target flow, result, and useful evidence notes.
-
-Propose a batch of durable entries:
-
-- Auth Pointer.
-- Browser Runbook.
-- Browser Gotcha.
-- Scratch Evidence.
-- Run Outcome.
-
-Ask the user to approve, edit, or discard the proposed batch.
-
-Write only approved entries. If the user discards everything, write nothing.
-
-Hand back to `browser-use` after capture.
-
-## Durable Knowledge
-
-Use only glossary terms from `CONTEXT.md`.
-
-- Auth Pointer: shape-only login context, never secret values.
-- Browser Runbook: agent-playable prose for live browser work.
-- Browser Gotcha: a non-obvious trap, fork, guard, or domain fact.
-- Scratch Evidence: redacted source material, not trusted memory.
-- Run Outcome: per-run result notes tied to a Browser Runbook.
-- Browser capture: the workflow that distills browser-run evidence into durable browser knowledge.
-
-## Composability
-
-- Called explicitly by `browser-use`.
-- Return to `browser-use` after read mode or Browser Capture Mode.
-- Do not call a third skill.
-- Do not assume description auto-routing will choose this skill.
-- Do not suppress the end-of-session Browser capture offer just because read mode found nothing.
+- Current browser work: use `browser-use`.
+- Current save/reuse requests: say browser-domain-memory is planned, then ask whether to capture implementation notes or continue with live `browser-use`.

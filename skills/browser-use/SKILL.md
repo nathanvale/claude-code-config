@@ -1,63 +1,72 @@
 ---
 name: browser-use
-description: "Drive a warm real-Chrome profile via agent-browser (default) or Chrome DevTools MCP. No AppleScript, no Chrome for Testing."
+description: "Route browser work through Warm Chrome Preflight and a real Chrome CDP adapter. No Chrome for Testing."
 ---
 
 # Browser Use
 
-Use this for browser tasks against a warm, real-Chrome session.
+Use for browser tasks that need a logged-in, profile-bearing Chrome session.
 
-One contract: **drive the real Google Chrome binary with a persistent, logged-in profile — never Chrome for Testing, never a throwaway profile.** Login-heavy sites fail in fresh profiles (captcha, device checks, missing SSO).
+## Contract
 
-Verified constraint (2026-05): you cannot attach to the user's *everyday default* Chrome profile. Chrome 136+ blocks `--remote-debugging-port` on the default profile, and the Chrome `chrome://inspect` remote-debugging toggle exposes no discoverable endpoint that `agent-browser` or `chrome-devtools-mcp` can connect to (no `DevToolsActivePort`, no HTTP `/json`). The working warm path is a **dedicated persistent profile** the skill launches once with classic debug — real binary, real cookies, logins survive. See `references/warm-chrome.md`.
+- Owner: `browser-use` owns Warm Chrome readiness, repair, launch, and adapter routing.
+- Warm Chrome: real Google Chrome binary, dedicated persistent profile, loopback CDP.
+- Never Chrome for Testing. Never throwaway profile. Never everyday default profile.
+- `browser-domain-memory`, runbooks, and adapters consume preflight proof; they do not own readiness policy.
+- Details: `references/warm-chrome.md`.
+- MCP config repair: `mcporter-config.md`.
 
-## Driver Mode
+## Preflight First
 
-**Default: `agent-browser`.** It owns named per-domain sessions, an auth vault, durable selector capture (`get attr`/`eval` resolve refs to real selectors), and webm recording.
-
-**Swap to `chrome-devtools` MCP only when the task needs DevTools-panel-grade work agent-browser can't do:** Performance-panel insight analysis (LCP/latency breakdowns), deep Network-panel request inspection by `reqid`. When you swap for this reason, **tell the user you're switching to chrome-devtools mode and why.**
-
-**User override wins.** If the user names a mode ("use agent-browser", "use MCP/chrome-devtools mode"), use it for the task with no auto-swap.
-
-Never use `chrome-isolated`, Playwright, Puppeteer, the Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` for browser control unless the user explicitly asks for an isolated/new browser.
-
-Screenshot/live UI bugs require this warm-Chrome path. `curl`, source inspection, Worker smoke tests, or local Playwright are supporting proof only; do not treat them as equivalent when the user showed a rendered browser problem or the page may depend on login/profile state.
-
----
-
-## Mode A — agent-browser (default)
-
-Browser-session-safety rules apply: always `--session <name>` (never default), `--headed`. Session names come from the registry at `~/.config/side-quest/browser-automation/registry.yaml`.
-
-Pre-flight: ensure warm real Chrome is up on the port, then pin every command to
-that port. NEVER let agent-browser auto-launch; it spawns Chrome for Testing.
-Launch the real binary with classic debug + a dedicated persistent profile:
+Before adapter action:
 
 ```bash
-PORT=9444; PROFILE="$HOME/.agent-warm-profile"
-# launch ONCE if not up (log into portals once; they persist in PROFILE)
-curl -sf -m2 "http://127.0.0.1:$PORT/json/version" >/dev/null || \
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-    --remote-debugging-port="$PORT" --user-data-dir="$PROFILE" \
-    --no-first-run --no-default-browser-check about:blank &
-
-agent-browser --session "$S" --headed --cdp "$PORT" get cdp-url
-agent-browser --session "$S" --headed --cdp "$PORT" tab list
-agent-browser --session "$S" --headed --cdp "$PORT" tab new <url>
-agent-browser --session "$S" --headed --cdp "$PORT" snapshot -i       # interactive elements + @refs
-agent-browser --session "$S" --headed --cdp "$PORT" click @e3         # act on a ref (re-snapshot after page change)
-agent-browser --session "$S" --headed --cdp "$PORT" get attr @e7 id   # resolve ref -> durable selector (capture)
+skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json
 ```
 
-Refs (`@e1`...) are reassigned on every snapshot and go stale on any page change — re-snapshot before the next ref interaction. For durable selectors, resolve a ref via `get attr @ref id`/`name`, or `eval` a CSS path. Proven on ASP.NET and Angular portals. See `references/warm-chrome.md` for the full recipe and why the toggle path fails.
+- Parse stdout envelope. Treat stderr as diagnostics only.
+- Success: choose adapter and pin it to verified endpoint.
+- Failure with `runtime_actions[].id=needs_browser_entry`: hard stop.
+- Do not switch adapters, cold-launch, or fall back to prose after preflight failure.
+- Use `repair` or `launch` only when explicitly preparing Warm Chrome entry.
+- Contract owner: `skills/browser-use/scripts/command-contract.ts`.
 
-`connect <port>` alone can report success while later commands use a sticky
-Chrome for Testing daemon. For proof-grade warm sessions, pass `--cdp "$PORT"`
-on every command and verify `get cdp-url` contains that port.
+Human health:
 
-## Mode B — chrome-devtools MCP
+```bash
+skills/browser-use/scripts/preflight-warm-chrome.sh status --port "$PORT" --plain
+```
 
-Config repair details live in `mcporter-config.md`. Use this mode for DevTools-panel work (see Driver Mode) or when the user asks.
+Repair/launch, when browser entry is approved:
+
+```bash
+skills/browser-use/scripts/preflight-warm-chrome.sh repair --port "$PORT" --profile "$PROFILE" --plain
+skills/browser-use/scripts/preflight-warm-chrome.sh launch --port "$PORT" --profile "$PROFILE" --plain
+```
+
+Observability:
+
+```bash
+skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json --debug --run-id "$RUN_ID"
+skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json --quiet
+```
+
+- `--debug`: LogTape JSONL breadcrumbs on stderr.
+- `--quiet`: suppress diagnostics; keep stdout envelope.
+- Use `--run-id` or `BROWSER_USE_RUN_ID` for cross-tool correlation.
+
+## Adapter Router
+
+- User-named adapter wins only after preflight passes and the adapter satisfies Warm Chrome.
+- Chrome DevTools MCP / `mcporter`: current proven default; use for general work when configured, Network, Performance, and DevTools-grade inspection.
+- `agent-browser`: use for named sessions, snapshots/refs, durable selector capture, webm recording, and runbook replay.
+- `puppeteer-core`: use for deterministic replay only; connect to verified `browserURL`.
+- Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
+- Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.
+
+## Chrome DevTools MCP
+
+Use after Warm Chrome Preflight passes. Config repair details live in `mcporter-config.md`.
 
 ```bash
 mcporter call chrome-devtools.list_pages --args '{}' --output text
@@ -69,16 +78,9 @@ mcporter call chrome-devtools.fill --args '{"uid":"1_13","value":"text","include
 mcporter call chrome-devtools.evaluate_script --args '{"function":"() => document.title"}' --output json
 ```
 
-Use `take_snapshot` before actions and current `uid` values only. Avoid `take_screenshot` unless visual layout matters.
-
-### Check MCP (Mode B)
-
-```bash
-mcporter list chrome-devtools --schema
-mcporter call chrome-devtools.list_pages --args '{}' --output text
-```
-
-Mode B attaches to the SAME warm Chrome as Mode A (real binary + classic debug + dedicated profile, per the top contract). Point chrome-devtools-mcp at that port (`--browserUrl http://127.0.0.1:$PORT`). Do NOT rely on the `chrome://inspect` toggle / `--autoConnect` — verified non-functional here (no discoverable endpoint). `list_pages` must show the warm profile's real tabs; if it shows a blank/isolated Chrome, stop and say reattach failed.
+- Use `take_snapshot` before actions and current `uid` values only.
+- Avoid `take_screenshot` unless visual layout matters.
+- `list_pages` must show warm profile tabs. Blank/isolated browser means reattach failed.
 
 If `list_pages` fails with `DevToolsActivePort`, confirm the warm Chrome launched on the port (classic `--remote-debugging-port`), then retry once:
 
@@ -91,12 +93,43 @@ If it still fails, stop and say Chrome DevTools MCP is unavailable. Do not use A
 
 Avoid noisy recovery loops. Repeated MCP/browser restarts can trigger reconnect/login prompts and alerts. Try once, then pause and choose a quieter path.
 
----
+## agent-browser
+
+Use after Warm Chrome Preflight passes.
+
+- Always `--session <name>`; never default session.
+- Always `--headed`.
+- Always pass `--cdp "$PORT"` on every command.
+- Session names come from `~/.config/side-quest/browser-automation/registry.yaml`.
+- Never let `agent-browser` auto-launch; it may spawn Chrome for Testing.
+
+```bash
+agent-browser --session "$S" --headed --cdp "$PORT" get cdp-url
+agent-browser --session "$S" --headed --cdp "$PORT" tab list
+agent-browser --session "$S" --headed --cdp "$PORT" tab new <url>
+agent-browser --session "$S" --headed --cdp "$PORT" snapshot -i
+agent-browser --session "$S" --headed --cdp "$PORT" click @e3
+agent-browser --session "$S" --headed --cdp "$PORT" get attr @e7 id
+```
+
+Refs (`@e1`...) are reassigned on every snapshot and go stale on any page change. Re-snapshot before the next ref interaction. For durable selectors, resolve a ref via `get attr @ref id`/`name`, or `eval` a CSS path.
+
+`connect <port>` alone can report success while later commands use a sticky Chrome for Testing daemon. Proof-grade runs pass `--cdp "$PORT"` on every command and verify `get cdp-url` contains that port.
+
+## puppeteer-core
+
+Use for deterministic replay against a verified endpoint. Do not launch or repair Chrome here.
+
+```ts
+const browser = await puppeteer.connect({
+	browserURL: `http://127.0.0.1:${port}`,
+});
+```
 
 ## Live UI Proof
 
-For screenshot regressions, deployed dashboard checks, or anything where the rendered browser is the bug, drive the existing logged-in/profile-bearing tab set in whichever mode is active. If browser automation is unavailable, report that as a verification gap instead of substituting isolated browser tooling.
+Screenshot regressions, deployed dashboard checks, and rendered-browser bugs require Warm Chrome. `curl`, source inspection, Worker smoke tests, or isolated Playwright are supporting proof only.
 
 ## Secret Handling
 
-Never print tokens/passwords from page DOM, network logs, or inputs. For token checks, return shape only: present/absent, length, status code, account/org name. This rule holds in both driver modes.
+Never print tokens/passwords from page DOM, network logs, or inputs. For token checks, return shape only: present/absent, length, status code, account/org name.

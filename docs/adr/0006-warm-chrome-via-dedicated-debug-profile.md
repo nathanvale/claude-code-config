@@ -35,5 +35,7 @@ with classic `--remote-debugging-port` against a **dedicated persistent `--user-
 - Pre-flight must **verify** it attached to the real binary and **fail loudly** if it only got
   Chrome for Testing — a silent cold-profile fallback would re-trigger captcha/device checks on
   login-heavy portals.
+- `browser-use` owns the executable pre-flight; Browser Adapters consume that proof rather than
+  carrying separate readiness policies.
 - If agent-browser later ships working M144-toggle support (tracked upstream), revisit — attaching
   to the user's actual everyday profile would be simpler.

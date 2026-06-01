@@ -3,6 +3,7 @@ date: 2026-05-30
 topic: browser-use warm-Chrome connection + dual-mode + capture
 type: research-findings
 status: proven-in-prototype
+current_status: historical; superseded sections are marked inline
 related:
   - prototypes/browser-use-uplift/
   - prototypes/build-scratch-handoff/
@@ -61,6 +62,9 @@ silently fell back to a cold **Chrome for Testing** instead of failing loud.
 ## Proven recipes (runnable, in prototypes/browser-use-uplift/)
 
 ### Fully-automated remote-debugging enable — NO human ⭐
+Historical only. The toggle can start a server, but the resolved section below
+rules out this path for current tools.
+
 `auto-enable-remote-debugging.sh`. Proven cold→enabled→repeatable.
 The battle was COORDINATES, not capability — peekaboo CAN click the chrome://
 web-content checkbox once the window is positioned deterministically:
@@ -74,6 +78,9 @@ web-content checkbox once the window is positioned deterministically:
 No separate Allow dialog — the checkbox click IS the permission grant.
 
 ### chrome-devtools mode warm connect (real Chrome)
+Superseded. The resolved section below corrects this: MCP server startup was
+misread as Chrome attachment, and the toggle path did not connect.
+
 `chrome-devtools-mcp --browserUrl http://127.0.0.1:9222` → connects to the
 toggle-enabled real warm Chrome. Proven ("Chrome DevTools MCP Server connected").
 NOTE: the repo's mcporter config defaults to 9223; the toggle server is on 9222 —
@@ -105,6 +112,8 @@ state file, and re-runs short-circuit the setup ask. Proven both runs.
 State-file LOCATION still undecided (temp dir for now) — a brainstorm/plan call.
 
 ## Dual-mode browser-use design (decided this session)
+Superseded. Current direction: no fixed default Browser Adapter; `browser-use`
+selects adapters by requested outcome and verified capability.
 
 - Default driver: **agent-browser** (durable selector capture, session fleet).
 - Auto-swap to **chrome-devtools MCP** only for DevTools-panel-grade work
@@ -170,6 +179,8 @@ per identity) is NOT pursued — it would fight the one-instance goal for no
 benefit given different-domain portals.
 
 ## Vision scorecard (what's proven vs gap, 2026-05-30)
+Superseded. Do not use this as current status; the resolved section and active
+plan replace the toggle-based scorecard.
 
 - ✅ **Real Chrome** — proven for chrome-devtools mode (toggle + `--browserUrl 9222`).
 - ⚠️ **Real Chrome for agent-browser mode** — needs upstream toggle support
@@ -194,6 +205,8 @@ when agent-browser ships M144-toggle support (#516).
   warm real Chrome on the toggle? Would collapse the dual-warm-recipe split.
 
 ## Smoke test (defined, pieces all proven, not yet chained)
+Superseded. The toggle-based smoke shape is historical only; current preflight
+uses the dedicated persistent Warm Chrome contract.
 
 Clean machine → cold open → auto-enable toggle → warm connect → both modes →
 capture → state record. Every step is individually proven by the prototypes

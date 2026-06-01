@@ -101,7 +101,7 @@ The smallest harness-specific difference needed when installing a canonical capa
 _Avoid_: fork, duplicate capability, harness copy
 
 **Capability dependency**:
-A manually declared skill or agent that a capability needs in order to work. Dependency inference may warn about likely omissions, but manual declarations remain the source of truth.
+A manually declared skill or agent that a capability needs to work. Dependency inference may warn about likely omissions, but manual declarations remain the source of truth.
 _Avoid_: auto dependency, inferred dependency, implicit dependency
 
 **Capability risk flag**:
@@ -121,11 +121,27 @@ The canonical adapted skill for safe 1Password CLI (`op`) workflows. It owns the
 _Avoid_: 1password, onepassword, secrets
 
 **browser-use**:
-The browser-driving capability. It owns Chrome connection, inspection, navigation, clicking, filling, and live browser control; it does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge.
-_Avoid_: browse, play, browser orchestrator, browser memory skill
+The browser-driving capability. It owns all browser entry — open, reuse, attach, repair, adapter policy, and capability-routed adapter selection — plus Warm Chrome, inspection, navigation, clicking, filling, and live browser control. It defaults to Warm Chrome; cold or isolated browser entry requires an explicit user request. It does not own browser memory, runbooks, capture policy, or domain-specific auth knowledge.
+_Avoid_: browse, play, browser adapter, browser orchestrator, browser memory skill
+
+**Warm Chrome**:
+A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
+_Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
+
+**Warm Chrome Preflight**:
+A `browser-use` readiness proof run before any Browser Adapter acts. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result rather than owning separate readiness policies.
+_Avoid_: adapter preflight, manual checklist, browser-domain-memory preflight
+
+**Browser Adapter**:
+A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome, such as `agent-browser`, Chrome DevTools MCP, or `puppeteer-core` via `connect`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge.
+_Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
+
+**Browser Entry Handoff**:
+A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It is not a CLI runtime or dependency failure. The consuming capability reports the need; `browser-use` owns opening, reuse, attach, repair, and adapter selection.
+_Avoid_: self-repair, direct browser launch, adapter fallback
 
 **browser-domain-memory**:
-The compound browser knowledge capability. It owns durable per-domain browser knowledge — auth pointers, dual-mode runbooks, gotchas — and browser capture/distillation plus the two playback modes (prose and deterministic).
+The compound browser knowledge capability. It owns durable per-domain browser knowledge — auth pointers, runbooks, gotchas — and browser capture/distillation plus the three playback modes (prose, runbook, deterministic).
 _Avoid_: domain-memory, browser-capture skill
 
 **Browser capture**:
@@ -133,31 +149,47 @@ The `browser-domain-memory` workflow that turns messy browser-run evidence into 
 _Avoid_: capture everything, raw trace archive, recording, replay capture, capture skill
 
 **Scratch Evidence**:
-Redacted browser-run source material used by `browser-domain-memory` to distill Durable Browser Knowledge. It may be retained as evidence and may be Recorder-shaped, but it is not trusted memory, a runbook, or a replay artifact. Use timestamped evidence names such as `YYYY-MM-DD-HHMMSS-flow-slug`.
+Redacted browser-run source material selectively retained when a run teaches something: capture, drift, failure, ambiguity, user-requested save, or promotion proof. It is not kept for every clean replay, not trusted memory, not a runbook, and not a durable replay artifact. Use timestamped evidence names such as `YYYY-MM-DD-HHMMSS-flow-slug`.
 _Avoid_: recording, trace, tape, replay file, raw history, durable instruction
 
 **Durable Browser Knowledge**:
-Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. It includes auth pointers, prose runbooks, gotchas, and other model-readable notes.
+Curated, trusted per-domain browser memory used to make future `browser-use` runs faster and safer. It includes Auth Pointers, Browser Runbooks, optional Recorder JSON for deterministic-ready flows, Browser Gotchas, and other model-readable notes.
 _Avoid_: scratch, trace archive, replay library, browser automation store
 
+**Browser Domain Key**:
+Canonical hostname used as the storage key for a portal's Durable Browser Knowledge. It has a required human alias because hostnames are often meaningless. Tenant/account identity is not part of the v1 key unless it changes the hostname.
+_Avoid_: display name key, tenant key, account key
+
+**Browser Flow Slug**:
+Human-readable stable slug for a repeated browser intent, such as `submit-timesheet` or `download-invoice`. It helps humans and LLMs find the right Browser Runbook. Change it when the user intent changes, not when selectors change.
+_Avoid_: opaque id, URL slug, page slug
+
 **Auth Pointer**:
-A safe per-domain reference to the 1Password account, vault, item, fields, and login context needed for browser auth. It belongs with Durable Browser Knowledge, points to secrets, and never contains secret values.
+A safe per-domain reference to the 1Password account, vault, item, fields, OTP fields when available, and login context needed for browser auth. It belongs with Durable Browser Knowledge, points to secrets, and never contains secret values. Playback artifacts may reference it and resolve it through `one-password` at runtime.
 _Avoid_: password note, secret mapping, auth tape, login recording
 
 **Browser Runbook**:
-Durable, dual-output path knowledge for a known browser flow: one capture emits both a model-readable run-book and a Recorder JSON. It may reference an Auth Pointer when login is needed but does not duplicate auth details. Played back in one of two modes (see Prose mode, Deterministic mode), per-domain configurable.
+The one active durable path for a known browser flow. It may retain prior versions for rollback, but only one current runbook is active. It may include login selectors and login choreography, and may reference an Auth Pointer for the secret fields. It must not contain secret values or 1Password item details. Prose mode may read it; Runbook mode consumes it mechanically; Deterministic mode uses its paired Recorder JSON when available.
 _Avoid_: automation script, CI fixture, raw trace
 
+**Recorder JSON**:
+An optional deterministic replay artifact paired with a Browser Runbook when the flow has been captured or made deterministic-ready. It contains replayable browser steps and may include login selectors or login choreography, but never secret values or 1Password item details.
+_Avoid_: recording, raw trace, transcript, secret replay file
+
 **Prose mode**:
-The playback mode where a reasoning agent reads a Browser Runbook and re-drives live Chrome via `browser-use`, resolving each step's selectors with live inspection and judgment. The durable, tool-neutral default. Config value `replayMode=prose`.
-_Avoid_: Agent-playable, manual mode, LLM replay
+The playback mode where a reasoning agent reads model-readable Durable Browser Knowledge and re-drives Warm Chrome through `browser-use`, using runbooks and gotchas to reduce discovery while still inspecting and judging the page. It does not consume Recorder JSON. The flexible default. Config value `replayMode=prose`.
+_Avoid_: coded replay, deterministic replay, manual mode
+
+**Runbook mode**:
+The playback mode where code reads a Browser Runbook and drives Warm Chrome through a Browser Adapter step-by-step, resolving stored selectors, waits, asserts, and coded heal ladders without an LLM call per step. It does not consume Recorder JSON. The fast tool-neutral path once the runbook is refined. Config value `replayMode=runbook`.
+_Avoid_: prose mode, puppeteer replay, LLM replay
 
 **Deterministic mode**:
-The playback mode where a Browser Runbook's Recorder JSON replays against the warm Chrome via puppeteer — fast, zero reasoning rounds. The fast opt-in. Config value `replayMode=deterministic`.
+The playback mode where a Browser Runbook's Recorder JSON replays against Warm Chrome through a Browser Adapter — fast, zero reasoning rounds, secret-value-free, and repaired through the heal/recapture loop when drift breaks playback. Recorder JSON may include login selectors/choreography, but secret field values come from live `one-password` resolution via the Auth Pointer. The fast opt-in. Config value `replayMode=deterministic`.
 _Avoid_: machine-play, tape execution, CI replay
 
 **Run Outcome**:
-A per-run result record for a Browser Runbook, stored beside it as `<flow>.runs.jsonl`. It tracks date, result, steps healed, drifted selectors, and per-mode value metrics (reasoning rounds / snapshots eliminated, heal rate, wall-clock), and links to timestamped Scratch Evidence. It feeds the staleness policy and lets the user assess which mode earns its keep per flow.
+A per-run result record for a Browser Runbook, stored beside it as `<flow>.runs.jsonl`. It tracks date, result, steps healed, drifted selectors, and per-mode value metrics (reasoning rounds / snapshots eliminated, heal rate, wall-clock), and links to timestamped Scratch Evidence only when evidence was selectively retained. It feeds the staleness policy and lets the user assess which mode earns its keep per flow.
 _Avoid_: test result, execution proof, success metric in prose
 
 **Browser Gotcha**:
@@ -165,7 +197,7 @@ A non-obvious domain fact, fork, trap, warning, label mismatch, slow state, or f
 _Avoid_: note, trivia, ordinary noise, raw observation
 
 **Compound browser knowledge**:
-The loop where browser work produces learning evidence, browser capture distills it into durable dual-mode runbooks, and later runs start from `browser-domain-memory` — replayed deterministically or re-driven in prose. The compounding is the curated-memory loop, not blind capture-everything.
+The loop where browser work produces learning evidence, browser capture distills it into durable browser knowledge, and later runs start from `browser-domain-memory` — agentic prose, coded runbook replay, or deterministic Recorder replay. The compounding is curated memory, not blind capture-everything.
 _Avoid_: raw record/replay everything, browser automation engine
 
 **Reference-only env file**:
@@ -294,11 +326,35 @@ Domain expert: "No. It can run targeted metadata checks for declared names, but 
 Dev: "Should `browser-use` remember the login path it just discovered?"
 Domain expert: "No. `browser-use` drives Chrome. `browser-domain-memory` owns browser capture and durable compound browser knowledge."
 
+Dev: "Can `browser-domain-memory` open or repair Warm Chrome?"
+Domain expert: "No. `browser-use` owns all browser entry, including Warm Chrome repair. `browser-domain-memory` consumes the browser environment and owns durable browser knowledge."
+
+Dev: "What does `browser-domain-memory` do when Warm Chrome is missing or wrong?"
+Domain expert: "It makes a Browser Entry Handoff. `browser-use` repairs or prepares Warm Chrome; browser-domain-memory does not launch or switch adapters itself."
+
+Dev: "Is a locked 1Password session a Browser Entry Handoff?"
+Domain expert: "No. Auth failures use the auth path. Browser Entry Handoff is for browser environment readiness."
+
+Dev: "Is a preflight CLI/runtime failure a Browser Entry Handoff?"
+Domain expert: "No. Browser Entry Handoff is only browser environment readiness. CLI runtime and dependency failures stop for diagnostics."
+
+Dev: "Is Warm Chrome the same as my everyday Chrome profile?"
+Domain expert: "No. Warm Chrome is an authenticated browser environment `browser-use` drives. Browser Adapters attach to it; they do not define it."
+
+Dev: "Is there only one Warm Chrome?"
+Domain expert: "No. Warm Chrome is a type of browser environment. A product plan may choose one shared active environment, but the term is not a singleton."
+
+Dev: "Is an isolated browser tool a Browser Adapter?"
+Domain expert: "No. Browser Adapters attach to Warm Chrome. Isolated or cold browser tools are explicit escape hatches, not adapters in this domain."
+
+Dev: "Can each adapter decide whether Chrome is ready?"
+Domain expert: "No. `browser-use` runs the shared Warm Chrome Preflight proof before adapter action; adapters consume that proof."
+
 Dev: "Is browser capture a separate skill?"
 Domain expert: "No. Browser capture is a `browser-domain-memory` workflow that distills messy browser-run evidence into curated domain memory."
 
 Dev: "Is the Chrome Recorder-shaped JSON a recording?"
-Domain expert: "No. Call it Scratch Evidence. It may be retained as evidence for browser capture, but it is not trusted memory or a replay artifact."
+Domain expert: "Not by itself. Recorder-shaped Scratch Evidence may be retained as source evidence, but only verified Recorder JSON is durable replay material."
 
 Dev: "What does browser capture create?"
 Domain expert: "Durable Browser Knowledge: curated auth pointers, runbooks, gotchas, and notes future `browser-use` runs can trust."
@@ -310,13 +366,22 @@ Dev: "Where does the 1Password item path for a portal live?"
 Domain expert: "As an Auth Pointer in Durable Browser Knowledge. `one-password` owns safe access mechanics, not the domain-specific item choice."
 
 Dev: "Should a Browser Runbook repeat the login steps?"
-Domain expert: "No. It may reference the Auth Pointer, but the Auth Pointer owns domain auth context."
+Domain expert: "It may include login choreography and selectors. Secret source details and secret values stay in the Auth Pointer and live `one-password` resolution."
 
 Dev: "Can a runbook click through the site next time?"
-Domain expert: "Yes, in two ways. Deterministic mode replays its Recorder JSON via puppeteer; prose mode has the agent re-drive live from the run-book. One capture, both outputs, per-domain config picks the mode."
+Domain expert: "Yes, in Runbook mode. Code reads the Browser Runbook and drives a Browser Adapter step-by-step. Deterministic mode replays Recorder JSON through a Browser Adapter. Prose mode keeps the agent in the loop and uses memory to avoid rediscovery."
+
+Dev: "Can browser-domain-memory choose `agent-browser` or Chrome DevTools MCP directly?"
+Domain expert: "No. It requests a playback mode or browser outcome. `browser-use` owns adapter policy and selection."
+
+Dev: "What's the default Browser Adapter?"
+Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."
+
+Dev: "Is Puppeteer banned?"
+Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is allowed only as a Browser Adapter that connects to verified Warm Chrome."
 
 Dev: "Which mode is the default for a fresh capture?"
-Domain expert: "Prose mode — the durable, tool-neutral default. Deterministic is the fast opt-in. Run Outcomes track per-mode metrics so you can see which earns its keep per flow."
+Domain expert: "Prose mode — the flexible default while memory is still maturing. Runbook and deterministic modes are faster opt-ins once the path proves stable. Run Outcomes track per-mode metrics so you can see which earns its keep per flow."
 
 Dev: "Should we import an entire plugin as one capability?"
 Domain expert: "No. Track the selected skill or agent as the capability. The plugin or repository is a source."

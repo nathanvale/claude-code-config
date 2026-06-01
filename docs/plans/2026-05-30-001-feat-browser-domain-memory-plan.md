@@ -1,12 +1,16 @@
 ---
 title: "feat: browser-domain-memory skill + browser-use consult-gate"
 type: feat
-status: active
+status: superseded
 date: 2026-05-30
 origin: docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
+superseded_by: docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md
 ---
 
 # feat: browser-domain-memory skill + browser-use consult-gate
+
+Superseded by `docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md`.
+This plan's prose-only/no-replay premise is historical context, not current direction.
 
 ## Summary
 
