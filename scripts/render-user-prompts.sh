@@ -8,7 +8,9 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# `cd >/dev/null` suppresses the path echo that CDPATH triggers, which would
+# otherwise corrupt SCRIPT_DIR (doubled path + newline) and break every redirect.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." >/dev/null && pwd)"
 FRAGMENTS="${SCRIPT_DIR}/prompt-fragments"
 
 # Fragment ordering for AGENTS.md (shared core)

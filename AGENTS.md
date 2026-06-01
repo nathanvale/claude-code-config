@@ -31,6 +31,9 @@ Applies when editing AGENTS.md, CLAUDE.md, `prompt-fragments/`, `rules/`, `conte
 
 ## No parallel policy
 
+- Must: new skill or doc needing an existing skill's mechanics is a thin wrapper that invokes it. Never copy its steps.
+- Must: default to linking the owner. Restating is the exception; justify it in the commit.
+- Compose, don't absorb. Reach for another skill's capability by calling it, not by reproducing it.
 - One canonical owner per policy, workflow, or contract.
 - Other docs link to owner. Don't restate.
 - No parallel policy across AGENTS, README, skills, runbooks, and generated docs.
@@ -139,6 +142,7 @@ When working with libraries, frameworks, or APIs:
 
 Hard rules for authoring skills and editing `SKILL.md` files.
 
+- **Default to prose-trust, steipete weight.** Contracts where a machine parses; prose where a model reads. Skill bodies are model-read → terse prose + commands, rules as fail-closed bullets, no enforcement machinery. Keep deterministic contracts only at machine-parsed boundaries (frontmatter shape, renderers, extractors, runbooks). Refuse edge cases in prose; don't engineer around them. See `context/skill-design-philosophy.md`.
 - Skills are canonical for tool workflows. Keep CLAUDE.md / AGENTS.md to hard rules only.
 - Editing AGENTS.md, CLAUDE.md, skills, or skill references: token-efficient, relaxed grammar, terse descriptions. See `work-style.md` shared fragment for the bar.
 - Skill descriptions: short generic trigger phrase, not a summary. No personal names, long paths, or workflow narration unless required for routing.
