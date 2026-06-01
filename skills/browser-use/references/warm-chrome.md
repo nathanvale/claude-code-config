@@ -65,6 +65,17 @@ skills/browser-use/scripts/preflight-warm-chrome.sh launch --port "$PORT" --prof
 - `error.hint`: next safe recovery move.
 - Current runtime: macOS only.
 
+### Continuation contract
+
+One safe next step per run. Read it from the current run, not from static lists.
+
+- Per-run `runtime_actions` outrank static `actionAffordances`. The static contract names possible actions for discovery; the run picks the current set.
+- `runtime_actions[0]` is the primary safe next action. Guard actions such as `do_not_fallback` constrain what must not happen; they do not replace the primary action.
+- After a preflight failure, do not switch adapters or fall back to a cold browser. Repair Warm Chrome, then rerun.
+- Action membership lives in `scripts/command-contract.ts` and runtime code. This doc states precedence, not the action list.
+
+Auth is not browser entry. The preflight proves Chrome readiness only. A portal login, MFA prompt, or session-expiry wall hit *after* preflight passes is an application step, not a `needs_browser_entry` failure. Do not rerun preflight or switch adapters to escape a login wall; complete the login in the warm profile (cookies persist).
+
 Observability:
 
 ```bash
