@@ -1,0 +1,31 @@
+{
+  "title": "Urban Furdo — book grooming (structure, STOPS before Book Now)",
+  "_note": "Captured live 2026-05-30 via agent-browser on the warm Chrome. Real URLs + selectors. Replays the PATH up to the service/staff step. The final date/time pick + Book Now confirmation are deliberately omitted — this never creates a real appointment.",
+  "steps": [
+    {
+      "type": "setViewport",
+      "width": 1200,
+      "height": 900,
+      "deviceScaleFactor": 1,
+      "isMobile": false,
+      "hasTouch": false,
+      "isLandscape": false
+    },
+    {
+      "type": "navigate",
+      "url": "https://www.urbanfurdo.com.au/book-now",
+      "assertedEvents": [{ "type": "navigation", "url": "https://www.urbanfurdo.com.au/book-now" }]
+    },
+    {
+      "type": "navigate",
+      "url": "https://book.squareup.com/appointments/4homoxayt60xtz/location/LVD8TBPTXNCK8/services",
+      "assertedEvents": [{ "type": "navigation" }]
+    },
+    {
+      "type": "click",
+      "selectors": [[".service-row"]],
+      "offsetX": 20,
+      "offsetY": 20
+    }
+  ]
+}
