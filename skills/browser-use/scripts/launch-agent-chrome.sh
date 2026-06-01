@@ -8,14 +8,14 @@
 # ba-browse surface-manager launch machinery.
 #
 # Usage:  launch-agent-chrome.sh [PORT] [PROFILE_DIR]
-# Default: PORT=9223  PROFILE_DIR=~/.cache/chrome-agent
+# Default: PORT=9222  PROFILE_DIR=~/.agent-warm-profile
 #
 # Safe to re-run: if a healthy agent Chrome is already on PORT, it does nothing.
 
 set -euo pipefail
 
-PORT="${1:-9223}"
-PROFILE_DIR="${2:-$HOME/.cache/chrome-agent}"
+PORT="${1:-9222}"
+PROFILE_DIR="${2:-$HOME/.agent-warm-profile}"
 CHROME="${CHROME_BIN:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 
 # 1. Already healthy on PORT? Reuse it (warm reuse is the goal).
@@ -29,7 +29,7 @@ else
     --remote-debugging-port="${PORT}" \
     --user-data-dir="${PROFILE_DIR}" \
     --no-first-run --no-default-browser-check \
-    about:blank >/dev/null 2>&1 &
+    https://example.com/ >/dev/null 2>&1 &
   # 3. Wait for the port to bind.
   for _ in $(seq 1 20); do
     curl -s -m 1 "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1 && break

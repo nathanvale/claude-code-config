@@ -17,11 +17,15 @@ import {
 	warmChromePreflightContracts,
 } from "./command-contract";
 import {
+	awaitChromeSpawn,
 	createDefaultRuntime,
+	emitUnhandledFailureEnvelope,
+	findListenerWithSystemTools,
 	runForTest,
 	validateErrorEnvelopeForTest,
 	type PreflightRuntime,
 } from "./preflight-warm-chrome";
+import { EventEmitter } from "node:events";
 
 const cleanupPaths: string[] = [];
 
@@ -151,6 +155,7 @@ describe("Warm Chrome command contract", () => {
 		expect(failureIds).toEqual([
 			"launch_warm_chrome",
 			"repair_profile",
+			"enable_remote_debugging",
 			"inspect_listener",
 			"inspect_diagnostics",
 			"change_input",
@@ -249,7 +254,7 @@ describe("CLI front door", () => {
 	test("uses BROWSER_USE_RUN_ID when --run-id is absent", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				env: { BROWSER_USE_RUN_ID: "env-run", HOME: "/Users/tester" },
 				profile,
@@ -267,7 +272,7 @@ describe("CLI front door", () => {
 			[
 				"check",
 				"--port",
-				"9444",
+				"9222",
 				"--profile",
 				profile,
 				"--json",
@@ -335,7 +340,7 @@ describe("check", () => {
 		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
 	});
 
-	test("points at launch when endpoint is missing and a profile source exists", async () => {
+	test("fails hard when endpoint is missing and a profile source exists", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
 			["check", "--port", "9", "--profile", profile, "--json"],
@@ -350,8 +355,34 @@ describe("check", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("endpoint_unreachable");
 		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
-		expect(actionIds(envelope)).toEqual(["launch_warm_chrome"]);
-		expectContinuation(envelope, "launch_warm_chrome");
+		expect(envelope.error.hint.docs_url).toBe(
+			"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
+		);
+		expect(actionIds(envelope)).toEqual(["enable_remote_debugging"]);
+		expectContinuation(envelope, "enable_remote_debugging");
+		expectBrowserEntryConstraint(envelope);
+	});
+
+	test("fails hard when the conventional endpoint is missing", async () => {
+		const result = await runForTest(
+			["check", "--json"],
+			testRuntime({
+				fetchJson: async () => {
+					throw new Error("remote debugging is off");
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("endpoint_unreachable");
+		expect(envelope.error.failure_domain).toBe("browser_entry_handoff");
+		expect(envelope.error.hint.summary).toContain("Remote debugging is off");
+		expect(envelope.error.hint.docs_url).toBe(
+			"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
+		);
+		expect(actionIds(envelope)).toEqual(["enable_remote_debugging"]);
+		expectContinuation(envelope, "enable_remote_debugging");
 		expectBrowserEntryConstraint(envelope);
 	});
 
@@ -378,7 +409,7 @@ describe("check", () => {
 	test("emits a browser_ready proof for a healthy real Chrome listener", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -396,7 +427,7 @@ describe("check", () => {
 	test("plain success writes stable human output", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--plain", "--run-id", "plain-ok"],
+			["check", "--port", "9222", "--profile", profile, "--plain", "--run-id", "plain-ok"],
 			testRuntime({ profile }),
 		);
 
@@ -410,7 +441,7 @@ describe("check", () => {
 	test("json success includes contract and schema", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -423,7 +454,7 @@ describe("check", () => {
 	test("json success returns adapter recovery actions", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -440,7 +471,7 @@ describe("check", () => {
 		const profile = await makeProfile(0o700);
 		const otherProfile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", otherProfile, "--json"],
+			["check", "--port", "9222", "--profile", otherProfile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -452,7 +483,7 @@ describe("check", () => {
 	test("treats a missing supplied profile as input to correct", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", join(profile, "missing"), "--json"],
+			["check", "--port", "9222", "--profile", join(profile, "missing"), "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -470,7 +501,7 @@ describe("check", () => {
 	test("does not chmod or write DevToolsActivePort", async () => {
 		const profile = await makeProfile(0o755);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -488,10 +519,10 @@ describe("check", () => {
 
 	test("rejects Chrome for Testing", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				listenerCommand:
-					"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing --remote-debugging-port=9444 --user-data-dir=/tmp/profile",
+					"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing --remote-debugging-port=9222 --user-data-dir=/tmp/profile",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -511,7 +542,7 @@ describe("check", () => {
 		const profile = join(defaultRoot, "Profile 1");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({ home, profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -530,7 +561,7 @@ describe("check", () => {
 		const profile = join(defaultRoot, "Profile 1");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ home, profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -566,7 +597,7 @@ describe("check", () => {
 	test("explicit port overrides BROWSER_USE_CDP_PORT", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				env: { BROWSER_USE_CDP_PORT: "9555" },
 				profile,
@@ -575,14 +606,14 @@ describe("check", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.data.port).toBe("9444");
+		expect(envelope.data.port).toBe("9222");
 	});
 
 	test("explicit profile overrides BROWSER_USE_PROFILE_DIR", async () => {
 		const envProfile = await makeProfile(0o700);
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				env: { BROWSER_USE_PROFILE_DIR: envProfile },
 				profile,
@@ -597,7 +628,7 @@ describe("check", () => {
 	test("accepts equals-form port and profile flags", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port=9444", `--profile=${profile}`, "--json"],
+			["check", "--port=9222", `--profile=${profile}`, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -609,13 +640,13 @@ describe("check", () => {
 	test("accepts equals-form endpoint flags", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--endpoint=http://127.0.0.1:9444", "--profile", profile, "--json"],
+			["check", "--endpoint=http://127.0.0.1:9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.data.endpoint).toBe("http://127.0.0.1:9444");
+		expect(envelope.data.endpoint).toBe("http://127.0.0.1:9222");
 	});
 
 	test("accepts localhost loopback endpoints", async () => {
@@ -624,7 +655,7 @@ describe("check", () => {
 			[
 				"check",
 				"--endpoint",
-				"http://localhost:9444",
+				"http://localhost:9222",
 				"--profile",
 				profile,
 				"--json",
@@ -634,7 +665,7 @@ describe("check", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.data.endpoint).toBe("http://localhost:9444");
+		expect(envelope.data.endpoint).toBe("http://localhost:9222");
 	});
 
 	test("handles quoted profile paths with spaces in the Chrome command", async () => {
@@ -642,10 +673,10 @@ describe("check", () => {
 		const profile = join(parent, "profile with spaces");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
-				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir="${profile}" --no-first-run`,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir="${profile}" --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -657,10 +688,10 @@ describe("check", () => {
 	test("handles separate --user-data-dir arguments in the Chrome command", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
-				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port 9444 --user-data-dir ${profile} --no-first-run`,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port 9222 --user-data-dir ${profile} --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -674,7 +705,7 @@ describe("check", () => {
 		const profile = join(home, ".agent-warm-profile");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", "~/.agent-warm-profile", "--json"],
+			["check", "--port", "9222", "--profile", "~/.agent-warm-profile", "--json"],
 			testRuntime({
 				home,
 				profile,
@@ -691,7 +722,7 @@ describe("check", () => {
 		const link = join(await makeDir(), "profile-link");
 		await symlink(profile, link);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", link, "--json"],
+			["check", "--port", "9222", "--profile", link, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -702,9 +733,9 @@ describe("check", () => {
 
 	test("fails when a port is occupied by a non-Chrome listener", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
-				listenerCommand: "/usr/bin/python3 -m http.server 9444",
+				listenerCommand: "/usr/bin/python3 -m http.server 9222",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -719,10 +750,10 @@ describe("check", () => {
 
 	test("rejects non-Chrome listeners that mention Chrome in arguments", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				listenerCommand:
-					"/usr/bin/python3 -m fake --path /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=/Users/tester/.agent-warm-profile",
+					"/usr/bin/python3 -m fake --path /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir=/Users/tester/.agent-warm-profile",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -735,10 +766,10 @@ describe("check", () => {
 		// `Google Chrome Helper` (and similar) start with the real Chrome path but
 		// are not the stable browser binary. The prefix must not certify them.
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				listenerCommand:
-					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper --remote-debugging-port=9444 --user-data-dir=/Users/tester/.agent-warm-profile",
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome Helper --remote-debugging-port=9222 --user-data-dir=/Users/tester/.agent-warm-profile",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -752,10 +783,10 @@ describe("check", () => {
 		const profile = join(parent, "chrome-mac", "Chromium.app", "warm-profile");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
-				listenerCommand: chromeCommand({ port: "9444", profile }),
+				listenerCommand: chromeCommand({ port: "9222", profile }),
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -766,10 +797,10 @@ describe("check", () => {
 
 	test("rejects Chromium listeners", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				listenerCommand:
-					"/Applications/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=9444 --user-data-dir=/Users/tester/.agent-warm-profile",
+					"/Applications/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=9222 --user-data-dir=/Users/tester/.agent-warm-profile",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -780,10 +811,10 @@ describe("check", () => {
 
 	test("rejects chrome-mac automation bundles", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				listenerCommand:
-					"/tmp/chrome-mac/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=9444 --user-data-dir=/Users/tester/.agent-warm-profile",
+					"/tmp/chrome-mac/Chromium.app/Contents/MacOS/Chromium --remote-debugging-port=9222 --user-data-dir=/Users/tester/.agent-warm-profile",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -795,7 +826,7 @@ describe("check", () => {
 	test("fails when the listener command uses a different debug port", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				listenerCommand: chromeCommand({ port: "9333", profile }),
@@ -813,7 +844,7 @@ describe("check", () => {
 
 	test("fails when CDP answers but no local listener can be inspected", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				findListener: async () => null,
 			}),
@@ -826,7 +857,7 @@ describe("check", () => {
 
 	test("fails when CDP version is not an object", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) return [];
@@ -846,14 +877,14 @@ describe("check", () => {
 
 	test("fails when CDP version misses required fields", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return {
 							Browser: "Chrome/136.0.0.0",
 							webSocketDebuggerUrl:
-								"ws://127.0.0.1:9444/devtools/browser/test-browser",
+								"ws://127.0.0.1:9222/devtools/browser/test-browser",
 						};
 					}
 					return [];
@@ -868,14 +899,14 @@ describe("check", () => {
 
 	test("rejects websocket discovery on a non-loopback host", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"ws://192.168.1.5:9444/devtools/browser/test-browser",
+								"ws://192.168.1.5:9222/devtools/browser/test-browser",
 						});
 					}
 					return [];
@@ -894,12 +925,12 @@ describe("check", () => {
 
 	test("rejects websocket discovery on the wrong port", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
 								"ws://127.0.0.1:9333/devtools/browser/test-browser",
 						});
@@ -917,15 +948,15 @@ describe("check", () => {
 	test("accepts websocket discovery on localhost loopback", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"ws://localhost:9444/devtools/browser/test-browser",
+								"ws://localhost:9222/devtools/browser/test-browser",
 						});
 					}
 					return [{ id: "page-1" }];
@@ -936,18 +967,18 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(envelope.data.web_socket_debugger_url).toBe(
-			"ws://localhost:9444/devtools/browser/test-browser",
+			"ws://localhost:9222/devtools/browser/test-browser",
 		);
 	});
 
 	test("rejects malformed websocket discovery URLs", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl: "not a websocket url",
 						});
 					}
@@ -963,14 +994,14 @@ describe("check", () => {
 
 	test("rejects non-websocket discovery protocols", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"http://127.0.0.1:9444/devtools/browser/test-browser",
+								"http://127.0.0.1:9222/devtools/browser/test-browser",
 						});
 					}
 					return [];
@@ -986,15 +1017,15 @@ describe("check", () => {
 	test("rejects non-browser websocket discovery paths", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"ws://127.0.0.1:9444/devtools/page/test-page",
+								"ws://127.0.0.1:9222/devtools/page/test-page",
 						});
 					}
 					return [{ id: "page-1" }];
@@ -1012,15 +1043,15 @@ describe("check", () => {
 		// target shape must still pass alongside the page-path rejection above.
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"ws://127.0.0.1:9444/devtools/browser/real-browser-guid",
+								"ws://127.0.0.1:9222/devtools/browser/real-browser-guid",
 						});
 					}
 					return [{ id: "page-1" }];
@@ -1031,16 +1062,16 @@ describe("check", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(envelope.data.web_socket_debugger_url).toBe(
-			"ws://127.0.0.1:9444/devtools/browser/real-browser-guid",
+			"ws://127.0.0.1:9222/devtools/browser/real-browser-guid",
 		);
 	});
 
 	test("fails when Chrome was launched without a dedicated user data dir", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				listenerCommand:
-					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --no-first-run",
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --no-first-run",
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1056,18 +1087,18 @@ describe("check", () => {
 			{
 				name: "empty equals form",
 				listenerCommand:
-					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir= --no-first-run",
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir= --no-first-run",
 			},
 			{
 				name: "separate flag without value",
 				listenerCommand:
-					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir --no-first-run",
+					"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir --no-first-run",
 			},
 		];
 
 		for (const scenario of scenarios) {
 			const result = await runForTest(
-				["check", "--port", "9444", "--json"],
+				["check", "--port", "9222", "--json"],
 				testRuntime({
 					listenerCommand: scenario.listenerCommand,
 				}),
@@ -1085,10 +1116,10 @@ describe("check", () => {
 		const profile = join(parent, "profile -- with marker");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
-				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir="${profile}" --no-first-run`,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir="${profile}" --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1108,10 +1139,10 @@ describe("check", () => {
 		await mkdir(decoy, { recursive: true, mode: 0o700 });
 		await mkdir(real, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", real, "--json"],
+			["check", "--port", "9222", "--profile", real, "--json"],
 			testRuntime({
 				profile: real,
-				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=${decoy} --user-data-dir=${real} --no-first-run`,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir=${decoy} --user-data-dir=${real} --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1128,10 +1159,10 @@ describe("check", () => {
 		const profile = join(parent, "--dash-prefixed-profile");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
-				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=${profile} --no-first-run`,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir=${profile} --no-first-run`,
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1145,7 +1176,7 @@ describe("check", () => {
 		const profile = join(home, "Library/Application Support/Google/Chrome");
 		await mkdir(profile, { recursive: true, mode: 0o700 });
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				home,
 				profile,
@@ -1168,7 +1199,7 @@ describe("check", () => {
 		let chmodCount = 0;
 		let writeCount = 0;
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				home,
 				profile,
@@ -1192,9 +1223,9 @@ describe("check", () => {
 		const parent = await makeDir();
 		const profile = join(parent, "missing-profile");
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
-				listenerCommand: chromeCommand({ port: "9444", profile }),
+				listenerCommand: chromeCommand({ port: "9222", profile }),
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1206,11 +1237,11 @@ describe("check", () => {
 	test("returns zero target count when target list is not an array", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
-					if (url.endsWith("/json/version")) return cdpVersion({ port: "9444" });
+					if (url.endsWith("/json/version")) return cdpVersion({ port: "9222" });
 					if (url.endsWith("/json/list")) return { not: "an array" };
 					throw new Error(`unexpected URL: ${url}`);
 				},
@@ -1225,11 +1256,11 @@ describe("check", () => {
 	test("returns zero target count when target list fetch fails", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
-					if (url.endsWith("/json/version")) return cdpVersion({ port: "9444" });
+					if (url.endsWith("/json/version")) return cdpVersion({ port: "9222" });
 					throw new Error("target list offline");
 				},
 			}),
@@ -1243,9 +1274,9 @@ describe("check", () => {
 	test("returns profile_missing when supplied profile is a file", async () => {
 		const profile = await makeFile();
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
-				listenerCommand: chromeCommand({ port: "9444", profile }),
+				listenerCommand: chromeCommand({ port: "9222", profile }),
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1257,7 +1288,7 @@ describe("check", () => {
 	test("rejects throwaway profile locations", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				isTemporaryPath: () => true,
@@ -1278,7 +1309,7 @@ describe("observability", () => {
 	test("keeps JSON success stdout as one envelope and default stderr quiet", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json"],
+			["check", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 
@@ -1293,7 +1324,7 @@ describe("observability", () => {
 			[
 				"check",
 				"--port",
-				"9444",
+				"9222",
 				"--profile",
 				profile,
 				"--json",
@@ -1309,18 +1340,52 @@ describe("observability", () => {
 		expect(result.exitCode).toBe(0);
 		expect(events).toContain("command-start");
 		expect(events).toContain("preflight-check");
+		expect(events).toContain("listener-detected");
 		expect(events).toContain("preflight-ready");
 		expect(diagnostics.every((entry) => entry.run_id === "debug-success")).toBe(true);
 		expect(diagnostics.find((entry) => entry.event === "preflight-check")).toMatchObject({
 			category: ["browser-use.warm-chrome"],
 			endpoint_host: "127.0.0.1",
 			phase: "verify",
-			port: "9444",
+			port: "9222",
 			profile: "provided",
+		});
+		expect(diagnostics.find((entry) => entry.event === "listener-detected")).toMatchObject({
+			category: ["browser-use.warm-chrome"],
+			phase: "inspect_listener",
+			port: "9222",
+			listener_pid: 12345,
 		});
 		expect(result.stderr).not.toContain(profile);
 		expect(result.stderr).not.toContain("devtools/browser");
 		expect(result.stderr).not.toContain("Google Chrome.app");
+	});
+
+	test("debug failure shows when port 9222 has a listener before validation", async () => {
+		const result = await runForTest(
+			["launch", "--port", "9222", "--json", "--debug", "--run-id", "occupied-9222"],
+			testRuntime({
+				fetchJson: async () => {
+					throw new Error("not cdp");
+				},
+				listenerCommand: "/usr/bin/python3 -m http.server 9222",
+			}),
+		);
+		const diagnostics = parseJsonObjects(result.stderr);
+		const events = diagnostics.map((entry) => entry.event);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("not_real_google_chrome");
+		expect(events).toContain("listener-detected");
+		expect(diagnostics.find((entry) => entry.event === "listener-detected")).toMatchObject({
+			run_id: "occupied-9222",
+			phase: "inspect_listener",
+			port: "9222",
+			listener_pid: 12345,
+		});
+		expect(result.stderr).not.toContain("python3");
+		expect(result.stderr).not.toContain("http.server");
 	});
 
 	test("flushes buffered diagnostics on JSON error", async () => {
@@ -1348,10 +1413,10 @@ describe("observability", () => {
 	test("default error diagnostics redact listener command and profile path", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json", "--run-id", "redact-error"],
+			["check", "--port", "9222", "--profile", profile, "--json", "--run-id", "redact-error"],
 			testRuntime({
 				profile,
-				listenerCommand: "/usr/bin/python3 -m http.server 9444",
+				listenerCommand: "/usr/bin/python3 -m http.server 9222",
 			}),
 		);
 
@@ -1379,7 +1444,7 @@ describe("observability", () => {
 	test("quiet wins over debug on success", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["check", "--port", "9444", "--profile", profile, "--json", "--debug", "--quiet"],
+			["check", "--port", "9222", "--profile", profile, "--json", "--debug", "--quiet"],
 			testRuntime({ profile }),
 		);
 
@@ -1391,7 +1456,7 @@ describe("observability", () => {
 	test("debug repair diagnostics include action names without profile paths", async () => {
 		const profile = await makeProfile(0o755);
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json", "--debug"],
+			["repair", "--port", "9222", "--profile", profile, "--json", "--debug"],
 			testRuntime({ profile }),
 		);
 		const diagnostics = parseJsonObjects(result.stderr);
@@ -1410,7 +1475,7 @@ describe("observability", () => {
 			[
 				"launch",
 				"--port",
-				"9444",
+				"9222",
 				"--profile",
 				profile,
 				"--chrome",
@@ -1424,7 +1489,7 @@ describe("observability", () => {
 					if (url.endsWith("/json/version") && !endpointReady) {
 						throw new Error("offline");
 					}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async () => {
 					endpointReady = true;
@@ -1445,7 +1510,7 @@ describe("repair", () => {
 	test("repairs owner-only mode and rewrites DevToolsActivePort", async () => {
 		const profile = await makeProfile(0o755);
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -1457,7 +1522,7 @@ describe("repair", () => {
 		]);
 		expect(await fileMode(profile)).toBe("700");
 		await expect(readFile(join(profile, "DevToolsActivePort"), "utf-8")).resolves.toBe(
-			"9444\n/devtools/browser/test-browser\n",
+			"9222\n/devtools/browser/test-browser\n",
 		);
 	});
 
@@ -1465,7 +1530,7 @@ describe("repair", () => {
 		const profile = await makeProfile(0o700);
 		let chmodCount = 0;
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				chmod: async () => {
@@ -1483,7 +1548,7 @@ describe("repair", () => {
 	test("uses BROWSER_USE_PROFILE_DIR for repair when profile flag is absent", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["repair", "--port", "9444", "--json"],
+			["repair", "--port", "9222", "--json"],
 			testRuntime({
 				env: { BROWSER_USE_PROFILE_DIR: profile },
 				profile,
@@ -1502,9 +1567,9 @@ describe("repair", () => {
 		let chmodCount = 0;
 		let writeCount = 0;
 		const result = await runForTest(
-			["repair", "--port", "9444", "--json"],
+			["repair", "--port", "9222", "--json"],
 			testRuntime({
-				listenerCommand: chromeCommand({ port: "9444", profile }),
+				listenerCommand: chromeCommand({ port: "9222", profile }),
 				chmod: async () => {
 					chmodCount += 1;
 				},
@@ -1532,7 +1597,7 @@ describe("repair", () => {
 		let chmodCount = 0;
 		let writeCount = 0;
 		const result = await runForTest(
-			["repair", "--port", "9444", "--json"],
+			["repair", "--port", "9222", "--json"],
 			testRuntime({
 				home,
 				profile,
@@ -1556,7 +1621,7 @@ describe("repair", () => {
 		const profile = await makeProfile(0o755);
 		let writeCount = 0;
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				chmod: async () => {
@@ -1580,7 +1645,7 @@ describe("repair", () => {
 	test("DevToolsActivePort write failure during repair surfaces runtime failure", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				writeTextFile: async () => {
@@ -1597,7 +1662,7 @@ describe("repair", () => {
 	test("refuses chmod when the current user does not own the profile", async () => {
 		const profile = await makeProfile(0o755);
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				currentUser: async () => "999999",
@@ -1621,7 +1686,7 @@ describe("repair", () => {
 		const profile = await makeProfile(0o700);
 		let writeCount = 0;
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				currentUser: async () => "999999",
@@ -1646,15 +1711,15 @@ describe("repair", () => {
 		const profile = await makeProfile(0o700);
 		let writes = 0;
 		const result = await runForTest(
-			["repair", "--port", "9444", "--profile", profile, "--json"],
+			["repair", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"ws://127.0.0.1:9444/devtools/page/test-page",
+								"ws://127.0.0.1:9222/devtools/page/test-page",
 						});
 					}
 					return [{ id: "page-1" }];
@@ -1676,21 +1741,22 @@ describe("launch", () => {
 	test("starts real Chrome after a machine restart and verifies the new endpoint", async () => {
 		const profile = await makeProfile(0o700);
 		let endpointReady = false;
-		let spawned: { port: string; profileDir: string } | undefined;
+		let spawned: { port: string; profileDir: string; startupUrl: string } | undefined;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version") && !endpointReady) {
 						throw new Error("offline after restart");
 					}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async (input) => {
 					spawned = {
 						port: input.port,
 						profileDir: input.profileDir,
+						startupUrl: input.startupUrl,
 					};
 					endpointReady = true;
 				},
@@ -1700,9 +1766,17 @@ describe("launch", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(spawned).toEqual({ port: "9444", profileDir: await realpath(profile) });
+		expect(spawned).toEqual({
+			port: "9222",
+			profileDir: await realpath(profile),
+			startupUrl: "https://example.com/",
+		});
 		expect(envelope.data.launch_performed).toBe(true);
 		expect(envelope.data.action).toBe("browser_ready");
+		expect(envelope.data.repair_actions).toEqual(["devtools_active_port"]);
+		await expect(readFile(join(profile, "DevToolsActivePort"), "utf-8")).resolves.toBe(
+			"9222\n/devtools/browser/test-browser\n",
+		);
 	});
 
 	test("creates a missing persistent profile before launching after restart", async () => {
@@ -1710,14 +1784,14 @@ describe("launch", () => {
 		const profile = join(parent, "new-warm-profile");
 		let endpointReady = false;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version") && !endpointReady) {
 						throw new Error("offline");
 					}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async () => {
 					endpointReady = true;
@@ -1767,7 +1841,7 @@ describe("launch", () => {
 		let endpointReady = false;
 		let launchedPort = "";
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				env: { BROWSER_USE_CDP_PORT: "9555" },
 				profile,
@@ -1775,7 +1849,7 @@ describe("launch", () => {
 					if (url.endsWith("/json/version") && !endpointReady) {
 						throw new Error("offline");
 					}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async (input) => {
 					launchedPort = input.port;
@@ -1787,22 +1861,22 @@ describe("launch", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(launchedPort).toBe("9444");
-		expect(envelope.data.port).toBe("9444");
+		expect(launchedPort).toBe("9222");
+		expect(envelope.data.port).toBe("9222");
 	});
 
 	test("launch accepts explicit loopback endpoint without separate port", async () => {
 		const profile = await makeProfile(0o700);
 		let endpointReady = false;
 		const result = await runForTest(
-			["launch", "--endpoint", "http://127.0.0.1:9444", "--profile", profile, "--json"],
+			["launch", "--endpoint", "http://127.0.0.1:9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version") && !endpointReady) {
 						throw new Error("offline");
 					}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async () => {
 					endpointReady = true;
@@ -1813,7 +1887,7 @@ describe("launch", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.data.endpoint).toBe("http://127.0.0.1:9444");
+		expect(envelope.data.endpoint).toBe("http://127.0.0.1:9222");
 		expect(envelope.data.launch_performed).toBe(true);
 	});
 
@@ -1821,7 +1895,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--endpoint", "http://192.168.1.5:9444", "--profile", profile, "--json"],
+			["launch", "--endpoint", "http://192.168.1.5:9222", "--profile", profile, "--json"],
 			testRuntime({
 				spawnChrome: async () => {
 					spawnCount += 1;
@@ -1841,7 +1915,7 @@ describe("launch", () => {
 		const profile = join(home, "Library/Application Support/Google/Chrome/Profile 1");
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				home,
 				fetchJson: async () => {
@@ -1865,7 +1939,7 @@ describe("launch", () => {
 		const profile = await makeFile();
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				fetchJson: async () => {
 					throw new Error("offline");
@@ -1894,7 +1968,7 @@ describe("launch", () => {
 			[
 				"launch",
 				"--port",
-				"9444",
+				"9222",
 				"--profile",
 				profile,
 				"--chrome",
@@ -1935,7 +2009,7 @@ describe("launch", () => {
 		for (const chromeBin of scenarios) {
 			let spawnCount = 0;
 			const result = await runForTest(
-				["launch", "--port", "9444", "--profile", profile, "--chrome", chromeBin, "--json"],
+				["launch", "--port", "9222", "--profile", profile, "--chrome", chromeBin, "--json"],
 				testRuntime({
 					profile,
 					fetchJson: async () => {
@@ -1961,7 +2035,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--chrome", "/bin/echo", "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--chrome", "/bin/echo", "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async () => {
@@ -1985,7 +2059,7 @@ describe("launch", () => {
 	test("spawn failure during launch surfaces runtime failure", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async () => {
@@ -2007,11 +2081,12 @@ describe("launch", () => {
 		const runtime = createDefaultRuntime();
 
 		await expect(
-			runtime.spawnChrome({
-				chromeBin: join(await makeDir(), "missing-chrome"),
-				port: "9444",
-				profileDir: await makeProfile(0o700),
-			}),
+				runtime.spawnChrome({
+					chromeBin: join(await makeDir(), "missing-chrome"),
+					port: "9222",
+					profileDir: await makeProfile(0o700),
+					startupUrl: "https://example.com/",
+				}),
 		).rejects.toThrow();
 	});
 
@@ -2020,7 +2095,7 @@ describe("launch", () => {
 		let endpointReady = false;
 		let chromeBin = "";
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 				testRuntime({
 					profile,
 					env: {
@@ -2031,7 +2106,7 @@ describe("launch", () => {
 						if (url.endsWith("/json/version") && !endpointReady) {
 							throw new Error("offline");
 						}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async (input) => {
 					chromeBin = input.chromeBin;
@@ -2051,7 +2126,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				env: {
@@ -2084,7 +2159,7 @@ describe("launch", () => {
 			[
 				"launch",
 				"--port",
-				"9444",
+				"9222",
 					"--profile",
 					profile,
 					"--chrome",
@@ -2098,7 +2173,7 @@ describe("launch", () => {
 					if (url.endsWith("/json/version") && !endpointReady) {
 						throw new Error("offline");
 					}
-					return cdpJsonForPort(url, "9444");
+					return cdpJsonForPort(url, "9222");
 				},
 				spawnChrome: async (input) => {
 					chromeBin = input.chromeBin;
@@ -2118,7 +2193,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async () => {
@@ -2151,7 +2226,7 @@ describe("launch", () => {
 		const profile = join(linkRoot, "Profile 1");
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				home,
 				fetchJson: async () => {
@@ -2179,7 +2254,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				spawnChrome: async () => {
@@ -2201,7 +2276,7 @@ describe("launch", () => {
 			[
 				"launch",
 				"--port",
-				"9444",
+				"9222",
 				"--profile",
 				profile,
 				"--chrome",
@@ -2228,7 +2303,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				env: {
@@ -2253,10 +2328,10 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
-				listenerCommand: "/usr/bin/python3 -m http.server 9444",
+				listenerCommand: "/usr/bin/python3 -m http.server 9222",
 				spawnChrome: async () => {
 					spawnCount += 1;
 				},
@@ -2273,13 +2348,13 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async () => {
 					throw new Error("not cdp");
 				},
-				listenerCommand: "/usr/bin/python3 -m http.server 9444",
+				listenerCommand: "/usr/bin/python3 -m http.server 9222",
 				spawnChrome: async () => {
 					spawnCount += 1;
 				},
@@ -2292,17 +2367,52 @@ describe("launch", () => {
 		expect(envelope.error.code).toBe("not_real_google_chrome");
 	});
 
+	test("wrong-port launch refuses to spawn when primary Warm Chrome is already healthy", async () => {
+		const home = await makeDir();
+		const profile = join(home, ".agent-warm-profile");
+		await mkdir(profile, { recursive: true, mode: 0o700 });
+		let spawnCount = 0;
+		let writeCount = 0;
+		const result = await runForTest(
+			["launch", "--port", "9333", "--profile", profile, "--json"],
+			testRuntime({
+				home,
+				profile,
+				fetchJson: async (url) => {
+					if (url.includes(":9333/")) throw new Error("wrong port");
+					return cdpJsonForPort(url, "9222");
+				},
+				listenerCommand: chromeCommand({ port: "9222", profile }),
+				spawnChrome: async () => {
+					spawnCount += 1;
+				},
+				writeTextFile: async () => {
+					writeCount += 1;
+				},
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(2);
+		expect(spawnCount).toBe(0);
+		expect(writeCount).toBe(0);
+		expect(envelope.error.code).toBe("warm_chrome_already_running");
+		expect(envelope.error.failure_domain).toBe("input");
+		expect(actionIds(envelope)).toEqual(["change_input"]);
+		expectContinuation(envelope, "change_input");
+	});
+
 	test("occupied real Chrome without CDP routes to listener inspection", async () => {
 		const profile = await makeProfile(0o700);
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async () => {
 					throw new Error("not cdp");
 				},
-				listenerCommand: chromeCommand({ port: "9444", profile }),
+				listenerCommand: chromeCommand({ port: "9222", profile }),
 				spawnChrome: async () => {
 					spawnCount += 1;
 				},
@@ -2323,7 +2433,7 @@ describe("launch", () => {
 		const profile = await makeProfile(0o700);
 		let sleeps = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--profile", profile, "--json"],
+			["launch", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({
 				profile,
 				fetchJson: async () => {
@@ -2361,7 +2471,7 @@ describe("launch", () => {
 				name: "supplied Chrome for Testing (input domain)",
 				expectedCode: "chrome_for_testing",
 				expectedDomain: "input",
-				argv: ["launch", "--port", "9444", "--profile", profile, "--chrome", cft, "--json"],
+				argv: ["launch", "--port", "9222", "--profile", profile, "--chrome", cft, "--json"],
 				runtime: testRuntime({
 					profile,
 					fetchJson: async () => {
@@ -2374,7 +2484,7 @@ describe("launch", () => {
 				name: "supplied non-stable Chrome (input domain)",
 				expectedCode: "not_real_google_chrome",
 				expectedDomain: "input",
-				argv: ["launch", "--port", "9444", "--profile", profile, "--chrome", "/bin/echo", "--json"],
+				argv: ["launch", "--port", "9222", "--profile", profile, "--chrome", "/bin/echo", "--json"],
 				runtime: testRuntime({
 					profile,
 					fetchJson: async () => {
@@ -2387,9 +2497,9 @@ describe("launch", () => {
 				name: "discovered Chrome for Testing listener (browser_entry_handoff domain)",
 				expectedCode: "chrome_for_testing",
 				expectedDomain: "browser_entry_handoff",
-				argv: ["check", "--port", "9444", "--json"],
+				argv: ["check", "--port", "9222", "--json"],
 				runtime: testRuntime({
-					listenerCommand: `${cft} --remote-debugging-port=9444 --user-data-dir=/tmp/profile`,
+					listenerCommand: `${cft} --remote-debugging-port=9222 --user-data-dir=/tmp/profile`,
 				}),
 			},
 		];
@@ -2412,20 +2522,20 @@ describe("status", () => {
 	test("defaults to plain human health output", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["status", "--port", "9444", "--profile", profile],
+			["status", "--port", "9222", "--profile", profile],
 			testRuntime({ profile }),
 		);
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("browser_ready command=status");
-		expect(result.stdout).toContain("port=9444");
+		expect(result.stdout).toContain("port=9222");
 		expect(result.stderr).toBe("");
 	});
 
 	test("can emit JSON when requested", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["status", "--port", "9444", "--profile", profile, "--json"],
+			["status", "--port", "9222", "--profile", profile, "--json"],
 			testRuntime({ profile }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -2479,7 +2589,7 @@ describe("status", () => {
 	test("inspect-first failures align retry signals and lead with inspect action", async () => {
 		// listener_missing: CDP answers but no local process owns the port.
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				findListener: async () => null,
 			}),
@@ -2497,14 +2607,14 @@ describe("status", () => {
 
 	test("invalid CDP websocket aligns retry signals", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({
 				fetchJson: async (url) => {
 					if (url.endsWith("/json/version")) {
 						return cdpVersion({
-							port: "9444",
+							port: "9222",
 							webSocketDebuggerUrl:
-								"ws://127.0.0.1:9444/devtools/page/test-page",
+								"ws://127.0.0.1:9222/devtools/page/test-page",
 						});
 					}
 					return [];
@@ -2522,11 +2632,11 @@ describe("status", () => {
 
 	test("plain output names the same action as JSON continuation", async () => {
 		const jsonResult = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({ findListener: async () => null }),
 		);
 		const plainResult = await runForTest(
-			["check", "--port", "9444", "--plain"],
+			["check", "--port", "9222", "--plain"],
 			testRuntime({ findListener: async () => null }),
 		);
 		const envelope = JSON.parse(jsonResult.stdout);
@@ -2540,7 +2650,7 @@ describe("status", () => {
 	test("last output flag wins for status", async () => {
 		const profile = await makeProfile(0o700);
 		const result = await runForTest(
-			["status", "--port", "9444", "--profile", profile, "--json", "--plain"],
+			["status", "--port", "9222", "--profile", profile, "--json", "--plain"],
 			testRuntime({ profile }),
 		);
 
@@ -2643,7 +2753,7 @@ describe("usage failures", () => {
 
 	test("rejects non-http endpoints", async () => {
 		const result = await runForTest(
-			["check", "--endpoint", "https://127.0.0.1:9444", "--json"],
+			["check", "--endpoint", "https://127.0.0.1:9222", "--json"],
 			testRuntime(),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -2657,7 +2767,7 @@ describe("usage failures", () => {
 			[
 				"check",
 				"--endpoint",
-				"http://127.0.0.1:9444",
+				"http://127.0.0.1:9222",
 				"--port",
 				"9555",
 				"--json",
@@ -2682,21 +2792,35 @@ describe("usage failures", () => {
 		expect(result.stderr).toBe("");
 	});
 
-	test("requires a profile before launch can spawn", async () => {
+	test("launch defaults to the conventional CDP port and primary warm profile", async () => {
+		const home = await makeDir();
+		const profile = join(home, ".agent-warm-profile");
+		let endpointReady = false;
 		let spawnCount = 0;
 		const result = await runForTest(
-			["launch", "--port", "9444", "--json"],
+			["launch", "--json"],
 			testRuntime({
+				home,
+				profile,
+				fetchJson: async (url) => {
+					if (url.endsWith("/json/version") && !endpointReady) {
+						throw new Error("offline");
+					}
+					return cdpJsonForPort(url, "9222");
+				},
+				findListener: listenerAfterLaunch(() => endpointReady, profile, "9222"),
 				spawnChrome: async () => {
 					spawnCount += 1;
+					endpointReady = true;
 				},
 			}),
 		);
 		const envelope = JSON.parse(result.stdout);
 
-		expect(result.exitCode).toBe(2);
-		expect(spawnCount).toBe(0);
-		expect(envelope.error.code).toBe("invalid_usage");
+		expect(result.exitCode).toBe(0);
+		expect(spawnCount).toBe(1);
+		expect(envelope.data.port).toBe("9222");
+		expect(envelope.data.profile_dir).toBe(await realpath(profile));
 	});
 
 	test("rejects --chrome outside launch", async () => {
@@ -2783,7 +2907,7 @@ describe("usage failures", () => {
 			},
 			{
 				name: "listener missing",
-				argv: ["check", "--port", "9444", "--plain"],
+				argv: ["check", "--port", "9222", "--plain"],
 				runtime: testRuntime({
 					findListener: async () => null,
 				}),
@@ -2810,7 +2934,7 @@ describe("usage failures", () => {
 
 	test("returns runtime failure on unsupported platforms", async () => {
 		const result = await runForTest(
-			["check", "--port", "9444", "--json"],
+			["check", "--port", "9222", "--json"],
 			testRuntime({ platform: "linux" }),
 		);
 		const envelope = JSON.parse(result.stdout);
@@ -2837,7 +2961,7 @@ describe("usage failures", () => {
 				expectedAction: "change_input",
 				expectedRuntimeAction: "change_input",
 				expectedExitCode: 2,
-				argv: ["check", "--port", "9444", "--profile", await makeProfile(0o700), "--json"],
+				argv: ["check", "--port", "9222", "--profile", await makeProfile(0o700), "--json"],
 				runtime: testRuntime({ profile }),
 			},
 			{
@@ -2847,10 +2971,10 @@ describe("usage failures", () => {
 				expectedAction: "repair_state",
 				expectedRuntimeAction: "inspect_listener",
 				expectedExitCode: 20,
-				argv: ["check", "--port", "9444", "--json"],
+				argv: ["check", "--port", "9222", "--json"],
 				runtime: testRuntime({
 					listenerCommand:
-						"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing --remote-debugging-port=9444 --user-data-dir=/tmp/profile",
+						"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing --remote-debugging-port=9222 --user-data-dir=/tmp/profile",
 				}),
 			},
 			{
@@ -2860,7 +2984,7 @@ describe("usage failures", () => {
 				expectedAction: "repair_state",
 				expectedRuntimeAction: "inspect_listener",
 				expectedExitCode: 20,
-				argv: ["check", "--port", "9444", "--json"],
+				argv: ["check", "--port", "9222", "--json"],
 				runtime: testRuntime({
 					home: profile,
 					profile: defaultProfile,
@@ -2892,6 +3016,129 @@ describe("usage failures", () => {
 	});
 	});
 
+describe("findListenerWithSystemTools error-code branching", () => {
+	test("returns null when lsof exits non-zero (no listener)", async () => {
+		// lsof -t exits 1 with empty stdout when nothing is listening. That is an
+		// expected operational outcome and must map to "no listener", not an error.
+		const exec = async (command: string): Promise<string> => {
+			if (command === "lsof") {
+				throw new Error("lsof exited 1");
+			}
+			throw new Error(`unexpected command: ${command}`);
+		};
+		const result = await findListenerWithSystemTools("9222", exec);
+		expect(result).toBeNull();
+	});
+
+	test("surfaces listener_uninspectable when lsof is missing (ENOENT)", async () => {
+		// A missing/denied lsof is environmental, not "port is free". It must not
+		// masquerade as a null listener; surface it so the caller can act.
+		const exec = async (command: string): Promise<string> => {
+			if (command === "lsof") {
+				const error = new Error("spawn lsof ENOENT") as NodeJS.ErrnoException;
+				error.code = "ENOENT";
+				throw error;
+			}
+			throw new Error(`unexpected command: ${command}`);
+		};
+		await expect(findListenerWithSystemTools("9222", exec)).rejects.toMatchObject({
+			code: "listener_uninspectable",
+		});
+	});
+
+	test("surfaces listener_uninspectable when lsof is denied (EACCES)", async () => {
+		const exec = async (command: string): Promise<string> => {
+			if (command === "lsof") {
+				const error = new Error("spawn lsof EACCES") as NodeJS.ErrnoException;
+				error.code = "EACCES";
+				throw error;
+			}
+			throw new Error(`unexpected command: ${command}`);
+		};
+		await expect(findListenerWithSystemTools("9222", exec)).rejects.toMatchObject({
+			code: "listener_uninspectable",
+		});
+	});
+
+	test("inspects the listener command when lsof finds a pid", async () => {
+		const exec = async (command: string, args: string[]): Promise<string> => {
+			if (command === "lsof") return "4321\n";
+			if (command === "ps" && args.includes("4321")) {
+				return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n";
+			}
+			throw new Error(`unexpected command: ${command}`);
+		};
+		const result = await findListenerWithSystemTools("9222", exec);
+		expect(result?.pid).toBe(4321);
+		expect(result?.command).toContain("Google Chrome");
+	});
+});
+
+describe("awaitChromeSpawn lifecycle", () => {
+	test("resolves when the child emits spawn", async () => {
+		const child = new EventEmitter();
+		const promise = awaitChromeSpawn(child);
+		child.emit("spawn");
+		await expect(promise).resolves.toBeUndefined();
+	});
+
+	test("rejects when the child errors before spawning", async () => {
+		const child = new EventEmitter();
+		const promise = awaitChromeSpawn(child);
+		const failure = new Error("spawn chrome ENOENT");
+		child.emit("error", failure);
+		await expect(promise).rejects.toBe(failure);
+	});
+
+	test("rejects when the child exits before spawning (post-launch death)", async () => {
+		// A Chrome that spawns then dies immediately would otherwise leave the
+		// caller polling a dead endpoint for 15s. The exit listener turns that
+		// silent death into an explicit rejection.
+		const child = new EventEmitter();
+		const promise = awaitChromeSpawn(child);
+		child.emit("exit", 1, null);
+		await expect(promise).rejects.toThrow(/exit/i);
+	});
+
+	test("ignores exit after a successful spawn", async () => {
+		// Once spawn fired we unref and resolve; a later exit (the detached child
+		// ending) must not produce an unhandled rejection.
+		const child = new EventEmitter();
+		const promise = awaitChromeSpawn(child);
+		child.emit("spawn");
+		await expect(promise).resolves.toBeUndefined();
+		expect(() => child.emit("exit", 0, null)).not.toThrow();
+	});
+});
+
+describe("emitUnhandledFailureEnvelope", () => {
+	test("emits a runtime_failure envelope and returns the runtime exit code", () => {
+		const stdout = new BufferWriter();
+		const exitCode = emitUnhandledFailureEnvelope(
+			new Error("stray rejection"),
+			{ runId: "test-run", stdout },
+		);
+		const envelope = JSON.parse(stdout.toString());
+
+		expect(exitCode).toBe(1);
+		expect(envelope.error.code).toBe("runtime_failure");
+		expect(envelope.error.failure_domain).toBe("runtime_diagnostics");
+		expect(envelope.run_id).toBe("test-run");
+		expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
+	});
+});
+
+class BufferWriter {
+	private chunks: string[] = [];
+	write(chunk: string): true {
+		this.chunks.push(chunk);
+		return true;
+	}
+	toString(): string {
+		return this.chunks.join("");
+	}
+}
+
 function testRuntime(
 	overrides: {
 		home?: string;
@@ -2917,14 +3164,14 @@ function testRuntime(
 		now: () => 1000,
 		fetchJson:
 			overrides.fetchJson ??
-			(async (url: string) => cdpJsonForPort(url, "9444")),
+			(async (url: string) => cdpJsonForPort(url, "9222")),
 		findListener:
 			overrides.findListener ??
 			(async () => ({
 				pid: 12345,
 				command:
 					overrides.listenerCommand ??
-					chromeCommand({ port: "9444", profile }),
+					chromeCommand({ port: "9222", profile }),
 			})),
 			currentUser: overrides.currentUser ?? (async () => String(userInfo().uid)),
 			chmod:
@@ -2950,7 +3197,7 @@ function chromeCommand(input: { port: string; profile: string }): string {
 function listenerAfterLaunch(
 	isReady: () => boolean,
 	profile: string,
-	port = "9444",
+	port = "9222",
 ): PreflightRuntime["findListener"] {
 	return async () =>
 		isReady()
