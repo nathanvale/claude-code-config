@@ -904,10 +904,13 @@ function extractUserDataDir(command: string): string | null {
 }
 
 function readCommandFlagValue(args: string, flag: string): string | null {
+	// Chrome resolves repeated switches last-wins, so scan every occurrence and
+	// keep the last non-empty value rather than returning on the first match.
 	let searchFrom = 0;
+	let resolved: string | null = null;
 	while (searchFrom < args.length) {
 		const flagIndex = args.indexOf(flag, searchFrom);
-		if (flagIndex === -1) return null;
+		if (flagIndex === -1) break;
 		const before = args[flagIndex - 1];
 		const after = args[flagIndex + flag.length];
 		const startsToken = flagIndex === 0 || /\s/.test(before);
@@ -916,21 +919,21 @@ function readCommandFlagValue(args: string, flag: string): string | null {
 				// Equals form: the bytes after = are the value verbatim, even if
 				// they begin with "--" (a profile path may legitimately do so).
 				const value = readCommandValue(args, flagIndex + flag.length + 1);
-				return value === "" ? null : value;
+				if (value !== "") resolved = value;
+			} else {
+				// Space-separated form: if the next token is itself a "--" flag,
+				// the flag had no value (e.g. `--user-data-dir --no-first-run`).
+				// Do not consume the following flag as the value.
+				const valueStart = skipWhitespace(args, flagIndex + flag.length);
+				if (!args.slice(valueStart).startsWith("--")) {
+					const value = readCommandValue(args, valueStart);
+					if (value !== "") resolved = value;
+				}
 			}
-			// Space-separated form: if the next token is itself a "--" flag, the
-			// flag had no value (e.g. `--user-data-dir --no-first-run`). Do not
-			// consume the following flag as the value.
-			const valueStart = skipWhitespace(args, flagIndex + flag.length);
-			if (args.slice(valueStart).startsWith("--")) {
-				return null;
-			}
-			const value = readCommandValue(args, valueStart);
-			return value === "" ? null : value;
 		}
 		searchFrom = flagIndex + flag.length;
 	}
-	return null;
+	return resolved;
 }
 
 function skipWhitespace(input: string, index: number): number {

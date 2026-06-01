@@ -937,6 +937,29 @@ describe("check", () => {
 		expect(envelope.data.profile_dir).toBe(await realpath(profile));
 	});
 
+	test("certifies the last --user-data-dir when the flag repeats (Chrome last-wins)", async () => {
+		// Chrome resolves repeated switches last-wins. A listener command with a
+		// decoy profile first and the real profile last must certify the real one,
+		// not the decoy, or the proof reports the wrong profile (and repair would
+		// write DevToolsActivePort into the decoy).
+		const parent = await makeDir();
+		const decoy = join(parent, "decoy-profile");
+		const real = join(parent, "real-profile");
+		await mkdir(decoy, { recursive: true, mode: 0o700 });
+		await mkdir(real, { recursive: true, mode: 0o700 });
+		const result = await runForTest(
+			["check", "--port", "9444", "--profile", real, "--json"],
+			testRuntime({
+				profile: real,
+				listenerCommand: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9444 --user-data-dir=${decoy} --user-data-dir=${real} --no-first-run`,
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.profile_dir).toBe(await realpath(real));
+	});
+
 	test("honors an equals-form --user-data-dir value that begins with --", async () => {
 		// The empty-value guard applies only to the space-separated form. In the
 		// equals form the bytes after = are the value verbatim, even with a
