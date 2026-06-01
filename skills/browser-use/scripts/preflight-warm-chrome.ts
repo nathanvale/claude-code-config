@@ -948,6 +948,13 @@ function readCommandValue(input: string, start: number): string {
 		}
 		return value;
 	}
+	// An unquoted value position that itself begins a "--" flag token means the
+	// flag had no value (e.g. `--user-data-dir --no-first-run`). Do not consume
+	// the following flag as the value. Quoted profile paths and paths that
+	// merely contain "--" inside quotes are handled by the quote branch above.
+	if (input.slice(start).startsWith("--")) {
+		return "";
+	}
 	const nextFlagIndex = findNextCommandFlag(input, start);
 	return input.slice(start, nextFlagIndex ?? input.length).trim();
 }
