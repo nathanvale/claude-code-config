@@ -144,6 +144,22 @@ describe("preflight scope guard", () => {
 	});
 });
 
+describe("replay dependency readiness (real resolution)", () => {
+	test("both deps resolve from repo root and report their versions", async () => {
+		// No resolver stub: exercise the real createRequire surface from the
+		// repo root, proving the declared root deps resolve where deterministic
+		// replay code will load them (R5) -- not from a sibling skill's link.
+		const checks = await checkReplayDependencies();
+
+		const replay = checks.find((c) => c.id === "@puppeteer/replay");
+		const core = checks.find((c) => c.id === "puppeteer-core");
+		expect(replay?.ok).toBe(true);
+		expect(replay?.detail).toContain("@puppeteer/replay@");
+		expect(core?.ok).toBe(true);
+		expect(core?.detail).toContain("puppeteer-core@");
+	});
+});
+
 describe("argv parsing", () => {
 	test("--json runs in json mode", () => {
 		expect(parseArgv(["--json"])).toEqual({ kind: "run", json: true });
