@@ -160,6 +160,41 @@ describe("replay dependency readiness (real resolution)", () => {
 	});
 });
 
+describe("facade package readiness (real resolution)", () => {
+	test("facade resolves from the script-local surface", async () => {
+		// No resolver stub: exercise the real createRequire surface from the
+		// script dir, proving the private link resolves where the future
+		// command-contract.ts will import it (R6).
+		const checks = await checkFacadePackage();
+		expect(checks[0]?.ok).toBe(true);
+		expect(checks[0]?.detail).toContain(FACADE_PACKAGE);
+		expect(checks[0]?.detail).toContain(
+			"resolved from skills/browser-domain-memory/scripts/",
+		);
+	});
+
+	test("public facade API is importable (defineCommandFacadeContract)", async () => {
+		const facade = await import("@side-quest/cli-command-facade");
+		expect(typeof facade.defineCommandFacadeContract).toBe("function");
+	});
+
+	test("wrong surface: a resolver that only finds it elsewhere does not satisfy readiness", async () => {
+		// Simulate the facade present only at a sibling skill's node_modules:
+		// resolution from the script dir must fail, not borrow create-cli's link.
+		const checks = await checkFacadePackage({
+			scriptDir: "/nonexistent/script/dir",
+			resolvePackage: (_name, fromDir) =>
+				fromDir === "/nonexistent/script/dir"
+					? { resolved: false, version: null }
+					: { resolved: true, version: "0.1.0" },
+		});
+		expect(checks[0]?.ok).toBe(false);
+		expect(checks[0]?.detail).toContain(
+			"skills/browser-domain-memory/scripts/",
+		);
+	});
+});
+
 describe("argv parsing", () => {
 	test("--json runs in json mode", () => {
 		expect(parseArgv(["--json"])).toEqual({ kind: "run", json: true });
