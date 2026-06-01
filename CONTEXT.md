@@ -128,6 +128,10 @@ _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory ski
 A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
 
+**Warm Chrome Binding**:
+A `browser-use` lifecycle record that pairs one CDP port with one dedicated Warm Chrome profile. It names the candidate endpoint/profile for Warm Chrome Preflight to verify; it is not readiness proof, Browser Adapter state, or Chrome's `DevToolsActivePort` hint.
+_Avoid_: default port, port lock, DevToolsActivePort, endpoint registry
+
 **Warm Chrome Preflight**:
 A `browser-use` readiness proof run before any Browser Adapter acts. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result rather than owning separate readiness policies.
 _Avoid_: adapter preflight, manual checklist, browser-domain-memory preflight
@@ -137,8 +141,8 @@ A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Ch
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
 
 **Browser Entry Handoff**:
-A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It is not a CLI runtime or dependency failure. The consuming capability reports the need; `browser-use` owns opening, reuse, attach, repair, and adapter selection.
-_Avoid_: self-repair, direct browser launch, adapter fallback
+A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure.
+_Avoid_: self-repair, direct browser launch, adapter fallback, operator stop
 
 **browser-domain-memory**:
 The compound browser knowledge capability. It owns durable per-domain browser knowledge — auth pointers, runbooks, gotchas — and browser capture/distillation plus the three playback modes (prose, runbook, deterministic).
@@ -331,6 +335,9 @@ Domain expert: "No. `browser-use` owns all browser entry, including Warm Chrome 
 
 Dev: "What does `browser-domain-memory` do when Warm Chrome is missing or wrong?"
 Domain expert: "It makes a Browser Entry Handoff. `browser-use` repairs or prepares Warm Chrome; browser-domain-memory does not launch or switch adapters itself."
+
+Dev: "Is a missing Warm Chrome endpoint from preflight a Browser Entry Handoff?"
+Domain expert: "Yes, when the failure means the Warm Chrome environment is not ready. Stop adapter work and continue through `browser-use` recovery."
 
 Dev: "Is a locked 1Password session a Browser Entry Handoff?"
 Domain expert: "No. Auth failures use the auth path. Browser Entry Handoff is for browser environment readiness."
