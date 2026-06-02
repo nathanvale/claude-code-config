@@ -18,7 +18,6 @@ import { readFile } from "node:fs/promises";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
-	type RuntimeActionGuidance,
 	type StructuredRuntimeError,
 	CliUsageError,
 	configureCliDiagnostics,
@@ -29,7 +28,6 @@ import {
 	renderCommandUsage,
 	resetCliDiagnostics,
 	usageError,
-	validateStructuredRuntimeError,
 	withCliDiagnosticContext,
 	createCliDiagnosticContext,
 	writeJsonEnvelope,
@@ -48,8 +46,6 @@ import {
 	type BrowserAdapterRouterReportSource,
 	type BrowserAdapterRouterSupportState,
 	browserAdapterRouterContracts,
-	browserAdapterRouterFailureActions,
-	browserAdapterRouterSuccessActions,
 } from "./command-contract";
 import { BROWSER_ADAPTER_ROUTER_MANIFESTS } from "./browser-adapter-router-manifests";
 import type {
@@ -64,15 +60,20 @@ import type {
 	RoutePreconditionEvidence,
 	RouteSuccess,
 	RouteTask,
-	RouterFailureActionId,
-	RouterSuccessActionId,
 } from "./browser-adapter-router-model";
 import {
-	continuationForCode,
 	evaluateRoute,
 	isReportStale,
 	resolveRequiredCapabilities,
 } from "./browser-adapter-router-engine";
+import {
+	continuationForCode,
+	recoverabilityForCode,
+	routeValidityConstraint,
+	runtimeActionForId,
+	validateRouterContinuationEnvelope,
+	validateRouterErrorEnvelope,
+} from "./browser-adapter-router-recovery";
 
 const VERSION = "0.1.0";
 const ROUTE_FAIL_CLOSED_EXIT_CODE = 20;
@@ -82,9 +83,15 @@ const USAGE_EXIT_CODE = 2;
 const quietDiagnosticWriter: CliWriter = { write: () => true };
 
 export {
+	continuationForCode,
 	evaluateRoute,
 	isReportStale,
+	recoverabilityForCode,
 	resolveRequiredCapabilities,
+	routeValidityConstraint,
+	runtimeActionForId,
+	validateRouterContinuationEnvelope,
+	validateRouterErrorEnvelope,
 };
 export type * from "./browser-adapter-router-model";
 
@@ -499,28 +506,6 @@ type ParsedRouterCommand =
 			capability?: AdapterCapability;
 	  };
 
-const routerRuntimeActions = [
-	...browserAdapterRouterFailureActions,
-	...browserAdapterRouterSuccessActions,
-] as const;
-const routerRuntimeActionById = new Map(
-	routerRuntimeActions.map((action) => [action.id, action]),
-);
-
-function runtimeAction(
-	id: RouterFailureActionId | RouterSuccessActionId,
-): RuntimeActionGuidance {
-	const action = routerRuntimeActionById.get(id);
-	if (!action) {
-		throw new Error(`Unknown Browser Adapter Router runtime action: ${id}`);
-	}
-	return {
-		id,
-		summary: action.summary,
-		side_effects: [...action.sideEffects] as RuntimeActionGuidance["side_effects"],
-	};
-}
-
 export async function runBrowserAdapterRouterCli(
 	argv: readonly string[],
 	options: {
@@ -798,19 +783,24 @@ function writeRouteSuccess(
 		);
 		return;
 	}
-	writeJsonEnvelope(
-		stdout,
-		createCliRuntimeSuccessEnvelope({
+	const envelope = createCliRuntimeSuccessEnvelope({
 			run_id: runtime.runId,
 			data: success,
-			runtime_actions: [runtimeAction("use_selected_browser_adapter")],
+			runtime_actions: [runtimeActionForId("use_selected_browser_adapter")],
 			continuation: {
 				next_action_id: "use_selected_browser_adapter",
 				constraints: [routeValidityConstraint()],
 			},
-		}),
-		runtime,
-	);
+		});
+	const issues = validateRouterContinuationEnvelope(envelope, {
+		requireRouteValidity: true,
+	});
+	if (issues.length > 0) {
+		throw new Error(
+			`Invalid Browser Adapter Router continuation envelope: ${issues.join("; ")}`,
+		);
+	}
+	writeJsonEnvelope(stdout, envelope, runtime);
 }
 
 function writeReportSuccess(
@@ -856,15 +846,6 @@ function writeReportSuccess(
 	);
 }
 
-function routeValidityConstraint() {
-	return {
-		id: "route_validity",
-		summary:
-			"Route is valid for one Bounded Browser Outcome: no adapter switching, no cold-browser fallback; reroute when bundle, target origin, selected adapter, proof, capability evidence, or preconditions change or expire.",
-		forbidden_action_ids: ["adapter_fallback", "cold_browser_fallback"],
-	};
-}
-
 function emitRouteFailure(input: {
 	failure: RouteFailure;
 	outputMode: OutputMode;
@@ -890,20 +871,28 @@ function emitRouteFailure(input: {
 		retryable: false,
 		failure_domain: "browser_adapter_router",
 	};
-	writeJsonEnvelope(
-		input.stdout,
-		createCliRuntimeErrorEnvelope({
+	const envelope = createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 			error,
-			runtime_actions: [runtimeAction(failure.next_action_id)],
+			runtime_actions: [runtimeActionForId(failure.next_action_id)],
 			continuation: {
 				next_action_id: failure.next_action_id,
 				constraints: [routeValidityConstraint()],
 			},
-		}),
-		{ runId: input.runId, durationMs: input.durationMs },
-	);
+		});
+	const issues = validateRouterErrorEnvelope(envelope, {
+		requireRouteValidity: true,
+	});
+	if (issues.length > 0) {
+		throw new Error(
+			`Invalid Browser Adapter Router error envelope: ${issues.join("; ")}`,
+		);
+	}
+	writeJsonEnvelope(input.stdout, envelope, {
+		runId: input.runId,
+		durationMs: input.durationMs,
+	});
 	return ROUTE_FAIL_CLOSED_EXIT_CODE;
 }
 
@@ -927,9 +916,7 @@ function emitReportFailure(input: {
 	// Share the route path's per-code continuation mapping; report failures
 	// (unknown or stale) both resolve to research_adapter_capability there.
 	const nextAction = continuationForCode(code);
-	writeJsonEnvelope(
-		input.stdout,
-		createCliRuntimeErrorEnvelope({
+	const envelope = createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 			error: {
@@ -938,41 +925,24 @@ function emitReportFailure(input: {
 				message,
 				exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 				severity: "error",
-				recoverability: "change_input",
+				recoverability: recoverabilityForCode(code),
 				retryable: false,
 				failure_domain: "browser_adapter_router",
 			},
-			runtime_actions: [runtimeAction(nextAction)],
+			runtime_actions: [runtimeActionForId(nextAction)],
 			continuation: { next_action_id: nextAction },
-		}),
-		{ runId: input.runId, durationMs: input.durationMs },
-	);
-	return ROUTE_FAIL_CLOSED_EXIT_CODE;
-}
-
-function recoverabilityForCode(
-	code: BrowserAdapterRouterDiagnosticCode,
-): StructuredRuntimeError["recoverability"] {
-	switch (code) {
-		case "auth_session_unverified":
-		case "target_origin_unverified":
-			return "authenticate";
-		case "adapter_attachment_unverified":
-			return "repair_state";
-		case "route_evidence_invalid":
-		case "route_evidence_mixed_run":
-		case "route_evidence_stale":
-		case "adapter_capability_none":
-		case "adapter_capability_unknown":
-		case "adapter_capability_stale":
-		case "adapter_capability_partial":
-		case "adapter_attachment_incompatible":
-			return "change_input";
-		default:
-			// Exhaustiveness guard: a new code must declare its recoverability.
-			void (code satisfies never);
-			return "change_input";
+		});
+	const issues = validateRouterErrorEnvelope(envelope);
+	if (issues.length > 0) {
+		throw new Error(
+			`Invalid Browser Adapter Router error envelope: ${issues.join("; ")}`,
+		);
 	}
+	writeJsonEnvelope(input.stdout, envelope, {
+		runId: input.runId,
+		durationMs: input.durationMs,
+	});
+	return ROUTE_FAIL_CLOSED_EXIT_CODE;
 }
 
 function emitRouteEvidenceError(input: {
@@ -991,26 +961,33 @@ function emitRouteEvidenceError(input: {
 			);
 			return ROUTE_FAIL_CLOSED_EXIT_CODE;
 		}
-		writeJsonEnvelope(
-			input.stdout,
-			createCliRuntimeErrorEnvelope({
+		const nextAction = continuationForCode(code);
+		const envelope = createCliRuntimeErrorEnvelope({
+			run_id: input.runId,
+			process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
+			error: {
 				run_id: input.runId,
-				process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
-				error: {
-					run_id: input.runId,
-					code,
-					message: input.error.message,
-					exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
-					severity: "error",
-					recoverability: "change_input",
-					retryable: false,
-					failure_domain: "browser_adapter_router",
-				},
-				runtime_actions: [runtimeAction("change_route_input")],
-				continuation: { next_action_id: "change_route_input" },
-			}),
-			{ runId: input.runId, durationMs: input.durationMs },
-		);
+				code,
+				message: input.error.message,
+				exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
+				severity: "error",
+				recoverability: recoverabilityForCode(code),
+				retryable: false,
+				failure_domain: "browser_adapter_router",
+			},
+			runtime_actions: [runtimeActionForId(nextAction)],
+			continuation: { next_action_id: nextAction },
+		});
+		const issues = validateRouterErrorEnvelope(envelope);
+		if (issues.length > 0) {
+			throw new Error(
+				`Invalid Browser Adapter Router error envelope: ${issues.join("; ")}`,
+			);
+		}
+		writeJsonEnvelope(input.stdout, envelope, {
+			runId: input.runId,
+			durationMs: input.durationMs,
+		});
 		return ROUTE_FAIL_CLOSED_EXIT_CODE;
 	}
 	return emitCliError({
@@ -1042,9 +1019,7 @@ function emitCliError(input: {
 		);
 		return exitCode;
 	}
-	writeJsonEnvelope(
-		input.stdout,
-		createCliRuntimeErrorEnvelope({
+	const envelope = createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
 			error: {
@@ -1062,13 +1037,23 @@ function emitCliError(input: {
 			// continuation rather than leaving the agent to guess.
 			...(isUsage
 				? {
-						runtime_actions: [runtimeAction("change_route_input")],
+						runtime_actions: [runtimeActionForId("change_route_input")],
 						continuation: { next_action_id: "change_route_input" },
 					}
 				: { continuation: { requires_operator: true } }),
-		}),
-		{ runId: input.runId, durationMs: input.durationMs },
-	);
+		});
+	if (isUsage) {
+		const issues = validateRouterErrorEnvelope(envelope);
+		if (issues.length > 0) {
+			throw new Error(
+				`Invalid Browser Adapter Router error envelope: ${issues.join("; ")}`,
+			);
+		}
+	}
+	writeJsonEnvelope(input.stdout, envelope, {
+		runId: input.runId,
+		durationMs: input.durationMs,
+	});
 	return exitCode;
 }
 
@@ -1289,27 +1274,7 @@ export async function runForTest(
 }
 
 export function validateErrorEnvelopeForTest(envelope: unknown): string[] {
-	if (
-		!envelope ||
-		typeof envelope !== "object" ||
-		Array.isArray(envelope) ||
-		!("error" in envelope)
-	) {
-		return ["envelope.error missing"];
-	}
-	const error = (envelope as { error: unknown }).error;
-	const runId =
-		"run_id" in envelope && typeof envelope.run_id === "string"
-			? envelope.run_id
-			: undefined;
-	const exitCode =
-		error && typeof error === "object" && "exit_code" in error
-			? (error as { exit_code: unknown }).exit_code
-			: undefined;
-	return validateStructuredRuntimeError(error, {
-		run_id: runId,
-		process_exit_code: typeof exitCode === "number" ? exitCode : undefined,
-	});
+	return validateRouterErrorEnvelope(envelope);
 }
 
 if (import.meta.main) {

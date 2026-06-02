@@ -24,6 +24,7 @@ import type {
 	RouteTask,
 	RouterFailureActionId,
 } from "./browser-adapter-router-model";
+import { continuationForCode } from "./browser-adapter-router-recovery";
 
 const CHROME_DEVTOOLS_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
@@ -530,41 +531,6 @@ function buildFailureFromDecision(input: {
 		candidate_decisions: input.decisions,
 		informational_alternatives: input.informational,
 	};
-}
-
-// One canonical continuation per failure code (R18, U3). Alternatives stay
-// explanatory only.
-export function continuationForCode(
-	code: BrowserAdapterRouterDiagnosticCode,
-): RouterFailureActionId {
-	switch (code) {
-		case "adapter_attachment_unverified":
-			return "prove_adapter_attachment";
-		case "adapter_capability_stale":
-		case "adapter_capability_unknown":
-			return "research_adapter_capability";
-		case "adapter_capability_partial":
-			return "accept_partial_adapter";
-		case "adapter_capability_none":
-		case "adapter_attachment_incompatible":
-		case "route_evidence_invalid":
-		case "route_evidence_mixed_run":
-		case "route_evidence_stale":
-		case "auth_session_unverified":
-		case "target_origin_unverified":
-			return "change_route_input";
-		default:
-			// Exhaustiveness guard: a new diagnostic code added to the union
-			// must declare its continuation here, or this fails to compile.
-			return assertNeverDiagnosticCode(code);
-	}
-}
-
-// Compile-time exhaustiveness guard for diagnostic-code switches. Runtime
-// fallback is the safe fail-closed input action.
-function assertNeverDiagnosticCode(code: never): "change_route_input" {
-	void code;
-	return "change_route_input";
 }
 
 function buildResearchRecovery(input: {

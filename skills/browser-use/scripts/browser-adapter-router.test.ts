@@ -29,6 +29,13 @@ import {
 	validateCapabilityReport,
 	validateErrorEnvelopeForTest,
 } from "./browser-adapter-router";
+import {
+	continuationForCode,
+	recoverabilityForCode,
+	runtimeActionForId,
+	validateRouterContinuationEnvelope,
+	validateRouterErrorEnvelope,
+} from "./browser-adapter-router-recovery";
 import { BROWSER_ADAPTER_ROUTER_MANIFESTS } from "./browser-adapter-router-manifests";
 
 const cleanupPaths: string[] = [];
@@ -847,6 +854,7 @@ describe("U2 policy resolver", () => {
 		expect(
 			(envelope.continuation as { next_action_id?: string }).next_action_id,
 		).toBe("use_selected_browser_adapter");
+		expect(validateRouterContinuationEnvelope(envelope)).toEqual([]);
 	});
 
 	test("route success emits constraints for selected adapter validity", async () => {
@@ -991,6 +999,9 @@ describe("U3 research recovery", () => {
 		expect(continuation.next_action_id).toBe("prove_adapter_attachment");
 		// exactly one continuation; runtime_actions carries the same id
 		expect(actions.map((a) => a.id)).toContain("prove_adapter_attachment");
+		expect(
+			validateRouterErrorEnvelope(parsed, { requireRouteValidity: true }),
+		).toEqual([]);
 	});
 
 	test("missing attachment proof recovery uses prove_adapter_attachment", () => {
@@ -1021,6 +1032,37 @@ describe("U3 research recovery", () => {
 		);
 		const parsed = parseJson(stdout);
 		expect(validateErrorEnvelopeForTest(parsed)).toEqual([]);
+	});
+
+	test("recovery metadata owns continuation and recoverability", () => {
+		expect(continuationForCode("adapter_attachment_unverified")).toBe(
+			"prove_adapter_attachment",
+		);
+		expect(continuationForCode("adapter_capability_stale")).toBe(
+			"research_adapter_capability",
+		);
+		expect(recoverabilityForCode("auth_session_unverified")).toBe(
+			"authenticate",
+		);
+	});
+
+	test("runtime action lookup projects declared Router actions", () => {
+		const action = runtimeActionForId("use_selected_browser_adapter");
+		expect(action.id).toBe("use_selected_browser_adapter");
+		expect(action.summary.length).toBeGreaterThan(0);
+		expect(action.side_effects).toEqual(["check"]);
+	});
+
+	test("report failure validates through Router recovery helper", async () => {
+		const { stdout } = await runForTest(
+			["report", "--adapter", "chrome-devtools", "--json"],
+			makeRuntime({ evaluationDate: "2027-01-01" }),
+		);
+		const parsed = parseJson(stdout);
+		expect(validateRouterErrorEnvelope(parsed)).toEqual([]);
+		expect(
+			(parsed.continuation as { next_action_id?: string }).next_action_id,
+		).toBe("research_adapter_capability");
 	});
 
 	test("diagnostic codes are the package-owned vocabulary", () => {
