@@ -53,16 +53,20 @@ The safety line for diagnostic trails that survive a CLI invocation. It names wh
 _Avoid_: full logging policy, trace vendor contract, raw log access, privacy schema
 
 **Diagnostic capability**:
-A contract candidate for a discoverable agent-native CLI affordance that checks readiness across environment, auth, config, service reachability, and local dependencies. Prefer `doctor` as CLI spelling when the capability exists, but don't require a literal route name when a package has an equivalent diagnostic path.
+A runtime-backed package-owned command role for discoverable readiness diagnostics across environment, auth, config, service reachability, and local dependencies. Prefer `doctor` as CLI spelling when a package has no established diagnostic route; facade validation owns the role, not route spelling or diagnostic event meaning.
 _Avoid_: mandatory doctor command, health route, status-only command, diagnostics prose
 
 **Baseline exit semantics**:
-The contract candidate minimum exit meaning set for agent-native CLIs: success, generic/runtime failure, and invalid usage. Extra exit codes remain package-owned and justified by distinct agent routing value.
+A facade-owned minimum exit meaning set for agent-native command contracts: success, generic or runtime failure, and invalid usage. Extra exit codes remain package-owned and justified by distinct agent routing value.
 _Avoid_: full exit taxonomy, package exit policy, prose-only exit convention
 
 **Machine-readable output capability**:
 The runtime-backed promise that an agent-native CLI exposes a parseable output path and keeps primary data separate from diagnostics. Exact payload content, mode names beyond the baseline, summaries, pagination, and field selection remain package-owned design choices.
 _Avoid_: JSON everywhere, prose-only output, mixed stdout diagnostics, package result schema
+
+**Package-owned result vocabulary**:
+Stable literal values a package emits or relies on inside its own command result surface, such as `data.*` status strings, source labels, diagnostic codes, failure domains, package runtime action ids, and exit codes beyond the facade baseline. Keep vocabulary in the package's contract-owned module cluster; facade docs own envelope shape, baseline exit keys, and result-contract field shape.
+_Avoid_: facade enum registry, generic result vocabulary, prose-owned literal list
 
 **Structured failure recovery**:
 The runtime-backed failure guidance minimum for agent-native CLIs: machine-readable failure category and same-input retry safety. Package code owns exact error families, repair meaning, runtime action labels, and operator policy.
@@ -73,8 +77,8 @@ The runtime-backed shape that exposes possible runtime actions, side-effect clas
 _Avoid_: full repair option schema, executable auto-repair, package recovery policy, confidence gate
 
 **Diagnostic trail pointer**:
-The contract candidate failure affordance that connects a failed invocation to its diagnostic trail when that trail exists. It may resolve through a diagnostics command, log path, trace URL, or package-owned surface; exact storage and logging implementation stay outside the contract.
-_Avoid_: mandatory log file, logging framework contract, trace vendor field, prose-only breadcrumb
+The design-layer failure affordance whose runtime-backed narrowing connects one CLI invocation to a package-owned Diagnostic capability for the same run. Storage, access, retention, deletion, and diagnostic event meaning stay package or platform policy.
+_Avoid_: mandatory log file, logging framework contract, trace vendor field, raw log access, persisted diagnostics access
 
 **Side-effect safety spine**:
 The runtime-backed safety minimum for agent-native CLIs: side-effect classes, execution modes, interactivity stance, and operator-stop capability. Package policy owns confirmations, rollback, retention, approval thresholds, and domain-specific gates.
@@ -93,7 +97,7 @@ The trust boundary for free text exposed through machine-readable command discov
 _Avoid_: prompt-injection scanner, content moderation, scraped help text, user-authored catalog text
 
 **Write preview capability**:
-The contract candidate safety promise that mutating command surfaces declare a preview, check, or dry-run path when safe preview is possible. Package policy owns exact preview behavior and justified exceptions.
+A runtime-backed safety promise that mutating command surfaces declare a check or dry-run path, or a package-owned exception when safe preview is not possible. Package policy owns exact preview behavior, rollback, idempotency, confirmation, and approval thresholds.
 _Avoid_: mandatory dry-run for every command, fake preview, package mutation policy, prose-only write warning
 
 **Secret input boundary**:
@@ -235,6 +239,10 @@ _Avoid_: manual checklist, durable binding, adapter fallback
 **Browser Adapter**:
 A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome: `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge. `puppeteer-core` is deterministic replay detail, not public adapter name.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
+
+**Browser Adapter Command Resolution**:
+Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; post-proof action invocation belongs to later adapter facade work.
+_Avoid_: bunx requirement, npx requirement, prose runner fallback, public package-runner contract, action facade
 
 **Browser Entry Handoff**:
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure.

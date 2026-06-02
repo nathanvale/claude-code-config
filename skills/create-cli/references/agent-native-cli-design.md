@@ -60,6 +60,15 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
   runtime-backed.
 - Prefer explicit `--json` for agents and scripts.
 - Declare result-contract metadata when output shape is stable and agent-facing.
+- Before documenting stable result literals, ask who owns the literal.
+- Facade owns contract shape.
+- Package-owned result vocabulary owns stable package result literals; see
+  `../../../CONTEXT.md` for category examples.
+- Private implementation detail stays out of create-cli prose.
+- Keep stable package result vocabulary near the package command contract: same
+  module while small, adjacent contract-owned module once noisy.
+- Browser Adapter Proof is a pattern citation only: stable package result
+  literals stayed beside the package command contract.
 - Keep human TTY output concise and scannable.
 - Use object JSON when correlation matters.
 - Keep stdout parseable; never mix progress, logs, or diagnostics into data.
@@ -71,7 +80,7 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 
 ## Exit Codes
 
-- Treat baseline exit semantics as contract candidate.
+- Treat baseline exit semantics as runtime-backed.
 - Baseline semantics: success, generic/runtime failure, invalid usage.
 - Add richer exit codes only when a skill driver can route differently from the
   code alone.
@@ -119,30 +128,27 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 ## Observability
 
 - Treat run correlation ID as runtime-backed.
-- Treat diagnostic trail pointer as contract candidate.
+- Treat diagnostic trail pointer as runtime-backed.
 - Quiet success.
 - Rich failure.
 - Include run correlation ID.
-- If diagnostics persist, include diagnostics command as portable inspection
-  path.
-- Use log path or trace URL only when those are real supported surfaces.
+- Point same-run failures to the diagnostic capability when more inspection
+  would help.
 - On failure, include same diagnostic pointer in machine-readable payload and
   human stderr.
 - Buffer detailed diagnostics during a run; flush on failure when supported.
 - Keep success logs out of the driver context unless requested.
 - Use facade-owned diagnostic flags for diagnostic volume and correlation.
 - Don't design package-specific diagnostic flags that fight the facade.
-- Diagnostic trail pointer does not grant raw log access.
-- When diagnostics persist, define what shared surfaces may reveal, who can
-  access them, how long they live, and how they can be deleted.
-- Keep protocol-visible diagnostic pointers sanitized and scoped to supported
-  inspection surfaces.
+- Diagnostic trail pointer is not persisted diagnostics access.
+- If diagnostics need a longer-lived shared surface, start a separate persisted
+  diagnostics exposure decision.
 
 ## Diagnostic Capability
 
 - Expose a discoverable diagnostic capability when readiness checks have real
   dependencies or state.
-- Treat diagnostic capability as contract candidate.
+- Treat diagnostic capability as runtime-backed.
 - Prefer `doctor` as CLI spelling.
 - Accept package-native equivalents when discovery clearly marks the diagnostic
   path.
@@ -157,10 +163,12 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 
 - Treat side-effect safety spine, redaction boundary, secret input boundary,
   and non-interactive execution spine as runtime-backed.
-- Treat write preview capability as contract candidate.
+- Treat write preview capability as runtime-backed.
 - Dry-run first for writes.
 - Require explicit execute mode for writes, destructive actions, auth, billing,
   irreversible actions, and externally visible mutations.
+- Do not use route-name inference for safety; use honest side-effect metadata
+  declared to the facade.
 - Low-risk read, check, and observation commands may declare side effects
   without a separate execute mode when they don't mutate state.
 - Require operator confirmation for destructive, auth, billing, or irreversible
@@ -193,6 +201,8 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 ## Review Checklist
 
 - Can the command contract validate its own declared surface?
+- Does every stable result literal have the right owner: facade shape,
+  package-owned result vocabulary, or private implementation detail?
 - Does the command meet the minimum bar before adopting heavier design-layer
   features?
 - Can a fresh driver discover the command and know when to use it?
@@ -206,6 +216,7 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 - Is projected discovery text maintainer-authored and safe for agent context?
 - Does MCP need a separate pass for this adoption channel?
 - Can exact contract shape be validated by the runtime?
+- Does generic create-cli prose avoid package-specific literal values?
 
 ## Owners
 

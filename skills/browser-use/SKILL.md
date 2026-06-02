@@ -76,6 +76,11 @@ skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-d
 
 Use after Warm Chrome Preflight and Browser Adapter Proof pass. Config repair details live in `mcporter-config.md`.
 
+- Skill prose names the public tool: `mcporter`.
+- Browser Adapter Proof owns command resolution and dependency recovery.
+- Missing `mcporter`, package runner, or Chrome DevTools MCP is `adapter_dependency_missing`, not Browser Entry Handoff.
+- Don't rewrite hot-path examples to a package runner; fix local command resolution instead.
+
 ```bash
 skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 mcporter call chrome-devtools.list_pages --args '{}' --output text

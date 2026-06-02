@@ -64,6 +64,7 @@ export const BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES = [
 	"adapter_config_stale",
 	"adapter_config_missing",
 	"adapter_dependency_missing",
+	"adapter_command_override_invalid",
 	"adapter_binding_mismatch",
 	"adapter_binding_ambiguous",
 	"adapter_signal_weak",
@@ -148,6 +149,11 @@ const adapterProofEnvVars = [
 		description: "Dedicated profile directory hint.",
 	},
 	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
+	{
+		name: "BROWSER_USE_MCPORTER_COMMAND_JSON",
+		description:
+			"JSON array command vector override for mcporter. Values must be non-empty strings; shell strings are rejected; package runners are never tried automatically.",
+	},
 ] as const satisfies BrowserAdapterProofCommandContract["envVars"];
 
 const adapterProofExitCodes = {
@@ -217,6 +223,12 @@ export const browserAdapterProofFailureActions = [
 		id: "inspect_adapter_config",
 		summary: "Inspect Browser Adapter config without changing it.",
 		sideEffects: ["check"],
+	},
+	{
+		id: "configure_adapter_dependency",
+		summary:
+			"Expose mcporter on PATH or configure an explicit mcporter command vector.",
+		sideEffects: ["write"],
 	},
 	{
 		id: "update_adapter_config",

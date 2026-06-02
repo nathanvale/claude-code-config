@@ -1,12 +1,22 @@
 ---
 title: "fix: Resolve Warm Chrome port through discovery, not disagreeing defaults"
 type: fix
-status: active
+status: superseded
 date: 2026-06-01
 issue: 149
+superseded_by: docs/adr/0009-browser-use-fixed-cdp-convention-and-runtime-proof.md
+resolved_by: https://github.com/nathanvale/claude-code-config/pull/152
 ---
 
 # fix: Resolve Warm Chrome port through discovery, not disagreeing defaults
+
+## Closure
+
+- Superseded by ADR 0009 fixed CDP convention plus runtime proof.
+- Issue #149 closed by PR #152 through `9222` / `~/.agent-warm-profile` alignment and Warm Chrome Preflight hardening.
+- Do not implement resolver, persisted hint, allocation, lease, or binding machinery from this plan.
+- Keep as incident history and guardrail source only.
+- Current adapter-readiness path: Browser Adapter Proof for `chrome-devtools`.
 
 ## Summary
 
