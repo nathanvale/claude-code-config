@@ -21,6 +21,8 @@ it. Design the pattern; let the facade hold it.
 - `--json` output rule → `json: boolean` + `createCliRuntimeSuccessEnvelope` /
   `writeJsonEnvelope` (the machine-stable `{ status, run_id, data }` shape).
 - Exit-code map → `exitCodes: Record<string, string>` (numeric-string keys).
+  Baseline Exit Semantics requires `"0"` success, `"1"` generic or runtime
+  failure, and `"2"` invalid usage; extra numeric codes stay package-owned.
 - `--dry-run` / safety modes → `executionModes: 'normal' | 'check' | 'dry_run'`.
 - `--plain` / line-based output → `outputModes: 'json' | 'plain' | 'jsonl'`
   (declare the capability; the facade advertises it, you render it).
@@ -31,10 +33,17 @@ it. Design the pattern; let the facade hold it.
   that imply a secret so they never reach the agent catalog).
 - Destructive-op classification → `sideEffects: 'read' | 'check' | 'write' |
   'destructive' | 'auth' | 'network' | 'browser'`.
+- Write Preview Capability → `sideEffects` containing `write` or `destructive`
+  requires `executionModes` containing `check` or `dry_run`, or safe-text
+  `previewExemption.reason`.
+- Diagnostic Capability → `capabilityRoles: ["diagnostic"]`; command name and
+  route spelling stay package-owned.
 - Error shape + recovery → `StructuredRuntimeError` + `AgentHint` (built via
   `createCliRuntimeErrorEnvelope`): `code`, `message`, `exit_code`, `severity`,
   `recoverability`, `retryable`, optional `hint`.
 - Result schema → `resultContract: { id, kind?, schema_version? }`.
+- Diagnostic trail → envelope helpers accept `diagnostic_trail` only as a
+  same-run pointer to `surface.kind: "diagnostic_capability"`.
 - Follow-up actions → `actionAffordances` / `RuntimeActionGuidance`.
 - Discovery / subcommand projection → `projectCommandDiscoveryTree`.
 
@@ -67,6 +76,13 @@ Ask:
 Static `actionAffordances` are discovery vocabulary. Per-run output is runtime
 authority. See ADR-0016 and facade package source for exact fields.
 
+## Package-owned result vocabulary
+
+`resultContract` identifies a stable command-result surface; it does not make
+the facade own package literals. Use Package-owned result vocabulary from
+`../../../CONTEXT.md` for category language. Private implementation detail stays
+private.
+
 ## Facade owns the diagnostic flags — don't declare them
 
 `--quiet`, `--verbose`, `--debug`, `--run-id` are facade-reserved (consumed
@@ -82,12 +98,16 @@ that stays in the prose spec (no contract field — fine for v1).
 
 Contract-enforced:
 
-- The Basics (exit codes, stdout/stderr) → `exitCodes`, `json`.
+- The Basics (baseline exit codes, stdout/stderr) → `exitCodes`, `json`.
 - Help (`-h/--help`) → `renderCommandUsage`.
 - Output (`--json`) → `json` + envelope writers.
 - Errors (structured + recovery) → `StructuredRuntimeError` + `AgentHint`.
 - Arguments and flags → typed `flags`.
 - Destructive classification → `sideEffects`; safety modes → `executionModes`.
+- Write preview for declared write/destructive commands → `sideEffects` +
+  `executionModes` or `previewExemption`.
+- Diagnostic capability role → `capabilityRoles`.
+- Diagnostic trail reference → `diagnostic_trail`.
 - Result schema / follow-ups → `resultContract` / `actionAffordances`.
 - Output: `--plain` / line-based modes → `outputModes` (declare, don't enforce).
 - Interactivity: `--no-input` stance → `interactivity` (declare, don't enforce).
@@ -129,6 +149,15 @@ Declare `sideEffects` honestly. Under-declared write/destructive effects can
 silently disable the high-stakes guard unless the consumer passes
 `writeImplyingMutations`.
 
+Write preview enforcement keys on honest `sideEffects`, not route-name
+inference or generic mutation vocabulary. `writeImplyingMutations` can catch a
+package-local mismatch, but the always-on preview requirement starts from
+declared `write` / `destructive` side effects.
+
+`diagnostic_trail` is same-run diagnostic capability shape only. It carries
+run correlation and a capability target; it does not carry raw logs, trace URLs,
+retention, access, deletion, or platform policy.
+
 Known boundary — projected free-text is scanned for secrets/control-chars, NOT
 for instruction-shaped text. The construction scan (above) catches credentials,
 control characters, and non-string types in projected fields. It deliberately
@@ -151,7 +180,7 @@ wrong spec can't ship silently. `parseCommandFacadeContract` is the no-throw
 variant — returns `{ ok, contracts } | { ok: false, issues }` where each issue
 carries a `category` and an imperative `action` an agent loop can apply.
 
-What the validator actually checks (it enforces *shape*, not judgment):
+What the validator actually checks (it enforces *shape*, not package judgment):
 
 - enum flag with empty `values` → `command-enum-flag-values-missing`.
 - a flag key not starting with `--` → `command-flag-name-invalid`.
@@ -160,9 +189,10 @@ What the validator actually checks (it enforces *shape*, not judgment):
 - an audience outside `agent|operator|smoke|governance` → `command-audience-invalid`.
 - an alias at a missing target / with empty default args → `command-alias-*`.
 
-It does NOT range-check exit codes or judge whether codes are *sensible* — that
-judgment is yours (recommend sysexits / 0-1-2). A minimal legal contract needs
-only: `script, summary, usage, json, audience, mutation, flags, exitCodes`;
+It requires baseline `"0"`, `"1"`, and `"2"` keys and numeric-string exit-code
+keys. It does not range-check extra numeric codes or judge message text beyond
+the projected-free-text safety scan. A minimal legal contract needs only:
+`script, summary, usage, json, audience, mutation, flags, exitCodes`;
 everything else is optional, so emit minimal and enrich later.
 
 ## Self-correction loop (autonomous mode)
