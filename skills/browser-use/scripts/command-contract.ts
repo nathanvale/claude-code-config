@@ -6,6 +6,9 @@ import {
 export const WARM_CHROME_PREFLIGHT_CONTRACT_ID =
 	"browser-use.warm-chrome-preflight" as const;
 export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "2" as const;
+export const BROWSER_ADAPTER_PROOF_CONTRACT_ID =
+	"browser-use.browser-adapter-proof" as const;
+export const BROWSER_ADAPTER_PROOF_SCHEMA_VERSION = "1" as const;
 
 export type WarmChromePreflightCommand =
 	| "check"
@@ -18,6 +21,17 @@ type WarmChromeCommandContract = CommandFacadeContract<
 	WarmChromePreflightCommand,
 	WarmChromeAudience,
 	WarmChromeMutation
+>;
+export type BrowserAdapterProofCommand = "check" | "status";
+export type BrowserAdapterProofAdapter =
+	| "chrome-devtools"
+	| "agent-browser"
+	| "playwright-cdp";
+type BrowserAdapterProofMutation = "check";
+type BrowserAdapterProofCommandContract = CommandFacadeContract<
+	BrowserAdapterProofCommand,
+	WarmChromeAudience,
+	BrowserAdapterProofMutation
 >;
 
 const readFlags = {
@@ -40,10 +54,10 @@ const writeFlags = {
 } as const satisfies WarmChromeCommandContract["flags"];
 
 const commonEnvVars = [
-	{ name: "BROWSER_USE_CDP_PORT", description: "Default CDP port." },
+	{ name: "BROWSER_USE_CDP_PORT", description: "CDP port hint." },
 	{
 		name: "BROWSER_USE_PROFILE_DIR",
-		description: "Default dedicated profile directory.",
+		description: "Dedicated profile directory hint.",
 	},
 	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
 	{ name: "CHROME_BIN", description: "Real Google Chrome binary override." },
@@ -61,6 +75,50 @@ const resultContract = {
 	kind: "Warm Chrome readiness proof.",
 	schema_version: WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 } as const satisfies NonNullable<WarmChromeCommandContract["resultContract"]>;
+
+const adapterProofReadFlags = {
+	"--adapter": {
+		type: "enum",
+		values: ["chrome-devtools", "agent-browser", "playwright-cdp"],
+		description: "Browser Adapter to prove.",
+		required: true,
+	},
+	"--port": { type: "string", description: "Verified Warm Chrome CDP port." },
+	"--endpoint": {
+		type: "string",
+		description: "Verified Warm Chrome loopback CDP endpoint.",
+	},
+	"--session": {
+		type: "string",
+		description: "agent-browser session name.",
+	},
+	"--json": { type: "boolean", description: "Emit JSON envelope." },
+	"--plain": { type: "boolean", description: "Emit stable text." },
+} as const satisfies BrowserAdapterProofCommandContract["flags"];
+
+const adapterProofEnvVars = [
+	{ name: "BROWSER_USE_CDP_PORT", description: "CDP port hint." },
+	{
+		name: "BROWSER_USE_PROFILE_DIR",
+		description: "Dedicated profile directory hint.",
+	},
+	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
+] as const satisfies BrowserAdapterProofCommandContract["envVars"];
+
+const adapterProofExitCodes = {
+	"0": "Browser Adapter proven.",
+	"1": "Runtime dependency failed.",
+	"2": "Usage error.",
+	"20": "Browser Adapter proof failed.",
+} as const satisfies BrowserAdapterProofCommandContract["exitCodes"];
+
+const adapterProofResultContract = {
+	id: BROWSER_ADAPTER_PROOF_CONTRACT_ID,
+	kind: "Browser Adapter attachment proof.",
+	schema_version: BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	BrowserAdapterProofCommandContract["resultContract"]
+>;
 
 export const warmChromeFailureActions = [
 	{
@@ -105,6 +163,33 @@ export const warmChromeSuccessActions = [
 		id: "rerun_preflight_before_adapter_action",
 		summary: "Rerun preflight before adapter action.",
 		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserAdapterProofFailureActions = [
+	{
+		id: "inspect_adapter_config",
+		summary: "Inspect Browser Adapter config without changing it.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "update_adapter_config",
+		summary: "Update external Browser Adapter config, then rerun proof.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "change_adapter_input",
+		summary: "Correct Browser Adapter proof arguments.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserAdapterProofSuccessActions = [
+	{
+		id: "use_verified_browser_adapter",
+		summary:
+			"Use the selected Browser Adapter against the verified Warm Chrome endpoint.",
+		sideEffects: ["browser"],
 	},
 ] as const;
 
@@ -205,6 +290,66 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 	} as const satisfies Record<
 		WarmChromePreflightCommand,
 		WarmChromeCommandContract
+	>,
+	{
+		path: "skills/browser-use/scripts/command-contract.ts",
+		writeImplyingMutations: new Set(["write", "browser"]),
+	},
+);
+
+export const browserAdapterProofContracts = defineCommandFacadeContract(
+	{
+		check: {
+			script: "scripts/preflight-browser-adapter.ts",
+			summary: "Verify a Browser Adapter against Warm Chrome.",
+			usage: [
+				"check --adapter <adapter> [--port <port> | --endpoint <endpoint>] [--session <name>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check", "network"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: adapterProofEnvVars,
+			resultContract: adapterProofResultContract,
+			actionAffordances: {
+				success: browserAdapterProofSuccessActions,
+				failure: browserAdapterProofFailureActions,
+			},
+			flags: adapterProofReadFlags,
+			exitCodes: adapterProofExitCodes,
+		},
+		status: {
+			script: "scripts/preflight-browser-adapter.ts",
+			summary: "Show human Browser Adapter proof status.",
+			usage: [
+				"status --adapter <adapter> [--port <port> | --endpoint <endpoint>] [--session <name>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check", "network"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: adapterProofEnvVars,
+			resultContract: adapterProofResultContract,
+			actionAffordances: {
+				success: browserAdapterProofSuccessActions,
+				failure: browserAdapterProofFailureActions,
+			},
+			flags: adapterProofReadFlags,
+			exitCodes: adapterProofExitCodes,
+			alias: {
+				command: "check",
+				defaultArgs: ["--plain"],
+			},
+		},
+	} as const satisfies Record<
+		BrowserAdapterProofCommand,
+		BrowserAdapterProofCommandContract
 	>,
 	{
 		path: "skills/browser-use/scripts/command-contract.ts",

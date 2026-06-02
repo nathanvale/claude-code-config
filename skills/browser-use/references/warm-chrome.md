@@ -34,6 +34,7 @@ Agent-facing readiness check:
 
 ```bash
 skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 ```
 
 Human health:
@@ -71,6 +72,7 @@ One safe next step per run. Read it from the current run, not from static lists.
 - Obey `continuation.constraints` before choosing adapters.
 - Profileless endpoint failures ask for input; `launch_warm_chrome` requires a supplied profile source.
 - Browser Entry Handoff constraints stop adapter fallback and cold-browser fallback.
+- Browser Adapter Proof runs after Warm Chrome Preflight; its failures also stop adapter fallback and cold-browser fallback.
 - `forbidden_action_ids` in a constraint names behaviours to skip, not `runtime_actions` ids. No lookup; obey them directly.
 - Read each emitted action's meaning from its `runtime_actions[].summary`, not from this doc.
 - Action membership lives in `scripts/command-contract.ts` and runtime code. This doc states precedence, not the action list.
@@ -91,7 +93,7 @@ skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json 
 
 ## Adapter Rules
 
-Preflight owns readiness proof. Adapters consume its result.
+Warm Chrome Preflight owns browser-entry proof. Browser Adapter Proof owns selected adapter attachment. Adapters consume both results.
 
 ### Chrome DevTools MCP / mcporter
 
@@ -100,6 +102,7 @@ Current proven browsing adapter.
 - Existing working `mcporter` / `chrome-devtools-mcp` daemon path is valid when Warm Chrome Preflight verifies the endpoint.
 - New config should prefer `--browserUrl http://127.0.0.1:$PORT`.
 - Existing `--auto-connect --userDataDir` config is acceptable only when its `DevToolsActivePort` resolves to verified Warm Chrome.
+- Run Browser Adapter Proof before `list_pages` or page actions.
 - Config repair details: `skills/browser-use/mcporter-config.md`.
 
 ### agent-browser
@@ -111,9 +114,16 @@ Optional adapter.
 - Never allow auto-launch / `--profile`; it may create Chrome for Testing.
 - Verify `get cdp-url` contains the expected loopback port.
 
+### playwright-cdp
+
+Public adapter name for Playwright `connectOverCDP` against verified Warm Chrome.
+
+- Attach to `http://127.0.0.1:$PORT`.
+- Do not call Playwright launch APIs.
+
 ### puppeteer-core
 
-Deterministic replay adapter.
+Deterministic replay detail.
 
 - Connect by `browserURL: http://127.0.0.1:$PORT`.
 - Consume preflight proof; do not own Warm Chrome launch or repair policy.

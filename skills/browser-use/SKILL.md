@@ -16,19 +16,22 @@ Use for browser tasks that need a logged-in, profile-bearing Chrome session.
 - Details: `references/warm-chrome.md`.
 - MCP config repair: `mcporter-config.md`.
 
-## Preflight First
+## Proof Flow
 
 Before adapter action:
 
 ```bash
 skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 ```
 
 - Parse stdout envelope. Treat stderr as diagnostics only.
-- Success: follow `continuation.next_action_id`; pin adapter to verified endpoint.
+- Warm Chrome Preflight success: follow `continuation.next_action_id`; candidate endpoint is verified.
+- Browser Adapter Proof success: follow `continuation.next_action_id`; selected adapter is verified.
 - Failure: follow `continuation.next_action_id`; inspect `runtime_actions` for that action's summary and side effects.
 - Obey `continuation.constraints` before choosing adapters; `forbidden_action_ids` are behaviours to skip, not `runtime_actions` ids to look up.
 - Browser Entry Handoff constraint stops adapter fallback and cold-browser fallback. Repair Warm Chrome, then rerun.
+- Browser Adapter Proof constraint also stops adapter fallback and cold-browser fallback. Inspect or update adapter config, then rerun.
 - A login/MFA wall hit after preflight passes is an app step, not browser entry: complete it in the warm profile, do not rerun preflight.
 - Use `repair` or `launch` only when explicitly preparing Warm Chrome entry.
 - Contract owner: `skills/browser-use/scripts/command-contract.ts`.
@@ -52,6 +55,7 @@ Observability:
 ```bash
 skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json --debug --run-id "$RUN_ID"
 skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json --quiet
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json --run-id "$RUN_ID"
 ```
 
 - `--debug`: LogTape JSONL breadcrumbs on stderr.
@@ -60,18 +64,20 @@ skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json 
 
 ## Adapter Router
 
-- User-named adapter wins only after preflight passes and the adapter satisfies Warm Chrome.
-- Chrome DevTools MCP / `mcporter`: current proven default; use for general work when configured, Network, Performance, and DevTools-grade inspection.
+- User-named adapter wins only after Warm Chrome Preflight and Browser Adapter Proof pass.
+- `chrome-devtools`: current proven default; use for general work when configured, Network, Performance, and DevTools-grade inspection.
 - `agent-browser`: use for named sessions, snapshots/refs, durable selector capture, webm recording, and runbook replay.
-- `puppeteer-core`: use for deterministic replay only; connect to verified `browserURL`.
+- `playwright-cdp`: use when Playwright `connectOverCDP` is the named adapter.
+- `puppeteer-core`: deterministic replay detail only; connect to verified `browserURL`.
 - Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
 - Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.
 
 ## Chrome DevTools MCP
 
-Use after Warm Chrome Preflight passes. Config repair details live in `mcporter-config.md`.
+Use after Warm Chrome Preflight and Browser Adapter Proof pass. Config repair details live in `mcporter-config.md`.
 
 ```bash
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 mcporter call chrome-devtools.list_pages --args '{}' --output text
 mcporter call chrome-devtools.select_page --args '{"pageId":9}' --output text
 mcporter call chrome-devtools.navigate_page --args '{"url":"https://example.com"}' --output text
@@ -85,16 +91,13 @@ mcporter call chrome-devtools.evaluate_script --args '{"function":"() => documen
 - Avoid `take_screenshot` unless visual layout matters.
 - `list_pages` must show warm profile tabs. Blank/isolated browser means reattach failed.
 
-If `list_pages` fails with `DevToolsActivePort`, confirm the warm Chrome launched on the port (classic `--remote-debugging-port`), then retry once:
+If Browser Adapter Proof fails, follow `continuation.next_action_id`. Inspect or update adapter config outside the proof command, then rerun proof.
 
 ```bash
-mcporter daemon restart
-mcporter call chrome-devtools.list_pages --args '{}' --output text
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 ```
 
-If it still fails, stop and say Chrome DevTools MCP is unavailable. Do not use AppleScript.
-
-Avoid noisy recovery loops. Repeated MCP/browser restarts can trigger reconnect/login prompts and alerts. Try once, then pause and choose a quieter path.
+Do not run `mcporter daemon restart` inside proof. Do not switch to AppleScript, Playwright launch, Puppeteer launch, Codex in-app browser, or `chrome-isolated` as fallback.
 
 ## agent-browser
 
