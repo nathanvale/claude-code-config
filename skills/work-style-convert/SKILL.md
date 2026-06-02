@@ -3,7 +3,7 @@ name: work-style-convert
 description: "Rewrite a file to match work-style rules: terse, telegraph density, no filler, no nested H3s. Triggers via /work-style-convert <path>."
 argument-hint: <file-path>
 disable-model-invocation: true
-allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/render-user-prompts.sh *)
+allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/agent-instructions.sh *)
 ---
 
 # Work Style Convert
@@ -11,26 +11,23 @@ allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/rende
 ## Guardrails
 
 - Manual only: require `$ARGUMENTS`.
-- Never edit `prompt-fragments/shared/work-style.md`.
+- Never edit generated prompt artifacts.
 - Preserve meaning; flag nuance that resists compression.
 - No destructive git ops.
-- No extra reference files; canonical rules live in `prompt-fragments/shared/work-style.md`.
+- No extra reference files; canonical rules live in `AGENTS.md`.
 
 ## Read
 
 1. Read target path from `$ARGUMENTS`; stop if absent.
 2. Read target file.
-3. Read `prompt-fragments/shared/work-style.md`; stop if missing.
-4. Extract banned filler from `## Banned filler`.
-5. Extract budgets from `## Line budgets`.
+3. Read `AGENTS.md`; stop if missing.
+4. Extract work-style rules from `# Work Style`.
 
 ## Classify
 
 - Rule: `rules/*.md`.
-- Shared fragment: `prompt-fragments/shared/*.md`.
-- Harness fragment: `prompt-fragments/claude/*.md` or `prompt-fragments/codex/*.md`.
 - Skill: `**/SKILL.md`.
-- Rendered prompt: `AGENTS.md` or `CLAUDE.md`.
+- Startup instruction: `AGENTS.md` or `CLAUDE.md`.
 - Context: `context/*.md`.
 - Other: no budget; apply style rules only.
 
@@ -53,14 +50,14 @@ allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/rende
 5. Remove filler; don't replace it with new filler.
 6. Compress examples; keep only distinct examples.
 7. Surface uncertainty instead of deleting nuance.
-8. Leave `prompt-fragments/shared/work-style.md` unchanged.
+8. Leave unrelated startup rules unchanged.
 
 ## Verify
 
 - Run `wc -l "$target"`; compare with matching budget.
 - Run banned filler grep again; fix remaining authored hits.
-- If target under `prompt-fragments/`, run `./scripts/render-user-prompts.sh --write`, then `./scripts/render-user-prompts.sh --check`.
-- If render check fails, fix or stop with failure details.
+- If target is startup instruction or owner doc, run `./scripts/agent-instructions.sh check`.
+- If instruction check fails, fix or stop with failure details.
 - If target is `SKILL.md`, YAML-parse frontmatter before done.
 
 ## Report

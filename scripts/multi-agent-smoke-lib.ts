@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -79,25 +87,6 @@ type HarnessAdapter = {
 	) => Promise<Record<string, JsonPrimitive>>;
 };
 
-const CODEX_SMOKE_DISABLED_MCP_SERVERS = [
-	"context7",
-	"qmd",
-	"notebooklm-mcp",
-	"x-api",
-	"firecrawl",
-	"chrome-devtools",
-	"bun-runner",
-	"biome-runner",
-	"tsc-runner",
-] as const;
-
-function buildCodexSmokeConfigOverrides(): string[] {
-	return CODEX_SMOKE_DISABLED_MCP_SERVERS.flatMap((serverName) => [
-		"-c",
-		`mcp_servers.${serverName}.enabled=false`,
-	]);
-}
-
 const HEADLESS_PROMPT_GUARDRAILS = [
 	"Return only a JSON object matching the provided schema.",
 	"Do not wrap the JSON in markdown.",
@@ -120,6 +109,34 @@ function createObjectSchema(
 
 function withGuardrails(prompt: string): string {
 	return `${prompt}\n\nRules: ${HEADLESS_PROMPT_GUARDRAILS}`;
+}
+
+function prepareCodexSmokeCwd(tempRoot: string, sourceCwd: string): string {
+	const sourceAgents = join(sourceCwd, "AGENTS.md");
+	const targetAgents = join(tempRoot, "AGENTS.md");
+	if (existsSync(sourceAgents)) {
+		copyFileSync(sourceAgents, targetAgents);
+	} else {
+		writeFileSync(targetAgents, "# Agent Instructions\n");
+	}
+	return tempRoot;
+}
+
+function prepareCodexSmokeHome(tempRoot: string, sourceCwd: string): string {
+	const codexHome = join(tempRoot, "codex-home");
+	mkdirSync(codexHome, { recursive: true });
+
+	const sourceAuth = join(process.env.HOME ?? "", ".codex", "auth.json");
+	if (existsSync(sourceAuth)) {
+		copyFileSync(sourceAuth, join(codexHome, "auth.json"));
+	}
+
+	const sourceAgents = join(sourceCwd, "AGENTS.md");
+	if (existsSync(sourceAgents)) {
+		copyFileSync(sourceAgents, join(codexHome, "AGENTS.md"));
+	}
+
+	return codexHome;
 }
 
 export const SMOKE_TESTS: readonly SmokeTestDefinition[] = [
@@ -288,46 +305,46 @@ Return a JSON object with these meanings:
 		schema: createObjectSchema(
 			{
 				whoAmI: { type: "string", enum: ["claude", "codex"] },
-				sharedFragmentsReachBothAfterRerender: { type: "boolean" },
-				rulesOnlyChangeReachesCodex: { type: "boolean" },
-				claudeOnlyFragmentsReachCodex: { type: "boolean" },
-				codexOnlyFragmentsReachClaude: { type: "boolean" },
-				codexNeedsRerenderAfterSharedFragmentChange: { type: "boolean" },
+				canonicalStartupSourceIsAgentsMd: { type: "boolean" },
+				generatedPromptArtifactsAreSource: { type: "boolean" },
+				promptFragmentsAreActiveAuthoringPath: { type: "boolean" },
+				claudeRulesOnlyChangeReachesCodex: { type: "boolean" },
+				codexUserStartupCheckedAgainstAgentsMd: { type: "boolean" },
 			},
 			[
 				"whoAmI",
-				"sharedFragmentsReachBothAfterRerender",
-				"rulesOnlyChangeReachesCodex",
-				"claudeOnlyFragmentsReachCodex",
-				"codexOnlyFragmentsReachClaude",
-				"codexNeedsRerenderAfterSharedFragmentChange",
+				"canonicalStartupSourceIsAgentsMd",
+				"generatedPromptArtifactsAreSource",
+				"promptFragmentsAreActiveAuthoringPath",
+				"claudeRulesOnlyChangeReachesCodex",
+				"codexUserStartupCheckedAgainstAgentsMd",
 			],
 		),
-		prompt: withGuardrails(`Prompt propagation smoke test.
+		prompt: withGuardrails(`Startup source smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
-- sharedFragmentsReachBothAfterRerender: true if a change in prompt-fragments/shared/ should reach both harnesses after rerendering
-- rulesOnlyChangeReachesCodex: true only if a rules/-only change automatically reaches Codex
-- claudeOnlyFragmentsReachCodex: true only if prompt-fragments/claude/ automatically reach Codex
-- codexOnlyFragmentsReachClaude: true only if prompt-fragments/codex/ automatically reach Claude
-- codexNeedsRerenderAfterSharedFragmentChange: true if Codex needs rerendering after prompt-fragments/shared/ changes`),
+- canonicalStartupSourceIsAgentsMd: true if AGENTS.md is the canonical startup instruction source
+- generatedPromptArtifactsAreSource: true only if generated prompt artifacts are source files
+- promptFragmentsAreActiveAuthoringPath: true only if your current instructions say prompt fragments are the active authoring path; if they do not say that, return false
+- claudeRulesOnlyChangeReachesCodex: true only if a Claude rules/-only change automatically reaches Codex
+- codexUserStartupCheckedAgainstAgentsMd: true if Codex user startup should be checked against AGENTS.md`),
 		expectations: {
 			claude: {
 				whoAmI: "claude",
-				sharedFragmentsReachBothAfterRerender: true,
-				rulesOnlyChangeReachesCodex: false,
-				claudeOnlyFragmentsReachCodex: false,
-				codexOnlyFragmentsReachClaude: false,
-				codexNeedsRerenderAfterSharedFragmentChange: true,
+				canonicalStartupSourceIsAgentsMd: true,
+				generatedPromptArtifactsAreSource: false,
+				promptFragmentsAreActiveAuthoringPath: false,
+				claudeRulesOnlyChangeReachesCodex: false,
+				codexUserStartupCheckedAgainstAgentsMd: true,
 			},
 			codex: {
 				whoAmI: "codex",
-				sharedFragmentsReachBothAfterRerender: true,
-				rulesOnlyChangeReachesCodex: false,
-				claudeOnlyFragmentsReachCodex: false,
-				codexOnlyFragmentsReachClaude: false,
-				codexNeedsRerenderAfterSharedFragmentChange: true,
+				canonicalStartupSourceIsAgentsMd: true,
+				generatedPromptArtifactsAreSource: false,
+				promptFragmentsAreActiveAuthoringPath: false,
+				claudeRulesOnlyChangeReachesCodex: false,
+				codexUserStartupCheckedAgainstAgentsMd: true,
 			},
 		},
 	},
@@ -559,10 +576,10 @@ const HARNESS_ADAPTERS: Record<HarnessName, HarnessAdapter> = {
 	codex: {
 		buildCommand: ({ prompt, schemaPath, outputPath, cwd }) => [
 			"codex",
-			...buildCodexSmokeConfigOverrides(),
-			"-a",
-			"never",
 			"exec",
+			"--ignore-user-config",
+			"--ignore-rules",
+			"--skip-git-repo-check",
 			"--sandbox",
 			"read-only",
 			"--ephemeral",
@@ -622,11 +639,15 @@ export function buildSmokeCommand(input: {
 	writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
 
 	try {
+		const commandCwd =
+			input.harness === "codex"
+				? prepareCodexSmokeCwd(tempRoot, input.cwd)
+				: input.cwd;
 		return HARNESS_ADAPTERS[input.harness].buildCommand({
 			prompt: test.prompt,
 			schemaPath,
 			outputPath,
-			cwd: input.cwd,
+			cwd: commandCwd,
 		});
 	} finally {
 		rmSync(tempRoot, { recursive: true, force: true });
@@ -706,12 +727,20 @@ export async function runSmokeTest(input: {
 	writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
 
 	const adapter = HARNESS_ADAPTERS[input.harness];
+	const commandCwd =
+		input.harness === "codex"
+			? prepareCodexSmokeCwd(tempRoot, input.cwd)
+			: input.cwd;
 	const command = adapter.buildCommand({
 		prompt: test.prompt,
 		schemaPath,
 		outputPath,
-		cwd: input.cwd,
+		cwd: commandCwd,
 	});
+	const env =
+		input.harness === "codex"
+			? { ...process.env, CODEX_HOME: prepareCodexSmokeHome(tempRoot, input.cwd) }
+			: process.env;
 
 	if (input.dryRun) {
 		rmSync(tempRoot, { recursive: true, force: true });
@@ -735,7 +764,8 @@ export async function runSmokeTest(input: {
 	const startedAt = performance.now();
 	const proc = Bun.spawn({
 		cmd: command,
-		cwd: input.cwd,
+		cwd: commandCwd,
+		env,
 		stdout: "pipe",
 		stderr: "pipe",
 	});

@@ -144,6 +144,62 @@ _Avoid_: doc-level scaffold pointer, hidden scaffold-pointer comment, loose scaf
 Agent-use boundary where an agent resolves a visible scaffold command through the CLI at the moment it needs the deterministic shape.
 _Avoid_: embedded packet YAML, hand-maintained scaffold example, stale rendered scaffold body
 
+**Startup Surface**:
+Agent instructions automatically loaded at session start. Includes rendered startup artifacts and wrappers; excludes on-demand context, skills, repo-local docs, generated references, and runtime config unless injected into startup.
+_Avoid_: startup prompt, global prompt, always-loaded handbook
+
+**Harness Engineering**:
+Agent-first engineering posture where humans design legible environments, repository knowledge, tools, and feedback loops so agents can execute reliable work. Use it as philosophy, not as a new workflow owner.
+_Avoid_: prompt stuffing, agent handbook, manual coding replacement, vibe automation
+
+**Context Engineering**:
+Agent-first posture for choosing what context enters the model, when it loads, and which owner supplies it. Use it for Startup Surface routing, owner docs, retrieval paths, projections, compaction, and checks that keep context useful.
+_Avoid_: prompt engineering, context dumping, bigger prompt, retrieval alone
+
+**Agent runtime**:
+Agent tool that loads Startup Surface instructions, such as Claude Code or Codex. Use this term for concrete Claude/Codex delivery mechanics; keep Harness Engineering for the philosophy.
+_Avoid_: harness, model, agent, client
+
+**Lean authoring**:
+Prompt-system shape where one compact canonical instruction source is edited directly, while install or projection tooling handles agent-runtime delivery and drift checks. After migration, retired prompt fragments are not a supported authoring path.
+_Avoid_: fragment-first authoring, prompt render system, manual prompt sync
+
+**Context path**:
+The route an agent follows from Startup Surface to the smallest sufficient owner: skill, context doc, repo doc, generated doc, runtime check, or code. It is successful when a fresh agent can find the owner without startup prose restating it.
+_Avoid_: lookup flow, doc link list, table of contents only, prompt memory
+
+**System of record**:
+The durable owner for a class of instruction or knowledge. Startup may route to it, but must not duplicate its content.
+_Avoid_: backup copy, duplicated policy, rendered summary, startup restatement
+
+**Light janitor pass**:
+Bounded cleanup pass that removes obvious agent-runtime and context drift: broken owner routes, stale generated outputs, appendix bloat, duplicate policy, or leftover fragments. It is not a broad documentation rewrite.
+_Avoid_: governance program, documentation overhaul, content audit, policy review
+
+**Instruction topology helper**:
+A CLI-shaped control surface that projects, checks, and diagnoses Startup Surface delivery across agent runtimes. It owns delivery health and drift visibility, not instruction authoring.
+_Avoid_: prompt generator, render script, install helper, startup authoring tool
+
+**Agent setup CLI**:
+Broader install/control surface for wiring agent runtimes across user-scope or repo-scope locations. Use as a separate track from Startup Surface health unless instruction delivery cannot proceed without it.
+_Avoid_: instruction topology helper, prompt renderer, repo `AGENTS.md` editor, broad Codex runtime setup by default
+
+**User-scope instruction source**:
+Canonical instruction file this repo owns for Nathan's user-scope agent-runtime setup. In this repo, root `AGENTS.md` fills that role while also acting as the repo-local startup file.
+_Avoid_: repo-local AGENTS only, prompt fragment source, generated startup file
+
+**Agent runtime appendix**:
+Optional tiny agent-runtime-specific Startup Surface addition composed with the shared instruction source during projection. It exists only when a Claude or Codex startup mechanic cannot live cleanly in the shared source, config, or runtime docs.
+_Avoid_: prompt fragment, second startup source, generated handbook
+
+**Managed instruction copy**:
+Projected Startup Surface file written to an agent-runtime-owned path and checked for drift against the selected runtime check owner. It is an install artifact, not an authoring source or committed generated file.
+_Avoid_: manual copy, generated source file, symlink target
+
+**Scoped ask-first gate**:
+A confirmation rule for high-consequence action classes, not a blanket pause before implementation. It preserves agent autonomy for concrete requested work; low-risk ambiguity gets reasonable assumptions, high-risk ambiguity gets a question.
+_Avoid_: ask before everything, implement only after confirmation, blanket confirmation
+
 **Implementation slice**:
 A thin, independently verifiable unit of issue work produced during planning before Stage 3 confirmation; represented at runtime as a candidate batch.
 _Avoid_: task, phase, horizontal slice, generic plan step
@@ -183,6 +239,10 @@ _Avoid_: snapshot, fork, installed output, local patch
 **Overlay**:
 The smallest harness-specific difference needed when installing a canonical capability. Use overlays for real harness edges such as metadata, paths, invocation wording, or blocking-question mechanics.
 _Avoid_: fork, duplicate capability, harness copy
+
+**Discovery projection**:
+A harness-visible exposure of a canonical capability, usually by symlink, copy, or generated artifact. A Discovery projection makes the capability reachable without becoming its owner.
+_Avoid_: duplicate capability, second source of truth, copied workflow
 
 **Capability dependency**:
 A manually declared skill or agent that a capability needs to work. Dependency inference may warn about likely omissions, but manual declarations remain the source of truth.

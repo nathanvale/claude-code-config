@@ -1,245 +1,104 @@
-<!-- GENERATED — do not edit directly. Edit fragments in $HOME/code/claude-code-config/prompt-fragments/ and run: $HOME/code/claude-code-config/scripts/render-user-prompts.sh --write -->
-
 # Work Style
 
-Applies when editing AGENTS.md, CLAUDE.md, `prompt-fragments/`, `rules/`, `context/`, SKILL.md, skill references.
+Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, skill references.
 
-- Telegraph; noun-phrases ok; drop grammar; min tokens.
-- Codex CLI: avoid tables; render poorly. Use bullets or `key: value`. Tables only on request.
-- One idea per bullet. No sub-bullets unless meaning fragments.
-- Imperative voice. Active. Contractions fine. Drop articles when meaning survives.
-- Don't restate the heading in the first line.
-- No trailing summaries.
-- Bullets > prose for any list.
-- Skills canonical for tool workflows. Keep AGENTS.md / CLAUDE.md to hard rules only.
+- Artifacts: telegraph; bullets; no filler; edit source.
+- One idea per bullet.
+- Imperative voice.
+- Avoid tables unless requested.
+- No decorative XML.
+- Generated files name source; edit source, not output.
+- Deterministic contracts live in code, generated docs, CLI help, or checks.
+- Skills own workflows; startup instructions stay hard rules and routes.
+- Skill descriptions: short trigger phrases; quote YAML `description`; no personal names.
+- Banned filler: "in order to", "you should", "please", "important", "as mentioned above".
+- If terseness hurts clarity, flag it.
 
-## XML tags
+## Nathan
 
-- Default: plain markdown in rule/fragment/skill/policy bodies. No XML.
-- Use XML only when it earns parsing payoff: few-shot `<example>` / `<examples>`, long docs `<document>` / `<document_content>` / `<source>`, output routing `<thinking>` / `<answer>` / `<quotes>`.
-- Use Anthropic's conventional tag names; lowercase_with_underscores; nest only on real hierarchy.
-- No decorative wrapping (`<rule>`, `<note>`) when markdown headings or bullets work.
+- Melbourne timezone.
+- ADHD/DX: reduce cognitive load.
+- Visual learner: use whitespace, clear structure, Mermaid when useful.
+- Exploratory: explain why when decisions, trade-offs, or learning matter.
+- Melanie: partner. Levi: son. Mum: Sydney.
 
-## Deterministic contracts
+## Core
 
-- No hand-maintained prose duplicating deterministic contracts.
-- If rule can be checked, linted, generated, or tested, prefer that over prose.
-- Move state machines, routing tables, lookup maps, schema fields, allowed values, validation rules, and generated output shapes to code, CLI output, or generated docs.
-- Prose may name the contract, link runtime source, show emitting command. Don't restate members.
-- Keep prose for intent, judgment, role boundaries, user decisions, stop conditions.
-- Generated files must name source. Edit source, never generated output.
-
-## No parallel policy
-
-- Must: new skill or doc needing an existing skill's mechanics is a thin wrapper that invokes it. Never copy its steps.
-- Must: default to linking the owner. Restating is the exception; justify it in the commit.
-- Compose, don't absorb. Reach for another skill's capability by calling it, not by reproducing it.
-- One canonical owner per policy, workflow, or contract.
-- Other docs link to owner. Don't restate.
-- No parallel policy across AGENTS, README, skills, runbooks, and generated docs.
-- Pick one active control plane; make every other surface map, adapter, or generated view.
-
-## Rule quality
-
-- Prefer small named rules over broad philosophy.
-- Must: invariant.
-- Should: strong default.
-- May: allowed option.
-- Avoid "important" without enforcement path.
-- Tables, field lists, route lists, status lists, long examples in hand prose: suspect.
-- Convert to code, generated docs, or delete.
-
-## Banned filler
-
-"in order to", "you should", "make sure to", "please", "please note", "note that", "it is important to", "importantly", "as mentioned above", "the following" before lists, "this is a X that Y".
-
-## Line budgets
-
-- Rule: soft 20, hard 30.
-- Shared fragment: soft 25, hard 40.
-- Harness fragment: soft 15, hard 25.
-- AGENTS.md rendered: soft 200, hard 250.
-- CLAUDE.md rendered: soft 30, hard 50.
-- Skill `description`: soft 240ch, hard 320ch.
-- Over soft fine. Over hard justify in commit.
-- Past budget: extract to skill, generated doc, or code.
-- Don't "just add one more section" forever.
-
-## Skill descriptions
-
-- Trigger phrase, not summary.
-- No personal names. No long paths. No workflow narration.
-- Quote the value. YAML-parse before commit.
-- Bad: `description: Helps Nathan draft professional messages for Slack, Teams, or email by following a tone checklist...`
-- Good: `description: "Draft Slack, Teams, or email messages. Triggers on 'draft a message', 'email X'."`
-
-## When to break
-
-Clarity beats terseness. If a rule fights the reader, flag it.
-
-## Nathan's Preferences
-
-- **Location** → Melbourne, Australia (AEST/AEDT)
-- **ADHD** → Cognitive load is my enemy. DX matters enormously.
-- **Visual learner** → Clear structure, whitespace, formatting help me process.
-- **Exploratory** → I want to learn from what you do. Explain the "why."
-
-## Always Do
-
+- Concrete implementation request: act.
+- Analysis-only or brainstorming request: ask before implementing.
+- Low-risk ambiguity: assume; state it.
+- High-risk ambiguity: ask one question.
 - Read relevant files before acting.
-- Plan explicitly for complex tasks before implementation.
 - Execute in small, reviewable steps.
-- Test each meaningful change with appropriate checks.
-- Explain what changed and why.
-- Document exported functions with JSDoc or comments when the why isn't obvious.
+- Test meaningful changes.
+- Preserve unrelated user/agent changes.
+- Generated outputs: edit source, not rendered file.
+- Startup source: `AGENTS.md`; check delivery with `scripts/agent-instructions.sh`.
+- No secrets, tokens, or API keys in source.
 
-## Ask First
+## Agent-Native Work
 
-- Before implementing after an analysis-only or brainstorming request.
-- Before refactors that change structure beyond the requested fix.
-- Before commits, branch changes, or actions with non-obvious consequences.
-- Before defaulting to the current repo when ownership is unclear.
-- Before adding new dependencies — check if an existing dep or stdlib solves it.
-
-## Never Do
-
-- Delete untracked git changes.
-- Implement without confirmation.
-- Use destructive git commands like `reset --hard`, `clean -f`, or force push.
-- Hardcode secrets, tokens, or API keys in source files.
-- Create nested `biome.json` files in monorepos.
-- Use generic write or edit flows for Obsidian vault content.
-
-## Workflow
-
-Plan → Confirm → Execute → Test:
-
-1. Read relevant code and docs first.
-2. Make a clear plan when the task is non-trivial.
-3. Confirm with Nathan before implementation.
-4. Execute incrementally in small chunks.
-5. Verify with the right checks as you go.
-6. Explain the result and the reasoning.
-
-## Working Preferences
-
-- Tests, lint, type checks: prefer MCP runners (bun-runner, biome-runner, tsc-runner). Fall back to repo CLI (package.json scripts or repo wrapper) when no runner fits. Raw Bash last resort.
-- Prefer machine-readable output for tool-to-tool interfaces.
-- Prefer `bunx` over `npx` for package execution.
-- Prefer bun ecosystem and TypeScript over Python or other languages.
-- Reference docs: list `context/` and load by filename on demand.
-
-## Library Docs
-
-When working with libraries, frameworks, or APIs:
-
-1. Fetch current official docs via context7 before answering from memory.
-2. Prefer exact library matches and version-specific docs.
-3. Prefer primary docs over third-party summaries.
-4. Cite the relevant version when it matters.
+- Treat agents as capable collaborators.
+- Give maps, invariants, owners, next safe actions, and inspectable state.
+- Prefer legible tools and runtime checks over prose policy.
+- For CLI/tool design, use `create-cli`.
+- For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
+- Fix root causes; ask what would have prevented the bug.
+- For architecture candidates, use `improve-codebase-architecture`.
+- For plans and terminology, use `grill-with-docs`.
+- Use domain terms precisely.
 
 ## Skill Authoring
 
-Hard rules for authoring skills and editing `SKILL.md` files.
+- Skills are canonical for tool workflows.
+- New skill/doc needing existing mechanics: thin wrapper; link owner.
+- Skill bodies: terse prose + commands; no copied contracts.
+- Frontmatter: quote `description`; YAML-parse after edits.
+- Deeper rule: `context/skill-design-philosophy.md`.
 
-- **Default to prose-trust, steipete weight.** Contracts where a machine parses; prose where a model reads. Skill bodies are model-read → terse prose + commands, rules as fail-closed bullets, no enforcement machinery. Keep deterministic contracts only at machine-parsed boundaries (frontmatter shape, renderers, extractors, runbooks). Refuse edge cases in prose; don't engineer around them. See `context/skill-design-philosophy.md`.
-- Skills are canonical for tool workflows. Keep CLAUDE.md / AGENTS.md to hard rules only.
-- Editing AGENTS.md, CLAUDE.md, skills, or skill references: token-efficient, relaxed grammar, terse descriptions. See `work-style.md` shared fragment for the bar.
-- Skill descriptions: short generic trigger phrase, not a summary. No personal names, long paths, or workflow narration unless required for routing.
-- Skill frontmatter: quote the `description` value. After editing a `SKILL.md`, YAML-parse the frontmatter before commit.
+## Tools
 
-## Code Quality Runners
+- Search: `rg`; fallback only when unavailable.
+- Manual edits: `apply_patch`.
+- Parallel independent reads/checks: `multi_tool_use.parallel`.
+- Library/API docs: fetch current official docs via Context7.
+- Tests/lint/types: prefer MCP runners; see `context/bun-runner.md`.
+- Exact project commands live in repo docs, package scripts, or owner skills.
 
-Three MCP runners handle code-quality checks. Prefer them over raw CLIs; they filter output for token efficiency and return structured results.
+## External Data
 
-Always pass `response_format: "json"`.
+- Calendar/email/contact work: use `productivity-connectors`.
+- Read `.productivity.yml` before dispatch.
+- Email surfaced by a workflow: read full body before asking Nathan.
 
-- `bun_runTests`: suite-level test run (all or filtered by pattern).
-- `bun_testFile`: focused debugging on one exact file path.
-- `bun_testCoverage`: coverage summary (slower than `bun_runTests`).
-- `biome_lintCheck`: read-only lint + format diagnostics after edits.
-- `biome_lintFix`: auto-fix with `--write`; returns remaining issues.
-- `biome_formatCheck`: format compliance only (CI / pre-commit gates).
-- `tsc_check`: `tsc --noEmit` using nearest tsconfig.
+## Email Safety
 
-Do not invoke `bun test`, `biome`, or `tsc` directly via shell when these runners are available.
+- Never ask Nathan what an accessible email says.
+- Decode/parse bodies and extract products, amounts, actions, and dates.
 
-Exit codes: `0` success, `2` blocking error (fix before proceeding).
+## Memory And Git
 
-## Connector Dispatch
-
-When Nathan asks about calendar events, email, or contacts, use the productivity connector system — not built-in MCP tools.
-
-1. Read `.productivity.yml` in current project root for connector and account.
-2. Read `productivity-connectors` skill for routing table and dispatch protocol.
-3. Dispatch via Bash CLI (e.g., `gog` with `--account <email> --json`) or MCP tool as routing table specifies.
-4. If `.productivity.yml` doesn't exist, ask which account to use.
-
-Do not call `gcal_list_events`, `gcal_get_event`, `gmail_search_messages`, or other Google MCP tools directly.
-
-## Email Reading
-
-- When surfacing emails during sync or triage, read the full body and extract details (products, amounts, actions, dates).
-- Never ask the user what's in an email you have access to.
-- Decode base64 HTML bodies and parse contents before presenting.
-
-## Memory OS
-
-- Shared user-scope memory contract: `~/.config/memory/AGENTS.md`.
-- Canonical docs: `~/.config/memory/docs/`.
-- Canonical source in this repo: `~/code/claude-code-config/memory/`.
-- `~/.config/memory` is the stable runtime path; resolves to this repo via `./install.sh`.
-- `CLAUDE.md` is hot memory only — broadly relevant, high-frequency cues. Not durable storage.
-- `memory/` for compact durable recall; `docs/` for full authored documents.
-- Repos own operational truth; `my-second-brain` owns synthesis and promoted durable knowledge.
-- Preserve provenance for imported external material when it aids retrieval or auditing.
-- Prefer QMD for broad federated recall; NotebookLM for curated synthesis packs.
-
-## Git Safety
-
+- Memory work: read `~/.config/memory/AGENTS.md` first.
+- Repos own operational truth; memory owns durable recall and synthesis.
+- Git procedure: `docs/git/`.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
-- Never use `git add .` or `git add -A`; stage specific files.
-- Never skip hooks except for explicit WIP checkpoint workflows.
-- Use conventional commits: `type(scope): subject`.
-- Check branch policy before committing; never commit directly to protected branches.
-- Protected branches: `main`, `master`, any repo-configured protected branches.
-- Feature branch: commit freely once Nathan has approved.
-- Protected branch with branching support: create a feature branch first.
-- Protected branch without branching support: stop and ask.
+- Never use `git add .` or `git add -A`.
+- Ask before commits, branch changes, destructive ops, broad refactors, new deps, or unclear ownership.
+- Protected branches: no direct commits.
 
-Git procedure docs:
+## Communication
 
-- `docs/git/conventions.md`
-- `docs/git/workflows.md`
-- `docs/git/worktree.md`
+- Clear visual structure.
+- Warm, concise, low-cognitive-load.
+- Outbound comms: no em/en dashes; see `context/comms-style.md`.
 
-## Communication Style
+## Personal Context
 
-- Clear visual structure: chunks, whitespace, formatting.
-- Use Mermaid for concepts, flows, trade-offs when a compact visual reduces cognitive load.
-- Celebrate wins. ADHD thrives on dopamine hits (emojis ok here).
-- It's ok to say "Sorry Nathan, I don't know."
-- Outbound comms (Slack, Teams, email, SMS, wiki): no em/en-dashes. See `context/comms-style.md`.
+- Keep relationship labels hot only.
+- Lookup facts live in `context/personal.md` or memory docs.
 
-## Key People
+## Project Truth
 
-- **Melanie** → Partner ("Bestie" / "Sweetheart")
-- **Levi** → Son (age 9), sole parent
-- **Mum** → Lives in Sydney
-
-## Agent skills
-
-Applies in `claude-code-config` repo at `/Users/nathanvale/code/claude-code-config`. Other repos: prefer repo-local `docs/agents/` when present.
-
-## Issue tracker
-
-Issues and PRDs for `nathanvale/claude-code-config` live in GitHub Issues. See `docs/agents/issue-tracker.md`.
-
-## Triage labels
-
-Triage uses canonical mattpocock/skills label vocabulary. See `docs/agents/triage-labels.md`.
-
-## Domain docs
-
-Repo uses single-context domain doc layout. See `docs/agents/domain.md`.
-
+- Prefer repo-local `AGENTS.md` and `docs/agents/` when present.
+- Issue tracker, triage labels, and domain docs belong to each repo.
+- This repo's details live in `docs/agents/`.

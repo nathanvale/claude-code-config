@@ -57,15 +57,15 @@ describe("multi-agent smoke library", () => {
 		const testDef = getSmokeTest("propagation");
 		const assertions = evaluateOutput(testDef, "codex", {
 			whoAmI: "codex",
-			sharedFragmentsReachBothAfterRerender: true,
-			rulesOnlyChangeReachesCodex: true,
-			claudeOnlyFragmentsReachCodex: false,
-			codexOnlyFragmentsReachClaude: false,
-			codexNeedsRerenderAfterSharedFragmentChange: true,
+			canonicalStartupSourceIsAgentsMd: true,
+			generatedPromptArtifactsAreSource: false,
+			promptFragmentsAreActiveAuthoringPath: false,
+			claudeRulesOnlyChangeReachesCodex: true,
+			codexUserStartupCheckedAgainstAgentsMd: true,
 		});
 
 		const mismatch = assertions.find(
-			(assertion) => assertion.key === "rulesOnlyChangeReachesCodex",
+			(assertion) => assertion.key === "claudeRulesOnlyChangeReachesCodex",
 		);
 		expect(mismatch?.ok).toBe(false);
 		expect(mismatch?.expected).toBe(false);
@@ -88,13 +88,16 @@ describe("multi-agent smoke library", () => {
 			harness: "codex",
 			cwd,
 		});
-		expect(codexCommand.slice(0, 3)).toEqual([
+		expect(codexCommand.slice(0, 4)).toEqual([
 			"codex",
-			"-c",
-			"mcp_servers.context7.enabled=false",
+			"exec",
+			"--ignore-user-config",
+			"--ignore-rules",
 		]);
-		expect(codexCommand).toContain("mcp_servers.tsc-runner.enabled=false");
 		expect(codexCommand).toContain("exec");
+		expect(codexCommand).toContain("--ignore-user-config");
+		expect(codexCommand).toContain("--ignore-rules");
+		expect(codexCommand).toContain("--skip-git-repo-check");
 		expect(codexCommand).toContain("--sandbox");
 	});
 

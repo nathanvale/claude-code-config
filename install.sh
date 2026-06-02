@@ -27,6 +27,7 @@ symlinks=(
 	"${CLAUDE_HOME}/hooks.json|${SCRIPT_DIR}/hooks.json"
 	"${CLAUDE_HOME}/settings.json|${SCRIPT_DIR}/settings.json"
 	"${CLAUDE_HOME}/.mcp.json|${SCRIPT_DIR}/.mcp.json"
+	"${CODEX_HOME}/AGENTS.md|${SCRIPT_DIR}/AGENTS.md"
 	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
 
@@ -50,8 +51,8 @@ create_links() {
 			if [[ "$(readlink "$link")" == "$target" ]]; then
 				echo "  OK:   $link"
 			else
-				ln -sf "$target" "$link"
-				echo "  UPDATED: $link -> $target"
+				echo "  WRONG: $link -> $(readlink "$link")"
+				echo "         Remove the managed symlink manually first, then re-run."
 			fi
 		elif [[ -e "$link" ]]; then
 			echo "  EXISTS (not a symlink): $link"
@@ -61,11 +62,6 @@ create_links() {
 			echo "  CREATED: $link -> $target"
 		fi
 	done
-
-	# Render prompt files from fragments
-	echo ""
-	echo "Rendering user prompt files..."
-	"${SCRIPT_DIR}/scripts/render-user-prompts.sh" --write
 
 	# Install tracked git hooks (pre-commit drift gate, etc.)
 	if [[ -x "${SCRIPT_DIR}/scripts/install-git-hooks.sh" ]]; then
@@ -119,6 +115,11 @@ show_status() {
 		fi
 	done
 	echo ""
+
+	if [[ -x "${SCRIPT_DIR}/scripts/agent-instructions.sh" ]]; then
+		"${SCRIPT_DIR}/scripts/agent-instructions.sh" status
+		echo ""
+	fi
 
 	check_v2_artifact_presence
 }
