@@ -67,4 +67,4 @@ allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/agent
 - Rules applied.
 - Banned filler hits fixed or intentionally kept.
 - Skipped changes with reasons.
-- Render/check results when applicable.
+- Health-check results when applicable.

@@ -69,11 +69,10 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 
 - Calendar/email/contact work: use `productivity-connectors`.
 - Read `.productivity.yml` before dispatch.
-- Email surfaced by a workflow: read full body before asking Nathan.
 
 ## Email Safety
 
-- Never ask Nathan what an accessible email says.
+- Never ask Nathan what accessible email says; read full body first.
 - Decode/parse bodies and extract products, amounts, actions, and dates.
 
 ## Memory And Git
@@ -94,7 +93,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 
 ## Personal Context
 
-- Keep relationship labels hot only.
+- Keep relationship labels only when contextually relevant.
 - Lookup facts live in `context/personal.md` or memory docs.
 
 ## Project Truth

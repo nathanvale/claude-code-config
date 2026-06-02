@@ -90,10 +90,12 @@ check_line_budget() {
 
 check_no_leakage() {
 	local file="$1"
-	[[ -f "$file" ]] || return
+	if [[ ! -f "$file" ]]; then
+		return 0
+	fi
 
 	if ! command -v rg >/dev/null 2>&1; then
-		add_fail "rg missing; cannot scan global leakage"
+		add_warn "rg missing; skipping global leakage scan: ${file#$SCRIPT_DIR/}"
 		return
 	fi
 
@@ -220,7 +222,9 @@ check_projection_drift() {
 run_checks() {
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
 	check_line_budget "CLAUDE.md" "$SCRIPT_DIR/CLAUDE.md" 50
-	check_line_budget "Codex user startup" "$HOME/.codex/AGENTS.md" 150
+	if [[ -f "$HOME/.codex/AGENTS.md" ]]; then
+		check_line_budget "Codex user startup" "$HOME/.codex/AGENTS.md" 150
+	fi
 	check_no_leakage "$SCRIPT_DIR/AGENTS.md"
 	check_no_leakage "$HOME/.codex/AGENTS.md"
 	check_owner_paths

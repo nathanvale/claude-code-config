@@ -25,6 +25,7 @@ You audit alignment between these surfaces:
 2. **Implementation:** `scripts/agent-instructions.sh`, `install.sh`
 3. **Startup source:** `AGENTS.md`, `CLAUDE.md`
 4. **Workflow front doors:** `skills/prompt-system-router/SKILL.md`, `skills/prompt-system-workflow/SKILL.md`
+5. **Runbooks:** relevant `docs/runbooks/`, `runbooks/`, and skill references that describe instruction delivery, routing, or health checks
 
 ## What You Catch That Scripts Do Not
 
