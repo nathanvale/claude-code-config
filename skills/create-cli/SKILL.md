@@ -11,10 +11,14 @@ Design CLI surface area (syntax + behavior), human-first, script-friendly.
 
 ## Do This First
 
-- Read `agent-scripts/skills/create-cli/references/cli-guidelines.md` and apply it as the default rubric.
+- Read `references/cli-guidelines.md` and apply it as the default rubric.
 - Upstream/full guidelines: https://clig.dev/ (propose changes: https://github.com/cli-guidelines/cli-guidelines)
 - Ask only the minimum clarifying questions needed to lock the interface.
-- Implementing? Emit a `CommandFacadeContract` skeleton (see `references/cli-command-facade.md`) and hand it to `defineCommandFacadeContract`; that object is the deliverable on the facade path, not the markdown spec.
+- Agent-native or implementing? Read `references/agent-native-cli-design.md`.
+- On the facade path, emit a `CommandFacadeContract` skeleton (see
+  `references/cli-command-facade.md`) and hand it to
+  `defineCommandFacadeContract`; that object is the deliverable, not markdown
+  spec.
 
 ## Clarify (fast)
 

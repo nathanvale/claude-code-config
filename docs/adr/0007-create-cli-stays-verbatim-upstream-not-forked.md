@@ -1,6 +1,7 @@
 ---
-status: accepted
+status: superseded
 date: 2026-05-31
+superseded_by: 0009
 ---
 
 # create-cli Stays Verbatim-Upstream, Not Forked
