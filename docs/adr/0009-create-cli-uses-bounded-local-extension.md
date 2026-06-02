@@ -4,7 +4,7 @@ date: 2026-06-02
 supersedes: 0007
 ---
 
-# create-cli Uses Bounded Local Overlay
+# create-cli Uses Bounded Local Extension
 
 ADR 0007 kept `create-cli` as a verbatim upstream core with a tiny side-quest
 whitelist: one facade reference, one pointer line, and local scripts. That was
@@ -21,19 +21,19 @@ The old principle still holds. The old whitelist is too constricting.
 ## Decision
 
 `create-cli` keeps its upstream core verbatim, but may grow a bounded local
-overlay.
+extension.
 
-The overlay may include:
+The extension may include:
 
-- Local reference docs that adapt the upstream CLI rubric to Nathan's
+- Local reference docs that adapt the upstream CLI baseline to Nathan's
   workflows.
 - Contract-runtime guidance for implementing the designed CLI.
-- Agent-native design rubrics for skill drivers: humans, plans, and agents.
+- Agent-native CLI design layer for skill drivers: humans, plans, and agents.
 - Local scripts that validate or exercise the contract runtime.
 - Provenance notes explaining which files are upstream core and which are local
-  overlay.
+  extension.
 
-The overlay must not:
+The extension must not:
 
 - Rewrite the upstream skill body to change its core methodology.
 - Duplicate deterministic contract members owned by the contract runtime.
@@ -41,21 +41,21 @@ The overlay must not:
 - Hide local behavior inside files described as verbatim upstream.
 
 `SKILL.md` may keep one local pointer under "Do This First" that routes skill
-drivers through the overlay references. That pointer can name multiple local
+drivers through the extension references. That pointer can name multiple local
 references when their order matters.
 
 ## Consequences
 
-- ADR 0007's strict whitelist is superseded by a bounded overlay model.
+- ADR 0007's strict whitelist is superseded by a bounded extension model.
 - Upstream provenance and byte-diffability remain meaningful for the upstream
   core: `SKILL.md` body and `references/cli-guidelines.md`.
-- Local overlay references become first-class owned material, not contraband
+- Local extension references become first-class owned material, not contraband
   exceptions to the old whitelist.
-- `agent-native-cli-design.md` should teach judgment for optional design
-  choices and recovery affordances.
+- `agent-native-cli-design.md` is the Agent-native CLI design layer and should
+  teach judgment for optional design choices and recovery affordances.
 - `cli-command-facade.md` should stay focused on how the contract runtime
   implements and validates the designed contract.
-- `PROVENANCE.md` must distinguish upstream core from local overlay.
+- `PROVENANCE.md` must distinguish upstream core from local extension.
 
 ## Alternatives considered
 

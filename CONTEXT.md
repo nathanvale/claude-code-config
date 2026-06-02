@@ -36,6 +36,10 @@ _Avoid_: contract-owned, runtime-backed, required field, schema promise
 The smallest behavior set a skill driver can safely rely on: discoverable command, non-interactive run path, parseable output, structured failure, run correlation, and side-effect stance. Escalate beyond it only when risk, scale, or output shape earns the extra surface.
 _Avoid_: full adoption checklist, maturity model, every rubric item, implementation plan
 
+**Agent-native CLI design layer**:
+The judgment layer that applies the CLI baseline to skill-driver workflows: discovery, non-interactive execution, parseability, recovery, observability, safety, and token budget. It sits between the CLI baseline and contract runtime path; it is not an Overlay in the harness-installation sense.
+_Avoid_: overlay, rubric, contract runtime, agent-only skill
+
 **Run correlation ID**:
 An identifier that connects one command invocation's result, human diagnostics, and diagnostic trail. Use concept wording in design prose; exact payload field names belong to the contract runtime.
 _Avoid_: runId, trace id, log id, diagnostics id

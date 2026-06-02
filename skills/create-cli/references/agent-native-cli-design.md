@@ -1,4 +1,4 @@
-# Agent-Native CLI Design
+# Agent-Native CLI Design Layer
 
 A CLI is agent-native when a skill driver can discover it, run it, parse
 results, recover from failures, and explain what happened without hidden
@@ -33,7 +33,8 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 - Escalate when agents run unattended, commands write or destroy state, output
   can become token-heavy, diagnostics persist, or multiple packages consume the
   contract.
-- Add rubric features only when they change driver behavior or reduce risk.
+- Add design-layer features only when they change driver behavior or reduce
+  risk.
 - Don't make every CLI carry a full toolkit surface by default.
 
 ## Lifecycle
@@ -192,7 +193,8 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 ## Review Checklist
 
 - Can the command contract validate its own declared surface?
-- Does the command meet the minimum bar before adopting heavier rubric features?
+- Does the command meet the minimum bar before adopting heavier design-layer
+  features?
 - Can a fresh driver discover the command and know when to use it?
 - Can a non-interactive driver run it without prompts?
 - Can machine output be parsed without scraping human text?

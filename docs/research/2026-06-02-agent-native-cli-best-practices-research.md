@@ -49,7 +49,7 @@ Not skill reference material.
 
 Treat these as pressure signals, not authority.
 
-## Rubric Impact
+## Design Layer Impact
 
 - Strengthen structured output beyond "has JSON".
 - Add repair options with evidence, constraints, side effects, and next action.
