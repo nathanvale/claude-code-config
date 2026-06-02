@@ -296,12 +296,20 @@ _Avoid_: manual checklist, browser-domain-memory preflight
 A read-only `browser-use` proof that a selected Browser Adapter is attached to verified Warm Chrome. It runs after Warm Chrome Preflight and before adapter action.
 _Avoid_: manual checklist, durable binding, adapter fallback
 
+**Browser Adapter Router**:
+The `browser-use` decision point that chooses a Browser Adapter for a Bounded Browser Outcome from current adapter capability evidence. It ranks proven candidates; missing proof is recovery, not inference. It is not a universal browser API, browser entry point, or browser memory owner.
+_Avoid_: browser adapter facade, browser orchestrator, adapter fallback, driver
+
+**Bounded Browser Outcome**:
+A scoped browser objective that `browser-use` can route while its assumptions remain valid. It is narrower than a whole user request and broader than a single element action.
+_Avoid_: browser task, action window, runbook step, whole request
+
 **Browser Adapter**:
 A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome: `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge. `puppeteer-core` is deterministic replay detail, not public adapter name.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
 
 **Browser Adapter Command Resolution**:
-Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; post-proof action invocation belongs to later adapter facade work.
+Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; post-proof action invocation belongs to later Browser Adapter Router work.
 _Avoid_: bunx requirement, npx requirement, prose runner fallback, public package-runner contract, action facade
 
 **Browser Entry Handoff**:
@@ -547,6 +555,9 @@ Domain expert: "No. It requests a playback mode or browser outcome. `browser-use
 
 Dev: "What's the default Browser Adapter?"
 Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."
+
+Dev: "Can Browser Adapter Router pick the likely best adapter when proof is missing?"
+Domain expert: "No. It ranks proven candidates. Missing proof becomes recovery, not selection."
 
 Dev: "Is Puppeteer banned?"
 Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is deterministic replay detail that connects to verified Warm Chrome."
