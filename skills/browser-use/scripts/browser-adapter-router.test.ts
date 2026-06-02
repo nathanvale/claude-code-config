@@ -16,19 +16,23 @@ import {
 	browserAdapterRouterContracts,
 } from "./command-contract";
 import {
-	type CapabilityReport,
 	type RouteEvidenceEnvelope,
 	type RouterRuntime,
 	createDefaultRouterRuntime,
-	discoverReport,
-	evaluateRoute,
-	isReportStale,
 	parseEvidenceEnvelope,
-	resolveRequiredCapabilities,
 	runForTest,
-	validateCapabilityReport,
 	validateErrorEnvelopeForTest,
 } from "./browser-adapter-router";
+import {
+	evaluateRoute,
+	isReportStale,
+	resolveRequiredCapabilities,
+} from "./browser-adapter-router-engine";
+import {
+	discoverReport,
+	validateCapabilityReport,
+} from "./browser-adapter-router-discovery";
+import type { CapabilityReport } from "./browser-adapter-router-model";
 import {
 	continuationForCode,
 	recoverabilityForCode,
