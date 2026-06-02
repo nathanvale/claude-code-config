@@ -4,10 +4,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." >/dev/null && pwd)"
-COMMAND="${1:-check}"
+COMMAND="check"
 FORMAT="plain"
 
-shift || true
+if [[ $# -gt 0 ]]; then
+	case "$1" in
+	check | status | help)
+		COMMAND="$1"
+		shift
+		;;
+	-h | --help)
+		COMMAND="help"
+		shift
+		;;
+	esac
+fi
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--json)
