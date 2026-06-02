@@ -420,3 +420,306 @@ export const browserAdapterProofContracts = defineCommandFacadeContract(
 		writeImplyingMutations: new Set(["write", "browser"]),
 	},
 );
+
+// ---------------------------------------------------------------------------
+// Browser Adapter Router (plan 2026-06-02-004)
+//
+// Package-owned result vocabulary for the evidence-first Router. The facade owns
+// envelope shape; these constants own the stable literals the Router emits and
+// callers/tests rely on (capability names, report states, diagnostic codes,
+// runtime action ids). The router runtime and tests derive from these — no
+// hand-maintained literal lists in prose (plan Scope Boundaries).
+// ---------------------------------------------------------------------------
+
+export const BROWSER_ADAPTER_ROUTER_CONTRACT_ID =
+	"browser-use.browser-adapter-router" as const;
+export const BROWSER_ADAPTER_ROUTER_SCHEMA_VERSION = "1" as const;
+
+export type BrowserAdapterRouterCommand = "route" | "report" | "status";
+
+// Registry ids (plan R11). Membership is known Browser Adapter identity, not
+// routability (R11a).
+export const BROWSER_ADAPTER_ROUTER_ADAPTERS = [
+	"chrome-devtools",
+	"agent-browser",
+	"playwright-cdp",
+] as const;
+export type BrowserAdapterRouterAdapter =
+	(typeof BROWSER_ADAPTER_ROUTER_ADAPTERS)[number];
+
+// Adapter capabilities (plan Capability Model). `performance_profile` is not
+// `devtools_performance_insight`; `memory_debug` is adapter-name-neutral.
+export const BROWSER_ADAPTER_ROUTER_CAPABILITIES = [
+	"snapshot_refs",
+	"element_actions",
+	"selector_actions",
+	"screenshot_media",
+	"console_debug",
+	"network_inspection",
+	"performance_profile",
+	"devtools_performance_insight",
+	"memory_debug",
+	"react_vitals",
+] as const;
+export type BrowserAdapterRouterCapability =
+	(typeof BROWSER_ADAPTER_ROUTER_CAPABILITIES)[number];
+
+// Capability support states (plan R6).
+export const BROWSER_ADAPTER_ROUTER_SUPPORT_STATES = [
+	"full",
+	"partial",
+	"none",
+	"unknown",
+	"stale",
+] as const;
+export type BrowserAdapterRouterSupportState =
+	(typeof BROWSER_ADAPTER_ROUTER_SUPPORT_STATES)[number];
+
+// Attachment models (plan R12). Only `verified_warm_chrome` is compatible
+// attachment for Router V1; the rest are reportable evidence but fail
+// compatibility (R12b, R12c).
+export const BROWSER_ADAPTER_ROUTER_ATTACHMENT_MODELS = [
+	"verified_warm_chrome",
+	"separate_browser_context",
+	"storage_state_import",
+	"unknown",
+] as const;
+export type BrowserAdapterRouterAttachmentModel =
+	(typeof BROWSER_ADAPTER_ROUTER_ATTACHMENT_MODELS)[number];
+export const BROWSER_ADAPTER_ROUTER_COMPATIBLE_ATTACHMENT_MODEL =
+	"verified_warm_chrome" as const;
+
+// Report source priority (plan "Report source order"): validated self-report
+// beats validated manifest; neither -> no routable report.
+export const BROWSER_ADAPTER_ROUTER_REPORT_SOURCES = [
+	"self_report",
+	"manifest",
+] as const;
+export type BrowserAdapterRouterReportSource =
+	(typeof BROWSER_ADAPTER_ROUTER_REPORT_SOURCES)[number];
+
+// Minimum per-capability confidence for a full route (plan Capability Discovery
+// V1: "confidence >=75 for every required capability").
+export const BROWSER_ADAPTER_ROUTER_MIN_ROUTE_CONFIDENCE = 75 as const;
+
+// Policy modes (plan Policy Semantics).
+export const BROWSER_ADAPTER_ROUTER_MODES = ["auto", "prefer", "force"] as const;
+export type BrowserAdapterRouterMode =
+	(typeof BROWSER_ADAPTER_ROUTER_MODES)[number];
+
+// Seed task-facing bundle names (plan Bundles). Presets, not guarantees;
+// runtime evaluates resolved required capabilities.
+export const BROWSER_ADAPTER_ROUTER_BUNDLES = [
+	"snapshot_page_action",
+	"visual_proof_capture",
+	"runtime_debug_inspection",
+	"performance_profile",
+	"runbook_step_execution",
+] as const;
+export type BrowserAdapterRouterBundle =
+	(typeof BROWSER_ADAPTER_ROUTER_BUNDLES)[number];
+
+// Diagnostic codes (plan Recovery Semantics). Stable error.code literals.
+export const BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES = [
+	"adapter_capability_none",
+	"adapter_capability_unknown",
+	"adapter_capability_stale",
+	"adapter_capability_partial",
+	"adapter_attachment_unverified",
+	"adapter_attachment_incompatible",
+	"route_evidence_invalid",
+	"route_evidence_mixed_run",
+	"route_evidence_stale",
+	"auth_session_unverified",
+	"target_origin_unverified",
+] as const;
+export type BrowserAdapterRouterDiagnosticCode =
+	(typeof BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES)[number];
+
+const routerReadFlags = {
+	"--envelope": {
+		type: "path",
+		description: "Evidence envelope JSON file. Omit to read envelope from stdin.",
+	},
+	"--adapter": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_ADAPTERS,
+		description: "Browser Adapter id for report discovery.",
+	},
+	"--capability": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_CAPABILITIES,
+		description: "Capability to report on for report discovery.",
+	},
+	"--json": { type: "boolean", description: "Emit JSON envelope." },
+	"--plain": { type: "boolean", description: "Emit stable text." },
+} as const satisfies BrowserAdapterRouterCommandContract["flags"];
+
+type BrowserAdapterRouterAudience = "agent" | "operator";
+type BrowserAdapterRouterMutation = "check" | "network";
+type BrowserAdapterRouterCommandContract = CommandFacadeContract<
+	BrowserAdapterRouterCommand,
+	BrowserAdapterRouterAudience,
+	BrowserAdapterRouterMutation
+>;
+
+const routerEnvVars = [
+	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
+	{
+		name: "BROWSER_USE_ROUTER_ENVELOPE_JSON",
+		description: "Inline evidence envelope JSON; overridden by --envelope.",
+	},
+	{
+		name: "BROWSER_USE_ROUTER_SELF_REPORT_JSON",
+		description:
+			"JSON array command vector override for an adapter self-report command. Values must be non-empty strings; shell strings are rejected.",
+	},
+] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
+
+const routerExitCodes = {
+	"0": "Browser Adapter selected or report produced.",
+	"1": "Runtime dependency failed.",
+	"2": "Usage error.",
+	"20": "Route failed closed.",
+} as const satisfies BrowserAdapterRouterCommandContract["exitCodes"];
+
+const routerResultContract = {
+	id: BROWSER_ADAPTER_ROUTER_CONTRACT_ID,
+	kind: "Browser Adapter route decision.",
+	schema_version: BROWSER_ADAPTER_ROUTER_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	BrowserAdapterRouterCommandContract["resultContract"]
+>;
+
+// Recovery + success runtime actions (plan Recovery Semantics). Action ids are
+// the stable continuation.next_action_id vocabulary.
+export const browserAdapterRouterFailureActions = [
+	{
+		id: "prove_adapter_attachment",
+		summary:
+			"Run Browser Adapter Proof for a candidate adapter, then retry routing with fresh proof evidence.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "research_adapter_capability",
+		summary:
+			"Run bounded docs research for an adapter capability; advisory only until verified.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "verify_capability_report",
+		summary: "Probe or validate evidence before refreshing a capability report.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "research_complete_unverified",
+		summary:
+			"Docs lookup finished but did not refresh runtime truth; routing stays closed.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "accept_partial_adapter",
+		summary:
+			"Explicit user/agent acceptance of degraded support; only when degraded mode is allowed.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_route_input",
+		summary: "Correct the supplied evidence envelope, mode, or bundle.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserAdapterRouterSuccessActions = [
+	{
+		id: "use_selected_browser_adapter",
+		summary:
+			"Use the Router-selected Browser Adapter under the emitted route validity constraints.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserAdapterRouterContracts = defineCommandFacadeContract(
+	{
+		route: {
+			script: "scripts/browser-adapter-router.ts",
+			summary:
+				"Select a Browser Adapter from a supplied evidence envelope without probing.",
+			usage: [
+				"route [--envelope <path>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: routerEnvVars,
+			resultContract: routerResultContract,
+			actionAffordances: {
+				success: browserAdapterRouterSuccessActions,
+				failure: browserAdapterRouterFailureActions,
+			},
+			flags: routerReadFlags,
+			exitCodes: routerExitCodes,
+		},
+		report: {
+			script: "scripts/browser-adapter-router.ts",
+			summary:
+				"Discover and validate one adapter capability report from registry or manifest.",
+			usage: [
+				"report --adapter <id> [--capability <id>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "network",
+			sideEffects: ["check", "network"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: routerEnvVars,
+			resultContract: routerResultContract,
+			actionAffordances: {
+				success: browserAdapterRouterSuccessActions,
+				failure: browserAdapterRouterFailureActions,
+			},
+			flags: routerReadFlags,
+			exitCodes: routerExitCodes,
+		},
+		status: {
+			script: "scripts/browser-adapter-router.ts",
+			summary:
+				"Project a supplied evidence envelope as a human route decision.",
+			usage: [
+				"status [--envelope <path>] [--json|--plain]",
+			],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: routerEnvVars,
+			resultContract: routerResultContract,
+			actionAffordances: {
+				success: browserAdapterRouterSuccessActions,
+				failure: browserAdapterRouterFailureActions,
+			},
+			flags: routerReadFlags,
+			exitCodes: routerExitCodes,
+			alias: {
+				command: "route",
+				defaultArgs: ["--plain"],
+			},
+		},
+	} as const satisfies Record<
+		BrowserAdapterRouterCommand,
+		BrowserAdapterRouterCommandContract
+	>,
+	{
+		path: "skills/browser-use/scripts/command-contract.ts",
+		writeImplyingMutations: new Set(["write", "browser"]),
+	},
+);
