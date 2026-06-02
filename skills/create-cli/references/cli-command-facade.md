@@ -67,6 +67,26 @@ Ask:
 Static `actionAffordances` are discovery vocabulary. Per-run output is runtime
 authority. See ADR-0016 and facade package source for exact fields.
 
+## Package-owned result vocabulary
+
+The facade owns shared output shape: envelopes, `resultContract` identity
+fields, runtime action shape, continuation shape, and diagnostic flag
+reservation. The package owns stable agent-facing values inside that shape once
+docs, tests, parsers, callers, or agents rely on them.
+
+Examples: diagnostic codes, source labels, statuses, action ids, parser enum
+values, and routing labels. Name categories; do not copy package member lists
+into prose.
+
+Export package-owned runtime constants and derived types beside the package
+`CommandFacadeContract`. Default to the same contract module. Split to a
+sibling vocabulary module only when the catalog gets noisy; keep the contract
+module pointing at or exporting the owner.
+
+Derive parser, runtime, tests, and docs examples from those constants.
+Implementation-local string unions are fine while private; they become a smell
+once another surface depends on the values.
+
 ## Facade owns the diagnostic flags — don't declare them
 
 `--quiet`, `--verbose`, `--debug`, `--run-id` are facade-reserved (consumed
