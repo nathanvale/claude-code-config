@@ -18,6 +18,14 @@ Current Browser Adapter Proof verifies the `mcporter` path. If another Chrome De
 
 If proof reports `configure_adapter_dependency`, expose `mcporter` on PATH or set `BROWSER_USE_MCPORTER_COMMAND_JSON` to an explicit JSON command vector. Package-runner examples are operator choices, not proof fallbacks.
 
+Local runner override examples:
+
+```bash
+export BROWSER_USE_MCPORTER_COMMAND_JSON='["bunx","mcporter"]'
+export BROWSER_USE_MCPORTER_COMMAND_JSON='["npx","-y","mcporter"]'
+export BROWSER_USE_MCPORTER_COMMAND_JSON='["pnpm","dlx","mcporter"]'
+```
+
 Preferred new config shape:
 
 ```json

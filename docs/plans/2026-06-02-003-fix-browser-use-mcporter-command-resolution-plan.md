@@ -11,7 +11,7 @@ date: 2026-06-02
 
 Make `browser-use` match ADR 0011: skill prose names `mcporter`, while Browser Adapter Proof resolves how to invoke it. The runtime should default to `mcporter` on PATH, accept an explicit JSON-array command-vector override for local runners, and emit structured dependency recovery when the command cannot be resolved.
 
-This slice is proof-only. Post-proof `mcporter call ...` examples remain public-tool prose until adapter facade work owns action invocation.
+This slice is proof-only. Post-proof `mcporter call ...` examples remain public-tool prose until Browser Adapter Router work owns action invocation.
 
 ## Problem Frame
 
@@ -49,7 +49,7 @@ The live Manpower run showed a mismatch: `SKILL.md` examples said `mcporter`, bu
 ### U1. Add command-vector resolution to Browser Adapter Proof
 
 - **Goal:** Replace hardcoded `bunx mcporter` invocations with a small resolver that returns the base command vector.
-- **Files:** `skills/browser-use/scripts/preflight-browser-adapter.ts`
+- **Files:** `skills/browser-use/scripts/preflight-browser-adapter.ts`, `skills/browser-use/scripts/command-contract.ts`
 - **Patterns:** Follow existing `AdapterCommandInput`, `runCommand`, and `AdapterProofRuntimeError` handling in `preflight-browser-adapter.ts`.
 - **Test Scenarios:**
   - Default resolution runs `mcporter config get chrome-devtools --json`.
@@ -91,6 +91,7 @@ The live Manpower run showed a mismatch: `SKILL.md` examples said `mcporter`, bu
 - Do not implement broader Browser Adapter support beyond `chrome-devtools`.
 - Do not implement Browser Adapter capability routing, forced/prefer/auto policy, or capability research recovery in this slice.
 - Do not implement post-proof Chrome DevTools action invocation in this slice.
+- Do not treat `BROWSER_USE_MCPORTER_COMMAND_JSON` as support for post-proof `mcporter call ...` examples; if proof used an override because `mcporter` is not on PATH, keep agents out of those examples until Browser Adapter Router owns action invocation.
 - Do not require every skill to adopt CLI command resolution machinery.
 
 ## Acceptance Examples
@@ -102,13 +103,14 @@ The live Manpower run showed a mismatch: `SKILL.md` examples said `mcporter`, bu
 - AE5. Given no override and `mcporter` is missing, when Browser Adapter Proof runs, then it does not automatically try `bunx`, `npx`, `pnpm dlx`, or any other package runner.
 - AE6. Given any command-resolution failure, when JSON output is emitted, then `continuation.next_action_id` is `configure_adapter_dependency`, references a current `runtime_actions[].id`, and the recovery wording names missing-tool setup rather than Warm Chrome repair, adapter fallback, or cold-browser fallback.
 - AE7. Given command contract discovery is requested, when Browser Adapter Proof emits its contract, then it includes `BROWSER_USE_MCPORTER_COMMAND_JSON` with JSON-array shape guidance.
+- AE8. Given Browser Adapter Proof succeeds only because `BROWSER_USE_MCPORTER_COMMAND_JSON` points at a local runner, when the skill reaches post-proof `mcporter call ...` examples, then recovery text does not send the agent into those examples until Browser Adapter Router owns action invocation.
 
 ## Risks & Dependencies
 
 - The exact env var name must be stable once shipped; prefer one clear name over multiple aliases.
 - `Bun.spawn` already supports command arrays, so the implementation should stay small.
 - Tests currently fixture exact `bunx mcporter` command strings; most churn will be in test fixtures, not runtime behavior.
-- Broader adapter facade work is tracked separately in `docs/plans/2026-06-02-004-design-browser-use-adapter-facade-plan.md`.
+- Broader Browser Adapter Router work is tracked separately in `docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`.
 
 ## Sources
 

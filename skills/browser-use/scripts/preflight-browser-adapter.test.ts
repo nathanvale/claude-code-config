@@ -484,6 +484,7 @@ describe("chrome-devtools proof", () => {
 	});
 
 	for (const [label, override] of [
+		["invalid JSON", "{"],
 		["shell string", "npx -y mcporter"],
 		["empty array", "[]"],
 		["non-string entry", '["npx",7,"mcporter"]'],
@@ -506,6 +507,9 @@ describe("chrome-devtools proof", () => {
 			expect(result.exitCode).toBe(20);
 			expect(commandCount).toBe(0);
 			expect(envelope.error.code).toBe("adapter_command_override_invalid");
+			expect(envelope.error.recoverability).toBe("repair_state");
+			expect(envelope.error.retryable).toBe(false);
+			expect(envelope.error.hint.action).toBe("repair_state");
 			expect(envelope.error.hint.summary).toContain(
 				"BROWSER_USE_MCPORTER_COMMAND_JSON",
 			);
@@ -907,6 +911,9 @@ describe("chrome-devtools proof", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_dependency_missing");
+		expect(envelope.error.recoverability).toBe("repair_state");
+		expect(envelope.error.retryable).toBe(false);
+		expect(envelope.error.hint.action).toBe("repair_state");
 		expect(envelope.error.hint.summary).toContain("Expose mcporter on PATH");
 		expect(envelope.error.hint.summary).toContain(
 			"BROWSER_USE_MCPORTER_COMMAND_JSON",
@@ -918,6 +925,27 @@ describe("chrome-devtools proof", () => {
 		expect(result.stderr).not.toContain("\"observed_port\":\"9223\"");
 		expectContinuation(envelope, "configure_adapter_dependency");
 		expectNoAdapterFallback(envelope);
+	});
+
+	test("plain command-resolution failure names configure_adapter_dependency", async () => {
+		const result = await runForTest(
+			["status", "--adapter", "chrome-devtools", "--port", "9222", "--run-id", "plain-missing"],
+			await testRuntime({
+				runCommand: commandRouter({
+					"mcporter config get chrome-devtools --json": {
+						exitCode: 127,
+						stdout: "",
+						stderr: "mcporter: command not found",
+					},
+				}),
+			}),
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toContain("browser_adapter_proof adapter_dependency_missing");
+		expect(result.stderr).toContain("action=configure_adapter_dependency");
+		expect(result.stderr).toContain("(run_id=plain-missing)");
 	});
 
 	test("missing configured runner is dependency missing, not config missing", async () => {
@@ -941,6 +969,9 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_dependency_missing");
 		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+		expect(envelope.error.recoverability).toBe("repair_state");
+		expect(envelope.error.retryable).toBe(false);
+		expect(envelope.error.hint.action).toBe("repair_state");
 		expect(envelope.error.hint.summary).toContain(
 			"the configured runner is missing",
 		);
