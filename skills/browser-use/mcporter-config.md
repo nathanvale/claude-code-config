@@ -16,6 +16,8 @@ mcporter config get chrome-devtools --json
 
 Current Browser Adapter Proof verifies the `mcporter` path. If another Chrome DevTools MCP surface is already available in the harness, treat it as future proof work; do not churn config without a new proof path.
 
+If proof reports `configure_adapter_dependency`, expose `mcporter` on PATH or set `BROWSER_USE_MCPORTER_COMMAND_JSON` to an explicit JSON command vector. Package-runner examples are operator choices, not proof fallbacks.
+
 Preferred new config shape:
 
 ```json
@@ -74,6 +76,8 @@ skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-d
 ```
 
 Proof never restarts `mcporter` or edits config. If proof reports stale config, update config outside proof, then rerun. Do not switch to AppleScript, Playwright launch, Puppeteer launch, or `chrome-isolated` unless the user explicitly asks for a fresh browser.
+
+Proof never auto-tries package runners. If `BROWSER_USE_MCPORTER_COMMAND_JSON` is set, it must be a JSON array of non-empty strings.
 
 ## Source Notes
 

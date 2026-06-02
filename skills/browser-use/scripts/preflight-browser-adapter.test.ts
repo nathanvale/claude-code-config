@@ -103,6 +103,14 @@ describe("Browser Adapter Proof command contract", () => {
 		expect(browserAdapterProofContracts.check.resultContract?.schema_version).toBe(
 			BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 		);
+		const mcporterCommandEnvVar =
+			browserAdapterProofContracts.check.envVars.find(
+				(envVar) => envVar.name === "BROWSER_USE_MCPORTER_COMMAND_JSON",
+			);
+		expect(mcporterCommandEnvVar?.description).toContain("JSON array");
+		expect(mcporterCommandEnvVar?.description).toContain(
+			"package runners are never tried automatically",
+		);
 		expect(
 			browserAdapterProofContracts.check.actionAffordances?.success.map(
 				(action) => action.id,
@@ -115,6 +123,16 @@ describe("Browser Adapter Proof command contract", () => {
 		).toEqual(
 			expect.arrayContaining(warmChromeFailureActions.map((action) => action.id)),
 		);
+		expect(
+			browserAdapterProofContracts.check.actionAffordances?.failure.map(
+				(action) => action.id,
+			),
+		).toContain("configure_adapter_dependency");
+		expect(
+			browserAdapterProofContracts.check.actionAffordances?.failure.find(
+				(action) => action.id === "configure_adapter_dependency",
+			)?.sideEffects,
+		).toEqual(["write"]);
 	});
 
 	test("owns stable Browser Adapter Proof vocabulary", () => {
@@ -139,6 +157,7 @@ describe("Browser Adapter Proof command contract", () => {
 				"adapter_binding_mismatch",
 				"adapter_binding_ambiguous",
 				"adapter_config_stale",
+				"adapter_command_override_invalid",
 				"adapter_signal_weak",
 			]),
 		);
@@ -312,7 +331,7 @@ describe("chrome-devtools proof", () => {
 			],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: [
 								"chrome-devtools-mcp",
@@ -321,7 +340,7 @@ describe("chrome-devtools proof", () => {
 							],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(
 							JSON.stringify({
 								pages: [
@@ -355,10 +374,13 @@ describe("chrome-devtools proof", () => {
 		]);
 	});
 
-	test("plain status projects check result and names same continuation action", async () => {
+	test("JSON command override prefixes mcporter subcommands", async () => {
 		const result = await runForTest(
-			["status", "--adapter", "chrome-devtools", "--port", "9222", "--run-id", "plain"],
+			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
+				env: {
+					BROWSER_USE_MCPORTER_COMMAND_JSON: '["bunx","mcporter"]',
+				},
 				runCommand: commandRouter({
 					"bunx mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
@@ -366,6 +388,90 @@ describe("chrome-devtools proof", () => {
 						}),
 					),
 					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+						okCommand(JSON.stringify({ pages: [] })),
+				}),
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.status).toBe("ok");
+		expectContinuation(envelope, "use_verified_browser_adapter");
+	});
+
+	test("JSON command override supports runner flags", async () => {
+		const result = await runForTest(
+			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+			await testRuntime({
+				env: {
+					BROWSER_USE_MCPORTER_COMMAND_JSON: '["npx","-y","mcporter"]',
+				},
+				runCommand: commandRouter({
+					"npx -y mcporter config get chrome-devtools --json": okCommand(
+						JSON.stringify({
+							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
+						}),
+					),
+					"npx -y mcporter call chrome-devtools.list_pages --args {} --output json":
+						okCommand(JSON.stringify({ pages: [] })),
+				}),
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.status).toBe("ok");
+		expectContinuation(envelope, "use_verified_browser_adapter");
+	});
+
+	for (const [label, override] of [
+		["shell string", "npx -y mcporter"],
+		["empty array", "[]"],
+		["non-string entry", '["npx",7,"mcporter"]'],
+		["blank string entry", '["npx"," ","mcporter"]'],
+	]) {
+		test(`invalid command override rejects ${label}`, async () => {
+			let commandCount = 0;
+			const result = await runForTest(
+				["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+				await testRuntime({
+					env: { BROWSER_USE_MCPORTER_COMMAND_JSON: override },
+					runCommand: async () => {
+						commandCount += 1;
+						return okCommand("{}");
+					},
+				}),
+			);
+			const envelope = JSON.parse(result.stdout);
+
+			expect(result.exitCode).toBe(20);
+			expect(commandCount).toBe(0);
+			expect(envelope.error.code).toBe("adapter_command_override_invalid");
+			expect(envelope.error.hint.summary).toContain(
+				"BROWSER_USE_MCPORTER_COMMAND_JSON",
+			);
+			expect(envelope.error.hint.summary).toContain(
+				'["bunx","mcporter"]',
+			);
+			expect(envelope.error.hint.summary).toContain(
+				"does not auto-try package runners",
+			);
+			expectContinuation(envelope, "configure_adapter_dependency");
+			expectNoAdapterFallback(envelope);
+		});
+	}
+
+	test("plain status projects check result and names same continuation action", async () => {
+		const result = await runForTest(
+			["status", "--adapter", "chrome-devtools", "--port", "9222", "--run-id", "plain"],
+			await testRuntime({
+				runCommand: commandRouter({
+					"mcporter config get chrome-devtools --json": okCommand(
+						JSON.stringify({
+							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
+						}),
+					),
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(JSON.stringify([])),
 				}),
 			}),
@@ -382,12 +488,12 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(
 							JSON.stringify({
 								content: [
@@ -417,12 +523,12 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://localhost:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(JSON.stringify({ pages: [] })),
 				}),
 			}),
@@ -443,7 +549,7 @@ describe("chrome-devtools proof", () => {
 				["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 				await testRuntime({
 					runCommand: commandRouter({
-						"bunx mcporter config get chrome-devtools --json": okCommand(
+						"mcporter config get chrome-devtools --json": okCommand(
 							JSON.stringify({
 								args: ["chrome-devtools-mcp", `--browserUrl=${endpoint}`],
 							}),
@@ -467,7 +573,7 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: [
 								"chrome-devtools-mcp",
@@ -515,12 +621,12 @@ describe("chrome-devtools proof", () => {
 				home,
 				cwd,
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(JSON.stringify({ pages: [] })),
 				}),
 			}),
@@ -562,12 +668,12 @@ describe("chrome-devtools proof", () => {
 			await testRuntime({
 				cwd,
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(JSON.stringify({ pages: [] })),
 				}),
 			}),
@@ -605,7 +711,7 @@ describe("chrome-devtools proof", () => {
 			await testRuntime({
 				cwd,
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": {
+					"mcporter config get chrome-devtools --json": {
 						exitCode: 1,
 						stdout: "",
 						stderr: "no config",
@@ -640,12 +746,12 @@ describe("chrome-devtools proof", () => {
 			await testRuntime({
 				cwd,
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+					"mcporter call chrome-devtools.list_pages --args {} --output json":
 						okCommand(JSON.stringify({ pages: [] })),
 				}),
 			}),
@@ -691,7 +797,7 @@ describe("chrome-devtools proof", () => {
 				await testRuntime({
 					cwd,
 					runCommand: commandRouter({
-						"bunx mcporter config get chrome-devtools --json": {
+						"mcporter config get chrome-devtools --json": {
 							exitCode: 1,
 							stdout: "",
 							stderr: "no config",
@@ -730,10 +836,10 @@ describe("chrome-devtools proof", () => {
 			await testRuntime({
 				cwd,
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": {
+					"mcporter config get chrome-devtools --json": {
 						exitCode: 127,
 						stdout: "",
-						stderr: "env: bun: No such file or directory",
+						stderr: "mcporter: command not found",
 					},
 				}),
 			}),
@@ -742,17 +848,26 @@ describe("chrome-devtools proof", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_dependency_missing");
-		expect(envelope.error.hint.summary).toContain("bun");
+		expect(envelope.error.hint.summary).toContain("Expose mcporter on PATH");
+		expect(envelope.error.hint.summary).toContain(
+			"BROWSER_USE_MCPORTER_COMMAND_JSON",
+		);
+		expect(envelope.error.hint.summary).toContain(
+			"does not auto-try package runners",
+		);
 		expect(result.stderr).toContain("\"source_label\":\"mcporter\"");
 		expect(result.stderr).not.toContain("\"observed_port\":\"9223\"");
-		expectContinuation(envelope, "inspect_adapter_config");
+		expectContinuation(envelope, "configure_adapter_dependency");
 		expectNoAdapterFallback(envelope);
 	});
 
-	test("missing bunx or mcporter is dependency missing, not config missing", async () => {
+	test("missing configured runner is dependency missing, not config missing", async () => {
 		const result = await runForTest(
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
+				env: {
+					BROWSER_USE_MCPORTER_COMMAND_JSON: '["bunx","mcporter"]',
+				},
 				runCommand: commandRouter({
 					"bunx mcporter config get chrome-devtools --json": {
 						exitCode: 127,
@@ -767,7 +882,13 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_dependency_missing");
 		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
-		expectContinuation(envelope, "inspect_adapter_config");
+		expect(envelope.error.hint.summary).toContain(
+			"the configured runner is missing",
+		);
+		expect(envelope.error.hint.summary).toContain(
+			'["npx","-y","mcporter"]',
+		);
+		expectContinuation(envelope, "configure_adapter_dependency");
 		expectNoAdapterFallback(envelope);
 	});
 
@@ -776,12 +897,12 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json": {
+					"mcporter call chrome-devtools.list_pages --args {} --output json": {
 						exitCode: 127,
 						stdout: "",
 						stderr: "chrome-devtools-mcp: command not found",
@@ -794,7 +915,7 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_dependency_missing");
 		expect(envelope.error.message).toContain("Chrome DevTools MCP");
-		expectContinuation(envelope, "inspect_adapter_config");
+		expectContinuation(envelope, "configure_adapter_dependency");
 		expectNoAdapterFallback(envelope);
 	});
 
@@ -803,7 +924,7 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						"not-json",
 					),
 				}),
@@ -823,12 +944,12 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json": {
+					"mcporter call chrome-devtools.list_pages --args {} --output json": {
 						exitCode: 1,
 						stdout: "",
 						stderr: "connection failed",
@@ -850,12 +971,12 @@ describe("chrome-devtools proof", () => {
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
 			await testRuntime({
 				runCommand: commandRouter({
-					"bunx mcporter config get chrome-devtools --json": okCommand(
+					"mcporter config get chrome-devtools --json": okCommand(
 						JSON.stringify({
 							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
 						}),
 					),
-					"bunx mcporter call chrome-devtools.list_pages --args {} --output json": {
+					"mcporter call chrome-devtools.list_pages --args {} --output json": {
 						exitCode: 1,
 						stdout: "",
 						stderr: "",
@@ -949,7 +1070,7 @@ async function testRuntime(
 		runCommand:
 			overrides.runCommand ??
 			commandRouter({
-				"bunx mcporter config get chrome-devtools --json": okCommand(
+				"mcporter config get chrome-devtools --json": okCommand(
 					JSON.stringify({
 						args: [
 							"chrome-devtools-mcp",
@@ -958,7 +1079,7 @@ async function testRuntime(
 						],
 					}),
 				),
-				"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+				"mcporter call chrome-devtools.list_pages --args {} --output json":
 					okCommand(JSON.stringify({ pages: [] })),
 			}),
 		});

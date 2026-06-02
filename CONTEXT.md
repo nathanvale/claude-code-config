@@ -236,6 +236,10 @@ _Avoid_: manual checklist, durable binding, adapter fallback
 A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome: `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge. `puppeteer-core` is deterministic replay detail, not public adapter name.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
 
+**Browser Adapter Command Resolution**:
+Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; post-proof action invocation belongs to later adapter facade work.
+_Avoid_: bunx requirement, npx requirement, prose runner fallback, public package-runner contract, action facade
+
 **Browser Entry Handoff**:
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure.
 _Avoid_: self-repair, direct browser launch, adapter fallback, operator stop

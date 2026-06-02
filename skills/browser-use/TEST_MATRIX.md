@@ -96,7 +96,7 @@ requires: Warm Chrome healthy on `9222`; non-selected native config can point at
 
 setup:
 - [ ] Capture current PATH and adapter config.
-- [ ] Hide `bun` or `bunx` for this command, or use a fixture that returns command-not-found from selected mcporter config lookup.
+- [ ] Hide PATH `mcporter` for this command, or use a fixture that returns command-not-found from selected mcporter config lookup.
 - [ ] Leave a stale non-selected native config present if available.
 
 run:
@@ -105,7 +105,7 @@ run:
 expect:
 - [ ] Exit `20`
 - [ ] `error.code=adapter_dependency_missing`
-- [ ] `continuation.next_action_id=inspect_adapter_config`
+- [ ] `continuation.next_action_id=configure_adapter_dependency`
 - [ ] `continuation.constraints` includes `no_adapter_fallback`
 - [ ] Diagnostics source is `mcporter`, not the stale native config.
 - [ ] Stale native `9223` does not mask the selected dependency failure.
@@ -113,24 +113,24 @@ expect:
 cleanup:
 - [ ] Restore PATH and adapter config.
 
-### BAP-D2 bun or bunx missing
+### BAP-D2 mcporter command missing
 
-case_id: `bap-bun-bunx-missing`
+case_id: `bap-mcporter-command-missing`
 kind: live diagnostic
 status: ready
-run_id: `bap-bun-bunx-missing`
+run_id: `bap-mcporter-command-missing`
 adapter: `chrome-devtools`
 side_effects: check, network
-requires: Warm Chrome healthy on `9222`; controlled PATH or runtime fixture hides `bun` or `bunx`
+requires: Warm Chrome healthy on `9222`; controlled PATH or runtime fixture hides PATH `mcporter` or configured runner
 
 run:
-- [ ] `skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port 9222 --json --run-id bap-bun-bunx-missing`
+- [ ] `skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port 9222 --json --run-id bap-mcporter-command-missing`
 
 expect:
 - [ ] Exit `20`
 - [ ] `error.code=adapter_dependency_missing`
-- [ ] Hint names `bun`, `bunx`, or selected adapter dependency.
-- [ ] `continuation.next_action_id=inspect_adapter_config`
+- [ ] Hint names PATH `mcporter`, `BROWSER_USE_MCPORTER_COMMAND_JSON`, or configured runner.
+- [ ] `continuation.next_action_id=configure_adapter_dependency`
 - [ ] `no_adapter_fallback` present
 
 cleanup:
@@ -144,7 +144,7 @@ status: ready
 run_id: `bap-mcporter-missing`
 adapter: `chrome-devtools`
 side_effects: check, network
-requires: Warm Chrome healthy on `9222`; controlled PATH or runtime fixture where `bunx mcporter` cannot resolve mcporter
+requires: Warm Chrome healthy on `9222`; controlled PATH or runtime fixture where `mcporter` cannot resolve
 
 run:
 - [ ] `skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port 9222 --json --run-id bap-mcporter-missing`
@@ -152,7 +152,7 @@ run:
 expect:
 - [ ] Exit `20`
 - [ ] `error.code=adapter_dependency_missing`
-- [ ] `continuation.next_action_id=inspect_adapter_config`
+- [ ] `continuation.next_action_id=configure_adapter_dependency`
 - [ ] `no_adapter_fallback` present
 
 cleanup:
@@ -175,7 +175,7 @@ expect:
 - [ ] Exit `20`
 - [ ] `error.code=adapter_dependency_missing`
 - [ ] Error or hint names Chrome DevTools MCP.
-- [ ] `continuation.next_action_id=inspect_adapter_config`
+- [ ] `continuation.next_action_id=configure_adapter_dependency`
 - [ ] `no_adapter_fallback` present
 
 cleanup:
@@ -361,7 +361,7 @@ status: ready
 run_id: `bap-mcporter-config-missing`
 adapter: `chrome-devtools`
 side_effects: check, network
-requires: Warm Chrome healthy on `9222`; controlled fixture where `bunx mcporter config get chrome-devtools --json` exits non-zero without command-not-found text
+requires: Warm Chrome healthy on `9222`; controlled fixture where `mcporter config get chrome-devtools --json` exits non-zero without command-not-found text
 
 run:
 - [ ] `skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port 9222 --json --run-id bap-mcporter-config-missing`

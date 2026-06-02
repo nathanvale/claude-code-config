@@ -51,6 +51,10 @@ const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
 const CHROME_DEVTOOLS_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
+const MCPORTER_COMMAND_ENV_VAR = "BROWSER_USE_MCPORTER_COMMAND_JSON";
+const MCPORTER_DEFAULT_COMMAND = ["mcporter"] as const;
+const MCPORTER_COMMAND_EXAMPLES =
+	'["bunx","mcporter"], ["npx","-y","mcporter"], or ["pnpm","dlx","mcporter"]';
 const ADAPTER_TIMEOUT_MS = {
 	"chrome-devtools": 8000,
 } as const satisfies Record<BrowserAdapterProofAdapter, number>;
@@ -160,6 +164,8 @@ type AdapterWarning = {
 	source_label?: BrowserAdapterProofConfigSourceLabel;
 	observed_port?: string;
 };
+
+type AdapterCommandVector = readonly [string, ...string[]];
 
 type PageSummary = {
 	id?: string;
@@ -677,18 +683,24 @@ async function proveChromeDevTools(input: {
 	if (!mcporter || mcporter.parse_status !== "ok" || !mcporter.binding) {
 		if (
 			mcporter?.code === "adapter_dependency_missing" ||
+			mcporter?.code === "adapter_command_override_invalid" ||
 			mcporter?.code === "adapter_output_unparsable"
 		) {
 			throw new AdapterProofRuntimeError(
 				mcporter.code,
 				mcporter.code === "adapter_output_unparsable"
 					? "Chrome DevTools mcporter config output was unparsable."
-					: "Chrome DevTools selected adapter dependencies are missing.",
+					: mcporter.code === "adapter_command_override_invalid"
+						? "Chrome DevTools mcporter command override is invalid."
+						: "Chrome DevTools selected adapter dependencies are missing.",
 				{
-					primaryActionId: "inspect_adapter_config",
+					primaryActionId:
+						mcporter.code === "adapter_output_unparsable"
+							? "inspect_adapter_config"
+							: "configure_adapter_dependency",
 					hintSummary:
 						mcporter.message ??
-						"Install or expose bun, bunx, mcporter, and Chrome DevTools MCP before adapter proof.",
+						"Expose mcporter on PATH or configure an explicit mcporter command vector.",
 					hintAction: "repair_state",
 					recoverability: "repair_state",
 					hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
@@ -835,17 +847,26 @@ async function inspectMcporterConfig(
 	};
 	let result: AdapterCommandResult;
 	try {
-		result = await runtime.runCommand({
-			command: "bunx",
-			args: ["mcporter", "config", "get", "chrome-devtools", "--json"],
-			timeoutMs: ADAPTER_TIMEOUT_MS["chrome-devtools"],
-		});
-	} catch {
+		result = await runMcporterCommand(runtime, [
+			"config",
+			"get",
+			"chrome-devtools",
+			"--json",
+		]);
+	} catch (error) {
+		if (error instanceof AdapterProofRuntimeError) {
+			return {
+				...base,
+				parse_status: "unreadable",
+				code: error.code as BrowserAdapterProofDiagnosticCode,
+				message: error.options.hintSummary ?? error.message,
+			};
+		}
 		return {
 			...base,
 			parse_status: "unreadable",
 			code: "adapter_dependency_missing",
-			message: "bun, bunx, or mcporter could not be started.",
+			message: mcporterDependencyHint("mcporter could not be started."),
 		};
 	}
 	if (result.timedOut) {
@@ -860,7 +881,7 @@ async function inspectMcporterConfig(
 			...base,
 			parse_status: "unreadable",
 			code: "adapter_dependency_missing",
-			message: "bun, bunx, or mcporter is missing.",
+			message: mcporterDependencyHint("mcporter or the configured runner is missing."),
 		};
 	}
 	if (result.exitCode !== 0) {
@@ -1243,22 +1264,15 @@ function warningsForNonSelectedConfig(
 	});
 }
 
-async function listChromeDevToolsPages(
+async function runMcporterCommand(
 	runtime: AdapterProofRuntime,
-): Promise<PageSummary[]> {
-	let result: AdapterCommandResult;
+	args: readonly string[],
+): Promise<AdapterCommandResult> {
+	const [command, ...baseArgs] = resolveMcporterCommand(runtime);
 	try {
-		result = await runtime.runCommand({
-			command: "bunx",
-			args: [
-				"mcporter",
-				"call",
-				"chrome-devtools.list_pages",
-				"--args",
-				"{}",
-				"--output",
-				"json",
-			],
+		return await runtime.runCommand({
+			command,
+			args: [...baseArgs, ...args],
 			timeoutMs: ADAPTER_TIMEOUT_MS["chrome-devtools"],
 		});
 	} catch {
@@ -1266,8 +1280,87 @@ async function listChromeDevToolsPages(
 			"adapter_dependency_missing",
 			"mcporter could not be started.",
 			{
-				primaryActionId: "inspect_adapter_config",
-				hintSummary: "Install or expose mcporter before adapter proof.",
+				primaryActionId: "configure_adapter_dependency",
+				hintSummary: mcporterDependencyHint(
+					`${command} could not be started from the selected mcporter command vector.`,
+				),
+				hintAction: "repair_state",
+				recoverability: "repair_state",
+				hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
+			},
+		);
+	}
+}
+
+function resolveMcporterCommand(
+	runtime: AdapterProofRuntime,
+): AdapterCommandVector {
+	const rawOverride = runtime.env[MCPORTER_COMMAND_ENV_VAR];
+	if (rawOverride === undefined) return MCPORTER_DEFAULT_COMMAND;
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(rawOverride);
+	} catch {
+		throw invalidMcporterCommandOverride(
+			`${MCPORTER_COMMAND_ENV_VAR} must be a JSON array of non-empty strings.`,
+		);
+	}
+	if (!Array.isArray(parsed) || parsed.length === 0) {
+		throw invalidMcporterCommandOverride(
+			`${MCPORTER_COMMAND_ENV_VAR} must be a non-empty JSON array of strings.`,
+		);
+	}
+	const vector = parsed.map((value) =>
+		typeof value === "string" ? value.trim() : value,
+	);
+	if (vector.some((value) => typeof value !== "string" || value === "")) {
+		throw invalidMcporterCommandOverride(
+			`${MCPORTER_COMMAND_ENV_VAR} entries must be non-empty strings.`,
+		);
+	}
+	return vector as AdapterCommandVector;
+}
+
+function invalidMcporterCommandOverride(message: string): AdapterProofRuntimeError {
+	return new AdapterProofRuntimeError(
+		"adapter_command_override_invalid",
+		"mcporter command override is invalid.",
+		{
+			primaryActionId: "configure_adapter_dependency",
+			hintSummary: `${message} Use a command vector such as ${MCPORTER_COMMAND_EXAMPLES}. Browser Adapter Proof does not auto-try package runners.`,
+			hintAction: "repair_state",
+			recoverability: "repair_state",
+			hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
+		},
+	);
+}
+
+function mcporterDependencyHint(problem: string): string {
+	return `${problem} Expose mcporter on PATH, or set ${MCPORTER_COMMAND_ENV_VAR} to a JSON array command vector. Examples: ${MCPORTER_COMMAND_EXAMPLES}. Choose one; Browser Adapter Proof does not auto-try package runners.`;
+}
+
+async function listChromeDevToolsPages(
+	runtime: AdapterProofRuntime,
+): Promise<PageSummary[]> {
+	let result: AdapterCommandResult;
+	try {
+		result = await runMcporterCommand(runtime, [
+			"call",
+			"chrome-devtools.list_pages",
+			"--args",
+			"{}",
+			"--output",
+			"json",
+		]);
+	} catch (error) {
+		if (error instanceof AdapterProofRuntimeError) throw error;
+		throw new AdapterProofRuntimeError(
+			"adapter_dependency_missing",
+			"mcporter could not be started.",
+			{
+				primaryActionId: "configure_adapter_dependency",
+				hintSummary: mcporterDependencyHint("mcporter could not be started."),
 				hintAction: "repair_state",
 				recoverability: "repair_state",
 				hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
@@ -1286,9 +1379,11 @@ async function listChromeDevToolsPages(
 			"adapter_dependency_missing",
 			"mcporter or Chrome DevTools MCP is missing.",
 			{
-				primaryActionId: "inspect_adapter_config",
+				primaryActionId: "configure_adapter_dependency",
 				hintSummary:
-					"Install or expose mcporter and Chrome DevTools MCP before adapter proof.",
+					mcporterDependencyHint(
+						"mcporter, the configured runner, or Chrome DevTools MCP is missing.",
+					),
 				hintAction: "repair_state",
 				recoverability: "repair_state",
 				hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
@@ -1793,7 +1888,16 @@ function hintForAdapterProofError(error: AdapterProofRuntimeError): {
 			};
 		case "adapter_dependency_missing":
 			return {
-				summary: "Install or expose the selected Browser Adapter dependency.",
+				summary:
+					"Expose the selected Browser Adapter dependency or configure its command vector.",
+				action: "repair_state",
+				docsUrl: CHROME_DEVTOOLS_DOCS_URL,
+				recoverability: "repair_state",
+			};
+		case "adapter_command_override_invalid":
+			return {
+				summary:
+					"Fix the selected Browser Adapter command-vector override.",
 				action: "repair_state",
 				docsUrl: CHROME_DEVTOOLS_DOCS_URL,
 				recoverability: "repair_state",
@@ -1845,6 +1949,9 @@ function primaryRuntimeActionForError(
 		return runtimeAction("change_adapter_input");
 	}
 	switch (error.code) {
+		case "adapter_command_override_invalid":
+		case "adapter_dependency_missing":
+			return runtimeAction("configure_adapter_dependency");
 		case "adapter_binding_mismatch":
 		case "adapter_config_stale":
 		case "adapter_config_missing":

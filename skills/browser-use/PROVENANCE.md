@@ -81,7 +81,8 @@ CLI hardening confirmed:
 - `chrome-devtools` proof accepts mcporter `--browserUrl` on verified `9222`.
 - Stale mcporter config reports `adapter_config_stale` and `update_adapter_config`.
 - Healthy mcporter plus stale native MCP config emits warning only.
-- Missing `bunx` / `mcporter` reports `adapter_dependency_missing`.
+- Missing PATH `mcporter`, configured runner, or Chrome DevTools MCP reports `adapter_dependency_missing`.
+- Invalid `BROWSER_USE_MCPORTER_COMMAND_JSON` reports `adapter_command_override_invalid`.
 - Proof timeout reports `adapter_proof_timeout`.
 
 ## Open Work
