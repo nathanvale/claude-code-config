@@ -20,7 +20,7 @@ PROMPT_SYSTEM_PATHS=(
   "skills/"
 )
 
-staged=$(git diff --cached --name-only --diff-filter=ACM)
+staged=$(git diff --cached --name-only --diff-filter=ACDM)
 
 matches=false
 for path in $staged; do

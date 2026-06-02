@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
 	buildSmokeCommand,
 	DEFAULT_TIMEOUT_MS,
@@ -99,6 +100,11 @@ describe("multi-agent smoke library", () => {
 		expect(codexCommand).toContain("--ignore-rules");
 		expect(codexCommand).toContain("--skip-git-repo-check");
 		expect(codexCommand).toContain("--sandbox");
+
+		const schemaIndex = codexCommand.indexOf("--output-schema") + 1;
+		const cwdIndex = codexCommand.indexOf("-C") + 1;
+		expect(existsSync(codexCommand[schemaIndex])).toBe(true);
+		expect(existsSync(codexCommand[cwdIndex])).toBe(true);
 	});
 
 	test("dry-run smoke results include bounded execution metadata", async () => {

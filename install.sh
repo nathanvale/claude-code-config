@@ -34,6 +34,7 @@ symlinks=(
 create_links() {
 	echo "Creating symlinks..."
 	mkdir -p "$CODEX_HOME"
+	local failures=0
 	for entry in "${symlinks[@]}"; do
 		local link="${entry%%|*}"
 		local target="${entry##*|}"
@@ -44,6 +45,7 @@ create_links() {
 
 		if [[ ! -e "$target" ]]; then
 			echo "  SKIP (target missing): $target"
+			failures=$((failures + 1))
 			continue
 		fi
 
@@ -53,10 +55,12 @@ create_links() {
 			else
 				echo "  WRONG: $link -> $(readlink "$link")"
 				echo "         Remove the managed symlink manually first, then re-run."
+				failures=$((failures + 1))
 			fi
 		elif [[ -e "$link" ]]; then
 			echo "  EXISTS (not a symlink): $link"
 			echo "         Remove it manually first, then re-run."
+			failures=$((failures + 1))
 		else
 			ln -s "$target" "$link"
 			echo "  CREATED: $link -> $target"
@@ -71,6 +75,18 @@ create_links() {
 	fi
 
 	echo ""
+	if [[ -x "${SCRIPT_DIR}/scripts/agent-instructions.sh" ]]; then
+		if ! "${SCRIPT_DIR}/scripts/agent-instructions.sh" check; then
+			failures=$((failures + 1))
+		fi
+	fi
+
+	echo ""
+	if (( failures > 0 )); then
+		echo "Install incomplete: $failures issue(s) need attention."
+		exit 1
+	fi
+
 	echo "Done."
 }
 
@@ -117,7 +133,7 @@ show_status() {
 	echo ""
 
 	if [[ -x "${SCRIPT_DIR}/scripts/agent-instructions.sh" ]]; then
-		"${SCRIPT_DIR}/scripts/agent-instructions.sh" status
+		"${SCRIPT_DIR}/scripts/agent-instructions.sh" status || true
 		echo ""
 	fi
 

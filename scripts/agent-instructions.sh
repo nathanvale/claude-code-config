@@ -46,13 +46,36 @@ line_count() {
 	wc -l < "$file" | tr -d ' '
 }
 
+canonical_path() {
+	local path="$1"
+	local dir
+	local base
+	dir="$(dirname "$path")"
+	base="$(basename "$path")"
+	if [[ -d "$dir" ]]; then
+		printf "%s/%s" "$(cd "$dir" >/dev/null && pwd -P)" "$base"
+	else
+		printf "%s" "$path"
+	fi
+}
+
+resolve_link_target() {
+	local link="$1"
+	local target
+	target="$(readlink "$link")"
+	if [[ "$target" != /* ]]; then
+		target="$(dirname "$link")/$target"
+	fi
+	canonical_path "$target"
+}
+
 check_line_budget() {
 	local label="$1"
 	local file="$2"
 	local max="$3"
 
 	if [[ ! -f "$file" ]]; then
-		add_warn "$label missing: $file"
+		add_fail "$label missing: $file"
 		return
 	fi
 
@@ -68,6 +91,11 @@ check_line_budget() {
 check_no_leakage() {
 	local file="$1"
 	[[ -f "$file" ]] || return
+
+	if ! command -v rg >/dev/null 2>&1; then
+		add_fail "rg missing; cannot scan global leakage"
+		return
+	fi
 
 	local patterns=(
 		'/Users/nathanvale/code/'
@@ -135,11 +163,13 @@ check_appendices() {
 check_projection_drift() {
 	local codex_user="$HOME/.codex/AGENTS.md"
 	local source="$SCRIPT_DIR/AGENTS.md"
+	local expected_source
+	expected_source="$(canonical_path "$source")"
 
 	if [[ -L "$codex_user" ]]; then
 		local target
-		target="$(readlink "$codex_user")"
-		if [[ "$target" == "$source" ]]; then
+		target="$(resolve_link_target "$codex_user")"
+		if [[ "$target" == "$expected_source" ]]; then
 			add_pass "Codex user startup symlinked to AGENTS.md"
 		else
 			add_fail "Codex user startup symlink points elsewhere: $target"
@@ -155,12 +185,35 @@ check_projection_drift() {
 	fi
 
 	local claude_file="$HOME/.claude/CLAUDE.md"
+	local claude_agents="$HOME/.claude/AGENTS.md"
+	local expected_claude
+	expected_claude="$(canonical_path "$SCRIPT_DIR/CLAUDE.md")"
 	if [[ -L "$claude_file" ]]; then
-		add_pass "Claude startup is symlink"
+		local target
+		target="$(resolve_link_target "$claude_file")"
+		if [[ "$target" == "$expected_claude" ]]; then
+			add_pass "Claude CLAUDE.md symlinked to repo wrapper"
+		else
+			add_fail "Claude CLAUDE.md symlink points elsewhere: $target"
+		fi
 	elif [[ -e "$claude_file" ]]; then
 		add_warn "Claude startup exists but is not symlink"
 	else
-		add_warn "Claude startup missing"
+		add_fail "Claude CLAUDE.md missing"
+	fi
+
+	if [[ -L "$claude_agents" ]]; then
+		local target
+		target="$(resolve_link_target "$claude_agents")"
+		if [[ "$target" == "$expected_source" ]]; then
+			add_pass "Claude AGENTS.md symlinked to repo startup"
+		else
+			add_fail "Claude AGENTS.md symlink points elsewhere: $target"
+		fi
+	elif [[ -e "$claude_agents" ]]; then
+		add_warn "Claude AGENTS.md exists but is not symlink"
+	else
+		add_fail "Claude AGENTS.md missing"
 	fi
 }
 

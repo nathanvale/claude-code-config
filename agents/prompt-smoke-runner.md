@@ -1,6 +1,6 @@
 ---
 name: prompt-smoke-runner
-description: Runs render --check and multi-agent smoke tests for the prompt system, returning a pass/fail summary. Use after prompt fragment, rule, or render script changes.
+description: Runs instruction health checks and multi-agent smoke tests, returning a pass/fail summary. Use after startup instruction, rule, or delivery changes.
 model: haiku
 disallowedTools:
   - Write
@@ -13,19 +13,19 @@ color: green
 
 ## Purpose
 
-Run the two verification scripts for the prompt system and return a structured pass/fail summary.
+Run instruction-topology health checks and smoke tests, then return a structured pass/fail summary.
 
 ## Checks
 
 Run these in order:
 
-### 1. Render Check
+### 1. Instruction Health
 
 ```bash
-./scripts/render-user-prompts.sh --check
+./scripts/agent-instructions.sh check
 ```
 
-This validates fragment drift, wrapper drift, Codex artifact drift, `@AGENTS.md` import resolution, Codex parity, shared context doc references, orphan fragments, and shared-fragment hygiene.
+This validates startup budgets, owner routes, leakage, appendices, and agent-runtime delivery drift.
 
 ### 2. Smoke Tests (when requested)
 
@@ -33,12 +33,12 @@ This validates fragment drift, wrapper drift, Codex artifact drift, `@AGENTS.md`
 bun scripts/multi-agent-smoke.ts
 ```
 
-This validates prompt propagation expectations and shared-vs-harness-specific behavioral boundaries.
+This validates startup propagation expectations and shared-vs-harness-specific behavioral boundaries.
 For Codex, the smoke command disables MCP server startup so instruction-only checks spend less time booting unrelated runtime services.
 
 The smoke runner already uses harness-aware warning and timeout defaults. Use `--warn-after-ms` or `--timeout-ms` only when you need to override that policy for one run.
 
-Only run smoke tests when the caller requests them or when shared behavior or propagation logic changed. If unsure, run only the render check.
+Only run smoke tests when the caller requests them or when shared behavior or propagation logic changed. If unsure, run only the health check.
 
 To run a subset:
 ```bash
@@ -48,7 +48,7 @@ bun scripts/multi-agent-smoke.ts --tests boundary,propagation
 ## Output
 
 Report:
-- **render-check:** PASS or FAIL with the first failing check name
+- **health-check:** PASS or FAIL with the first failing check name
 - **smoke-tests:** PASS, FAIL (with failing test and mismatch), or SKIPPED
 - **summary:** one-line overall verdict
 

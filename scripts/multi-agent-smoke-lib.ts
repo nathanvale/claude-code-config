@@ -638,20 +638,16 @@ export function buildSmokeCommand(input: {
 	const outputPath = join(tempRoot, `${test.id}.output.json`);
 	writeFileSync(schemaPath, JSON.stringify(test.schema, null, 2));
 
-	try {
-		const commandCwd =
-			input.harness === "codex"
-				? prepareCodexSmokeCwd(tempRoot, input.cwd)
-				: input.cwd;
-		return HARNESS_ADAPTERS[input.harness].buildCommand({
-			prompt: test.prompt,
-			schemaPath,
-			outputPath,
-			cwd: commandCwd,
-		});
-	} finally {
-		rmSync(tempRoot, { recursive: true, force: true });
-	}
+	const commandCwd =
+		input.harness === "codex"
+			? prepareCodexSmokeCwd(tempRoot, input.cwd)
+			: input.cwd;
+	return HARNESS_ADAPTERS[input.harness].buildCommand({
+		prompt: test.prompt,
+		schemaPath,
+		outputPath,
+		cwd: commandCwd,
+	});
 }
 
 /** Return the default bounded timeout for one harness. */
@@ -743,7 +739,6 @@ export async function runSmokeTest(input: {
 			: process.env;
 
 	if (input.dryRun) {
-		rmSync(tempRoot, { recursive: true, force: true });
 		return {
 			harness: input.harness,
 			test: test.id,

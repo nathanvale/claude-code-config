@@ -161,7 +161,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/code/claude-code-config/scripts/check-prompt-drift-on-stop.sh",
+            "command": "bash -lc 'repo=$(git rev-parse --show-toplevel 2>/dev/null || true); if [ -x \"$repo/scripts/check-prompt-drift-on-stop.sh\" ]; then \"$repo/scripts/check-prompt-drift-on-stop.sh\"; fi'",
             "timeout": 10
           }
         ]

@@ -101,4 +101,3 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 
 - Prefer repo-local `AGENTS.md` and `docs/agents/` when present.
 - Issue tracker, triage labels, and domain docs belong to each repo.
-- This repo's details live in `docs/agents/`.
