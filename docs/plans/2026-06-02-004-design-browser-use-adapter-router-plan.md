@@ -1,7 +1,7 @@
 ---
 title: Design browser-use Browser Adapter Router
 type: architecture
-status: accepted
+status: completed
 date: 2026-06-02
 origin: docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md
 ---
