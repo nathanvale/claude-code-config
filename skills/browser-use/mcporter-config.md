@@ -14,7 +14,7 @@ Home config usually owns the default:
 mcporter config get chrome-devtools --json
 ```
 
-If `mcporter` is not on this shell path but Chrome DevTools MCP is already available in the harness, use the available MCP surface and do not churn config.
+Current Browser Adapter Proof verifies the `mcporter` path. If another Chrome DevTools MCP surface is already available in the harness, treat it as future proof work; do not churn config without a new proof path.
 
 Preferred new config shape:
 

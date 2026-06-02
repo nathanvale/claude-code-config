@@ -16,6 +16,10 @@ import {
 	parseCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_ADAPTER_PROOF_ADAPTERS,
+	BROWSER_ADAPTER_PROOF_BINDING_STATUSES,
+	BROWSER_ADAPTER_PROOF_CONFIG_SOURCE_LABELS,
+	BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES,
 	BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 	browserAdapterProofContracts,
 	warmChromeFailureActions,
@@ -110,6 +114,33 @@ describe("Browser Adapter Proof command contract", () => {
 			),
 		).toEqual(
 			expect.arrayContaining(warmChromeFailureActions.map((action) => action.id)),
+		);
+	});
+
+	test("owns stable Browser Adapter Proof vocabulary", () => {
+		expect(BROWSER_ADAPTER_PROOF_ADAPTERS).toEqual(["chrome-devtools"]);
+		expect(BROWSER_ADAPTER_PROOF_CONFIG_SOURCE_LABELS).toEqual([
+			"mcporter",
+			"repo_mcp",
+			"native_mcp_claude_code",
+			"native_mcp_claude_desktop",
+			"native_mcp_codex",
+			"native_mcp_unknown",
+		]);
+		expect(BROWSER_ADAPTER_PROOF_BINDING_STATUSES).toEqual([
+			"matches_verified_endpoint",
+			"mismatch",
+			"stale",
+			"missing",
+			"unknown",
+		]);
+		expect(BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES).toEqual(
+			expect.arrayContaining([
+				"adapter_binding_mismatch",
+				"adapter_binding_ambiguous",
+				"adapter_config_stale",
+				"adapter_signal_weak",
+			]),
 		);
 	});
 

@@ -24,10 +24,16 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_ADAPTER_PROOF_ADAPTERS,
 	BROWSER_ADAPTER_PROOF_CONTRACT_ID,
 	BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 	type BrowserAdapterProofAdapter,
+	type BrowserAdapterProofBindingKind,
+	type BrowserAdapterProofBindingStatus,
 	type BrowserAdapterProofCommand,
+	type BrowserAdapterProofConfigParseStatus,
+	type BrowserAdapterProofConfigSourceLabel,
+	type BrowserAdapterProofDiagnosticCode,
 	browserAdapterProofContracts,
 	browserAdapterProofFailureActions,
 	browserAdapterProofSuccessActions,
@@ -48,9 +54,6 @@ const CHROME_DEVTOOLS_DOCS_URL =
 const ADAPTER_TIMEOUT_MS = {
 	"chrome-devtools": 8000,
 } as const satisfies Record<BrowserAdapterProofAdapter, number>;
-const SUPPORTED_ADAPTERS: readonly BrowserAdapterProofAdapter[] = [
-	"chrome-devtools",
-];
 const quietDiagnosticWriter: CliWriter = {
 	write: () => true,
 };
@@ -131,45 +134,30 @@ type WarmChromeProofData = {
 	target_count?: number;
 };
 
-type ConfigSourceLabel =
-	| "mcporter"
-	| "repo_mcp"
-	| "native_mcp_claude_code"
-	| "native_mcp_claude_desktop"
-	| "native_mcp_codex"
-	| "native_mcp_unknown";
-
-type BindingStatus =
-	| "matches_verified_endpoint"
-	| "mismatch"
-	| "stale"
-	| "missing"
-	| "unknown";
-
 type AdapterBinding = {
-	kind: "browser_url" | "devtools_active_port" | "auto_connect_user_data_dir";
-	status: BindingStatus;
+	kind: BrowserAdapterProofBindingKind;
+	status: BrowserAdapterProofBindingStatus;
 	observed_port?: string;
 	endpoint_host?: string;
 };
 
 type ConfigSourceDiagnostic = {
-	source_label: ConfigSourceLabel;
+	source_label: BrowserAdapterProofConfigSourceLabel;
 	scope?: "project" | "user" | "unknown";
 	path_hint?: string;
-	parse_status: "ok" | "missing" | "malformed" | "unreadable";
+	parse_status: BrowserAdapterProofConfigParseStatus;
 	binding?: AdapterBinding;
 	selected?: boolean;
-	code?: string;
+	code?: BrowserAdapterProofDiagnosticCode;
 	message?: string;
 };
 
 type AdapterWarning = {
-	code: string;
+	code: BrowserAdapterProofDiagnosticCode;
 	severity: "warning";
 	summary: string;
 	docs_url?: string;
-	source_label?: ConfigSourceLabel;
+	source_label?: BrowserAdapterProofConfigSourceLabel;
 	observed_port?: string;
 };
 
@@ -192,7 +180,7 @@ type AdapterProof = {
 	page_count: number;
 	pages: PageSummary[];
 	diagnostics: {
-		selected_config_source?: ConfigSourceLabel;
+		selected_config_source?: BrowserAdapterProofConfigSourceLabel;
 		selected_binding?: AdapterBinding;
 		config_sources: ConfigSourceDiagnostic[];
 		warnings: AdapterWarning[];
@@ -210,7 +198,7 @@ type AdapterProofRuntimeErrorOptions = {
 	failureDomain?: AdapterProofFailureDomain;
 	primaryActionId?: AdapterProofRuntimeActionId;
 	observedPort?: string;
-	sourceLabel?: ConfigSourceLabel;
+	sourceLabel?: BrowserAdapterProofConfigSourceLabel;
 };
 
 class AdapterProofRuntimeError extends Error {
@@ -484,7 +472,7 @@ function parseAdapterProofArgv(
 			"unknown_adapter",
 			`Unsupported Browser Adapter: ${adapter}.`,
 			inputChangeOptions(
-				`Use one of: ${SUPPORTED_ADAPTERS.join(", ")}.`,
+				`Use one of: ${BROWSER_ADAPTER_PROOF_ADAPTERS.join(", ")}.`,
 			),
 		);
 	}
@@ -909,7 +897,7 @@ async function inspectMcporterConfig(
 }
 
 function nativeChromeDevToolsConfigSources(runtime: AdapterProofRuntime): Array<{
-	sourceLabel: ConfigSourceLabel;
+	sourceLabel: BrowserAdapterProofConfigSourceLabel;
 	scope: "project" | "user";
 	pathHint: string;
 	path: string;
@@ -972,7 +960,7 @@ function nativeChromeDevToolsConfigSources(runtime: AdapterProofRuntime): Array<
 
 async function inspectNativeConfigSource(input: {
 	runtime: AdapterProofRuntime;
-	sourceLabel: ConfigSourceLabel;
+	sourceLabel: BrowserAdapterProofConfigSourceLabel;
 	scope: "project" | "user";
 	pathHint: string;
 	path: string;
@@ -1711,7 +1699,7 @@ function normalizeError(error: unknown): {
 	failureDomain: AdapterProofFailureDomain;
 	primaryActionId?: AdapterProofRuntimeActionId;
 	observedPort?: string;
-	sourceLabel?: ConfigSourceLabel;
+	sourceLabel?: BrowserAdapterProofConfigSourceLabel;
 } {
 	if (error instanceof CliUsageError) {
 		return {
@@ -1974,7 +1962,9 @@ function isBrowserAdapterProofCommand(
 }
 
 function isBrowserAdapter(value: string): value is BrowserAdapterProofAdapter {
-	return SUPPORTED_ADAPTERS.includes(value as BrowserAdapterProofAdapter);
+	return BROWSER_ADAPTER_PROOF_ADAPTERS.includes(
+		value as BrowserAdapterProofAdapter,
+	);
 }
 
 export async function runCommand(

@@ -23,7 +23,59 @@ type WarmChromeCommandContract = CommandFacadeContract<
 	WarmChromeMutation
 >;
 export type BrowserAdapterProofCommand = "check" | "status";
-export type BrowserAdapterProofAdapter = "chrome-devtools";
+export const BROWSER_ADAPTER_PROOF_ADAPTERS = ["chrome-devtools"] as const;
+export type BrowserAdapterProofAdapter =
+	(typeof BROWSER_ADAPTER_PROOF_ADAPTERS)[number];
+export const BROWSER_ADAPTER_PROOF_CONFIG_SOURCE_LABELS = [
+	"mcporter",
+	"repo_mcp",
+	"native_mcp_claude_code",
+	"native_mcp_claude_desktop",
+	"native_mcp_codex",
+	"native_mcp_unknown",
+] as const;
+export type BrowserAdapterProofConfigSourceLabel =
+	(typeof BROWSER_ADAPTER_PROOF_CONFIG_SOURCE_LABELS)[number];
+export const BROWSER_ADAPTER_PROOF_BINDING_KINDS = [
+	"browser_url",
+	"devtools_active_port",
+	"auto_connect_user_data_dir",
+] as const;
+export type BrowserAdapterProofBindingKind =
+	(typeof BROWSER_ADAPTER_PROOF_BINDING_KINDS)[number];
+export const BROWSER_ADAPTER_PROOF_BINDING_STATUSES = [
+	"matches_verified_endpoint",
+	"mismatch",
+	"stale",
+	"missing",
+	"unknown",
+] as const;
+export type BrowserAdapterProofBindingStatus =
+	(typeof BROWSER_ADAPTER_PROOF_BINDING_STATUSES)[number];
+export const BROWSER_ADAPTER_PROOF_CONFIG_PARSE_STATUSES = [
+	"ok",
+	"missing",
+	"malformed",
+	"unreadable",
+] as const;
+export type BrowserAdapterProofConfigParseStatus =
+	(typeof BROWSER_ADAPTER_PROOF_CONFIG_PARSE_STATUSES)[number];
+export const BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES = [
+	"adapter_config_stale",
+	"adapter_config_missing",
+	"adapter_dependency_missing",
+	"adapter_binding_mismatch",
+	"adapter_binding_ambiguous",
+	"adapter_signal_weak",
+	"adapter_chrome_for_testing_risk",
+	"adapter_auto_launch_risk",
+	"adapter_proof_timeout",
+	"adapter_command_failed",
+	"adapter_output_unparsable",
+	"adapter_config_parse_error",
+] as const;
+export type BrowserAdapterProofDiagnosticCode =
+	(typeof BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES)[number];
 type BrowserAdapterProofMutation = "check";
 type BrowserAdapterProofCommandContract = CommandFacadeContract<
 	BrowserAdapterProofCommand,
@@ -76,7 +128,7 @@ const resultContract = {
 const adapterProofReadFlags = {
 	"--adapter": {
 		type: "enum",
-		values: ["chrome-devtools"],
+		values: BROWSER_ADAPTER_PROOF_ADAPTERS,
 		description: "Browser Adapter to prove.",
 		required: true,
 	},

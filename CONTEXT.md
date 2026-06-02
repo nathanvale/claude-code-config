@@ -477,7 +477,7 @@ Dev: "What's the default Browser Adapter?"
 Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."
 
 Dev: "Is Puppeteer banned?"
-Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is allowed only as a Browser Adapter that connects to verified Warm Chrome."
+Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is deterministic replay detail that connects to verified Warm Chrome."
 
 Dev: "Which mode is the default for a fresh capture?"
 Domain expert: "Prose mode — the flexible default while memory is still maturing. Runbook and deterministic modes are faster opt-ins once the path proves stable. Run Outcomes track per-mode metrics so you can see which earns its keep per flow."
