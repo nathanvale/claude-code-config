@@ -119,7 +119,10 @@ export type RouteEvidenceFreshness = {
 };
 
 export type RoutePreconditionEvidence = {
-	// Run correlation: every supplied evidence item must share one run id (R17b).
+	// Run correlation (R17b): run-scoped proof and precondition evidence must tie
+	// to the route run. Capability reports are reusable cross-run snapshots gated
+	// by their own `checked_at` freshness, not run id; only this run-scoped
+	// precondition block carries the run_id the Router correlates against.
 	run_id: string;
 	freshness: RouteEvidenceFreshness;
 	warm_chrome_ready: boolean;
@@ -190,7 +193,10 @@ const BUNDLE_CAPABILITIES = {
 export function resolveRequiredCapabilities(
 	task: RouteTask,
 ): AdapterCapability[] {
-	const fromBundle = task.bundle ? BUNDLE_CAPABILITIES[task.bundle] : [];
+	// Guard the lookup: an unknown bundle name resolves to no bundle capabilities
+	// rather than spreading `undefined`. parseEvidenceEnvelope already rejects
+	// unknown bundle names, so this is defense in depth.
+	const fromBundle = task.bundle ? (BUNDLE_CAPABILITIES[task.bundle] ?? []) : [];
 	const merged = new Set<AdapterCapability>([
 		...fromBundle,
 		...(task.required_capabilities ?? []),
@@ -229,8 +235,25 @@ export function validateCapabilityReport(value: unknown): ReportValidationResult
 	if (!Array.isArray(capabilities) || capabilities.length === 0) {
 		diagnostics.push("report.capabilities must be a non-empty array");
 	} else {
+		// Reject duplicate capability keys. evaluateCandidate indexes capabilities
+		// by name (last-write-wins), so a duplicate entry could forge support for a
+		// required capability and defeat the fail-closed gates. The same validator
+		// runs on adapter self-reports (R8b), so this guard is load-bearing.
+		const seen = new Set<string>();
 		for (const [index, entry] of capabilities.entries()) {
 			diagnostics.push(...validateCapabilityEntry(entry, index));
+			const key =
+				isJsonObject(entry) && typeof entry.capability === "string"
+					? entry.capability
+					: undefined;
+			if (key !== undefined) {
+				if (seen.has(key)) {
+					diagnostics.push(
+						`report.capabilities has a duplicate entry for ${key}`,
+					);
+				}
+				seen.add(key);
+			}
 		}
 	}
 	if (diagnostics.length > 0) {
@@ -321,7 +344,17 @@ export function isReportStale(
 	const now = Date.parse(evaluationDate);
 	if (Number.isNaN(checked) || Number.isNaN(now)) return true;
 	const ageDays = (now - checked) / (1000 * 60 * 60 * 24);
+	// A future checked_at (negative age) is not evidence of freshness — it is a
+	// misconfigured or forged report. Fail closed rather than treating it as
+	// always-fresh.
+	if (ageDays < 0) return true;
 	return ageDays > provenance.stale_after_days;
+}
+
+// Today's date as YYYY-MM-DD (UTC). The runtime default evaluation date; tests
+// pin a fixed date via the runtime override so this is never called under test.
+function todayIsoDate(): string {
+	return new Date().toISOString().slice(0, 10);
 }
 
 function isFreshnessExpired(
@@ -1042,14 +1075,41 @@ export function parseEvidenceEnvelope(raw: string): RouteEvidenceEnvelope {
 	if (typeof value.run_id !== "string" || value.run_id === "") {
 		issues.push("envelope.run_id is required");
 	}
-	if (!isJsonObject(value.policy) || !isMode(value.policy.mode)) {
+	const policy = isJsonObject(value.policy) ? value.policy : undefined;
+	if (!policy || !isMode(policy.mode)) {
 		issues.push("envelope.policy.mode must be auto, prefer, or force");
+	} else {
+		// adapter_id is optional for auto, required and registry-valid for
+		// force/prefer; an unknown id must fail as invalid input, not as a
+		// misleading attachment/capability recovery.
+		if (policy.adapter_id !== undefined && !isBrowserAdapter(policy.adapter_id)) {
+			issues.push("envelope.policy.adapter_id must be a known registry adapter");
+		}
+		if (policy.mode === "force" && policy.adapter_id === undefined) {
+			issues.push("envelope.policy.adapter_id is required in force mode");
+		}
 	}
 	if (!isJsonObject(value.preconditions)) {
 		issues.push("envelope.preconditions is required");
 	}
 	if (!Array.isArray(value.reports)) {
 		issues.push("envelope.reports must be an array");
+	}
+	// Validate optional task fields so an unknown bundle name fails closed here
+	// rather than resolving to an empty capability set downstream.
+	if (value.task !== undefined && isJsonObject(value.task)) {
+		const bundle = value.task.bundle;
+		if (bundle !== undefined && !(bundle as string in BUNDLE_CAPABILITIES)) {
+			issues.push("envelope.task.bundle is not a known bundle");
+		}
+		const required = value.task.required_capabilities;
+		if (required !== undefined) {
+			if (!Array.isArray(required) || !required.every(isCapability)) {
+				issues.push(
+					"envelope.task.required_capabilities must be known capabilities",
+				);
+			}
+		}
 	}
 	if (issues.length > 0) {
 		throw new RouteEvidenceError(
@@ -1123,9 +1183,12 @@ export function createDefaultRouterRuntime(
 		cwd: process.cwd(),
 		readTextFile: (path: string) => readFile(path, "utf-8"),
 		readStdin: () => readAllStdin(),
-		// Maintainer-supplied evaluation date keeps freshness deterministic and
-		// avoids `Date.now()` in runtime code. Overridable via env for callers.
-		evaluationDate: process.env.BROWSER_USE_ROUTER_EVAL_DATE ?? "2026-06-02",
+		// Freshness evaluates against today's date by default. Tests and CI pin a
+		// fixed date via BROWSER_USE_ROUTER_EVAL_DATE for determinism; a frozen
+		// literal default here would silently stale every manifest once its
+		// window elapsed.
+		evaluationDate:
+			process.env.BROWSER_USE_ROUTER_EVAL_DATE ?? todayIsoDate(),
 		...overrides,
 	};
 }
@@ -1507,7 +1570,18 @@ async function readEnvelopeSource(
 	runtime: RouterRuntime,
 ): Promise<string> {
 	if (envelopePath) {
-		return runtime.readTextFile(envelopePath);
+		try {
+			return await runtime.readTextFile(envelopePath);
+		} catch {
+			// A missing/unreadable envelope file is caller input, not a runtime
+			// fault: fail closed with route_evidence_invalid (exit 20) rather than
+			// the generic runtime error (exit 1). The path is omitted from the
+			// message so it is not echoed into stderr/logs.
+			throw new RouteEvidenceError(
+				"route_evidence_invalid",
+				"Evidence envelope file could not be read.",
+			);
+		}
 	}
 	const inline = runtime.env.BROWSER_USE_ROUTER_ENVELOPE_JSON;
 	if (inline) return inline;
@@ -1643,7 +1717,6 @@ function emitRouteFailure(input: {
 				next_action_id: failure.next_action_id,
 				constraints: [routeValidityConstraint()],
 			},
-			diagnostic_trail: undefined,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1800,6 +1873,15 @@ function emitCliError(input: {
 				retryable: false,
 				failure_domain: isUsage ? "input" : "runtime_diagnostics",
 			},
+			// A usage error is caller-correctable (change input); a fatal runtime
+			// error needs an operator. Either way the envelope carries an explicit
+			// continuation rather than leaving the agent to guess.
+			...(isUsage
+				? {
+						runtime_actions: [runtimeAction("change_route_input")],
+						continuation: { next_action_id: "change_route_input" },
+					}
+				: { continuation: { requires_operator: true } }),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1830,6 +1912,12 @@ function parseRouterArgv(argv: readonly string[]): ParsedRouterCommand {
 			throw usageError("report requires --adapter <id>.");
 		}
 		const capability = readEnumFlag(rest, "--capability", isCapability);
+		rejectUnknownFlags(rest, [
+			"--adapter",
+			"--capability",
+			"--json",
+			"--plain",
+		]);
 		return { kind: "report", outputMode, adapter, capability };
 	}
 
@@ -1976,6 +2064,14 @@ function renderHelp(command?: BrowserAdapterRouterCommand): string {
 // ---------------------------------------------------------------------------
 
 async function readAllStdin(): Promise<string> {
+	// Fail fast instead of hanging when route/status is invoked with no envelope
+	// source and stdin is an interactive terminal. The contract is non-interactive
+	// (interactivity: none), so a blocking read on a TTY is a usage error.
+	if (process.stdin.isTTY) {
+		throw usageError(
+			"route requires --envelope <path>, BROWSER_USE_ROUTER_ENVELOPE_JSON, or piped stdin JSON.",
+		);
+	}
 	const chunks: Uint8Array[] = [];
 	for await (const chunk of Bun.stdin.stream()) {
 		chunks.push(chunk);

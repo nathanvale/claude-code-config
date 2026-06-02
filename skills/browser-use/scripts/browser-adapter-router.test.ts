@@ -156,10 +156,11 @@ describe("U0 command contract", () => {
 		).not.toContain("--verify");
 	});
 
-	test("report contract declares check/network side effects and no browser action", () => {
+	test("report contract declares check-only side effects and no browser action", () => {
+		// V1 report is a pure in-process lookup (env self-report JSON or static
+		// manifest); declared check-only to match reality. No browser action.
 		const sideEffects = browserAdapterRouterContracts.report.sideEffects ?? [];
 		expect(sideEffects).toContain("check");
-		expect(sideEffects).toContain("network");
 		expect(sideEffects).not.toContain("browser");
 	});
 
@@ -1210,5 +1211,272 @@ describe("safety", () => {
 		expect(BROWSER_ADAPTER_ROUTER_CAPABILITIES).toContain(
 			"devtools_performance_insight",
 		);
+	});
+});
+
+// =========================================================================
+// Review-driven hardening (code-review findings)
+// =========================================================================
+
+describe("hardening: duplicate-capability forgery (adversarial P0)", () => {
+	test("validator rejects a report with duplicate capability keys", () => {
+		const forged: unknown = {
+			...makeReport(),
+			capabilities: [
+				{
+					capability: "snapshot_refs",
+					support: "partial",
+					confidence: 60,
+					evidence: { verification_method: "m" },
+				},
+				{
+					capability: "snapshot_refs",
+					support: "full",
+					confidence: 90,
+					evidence: { verification_method: "m" },
+				},
+			],
+		};
+		const result = validateCapabilityReport(forged);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.diagnostics.some((d) => d.includes("duplicate"))).toBe(true);
+		}
+	});
+
+	test("a forged duplicate cannot route as selected", () => {
+		const forgedReport = {
+			...makeReport(),
+			capabilities: [
+				{
+					capability: "snapshot_refs",
+					support: "none",
+					confidence: 90,
+					evidence: { verification_method: "m" },
+				},
+				{
+					capability: "snapshot_refs",
+					support: "full",
+					confidence: 90,
+					evidence: { verification_method: "m" },
+				},
+				{
+					capability: "element_actions",
+					support: "full",
+					confidence: 90,
+					evidence: { verification_method: "m" },
+				},
+				{
+					capability: "screenshot_media",
+					support: "full",
+					confidence: 90,
+					evidence: { verification_method: "m" },
+				},
+			],
+		};
+		const envelope = {
+			...makeEnvelope(),
+			reports: [forgedReport as unknown as CapabilityReport],
+		};
+		// Routed through the CLI so the envelope passes through the report validator.
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow();
+	});
+});
+
+describe("hardening: invalid envelope fields fail closed (correctness P1/P2)", () => {
+	test("unknown task.bundle fails closed instead of crashing", () => {
+		const envelope = { ...makeEnvelope(), task: { bundle: "bogus_bundle" } };
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/bundle/,
+		);
+	});
+
+	test("unknown required_capability fails closed", () => {
+		const envelope = {
+			...makeEnvelope(),
+			task: { required_capabilities: ["not_a_capability"] },
+		};
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/required_capabilities/,
+		);
+	});
+
+	test("invalid policy.adapter_id fails closed", () => {
+		const envelope = {
+			...makeEnvelope(),
+			policy: { mode: "force", adapter_id: "selenium" },
+		};
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/adapter_id/,
+		);
+	});
+
+	test("force mode without adapter_id fails closed", () => {
+		const envelope = { ...makeEnvelope(), policy: { mode: "force" } };
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/force/,
+		);
+	});
+});
+
+describe("hardening: freshness fail-closed (adversarial)", () => {
+	test("future-dated checked_at is treated as stale", () => {
+		const future = {
+			adapter_version: "",
+			source_url: "",
+			verification_method: "",
+			checked_at: "2099-01-01",
+			stale_after_days: 30,
+		};
+		expect(isReportStale(future, EVAL_DATE)).toBe(true);
+	});
+
+	test("malformed checked_at date is treated as stale", () => {
+		const malformed = {
+			adapter_version: "",
+			source_url: "",
+			verification_method: "",
+			checked_at: "not-a-date",
+			stale_after_days: 30,
+		};
+		expect(isReportStale(malformed, EVAL_DATE)).toBe(true);
+	});
+
+	test("exact-boundary age (age === stale_after_days) is still fresh", () => {
+		const boundary = {
+			adapter_version: "",
+			source_url: "",
+			verification_method: "",
+			checked_at: "2026-05-11",
+			stale_after_days: 30,
+		};
+		// 2026-05-11 -> 2026-06-10 is exactly 30 days.
+		expect(isReportStale(boundary, "2026-06-10")).toBe(false);
+	});
+});
+
+describe("hardening: report CLI success path + reliability", () => {
+	test("report --json success path emits ok envelope end-to-end", async () => {
+		const { exitCode, stdout } = await runForTest(
+			["report", "--adapter", "chrome-devtools", "--json"],
+			makeRuntime({ evaluationDate: "2026-06-02" }),
+		);
+		expect(exitCode).toBe(0);
+		expect(parseJson(stdout).status).toBe("ok");
+	});
+
+	test("report --plain success path emits report_found", async () => {
+		const { exitCode, stdout } = await runForTest(
+			["report", "--adapter", "chrome-devtools", "--plain"],
+			makeRuntime({ evaluationDate: "2026-06-02" }),
+		);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("report_found");
+	});
+
+	test("report rejects an unknown flag", async () => {
+		const { exitCode } = await runForTest(
+			["report", "--adapter", "chrome-devtools", "--envelope", "x.json"],
+			makeRuntime(),
+		);
+		expect(exitCode).not.toBe(0);
+	});
+
+	test("missing --envelope file fails closed with route_evidence_invalid", async () => {
+		const { exitCode, stdout } = await runForTest(
+			["route", "--envelope", "/tmp/definitely-not-here-bar.json", "--json"],
+			makeRuntime(),
+		);
+		expect(exitCode).toBe(20);
+		const parsed = parseJson(stdout);
+		expect(
+			(parsed.error as { code?: string }).code,
+		).toBe("route_evidence_invalid");
+	});
+
+	test("every CLI error envelope carries a continuation", async () => {
+		const { stdout } = await runForTest(
+			["bogus-command", "--json"],
+			makeRuntime(),
+		);
+		const parsed = parseJson(stdout);
+		expect(parsed.continuation).toBeDefined();
+	});
+
+	test("self-report env override JSON success routes through the validator", async () => {
+		const selfReport = JSON.stringify(makeReport({ adapter_id: "agent-browser" }));
+		const { exitCode, stdout } = await runForTest(
+			["report", "--adapter", "agent-browser", "--json"],
+			makeRuntime({
+				evaluationDate: "2026-06-08",
+				env: { BROWSER_USE_ROUTER_SELF_REPORT_JSON: selfReport },
+			}),
+		);
+		expect(exitCode).toBe(0);
+		const data = parseJson(stdout).data as { report_source?: string };
+		expect(data.report_source).toBe("self_report");
+	});
+});
+
+describe("hardening: auth precondition coverage (U5)", () => {
+	test("auth required with account_session_match false fails closed", () => {
+		const envelope = makeEnvelope({
+			preconditions: {
+				run_id: "run-1",
+				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+				warm_chrome_ready: true,
+				adapter_attached_verified_browser: { "chrome-devtools": true },
+				auth_session: {
+					required: true,
+					target_origin: "https://app.test",
+					verified_profile_identity: "profile-A",
+					account_session_match: false,
+				},
+			},
+		});
+		const evaluation = evaluateRoute(envelope, EVAL_DATE);
+		expect(evaluation.outcome).toBe("fail_closed");
+		if (evaluation.outcome === "fail_closed") {
+			expect(evaluation.code).toBe("auth_session_unverified");
+		}
+	});
+
+	test("auth required:false skips the gate", () => {
+		const envelope = makeEnvelope({
+			preconditions: {
+				run_id: "run-1",
+				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+				warm_chrome_ready: true,
+				adapter_attached_verified_browser: { "chrome-devtools": true },
+				auth_session: { required: false },
+			},
+		});
+		const evaluation = evaluateRoute(envelope, EVAL_DATE);
+		expect(evaluation.outcome).toBe("selected");
+	});
+});
+
+describe("hardening: empty required capabilities", () => {
+	test("no bundle and no required_capabilities still requires attachment + report", () => {
+		const envelope = makeEnvelope({ task: {} });
+		const evaluation = evaluateRoute(envelope, EVAL_DATE);
+		expect(evaluation.outcome).toBe("selected");
+		if (evaluation.outcome === "selected") {
+			expect(evaluation.route_confidence).toBe(100);
+		}
+	});
+
+	test("empty task still fails closed without attachment proof", () => {
+		const envelope = makeEnvelope({
+			task: {},
+			preconditions: {
+				run_id: "run-1",
+				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+				warm_chrome_ready: true,
+				adapter_attached_verified_browser: {},
+			},
+		});
+		const evaluation = evaluateRoute(envelope, EVAL_DATE);
+		expect(evaluation.outcome).toBe("fail_closed");
 	});
 });

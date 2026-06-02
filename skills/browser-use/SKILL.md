@@ -80,7 +80,8 @@ skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$ENVELOPE
 skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOPE" --plain
 ```
 
-- `route` consumes the envelope only; it never invokes proof, runs self-report commands, or reads implicit latest files.
+- `route` consumes the envelope only; it never invokes proof, runs self-report commands, or reads implicit latest files. Supply the envelope via `--envelope <path>`, `BROWSER_USE_ROUTER_ENVELOPE_JSON`, or piped stdin (never an interactive terminal).
+- `BROWSER_USE_ROUTER_SELF_REPORT_JSON`: inject a fresh capability report object for `report`; `BROWSER_USE_ROUTER_EVAL_DATE`: pin the freshness evaluation date (defaults to today).
 - Registry membership (`chrome-devtools`, `agent-browser`, `playwright-cdp`) is known adapter identity, not routability; current support comes from `report`.
 - Missing proof emits `prove_adapter_attachment`; stale/unknown capability emits `research_adapter_capability` (advisory until a verified report refresh exists). Follow the single `continuation.next_action_id`; alternatives are informational only.
 - Force proves one adapter or stops; only prefer with `fallback_allowed` may fall back. Partial fails closed in V1.

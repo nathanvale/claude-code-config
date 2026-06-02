@@ -572,7 +572,12 @@ const routerEnvVars = [
 	{
 		name: "BROWSER_USE_ROUTER_SELF_REPORT_JSON",
 		description:
-			"JSON array command vector override for an adapter self-report command. Values must be non-empty strings; shell strings are rejected.",
+			"Full JSON capability report object for the self-report path; validated by the same report validator as adapter manifests.",
+	},
+	{
+		name: "BROWSER_USE_ROUTER_EVAL_DATE",
+		description:
+			"ISO date (YYYY-MM-DD) used as the freshness evaluation date. Defaults to today; pin in tests and CI for determinism.",
 	},
 ] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
 
@@ -673,8 +678,12 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			],
 			json: true,
 			audience: "agent",
-			mutation: "network",
-			sideEffects: ["check", "network"],
+			// V1 report is pure in-process lookup (env self-report JSON or static
+			// manifest); no network I/O. Declared check-only to match reality. A
+			// future executable self-report command vector would reintroduce
+			// `network` here.
+			mutation: "check",
+			sideEffects: ["check"],
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
