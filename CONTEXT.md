@@ -20,6 +20,82 @@ _Avoid_: git proof, commit proof, git utility, ledger evidence row, CLI evidence
 A focused Issue-to-PR validation that keeps prose claims about CLI-owned facts aligned with the runtime contract the helper emits. It covers mechanically checkable facts and the control-plane links needed for operator recovery, not broad documentation quality.
 _Avoid_: public docs drift check, general docs audit, markdown link crawler, gotchas-only safeguard
 
+**Contract runtime**:
+A runtime component that validates and enforces a declared contract, including required shape, drift detection, and machine-readable diagnostic feedback. Use prose guidance for judgment and optional design choices; don't restate deterministic contract members in prose.
+_Avoid_: power tool, implementation guide, docs-owned schema, prose contract
+
+**Runtime-backed capability**:
+An agent-native CLI behavior already exposed or enforced by the contract runtime. Use this term when current runtime support exists; point readers to runtime docs for exact fields and validation.
+_Avoid_: future contract, aspirational contract, rubric-owned contract, prose contract
+
+**Contract candidate**:
+An agreed agent-native CLI behavior that may belong in the contract runtime later but is not yet runtime-backed. Keep it in rubric guidance until implementation makes it enforceable.
+_Avoid_: contract-owned, runtime-backed, required field, schema promise
+
+**Minimum agent-native CLI bar**:
+The smallest behavior set a skill driver can safely rely on: discoverable command, non-interactive run path, parseable output, structured failure, run correlation, and side-effect stance. Escalate beyond it only when risk, scale, or output shape earns the extra surface.
+_Avoid_: full adoption checklist, maturity model, every rubric item, implementation plan
+
+**Run correlation ID**:
+An identifier that connects one command invocation's result, human diagnostics, and diagnostic trail. Use concept wording in design prose; exact payload field names belong to the contract runtime.
+_Avoid_: runId, trace id, log id, diagnostics id
+
+**Persisted diagnostics exposure boundary**:
+The safety line for diagnostic trails that survive a CLI invocation. It names what can be shown through shared, protocol-visible, or remote surfaces; access, retention, deletion, and richer local detail remain package or platform policy.
+_Avoid_: full logging policy, trace vendor contract, raw log access, privacy schema
+
+**Diagnostic capability**:
+A contract candidate for a discoverable agent-native CLI affordance that checks readiness across environment, auth, config, service reachability, and local dependencies. Prefer `doctor` as CLI spelling when the capability exists, but don't require a literal route name when a package has an equivalent diagnostic path.
+_Avoid_: mandatory doctor command, health route, status-only command, diagnostics prose
+
+**Baseline exit semantics**:
+The contract candidate minimum exit meaning set for agent-native CLIs: success, generic/runtime failure, and invalid usage. Extra exit codes remain package-owned and justified by distinct agent routing value.
+_Avoid_: full exit taxonomy, package exit policy, prose-only exit convention
+
+**Machine-readable output capability**:
+The runtime-backed promise that an agent-native CLI exposes a parseable output path and keeps primary data separate from diagnostics. Exact payload content, mode names beyond the baseline, summaries, pagination, and field selection remain package-owned design choices.
+_Avoid_: JSON everywhere, prose-only output, mixed stdout diagnostics, package result schema
+
+**Structured failure recovery**:
+The runtime-backed failure guidance minimum for agent-native CLIs: machine-readable failure category and same-input retry safety. Package code owns exact error families, repair meaning, runtime action labels, and operator policy.
+_Avoid_: prose-only recovery, full repair schema, package recovery engine, generic confidence score
+
+**Repair affordance spine**:
+The runtime-backed shape that exposes possible runtime actions, side-effect classes, and continuation/stop guidance without owning package repair semantics. Rubric guidance owns evidence quality, ranking, preconditions, reversibility, and documentation-link judgment.
+_Avoid_: full repair option schema, executable auto-repair, package recovery policy, confidence gate
+
+**Diagnostic trail pointer**:
+The contract candidate failure affordance that connects a failed invocation to its diagnostic trail when that trail exists. It may resolve through a diagnostics command, log path, trace URL, or package-owned surface; exact storage and logging implementation stay outside the contract.
+_Avoid_: mandatory log file, logging framework contract, trace vendor field, prose-only breadcrumb
+
+**Side-effect safety spine**:
+The runtime-backed safety minimum for agent-native CLIs: side-effect classes, execution modes, interactivity stance, and operator-stop capability. Package policy owns confirmations, rollback, retention, approval thresholds, and domain-specific gates.
+_Avoid_: full safety policy, prose-only mutation warning, package rollback contract, mandatory confirmation wording
+
+**Redaction boundary**:
+The runtime-backed baseline that machine-visible CLI output must not leak sensitive values. Package code owns domain-specific sensitive fields and extra redaction fixtures.
+_Avoid_: prose-only secrecy warning, full privacy policy, package data taxonomy, logging vendor contract
+
+**Command discovery capability**:
+The runtime-backed promise that an agent-native CLI exposes discoverable command purpose, usage, flags, risk posture, and machine-readable path. Package code owns command catalog meaning, naming, and route policy.
+_Avoid_: prose-only help, global command router, package command catalog, scraped usage text
+
+**Projected discovery text boundary**:
+The trust boundary for free text exposed through machine-readable command discovery. Project maintainer-authored, sanitized text only; never project user, third-party, or instruction-shaped text into an agent catalog.
+_Avoid_: prompt-injection scanner, content moderation, scraped help text, user-authored catalog text
+
+**Write preview capability**:
+The contract candidate safety promise that mutating command surfaces declare a preview, check, or dry-run path when safe preview is possible. Package policy owns exact preview behavior and justified exceptions.
+_Avoid_: mandatory dry-run for every command, fake preview, package mutation policy, prose-only write warning
+
+**Secret input boundary**:
+The runtime-backed baseline that agent-native CLIs do not invite or project secret values through flags, discovery metadata, or machine-visible output. Package code owns domain secret references and service-specific secret handling.
+_Avoid_: secret flags, plaintext secret examples, package auth policy, secret-value discovery
+
+**Non-interactive execution spine**:
+The runtime-backed declaration of whether a command can run without prompts or operator input. Package code owns exact prompt behavior, confirmation wording, and interactive UX.
+_Avoid_: prose-only prompt warning, mandatory no-input flag, package prompt policy
+
 **Workflow Learning Scan**:
 A read-only Issue-to-PR reflection pass that captures workflow-level learnings from ship-time or fail-stop evidence. It records learning metadata through ledger and registry surfaces; it does not repair skills, runbooks, CLI code, docs, or deliverables.
 _Avoid_: self-repair pass, learning audit, workflow repair scan, meta-work pass
@@ -103,6 +179,18 @@ _Avoid_: fork, duplicate capability, harness copy
 **Capability dependency**:
 A manually declared skill or agent that a capability needs to work. Dependency inference may warn about likely omissions, but manual declarations remain the source of truth.
 _Avoid_: auto dependency, inferred dependency, implicit dependency
+
+**Skill driver**:
+The human, plan, or agent that invokes a skill and supplies its working context. A skill may serve multiple drivers while preserving one owned workflow and vocabulary.
+_Avoid_: driver, caller, agent-only mode, separate skill
+
+**Progressive disclosure index**:
+A short entry reference that routes readers to heavier supporting examples only when their current decision needs them. It is a judgment aid, not a deterministic router or required-read table.
+_Avoid_: front door router, route table, required reference map, example dump
+
+**MCP adoption trigger**:
+A condition that moves CLI design into a separate MCP pass because clients need typed remote discovery, server-mediated auth, session transport, or MCP-native tool orchestration. It is not a reason to weaken the CLI contract.
+_Avoid_: MCP by default, CLI replacement, transport-first design, generic integration idea
 
 **Capability risk flag**:
 A composable review signal attached to a capability, such as whether it handles secrets, writes files, uses the network, or causes side effects. Risk flags shape review posture; they are not a lifecycle status.
