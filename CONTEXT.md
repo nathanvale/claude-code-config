@@ -228,6 +228,10 @@ _Avoid_: ledger template scaffold, generated schema doc, mutable ledger init
 A registry-managed skill or agent, together with the files owned by that skill or agent. In v1, runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins are not capabilities.
 _Avoid_: imported thing, tool, plugin, runbook capability
 
+**Adapter capability report**:
+A runtime-owned browser adapter support fact set with provenance and freshness. It is Adapter capability evidence for Browser Adapter Router decisions, not an Agent Capability Registry capability.
+_Avoid_: capability, docs matrix, adapter truth prose, projection slice
+
 **Source**:
 The provenance record for where a capability came from. A source is metadata for review and update decisions, not the unit installed into a harness.
 _Avoid_: install unit, upstream capability, source capability

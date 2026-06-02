@@ -37,6 +37,24 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
   risk.
 - Don't make every CLI carry a full toolkit surface by default.
 
+## Runtime Surfaces
+
+- Name owners before implementing or extending CLI/runtime surfaces.
+- Contract owns package vocabulary, command metadata, action ids, and
+  validation.
+- Model owns exported runtime types and shared data shapes.
+- Engine owns pure policy, ranking, evaluation, and state transitions.
+- Discovery owns runtime lookup, provenance, freshness, and capability reports.
+- CLI owns argv parsing, IO, rendering, diagnostics, and test harnesses.
+- Keep CLI entrypoints thin.
+- Map current owners before adding behaviour to existing surfaces.
+- Name which owner the new behaviour belongs to.
+- Do not split mechanically.
+- Use compatibility barrels only for import stability.
+- Keep recovery metadata in one owner.
+- Derive type guards from contract-owned arrays.
+- Prefer one deepening move per change.
+
 ## Lifecycle
 
 - Treat command discovery capability as runtime-backed.
