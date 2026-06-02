@@ -17,11 +17,13 @@ import {
 } from "./command-contract";
 import {
 	type RouteEvidenceEnvelope,
+	type ValidatedRouteEvidenceEnvelope,
 	type RouterRuntime,
 	createDefaultRouterRuntime,
 	parseEvidenceEnvelope,
 	runForTest,
 	validateErrorEnvelopeForTest,
+	validateRouteEvidenceEnvelope,
 } from "./browser-adapter-router";
 import {
 	evaluateRoute,
@@ -111,6 +113,12 @@ function makeEnvelope(
 		},
 		reports: overrides.reports ?? [makeReport()],
 	};
+}
+
+function makeValidatedEnvelope(
+	overrides: Partial<RouteEvidenceEnvelope> = {},
+): ValidatedRouteEvidenceEnvelope {
+	return parseEvidenceEnvelope(JSON.stringify(makeEnvelope(overrides)));
 }
 
 function makeRuntime(overrides: Partial<RouterRuntime> = {}): RouterRuntime {
@@ -282,8 +290,30 @@ describe("U0 report discovery", () => {
 });
 
 describe("U0 evidence envelope input", () => {
+	test("route validation returns a branded validated envelope", () => {
+		const result = validateRouteEvidenceEnvelope(makeEnvelope());
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			const evaluation = evaluateRoute(result.envelope, EVAL_DATE);
+			expect(evaluation.outcome).toBe("selected");
+		}
+	});
+
+	test("route validation exposes diagnostics without throwing", () => {
+		const result = validateRouteEvidenceEnvelope({
+			...makeEnvelope(),
+			policy: { mode: "force" },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.diagnostics).toContain(
+				"envelope.policy.adapter_id is required in force mode",
+			);
+		}
+	});
+
 	test("route accepts an evidence envelope path", async () => {
-		const path = await envelopeFile(makeEnvelope());
+		const path = await envelopeFile(makeValidatedEnvelope());
 		const { exitCode, stdout } = await runForTest(
 			["route", "--envelope", path, "--json"],
 			makeRuntime(),
@@ -293,7 +323,7 @@ describe("U0 evidence envelope input", () => {
 	});
 
 	test("route accepts an evidence envelope from stdin JSON", async () => {
-		const json = JSON.stringify(makeEnvelope());
+		const json = JSON.stringify(makeValidatedEnvelope());
 		const { exitCode, stdout } = await runForTest(
 			["route", "--json"],
 			makeRuntime({ readStdin: async () => json }),
@@ -313,7 +343,7 @@ describe("U0 evidence envelope input", () => {
 	});
 
 	test("status projects a supplied envelope without hidden latest-route state", async () => {
-		const path = await envelopeFile(makeEnvelope());
+		const path = await envelopeFile(makeValidatedEnvelope());
 		const { exitCode, stdout } = await runForTest(
 			["status", "--envelope", path, "--plain"],
 			makeRuntime(),
@@ -323,7 +353,7 @@ describe("U0 evidence envelope input", () => {
 	});
 
 	test("route and status use the same pure route evaluator", async () => {
-		const envelope = makeEnvelope();
+		const envelope = makeValidatedEnvelope();
 		const path = await envelopeFile(envelope);
 		const route = await runForTest(
 			["route", "--envelope", path, "--json"],
@@ -414,7 +444,7 @@ describe("U1 capability report contract", () => {
 
 	test("storage-state import attachment fails compatibility in V1", () => {
 		const report = makeReport({ attachment_model: "storage_state_import" });
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
 		if (evaluation.outcome === "fail_closed") {
@@ -424,7 +454,7 @@ describe("U1 capability report contract", () => {
 
 	test("separate browser context attachment fails compatibility in V1", () => {
 		const report = makeReport({ attachment_model: "separate_browser_context" });
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
 		if (evaluation.outcome === "fail_closed") {
@@ -442,7 +472,7 @@ describe("U1 capability report contract", () => {
 				stale_after_days: 30,
 			},
 		});
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
 		if (evaluation.outcome === "fail_closed") {
@@ -473,7 +503,7 @@ describe("U1 capability report contract", () => {
 				},
 			],
 		});
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
 	});
@@ -501,7 +531,7 @@ describe("U1 capability report contract", () => {
 				},
 			],
 		});
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("selected");
 		if (evaluation.outcome === "selected") {
@@ -541,7 +571,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("route rejects stale evidence without freshness metadata", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				// @ts-expect-error intentionally missing freshness
@@ -558,7 +588,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("route rejects stale evidence", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-01-01", stale_after_days: 5 },
@@ -574,7 +604,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("route rejects mixed-run evidence", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			run_id: "run-A",
 			preconditions: {
 				run_id: "run-B",
@@ -591,7 +621,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("missing candidate proof emits prove_adapter_attachment", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "force", adapter_id: "agent-browser" },
 			task: { bundle: "snapshot_page_action" },
 			preconditions: {
@@ -610,7 +640,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("auto routes a fully evidenced candidate while disclosing skipped candidates", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "auto" },
 			reports: [
 				makeReport({ adapter_id: "chrome-devtools" }),
@@ -636,7 +666,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("auto does not route silently when no candidate is fully evidenced", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "auto" },
 			preconditions: {
 				run_id: "run-1",
@@ -650,7 +680,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("prefer falls back only when allowed", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: {
 				mode: "prefer",
 				adapter_id: "agent-browser",
@@ -701,7 +731,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("prefer with missing preferred proof fails closed when fallback not allowed", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: {
 				mode: "prefer",
 				adapter_id: "agent-browser",
@@ -723,7 +753,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("force never falls back", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "force", adapter_id: "agent-browser" },
 			reports: [
 				makeReport({
@@ -793,7 +823,7 @@ describe("U2 policy resolver", () => {
 				},
 			],
 		});
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
 		if (evaluation.outcome === "fail_closed") {
@@ -802,7 +832,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("auto uses task bundle ranking before registry ranking", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "auto" },
 			task: {
 				bundle: "snapshot_page_action",
@@ -840,7 +870,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("auto emits ranking evidence", () => {
-		const envelope = makeEnvelope({ policy: { mode: "auto" } });
+		const envelope = makeValidatedEnvelope({ policy: { mode: "auto" } });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("selected");
 		if (evaluation.outcome === "selected") {
@@ -849,7 +879,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("route success uses use_selected_browser_adapter", async () => {
-		const path = await envelopeFile(makeEnvelope());
+		const path = await envelopeFile(makeValidatedEnvelope());
 		const { stdout } = await runForTest(
 			["route", "--envelope", path, "--json"],
 			makeRuntime(),
@@ -862,7 +892,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("route success emits constraints for selected adapter validity", async () => {
-		const path = await envelopeFile(makeEnvelope());
+		const path = await envelopeFile(makeValidatedEnvelope());
 		const { stdout } = await runForTest(
 			["route", "--envelope", path, "--json"],
 			makeRuntime(),
@@ -880,7 +910,7 @@ describe("U2 policy resolver", () => {
 	});
 
 	test("route output includes concise candidate decisions", () => {
-		const envelope = makeEnvelope({ policy: { mode: "auto" } });
+		const envelope = makeValidatedEnvelope({ policy: { mode: "auto" } });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		if (evaluation.outcome === "selected") {
 			expect(evaluation.candidate_decisions.length).toBe(
@@ -891,7 +921,7 @@ describe("U2 policy resolver", () => {
 
 	test("full action support with incompatible attachment_model fails closed", () => {
 		const report = makeReport({ attachment_model: "unknown" });
-		const envelope = makeEnvelope({ reports: [report] });
+		const envelope = makeValidatedEnvelope({ reports: [report] });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
 		if (evaluation.outcome === "fail_closed") {
@@ -922,7 +952,7 @@ describe("U2 policy resolver", () => {
 				},
 			],
 		});
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "auto", allow_degraded: true },
 			reports: [report],
 		});
@@ -938,7 +968,7 @@ describe("U2 policy resolver", () => {
 
 describe("U3 research recovery", () => {
 	test("stale capability emits research_adapter_capability", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			reports: [
 				makeReport({
 					provenance: {
@@ -962,7 +992,7 @@ describe("U3 research recovery", () => {
 	});
 
 	test("research signal is capped below route threshold", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			reports: [
 				makeReport({
 					provenance: {
@@ -982,7 +1012,7 @@ describe("U3 research recovery", () => {
 	});
 
 	test("route failure emits one canonical continuation.next_action_id", async () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "force", adapter_id: "agent-browser" },
 			reports: [makeReport({ adapter_id: "agent-browser" })],
 			preconditions: {
@@ -1009,7 +1039,7 @@ describe("U3 research recovery", () => {
 	});
 
 	test("missing attachment proof recovery uses prove_adapter_attachment", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "force", adapter_id: "agent-browser" },
 			reports: [makeReport({ adapter_id: "agent-browser" })],
 			preconditions: {
@@ -1026,7 +1056,7 @@ describe("U3 research recovery", () => {
 	});
 
 	test("error envelope validates against the facade contract", async () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			reports: [makeReport({ attachment_model: "storage_state_import" })],
 		});
 		const path = await envelopeFile(envelope);
@@ -1085,7 +1115,7 @@ describe("U3 research recovery", () => {
 
 describe("U5 precondition guardrails", () => {
 	test("auth/session precondition requires target origin and verified profile identity", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
@@ -1102,7 +1132,7 @@ describe("U5 precondition guardrails", () => {
 	});
 
 	test("auth/session precondition passes with full evidence", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
@@ -1121,7 +1151,7 @@ describe("U5 precondition guardrails", () => {
 	});
 
 	test("declared target page/origin precondition requires matching evidence", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
@@ -1142,7 +1172,7 @@ describe("U5 precondition guardrails", () => {
 	});
 
 	test("missing auth/session precondition fails before adapter routing", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			policy: { mode: "auto" },
 			preconditions: {
 				run_id: "run-1",
@@ -1165,7 +1195,7 @@ describe("U5 precondition guardrails", () => {
 	});
 
 	test("warm chrome not ready fails closed before routing", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
@@ -1183,7 +1213,7 @@ describe("U5 precondition guardrails", () => {
 
 describe("U5 media proof guardrails", () => {
 	test("screenshot/media proof emits run-scoped artifact handling metadata", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			task: {
 				bundle: "visual_proof_capture",
 				media_proof: {
@@ -1204,7 +1234,7 @@ describe("U5 media proof guardrails", () => {
 	});
 
 	test("proof artifacts are not written into diagnostic logs (stderr)", async () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			task: {
 				bundle: "visual_proof_capture",
 				media_proof: {
@@ -1222,7 +1252,7 @@ describe("U5 media proof guardrails", () => {
 	});
 
 	test("media proof owner is browser-use, adapter cannot override", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			task: {
 				bundle: "visual_proof_capture",
 				media_proof: { requested: true, run_scoped_path: "runs/x.png" },
@@ -1466,7 +1496,7 @@ describe("hardening: report CLI success path + reliability", () => {
 
 describe("hardening: auth precondition coverage (U5)", () => {
 	test("auth required with account_session_match false fails closed", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
@@ -1488,7 +1518,7 @@ describe("hardening: auth precondition coverage (U5)", () => {
 	});
 
 	test("auth required:false skips the gate", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			preconditions: {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
@@ -1504,7 +1534,7 @@ describe("hardening: auth precondition coverage (U5)", () => {
 
 describe("hardening: empty required capabilities", () => {
 	test("no bundle and no required_capabilities still requires attachment + report", () => {
-		const envelope = makeEnvelope({ task: {} });
+		const envelope = makeValidatedEnvelope({ task: {} });
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("selected");
 		if (evaluation.outcome === "selected") {
@@ -1513,7 +1543,7 @@ describe("hardening: empty required capabilities", () => {
 	});
 
 	test("empty task still fails closed without attachment proof", () => {
-		const envelope = makeEnvelope({
+		const envelope = makeValidatedEnvelope({
 			task: {},
 			preconditions: {
 				run_id: "run-1",

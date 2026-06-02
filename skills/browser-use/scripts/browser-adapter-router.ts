@@ -33,23 +33,15 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
-	BROWSER_ADAPTER_ROUTER_BUNDLES,
-	BROWSER_ADAPTER_ROUTER_MODES,
 	type BrowserAdapterRouterCommand,
 	type BrowserAdapterRouterDiagnosticCode,
-	type BrowserAdapterRouterMode,
 	browserAdapterRouterContracts,
 } from "./command-contract";
 import type {
 	AdapterCapability,
 	BrowserAdapterId,
-	CapabilityReport,
-	RouteEvidenceEnvelope,
 	RouteFailure,
-	RoutePolicy,
-	RoutePreconditionEvidence,
 	RouteSuccess,
-	RouteTask,
 } from "./browser-adapter-router-model";
 import {
 	evaluateRoute,
@@ -59,10 +51,18 @@ import {
 import {
 	type ReportDiscovery,
 	discoverReport,
+} from "./browser-adapter-router-discovery";
+import {
 	isBrowserAdapter,
 	isCapability,
 	validateCapabilityReport,
-} from "./browser-adapter-router-discovery";
+} from "./browser-adapter-router-report-validation";
+import {
+	type ValidatedRouteEvidenceEnvelope,
+	RouteEvidenceError,
+	parseRouteEvidenceEnvelope,
+	validateRouteEvidenceEnvelope,
+} from "./browser-adapter-router-validation";
 import {
 	continuationForCode,
 	recoverabilityForCode,
@@ -93,124 +93,23 @@ export {
 	validateRouterContinuationEnvelope,
 	validateRouterErrorEnvelope,
 	validateCapabilityReport,
+	validateRouteEvidenceEnvelope,
 };
+// Legacy alias for existing callers; route validation lives in
+// browser-adapter-router-validation.ts.
+export const parseEvidenceEnvelope = parseRouteEvidenceEnvelope;
 export type * from "./browser-adapter-router-model";
+export type { ReportDiscovery } from "./browser-adapter-router-discovery";
+export type { ReportValidationResult } from "./browser-adapter-router-report-validation";
 export type {
-	ReportDiscovery,
-	ReportValidationResult,
-} from "./browser-adapter-router-discovery";
+	RouteValidationResult,
+	ValidatedRouteEvidenceEnvelope,
+} from "./browser-adapter-router-validation";
 
 // Today's date as YYYY-MM-DD (UTC). The runtime default evaluation date; tests
 // pin a fixed date via the runtime override so this is never called under test.
 function todayIsoDate(): string {
 	return new Date().toISOString().slice(0, 10);
-}
-
-// Envelope-shape failures surface as runtime/usage errors, not RouteEvaluation.
-export class RouteEvidenceError extends Error {
-	readonly code: BrowserAdapterRouterDiagnosticCode;
-	constructor(code: BrowserAdapterRouterDiagnosticCode, message: string) {
-		super(message);
-		this.name = "RouteEvidenceError";
-		this.code = code;
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Envelope parsing (U0/U2). route/status consume a supplied envelope only.
-// ---------------------------------------------------------------------------
-
-export function parseEvidenceEnvelope(raw: string): RouteEvidenceEnvelope {
-	let value: unknown;
-	try {
-		value = JSON.parse(raw);
-	} catch {
-		throw new RouteEvidenceError(
-			"route_evidence_invalid",
-			"Evidence envelope is not valid JSON.",
-		);
-	}
-	if (!isJsonObject(value)) {
-		throw new RouteEvidenceError(
-			"route_evidence_invalid",
-			"Evidence envelope must be a JSON object.",
-		);
-	}
-	const issues: string[] = [];
-	if (typeof value.run_id !== "string" || value.run_id === "") {
-		issues.push("envelope.run_id is required");
-	}
-	const policy = isJsonObject(value.policy) ? value.policy : undefined;
-	if (!policy || !isMode(policy.mode)) {
-		issues.push("envelope.policy.mode must be auto, prefer, or force");
-	} else {
-		// adapter_id is optional for auto, required and registry-valid for
-		// force/prefer; an unknown id must fail as invalid input, not as a
-		// misleading attachment/capability recovery.
-		if (policy.adapter_id !== undefined && !isBrowserAdapter(policy.adapter_id)) {
-			issues.push("envelope.policy.adapter_id must be a known registry adapter");
-		}
-		if (policy.mode === "force" && policy.adapter_id === undefined) {
-			issues.push("envelope.policy.adapter_id is required in force mode");
-		}
-	}
-	if (!isJsonObject(value.preconditions)) {
-		issues.push("envelope.preconditions is required");
-	}
-	if (!Array.isArray(value.reports)) {
-		issues.push("envelope.reports must be an array");
-	}
-	// Validate optional task fields so an unknown bundle name fails closed here
-	// rather than resolving to an empty capability set downstream.
-	if (value.task !== undefined && isJsonObject(value.task)) {
-		const bundle = value.task.bundle;
-		if (
-			bundle !== undefined &&
-			!(
-				typeof bundle === "string" &&
-				(BROWSER_ADAPTER_ROUTER_BUNDLES as readonly string[]).includes(bundle)
-			)
-		) {
-			issues.push("envelope.task.bundle is not a known bundle");
-		}
-		const required = value.task.required_capabilities;
-		if (required !== undefined) {
-			if (!Array.isArray(required) || !required.every(isCapability)) {
-				issues.push(
-					"envelope.task.required_capabilities must be known capabilities",
-				);
-			}
-		}
-	}
-	if (issues.length > 0) {
-		throw new RouteEvidenceError(
-			"route_evidence_invalid",
-			`Evidence envelope is schema-invalid: ${issues.join("; ")}`,
-		);
-	}
-
-	// Validate every supplied report through the shared validator (R8b). An
-	// invalid report makes the whole envelope invalid — the caller must assemble
-	// validated reports.
-	const reports: CapabilityReport[] = [];
-	for (const [index, report] of (value.reports as unknown[]).entries()) {
-		const result = validateCapabilityReport(report);
-		if (!result.ok) {
-			throw new RouteEvidenceError(
-				"route_evidence_invalid",
-				`envelope.reports[${index}] is invalid: ${result.diagnostics.join("; ")}`,
-			);
-		}
-		reports.push(result.report);
-	}
-
-	return {
-		run_id: value.run_id as string,
-		policy: value.policy as RoutePolicy,
-		task: (isJsonObject(value.task) ? value.task : {}) as RouteTask,
-		preconditions: value.preconditions as RoutePreconditionEvidence,
-		reports,
-	};
 }
 
 export type RouterRuntime = {
@@ -241,21 +140,6 @@ export function createDefaultRouterRuntime(
 			process.env.BROWSER_USE_ROUTER_EVAL_DATE ?? todayIsoDate(),
 		...overrides,
 	};
-}
-
-// ---------------------------------------------------------------------------
-// Type guards.
-// ---------------------------------------------------------------------------
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isMode(value: unknown): value is BrowserAdapterRouterMode {
-	return (
-		typeof value === "string" &&
-		(BROWSER_ADAPTER_ROUTER_MODES as readonly string[]).includes(value)
-	);
 }
 
 // ---------------------------------------------------------------------------
@@ -417,7 +301,7 @@ async function executeRoute(input: {
 		});
 	}
 
-	let envelope: RouteEvidenceEnvelope;
+	let envelope: ValidatedRouteEvidenceEnvelope;
 	try {
 		envelope = parseEvidenceEnvelope(raw);
 	} catch (error) {

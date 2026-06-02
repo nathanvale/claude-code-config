@@ -14,7 +14,6 @@ import type {
 	CandidateDecision,
 	MediaProofMetadata,
 	ResearchRecovery,
-	RouteEvidenceEnvelope,
 	RouteEvidenceFreshness,
 	RouteEvaluation,
 	RouteFailure,
@@ -24,6 +23,7 @@ import type {
 	RouteTask,
 	RouterFailureActionId,
 } from "./browser-adapter-router-model";
+import type { ValidatedRouteEvidenceEnvelope } from "./browser-adapter-router-validation";
 import { continuationForCode } from "./browser-adapter-router-recovery";
 
 const CHROME_DEVTOOLS_DOCS_URL =
@@ -232,7 +232,7 @@ function evaluateCandidate(input: EvaluateCandidateInput): CandidateDecision {
 // ---------------------------------------------------------------------------
 
 export function evaluateRoute(
-	envelope: RouteEvidenceEnvelope,
+	envelope: ValidatedRouteEvidenceEnvelope,
 	evaluationDate: string,
 ): RouteEvaluation {
 	const mode = envelope.policy.mode;
@@ -374,7 +374,7 @@ function candidateAdaptersForMode(policy: RoutePolicy): BrowserAdapterId[] {
 // then lexicographic adapter id as the final deterministic tie-break.
 function rankSelectable(
 	selectable: readonly CandidateDecision[],
-	envelope: RouteEvidenceEnvelope,
+	envelope: ValidatedRouteEvidenceEnvelope,
 ): CandidateDecision {
 	const taskRanking = envelope.task.adapter_ranking ?? [];
 	const taskPriority = (id: BrowserAdapterId): number => {
@@ -394,7 +394,7 @@ function rankSelectable(
 }
 
 function buildSuccess(input: {
-	envelope: RouteEvidenceEnvelope;
+	envelope: ValidatedRouteEvidenceEnvelope;
 	mode: BrowserAdapterRouterMode;
 	requested: BrowserAdapterId | null;
 	selected: BrowserAdapterId;
@@ -476,7 +476,7 @@ function indexReportsByAdapter(
 // are not in `decisions`. Evaluate them here for the informational-only list
 // (AE2a) using the already-built report index.
 function fullAlternatives(input: {
-	envelope: RouteEvidenceEnvelope;
+	envelope: ValidatedRouteEvidenceEnvelope;
 	reportByAdapter: Map<BrowserAdapterId, CapabilityReport>;
 	requiredCapabilities: readonly AdapterCapability[];
 	evaluationDate: string;
@@ -498,7 +498,7 @@ function fullAlternatives(input: {
 // Map a rejected/skipped candidate decision into a fail-closed route, choosing
 // the canonical continuation action and (for stale) a research recovery (U3).
 function buildFailureFromDecision(input: {
-	envelope: RouteEvidenceEnvelope;
+	envelope: ValidatedRouteEvidenceEnvelope;
 	mode: BrowserAdapterRouterMode;
 	requested: BrowserAdapterId | null;
 	decision: CandidateDecision | undefined;
@@ -534,7 +534,7 @@ function buildFailureFromDecision(input: {
 }
 
 function buildResearchRecovery(input: {
-	envelope: RouteEvidenceEnvelope;
+	envelope: ValidatedRouteEvidenceEnvelope;
 	adapter: BrowserAdapterId;
 	staleReason: string;
 }): ResearchRecovery {
@@ -561,7 +561,7 @@ function buildResearchRecovery(input: {
 // ---------------------------------------------------------------------------
 
 function checkPreconditions(
-	envelope: RouteEvidenceEnvelope,
+	envelope: ValidatedRouteEvidenceEnvelope,
 	evaluationDate: string,
 ): RouteFailure | null {
 	const pre = envelope.preconditions;

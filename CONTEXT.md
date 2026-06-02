@@ -220,6 +220,10 @@ _Avoid_: ledger schema contract, runtime field list, schema owner
 Legacy committed template that showed the per-issue ledger starting shape before runtime rendering owned initial ledger creation.
 _Avoid_: initial ledger render, generated schema doc, prose schema, contract owner
 
+**Validated Route Evidence Envelope**:
+Browser Adapter Router route input that has passed runtime-owned validation before route evaluation. Use this term for the engine input boundary; keep raw JSON, CLI flags, file paths, and stdin outside it.
+_Avoid_: raw route envelope, trusted CLI envelope, typed envelope
+
 **Initial ledger render**:
 Runtime-emitted complete starting ledger document created after acceptance criteria confirmation; read-only output, not a committed template or filesystem mutation.
 _Avoid_: ledger template scaffold, generated schema doc, mutable ledger init
