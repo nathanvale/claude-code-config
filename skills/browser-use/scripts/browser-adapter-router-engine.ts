@@ -23,7 +23,7 @@ import type {
 	RouteSuccess,
 	RouteTask,
 	RouterFailureActionId,
-} from "./browser-adapter-router";
+} from "./browser-adapter-router-model";
 
 const CHROME_DEVTOOLS_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";

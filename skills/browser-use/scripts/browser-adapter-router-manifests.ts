@@ -14,7 +14,7 @@ import type {
 	AdapterCapability,
 	BrowserAdapterId,
 	CapabilityReport,
-} from "./browser-adapter-router";
+} from "./browser-adapter-router-model";
 
 // One ISO date stamp shared by the seeded manifests. `Date.now()`/`new Date()`
 // are intentionally avoided in runtime code so behavior stays deterministic; the
