@@ -220,16 +220,16 @@ _Avoid_: browse, play, browser adapter, browser orchestrator, browser memory ski
 A reusable authenticated browser environment that `browser-use` drives for login-heavy workflows. It is distinct from the everyday Chrome profile and from Browser Adapters; separate identities may require separate Warm Chrome environments.
 _Avoid_: default Chrome profile, adapter browser, Chrome for Testing, cold browser
 
-**Warm Chrome Binding**:
-A planned `browser-use` lifecycle record that pairs one CDP port with one dedicated Warm Chrome profile. It names the candidate endpoint/profile for Warm Chrome Preflight to verify; it is not readiness proof, Browser Adapter state, or Chrome's `DevToolsActivePort` hint.
-_Avoid_: default port, port lock, DevToolsActivePort, endpoint registry
-
 **Warm Chrome Preflight**:
 A `browser-use` readiness proof run before any Browser Adapter acts. It verifies that a candidate browser endpoint satisfies the Warm Chrome contract; adapters consume the result rather than owning separate readiness policies.
-_Avoid_: adapter preflight, manual checklist, browser-domain-memory preflight
+_Avoid_: manual checklist, browser-domain-memory preflight
+
+**Browser Adapter Proof**:
+A read-only `browser-use` proof that a selected Browser Adapter is attached to verified Warm Chrome. It runs after Warm Chrome Preflight and before adapter action.
+_Avoid_: manual checklist, durable binding, adapter fallback
 
 **Browser Adapter**:
-A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome, such as `agent-browser`, Chrome DevTools MCP, or `puppeteer-core` via `connect`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge.
+A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome: `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge. `puppeteer-core` is deterministic replay detail, not public adapter name.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
 
 **Browser Entry Handoff**:
@@ -477,7 +477,7 @@ Dev: "What's the default Browser Adapter?"
 Domain expert: "There isn't a fixed default. `browser-use` selects by requested outcome and verified adapter capability."
 
 Dev: "Is Puppeteer banned?"
-Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is allowed only as a Browser Adapter that connects to verified Warm Chrome."
+Domain expert: "Puppeteer launch paths are banned. `puppeteer-core` is deterministic replay detail that connects to verified Warm Chrome."
 
 Dev: "Which mode is the default for a fresh capture?"
 Domain expert: "Prose mode — the flexible default while memory is still maturing. Runbook and deterministic modes are faster opt-ins once the path proves stable. Run Outcomes track per-mode metrics so you can see which earns its keep per flow."

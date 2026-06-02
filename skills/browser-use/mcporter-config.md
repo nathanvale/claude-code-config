@@ -14,7 +14,7 @@ Home config usually owns the default:
 mcporter config get chrome-devtools --json
 ```
 
-If `mcporter` is not on this shell path but Chrome DevTools MCP is already available in the harness, use the available MCP surface and do not churn config.
+Current Browser Adapter Proof verifies the `mcporter` path. If another Chrome DevTools MCP surface is already available in the harness, treat it as future proof work; do not churn config without a new proof path.
 
 Preferred new config shape:
 
@@ -32,15 +32,12 @@ Preferred new config shape:
 
 Existing `--auto-connect --userDataDir <dir>` config is acceptable only when `<dir>/DevToolsActivePort` resolves to a verified loopback Warm Chrome endpoint. Do not point it at the everyday default Chrome profile.
 
-Observed 2026-06-01:
-
-- `9444`: real Google Chrome, `~/.agent-warm-profile`, CDP responds.
-- `9223`: real Google Chrome, actual profile `~/.agent-prose-replay-profile`.
-- `~/.cache/chrome-agent/DevToolsActivePort` may point at `9223`; treat it as a pointer, not proof.
+Observed incident ports belong to provenance, not setup instructions. Current convention is `9222` plus runtime proof.
 
 ## Verify
 
 ```bash
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 mcporter call chrome-devtools.list_pages --args '{}' --output text
 ```
 
@@ -73,11 +70,10 @@ If `DevToolsActivePort` or connection startup fails:
 
 ```bash
 skills/browser-use/scripts/preflight-warm-chrome.sh repair --port "$PORT" --profile "$PROFILE" --plain
-mcporter daemon restart
-mcporter call chrome-devtools.list_pages --args '{}' --output text
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
 ```
 
-Retry once. If still broken, ask before restarting Chrome or changing config. Do not switch to AppleScript, Playwright, Puppeteer, or `chrome-isolated` unless the user explicitly asks for a fresh browser.
+Proof never restarts `mcporter` or edits config. If proof reports stale config, update config outside proof, then rerun. Do not switch to AppleScript, Playwright launch, Puppeteer launch, or `chrome-isolated` unless the user explicitly asks for a fresh browser.
 
 ## Source Notes
 

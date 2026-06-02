@@ -11,8 +11,9 @@ adapter-neutral Warm Chrome contract.
 
 - Canonical owner: `browser-use`.
 - Contract: real Google Chrome binary, dedicated persistent profile, loopback CDP, no Chrome for Testing.
-- Current proven adapter: Chrome DevTools MCP / `mcporter`.
-- Optional adapters: `agent-browser` and `puppeteer-core`, only when they satisfy the same contract.
+- Current proof adapter: `chrome-devtools`.
+- Future proof targets: `agent-browser`, `playwright-cdp`.
+- Deterministic replay detail: `puppeteer-core` against a verified endpoint.
 
 ## Why it's here
 
@@ -28,6 +29,9 @@ that substrate and adds a local Warm Chrome contract so browser-memory work cons
 - `scripts/command-contract.ts` — `create-cli` / facade contract for command surface, side effects,
   result contract, and action affordances.
 - `scripts/preflight-warm-chrome.test.ts` — focused CLI behavior tests.
+- `scripts/preflight-browser-adapter.sh` — thin Browser Adapter Proof wrapper.
+- `scripts/preflight-browser-adapter.ts` — read-only adapter attachment proof. Runs Warm Chrome Preflight first.
+- `scripts/preflight-browser-adapter.test.ts` — focused Browser Adapter Proof contract and `chrome-devtools` tests.
 - `scripts/launch-agent-chrome.sh` — older step-zero launcher. `--auto-connect` attaches but does not
   launch; this starts real Google Chrome on a known port and writes `DevToolsActivePort` for
   chrome-devtools-mcp. Treat it as legacy helper under the Warm Chrome contract, not the contract.
@@ -44,7 +48,7 @@ boundary (never route a password through an MCP tool call).
 
 ## Validated 2026-06-01
 
-Evaluation confirmed:
+Evaluation confirmed historical incident context:
 
 - `9444`: real Google Chrome, `~/.agent-warm-profile`, CDP responds.
 - `9223`: real Google Chrome, actual profile `~/.agent-prose-replay-profile`.
@@ -69,6 +73,16 @@ CLI hardening confirmed:
 - Explicit `--endpoint` derives its own port when `--port` is absent.
 - Runtime/dependency failures route to `inspect_diagnostics`, not browser-entry repair loops.
 - Browser-entry failures emit specific recovery affordances alongside the hard-stop action.
+
+## Validated 2026-06-02
+
+- Browser Adapter Proof contract validates through `defineCommandFacadeContract`.
+- `chrome-devtools` proof runs Warm Chrome Preflight internally.
+- `chrome-devtools` proof accepts mcporter `--browserUrl` on verified `9222`.
+- Stale mcporter config reports `adapter_config_stale` and `update_adapter_config`.
+- Healthy mcporter plus stale native MCP config emits warning only.
+- Missing `bunx` / `mcporter` reports `adapter_dependency_missing`.
+- Proof timeout reports `adapter_proof_timeout`.
 
 ## Open Work
 

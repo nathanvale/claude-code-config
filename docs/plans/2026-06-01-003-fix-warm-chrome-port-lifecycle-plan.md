@@ -14,6 +14,17 @@ Make `browser-use` find the running warm Chrome instead of guessing a CDP port. 
 
 This fixes issue #149 by collapsing the defaults into resolver-owned candidates and adding a scan-before-spawn guard. It is deliberately **stateless beyond a lightweight hint**: no persisted ownership record, no mutation lock, no port-allocation range. Durable per-session port ownership is real future work but belongs to the browser-domain-memory lifecycle epic, not this single-operator fix.
 
+### 2026-06-02 Branch Slice
+
+Current branch delivered the first runtime-proof slice, not the full resolver/hint plan:
+
+- Browser Adapter Proof CLI scaffolded with create-cli contract.
+- Warm Chrome preflight composed before adapter proof.
+- `chrome-devtools` proof implemented through `bunx mcporter`.
+- Live smoke green against fixed CDP port `9222`.
+- `agent-browser` and `playwright-cdp` Browser Adapter Proof implementations remain follow-up work; they are not accepted CLI values in this slice.
+- Broader resolver, hint write/read, launch reuse, and shell wrapper alignment remain follow-up work.
+
 ---
 
 ## Problem Frame
@@ -26,7 +37,7 @@ The fix is resolution, not ownership: probe the fixed warm-CDP port through the 
 
 ### Why no durable binding (scope decision)
 
-An earlier draft of this plan added a persisted `Warm Chrome Binding` file plus a mutation lock, stale-recovery, and a two-tier allocation range. A deepening review (adversarial + scope) showed that machinery solves a *persistence* problem #149 never reported, and that for read-only commands a stale binding is strictly worse than no binding (it adds a failure mode discovery would have avoided). The running Chrome's own CDP listener is already the authority for "which port is warm," and `verifyWarmChrome` already cross-checks it. So this plan keeps only a lightweight **endpoint hint** (a cache to skip a probe, never an authority) and drops the lock, stale-recovery, atomic-rename, and allocation range. See `docs/adr/0008` (status: proposed) for the deferred durable-binding design.
+An earlier draft of this plan added a persisted `Warm Chrome Binding` file plus a mutation lock, stale-recovery, and a two-tier allocation range. A deepening review (adversarial + scope) showed that machinery solves a *persistence* problem #149 never reported, and that for read-only commands a stale binding is strictly worse than no binding (it adds a failure mode discovery would have avoided). The running Chrome's own CDP listener is already the authority for "which port is warm," and `verifyWarmChrome` already cross-checks it. So this plan keeps only a lightweight **endpoint hint** (a cache to skip a probe, never an authority) and drops the lock, stale-recovery, atomic-rename, and allocation range. ADR 0008 is superseded by ADR 0009's fixed convention plus runtime proof decision.
 
 ---
 
@@ -87,7 +98,12 @@ An earlier draft of this plan added a persisted `Warm Chrome Binding` file plus 
 
 ### Deferred to Follow-Up Work
 
-- Durable `Warm Chrome Binding` ownership record, mutation lock, and stale-recovery (ADR-0008, browser-domain-memory epic).
+- Durable browser ownership record, mutation lock, and stale-recovery. ADR 0009 rejects this for the current slice.
+- `agent-browser` Browser Adapter Proof implementation.
+- `playwright-cdp` Browser Adapter Proof implementation.
+- Resolver/hint implementation from this plan: advisory hint, discovery precedence, and `resolution_source` provenance.
+- Launch reuse and competitor refusal from this plan, including wrong-port launch recovery without spawning a redundant browser.
+- `launch-agent-chrome.sh` compatibility wrapper alignment.
 - Port-allocation range when both bootstrap candidates are occupied.
 - Concurrent-launch serialization.
 - Multi-profile fleet support and a `--force-new-binding` second-instance workflow.

@@ -11,7 +11,7 @@ issue: 149
 
 ## Summary
 
-Add a Browser Adapter Proof layer after Warm Chrome Preflight. Warm Chrome stays simple: fixed CDP convention on `9222`, dedicated profile convention at `~/.agent-warm-profile`, prove reality on each run, then prove the chosen adapter is attached to that verified endpoint.
+Add a Chrome DevTools Browser Adapter Proof layer after Warm Chrome Preflight. Warm Chrome stays simple: fixed CDP convention on `9222`, dedicated profile convention at `~/.agent-warm-profile`, prove reality on each run, then prove `chrome-devtools` is attached to that verified endpoint.
 
 This plan removes the abandoned Warm Chrome Binding direction. No port leases, no durable ownership record, no allocation range, no hidden fallback.
 
@@ -39,8 +39,8 @@ The repo language also needs cleanup. `CONTEXT.md` and ADR `0008` still describe
 
 ### Browser Adapter Proof
 
-- R6. A new Browser Adapter Proof command verifies one selected adapter after Warm Chrome Preflight succeeds.
-- R7. Public adapter names are `chrome-devtools`, `agent-browser`, and `playwright-cdp`.
+- R6. A new Browser Adapter Proof command verifies `chrome-devtools` after Warm Chrome Preflight succeeds.
+- R7. Current accepted adapter name is `chrome-devtools`.
 - R8. `puppeteer-core` is documented as deterministic replay implementation detail, not a public adapter name.
 - R9. Adapter proof is read-only by default. It does not navigate, open tabs, mutate adapter config, or edit user config.
 - R10. Adapter proof success proves the adapter is bound to the same verified endpoint emitted by Warm Chrome Preflight and can list pages or tabs through that adapter.
@@ -56,9 +56,9 @@ The repo language also needs cleanup. `CONTEXT.md` and ADR `0008` still describe
 - R17. `chrome-devtools` accepts `--auto-connect --userDataDir` only when `DevToolsActivePort` resolves to verified Warm Chrome.
 - R18. `chrome-devtools` auto-detects binding mode and reports diagnostics; no public `--mode` flag.
 - R19. Stale native MCP config is mode-aware: hard fail only when detection proves the selected path would use it; otherwise surface as a warning.
-- R20. `agent-browser` proof requires `--session`, `--headed`, and `--cdp 9222` on every proof command.
-- R21. `agent-browser` proof rejects auto-launch, `--profile`, sticky Chrome for Testing, and `connect <port>` alone as proof.
-- R22. `playwright-cdp` proof accepts Playwright `connectOverCDP` via `playwright` or `playwright-core`; it rejects launch paths and non-Playwright CDP clients.
+- R20. `agent-browser` proof is deferred outside this PR.
+- R21. `playwright-cdp` proof is deferred outside this PR.
+- R22. Docs may name future proof constraints, but the CLI contract does not accept future adapter values.
 
 ### Documentation And Test Matrix
 
@@ -75,7 +75,7 @@ The repo language also needs cleanup. `CONTEXT.md` and ADR `0008` still describe
 - **Browser Adapter Proof, not adapter preflight.** Warm Chrome Preflight already means browser-entry readiness. The new term names the second proof: selected adapter attachment to verified Warm Chrome.
 - **Convention over binding.** Use `9222` and `~/.agent-warm-profile` as the current simple convention. Detect and explain conflicts instead of allocating or leasing ports.
 - **Proof is observational.** The proof command inspects config and runs minimal attach/list checks. Navigation belongs to smoke matrix cases so routine proof stays low impact.
-- **One public adapter vocabulary.** Public contract values are Chrome DevTools, agent-browser, and Playwright-CDP. Puppeteer-core remains a replay implementation detail because the public adapter proof must prove the named adapter, not any CDP client.
+- **One implemented adapter vocabulary.** Public contract value for this PR is Chrome DevTools. agent-browser and Playwright-CDP remain future proof targets. Puppeteer-core remains a replay implementation detail because the public adapter proof must prove the named adapter, not any CDP client.
 - **Mode-aware stale config without a mode flag.** Chrome DevTools proof auto-detects mcporter/native MCP binding surfaces and reports observed mode diagnostics. Stale native MCP config should not block a healthy mcporter CLI path, but it must hard fail when detection proves the selected path would use stale native MCP config.
 - **Warnings stay diagnostic.** Successful proof keeps `status: "ok"`. Non-blocking findings live under `data.diagnostics.warnings[]` with adapter-specific `docs_url`; they are not runtime actions and do not create a degraded status.
 - **Explicit inputs are current-run inputs.** Browser Adapter Proof examples use `--port 9222`, but the command accepts `--port` and `--endpoint` to match Warm Chrome Preflight. Neither creates a durable binding.
@@ -96,17 +96,17 @@ The repo language also needs cleanup. `CONTEXT.md` and ADR `0008` still describe
 8. Stale native MCP config is a warning when mcporter is healthy.
 9. Stale native MCP config is a hard fail when native MCP is the selected or only usable path.
 10. Ambiguous Chrome DevTools binding is not silently green.
-11. Public third adapter is `playwright-cdp`.
-12. `puppeteer-core` is deterministic replay detail, not a public adapter.
-13. `playwright-cdp` tries `playwright` first.
-14. `playwright-cdp` tries `playwright-core` second.
-15. `playwright-cdp` does not accept `puppeteer-core.connect()` as proof.
+11. `agent-browser` is a future Browser Adapter Proof target, not an accepted CLI value in this PR.
+12. `playwright-cdp` is a future Browser Adapter Proof target, not an accepted CLI value in this PR.
+13. `puppeteer-core` is deterministic replay detail, not a public adapter.
+14. Future `playwright-cdp` proof tries `playwright` first.
+15. Future `playwright-cdp` proof tries `playwright-core` second.
 16. Proof stays observational.
 17. Proof does not navigate to `example.com`.
 18. `example.com` belongs in smoke checklist cases.
-19. agent-browser proof uses `get cdp-url`.
-20. agent-browser proof also uses `tab list`.
-21. agent-browser proof does not use snapshot by default.
+19. Future agent-browser proof uses `get cdp-url`.
+20. Future agent-browser proof also uses `tab list`.
+21. Future agent-browser proof does not use snapshot by default.
 22. Chrome DevTools proof uses config inspection.
 23. Chrome DevTools proof also uses `list_pages`.
 24. Chrome DevTools proof does not navigate.
@@ -135,7 +135,7 @@ The repo language also needs cleanup. `CONTEXT.md` and ADR `0008` still describe
 47. Agent examples use `--json`; human examples use `--plain`.
 48. Every smoke checklist case includes a `run_id`.
 49. Adapter proof never installs dependencies.
-50. `playwright-cdp` dependency checks use dynamic import only.
+50. Future `playwright-cdp` dependency checks use dynamic import only.
 51. Adapter proof never launches a browser, including through Playwright defaults.
 52. Config-source paths are reported as source labels where possible, not noisy full home paths.
 53. Exact bad port values such as `9223` are reported because they are useful and not secret.
@@ -153,7 +153,7 @@ The repo language also needs cleanup. `CONTEXT.md` and ADR `0008` still describe
 65. Config source labels are stable contract values owned by `skills/browser-use/scripts/command-contract.ts`.
 66. Initial config source labels are `mcporter`, `repo_mcp`, `native_mcp_claude_code`, `native_mcp_claude_desktop`, `native_mcp_codex`, and `native_mcp_unknown`.
 67. Scope, path hints, parse status, and binding details are separate diagnostic fields, not encoded into source labels.
-68. Adapter proof uses bounded per-adapter deadlines: `chrome-devtools` 8000ms, `agent-browser` 5000ms, and `playwright-cdp` 5000ms.
+68. Adapter proof uses bounded deadline `chrome-devtools` 8000ms.
 69. Adapter proof timeout fails with `adapter_proof_timeout`, `failure_domain: "browser_adapter_proof"`, exit code `20`, adapter-specific continuation, docs URL, and `no_adapter_fallback`.
 70. Timeout is never a warning or `adapter_signal_weak`; proof did not complete.
 71. Ambiguous Chrome DevTools config fails only when proof cannot identify one proofable selected invocation surface bound to verified Warm Chrome.
@@ -178,18 +178,15 @@ flowchart TB
   START["browser-use adapter action"] --> WARM["Warm Chrome Preflight"]
   WARM -->|fails| WARM_CONT["Follow Warm Chrome continuation"]
   WARM -->|passes| PROOF["Browser Adapter Proof"]
-  PROOF --> SELECT{"adapter"}
-  SELECT --> CHROME["chrome-devtools config + list_pages proof"]
-  SELECT --> AB["agent-browser --session --headed --cdp proof"]
-  SELECT --> PW["playwright-cdp attach proof"]
+  PROOF --> CHROME["chrome-devtools config + list_pages proof"]
   CHROME --> OK{"same endpoint?"}
-  AB --> OK
-  PW --> OK
   OK -->|yes| ACT["Adapter may act"]
   OK -->|no| STOP["Emit continuation + no_adapter_fallback"]
 ```
 
 The proof command composes with Warm Chrome Preflight instead of replacing it. Warm Chrome proves the browser environment. Browser Adapter Proof proves adapter attachment to that environment.
+
+Future slices add `agent-browser` and `playwright-cdp` branches after their proof semantics are implemented.
 
 ---
 
@@ -222,10 +219,10 @@ The proof command composes with Warm Chrome Preflight instead of replacing it. W
   - `skills/browser-use/scripts/preflight-browser-adapter.ts`
   - `skills/browser-use/scripts/preflight-browser-adapter.sh`
   - `skills/browser-use/scripts/preflight-browser-adapter.test.ts`
-- **Approach:** Keep `skills/browser-use/scripts/command-contract.ts` as the single public contract owner. Add Browser Adapter Proof constants, types, actions, and `browserAdapterProofContracts` beside `warmChromePreflightContracts`; do not add an index or split contract modules in this slice. Add `check` and `status` commands with `--adapter`, `--port`, `--endpoint`, `--session`, `--json`, `--plain`, `--debug`, `--quiet`, and `--run-id`. Do not add a Chrome DevTools `--mode` flag. The proof command runs Warm Chrome Preflight first through existing runtime helpers, then dispatches adapter-specific proof. `status` is a human-readable projection of `check`, not separate proof logic. Success keeps `status: "ok"` and `continuation.next_action_id: "use_verified_browser_adapter"`. Non-blocking findings live in `data.diagnostics.warnings[]` with adapter-specific `docs_url`; blocking adapter findings emit `failure_domain: "browser_adapter_proof"` and an error envelope with `no_adapter_fallback`. Warm Chrome failures surfaced by adapter proof keep `failure_domain: "browser_entry_handoff"`. Plain output must name the same `continuation.next_action_id` as JSON.
+- **Approach:** Keep `skills/browser-use/scripts/command-contract.ts` as the single public contract owner. Add Browser Adapter Proof constants, types, actions, and `browserAdapterProofContracts` beside `warmChromePreflightContracts`; do not add an index or split contract modules in this slice. Add `check` and `status` command-owned flags `--adapter`, `--port`, `--endpoint`, `--json`, and `--plain`; keep facade-owned diagnostic flags `--debug`, `--quiet`, and `--run-id` out of `CommandFacadeContract.flags`. Do not add a Chrome DevTools `--mode` flag. The proof command runs Warm Chrome Preflight first through existing runtime helpers, then dispatches `chrome-devtools` proof. `status` is a human-readable projection of `check`, not separate proof logic. Success keeps `status: "ok"` and `continuation.next_action_id: "use_verified_browser_adapter"`. Non-blocking findings live in `data.diagnostics.warnings[]` with adapter-specific `docs_url`; blocking adapter findings emit `failure_domain: "browser_adapter_proof"` and an error envelope with `no_adapter_fallback`. Warm Chrome failures surfaced by adapter proof keep `failure_domain: "browser_entry_handoff"`. Plain output must name the same `continuation.next_action_id` as JSON.
 - **Runtime Actions:** Add `use_verified_browser_adapter` with summary "Use the selected Browser Adapter against the verified Warm Chrome endpoint." Adapter config continuations split by side effect: `inspect_adapter_config` for read-only investigation and `update_adapter_config` for proven stale or missing config requiring an external config edit. Proof never performs the write.
 - **Failure Codes:** Use stable diagnostic codes: `adapter_config_stale`, `adapter_config_missing`, `adapter_dependency_missing`, `adapter_binding_mismatch`, `adapter_binding_ambiguous`, `adapter_signal_weak`, `adapter_chrome_for_testing_risk`, `adapter_auto_launch_risk`, and `adapter_proof_timeout`. Warnings reuse diagnostic codes with `severity: "warning"`; do not create warning-only code variants. Runtime action, not code name, decides continuation.
-- **Timeouts:** Adapter proof uses bounded per-adapter deadlines for blocking adapter operations: `chrome-devtools` 8000ms, `agent-browser` 5000ms, and `playwright-cdp` 5000ms. Deadline expiry fails proof with `adapter_proof_timeout`, `failure_domain: "browser_adapter_proof"`, exit code `20`, adapter-specific continuation, docs URL, and `no_adapter_fallback`. Warm Chrome timeout remains `failure_domain: "browser_entry_handoff"` when Warm Chrome Preflight fails before adapter dispatch.
+- **Timeouts:** Adapter proof uses bounded deadline for blocking adapter operations: `chrome-devtools` 8000ms. Deadline expiry fails proof with `adapter_proof_timeout`, `failure_domain: "browser_adapter_proof"`, exit code `20`, adapter-specific continuation, docs URL, and `no_adapter_fallback`. Warm Chrome timeout remains `failure_domain: "browser_entry_handoff"` when Warm Chrome Preflight fails before adapter dispatch.
 - **Runtime Shape:** Invoke Warm Chrome Preflight in-process through shared runtime helpers, not by shelling to the CLI. Adapter proof emits or generates a run id and exposes the internally invoked Warm Chrome Preflight run id. Diagnostics include elapsed time for major phases. Input validation failures stop before adapter subprocesses are spawned.
 - **Command Failures:** Classify adapter timeout, non-zero adapter exit, and unparsable adapter output separately. Timeout uses `adapter_proof_timeout`; non-zero exit and unparsable output should be distinct diagnostic codes selected during implementation without collapsing into config stale.
 - **Test Scenarios:**
@@ -280,8 +277,9 @@ The proof command composes with Warm Chrome Preflight instead of replacing it. W
   - Blank-only or empty page list emits `adapter_signal_weak` warning.
 - **Verification:** Mocked config-source tests; optional live smoke row for current machine state.
 
-### U4. agent-browser Adapter Proof
+### U4. Deferred agent-browser Adapter Proof
 
+- **Status:** Deferred follow-up, outside this PR.
 - **Goal:** Prevent agent-browser from silently using Chrome for Testing, a sticky daemon, or an unpinned CDP connection.
 - **Requirements:** R10, R11, R12, R13, R20, R21
 - **Files:**
@@ -302,9 +300,10 @@ The proof command composes with Warm Chrome Preflight instead of replacing it. W
   - Docs say every proof-grade agent-browser command uses `--cdp "$PORT"`.
 - **Verification:** Mocked command-runner tests; live smoke only when agent-browser is installed and a session is available.
 
-### U5. Playwright CDP Adapter Proof
+### U5. Deferred Playwright CDP Adapter Proof
 
-- **Goal:** Support the third public adapter as a Playwright CDP attachment path, not a browser launch path.
+- **Status:** Deferred follow-up, outside this PR.
+- **Goal:** Support Playwright CDP as an attachment path, not a browser launch path.
 - **Requirements:** R7, R8, R10, R11, R22
 - **Files:**
   - `skills/browser-use/scripts/preflight-browser-adapter.ts`
@@ -334,7 +333,7 @@ The proof command composes with Warm Chrome Preflight instead of replacing it. W
   - `skills/browser-use/mcporter-config.md`
   - `skills/browser-use/PROVENANCE.md`
   - `skills/browser-use/TEST_MATRIX.md`
-- **Approach:** Update skill docs to say Warm Chrome Preflight first, Browser Adapter Proof second, adapter action third. Keep deterministic contracts in code; docs explain precedence and stop conditions only. Update provenance to list the three public adapters. Update `TEST_MATRIX.md` from a table to a case-per-heading checklist. Each case uses stable `case_id`, `kind`, `status`, `run_id`, optional `adapter`, `side_effects`, `requires`, `setup`, `run`, `expect`, `observe`, `record`, and `cleanup` fields. Use checkboxes for human-run steps and key-value metadata for agent parsing. Keep `https://example.com/` navigation only in explicit smoke cases. Use `--json` in agent examples and `--plain` in human examples.
+- **Approach:** Update skill docs to say Warm Chrome Preflight first, Browser Adapter Proof second, adapter action third. Keep deterministic contracts in code; docs explain precedence and stop conditions only. Update provenance to list `chrome-devtools` as the current proof adapter and `agent-browser` / `playwright-cdp` as future proof targets. Update `TEST_MATRIX.md` from a table to a case-per-heading checklist. Each case uses stable `case_id`, `kind`, `status`, `run_id`, optional `adapter`, `side_effects`, `requires`, `setup`, `run`, `expect`, `observe`, `record`, and `cleanup` fields. Use checkboxes for human-run steps and key-value metadata for agent parsing. Keep `https://example.com/` navigation only in explicit smoke cases. Use `--json` in agent examples and `--plain` in human examples.
 - **Test Scenarios:**
   - Skill frontmatter remains YAML-parseable.
   - Docs contain `Browser Adapter Proof`.
@@ -377,9 +376,9 @@ The proof command composes with Warm Chrome Preflight instead of replacing it. W
 - AE2. Given Warm Chrome is healthy on `9222` and mcporter points at `9223`, when `chrome-devtools` proof runs, then it fails with `adapter_config_stale`, observed source, docs URL, and `update_adapter_config`.
 - AE3. Given Warm Chrome is healthy on `9222`, mcporter is pinned to `9222`, and native MCP config is stale, when the selected path is mcporter, then proof passes with a warning.
 - AE4. Given the selected path is native Chrome DevTools MCP and native config points at stale `9223`, when proof runs, then it hard fails.
-- AE5. Given agent-browser can report `get cdp-url` for `9222`, when proof runs with `--session`, `--headed`, and `--cdp 9222`, then it passes.
-- AE6. Given agent-browser would auto-launch or use Chrome for Testing, when proof runs, then it fails with `adapter_auto_launch_risk` or `adapter_chrome_for_testing_risk`.
-- AE7. Given Playwright-CDP proof detects a launch path instead of CDP attach, when proof runs, then it fails and forbids adapter fallback.
+- AE5. Future: Given agent-browser can report `get cdp-url` for `9222`, when proof runs with `--session`, `--headed`, and `--cdp 9222`, then it passes.
+- AE6. Future: Given agent-browser would auto-launch or use Chrome for Testing, when proof runs, then it fails with `adapter_auto_launch_risk` or `adapter_chrome_for_testing_risk`.
+- AE7. Future: Given Playwright-CDP proof detects a launch path instead of CDP attach, when proof runs, then it fails and forbids adapter fallback.
 - AE8. Given a smoke run is requested, when the matrix case executes, then the adapter opens or navigates to `https://example.com/` and cleanup leaves no extra listener state.
 
 ---

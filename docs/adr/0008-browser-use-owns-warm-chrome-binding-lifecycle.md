@@ -1,9 +1,12 @@
 ---
-status: proposed
+status: superseded
 date: 2026-06-01
+superseded_by: 0009-browser-use-fixed-cdp-convention-and-runtime-proof.md
 ---
 
 # browser-use Owns Warm Chrome Binding Lifecycle
+
+Superseded by ADR 0009. Do not implement this design for the current slice.
 
 `browser-use` should own the singleton `Warm Chrome Binding`: user-machine state that
 pairs one CDP port with one dedicated Warm Chrome profile. The binding would live outside
