@@ -1311,15 +1311,17 @@ function resolveMcporterCommand(
 			`${MCPORTER_COMMAND_ENV_VAR} must be a non-empty JSON array of strings.`,
 		);
 	}
-	const vector = parsed.map((value) =>
-		typeof value === "string" ? value.trim() : value,
-	);
-	if (vector.some((value) => typeof value !== "string" || value === "")) {
-		throw invalidMcporterCommandOverride(
-			`${MCPORTER_COMMAND_ENV_VAR} entries must be non-empty strings.`,
-		);
+	const vector: string[] = [];
+	for (const value of parsed) {
+		if (typeof value !== "string" || value.trim() === "") {
+			throw invalidMcporterCommandOverride(
+				`${MCPORTER_COMMAND_ENV_VAR} entries must be non-empty strings.`,
+			);
+		}
+		vector.push(value.trim());
 	}
-	return vector as AdapterCommandVector;
+	const [command, ...args] = vector;
+	return [command, ...args];
 }
 
 function invalidMcporterCommandOverride(message: string): AdapterProofRuntimeError {
