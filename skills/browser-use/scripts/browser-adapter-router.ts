@@ -451,15 +451,13 @@ function evaluateCandidate(input: EvaluateCandidateInput): CandidateDecision {
 				code: "adapter_capability_none",
 			};
 		}
-		if (entry.support === "partial") {
-			if (!input.allowDegraded) {
-				return {
-					...base,
-					status: "rejected",
-					reason: `Required capability ${capability} reports partial; fails closed by default.`,
-					code: "adapter_capability_partial",
-				};
-			}
+		if (entry.support === "partial" && !input.allowDegraded) {
+			return {
+				...base,
+				status: "rejected",
+				reason: `Required capability ${capability} reports partial; fails closed by default.`,
+				code: "adapter_capability_partial",
+			};
 		}
 		// `full` (or accepted `partial` under explicit degraded mode) must still
 		// clear the confidence floor (plan: ">=75 for every required capability").
@@ -575,10 +573,7 @@ export function evaluateRoute(
 	const requiredCapabilities = resolveRequiredCapabilities(envelope.task);
 	const allowDegraded = false; // allow_degraded is not routed in V1 (R20).
 
-	const reportByAdapter = new Map<BrowserAdapterId, CapabilityReport>();
-	for (const report of envelope.reports) {
-		reportByAdapter.set(report.adapter_id, report);
-	}
+	const reportByAdapter = indexReportsByAdapter(envelope.reports);
 
 	const candidateOrder = candidateAdaptersForMode(envelope.policy);
 	const decisions = candidateOrder.map((adapter) =>
@@ -615,7 +610,12 @@ export function evaluateRoute(
 			decision,
 			decisions,
 			// Alternatives are informational only (AE2a, R3).
-			informational: fullAlternatives(envelope, requiredCapabilities, evaluationDate),
+			informational: fullAlternatives({
+				envelope,
+				reportByAdapter,
+				requiredCapabilities,
+				evaluationDate,
+			}),
 			evaluationDate,
 		});
 	}
@@ -791,24 +791,36 @@ function buildMediaProof(request: {
 	};
 }
 
-function fullAlternatives(
-	envelope: RouteEvidenceEnvelope,
-	requiredCapabilities: readonly AdapterCapability[],
-	evaluationDate: string,
-): BrowserAdapterId[] {
-	const reportByAdapter = new Map<BrowserAdapterId, CapabilityReport>();
-	for (const report of envelope.reports) {
-		reportByAdapter.set(report.adapter_id, report);
+// Index reports by adapter id once; shared by the route evaluator and the
+// force-mode informational-alternatives scan so keying stays in one place.
+function indexReportsByAdapter(
+	reports: readonly CapabilityReport[],
+): Map<BrowserAdapterId, CapabilityReport> {
+	const byAdapter = new Map<BrowserAdapterId, CapabilityReport>();
+	for (const report of reports) {
+		byAdapter.set(report.adapter_id, report);
 	}
+	return byAdapter;
+}
+
+// Force mode evaluates only the forced adapter, so the non-forced candidates
+// are not in `decisions`. Evaluate them here for the informational-only list
+// (AE2a) using the already-built report index.
+function fullAlternatives(input: {
+	envelope: RouteEvidenceEnvelope;
+	reportByAdapter: Map<BrowserAdapterId, CapabilityReport>;
+	requiredCapabilities: readonly AdapterCapability[];
+	evaluationDate: string;
+}): BrowserAdapterId[] {
 	return BROWSER_ADAPTER_ROUTER_ADAPTERS.filter((adapter) => {
-		if (adapter === envelope.policy.adapter_id) return false;
+		if (adapter === input.envelope.policy.adapter_id) return false;
 		const decision = evaluateCandidate({
 			adapter,
-			report: reportByAdapter.get(adapter),
-			requiredCapabilities,
-			preconditions: envelope.preconditions,
+			report: input.reportByAdapter.get(adapter),
+			requiredCapabilities: input.requiredCapabilities,
+			preconditions: input.envelope.preconditions,
 			allowDegraded: false,
-			evaluationDate,
+			evaluationDate: input.evaluationDate,
 		});
 		return decision.status === "selectable";
 	});
@@ -865,9 +877,28 @@ function continuationForCode(
 			return "research_adapter_capability";
 		case "adapter_capability_partial":
 			return "accept_partial_adapter";
-		default:
+		case "adapter_capability_none":
+		case "adapter_attachment_incompatible":
+		case "route_evidence_invalid":
+		case "route_evidence_mixed_run":
+		case "route_evidence_stale":
+		case "auth_session_unverified":
+		case "target_origin_unverified":
 			return "change_route_input";
+		default:
+			// Exhaustiveness guard: a new diagnostic code added to the union
+			// must declare its continuation here, or this fails to compile.
+			return assertNeverDiagnosticCode(code);
 	}
+}
+
+// Compile-time exhaustiveness guard for diagnostic-code switches. Runtime
+// fallback is the safe fail-closed input action.
+function assertNeverDiagnosticCode(
+	code: never,
+): "change_route_input" {
+	void code;
+	return "change_route_input";
 }
 
 function buildResearchRecovery(input: {
@@ -1200,10 +1231,6 @@ function isMode(value: unknown): value is BrowserAdapterRouterMode {
 	return value === "auto" || value === "prefer" || value === "force";
 }
 
-function isCapabilityFlag(value: unknown): value is AdapterCapability {
-	return isCapability(value);
-}
-
 // ---------------------------------------------------------------------------
 // CLI driver (U0). Mirrors preflight-browser-adapter.ts structure.
 // ---------------------------------------------------------------------------
@@ -1215,7 +1242,6 @@ type ParsedRouterCommand =
 	| { kind: "version" }
 	| {
 			kind: "route";
-			displayCommand: "route" | "status";
 			outputMode: OutputMode;
 			envelopePath?: string;
 	  }
@@ -1641,10 +1667,9 @@ function emitReportFailure(input: {
 		);
 		return ROUTE_FAIL_CLOSED_EXIT_CODE;
 	}
-	const nextAction: RouterFailureActionId =
-		code === "adapter_capability_stale"
-			? "research_adapter_capability"
-			: "research_adapter_capability";
+	// Share the route path's per-code continuation mapping; report failures
+	// (unknown or stale) both resolve to research_adapter_capability there.
+	const nextAction = continuationForCode(code);
 	writeJsonEnvelope(
 		input.stdout,
 		createCliRuntimeErrorEnvelope({
@@ -1680,8 +1705,15 @@ function recoverabilityForCode(
 		case "route_evidence_invalid":
 		case "route_evidence_mixed_run":
 		case "route_evidence_stale":
+		case "adapter_capability_none":
+		case "adapter_capability_unknown":
+		case "adapter_capability_stale":
+		case "adapter_capability_partial":
+		case "adapter_attachment_incompatible":
 			return "change_input";
 		default:
+			// Exhaustiveness guard: a new code must declare its recoverability.
+			void (code satisfies never);
 			return "change_input";
 	}
 }
@@ -1797,7 +1829,7 @@ function parseRouterArgv(argv: readonly string[]): ParsedRouterCommand {
 		if (!adapter) {
 			throw usageError("report requires --adapter <id>.");
 		}
-		const capability = readEnumFlag(rest, "--capability", isCapabilityFlag);
+		const capability = readEnumFlag(rest, "--capability", isCapability);
 		return { kind: "report", outputMode, adapter, capability };
 	}
 
@@ -1805,7 +1837,6 @@ function parseRouterArgv(argv: readonly string[]): ParsedRouterCommand {
 	rejectUnknownFlags(rest, ["--envelope", "--json", "--plain"]);
 	return {
 		kind: "route",
-		displayCommand: command === "status" ? "status" : "route",
 		outputMode,
 		envelopePath,
 	};
