@@ -74,6 +74,8 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 | `microsoft-365` | Microsoft Graph mail tools |
 | `gog` | `gog gmail search "is:unread" --account <email> --client <name> --json --max 20` (via Bash — see references/gogcli-commands.md) |
 
+**Body-reading invariant:** When surfacing email during sync or triage, read the full body before presenting results. Extract products, amounts, actions, and dates. Never ask Nathan what an accessible email says. Decode base64 HTML bodies and parse the content before summarising.
+
 **Common patterns:**
 - Unread inbox for default sync
 - Sent messages for `--deep` mode (find commitments made)

@@ -1,33 +1,27 @@
 #!/bin/bash
 # check-prompt-drift-on-stop.sh
-# Soft drift check for the prompt system. Runs on Stop hook.
-# Only fires when invoked from inside the claude-code-config repo.
+# Soft health check for startup instructions. Runs on Stop hook.
+# Only fires when invoked from inside a repo with agent-instructions.sh.
 # Never blocks — prints a warning if drift is detected, otherwise silent.
 
 set -uo pipefail
 
-REPO_ROOT="${HOME}/code/claude-code-config"
-RENDER_SCRIPT="${REPO_ROOT}/scripts/render-user-prompts.sh"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+CHECK_SCRIPT="${REPO_ROOT}/scripts/agent-instructions.sh"
 
-# Only run if we're operating in or under the claude-code-config repo
-case "${PWD}" in
-  "${REPO_ROOT}"|"${REPO_ROOT}"/*) ;;
-  *) exit 0 ;;
-esac
-
-# Only run if the render script exists
-[[ -x "${RENDER_SCRIPT}" ]] || exit 0
+# Only run if this repo owns the instruction health script.
+[[ -n "${REPO_ROOT}" && -x "${CHECK_SCRIPT}" ]] || exit 0
 
 # Run check; capture output
-output=$("${RENDER_SCRIPT}" --check 2>&1)
+output=$("${CHECK_SCRIPT}" check 2>&1)
 status=$?
 
 if [[ $status -ne 0 ]]; then
   echo ""
-  echo "⚠️  Prompt system drift detected:"
-  echo "${output}" | grep -E "^(DRIFT|BROKEN|HYGIENE|ORPHAN):" || echo "${output}"
+  echo "Startup instruction health check failed:"
+  echo "${output}" | grep -E "^(FAIL|WARN):" || echo "${output}"
   echo ""
-  echo "Run: ${RENDER_SCRIPT} --write"
+  echo "Run: ${CHECK_SCRIPT} check"
 fi
 
 # Always exit 0 — this hook informs, it does not block

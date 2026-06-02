@@ -1,25 +1,26 @@
 #!/bin/bash
-# pre-commit hook: block commits that would introduce prompt-system drift.
-# Only fires when staged changes touch prompt-system files.
+# pre-commit hook: block commits that would break instruction health.
+# Only fires when staged changes touch instruction files.
 #
 # Install with: ./scripts/install-git-hooks.sh
 
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-RENDER_SCRIPT="${REPO_ROOT}/scripts/render-user-prompts.sh"
+CHECK_SCRIPT="${REPO_ROOT}/scripts/agent-instructions.sh"
 
 PROMPT_SYSTEM_PATHS=(
-  "prompt-fragments/"
   "rules/"
   "context/"
+  "scripts/agent-instructions.sh"
   "scripts/render-user-prompts.sh"
   "AGENTS.md"
   "CLAUDE.md"
-  "generated/"
+  "docs/adr/"
+  "skills/"
 )
 
-staged=$(git diff --cached --name-only --diff-filter=ACM)
+staged=$(git diff --cached --name-only --diff-filter=ACDM)
 
 matches=false
 for path in $staged; do
@@ -37,14 +38,13 @@ if ! $matches; then
   exit 0
 fi
 
-if ! "${RENDER_SCRIPT}" --check > /tmp/prompt-drift-check.log 2>&1; then
+if ! "${CHECK_SCRIPT}" check > /tmp/prompt-drift-check.log 2>&1; then
   echo ""
-  echo "❌ Prompt system drift detected — commit blocked."
+  echo "Instruction health check failed - commit blocked."
   echo ""
-  grep -E "^(DRIFT|BROKEN|HYGIENE|ORPHAN):" /tmp/prompt-drift-check.log || cat /tmp/prompt-drift-check.log
+  grep -E "^(FAIL|WARN):" /tmp/prompt-drift-check.log || cat /tmp/prompt-drift-check.log
   echo ""
-  echo "Fix: ${RENDER_SCRIPT} --write"
-  echo "Then stage the re-rendered files and retry the commit."
+  echo "Fix the reported instruction health issue, then retry the commit."
   echo ""
   echo "(Full log: /tmp/prompt-drift-check.log)"
   exit 1

@@ -1,28 +1,22 @@
-# Bun Runner (MCP Tools)
+# Code Quality Runners
 
-## Why MCP Over CLI
+Prefer MCP runners over raw CLIs when available. Always pass
+`response_format: "json"`.
 
-MCP tools filter output → token-efficient, failures only
+## Tests
 
-## Testing
+- `bun_runTests`: suite or pattern run.
+- `bun_testFile`: one exact test file.
+- `bun_testCoverage`: coverage summary.
 
-| Tool | Use |
-|------|-----|
-| `bun_runTests` | All tests or filter by pattern |
-| `bun_testFile` | Specific file |
-| `bun_testCoverage` | Coverage summary |
+## Lint And Format
 
-## Linting
+- `biome_lintCheck`: read-only lint/format diagnostics.
+- `biome_lintFix`: auto-fix with `--write`.
+- `biome_formatCheck`: formatting gate.
 
-| Tool | Use |
-|------|-----|
-| `bun_lintCheck` | Check issues (read-only) |
-| `bun_lintFix` | Auto-fix (`--write`) |
-| `bun_formatCheck` | Formatting only |
+## Types
 
-## Hooks (Automatic)
+- `tsc_check`: `tsc --noEmit` from nearest config.
 
-- **PostToolUse** → Biome fix + tsc check after Write/Edit
-- **Stop** → Full lint + type check before session ends
-
-Exit codes → 0 = success, 2 = blocking error
+Exit codes: `0` success, `2` blocking error.

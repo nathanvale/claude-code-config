@@ -27,12 +27,14 @@ symlinks=(
 	"${CLAUDE_HOME}/hooks.json|${SCRIPT_DIR}/hooks.json"
 	"${CLAUDE_HOME}/settings.json|${SCRIPT_DIR}/settings.json"
 	"${CLAUDE_HOME}/.mcp.json|${SCRIPT_DIR}/.mcp.json"
+	"${CODEX_HOME}/AGENTS.md|${SCRIPT_DIR}/AGENTS.md"
 	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
 
 create_links() {
 	echo "Creating symlinks..."
 	mkdir -p "$CODEX_HOME"
+	local failures=0
 	for entry in "${symlinks[@]}"; do
 		local link="${entry%%|*}"
 		local target="${entry##*|}"
@@ -43,6 +45,7 @@ create_links() {
 
 		if [[ ! -e "$target" ]]; then
 			echo "  SKIP (target missing): $target"
+			failures=$((failures + 1))
 			continue
 		fi
 
@@ -50,22 +53,19 @@ create_links() {
 			if [[ "$(readlink "$link")" == "$target" ]]; then
 				echo "  OK:   $link"
 			else
-				ln -sf "$target" "$link"
-				echo "  UPDATED: $link -> $target"
+				echo "  WRONG: $link -> $(readlink "$link")"
+				echo "         Remove the managed symlink manually first, then re-run."
+				failures=$((failures + 1))
 			fi
 		elif [[ -e "$link" ]]; then
 			echo "  EXISTS (not a symlink): $link"
 			echo "         Remove it manually first, then re-run."
+			failures=$((failures + 1))
 		else
 			ln -s "$target" "$link"
 			echo "  CREATED: $link -> $target"
 		fi
 	done
-
-	# Render prompt files from fragments
-	echo ""
-	echo "Rendering user prompt files..."
-	"${SCRIPT_DIR}/scripts/render-user-prompts.sh" --write
 
 	# Install tracked git hooks (pre-commit drift gate, etc.)
 	if [[ -x "${SCRIPT_DIR}/scripts/install-git-hooks.sh" ]]; then
@@ -75,6 +75,18 @@ create_links() {
 	fi
 
 	echo ""
+	if [[ -x "${SCRIPT_DIR}/scripts/agent-instructions.sh" ]]; then
+		if ! "${SCRIPT_DIR}/scripts/agent-instructions.sh" check; then
+			failures=$((failures + 1))
+		fi
+	fi
+
+	echo ""
+	if (( failures > 0 )); then
+		echo "Install incomplete: $failures issue(s) need attention."
+		exit 1
+	fi
+
 	echo "Done."
 }
 
@@ -119,6 +131,11 @@ show_status() {
 		fi
 	done
 	echo ""
+
+	if [[ -x "${SCRIPT_DIR}/scripts/agent-instructions.sh" ]]; then
+		"${SCRIPT_DIR}/scripts/agent-instructions.sh" status || true
+		echo ""
+	fi
 
 	check_v2_artifact_presence
 }
