@@ -8,12 +8,12 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ARGS=("launch" "--plain")
 
-if [[ $# -gt 0 ]]; then
+if [[ $# -gt 0 && "$1" != -* ]]; then
 	ARGS+=("--port" "$1")
 	shift
 fi
 
-if [[ $# -gt 0 ]]; then
+if [[ $# -gt 0 && "$1" != -* ]]; then
 	ARGS+=("--profile" "$1")
 	shift
 fi

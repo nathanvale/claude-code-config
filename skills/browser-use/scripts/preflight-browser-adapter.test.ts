@@ -231,6 +231,65 @@ describe("CLI front door", () => {
 		expect(stderr).toBe("");
 	});
 
+	test("legacy launch wrapper forwards leading flags as preflight options", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "launch-agent-chrome-"));
+		cleanupPaths.push(dir);
+		const wrapper = join(dir, "launch-agent-chrome.sh");
+		const stub = join(dir, "preflight-warm-chrome.sh");
+		await writeFile(
+			wrapper,
+			await readFile(join(import.meta.dir, "launch-agent-chrome.sh"), "utf8"),
+		);
+		await writeFile(stub, '#!/usr/bin/env bash\nprintf "<%s>\\n" "$@"\n');
+		await Promise.all([chmod(wrapper, 0o755), chmod(stub, 0o755)]);
+
+		const proc = Bun.spawn(["bash", wrapper, "--json", "--debug"], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+
+		expect(exitCode).toBe(0);
+		expect(stdout).toBe("<launch>\n<--plain>\n<--json>\n<--debug>\n");
+		expect(stderr).toBe("");
+	});
+
+	test("legacy launch wrapper still maps positional port and profile", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "launch-agent-chrome-"));
+		cleanupPaths.push(dir);
+		const wrapper = join(dir, "launch-agent-chrome.sh");
+		const stub = join(dir, "preflight-warm-chrome.sh");
+		await writeFile(
+			wrapper,
+			await readFile(join(import.meta.dir, "launch-agent-chrome.sh"), "utf8"),
+		);
+		await writeFile(stub, '#!/usr/bin/env bash\nprintf "<%s>\\n" "$@"\n');
+		await Promise.all([chmod(wrapper, 0o755), chmod(stub, 0o755)]);
+
+		const proc = Bun.spawn(
+			["bash", wrapper, "9333", "/tmp/agent-profile", "--json"],
+			{
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+
+		expect(exitCode).toBe(0);
+		expect(stdout).toBe(
+			"<launch>\n<--plain>\n<--port>\n<9333>\n<--profile>\n</tmp/agent-profile>\n<--json>\n",
+		);
+		expect(stderr).toBe("");
+	});
+
 	test("missing adapter is input failure before adapter subprocesses", async () => {
 		let commandCount = 0;
 		const result = await runForTest(
