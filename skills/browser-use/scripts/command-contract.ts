@@ -160,6 +160,7 @@ export const warmChromeSuccessActions = [
 ] as const;
 
 export const browserAdapterProofFailureActions = [
+	...warmChromeFailureActions,
 	{
 		id: "inspect_adapter_config",
 		summary: "Inspect Browser Adapter config without changing it.",

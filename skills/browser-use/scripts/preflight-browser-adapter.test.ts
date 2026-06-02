@@ -18,6 +18,7 @@ import {
 import {
 	BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 	browserAdapterProofContracts,
+	warmChromeFailureActions,
 } from "./command-contract";
 import {
 	createDefaultAdapterProofRuntime,
@@ -103,6 +104,13 @@ describe("Browser Adapter Proof command contract", () => {
 				(action) => action.id,
 			),
 		).toEqual(["use_verified_browser_adapter"]);
+		expect(
+			browserAdapterProofContracts.check.actionAffordances?.failure.map(
+				(action) => action.id,
+			),
+		).toEqual(
+			expect.arrayContaining(warmChromeFailureActions.map((action) => action.id)),
+		);
 	});
 
 	test("validates against facade package without declaring reserved diagnostics", () => {
@@ -632,6 +640,43 @@ describe("chrome-devtools proof", () => {
 			}),
 		);
 	});
+
+	for (const endpoint of [
+		"https://127.0.0.1:9222",
+		"http://192.168.0.2:9222",
+	]) {
+		test(`missing mcporter reports TOML chrome-devtools unsafe endpoint ${endpoint} as mismatch`, async () => {
+			const cwd = await makeDir();
+			await mkdir(join(cwd, ".codex"), { recursive: true });
+			await writeFile(
+				join(cwd, ".codex", "config.toml"),
+				[
+					"[mcp_servers.chrome-devtools]",
+					`args = ["chrome-devtools-mcp", "--browserUrl", "${endpoint}"]`,
+				].join("\n"),
+			);
+			const result = await runForTest(
+				["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+				await testRuntime({
+					cwd,
+					runCommand: commandRouter({
+						"bunx mcporter config get chrome-devtools --json": {
+							exitCode: 1,
+							stdout: "",
+							stderr: "no config",
+						},
+					}),
+				}),
+			);
+			const envelope = JSON.parse(result.stdout);
+
+			expect(result.exitCode).toBe(20);
+			expect(envelope.error.code).toBe("adapter_binding_mismatch");
+			expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+			expectContinuation(envelope, "update_adapter_config");
+			expectNoAdapterFallback(envelope);
+		});
+	}
 
 	test("selected dependency failure outranks stale native MCP config", async () => {
 		const cwd = await makeDir();

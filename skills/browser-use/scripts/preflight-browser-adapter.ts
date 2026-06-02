@@ -1120,12 +1120,12 @@ function bindingFromText(
 	verifiedPort: string,
 ): AdapterBinding | undefined {
 	const browserUrlMatch = text.match(
-		/--browserUrl(?:=|\s+)(http:\/\/(?:127\.0\.0\.1|localhost):\d+)/,
+		/--browserUrl(?:=|\s+)["']?([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"',\]]+)["']?/,
 	);
 	if (browserUrlMatch?.[1]) {
 		return bindingFromEndpoint(browserUrlMatch[1], verifiedEndpoint, verifiedPort);
 	}
-	const urlMatch = text.match(/http:\/\/(?:127\.0\.0\.1|localhost):\d+/);
+	const urlMatch = text.match(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"',\]]+/);
 	if (urlMatch?.[0]) {
 		return bindingFromEndpoint(urlMatch[0], verifiedEndpoint, verifiedPort);
 	}
