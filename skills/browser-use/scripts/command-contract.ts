@@ -23,10 +23,7 @@ type WarmChromeCommandContract = CommandFacadeContract<
 	WarmChromeMutation
 >;
 export type BrowserAdapterProofCommand = "check" | "status";
-export type BrowserAdapterProofAdapter =
-	| "chrome-devtools"
-	| "agent-browser"
-	| "playwright-cdp";
+export type BrowserAdapterProofAdapter = "chrome-devtools";
 type BrowserAdapterProofMutation = "check";
 type BrowserAdapterProofCommandContract = CommandFacadeContract<
 	BrowserAdapterProofCommand,
@@ -79,7 +76,7 @@ const resultContract = {
 const adapterProofReadFlags = {
 	"--adapter": {
 		type: "enum",
-		values: ["chrome-devtools", "agent-browser", "playwright-cdp"],
+		values: ["chrome-devtools"],
 		description: "Browser Adapter to prove.",
 		required: true,
 	},
@@ -87,10 +84,6 @@ const adapterProofReadFlags = {
 	"--endpoint": {
 		type: "string",
 		description: "Verified Warm Chrome loopback CDP endpoint.",
-	},
-	"--session": {
-		type: "string",
-		description: "agent-browser session name.",
 	},
 	"--json": { type: "boolean", description: "Emit JSON envelope." },
 	"--plain": { type: "boolean", description: "Emit stable text." },
@@ -228,6 +221,9 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			mutation: "write",
 			sideEffects: ["check", "network", "write"],
 			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Repair changes local Warm Chrome profile proof state.",
+			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: commonEnvVars,
@@ -250,6 +246,9 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			mutation: "browser",
 			sideEffects: ["check", "network", "write", "browser"],
 			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Launch may start local Warm Chrome.",
+			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: commonEnvVars,
@@ -303,7 +302,7 @@ export const browserAdapterProofContracts = defineCommandFacadeContract(
 			script: "scripts/preflight-browser-adapter.ts",
 			summary: "Verify a Browser Adapter against Warm Chrome.",
 			usage: [
-				"check --adapter <adapter> [--port <port> | --endpoint <endpoint>] [--session <name>] [--json|--plain]",
+				"check --adapter chrome-devtools [--port <port> | --endpoint <endpoint>] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",
@@ -325,7 +324,7 @@ export const browserAdapterProofContracts = defineCommandFacadeContract(
 			script: "scripts/preflight-browser-adapter.ts",
 			summary: "Show human Browser Adapter proof status.",
 			usage: [
-				"status --adapter <adapter> [--port <port> | --endpoint <endpoint>] [--session <name>] [--json|--plain]",
+				"status --adapter chrome-devtools [--port <port> | --endpoint <endpoint>] [--json|--plain]",
 			],
 			json: true,
 			audience: "operator",

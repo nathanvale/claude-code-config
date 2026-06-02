@@ -66,8 +66,8 @@ skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-d
 
 - User-named adapter wins only after Warm Chrome Preflight and Browser Adapter Proof pass.
 - `chrome-devtools`: current proven default; use for general work when configured, Network, Performance, and DevTools-grade inspection.
-- `agent-browser`: use for named sessions, snapshots/refs, durable selector capture, webm recording, and runbook replay.
-- `playwright-cdp`: use when Playwright `connectOverCDP` is the named adapter.
+- `agent-browser`: future Browser Adapter Proof target; use only when an external workflow explicitly owns its proof.
+- `playwright-cdp`: future Browser Adapter Proof target; use only when an external workflow explicitly owns its proof.
 - `puppeteer-core`: deterministic replay detail only; connect to verified `browserURL`.
 - Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
 - Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.
@@ -101,7 +101,7 @@ Do not run `mcporter daemon restart` inside proof. Do not switch to AppleScript,
 
 ## agent-browser
 
-Use after Warm Chrome Preflight passes.
+Future Browser Adapter Proof target. Current proof CLI does not accept this adapter.
 
 - Always `--session <name>`; never default session.
 - Always `--headed`.

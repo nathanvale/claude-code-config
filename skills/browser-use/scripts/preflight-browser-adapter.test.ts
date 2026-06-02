@@ -12,6 +12,10 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	CLI_DIAGNOSTIC_FLAGS,
+	parseCommandFacadeContract,
+} from "@side-quest/cli-command-facade";
+import {
 	BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 	browserAdapterProofContracts,
 } from "./command-contract";
@@ -85,7 +89,7 @@ describe("Browser Adapter Proof command contract", () => {
 		});
 		expect(browserAdapterProofContracts.check.flags["--adapter"]).toMatchObject({
 			type: "enum",
-			values: ["chrome-devtools", "agent-browser", "playwright-cdp"],
+			values: ["chrome-devtools"],
 			required: true,
 		});
 		expect(browserAdapterProofContracts.check.resultContract?.id).toBe(
@@ -99,6 +103,20 @@ describe("Browser Adapter Proof command contract", () => {
 				(action) => action.id,
 			),
 		).toEqual(["use_verified_browser_adapter"]);
+	});
+
+	test("validates against facade package without declaring reserved diagnostics", () => {
+		const parsed = parseCommandFacadeContract(browserAdapterProofContracts, {
+			path: "skills/browser-use/scripts/command-contract.ts",
+			writeImplyingMutations: new Set(["write", "browser"]),
+		});
+
+		expect(parsed.ok).toBe(true);
+		for (const contract of Object.values(browserAdapterProofContracts)) {
+			for (const flag of CLI_DIAGNOSTIC_FLAGS) {
+				expect(contract.flags).not.toHaveProperty(flag);
+			}
+		}
 	});
 
 	test("keeps proof commands read-only", () => {
@@ -185,7 +203,7 @@ describe("CLI front door", () => {
 		expect(result.exitCode).toBe(2);
 		expect(envelope.error.code).toBe("unknown_adapter");
 		expect(envelope.error.hint.summary).toContain("chrome-devtools");
-		expect(envelope.error.hint.summary).toContain("playwright-cdp");
+		expect(envelope.error.hint.summary).not.toContain("playwright-cdp");
 		expectContinuation(envelope, "change_adapter_input");
 	});
 });
@@ -355,6 +373,56 @@ describe("chrome-devtools proof", () => {
 		expect(envelope.data.diagnostics.warnings).toEqual([]);
 	});
 
+	test("mcporter pinned to localhost Warm Chrome passes", async () => {
+		const result = await runForTest(
+			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+			await testRuntime({
+				runCommand: commandRouter({
+					"bunx mcporter config get chrome-devtools --json": okCommand(
+						JSON.stringify({
+							args: ["chrome-devtools-mcp", "--browserUrl=http://localhost:9222"],
+						}),
+					),
+					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+						okCommand(JSON.stringify({ pages: [] })),
+				}),
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.diagnostics.selected_binding).toMatchObject({
+			status: "matches_verified_endpoint",
+			endpoint_host: "localhost",
+			observed_port: "9222",
+		});
+	});
+
+	for (const endpoint of ["http://192.168.0.2:9222", "http://0.0.0.0:9222"]) {
+		test(`mcporter pinned to non-loopback endpoint ${endpoint} fails`, async () => {
+			const result = await runForTest(
+				["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+				await testRuntime({
+					runCommand: commandRouter({
+						"bunx mcporter config get chrome-devtools --json": okCommand(
+							JSON.stringify({
+								args: ["chrome-devtools-mcp", `--browserUrl=${endpoint}`],
+							}),
+						),
+					}),
+				}),
+			);
+			const envelope = JSON.parse(result.stdout);
+
+			expect(result.exitCode).toBe(20);
+			expect(envelope.error.code).toBe("adapter_binding_mismatch");
+			expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+			expectContinuation(envelope, "update_adapter_config");
+			expectNoAdapterFallback(envelope);
+			expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
+		});
+	}
+
 	test("mcporter pinned to stale port fails with update_adapter_config", async () => {
 		const result = await runForTest(
 			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
@@ -432,6 +500,137 @@ describe("chrome-devtools proof", () => {
 			}),
 		);
 		expect(actionIds(envelope)).toEqual(["use_verified_browser_adapter"]);
+	});
+
+	test("healthy mcporter ignores stale URL in unrelated native MCP server", async () => {
+		const cwd = await makeDir();
+		await writeFile(
+			join(cwd, ".mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					"not-chrome-devtools": {
+						args: [
+							"some-other-mcp",
+							"--browserUrl",
+							"http://127.0.0.1:9223",
+						],
+					},
+				},
+			}),
+		);
+		const result = await runForTest(
+			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+			await testRuntime({
+				cwd,
+				runCommand: commandRouter({
+					"bunx mcporter config get chrome-devtools --json": okCommand(
+						JSON.stringify({
+							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
+						}),
+					),
+					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+						okCommand(JSON.stringify({ pages: [] })),
+				}),
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.diagnostics.warnings).not.toContainEqual(
+			expect.objectContaining({
+				code: "adapter_config_stale",
+				source_label: "repo_mcp",
+				observed_port: "9223",
+			}),
+		);
+	});
+
+	test("missing mcporter ignores stale URL in unrelated native MCP server", async () => {
+		const cwd = await makeDir();
+		await writeFile(
+			join(cwd, ".mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					"not-chrome-devtools": {
+						args: [
+							"some-other-mcp",
+							"--browserUrl",
+							"http://127.0.0.1:9223",
+						],
+					},
+				},
+			}),
+		);
+		const result = await runForTest(
+			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+			await testRuntime({
+				cwd,
+				runCommand: commandRouter({
+					"bunx mcporter config get chrome-devtools --json": {
+						exitCode: 1,
+						stdout: "",
+						stderr: "no config",
+					},
+				}),
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error.code).toBe("adapter_config_missing");
+		expect(envelope.error.message).not.toContain("9223");
+		expectContinuation(envelope, "update_adapter_config");
+		expectNoAdapterFallback(envelope);
+	});
+
+	test("native TOML parser ignores stale URL outside chrome-devtools section", async () => {
+		const cwd = await makeDir();
+		await mkdir(join(cwd, ".codex"), { recursive: true });
+		await writeFile(
+			join(cwd, ".codex", "config.toml"),
+			[
+				"[mcp_servers.not-chrome-devtools]",
+				'args = ["some-other-mcp", "--browserUrl", "http://127.0.0.1:9223"]',
+				"",
+				"[mcp_servers.chrome-devtools]",
+				'args = ["chrome-devtools-mcp", "--browserUrl", "http://127.0.0.1:9222"]',
+			].join("\n"),
+		);
+		const result = await runForTest(
+			["check", "--adapter", "chrome-devtools", "--port", "9222", "--json"],
+			await testRuntime({
+				cwd,
+				runCommand: commandRouter({
+					"bunx mcporter config get chrome-devtools --json": okCommand(
+						JSON.stringify({
+							args: ["chrome-devtools-mcp", "--browserUrl=http://127.0.0.1:9222"],
+						}),
+					),
+					"bunx mcporter call chrome-devtools.list_pages --args {} --output json":
+						okCommand(JSON.stringify({ pages: [] })),
+				}),
+			}),
+		);
+		const envelope = JSON.parse(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data.diagnostics.config_sources).toContainEqual(
+			expect.objectContaining({
+				source_label: "native_mcp_codex",
+				scope: "project",
+				binding: expect.objectContaining({
+					status: "matches_verified_endpoint",
+					observed_port: "9222",
+				}),
+			}),
+		);
+		expect(envelope.data.diagnostics.warnings).not.toContainEqual(
+			expect.objectContaining({
+				code: "adapter_config_stale",
+				source_label: "native_mcp_codex",
+				observed_port: "9223",
+			}),
+		);
 	});
 
 	test("selected dependency failure outranks stale native MCP config", async () => {

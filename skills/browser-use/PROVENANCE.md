@@ -11,7 +11,8 @@ adapter-neutral Warm Chrome contract.
 
 - Canonical owner: `browser-use`.
 - Contract: real Google Chrome binary, dedicated persistent profile, loopback CDP, no Chrome for Testing.
-- Public adapters: `chrome-devtools`, `agent-browser`, `playwright-cdp`.
+- Current proof adapter: `chrome-devtools`.
+- Future proof targets: `agent-browser`, `playwright-cdp`.
 - Deterministic replay detail: `puppeteer-core` against a verified endpoint.
 
 ## Why it's here

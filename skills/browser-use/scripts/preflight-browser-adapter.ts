@@ -47,13 +47,9 @@ const CHROME_DEVTOOLS_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
 const ADAPTER_TIMEOUT_MS = {
 	"chrome-devtools": 8000,
-	"agent-browser": 5000,
-	"playwright-cdp": 5000,
 } as const satisfies Record<BrowserAdapterProofAdapter, number>;
 const SUPPORTED_ADAPTERS: readonly BrowserAdapterProofAdapter[] = [
 	"chrome-devtools",
-	"agent-browser",
-	"playwright-cdp",
 ];
 const quietDiagnosticWriter: CliWriter = {
 	write: () => true,
@@ -92,7 +88,6 @@ type ParsedAdapterProofCommand =
 			adapter: BrowserAdapterProofAdapter;
 			endpoint: string;
 			port: string;
-			session?: string;
 	  };
 
 export type AdapterCommandInput = {
@@ -146,6 +141,7 @@ type ConfigSourceLabel =
 
 type BindingStatus =
 	| "matches_verified_endpoint"
+	| "mismatch"
 	| "stale"
 	| "missing"
 	| "unknown";
@@ -439,7 +435,6 @@ function parseAdapterProofArgv(
 	let adapter = "";
 	let port = "";
 	let endpoint = "";
-	let session: string | undefined;
 
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
@@ -462,10 +457,6 @@ function parseAdapterProofArgv(
 				endpoint = requireNext(args, index, "--endpoint");
 				index += 1;
 				break;
-			case "--session":
-				session = requireNext(args, index, "--session");
-				index += 1;
-				break;
 			default:
 				if (arg.startsWith("--adapter=")) {
 					adapter = requireInlineValue(arg, "--adapter");
@@ -473,8 +464,6 @@ function parseAdapterProofArgv(
 					port = requireInlineValue(arg, "--port");
 				} else if (arg.startsWith("--endpoint=")) {
 					endpoint = requireInlineValue(arg, "--endpoint");
-				} else if (arg.startsWith("--session=")) {
-					session = requireInlineValue(arg, "--session");
 				} else if (arg.startsWith("-")) {
 					throw usageError(`unknown option: ${arg}`);
 				} else {
@@ -512,7 +501,6 @@ function parseAdapterProofArgv(
 		outputMode,
 		adapter,
 		...normalized,
-		session,
 	};
 }
 
@@ -678,28 +666,6 @@ async function executeAdapterProof(input: {
 	switch (input.parsed.adapter) {
 		case "chrome-devtools":
 			return proveChromeDevTools(input);
-		case "agent-browser":
-			throw new AdapterProofRuntimeError(
-				"adapter_dependency_missing",
-				"agent-browser proof is not implemented in this slice.",
-				{
-					primaryActionId: "inspect_adapter_config",
-					hintSummary: "Use chrome-devtools proof for this slice.",
-					hintAction: "repair_state",
-					recoverability: "repair_state",
-				},
-			);
-		case "playwright-cdp":
-			throw new AdapterProofRuntimeError(
-				"adapter_dependency_missing",
-				"playwright-cdp proof is not implemented in this slice.",
-				{
-					primaryActionId: "inspect_adapter_config",
-					hintSummary: "Use chrome-devtools proof for this slice.",
-					hintAction: "repair_state",
-					recoverability: "repair_state",
-				},
-			);
 	}
 }
 
@@ -747,6 +713,17 @@ async function proveChromeDevTools(input: {
 				source.source_label !== "mcporter" &&
 				source.binding?.status === "stale",
 		);
+		const mismatchedNative = config.sources.find(
+			(source) =>
+				source.source_label !== "mcporter" &&
+				source.binding?.status === "mismatch",
+		);
+		if (mismatchedNative?.binding) {
+			throw bindingMismatchError({
+				...mismatchedNative,
+				binding: mismatchedNative.binding,
+			});
+		}
 		if (staleNative?.binding) {
 			throw new AdapterProofRuntimeError(
 				"adapter_config_stale",
@@ -779,6 +756,9 @@ async function proveChromeDevTools(input: {
 	}
 
 	if (mcporter.binding.status !== "matches_verified_endpoint") {
+		if (mcporter.binding.status === "mismatch") {
+			throw bindingMismatchError({ ...mcporter, binding: mcporter.binding });
+		}
 		throw new AdapterProofRuntimeError(
 			"adapter_config_stale",
 			`Chrome DevTools mcporter config points at stale port ${mcporter.binding.observed_port}.`,
@@ -1015,7 +995,10 @@ async function inspectNativeConfigSource(input: {
 	}
 
 	if (input.format === "toml") {
-		const binding = bindingFromText(content, input.endpoint, input.port);
+		const chromeDevToolsSection = selectChromeDevToolsTomlSection(content);
+		const binding = chromeDevToolsSection
+			? bindingFromText(chromeDevToolsSection, input.endpoint, input.port)
+			: undefined;
 		return {
 			...base,
 			parse_status: "ok",
@@ -1038,13 +1021,24 @@ async function inspectNativeConfigSource(input: {
 	return {
 		...base,
 		parse_status: "ok",
-		binding: await extractChromeDevToolsBinding({
+		binding: await extractChromeDevToolsBindingForNativeConfig({
 			value: parsed,
 			runtime: input.runtime,
 			endpoint: input.endpoint,
 			port: input.port,
 		}),
 	};
+}
+
+async function extractChromeDevToolsBindingForNativeConfig(input: {
+	value: unknown;
+	runtime: AdapterProofRuntime;
+	endpoint: string;
+	port: string;
+}): Promise<AdapterBinding | undefined> {
+	const selected = selectChromeDevToolsNativeConfigEntry(input.value);
+	if (!selected) return undefined;
+	return extractChromeDevToolsBinding({ ...input, value: selected });
 }
 
 async function extractChromeDevToolsBinding(input: {
@@ -1087,6 +1081,39 @@ async function extractChromeDevToolsBinding(input: {
 	return bindingFromText(JSON.stringify(input.value), input.endpoint, input.port);
 }
 
+function selectChromeDevToolsNativeConfigEntry(value: unknown): unknown | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined;
+	}
+	const object = value as Record<string, unknown>;
+	for (const containerKey of ["mcpServers", "mcp_servers", "servers"]) {
+		const container = object[containerKey];
+		if (!container || typeof container !== "object" || Array.isArray(container)) {
+			continue;
+		}
+		const entry = (container as Record<string, unknown>)["chrome-devtools"];
+		if (entry) return entry;
+	}
+	return object["chrome-devtools"];
+}
+
+function selectChromeDevToolsTomlSection(content: string): string | undefined {
+	const lines = content.split("\n");
+	const selected: string[] = [];
+	let inChromeDevToolsSection = false;
+	for (const line of lines) {
+		const header = line.match(/^\s*\[([^\]]+)\]\s*$/);
+		if (header) {
+			inChromeDevToolsSection = header[1]
+				.split(".")
+				.map((part) => part.trim().replace(/^["']|["']$/g, ""))
+				.includes("chrome-devtools");
+		}
+		if (inChromeDevToolsSection) selected.push(line);
+	}
+	return selected.length > 0 ? selected.join("\n") : undefined;
+}
+
 function bindingFromText(
 	text: string,
 	verifiedEndpoint: string,
@@ -1113,23 +1140,45 @@ function bindingFromEndpoint(
 	try {
 		const parsed = new URL(endpoint);
 		const observedPort = parsed.port || undefined;
+		const isLoopback =
+			parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
+		const isHttp = parsed.protocol === "http:";
 		return {
 			kind: "browser_url",
 			status:
-				observedPort === verifiedPort
+				observedPort === verifiedPort && isLoopback && isHttp
 					? "matches_verified_endpoint"
 					: observedPort
-						? "stale"
+						? isLoopback && isHttp
+							? "stale"
+							: "mismatch"
 						: "unknown",
 			observed_port: observedPort,
 			endpoint_host:
-				parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost"
-					? parsed.hostname
-					: "non_loopback",
+				isLoopback ? parsed.hostname : "non_loopback",
 		};
 	} catch {
 		return { kind: "browser_url", status: "unknown" };
 	}
+}
+
+function bindingMismatchError(
+	source: ConfigSourceDiagnostic & { binding: AdapterBinding },
+): AdapterProofRuntimeError {
+	return new AdapterProofRuntimeError(
+		"adapter_binding_mismatch",
+		"Chrome DevTools config is not bound to the verified loopback Warm Chrome endpoint.",
+		{
+			primaryActionId: "update_adapter_config",
+			hintSummary:
+				"Update Chrome DevTools config to a loopback Warm Chrome endpoint.",
+			hintAction: "repair_state",
+			recoverability: "repair_state",
+			hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
+			observedPort: source.binding.observed_port,
+			sourceLabel: source.source_label,
+		},
+	);
 }
 
 async function bindingFromDevToolsActivePort(input: {
@@ -1166,8 +1215,8 @@ function warningsForNonSelectedConfig(
 ): AdapterWarning[] {
 	return sources.flatMap((source): AdapterWarning[] => {
 		if (source.selected) return [];
-		if (source.binding?.status === "stale") {
-			return [
+			if (source.binding?.status === "stale") {
+				return [
 				{
 					code: "adapter_config_stale",
 					severity: "warning",
@@ -1176,9 +1225,22 @@ function warningsForNonSelectedConfig(
 					source_label: source.source_label,
 					observed_port: source.binding.observed_port,
 				},
-			];
-		}
-		if (source.parse_status === "malformed") {
+				];
+			}
+			if (source.binding?.status === "mismatch") {
+				return [
+					{
+						code: "adapter_binding_mismatch",
+						severity: "warning",
+						summary:
+							"Non-selected Chrome DevTools config is not bound to loopback Warm Chrome.",
+						docs_url: CHROME_DEVTOOLS_DOCS_URL,
+						source_label: source.source_label,
+						observed_port: source.binding.observed_port,
+					},
+				];
+			}
+			if (source.parse_status === "malformed") {
 			return [
 				{
 					code: source.code ?? "adapter_config_parse_error",
@@ -1726,6 +1788,7 @@ function hintForAdapterProofError(error: AdapterProofRuntimeError): {
 				recoverability: "change_input",
 			};
 		case "adapter_config_stale":
+		case "adapter_binding_mismatch":
 			return {
 				summary:
 					"Update Browser Adapter config to the verified Warm Chrome endpoint.",
@@ -1794,6 +1857,7 @@ function primaryRuntimeActionForError(
 		return runtimeAction("change_adapter_input");
 	}
 	switch (error.code) {
+		case "adapter_binding_mismatch":
 		case "adapter_config_stale":
 		case "adapter_config_missing":
 			return runtimeAction("update_adapter_config");

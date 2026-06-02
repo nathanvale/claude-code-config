@@ -107,7 +107,7 @@ Current proven browsing adapter.
 
 ### agent-browser
 
-Optional adapter.
+Future Browser Adapter Proof target.
 
 - Pass `--cdp "$PORT"` on every command.
 - Never rely on `connect <port>` alone.
@@ -116,7 +116,7 @@ Optional adapter.
 
 ### playwright-cdp
 
-Public adapter name for Playwright `connectOverCDP` against verified Warm Chrome.
+Future Browser Adapter Proof target for Playwright `connectOverCDP` against verified Warm Chrome.
 
 - Attach to `http://127.0.0.1:$PORT`.
 - Do not call Playwright launch APIs.

@@ -192,7 +192,7 @@ side_effects: check, network
 requires: agent-browser installed; named session exists; Warm Chrome healthy on `9222`
 
 run:
-- [ ] `skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter agent-browser --session "$S" --port 9222 --json --run-id bap-agent-browser-pinned`
+- [ ] Future proof CLI: verify named `agent-browser` session with `--session "$S" --headed --cdp 9222` after the adapter contract accepts `agent-browser`.
 
 expect:
 - [ ] `get cdp-url` proves `9222`
@@ -234,7 +234,7 @@ side_effects: check, network
 requires: Playwright runtime available; Warm Chrome healthy on `9222`
 
 run:
-- [ ] `skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter playwright-cdp --port 9222 --json --run-id bap-playwright-cdp-attach`
+- [ ] Future proof CLI: verify Playwright `connectOverCDP` attaches to `http://127.0.0.1:9222` after the adapter contract accepts `playwright-cdp`.
 
 expect:
 - [ ] Playwright `connectOverCDP` attaches to verified endpoint.

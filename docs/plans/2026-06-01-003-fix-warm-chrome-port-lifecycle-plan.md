@@ -22,7 +22,7 @@ Current branch delivered the first runtime-proof slice, not the full resolver/hi
 - Warm Chrome preflight composed before adapter proof.
 - `chrome-devtools` proof implemented through `bunx mcporter`.
 - Live smoke green against fixed CDP port `9222`.
-- `agent-browser` and `playwright-cdp` are contract-visible only; both return not-implemented adapter dependency errors.
+- `agent-browser` and `playwright-cdp` Browser Adapter Proof implementations remain follow-up work; they are not accepted CLI values in this slice.
 - Broader resolver, hint write/read, launch reuse, and shell wrapper alignment remain follow-up work.
 
 ---
