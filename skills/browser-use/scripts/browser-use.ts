@@ -33,6 +33,7 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_ADAPTER_PROOF_ADAPTERS,
 	BROWSER_ADAPTER_PROOF_CONTRACT_ID,
 	BROWSER_ADAPTER_ROUTER_ADAPTERS,
 	BROWSER_ADAPTER_ROUTER_CONTRACT_ID,
@@ -648,7 +649,7 @@ async function runTargetsList(input: {
 	}
 
 	// Discover live Browser Targets through the proven adapter.
-	const discovery = await discoverPages(runtime);
+	const discovery = await discoverPages(runtime, requestedAdapter);
 	if (!discovery.ok) {
 		return emitTargetDiscoveryFailure({
 			failure: discovery.failure,
@@ -817,10 +818,13 @@ async function readRouteFacts(
 			failure: routeInvalidFailure("route is not a success envelope"),
 		};
 	}
-	if (data.contract !== undefined && data.contract !== BROWSER_ADAPTER_ROUTER_CONTRACT_ID) {
+	// Require the Router contract id. A route success that is about to authorize
+	// discovery must positively identify as Router output; a missing contract is
+	// rejected, not waved through, so a hand-written or partial file cannot pass.
+	if (data.contract !== BROWSER_ADAPTER_ROUTER_CONTRACT_ID) {
 		return {
 			ok: false,
-			failure: routeInvalidFailure("route contract id does not match"),
+			failure: routeInvalidFailure("route contract id missing or does not match"),
 		};
 	}
 	const selectedAdapter = data.selected_adapter;
@@ -839,6 +843,18 @@ async function readRouteFacts(
 			ok: false,
 			failure: routeInvalidFailure(
 				"route success carries no operation binding; re-route with fresh proof",
+			),
+		};
+	}
+	// The binding's selected adapter must agree with the route's top-level
+	// selected_adapter. A file where they disagree is internally inconsistent and
+	// must not authorize discovery against either adapter (fail closed, R9).
+	const bindingAdapter = stringField(binding.selected_adapter_id);
+	if (bindingAdapter !== selectedAdapter) {
+		return {
+			ok: false,
+			failure: routeInvalidFailure(
+				"route binding selected_adapter_id does not match route selected_adapter",
 			),
 		};
 	}
@@ -884,10 +900,27 @@ type DiscoverResult =
 
 async function discoverPages(
 	runtime: BrowserUseRuntime,
+	adapter: BrowserAdapterId,
 ): Promise<DiscoverResult> {
+	// MVP implements the page-listing transport for chrome-devtools only. A route
+	// or recovery request can name another registry adapter (agent-browser,
+	// playwright-cdp); fail closed rather than silently listing chrome-devtools
+	// pages against the wrong adapter, until those transports land (V2).
+	if (!(BROWSER_ADAPTER_PROOF_ADAPTERS as readonly string[]).includes(adapter)) {
+		return {
+			ok: false,
+			failure: {
+				code: "target_discovery_transport_failed",
+				message: `Browser Target Discovery is not implemented for adapter ${adapter} yet.`,
+				actionId: "change_target_discovery_input",
+				exitCode: TARGET_DISCOVERY_EXIT_CODE,
+				recoverability: "change_input",
+			},
+		};
+	}
 	const transport = await runBrowserUseMcporter(runtime, [
 		"call",
-		"chrome-devtools.list_pages",
+		`${adapter}.list_pages`,
 		"--args",
 		"{}",
 		"--output",
@@ -1027,15 +1060,54 @@ function parseUrlSafe(value: string | undefined): URL | undefined {
 	}
 }
 
-// Redacted path shape (R32, AE11): pathname only. Query strings and fragments
-// are dropped entirely; an opaque marker records that a query/fragment existed
-// without disclosing its content. Long path segments are length-bounded.
+// Redacted path shape (R32, AE11): a structural projection of the pathname, not
+// the literal segments. Query strings and fragments are dropped entirely (an
+// opaque marker records that one existed); each path segment is replaced with a
+// type token when it looks like an identifier or secret (numeric id, UUID,
+// opaque hex/long token), so reset links, invite codes, and opaque ids never
+// leak. Short readable words are kept as semantic hints. Depth is capped.
+const PATH_SHAPE_MAX_SEGMENTS = 6;
+
 function redactPathShape(parsed: URL): string {
-	const path = parsed.pathname === "" ? "/" : parsed.pathname;
-	const hadQuery = parsed.search !== "";
-	const hadFragment = parsed.hash !== "";
-	const marker = hadQuery || hadFragment ? " […]" : "";
+	const segments = parsed.pathname.split("/").filter((s) => s !== "");
+	const shaped = segments
+		.slice(0, PATH_SHAPE_MAX_SEGMENTS)
+		.map(shapePathSegment);
+	if (segments.length > PATH_SHAPE_MAX_SEGMENTS) shaped.push("…");
+	const path = shaped.length === 0 ? "/" : `/${shaped.join("/")}`;
+	const marker = parsed.search !== "" || parsed.hash !== "" ? " […]" : "";
 	return `${truncateText(path, 120)}${marker}`;
+}
+
+// Map one path segment to a type token when it carries identifier/secret shape,
+// otherwise keep a short readable literal. Errs toward redaction: a segment that
+// mixes letters and digits, or is long, reads as an opaque handle and is shaped
+// rather than echoed. Only pure readable words survive as semantic hints.
+function shapePathSegment(segment: string): string {
+	const decoded = safeDecode(segment);
+	if (/^\d+$/.test(decoded)) return ":num";
+	if (
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded)
+	) {
+		return ":uuid";
+	}
+	// Anything with a non-word character (encoded bytes, separators beyond . _ -)
+	// is opaque.
+	if (/[^a-zA-Z0-9._-]/.test(decoded)) return ":str";
+	// A segment mixing letters and digits is an identifier/handle (invite codes,
+	// short ids, hex blobs), not a readable noun; shape it.
+	if (/\d/.test(decoded) && /[a-zA-Z]/.test(decoded)) return ":id";
+	// Long pure-letter segment is more likely an opaque token than a word.
+	if (decoded.length > 24) return ":id";
+	return decoded;
+}
+
+function safeDecode(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
 }
 
 function truncateText(value: string, maxLength: number): string {

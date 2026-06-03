@@ -950,6 +950,71 @@ describe("U5 target discovery — route-bound mode", () => {
 			code: "target_discovery_route_invalid",
 		});
 	});
+
+	test("a route success missing the router contract id is rejected", async () => {
+		// A hand-written/partial file that omits the contract must not authorize
+		// discovery (PR #168 review): contract id is required, not optional.
+		const noContract = JSON.stringify({
+			status: "ok",
+			run_id: "route-run",
+			data: {
+				outcome: "selected",
+				selected_adapter: "chrome-devtools",
+				binding: {
+					run_id: "route-run",
+					selected_adapter_id: "chrome-devtools",
+					warm_chrome_run_id: "warm-1",
+					adapter_proof_id: "proof-abc",
+					verified_endpoint_identity: "127.0.0.1:9222",
+					route_evidence_hash: "hash-xyz",
+				},
+			},
+		});
+		const { runtime } = discoveryRuntime({
+			files: { "/p.json": adapterProofEnvelope(), "/route.json": noContract },
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "route-bound", "--route", "/route.json", "--adapter-proof", "/p.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_route_invalid",
+		});
+	});
+
+	test("a route whose binding selected_adapter_id disagrees with selected_adapter is rejected", async () => {
+		// Internally inconsistent route file (PR #168 review): the binding names a
+		// different adapter than the route's selected_adapter. Fail closed.
+		const inconsistent = JSON.stringify({
+			status: "ok",
+			run_id: "route-run",
+			data: {
+				outcome: "selected",
+				contract: ROUTER_CONTRACT,
+				selected_adapter: "chrome-devtools",
+				binding: {
+					run_id: "route-run",
+					selected_adapter_id: "playwright-cdp",
+					warm_chrome_run_id: "warm-1",
+					adapter_proof_id: "proof-abc",
+					verified_endpoint_identity: "127.0.0.1:9222",
+					route_evidence_hash: "hash-xyz",
+				},
+			},
+		});
+		const { runtime } = discoveryRuntime({
+			files: { "/p.json": adapterProofEnvelope(), "/route.json": inconsistent },
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "route-bound", "--route", "/route.json", "--adapter-proof", "/p.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_route_invalid",
+		});
+	});
 });
 
 describe("U5 target discovery — empty set, transport, and envelope mapping", () => {
@@ -1029,6 +1094,27 @@ describe("U5 target discovery — empty set, transport, and envelope mapping", (
 		expect(calls).toHaveLength(1);
 		expect(commandVector(calls[0])).toEqual(["mcporter", ...LIST_PAGES_ARGS]);
 	});
+
+	test("an adapter without a discovery transport fails closed, never lists chrome-devtools", async () => {
+		// PR #168 review: discovery must not silently list chrome-devtools pages for
+		// a non-chrome-devtools adapter. Recovery for playwright-cdp (proof matches)
+		// fails closed before any transport call.
+		const { runtime, calls } = discoveryRuntime({
+			files: {
+				"/p.json": adapterProofEnvelope({ adapter: "playwright-cdp" }),
+			},
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "recovery", "--adapter", "playwright-cdp", "--adapter-proof", "/p.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_discovery_transport_failed",
+		});
+		// No list_pages call was made against the wrong adapter.
+		expect(calls).toHaveLength(0);
+	});
 });
 
 describe("U5 target discovery — privacy release gate", () => {
@@ -1091,11 +1177,66 @@ describe("U5 target discovery — privacy release gate", () => {
 		const candidate = (parseJson(result.stdout).data as Record<string, any>)
 			.candidates[0];
 		expect(candidate.origin).toBe("https://example.com");
-		// Path shape keeps the pathname, strips the query/fragment, and marks that
-		// a query/fragment existed without disclosing it.
+		// Path shape keeps short readable segments, strips the query/fragment, and
+		// marks that a query/fragment existed without disclosing it.
 		expect(candidate.path_shape).toContain("/account");
 		expect(candidate.path_shape).not.toContain("secret-token");
 		expect(candidate.path_shape).not.toContain("frag");
+	});
+
+	test("path_shape tokenizes identifier-bearing segments so path tokens never leak", async () => {
+		// PR #168 review: --show-url must not forward raw path segments like reset
+		// links, invite codes, UUIDs, or opaque ids. Each is projected to a type
+		// token; readable nouns survive as semantic hints.
+		const { runtime } = discoveryRuntime({
+			files: { "/p.json": adapterProofEnvelope() },
+			pages: okCommand(
+				listPagesStdout([
+					{
+						id: "P1",
+						url: "https://example.com/reset/a8f3e9c2d1b04f6e8a7c3d2e1f0b9a8c/invite/Xh92Kd71Qz/user/40198",
+						title: "Reset",
+					},
+				]),
+			),
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--adapter-proof", "/p.json", "--show-url", "--json"],
+			runtime,
+		);
+		const candidate = (parseJson(result.stdout).data as Record<string, any>)
+			.candidates[0];
+		// Readable nouns survive; identifiers/secrets become type tokens.
+		expect(candidate.path_shape).toContain("/reset/");
+		expect(candidate.path_shape).toContain(":id");
+		expect(candidate.path_shape).toContain(":num");
+		// The raw secret-bearing segments never appear.
+		expect(result.stdout).not.toContain("a8f3e9c2d1b04f6e8a7c3d2e1f0b9a8c");
+		expect(result.stdout).not.toContain("Xh92Kd71Qz");
+		expect(result.stdout).not.toContain("40198");
+	});
+
+	test("path_shape tokenizes a UUID segment", async () => {
+		const { runtime } = discoveryRuntime({
+			files: { "/p.json": adapterProofEnvelope() },
+			pages: okCommand(
+				listPagesStdout([
+					{
+						id: "P1",
+						url: "https://example.com/orders/550e8400-e29b-41d4-a716-446655440000",
+						title: "Order",
+					},
+				]),
+			),
+		});
+		const result = await runForTest(
+			["targets", "list", "--mode", "recovery", "--adapter", "chrome-devtools", "--adapter-proof", "/p.json", "--show-url", "--json"],
+			runtime,
+		);
+		const candidate = (parseJson(result.stdout).data as Record<string, any>)
+			.candidates[0];
+		expect(candidate.path_shape).toBe("/orders/:uuid");
+		expect(result.stdout).not.toContain("550e8400");
 	});
 
 	test("a title carrying a query string or fragment is redacted", async () => {
