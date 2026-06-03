@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 const DEFAULT_OUT_DIR = "/tmp/claude-501";
 const DEFAULT_SCRIPT = "skills/browser-use/scripts/browser-adapter-router.ts";
+const ARTIFACT_SCHEMA_VERSION = "1";
+const SENSITIVE_ARG_PATTERN = /(secret|token|password|credential|private)/i;
 const ADAPTERS = ["chrome-devtools", "agent-browser", "playwright-cdp"];
 const CAPABILITIES = [
 	"snapshot_refs",
@@ -85,6 +88,71 @@ function repoRoot() {
 function gitLines(cwd, args) {
 	const result = spawnSync("git", args, { cwd, encoding: "utf8" });
 	return result.stdout.trim() ? result.stdout.trim().split("\n") : [];
+}
+
+function commandOutput(cwd, args) {
+	const result = spawnSync(args[0], args.slice(1), { cwd, encoding: "utf8" });
+	return result.status === 0 ? result.stdout.trim() : "";
+}
+
+function sha256(text) {
+	return createHash("sha256").update(text).digest("hex");
+}
+
+function redactArg(arg) {
+	if (SENSITIVE_ARG_PATTERN.test(arg)) return "[redacted]";
+	if (arg.startsWith("/Users/example/")) return "[redacted-path]";
+	return arg;
+}
+
+function redactedCommand(script, args) {
+	return ["bun", script, ...args].map(redactArg);
+}
+
+function capturedEnv(env = {}) {
+	return Object.fromEntries(
+		Object.entries(env).map(([key, value]) => [
+			key,
+			SENSITIVE_ARG_PATTERN.test(key)
+				? "[redacted]"
+				: { sha256: sha256(String(value)), bytes: String(value).length },
+		]),
+	);
+}
+
+function capturedInput(input) {
+	if (input === undefined) return undefined;
+	return { sha256: sha256(input), bytes: input.length };
+}
+
+function caseIntent(expectedExit, args) {
+	if (args.includes("--help")) return "help";
+	if (args.includes("--version")) return "version";
+	if (expectedExit === 0) return "expected_cli_success";
+	return "expected_cli_failure";
+}
+
+function outputFormat(args) {
+	if (args.includes("--json")) return "json";
+	if (args.includes("--plain")) return "plain";
+	if (args.includes("--help")) return "plain";
+	if (args.includes("--version")) return "plain";
+	return "plain";
+}
+
+function inputSource(args, options = {}) {
+	if (args.includes("--envelope")) return "file";
+	if (options.env?.BROWSER_USE_ROUTER_ENVELOPE_JSON) return "env";
+	if (options.input !== undefined) return "stdin";
+	return "none";
+}
+
+function parseStatus(response, parsed) {
+	if (parsed) return "parsed";
+	const text = response.stdout.trim();
+	if (text === "") return "empty";
+	if (text.startsWith("{") || text.startsWith("[")) return "invalid_json";
+	return "non_json";
 }
 
 function runCli(repo, script, args, options = {}) {
@@ -171,6 +239,13 @@ function envelope(overrides = {}) {
 		},
 		reports: overrides.reports ?? [report("chrome-devtools")],
 	};
+}
+
+function selfReportEnvelope(overrides = {}) {
+	return envelope({
+		reports: [report("agent-browser", { report_source: "self_report" })],
+		...overrides,
+	});
 }
 
 function writeFixture(dir, name, value) {
@@ -388,6 +463,38 @@ function makeFixtures(suiteName) {
 				reports: [report("chrome-devtools")],
 			}),
 		),
+		preferMissingProofFallback: writeFixture(
+			dir,
+			"prefer-missing-proof-fallback",
+			envelope({
+				policy: {
+					mode: "prefer",
+					adapter_id: "agent-browser",
+					fallback_allowed: true,
+				},
+				preconditions: {
+					adapter_attached_verified_browser: {
+						"agent-browser": false,
+						"chrome-devtools": true,
+					},
+				},
+				reports: [agent, report("chrome-devtools")],
+			}),
+		),
+		preferMissingProofNoFallback: writeFixture(
+			dir,
+			"prefer-missing-proof-no-fallback",
+			envelope({
+				policy: { mode: "prefer", adapter_id: "agent-browser" },
+				preconditions: {
+					adapter_attached_verified_browser: {
+						"agent-browser": false,
+						"chrome-devtools": true,
+					},
+				},
+				reports: [agent, report("chrome-devtools")],
+			}),
+		),
 		preferPartial: writeFixture(
 			dir,
 			"prefer-partial",
@@ -437,6 +544,55 @@ function makeFixtures(suiteName) {
 				reports: [agentSnapshotNone, report("chrome-devtools")],
 			}),
 		),
+		forceAgentMissingProofWithChrome: writeFixture(
+			dir,
+			"force-agent-missing-proof-with-chrome",
+			envelope({
+				policy: { mode: "force", adapter_id: "agent-browser" },
+				preconditions: {
+					adapter_attached_verified_browser: {
+						"agent-browser": false,
+						"chrome-devtools": true,
+					},
+				},
+				reports: [agent, report("chrome-devtools")],
+			}),
+		),
+		taskRanking: writeFixture(
+			dir,
+			"task-ranking",
+			envelope({
+				task: {
+					bundle: "snapshot_page_action",
+					adapter_ranking: ["playwright-cdp", "agent-browser", "chrome-devtools"],
+				},
+				reports: ADAPTERS.map((adapter) => report(adapter)),
+			}),
+		),
+		bundleExtraCapability: writeFixture(
+			dir,
+			"bundle-extra-capability",
+			envelope({
+				task: {
+					bundle: "visual_proof_capture",
+					required_capabilities: ["console_debug"],
+				},
+			}),
+		),
+		mediaProof: writeFixture(
+			dir,
+			"media-proof",
+			envelope({
+				task: {
+					bundle: "visual_proof_capture",
+					media_proof: {
+						requested: true,
+						run_scoped_path: "runs/router-smoke.png",
+					},
+				},
+			}),
+		),
+		selfReportRoute: writeFixture(dir, "self-report-route", selfReportEnvelope()),
 		noReports: writeFixture(dir, "no-reports", envelope({ reports: [] })),
 		none: writeFixture(
 			dir,
@@ -502,6 +658,17 @@ function makeFixtures(suiteName) {
 				reports: [
 					report("chrome-devtools", {
 						attachment_model: "storage_state_import",
+					}),
+				],
+			}),
+		),
+		separateContext: writeFixture(
+			dir,
+			"separate-context",
+			envelope({
+				reports: [
+					report("chrome-devtools", {
+						attachment_model: "separate_browser_context",
 					}),
 				],
 			}),
@@ -664,7 +831,14 @@ function makeFixtures(suiteName) {
 }
 
 function add(cases, key, expectedExit, args, validator, options = {}) {
-	cases.push({ key, expectedExit, args, validator, options });
+	cases.push({
+		key,
+		expectedExit,
+		args,
+		validator,
+		options,
+		caseKind: options.caseKind ?? (key.startsWith("pad_") ? "padding" : "coverage"),
+	});
 }
 
 function coreCases(fixtures) {
@@ -887,9 +1061,12 @@ function coreCases(fixtures) {
 	]) {
 		add(cases, key, 0, ["route", "--envelope", file, "--json", "--run-id", key, "--quiet"], selected(adapter));
 	}
+	add(cases, "route_prefer_missing_proof_fallback", 0, ["route", "--envelope", files.preferMissingProofFallback, "--json", "--run-id", "prefer-missing-proof-fallback", "--quiet"], selected("chrome-devtools"));
+	add(cases, "route_prefer_missing_proof_no_fallback", 20, ["route", "--envelope", files.preferMissingProofNoFallback, "--json", "--run-id", "prefer-missing-proof-no-fallback", "--quiet"], errorShape("adapter_attachment_unverified", "prove_adapter_attachment", "repair_state"));
 	add(cases, "route_prefer_partial_no_fallback", 20, ["route", "--envelope", files.preferPartial, "--json", "--run-id", "prefer-partial-no-fallback", "--quiet"], errorShape("adapter_capability_partial", "change_route_input", "change_input"));
 	add(cases, "route_prefer_partial_fallback", 0, ["route", "--envelope", files.preferPartialFallback, "--json", "--run-id", "prefer-partial-fallback", "--quiet"], selected("chrome-devtools"));
 	add(cases, "route_force_no_fallback_with_full_alternative", 20, ["route", "--envelope", files.forceAgentNoneWithChrome, "--json", "--run-id", "force-no-fallback", "--quiet"], errorShape("adapter_capability_none", "change_route_input", "change_input"));
+	add(cases, "route_force_missing_proof_with_full_alternative", 20, ["route", "--envelope", files.forceAgentMissingProofWithChrome, "--json", "--run-id", "force-missing-proof", "--quiet"], errorShape("adapter_attachment_unverified", "prove_adapter_attachment", "repair_state"));
 	add(cases, "route_boundary_freshness", 0, ["route", "--envelope", files.boundaryFreshness, "--json", "--run-id", "fresh-boundary", "--quiet"], selected("chrome-devtools"));
 	add(cases, "route_plain_chrome", 0, ["route", "--envelope", files.ok, "--plain", "--run-id", "plain1", "--quiet"], plainSelected("chrome-devtools"));
 	add(cases, "status_json_chrome", 0, ["status", "--envelope", files.ok, "--json", "--run-id", "status1", "--quiet"], selected("chrome-devtools"));
@@ -929,6 +1106,9 @@ function coreCases(fixtures) {
 	add(cases, "env_run_id_route", 0, ["route", "--envelope", files.ok, "--json", "--quiet"], jsonPath("run_id", "env-run-id"), { env: { BROWSER_USE_RUN_ID: "env-run-id" } });
 	add(cases, "explicit_run_id_beats_env", 0, ["route", "--envelope", files.ok, "--json", "--run-id", "explicit-run-id", "--quiet"], jsonPath("run_id", "explicit-run-id"), { env: { BROWSER_USE_RUN_ID: "env-run-id" } });
 	add(cases, "success_validity_constraint", 0, ["route", "--envelope", files.ok, "--json", "--run-id", "validity-ok", "--quiet"], (response) => routeValidity(json(response)));
+	if (cases.length > 100) {
+		throw new Error(`core suite has too many coverage cases: ${cases.length}`);
+	}
 	while (cases.length < 100) {
 		const index = cases.length + 1;
 		add(cases, `pad_core_success_${index}`, 0, ["route", "--envelope", files.ok, "--json", "--run-id", `pad-core-${index}`, "--quiet"], selected("chrome-devtools"));
@@ -1018,8 +1198,12 @@ function hintsCases(fixtures) {
 			const ranking = json(response).data.ranking.map((item) => item.adapter_id);
 			assert(ranking.join(",") === ADAPTERS.join(","), `ranking ${ranking.join(",")}`);
 		}],
-		["obs_task_ranking_beats_registry", ["route", "--envelope", files.preferAgent, "--json", "--run-id", "obs-task-rank", "--quiet"], (response) => {
-			assert(json(response).data.selected_adapter === "agent-browser", "task ranking did not win");
+		["obs_task_ranking_beats_registry", ["route", "--envelope", files.taskRanking, "--json", "--run-id", "obs-task-rank", "--quiet"], (response) => {
+			const parsed = json(response);
+			assert(parsed.data.mode === "auto", `mode ${parsed.data.mode}`);
+			assert(parsed.data.selected_adapter === "playwright-cdp", "task ranking did not win");
+			assert(parsed.data.ranking[0].adapter_id === "playwright-cdp", "ranking leader mismatch");
+			assert(parsed.data.ranking[0].ranking.task_priority === 0, "missing task priority");
 		}],
 	]) {
 		add(cases, key, 0, args, validator);
@@ -1116,6 +1300,33 @@ function hintsCases(fixtures) {
 	});
 	add(cases, "obs_bad_env_json_recovery", 20, ["route", "--json", "--run-id", "bad-env-json", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"), { env: { BROWSER_USE_ROUTER_ENVELOPE_JSON: "{bad json" } });
 	add(cases, "obs_bad_stdin_json_recovery", 20, ["route", "--json", "--run-id", "bad-stdin-json", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"), { input: "{bad json" });
+	add(cases, "route_self_report_evidence", 0, ["route", "--envelope", files.selfReportRoute, "--json", "--run-id", "route-self-report", "--quiet"], (response) => {
+		const parsed = json(response);
+		selected("agent-browser")(response);
+		assert(
+			parsed.data.provenance_summary.some(
+				(item) =>
+					item.adapter_id === "agent-browser" &&
+					item.report_source === "self_report",
+			),
+			"missing self-report provenance",
+		);
+	});
+	add(cases, "route_bundle_plus_extra_capability", 0, ["route", "--envelope", files.bundleExtraCapability, "--json", "--run-id", "bundle-extra-capability", "--quiet"], (response) => {
+		const parsed = json(response);
+		selected("chrome-devtools")(response);
+		assert(parsed.data.required_capabilities.includes("screenshot_media"), "missing bundle capability");
+		assert(parsed.data.required_capabilities.includes("console_debug"), "missing extra capability");
+	});
+	add(cases, "route_media_proof_metadata", 0, ["route", "--envelope", files.mediaProof, "--json", "--run-id", "media-proof", "--quiet"], (response) => {
+		const media = json(response).data.media_proof;
+		assert(media?.owner === "browser-use", `owner ${media?.owner}`);
+		assert(media?.retention === "per_run", `retention ${media?.retention}`);
+		assert(media?.disclose_to_user === true, "disclosure not true");
+		assert(media?.run_scoped_path === "runs/router-smoke.png", "bad media path");
+	});
+	add(cases, "fail_separate_context_incompat", 20, ["route", "--envelope", files.separateContext, "--json", "--run-id", "separate-context", "--quiet"], errorShape("adapter_attachment_incompatible", "change_route_input", "change_input"));
+	add(cases, "fail_no_input_route", 20, ["route", "--json", "--run-id", "no-input", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"));
 	add(cases, "pad_repair_summary_specific", 20, ["route", "--envelope", files.attachMissing, "--json", "--run-id", "repair-summary", "--quiet"], (response) => {
 		assert(json(response).runtime_actions[0].summary.includes("Browser Adapter Proof"), "missing repair hint");
 	});
@@ -1129,6 +1340,9 @@ function hintsCases(fixtures) {
 		assert(parsed.continuation.next_action_id === "change_route_input", "partial did not fail closed to input change");
 		assert(parsed.runtime_actions[0].summary.includes("Correct the supplied evidence envelope"), "missing route input hint");
 	});
+	if (cases.length > 100) {
+		throw new Error(`hints suite has too many coverage cases: ${cases.length}`);
+	}
 	while (cases.length < 100) {
 		const index = cases.length + 1;
 		add(cases, `pad_hints_success_${index}`, 0, ["route", "--envelope", files.ok, "--json", "--run-id", `pad-hints-${index}`, "--quiet"], (response) => {
@@ -1149,7 +1363,7 @@ function artifactName(suite, timestampEnabled) {
 	return `${base}${timestampEnabled ? `-${stamp}` : ""}.json`;
 }
 
-function runSuite({ suite, repo, script, outDir, timestamp }) {
+function runSuite({ suite, repo, script, outDir, timestamp, parentRunId, generatorCommand }) {
 	const fixtures = makeFixtures(suite);
 	const cases = suite === "core" ? coreCases(fixtures) : hintsCases(fixtures);
 	if (cases.length !== 100) {
@@ -1163,9 +1377,22 @@ function runSuite({ suite, repo, script, outDir, timestamp }) {
 		const parsed = parseJsonOutput(response);
 		const record = {
 			key: testCase.key,
-			command: ["bun", script, ...testCase.args],
+			case_kind: testCase.caseKind,
+			case_intent: caseIntent(testCase.expectedExit, testCase.args),
+			input_source: inputSource(testCase.args, testCase.options),
+			command: redactedCommand(script, testCase.args),
+			command_sha256: sha256(["bun", script, ...testCase.args].join("\u0000")),
+			...(testCase.options.env
+				? { env: capturedEnv(testCase.options.env) }
+				: {}),
+			...(testCase.options.input !== undefined
+				? { stdin: capturedInput(testCase.options.input) }
+				: {}),
 			expected_exit_code: testCase.expectedExit,
+			expected_status: testCase.expectedExit === 0 ? "ok" : "error",
 			exit_code: response.exit_code,
+			output_format: outputFormat(testCase.args),
+			parse_status: parseStatus(response, parsed),
 			stdout: response.stdout,
 			stderr: response.stderr,
 			parsed_stdout: parsed,
@@ -1179,7 +1406,19 @@ function runSuite({ suite, repo, script, outDir, timestamp }) {
 			);
 			testCase.validator(response);
 			record.passed = true;
-			record.assertions = ["exit code matched", "validator passed"];
+			record.assertions = [
+				{
+					id: "exit_code",
+					expected: testCase.expectedExit,
+					actual: response.exit_code,
+					pass: true,
+				},
+				{
+					id: `${testCase.key}_validator`,
+					validator: testCase.validator.name || "anonymous_validator",
+					pass: true,
+				},
+			];
 			pass += 1;
 			console.log(`PASS ${String(pass).padStart(3, "0")} ${suite}:${testCase.key}`);
 		} catch (error) {
@@ -1190,12 +1429,24 @@ function runSuite({ suite, repo, script, outDir, timestamp }) {
 		responses[testCase.key] = record;
 	}
 	const artifact = {
+		schema_version: ARTIFACT_SCHEMA_VERSION,
+		artifact_id: randomUUID(),
+		parent_run_id: parentRunId,
 		generated_at: new Date().toISOString(),
 		cwd: repo,
 		branch: gitLines(repo, ["branch", "--show-current"])[0] ?? "",
 		head: gitLines(repo, ["rev-parse", "HEAD"])[0] ?? "",
 		git_status: gitLines(repo, ["status", "--short", "--branch"]),
+		generator_command: generatorCommand.map(redactArg),
+		runtime: {
+			node: process.version,
+			bun: commandOutput(repo, ["bun", "--version"]),
+			platform: process.platform,
+			arch: process.arch,
+		},
 		script,
+		script_sha256: sha256(readFileSync(path.join(repo, script), "utf8")),
+		evaluation_date: "2026-06-10",
 		temp_fixture_dir: fixtures.dir,
 		suite,
 		suite_focus:
@@ -1218,6 +1469,12 @@ function main() {
 		? options.script
 		: path.relative(repo, path.resolve(repo, options.script));
 	const suites = options.suite === "all" ? ["core", "hints"] : [options.suite];
+	const parentRunId = randomUUID();
+	const generatorCommand = [
+		"node",
+		"skills/router-cli-smoke/scripts/router_cli_smoke.mjs",
+		...process.argv.slice(2),
+	];
 	const results = suites.map((suite) =>
 		runSuite({
 			suite,
@@ -1225,6 +1482,8 @@ function main() {
 			script,
 			outDir: options.outDir,
 			timestamp: options.timestamp,
+			parentRunId,
+			generatorCommand,
 		}),
 	);
 	const total = results.reduce(
