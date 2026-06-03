@@ -83,6 +83,7 @@ const CHROME_DEVTOOLS_MANIFEST: CapabilityReport = {
 		),
 		chromeCapability("memory_debug", "partial", 60, "maintainer_verified_manifest"),
 		chromeCapability("react_vitals", "none", 80, "maintainer_verified_manifest"),
+		chromeCapability("viewport_emulation", "full", 90, "maintainer_verified_manifest"),
 	],
 };
 
@@ -159,6 +160,7 @@ const PLAYWRIGHT_CDP_MANIFEST: CapabilityReport = {
 		),
 		playwrightCapability("memory_debug", "none", 70, "maintainer_verified_manifest"),
 		playwrightCapability("react_vitals", "none", 75, "maintainer_verified_manifest"),
+		playwrightCapability("viewport_emulation", "full", 85, "maintainer_verified_manifest"),
 	],
 };
 

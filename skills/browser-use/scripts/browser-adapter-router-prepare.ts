@@ -205,6 +205,23 @@ export function assemblePrepare(inputs: PrepareInputs): PrepareResult {
 			? warmChrome.runId
 			: (inputs.fallbackRunId ?? "prepare-run");
 	const adapterId = adapterProof.ok ? adapterProof.adapter : undefined;
+	// Proof binding (plan U2 R8). When the adapter proof verifies, prepare emits
+	// run-scoped binding identity so the route it produces is operation-capable:
+	// route success surfaces this binding for the Browser Operation Front Door.
+	const proofBinding =
+		adapterProof.ok && adapterId
+			? {
+					warm_chrome_run_id: adapterProof.warmChromeRunId,
+					adapter_proof: {
+						[adapterId]: {
+							adapter_proof_id: adapterProof.adapterProofId,
+							warm_chrome_run_id: adapterProof.warmChromeRunId,
+							verified_endpoint_identity:
+								adapterProof.verifiedEndpointIdentity,
+						},
+					},
+				}
+			: undefined;
 
 	const policy: RoutePolicy = {
 		mode,
@@ -235,6 +252,7 @@ export function assemblePrepare(inputs: PrepareInputs): PrepareResult {
 			...(adapterId
 				? { adapter_attached_verified_browser: { [adapterId]: true } }
 				: {}),
+			...(proofBinding ?? {}),
 			...(inputs.targetOrigin
 				? {
 						target_origin: {
@@ -294,7 +312,13 @@ function parseProofEnvelope(
 }
 
 type AdapterProofParse =
-	| { ok: true; adapter: BrowserAdapterId; warmChromeRunId: string }
+	| {
+			ok: true;
+			adapter: BrowserAdapterId;
+			warmChromeRunId: string;
+			adapterProofId: string;
+			verifiedEndpointIdentity: string;
+	  }
 	| { ok: false; detail: string };
 
 function parseAdapterProof(raw: string | undefined): AdapterProofParse {
@@ -311,10 +335,23 @@ function parseAdapterProof(raw: string | undefined): AdapterProofParse {
 	if (typeof warmChromeRunId !== "string" || warmChromeRunId === "") {
 		return { ok: false, detail: "warm Chrome run id missing" };
 	}
+	const adapterProofId = data?.adapter_proof_id;
+	if (typeof adapterProofId !== "string" || adapterProofId === "") {
+		return { ok: false, detail: "adapter proof id missing" };
+	}
+	const verifiedEndpointIdentity = data?.verified_endpoint_identity;
+	if (
+		typeof verifiedEndpointIdentity !== "string" ||
+		verifiedEndpointIdentity === ""
+	) {
+		return { ok: false, detail: "verified endpoint identity missing" };
+	}
 	return {
 		ok: true,
 		adapter: adapter as BrowserAdapterId,
 		warmChromeRunId,
+		adapterProofId,
+		verifiedEndpointIdentity,
 	};
 }
 

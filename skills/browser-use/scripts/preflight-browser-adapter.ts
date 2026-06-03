@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -183,6 +184,11 @@ type AdapterProof = {
 	endpoint: string;
 	port: string;
 	warm_chrome_run_id: string;
+	// Run-scoped binding identity (plan U2 R8). Deterministic proof id plus the
+	// verified attach identity let the Router carry one bound proof to Browser
+	// Operations and fail closed on mismatched or reused proof evidence.
+	adapter_proof_id: string;
+	verified_endpoint_identity: string;
 	page_count: number;
 	pages: PageSummary[];
 	diagnostics: {
@@ -233,6 +239,30 @@ class BufferWriter implements CliWriter {
 	toString(): string {
 		return this.chunks.join("");
 	}
+}
+
+// Normalized verified attach identity (plan U2 R8): host:port without scheme,
+// the stable shape the Router binds against. Strips a leading scheme so
+// "http://127.0.0.1:9333" and a bare "127.0.0.1:9333" produce one identity.
+function adapterEndpointIdentity(endpoint: string, port: string): string {
+	const host = endpoint.replace(/^[a-z]+:\/\//i, "").replace(/:\d+$/, "");
+	return `${host}:${port}`;
+}
+
+// Deterministic Browser Adapter Proof id (plan U2 R8). Content hash over the
+// run-scoped binding facts; no clock or randomness so the same verified
+// attachment always yields the same proof id for binding comparison.
+function adapterProofId(input: {
+	warmChromeRunId: string;
+	adapter: string;
+	verifiedEndpointIdentity: string;
+}): string {
+	const canonical = JSON.stringify([
+		input.warmChromeRunId,
+		input.adapter,
+		input.verifiedEndpointIdentity,
+	]);
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
 }
 
 export function createDefaultAdapterProofRuntime(
@@ -790,6 +820,10 @@ async function proveChromeDevTools(input: {
 		});
 	}
 
+	const verified_endpoint_identity = adapterEndpointIdentity(
+		input.parsed.endpoint,
+		input.parsed.port,
+	);
 	return {
 		ok: true,
 		action: "adapter_ready",
@@ -800,6 +834,12 @@ async function proveChromeDevTools(input: {
 		endpoint: input.parsed.endpoint,
 		port: input.parsed.port,
 		warm_chrome_run_id: input.warmChrome.runId,
+		adapter_proof_id: adapterProofId({
+			warmChromeRunId: input.warmChrome.runId,
+			adapter: input.parsed.adapter,
+			verifiedEndpointIdentity: verified_endpoint_identity,
+		}),
+		verified_endpoint_identity,
 		page_count: pages.length,
 		pages,
 		diagnostics: {

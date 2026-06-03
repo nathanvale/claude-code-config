@@ -528,6 +528,11 @@ describe("chrome-devtools proof", () => {
 		expect(envelope.data.contract).toBe("browser-use.browser-adapter-proof");
 		expect(envelope.data.adapter).toBe("chrome-devtools");
 		expect(envelope.data.warm_chrome_run_id).toBe("proof-ok-warm-chrome");
+		// Binding identity (plan U2 R8): verified attach identity is host:port
+		// without scheme; proof id is a deterministic content hash.
+		expect(envelope.data.verified_endpoint_identity).toBe("127.0.0.1:9222");
+		expect(typeof envelope.data.adapter_proof_id).toBe("string");
+		expect(envelope.data.adapter_proof_id).toHaveLength(32);
 		expect(envelope.data.page_count).toBe(1);
 		expect(envelope.data.pages[0].url).toBe("https://example.com/");
 		expect(envelope.data.diagnostics.selected_config_source).toBe("mcporter");

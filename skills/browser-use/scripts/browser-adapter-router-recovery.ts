@@ -50,6 +50,7 @@ export function continuationForCode(
 		case "route_evidence_invalid":
 		case "route_evidence_mixed_run":
 		case "route_evidence_stale":
+		case "route_evidence_binding_mismatch":
 			return "change_route_input";
 		default:
 			return assertNeverDiagnosticCode(code);
@@ -68,6 +69,7 @@ export function recoverabilityForCode(
 		case "route_evidence_invalid":
 		case "route_evidence_mixed_run":
 		case "route_evidence_stale":
+		case "route_evidence_binding_mismatch":
 		case "adapter_capability_none":
 		case "adapter_capability_unknown":
 		case "adapter_capability_stale":

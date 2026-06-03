@@ -71,8 +71,16 @@ export type RoutePreconditionEvidence = {
 	run_id: string;
 	freshness: RouteEvidenceFreshness;
 	warm_chrome_ready: boolean;
+	// Authoritative run-scoped Warm Chrome session id (U2 R8). When supplied,
+	// every adapter proof's warm_chrome_run_id must match it; a mismatch fails
+	// closed as cross-run proof evidence (R9).
+	warm_chrome_run_id?: string;
 	// Browser Adapter Proof evidence per candidate adapter (R5c).
 	adapter_attached_verified_browser?: Partial<Record<BrowserAdapterId, boolean>>;
+	// Run-scoped Browser Adapter Proof identity per candidate adapter (U2 R8).
+	// Surfaced on route success as the binding tuple so Browser Operations can
+	// fail closed on mismatched, stale, or cross-run proof evidence (R9).
+	adapter_proof?: Partial<Record<BrowserAdapterId, AdapterProofBinding>>;
 	// Auth/session precondition (R15, R16). Only present when the task declares it.
 	auth_session?: {
 		required: boolean;
@@ -139,6 +147,35 @@ export type RouteRanking = {
 	route_confidence: number;
 };
 
+// Run-scoped Browser Adapter Proof identity (U2 R8). Supplied per candidate
+// adapter on precondition evidence; the selected adapter's entry is surfaced on
+// route success so downstream Browser Operations bind to one proof.
+export type AdapterProofBinding = {
+	adapter_proof_id: string;
+	warm_chrome_run_id: string;
+	verified_endpoint_identity: string;
+};
+
+// Browser Operation classes authorized by route evidence (U2 R10, R11). Each
+// class maps to a routed capability; an operation is authorized only when its
+// capability is present in the route's authorized capability set.
+export type BrowserOperationClass = "snapshot" | "screenshot" | "emulate";
+
+// Canonical binding tuple slice owned by route success (U2 R8). Target and
+// operation tuple fields (target_envelope_id, target_candidate_id,
+// operation_intent_id) are added by U5-U7 as those surfaces ship.
+export type RouteBinding = {
+	run_id: string;
+	selected_adapter_id: BrowserAdapterId;
+	warm_chrome_run_id: string;
+	adapter_proof_id: string;
+	verified_endpoint_identity: string;
+	route_evidence_hash: string;
+	authorized_capabilities: AdapterCapability[];
+	emitted_at: string;
+	expires_at: string;
+};
+
 export type RouteSuccess = {
 	outcome: "selected";
 	evaluation_date: string;
@@ -154,6 +191,11 @@ export type RouteSuccess = {
 		report_source: BrowserAdapterRouterReportSource;
 		checked_at: string;
 	}[];
+	// Route/proof binding tuple (U2 R8). Present whenever the selected adapter
+	// carries run-scoped proof evidence; required for operation-capable routes
+	// (R9, R12) and absent for non-operation routes such as pure capability
+	// discovery, which never reach a Browser Operation.
+	binding?: RouteBinding;
 	media_proof?: MediaProofMetadata;
 };
 
