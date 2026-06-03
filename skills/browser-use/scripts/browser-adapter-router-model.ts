@@ -139,6 +139,7 @@ export type RouteRanking = {
 
 export type RouteSuccess = {
 	outcome: "selected";
+	evaluation_date: string;
 	mode: BrowserAdapterRouterMode;
 	requested_adapter: BrowserAdapterId | null;
 	selected_adapter: BrowserAdapterId;
@@ -156,14 +157,30 @@ export type RouteSuccess = {
 
 export type RouteFailure = {
 	outcome: "fail_closed";
+	evaluation_date: string;
 	mode: BrowserAdapterRouterMode;
 	requested_adapter: BrowserAdapterId | null;
 	code: BrowserAdapterRouterDiagnosticCode;
 	message: string;
 	next_action_id: RouterFailureActionId;
+	required_capabilities: AdapterCapability[];
 	research?: ResearchRecovery;
 	candidate_decisions: readonly CandidateDecision[];
 	informational_alternatives: readonly BrowserAdapterId[];
+};
+
+export type RouteFailureData = {
+	failure_kind: "route_failure";
+	evaluation_date: string;
+	required_capabilities: AdapterCapability[];
+	routing_started: boolean;
+	candidate_decisions: readonly CandidateDecision[];
+	informational_alternatives: readonly BrowserAdapterId[];
+	research?: {
+		adapter_id: BrowserAdapterId;
+		capability: AdapterCapability;
+		diagnostic_trail_id: "browser-adapter-router.research_adapter_capability";
+	};
 };
 
 export type MediaProofMetadata = {

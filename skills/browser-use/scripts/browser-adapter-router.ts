@@ -40,6 +40,7 @@ import type {
 	AdapterCapability,
 	BrowserAdapterId,
 	RouteFailure,
+	RouteFailureData,
 	RouteSuccess,
 } from "./browser-adapter-router-model";
 import {
@@ -555,18 +556,19 @@ function emitRouteFailure(input: {
 		failure_domain: "browser_adapter_router",
 	};
 	const envelope = createCliRuntimeErrorEnvelope({
-			run_id: input.runId,
-			process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
-			error,
-			runtime_actions: [runtimeActionForId(failure.next_action_id)],
-			continuation: {
-				next_action_id: failure.next_action_id,
-				constraints: [routeValidityConstraint()],
-			},
-			...(failure.next_action_id === "research_adapter_capability"
-				? { diagnostic_trail: researchRecoveryDiagnosticTrail(input.runId) }
-				: {}),
-		});
+		run_id: input.runId,
+		data: routeFailureData(failure),
+		process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
+		error,
+		runtime_actions: [runtimeActionForId(failure.next_action_id)],
+		continuation: {
+			next_action_id: failure.next_action_id,
+			constraints: [routeValidityConstraint()],
+		},
+		...(failure.next_action_id === "research_adapter_capability"
+			? { diagnostic_trail: researchRecoveryDiagnosticTrail(input.runId) }
+			: {}),
+	});
 	const issues = validateRouterErrorEnvelope(envelope, {
 		requireRouteValidity: true,
 	});
@@ -580,6 +582,27 @@ function emitRouteFailure(input: {
 		durationMs: input.durationMs,
 	});
 	return ROUTE_FAIL_CLOSED_EXIT_CODE;
+}
+
+function routeFailureData(failure: RouteFailure): RouteFailureData {
+	return {
+		failure_kind: "route_failure",
+		evaluation_date: failure.evaluation_date,
+		required_capabilities: failure.required_capabilities,
+		routing_started: failure.candidate_decisions.length > 0,
+		candidate_decisions: failure.candidate_decisions,
+		informational_alternatives: failure.informational_alternatives,
+		...(failure.research
+			? {
+					research: {
+						adapter_id: failure.research.adapter_id,
+						capability: failure.research.capability,
+						diagnostic_trail_id:
+							"browser-adapter-router.research_adapter_capability",
+					},
+				}
+			: {}),
+	};
 }
 
 function emitReportFailure(input: {

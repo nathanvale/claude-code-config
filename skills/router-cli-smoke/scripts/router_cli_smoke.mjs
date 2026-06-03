@@ -309,6 +309,10 @@ function selected(adapterId) {
 		assert(parsed.status === "ok", `status ${parsed.status}`);
 		assert(parsed.data?.outcome === "selected", `outcome ${parsed.data?.outcome}`);
 		assert(
+			parsed.data?.evaluation_date === "2026-06-10",
+			`evaluation_date ${parsed.data?.evaluation_date}`,
+		);
+		assert(
 			parsed.data?.selected_adapter === adapterId,
 			`selected ${parsed.data?.selected_adapter}`,
 		);
@@ -1262,10 +1266,19 @@ function hintsCases(fixtures) {
 		researchDiagnosticTrail(parsed);
 		noRouteValidity(parsed);
 	}, { env: { BROWSER_USE_ROUTER_SELF_REPORT_JSON: missingCapabilitySelfAgent } });
-	add(cases, "route_research_has_diagnostic_trail", 20, ["route", "--envelope", files.noReports, "--json", "--run-id", "route-research-trail", "--quiet"], (response) => {
+	add(cases, "route_research_has_diagnostic_trail", 20, ["route", "--envelope", files.staleReport, "--json", "--run-id", "route-research-trail", "--quiet"], (response) => {
 		const parsed = json(response);
-		errorShape("adapter_capability_unknown", "research_adapter_capability", "change_input")(response);
+		errorShape("adapter_capability_stale", "research_adapter_capability", "change_input")(response);
 		researchDiagnosticTrail(parsed);
+		assert(parsed.data?.failure_kind === "route_failure", "missing route failure kind");
+		assert(parsed.data?.evaluation_date === "2026-06-10", "missing evaluation date");
+		assert(parsed.data?.routing_started === true, "missing routing_started");
+		assert(Array.isArray(parsed.data?.candidate_decisions), "missing candidate decisions");
+		assert(
+			parsed.data?.research?.diagnostic_trail_id ===
+				"browser-adapter-router.research_adapter_capability",
+			"missing research diagnostic pointer",
+		);
 		routeValidity(parsed);
 	});
 	add(cases, "invalid_route_input_has_no_route_validity", 20, ["route", "--envelope", files.invalid, "--json", "--run-id", "invalid-no-validity", "--quiet"], (response) => {
@@ -1273,6 +1286,7 @@ function hintsCases(fixtures) {
 		errorShape("route_evidence_invalid", "change_route_input", "change_input")(response);
 		noRouteValidity(parsed);
 		noDiagnosticTrail(parsed);
+		assert(parsed.data === undefined, "unexpected invalid-input data");
 	});
 	add(cases, "auth_mismatch_hint_names_auth_evidence", 20, ["route", "--envelope", files.authMismatch, "--json", "--run-id", "auth-mismatch-hint", "--quiet"], (response) => {
 		const message = json(response).error.message;
@@ -1338,6 +1352,8 @@ function hintsCases(fixtures) {
 	add(cases, "pad_partial_change_input_summary", 20, ["route", "--envelope", files.partial, "--json", "--run-id", "partial-summary", "--quiet"], (response) => {
 		const parsed = json(response);
 		assert(parsed.continuation.next_action_id === "change_route_input", "partial did not fail closed to input change");
+		assert(parsed.data?.failure_kind === "route_failure", "missing route failure data");
+		assert(parsed.data?.required_capabilities?.includes("memory_debug"), "missing required capability");
 		assert(parsed.runtime_actions[0].summary.includes("Correct the supplied evidence envelope"), "missing route input hint");
 	});
 	if (cases.length > 100) {

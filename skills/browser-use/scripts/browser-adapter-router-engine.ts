@@ -244,12 +244,16 @@ export function evaluateRoute(
 ): RouteEvaluation {
 	const mode = envelope.policy.mode;
 	const requested = envelope.policy.adapter_id ?? null;
+	const requiredCapabilities = resolveRequiredCapabilities(envelope.task);
 
 	// --- Precondition gate (KTD1b): run facts pass before capability ranking. ---
-	const preconditionFailure = checkPreconditions(envelope, evaluationDate);
+	const preconditionFailure = checkPreconditions({
+		envelope,
+		requiredCapabilities,
+		evaluationDate,
+	});
 	if (preconditionFailure) return preconditionFailure;
 
-	const requiredCapabilities = resolveRequiredCapabilities(envelope.task);
 	const allowDegraded = false; // allow_degraded is not routed in V1 (R20).
 
 	const reportByAdapter = indexReportsByAdapter(envelope.reports);
@@ -274,6 +278,7 @@ export function evaluateRoute(
 		if (decision && decision.status === "selectable") {
 			return buildSuccess({
 				envelope,
+				evaluationDate,
 				mode,
 				requested,
 				selected: decision.adapter_id,
@@ -284,6 +289,7 @@ export function evaluateRoute(
 		}
 		return buildFailureFromDecision({
 			envelope,
+			evaluationDate,
 			mode,
 			requested,
 			decision,
@@ -295,7 +301,6 @@ export function evaluateRoute(
 				requiredCapabilities,
 				evaluationDate,
 			}),
-			evaluationDate,
 		});
 	}
 
@@ -306,6 +311,7 @@ export function evaluateRoute(
 		if (preferred && preferred.status === "selectable") {
 			return buildSuccess({
 				envelope,
+				evaluationDate,
 				mode,
 				requested,
 				selected: preferred.adapter_id,
@@ -319,6 +325,7 @@ export function evaluateRoute(
 			const winner = rankSelectable(selectable, envelope);
 			return buildSuccess({
 				envelope,
+				evaluationDate,
 				mode,
 				requested,
 				selected: winner.adapter_id,
@@ -329,12 +336,12 @@ export function evaluateRoute(
 		}
 		return buildFailureFromDecision({
 			envelope,
+			evaluationDate,
 			mode,
 			requested,
 			decision: preferred,
 			decisions,
 			informational: [],
-			evaluationDate,
 		});
 	}
 
@@ -343,6 +350,7 @@ export function evaluateRoute(
 		const winner = rankSelectable(selectable, envelope);
 		return buildSuccess({
 			envelope,
+			evaluationDate,
 			mode,
 			requested,
 			selected: winner.adapter_id,
@@ -354,12 +362,12 @@ export function evaluateRoute(
 	// Auto does not route silently when candidates were skipped (U2).
 	return buildFailureFromDecision({
 		envelope,
+		evaluationDate,
 		mode,
 		requested,
 		decision: decisions[0],
 		decisions,
 		informational: [],
-		evaluationDate,
 	});
 }
 
@@ -402,6 +410,7 @@ function rankSelectable(
 
 function buildSuccess(input: {
 	envelope: ValidatedRouteEvidenceEnvelope;
+	evaluationDate: string;
 	mode: BrowserAdapterRouterMode;
 	requested: BrowserAdapterId | null;
 	selected: BrowserAdapterId;
@@ -454,6 +463,7 @@ function buildSuccess(input: {
 
 	return {
 		outcome: "selected",
+		evaluation_date: input.evaluationDate,
 		mode: input.mode,
 		requested_adapter: input.requested,
 		selected_adapter: input.selected,
@@ -520,12 +530,12 @@ function fullAlternatives(input: {
 // the canonical continuation action and (for stale) a research recovery (U3).
 function buildFailureFromDecision(input: {
 	envelope: ValidatedRouteEvidenceEnvelope;
+	evaluationDate: string;
 	mode: BrowserAdapterRouterMode;
 	requested: BrowserAdapterId | null;
 	decision: CandidateDecision | undefined;
 	decisions: readonly CandidateDecision[];
 	informational: readonly BrowserAdapterId[];
-	evaluationDate: string;
 }): RouteFailure {
 	const code = input.decision?.code ?? "adapter_capability_unknown";
 	const message =
@@ -543,11 +553,13 @@ function buildFailureFromDecision(input: {
 
 	return {
 		outcome: "fail_closed",
+		evaluation_date: input.evaluationDate,
 		mode: input.mode,
 		requested_adapter: input.requested,
 		code,
 		message,
 		next_action_id,
+		required_capabilities: resolveRequiredCapabilities(input.envelope.task),
 		...(research ? { research } : {}),
 		candidate_decisions: input.decisions,
 		informational_alternatives: input.informational,
@@ -581,10 +593,12 @@ function buildResearchRecovery(input: {
 // Precondition gate (U5). Run facts must pass before adapter capability ranking.
 // ---------------------------------------------------------------------------
 
-function checkPreconditions(
-	envelope: ValidatedRouteEvidenceEnvelope,
-	evaluationDate: string,
-): RouteFailure | null {
+function checkPreconditions(input: {
+	envelope: ValidatedRouteEvidenceEnvelope;
+	requiredCapabilities: readonly AdapterCapability[];
+	evaluationDate: string;
+}): RouteFailure | null {
+	const { envelope, evaluationDate } = input;
 	const pre = envelope.preconditions;
 	const mode = envelope.policy.mode;
 	const requested = envelope.policy.adapter_id ?? null;
@@ -594,6 +608,8 @@ function checkPreconditions(
 		return preconditionFailure(
 			mode,
 			requested,
+			input.requiredCapabilities,
+			evaluationDate,
 			"route_evidence_stale",
 			"Route evidence freshness is missing or expired.",
 		);
@@ -604,6 +620,8 @@ function checkPreconditions(
 		return preconditionFailure(
 			mode,
 			requested,
+			input.requiredCapabilities,
+			evaluationDate,
 			"route_evidence_mixed_run",
 			"Precondition evidence run id does not match the route run id.",
 		);
@@ -613,6 +631,8 @@ function checkPreconditions(
 		return preconditionFailure(
 			mode,
 			requested,
+			input.requiredCapabilities,
+			evaluationDate,
 			"adapter_attachment_unverified",
 			"Warm Chrome is not verified ready.",
 			"prove_adapter_attachment",
@@ -630,6 +650,8 @@ function checkPreconditions(
 			return preconditionFailure(
 				mode,
 				requested,
+				input.requiredCapabilities,
+				evaluationDate,
 				"auth_session_unverified",
 				"Auth/session precondition requires target origin and verified profile identity.",
 			);
@@ -643,6 +665,8 @@ function checkPreconditions(
 			return preconditionFailure(
 				mode,
 				requested,
+				input.requiredCapabilities,
+				evaluationDate,
 				"target_origin_unverified",
 				"Target origin precondition requires matching supplied evidence.",
 			);
@@ -655,17 +679,21 @@ function checkPreconditions(
 function preconditionFailure(
 	mode: BrowserAdapterRouterMode,
 	requested: BrowserAdapterId | null,
+	requiredCapabilities: readonly AdapterCapability[],
+	evaluationDate: string,
 	code: BrowserAdapterRouterDiagnosticCode,
 	message: string,
 	nextAction?: RouterFailureActionId,
 ): RouteFailure {
 	return {
 		outcome: "fail_closed",
+		evaluation_date: evaluationDate,
 		mode,
 		requested_adapter: requested,
 		code,
 		message,
 		next_action_id: nextAction ?? continuationForCode(code),
+		required_capabilities: [...requiredCapabilities],
 		candidate_decisions: [],
 		informational_alternatives: [],
 	};

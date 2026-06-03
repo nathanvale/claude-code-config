@@ -361,9 +361,12 @@ describe("U0 command contract", () => {
 					argv: ["route", "--envelope", path, "--json"],
 					assert: (result) => {
 						const parsed = expectJsonOk(result);
-						expect(
-							(parsed.data as { selected_adapter?: string }).selected_adapter,
-						).toBe("chrome-devtools");
+						const data = parsed.data as {
+							selected_adapter?: string;
+							evaluation_date?: string;
+						};
+						expect(data.selected_adapter).toBe("chrome-devtools");
+						expect(data.evaluation_date).toBe(EVAL_DATE);
 					},
 				},
 				{
@@ -371,9 +374,12 @@ describe("U0 command contract", () => {
 					argv: ["status", "--envelope", path, "--json"],
 					assert: (result) => {
 						const parsed = expectJsonOk(result);
-						expect(
-							(parsed.data as { selected_adapter?: string }).selected_adapter,
-						).toBe("chrome-devtools");
+						const data = parsed.data as {
+							selected_adapter?: string;
+							evaluation_date?: string;
+						};
+						expect(data.selected_adapter).toBe("chrome-devtools");
+						expect(data.evaluation_date).toBe(EVAL_DATE);
 					},
 				},
 			],
@@ -1353,6 +1359,20 @@ describe("U3 research recovery", () => {
 		expect(continuation.next_action_id).toBe("prove_adapter_attachment");
 		// exactly one continuation; runtime_actions carries the same id
 		expect(actions.map((a) => a.id)).toContain("prove_adapter_attachment");
+		expect(parsed.data).toMatchObject({
+			failure_kind: "route_failure",
+			evaluation_date: EVAL_DATE,
+			required_capabilities: ["snapshot_refs", "element_actions", "screenshot_media"],
+			routing_started: true,
+			candidate_decisions: [
+				{
+					adapter_id: "agent-browser",
+					status: "skipped",
+					code: "adapter_attachment_unverified",
+				},
+			],
+			informational_alternatives: [],
+		});
 		expect(
 			validateRouterErrorEnvelope(parsed, { requireRouteValidity: true }),
 		).toEqual([]);
@@ -1388,6 +1408,17 @@ describe("U3 research recovery", () => {
 				id: "browser-adapter-router.research_adapter_capability",
 			},
 		});
+		expect(parsed.data).toMatchObject({
+			failure_kind: "route_failure",
+			evaluation_date: EVAL_DATE,
+			routing_started: true,
+			research: {
+				adapter_id: "chrome-devtools",
+				capability: "snapshot_refs",
+				diagnostic_trail_id:
+					"browser-adapter-router.research_adapter_capability",
+			},
+		});
 		expect(validateRouterErrorEnvelope(parsed)).toEqual([]);
 	});
 
@@ -1403,6 +1434,7 @@ describe("U3 research recovery", () => {
 		expect(
 			(parsed.continuation as { constraints?: { id?: string }[] }).constraints,
 		).toBeUndefined();
+		expect(parsed.data).toBeUndefined();
 		expect(validateRouterErrorEnvelope(parsed)).toEqual([]);
 	});
 
