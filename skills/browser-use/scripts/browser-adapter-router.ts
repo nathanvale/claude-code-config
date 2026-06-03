@@ -33,7 +33,12 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	BROWSER_ADAPTER_ROUTER_ADAPTERS,
+	BROWSER_ADAPTER_ROUTER_BUNDLES,
+	BROWSER_ADAPTER_ROUTER_MODES,
+	type BrowserAdapterRouterBundle,
 	type BrowserAdapterRouterCommand,
+	type BrowserAdapterRouterMode,
 	browserAdapterRouterContracts,
 } from "./command-contract";
 import type {
@@ -43,6 +48,13 @@ import type {
 	RouteFailureData,
 	RouteSuccess,
 } from "./browser-adapter-router-model";
+import {
+	type PrepareFailure,
+	type PrepareInputs,
+	type PrepareSuccess,
+	assemblePrepare,
+	canonicalMissingFact,
+} from "./browser-adapter-router-prepare";
 import {
 	evaluateRoute,
 	isReportStale,
@@ -65,6 +77,8 @@ import {
 } from "./browser-adapter-router-validation";
 import {
 	continuationForCode,
+	prepareContinuationForCode,
+	prepareRecoverabilityForCode,
 	recoverabilityForCode,
 	researchRecoveryDiagnosticTrail,
 	routeValidityConstraint,
@@ -153,6 +167,20 @@ type OutputMode = "json" | "plain";
 type ParsedRouterCommand =
 	| { kind: "help"; command?: BrowserAdapterRouterCommand }
 	| { kind: "version"; outputMode: OutputMode }
+	| {
+			kind: "prepare";
+			outputMode: OutputMode;
+			warmChromeProofPath?: string;
+			adapterProofPath?: string;
+			reportPaths: string[];
+			targetDiscoveryPath?: string;
+			mode?: BrowserAdapterRouterMode;
+			adapter?: BrowserAdapterId;
+			fallbackAllowed?: boolean;
+			bundle?: BrowserAdapterRouterBundle;
+			capabilities: AdapterCapability[];
+			targetOrigin?: string;
+	  }
 	| {
 			kind: "route";
 			outputMode: OutputMode;
@@ -263,6 +291,16 @@ export async function runBrowserAdapterRouterCli(
 			const runId = diagnosticArgv.options.runId;
 			const durationMs = () =>
 				runtime.now() - diagnosticArgv.options.startedAtMs;
+			if (parsed.kind === "prepare") {
+				return executePrepare({
+					parsed,
+					runtime,
+					stdout,
+					stderr,
+					runId,
+					durationMs,
+				});
+			}
 			if (parsed.kind === "report") {
 				return executeReport({
 					parsed,
@@ -284,6 +322,116 @@ export async function runBrowserAdapterRouterCli(
 		});
 	} finally {
 		resetCliDiagnostics();
+	}
+}
+
+async function executePrepare(input: {
+	parsed: Extract<ParsedRouterCommand, { kind: "prepare" }>;
+	runtime: RouterRuntime;
+	stdout: CliWriter;
+	stderr: CliWriter;
+	runId: string;
+	durationMs: () => number;
+}): Promise<number> {
+	const { parsed, runtime } = input;
+	// prepare does the file I/O; the assembler stays pure (R7, testability). An
+	// unreadable input path is caller input, not a runtime fault: it becomes a
+	// change_prepare_input fact, never a generic runtime error. The path is never
+	// echoed into diagnostics.
+	let warmChromeProofRaw: string | undefined;
+	let adapterProofRaw: string | undefined;
+	let targetDiscoveryRaw: string | undefined;
+	const reportRaws: string[] = [];
+	const readErrors: string[] = [];
+
+	if (parsed.warmChromeProofPath) {
+		const read = await readOptionalFile(parsed.warmChromeProofPath, runtime);
+		if (read.ok) warmChromeProofRaw = read.content;
+		else readErrors.push("warm Chrome proof file could not be read");
+	}
+	if (parsed.adapterProofPath) {
+		const read = await readOptionalFile(parsed.adapterProofPath, runtime);
+		if (read.ok) adapterProofRaw = read.content;
+		else readErrors.push("adapter proof file could not be read");
+	}
+	if (parsed.targetDiscoveryPath) {
+		const read = await readOptionalFile(parsed.targetDiscoveryPath, runtime);
+		if (read.ok) targetDiscoveryRaw = read.content;
+		else readErrors.push("target discovery file could not be read");
+	}
+	for (const [index, reportPath] of parsed.reportPaths.entries()) {
+		const read = await readOptionalFile(reportPath, runtime);
+		if (read.ok) reportRaws.push(read.content);
+		else readErrors.push(`report[${index}] file could not be read`);
+	}
+
+	const inputs: PrepareInputs = {
+		warmChromeProofRaw,
+		adapterProofRaw,
+		reportRaws,
+		targetDiscoveryRaw,
+		mode: parsed.mode,
+		adapter: parsed.adapter,
+		fallbackAllowed: parsed.fallbackAllowed,
+		bundle: parsed.bundle,
+		capabilities: parsed.capabilities,
+		targetOrigin: parsed.targetOrigin,
+		fallbackRunId:
+			runtime.env.BROWSER_USE_ROUTER_PREPARE_RUN_ID ??
+			runtime.env.BROWSER_USE_RUN_ID,
+		evaluationDate: runtime.evaluationDate,
+	};
+
+	const result = assemblePrepare(inputs);
+	// Read failures are prepare input faults: fold them into the missing-fact set
+	// so they resolve to change_prepare_input alongside any assembler findings.
+	if (readErrors.length > 0) {
+		const merged: PrepareFailure = {
+			ok: false,
+			missing_facts: [
+				...(result.ok ? [] : result.missing_facts),
+				...readErrors.map((detail) => ({
+					kind: "prepare_input" as const,
+					code: "prepare_input_invalid" as const,
+					detail,
+				})),
+			],
+		};
+		return emitPrepareFailure({
+			failure: merged,
+			outputMode: parsed.outputMode,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			durationMs: input.durationMs(),
+		});
+	}
+
+	if (result.ok) {
+		writePrepareSuccess(input.stdout, result, parsed.outputMode, {
+			runId: input.runId,
+			durationMs: input.durationMs(),
+		});
+		return 0;
+	}
+	return emitPrepareFailure({
+		failure: result,
+		outputMode: parsed.outputMode,
+		stdout: input.stdout,
+		stderr: input.stderr,
+		runId: input.runId,
+		durationMs: input.durationMs(),
+	});
+}
+
+async function readOptionalFile(
+	path: string,
+	runtime: RouterRuntime,
+): Promise<{ ok: true; content: string } | { ok: false }> {
+	try {
+		return { ok: true, content: await runtime.readTextFile(path) };
+	} catch {
+		return { ok: false };
 	}
 }
 
@@ -488,6 +636,115 @@ function writeRouteSuccess(
 		);
 	}
 	writeJsonEnvelope(stdout, envelope, runtime);
+}
+
+function writePrepareSuccess(
+	stdout: CliWriter,
+	success: PrepareSuccess,
+	outputMode: OutputMode,
+	runtime: { runId: string; durationMs: number },
+): void {
+	if (outputMode === "plain") {
+		stdout.write(
+			[
+				"route_evidence_prepared",
+				`mode=${success.route_input_mode}`,
+				`reports=${success.envelope.reports.length}`,
+				`next=${success.next_command_intent}`,
+				"action=route_prepared_evidence",
+				`run_id=${runtime.runId}`,
+				`duration_ms=${runtime.durationMs}`,
+			].join(" ") + "\n",
+		);
+		return;
+	}
+	const envelope = createCliRuntimeSuccessEnvelope({
+		run_id: runtime.runId,
+		data: {
+			envelope: success.envelope,
+			route_input_mode: success.route_input_mode,
+			next_command_intent: success.next_command_intent,
+		},
+		runtime_actions: [runtimeActionForId("route_prepared_evidence")],
+		continuation: { next_action_id: "route_prepared_evidence" },
+	});
+	const issues = validateRouterContinuationEnvelope(envelope);
+	if (issues.length > 0) {
+		throw new Error(
+			`Invalid Browser Adapter Router prepare envelope: ${issues.join("; ")}`,
+		);
+	}
+	writeJsonEnvelope(stdout, envelope, runtime);
+}
+
+function emitPrepareFailure(input: {
+	failure: PrepareFailure;
+	outputMode: OutputMode;
+	stdout: CliWriter;
+	stderr: CliWriter;
+	runId: string;
+	durationMs: number;
+}): number {
+	const canonical = canonicalMissingFact(input.failure.missing_facts);
+	// canonical is always defined here: emitPrepareFailure is only called with a
+	// non-empty missing-fact set.
+	const code = canonical?.code ?? "prepare_input_invalid";
+	const nextAction = prepareContinuationForCode(code);
+	const message =
+		canonical?.detail ?? "prepare could not assemble route evidence.";
+	if (input.outputMode === "plain") {
+		input.stderr.write(
+			`browser_adapter_router ${code}: ${message} action=${nextAction} (run_id=${input.runId})\n`,
+		);
+		return ROUTE_FAIL_CLOSED_EXIT_CODE;
+	}
+	// runtime_actions lists every relevant recovery action across the missing
+	// facts; the canonical continuation follows dependency order (R6).
+	const actionIds = [
+		nextAction,
+		...input.failure.missing_facts
+			.map((fact) => prepareContinuationForCode(fact.code))
+			.filter((id) => id !== nextAction),
+	];
+	const seen = new Set<string>();
+	const runtimeActions = actionIds
+		.filter((id) => {
+			if (seen.has(id)) return false;
+			seen.add(id);
+			return true;
+		})
+		.map((id) => runtimeActionForId(id));
+	const envelope = createCliRuntimeErrorEnvelope({
+		run_id: input.runId,
+		process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
+		data: {
+			failure_kind: "prepare_failure",
+			missing_facts: input.failure.missing_facts,
+		},
+		error: {
+			run_id: input.runId,
+			code,
+			message,
+			exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
+			severity: "error",
+			recoverability: prepareRecoverabilityForCode(code),
+			retryable: false,
+			failure_domain: "browser_adapter_router",
+		},
+		runtime_actions: runtimeActions,
+		continuation: { next_action_id: nextAction },
+	});
+	const issues = validateRouterErrorEnvelope(envelope);
+	if (issues.length > 0) {
+		throw new Error(
+			`Invalid Browser Adapter Router prepare error envelope: ${issues.join("; ")}`,
+		);
+	}
+	writeJsonEnvelope(input.stdout, envelope, {
+		runId: input.runId,
+		durationMs: input.durationMs,
+	});
+	return ROUTE_FAIL_CLOSED_EXIT_CODE;
 }
 
 function writeReportSuccess(
@@ -813,11 +1070,55 @@ function parseRouterArgv(argv: readonly string[]): ParsedRouterCommand {
 	}
 	if (!command) {
 		throw usageError(
-			"missing command: expected route, report, or status.",
+			"missing command: expected prepare, route, report, or status.",
 		);
 	}
 	const outputMode = inferCommandOutputMode(argv, command);
 	const rest = argv.filter((arg) => arg !== command);
+
+	if (command === "prepare") {
+		const mode = readEnumFlag(rest, "--mode", isMode);
+		const adapter = readEnumFlag(rest, "--adapter", isPrepareAdapter);
+		const bundle = readEnumFlag(rest, "--bundle", isBundle);
+		const capabilities = readRepeatedEnumFlag(
+			rest,
+			"--capability",
+			isCapability,
+		);
+		const reportPaths = readRepeatedArgFlagValue(rest, "--report");
+		const targetOrigin = readArgFlagValue(rest, "--target-origin");
+		const fallbackAllowed = rest.includes("--fallback-allowed")
+			? true
+			: undefined;
+		rejectUnknownFlags(rest, [
+			"--warm-chrome-proof",
+			"--adapter-proof",
+			"--report",
+			"--target-discovery",
+			"--mode",
+			"--adapter",
+			"--fallback-allowed",
+			"--bundle",
+			"--capability",
+			"--target-origin",
+			"--json",
+			"--plain",
+		]);
+		return {
+			kind: "prepare",
+			outputMode,
+			warmChromeProofPath: readArgFlagValue(rest, "--warm-chrome-proof"),
+			adapterProofPath: readArgFlagValue(rest, "--adapter-proof"),
+			reportPaths,
+			targetDiscoveryPath: readArgFlagValue(rest, "--target-discovery"),
+			mode,
+			adapter,
+			fallbackAllowed,
+			bundle,
+			capabilities,
+			targetOrigin,
+		};
+	}
 
 	if (command === "report") {
 		const adapter = readEnumFlag(rest, "--adapter", isBrowserAdapter);
@@ -852,7 +1153,12 @@ function findCommand(
 function isRouterCommand(
 	value: string | undefined,
 ): value is BrowserAdapterRouterCommand {
-	return value === "route" || value === "report" || value === "status";
+	return (
+		value === "prepare" ||
+		value === "route" ||
+		value === "report" ||
+		value === "status"
+	);
 }
 
 function readEnumFlag<T extends string>(
@@ -866,6 +1172,61 @@ function readEnumFlag<T extends string>(
 		throw usageError(`invalid value for ${flag}: ${sanitizeUsageValue(value)}`);
 	}
 	return value;
+}
+
+function isMode(value: unknown): value is BrowserAdapterRouterMode {
+	return (
+		typeof value === "string" &&
+		(BROWSER_ADAPTER_ROUTER_MODES as readonly string[]).includes(value)
+	);
+}
+
+function isPrepareAdapter(value: unknown): value is BrowserAdapterId {
+	return (
+		typeof value === "string" &&
+		(BROWSER_ADAPTER_ROUTER_ADAPTERS as readonly string[]).includes(value)
+	);
+}
+
+function isBundle(value: unknown): value is BrowserAdapterRouterBundle {
+	return (
+		typeof value === "string" &&
+		(BROWSER_ADAPTER_ROUTER_BUNDLES as readonly string[]).includes(value)
+	);
+}
+
+function readRepeatedArgFlagValue(
+	argv: readonly string[],
+	flag: string,
+): string[] {
+	const values: string[] = [];
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (arg === flag) {
+			const next = argv[index + 1];
+			if (next === undefined || next.startsWith("--")) {
+				throw usageError(`${flag} requires a value.`);
+			}
+			values.push(next);
+			index += 1;
+		} else if (arg.startsWith(`${flag}=`)) {
+			values.push(arg.slice(flag.length + 1));
+		}
+	}
+	return values;
+}
+
+function readRepeatedEnumFlag<T extends string>(
+	argv: readonly string[],
+	flag: string,
+	guard: (value: unknown) => value is T,
+): T[] {
+	return readRepeatedArgFlagValue(argv, flag).map((value) => {
+		if (!guard(value)) {
+			throw usageError(`invalid value for ${flag}: ${sanitizeUsageValue(value)}`);
+		}
+		return value;
+	});
 }
 
 function readArgFlagValue(

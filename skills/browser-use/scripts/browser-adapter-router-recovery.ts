@@ -6,17 +6,24 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	type BrowserAdapterRouterDiagnosticCode,
+	type BrowserAdapterRouterPrepareDiagnosticCode,
 	browserAdapterRouterFailureActions,
+	browserAdapterRouterPrepareFailureActions,
+	browserAdapterRouterPrepareSuccessActions,
 	browserAdapterRouterSuccessActions,
 } from "./command-contract";
 import type {
 	RouterFailureActionId,
 	RouterSuccessActionId,
+	RouterPrepareFailureActionId,
+	RouterPrepareSuccessActionId,
 } from "./browser-adapter-router-model";
 
 const routerRuntimeActions = [
 	...browserAdapterRouterFailureActions,
 	...browserAdapterRouterSuccessActions,
+	...browserAdapterRouterPrepareFailureActions,
+	...browserAdapterRouterPrepareSuccessActions,
 ] as const;
 
 const routerRuntimeActionById = new Map(
@@ -73,8 +80,48 @@ export function recoverabilityForCode(
 	}
 }
 
+// Continuation + recoverability for prepare missing-fact codes (R6). prepare
+// codes name missing input facts, distinct from route evaluation codes.
+export function prepareContinuationForCode(
+	code: BrowserAdapterRouterPrepareDiagnosticCode,
+): RouterPrepareFailureActionId {
+	switch (code) {
+		case "prepare_warm_chrome_missing":
+			return "prove_warm_chrome";
+		case "prepare_report_missing":
+			return "discover_capability_report";
+		case "prepare_adapter_proof_missing":
+			return "prove_adapter_attachment";
+		case "prepare_input_invalid":
+			return "change_prepare_input";
+		default:
+			void (code satisfies never);
+			return "change_prepare_input";
+	}
+}
+
+export function prepareRecoverabilityForCode(
+	code: BrowserAdapterRouterPrepareDiagnosticCode,
+): StructuredRuntimeError["recoverability"] {
+	switch (code) {
+		case "prepare_warm_chrome_missing":
+		case "prepare_adapter_proof_missing":
+			return "repair_state";
+		case "prepare_report_missing":
+		case "prepare_input_invalid":
+			return "change_input";
+		default:
+			void (code satisfies never);
+			return "change_input";
+	}
+}
+
 export function runtimeActionForId(
-	id: RouterFailureActionId | RouterSuccessActionId,
+	id:
+		| RouterFailureActionId
+		| RouterSuccessActionId
+		| RouterPrepareFailureActionId
+		| RouterPrepareSuccessActionId,
 ): RuntimeActionGuidance {
 	const action = routerRuntimeActionById.get(id);
 	if (!action) {

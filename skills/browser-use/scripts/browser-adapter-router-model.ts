@@ -8,6 +8,8 @@ import type {
 	BrowserAdapterRouterReportSource,
 	BrowserAdapterRouterSupportState,
 	browserAdapterRouterFailureActions,
+	browserAdapterRouterPrepareFailureActions,
+	browserAdapterRouterPrepareSuccessActions,
 	browserAdapterRouterSuccessActions,
 } from "./command-contract";
 
@@ -209,5 +211,9 @@ export type RouterFailureActionId =
 	(typeof browserAdapterRouterFailureActions)[number]["id"];
 export type RouterSuccessActionId =
 	(typeof browserAdapterRouterSuccessActions)[number]["id"];
+export type RouterPrepareFailureActionId =
+	(typeof browserAdapterRouterPrepareFailureActions)[number]["id"];
+export type RouterPrepareSuccessActionId =
+	(typeof browserAdapterRouterPrepareSuccessActions)[number]["id"];
 
 export type RouteEvaluation = RouteSuccess | RouteFailure;

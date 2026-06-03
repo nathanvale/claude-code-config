@@ -530,7 +530,11 @@ export const BROWSER_ADAPTER_ROUTER_CONTRACT_ID =
 	"browser-use.browser-adapter-router" as const;
 export const BROWSER_ADAPTER_ROUTER_SCHEMA_VERSION = "1" as const;
 
-export type BrowserAdapterRouterCommand = "route" | "report" | "status";
+export type BrowserAdapterRouterCommand =
+	| "prepare"
+	| "route"
+	| "report"
+	| "status";
 
 // Registry ids (plan R11). Membership is known Browser Adapter identity, not
 // routability (R11a).
@@ -631,6 +635,19 @@ export const BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES = [
 export type BrowserAdapterRouterDiagnosticCode =
 	(typeof BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES)[number];
 
+// Prepare diagnostic codes (plan R6). `prepare` aggregates missing/invalid input
+// facts; these codes name the missing-fact classes that resolve to the
+// dependency-ordered canonical continuation, distinct from route evaluation
+// codes which judge already-assembled evidence.
+export const BROWSER_ADAPTER_ROUTER_PREPARE_DIAGNOSTIC_CODES = [
+	"prepare_warm_chrome_missing",
+	"prepare_report_missing",
+	"prepare_adapter_proof_missing",
+	"prepare_input_invalid",
+] as const;
+export type BrowserAdapterRouterPrepareDiagnosticCode =
+	(typeof BROWSER_ADAPTER_ROUTER_PREPARE_DIAGNOSTIC_CODES)[number];
+
 type BrowserAdapterRouterAudience = "agent" | "operator";
 type BrowserAdapterRouterMutation = "check" | "network";
 type BrowserAdapterRouterCommandContract = CommandFacadeContract<
@@ -667,6 +684,56 @@ const routerReportFlags = {
 	...routerOutputFlags,
 } as const satisfies BrowserAdapterRouterCommandContract["flags"];
 
+const routerPrepareFlags = {
+	"--warm-chrome-proof": {
+		type: "path",
+		description: "Warm Chrome Preflight proof envelope JSON file.",
+	},
+	"--adapter-proof": {
+		type: "path",
+		description: "Browser Adapter Proof envelope JSON file.",
+	},
+	"--report": {
+		type: "path",
+		description:
+			"Capability report JSON file. Repeat to supply multiple reports.",
+	},
+	"--target-discovery": {
+		type: "path",
+		description:
+			"Recovery-mode target discovery envelope JSON file for target precondition evidence.",
+	},
+	"--mode": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_MODES,
+		description: "Route policy mode.",
+	},
+	"--adapter": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_ADAPTERS,
+		description: "Requested Browser Adapter id for prefer/force mode.",
+	},
+	"--fallback-allowed": {
+		type: "boolean",
+		description: "Allow adapter fallback in the assembled policy.",
+	},
+	"--bundle": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_BUNDLES,
+		description: "Task capability bundle preset.",
+	},
+	"--capability": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_CAPABILITIES,
+		description: "Required capability. Repeat to require multiple.",
+	},
+	"--target-origin": {
+		type: "string",
+		description: "Required target origin precondition term.",
+	},
+	...routerOutputFlags,
+} as const satisfies BrowserAdapterRouterCommandContract["flags"];
+
 const routerBaseEnvVars = [
 	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
 	{
@@ -690,6 +757,15 @@ const routerReportEnvVars = [
 		name: "BROWSER_USE_ROUTER_SELF_REPORT_JSON",
 		description:
 			"Full JSON capability report object for the self-report path; validated by the same report validator as adapter manifests.",
+	},
+] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
+
+const routerPrepareEnvVars = [
+	...routerBaseEnvVars,
+	{
+		name: "BROWSER_USE_ROUTER_PREPARE_RUN_ID",
+		description:
+			"Run correlation id stamped into the prepared envelope when no proof supplies one; defaults to BROWSER_USE_RUN_ID.",
 	},
 ] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
 
@@ -761,12 +837,76 @@ export const browserAdapterRouterSuccessActions = [
 	},
 ] as const;
 
+// Prepare recovery + success runtime actions (plan R6). The four failure ids are
+// emitted in dependency order: prove warm Chrome, discover a capability report,
+// prove adapter attachment, then correct prepare input. The success id signals
+// the assembled envelope is ready for `route`.
+export const browserAdapterRouterPrepareFailureActions = [
+	{
+		id: "prove_warm_chrome",
+		summary:
+			"Run Warm Chrome Preflight and pass its proof to prepare --warm-chrome-proof.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "discover_capability_report",
+		summary:
+			"Discover or validate an adapter capability report, then pass it to prepare --report.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "prove_adapter_attachment",
+		summary:
+			"Run Browser Adapter Proof and pass its proof to prepare --adapter-proof.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_prepare_input",
+		summary: "Correct prepare policy, bundle, capability, or input envelopes.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserAdapterRouterPrepareSuccessActions = [
+	{
+		id: "route_prepared_evidence",
+		summary:
+			"Pass the prepared evidence envelope to browser-adapter-router route.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 export const browserAdapterRouterContracts = defineCommandFacadeContract(
 	{
+		prepare: {
+			script: "scripts/browser-adapter-router.ts",
+			summary:
+				"Assemble route evidence from proof, report, and task facts; emit a route-ready envelope or dependency-ordered recovery.",
+			usage: [
+				"prepare [--warm-chrome-proof <path>] [--adapter-proof <path>] [--report <path>]... [--target-discovery <path>] [--mode <mode>] [--adapter <id>] [--fallback-allowed] [--bundle <id>] [--capability <id>]... [--target-origin <origin>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			// prepare reads supplied proof/report envelopes and assembles route
+			// evidence; it never runs preflight, proof, report, or discovery (R7).
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: routerPrepareEnvVars,
+			resultContract: routerResultContract,
+			actionAffordances: {
+				success: browserAdapterRouterPrepareSuccessActions,
+				failure: browserAdapterRouterPrepareFailureActions,
+			},
+			flags: routerPrepareFlags,
+			exitCodes: routerExitCodes,
+		},
 		route: {
 			script: "scripts/browser-adapter-router.ts",
 			summary:
-				"Select a Browser Adapter from a supplied evidence envelope without probing.",
+				"Select a Browser Adapter from a supplied evidence envelope without probing. Get the envelope from `prepare`.",
 			usage: [
 				"route [--envelope <path>] [--json|--plain]",
 			],
