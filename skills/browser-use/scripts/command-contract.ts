@@ -1036,6 +1036,17 @@ export type BrowserUseOperateSubcommand =
 export const BROWSER_USE_FAMILIES = ["targets", "operate"] as const;
 export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
 
+// Browser Target Discovery modes (plan U5 R18-R20). `targets list --mode` takes
+// these, not the Router policy modes (auto/prefer/force): discovery is a
+// route-bound vs recovery distinction, not an adapter-selection policy. The U3
+// shell reused Router modes as a placeholder; U5 replaces it.
+export const BROWSER_USE_TARGET_DISCOVERY_MODES = [
+	"recovery",
+	"route-bound",
+] as const;
+export type BrowserUseTargetDiscoveryMode =
+	(typeof BROWSER_USE_TARGET_DISCOVERY_MODES)[number];
+
 export type BrowserUseCommand =
 	| "targets-list"
 	| "targets-select"
@@ -1055,9 +1066,84 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_command_override_invalid",
 	"browser_operation_transport_timeout",
 	"browser_operation_transport_failed",
+	// Browser Target Discovery (U5). Distinct codes so empty / mismatched-proof /
+	// missing-evidence outcomes each map to their own recovery, never to a wrong
+	// or silent success (handoff envelope-mapping class).
+	"target_discovery_adapter_proof_invalid",
+	"target_discovery_adapter_proof_mismatch",
+	"target_discovery_route_invalid",
+	"target_discovery_no_candidates",
+	"target_discovery_dependency_missing",
+	"target_discovery_transport_timeout",
+	"target_discovery_transport_failed",
+	"target_discovery_command_override_invalid",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
+
+// Browser Target Discovery runtime action ids (plan U5). The stable
+// continuation.next_action_id vocabulary `targets list` emits on recovery.
+// supply_adapter_proof / refresh_adapter_proof are the proof-mismatch
+// continuations the plan names (R, AE); the rest cover dependency, transport,
+// route, and empty-candidate recovery.
+export const browserUseTargetDiscoveryFailureActions = [
+	{
+		id: "supply_adapter_proof",
+		summary:
+			"Run Browser Adapter Proof for the requested adapter and pass it to targets list --adapter-proof.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_adapter_proof",
+		summary:
+			"Re-run Browser Adapter Proof for the selected adapter; the supplied proof does not match the route's adapter.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "rerun_route_bound_target_discovery",
+		summary:
+			"Supply a fresh Router route success envelope, then re-run route-bound targets list.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "open_browser_target",
+		summary:
+			"Open or navigate a Browser Target matching the task, then re-run targets list.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "configure_target_dependency",
+		summary:
+			"Expose mcporter on PATH or configure an explicit mcporter command vector, then re-run targets list.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_target_discovery_diagnostics",
+		summary:
+			"Stop and inspect target discovery diagnostics before retrying.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_target_discovery_input",
+		summary: "Correct targets list mode, adapter, route, or proof arguments.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseTargetDiscoverySuccessActions = [
+	{
+		id: "select_browser_target",
+		summary:
+			"Select one route-bound Browser Target Candidate with browser-use targets select.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "prepare_with_target_discovery",
+		summary:
+			"Pass recovery target discovery output to browser-adapter-router prepare --target-discovery.",
+		sideEffects: ["check"],
+	},
+] as const;
 
 type BrowserUseAudience = "agent" | "operator";
 type BrowserUseMutation = "check" | "browser";
@@ -1095,8 +1181,9 @@ const browserUseRouteBoundFlags = {
 const browserUseTargetsListFlags = {
 	"--mode": {
 		type: "enum",
-		values: BROWSER_ADAPTER_ROUTER_MODES,
-		description: "Discovery mode hint (route-bound prerequisite from Router).",
+		values: BROWSER_USE_TARGET_DISCOVERY_MODES,
+		description:
+			"Discovery mode: recovery (requested adapter + proof) or route-bound (route success + proof).",
 	},
 	"--adapter": {
 		type: "enum",
@@ -1238,7 +1325,8 @@ export const browserUseContracts = defineCommandFacadeContract(
 			summary:
 				"List route-bound or recovery Browser Target Candidates. Get route evidence from browser-adapter-router prepare then route.",
 			usage: [
-				"targets list [--mode <mode>] [--adapter <id>] [--route <path>] [--adapter-proof <path>] [--show-url] [--dry-run] [--json|--plain]",
+				"targets list --mode recovery --adapter <id> --adapter-proof <path> [--show-url] [--json|--plain]",
+				"targets list --mode route-bound --route <path> --adapter-proof <path> [--show-url] [--json|--plain]",
 			],
 			json: true,
 			audience: "agent",

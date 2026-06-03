@@ -176,6 +176,74 @@ export type RouteBinding = {
 	expires_at: string;
 };
 
+// ---------------------------------------------------------------------------
+// Browser Target Discovery (U5). `browser-use targets list` discovers Browser
+// Target Candidates through a proven adapter in two modes (R18, R19, R20):
+//   - route-bound: full route success + fresh Adapter Proof -> operation-ready
+//     candidates that can feed `targets select` and `operate`.
+//   - recovery:    requested adapter + fresh Adapter Proof -> evidence-gathering
+//     candidates that can feed `prepare --target-discovery` only.
+// The tuple below extends the route/proof binding (U2 R8) with the target slice;
+// it is owned by `targets list`, not route success, so route stays pure (KTD2).
+// ---------------------------------------------------------------------------
+
+export type TargetDiscoveryMode = "recovery" | "route-bound";
+
+// Display-safe candidate facts (R32, KTD6, KTD7). The candidate ordinal is the
+// only public target handle (scoped to one target envelope, R21); `origin` and
+// `path_shape` are redaction-gated projections. Raw adapter page ids, CDP target
+// ids, query strings, fragments, and auth-bearing path segments never appear
+// here — display facts stay separate from any machine evidence.
+export type BrowserTargetCandidate = {
+	// Candidate ordinal scoped to the target envelope (R21). Public target handle.
+	candidate_ordinal: number;
+	// Stable per-envelope candidate id. Derived from the target envelope id and
+	// ordinal, never from raw adapter page/CDP ids (R32, KTD6).
+	candidate_id: string;
+	// Redacted origin (scheme + host + port). Empty when the raw url is unparsable.
+	origin: string;
+	// Redacted path shape: pathname only, no query string or fragment. Present
+	// only when `--show-url` is requested (R32, AE11).
+	path_shape?: string;
+	// Redacted, length-bounded page title. Semantic Browser Target Hint surface.
+	title?: string;
+};
+
+// Target/proof binding the discovery envelope carries. Recovery mode omits the
+// route slice (no route_success_id / route_evidence_hash) because recovery
+// candidates are never operation-authorized (R20, R25).
+export type TargetDiscoveryBinding = {
+	run_id: string;
+	warm_chrome_run_id: string;
+	adapter_proof_id: string;
+	selected_adapter_id: BrowserAdapterId;
+	verified_endpoint_identity: string;
+	// Target envelope id scopes candidate ordinals (R21). Content hash over the
+	// run-scoped binding facts (run id, mode, adapter, proof id, route hash); no
+	// clock or randomness. In route-bound mode the run id comes from the route
+	// binding, so re-running against the same route yields the same envelope id.
+	// In recovery mode the run id is the per-invocation run id, so the envelope id
+	// scopes ordinals within one listing rather than across invocations.
+	target_envelope_id: string;
+	// Route slice present only in route-bound mode (R18). Binds candidates to the
+	// route success that authorized them so `operate` can fail closed on stale or
+	// cross-run target evidence (R9).
+	route_evidence_hash?: string;
+};
+
+export type TargetDiscoveryEnvelope = {
+	mode: TargetDiscoveryMode;
+	// R20: recovery candidates are evidence-gathering only; route-bound candidates
+	// are operation-ready. These flags are the gate `targets select`/`operate`
+	// (U6/U7) read to reject recovery candidates (R25).
+	route_bound: boolean;
+	operation_ready: boolean;
+	requested_adapter: BrowserAdapterId;
+	binding: TargetDiscoveryBinding;
+	candidate_count: number;
+	candidates: readonly BrowserTargetCandidate[];
+};
+
 export type RouteSuccess = {
 	outcome: "selected";
 	evaluation_date: string;

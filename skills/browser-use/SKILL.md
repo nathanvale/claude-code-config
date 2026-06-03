@@ -69,6 +69,18 @@ Use `status` for human route projection:
 skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOPE" --plain
 ```
 
+After route success, list Browser Target Candidates through the proven adapter:
+
+```bash
+skills/browser-use/scripts/browser-use.sh targets list --mode route-bound --route "$ROUTE" --adapter-proof "$PROOF" --json
+```
+
+- Route-bound listing yields operation-ready candidates; recovery listing (`--mode recovery` with a requested adapter instead of a route) yields evidence-gathering candidates for `prepare --target-discovery`.
+- Reference targets by candidate ordinal; ordinals are scoped to one target envelope.
+- Use `--show-url` for origin plus redacted path shape only; never expect query strings, fragments, or adapter handles in output.
+- Follow `continuation.next_action_id`: route-bound points at `targets select`, recovery at `prepare`.
+- Modes, flags, result vocab, and recovery actions: `skills/browser-use/scripts/command-contract.ts`.
+
 ## Page Actions
 
 - Use the selected adapter after proof.
