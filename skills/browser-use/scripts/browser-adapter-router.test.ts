@@ -13,10 +13,14 @@ import {
 } from "@side-quest/cli-command-facade/testing";
 import {
 	BROWSER_ADAPTER_PROOF_ADAPTERS,
+	BROWSER_ADAPTER_PROOF_CONTRACT_ID,
+	BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 	BROWSER_ADAPTER_ROUTER_ADAPTERS,
 	BROWSER_ADAPTER_ROUTER_CAPABILITIES,
 	BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES,
 	BROWSER_ADAPTER_ROUTER_SUPPORT_STATES,
+	WARM_CHROME_PREFLIGHT_CONTRACT_ID,
+	WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 	type BrowserAdapterRouterCommand,
 	browserAdapterProofContracts,
 	browserAdapterRouterContracts,
@@ -215,9 +219,10 @@ function expectPlainSuccess(
 // =========================================================================
 
 describe("U0 command contract", () => {
-	test("contract exposes route, report, and status", () => {
+	test("contract exposes prepare, route, report, and status", () => {
 		const result = parseCommandFacadeContract(
 			{
+				prepare: browserAdapterRouterContracts.prepare,
 				route: browserAdapterRouterContracts.route,
 				report: browserAdapterRouterContracts.report,
 				status: browserAdapterRouterContracts.status,
@@ -226,14 +231,19 @@ describe("U0 command contract", () => {
 		);
 		expect(result.ok).toBe(true);
 		expect(Object.keys(browserAdapterRouterContracts).sort()).toEqual([
+			"prepare",
 			"report",
 			"route",
 			"status",
 		]);
 	});
 
-	test("V1 has no prepare command", () => {
-		expect("prepare" in browserAdapterRouterContracts).toBe(false);
+	test("prepare contract declares check-only side effects (R7)", () => {
+		// prepare reads supplied proof/report envelopes and assembles route
+		// evidence; it never runs preflight, proof, report, or discovery.
+		const sideEffects = browserAdapterRouterContracts.prepare.sideEffects ?? [];
+		expect(sideEffects).toEqual(["check"]);
+		expect(sideEffects).not.toContain("browser");
 	});
 
 	test("V1 command contract does not expose verify or report --verify", () => {
@@ -286,6 +296,20 @@ describe("U0 command contract", () => {
 	});
 
 	test("Router command contracts expose only command-specific flags", () => {
+		expect(routerContractFlags("prepare")).toEqual([
+			"--adapter",
+			"--adapter-proof",
+			"--bundle",
+			"--capability",
+			"--fallback-allowed",
+			"--json",
+			"--mode",
+			"--plain",
+			"--report",
+			"--target-discovery",
+			"--target-origin",
+			"--warm-chrome-proof",
+		]);
 		expect(routerContractFlags("route")).toEqual([
 			"--envelope",
 			"--json",
@@ -307,6 +331,11 @@ describe("U0 command contract", () => {
 	test("Router command discovery metadata stays command-specific", async () => {
 		const discovery = routerDiscoveryTree();
 
+		expect(routerDiscoveryEnvNames("prepare")).toEqual([
+			"BROWSER_USE_ROUTER_EVAL_DATE",
+			"BROWSER_USE_ROUTER_PREPARE_RUN_ID",
+			"BROWSER_USE_RUN_ID",
+		]);
 		expect(routerDiscoveryEnvNames("route")).toEqual([
 			"BROWSER_USE_ROUTER_ENVELOPE_JSON",
 			"BROWSER_USE_ROUTER_EVAL_DATE",
@@ -521,6 +550,346 @@ describe("U0 command contract", () => {
 		expect(browserAdapterProofContracts.check.sideEffects).not.toContain(
 			"browser",
 		);
+	});
+});
+
+// =========================================================================
+// U1. Prepare route evidence on-ramp
+// =========================================================================
+
+function warmChromeProofEnvelope(
+	overrides: { runId?: string; ok?: boolean; status?: string } = {},
+): string {
+	const runId = overrides.runId ?? "run-1";
+	return JSON.stringify({
+		status: overrides.status ?? "ok",
+		run_id: runId,
+		data: {
+			ok: overrides.ok ?? true,
+			action: "browser_ready",
+			contract: WARM_CHROME_PREFLIGHT_CONTRACT_ID,
+			schema_version: WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
+			command: "check",
+			endpoint: "http://127.0.0.1:9333",
+			port: "9333",
+		},
+	});
+}
+
+function adapterProofEnvelope(
+	overrides: {
+		runId?: string;
+		warmChromeRunId?: string;
+		adapter?: string;
+		ok?: boolean;
+	} = {},
+): string {
+	const runId = overrides.runId ?? "adapter-run-1";
+	return JSON.stringify({
+		status: "ok",
+		run_id: runId,
+		data: {
+			ok: overrides.ok ?? true,
+			action: "adapter_ready",
+			contract: BROWSER_ADAPTER_PROOF_CONTRACT_ID,
+			schema_version: BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
+			command: "check",
+			adapter: overrides.adapter ?? "chrome-devtools",
+			warm_chrome_run_id: overrides.warmChromeRunId ?? "run-1",
+			endpoint: "http://127.0.0.1:9333",
+			port: "9333",
+			page_count: 1,
+			pages: [],
+		},
+	});
+}
+
+async function tmpFile(name: string, content: string): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), "prepare-test-"));
+	cleanupPaths.push(dir);
+	const path = join(dir, name);
+	await writeFile(path, content, "utf-8");
+	return path;
+}
+
+async function completePrepareArgv(
+	overrides: {
+		warmChrome?: string;
+		adapterProof?: string;
+		report?: string;
+		extra?: string[];
+	} = {},
+): Promise<string[]> {
+	const warm = await tmpFile(
+		"warm.json",
+		overrides.warmChrome ?? warmChromeProofEnvelope(),
+	);
+	const proof = await tmpFile(
+		"proof.json",
+		overrides.adapterProof ?? adapterProofEnvelope(),
+	);
+	const report = await tmpFile(
+		"report.json",
+		overrides.report ?? JSON.stringify(makeReport()),
+	);
+	return [
+		"prepare",
+		"--warm-chrome-proof",
+		warm,
+		"--adapter-proof",
+		proof,
+		"--report",
+		report,
+		"--bundle",
+		"snapshot_page_action",
+		...(overrides.extra ?? []),
+		"--json",
+	];
+}
+
+describe("U1 prepare on-ramp", () => {
+	test("prepare --help renders evidence flags", async () => {
+		const help = await runForTest(["prepare", "--help"], makeRuntime());
+		expect(help.exitCode).toBe(0);
+		for (const flag of [
+			"--warm-chrome-proof",
+			"--adapter-proof",
+			"--report",
+			"--target-discovery",
+			"--mode",
+			"--adapter",
+			"--fallback-allowed",
+			"--bundle",
+			"--capability",
+			"--target-origin",
+		]) {
+			expect(help.stdout).toContain(flag);
+		}
+	});
+
+	test("route --help points to prepare", async () => {
+		const help = await runForTest(["route", "--help"], makeRuntime());
+		expect(help.stdout).toContain("prepare");
+	});
+
+	test("complete inputs emit a route-ready envelope and route_prepared_evidence", async () => {
+		const argv = await completePrepareArgv();
+		const result = await runForTest(argv, makeRuntime());
+		const parsed = expectJsonOk(result);
+		const data = parsed.data as {
+			envelope?: unknown;
+			route_input_mode?: string;
+			next_command_intent?: string;
+		};
+		expect(data.envelope).toBeDefined();
+		expect(data.route_input_mode).toBe("auto");
+		expect(data.next_command_intent).toBe("route");
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"route_prepared_evidence",
+		);
+	});
+
+	test("emitted envelope is accepted by route (AE3)", async () => {
+		const prepareArgv = await completePrepareArgv();
+		const prepared = await runForTest(prepareArgv, makeRuntime());
+		const data = parseJson(prepared.stdout).data as { envelope: unknown };
+		const envelopePath = await tmpFile(
+			"prepared-envelope.json",
+			JSON.stringify(data.envelope),
+		);
+		const routed = await runForTest(
+			["route", "--envelope", envelopePath, "--json"],
+			makeRuntime(),
+		);
+		const routedParsed = expectJsonOk(routed);
+		expect((routedParsed.data as { selected_adapter?: string }).selected_adapter).toBe(
+			"chrome-devtools",
+		);
+	});
+
+	test("repeated --report inputs produce a reports array", async () => {
+		const warm = await tmpFile("warm.json", warmChromeProofEnvelope());
+		const proof = await tmpFile("proof.json", adapterProofEnvelope());
+		const reportA = await tmpFile("a.json", JSON.stringify(makeReport()));
+		const reportB = await tmpFile("b.json", JSON.stringify(makeReport()));
+		const result = await runForTest(
+			[
+				"prepare",
+				"--warm-chrome-proof",
+				warm,
+				"--adapter-proof",
+				proof,
+				"--report",
+				reportA,
+				"--report",
+				reportB,
+				"--bundle",
+				"snapshot_page_action",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		const data = expectJsonOk(result).data as {
+			envelope: { reports: unknown[] };
+		};
+		expect(data.envelope.reports).toHaveLength(2);
+	});
+
+	test("missing warm Chrome proof emits prove_warm_chrome", async () => {
+		const proof = await tmpFile("proof.json", adapterProofEnvelope());
+		const report = await tmpFile("report.json", JSON.stringify(makeReport()));
+		const result = await runForTest(
+			[
+				"prepare",
+				"--adapter-proof",
+				proof,
+				"--report",
+				report,
+				"--bundle",
+				"snapshot_page_action",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect(parsed.status).toBe("error");
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"prove_warm_chrome",
+		);
+	});
+
+	test("missing report emits discover_capability_report", async () => {
+		const warm = await tmpFile("warm.json", warmChromeProofEnvelope());
+		const proof = await tmpFile("proof.json", adapterProofEnvelope());
+		const result = await runForTest(
+			[
+				"prepare",
+				"--warm-chrome-proof",
+				warm,
+				"--adapter-proof",
+				proof,
+				"--bundle",
+				"snapshot_page_action",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"discover_capability_report",
+		);
+	});
+
+	test("missing adapter proof emits prove_adapter_attachment", async () => {
+		const warm = await tmpFile("warm.json", warmChromeProofEnvelope());
+		const report = await tmpFile("report.json", JSON.stringify(makeReport()));
+		const result = await runForTest(
+			[
+				"prepare",
+				"--warm-chrome-proof",
+				warm,
+				"--report",
+				report,
+				"--bundle",
+				"snapshot_page_action",
+				"--json",
+			],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"prove_adapter_attachment",
+		);
+	});
+
+	test("force mode without adapter emits change_prepare_input", async () => {
+		const argv = await completePrepareArgv({ extra: ["--mode", "force"] });
+		const result = await runForTest(argv, makeRuntime());
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"change_prepare_input",
+		);
+	});
+
+	test("malformed report envelope emits change_prepare_input", async () => {
+		const argv = await completePrepareArgv({ report: "{not json" });
+		const result = await runForTest(argv, makeRuntime());
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect((parsed.error as { code?: string }).code).toBe("prepare_input_invalid");
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"change_prepare_input",
+		);
+	});
+
+	test("multiple missing facts list every fact and choose canonical order", async () => {
+		// No inputs at all: warm chrome, report, and adapter proof all missing.
+		const result = await runForTest(
+			["prepare", "--bundle", "snapshot_page_action", "--json"],
+			makeRuntime(),
+		);
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		const data = parsed.data as {
+			missing_facts: Array<{ kind: string }>;
+		};
+		const kinds = data.missing_facts.map((fact) => fact.kind);
+		expect(kinds).toContain("warm_chrome_proof");
+		expect(kinds).toContain("capability_report");
+		expect(kinds).toContain("adapter_proof");
+		// Canonical continuation follows dependency order: warm Chrome first.
+		expect((parsed.continuation as { next_action_id?: string }).next_action_id).toBe(
+			"prove_warm_chrome",
+		);
+		// runtime_actions includes every relevant recovery action.
+		const actionIds = (parsed.runtime_actions as Array<{ id: string }>).map(
+			(action) => action.id,
+		);
+		expect(actionIds).toContain("prove_warm_chrome");
+		expect(actionIds).toContain("discover_capability_report");
+		expect(actionIds).toContain("prove_adapter_attachment");
+	});
+
+	test("adapter proof bound to a different warm Chrome run fails closed", async () => {
+		const argv = await completePrepareArgv({
+			adapterProof: adapterProofEnvelope({ warmChromeRunId: "other-run" }),
+		});
+		const result = await runForTest(argv, makeRuntime());
+		expect(result.exitCode).toBe(20);
+		const parsed = parseJson(result.stdout);
+		expect((parsed.error as { code?: string }).code).toBe("prepare_input_invalid");
+	});
+
+	test("prepare plain output emits route_evidence_prepared", async () => {
+		const warm = await tmpFile("warm.json", warmChromeProofEnvelope());
+		const proof = await tmpFile("proof.json", adapterProofEnvelope());
+		const report = await tmpFile("report.json", JSON.stringify(makeReport()));
+		const result = await runForTest(
+			[
+				"prepare",
+				"--warm-chrome-proof",
+				warm,
+				"--adapter-proof",
+				proof,
+				"--report",
+				report,
+				"--bundle",
+				"snapshot_page_action",
+				"--plain",
+			],
+			makeRuntime(),
+		);
+		expectPlainSuccess(result, "route_evidence_prepared");
+	});
+
+	test("prepare rejects undeclared flags", async () => {
+		const argv = await completePrepareArgv({ extra: ["--bogus", "x"] });
+		const result = await runForTest(argv, makeRuntime());
+		expectUnknownOption(result, "--bogus");
 	});
 });
 
