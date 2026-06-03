@@ -111,7 +111,7 @@ function capability(capability, support = "full", confidence = 90) {
 		capability,
 		support,
 		confidence,
-		evidence: { verification_method: "maintainer_docs_review" },
+		evidence: { verification_method: "maintainer_verified_manifest" },
 	};
 }
 
@@ -139,7 +139,7 @@ function report(adapterId = "chrome-devtools", overrides = {}) {
 			adapter_version: `${adapterId}@1`,
 			source_url: "https://example.test/docs",
 			checked_at: "2026-06-08",
-			verification_method: "maintainer_docs_review",
+			verification_method: "maintainer_verified_manifest",
 			stale_after_days: 30,
 		},
 		capabilities: capabilitySet(),
@@ -887,7 +887,7 @@ function coreCases(fixtures) {
 	]) {
 		add(cases, key, 0, ["route", "--envelope", file, "--json", "--run-id", key, "--quiet"], selected(adapter));
 	}
-	add(cases, "route_prefer_partial_no_fallback", 20, ["route", "--envelope", files.preferPartial, "--json", "--run-id", "prefer-partial-no-fallback", "--quiet"], errorShape("adapter_capability_partial", "accept_partial_adapter", "change_input"));
+	add(cases, "route_prefer_partial_no_fallback", 20, ["route", "--envelope", files.preferPartial, "--json", "--run-id", "prefer-partial-no-fallback", "--quiet"], errorShape("adapter_capability_partial", "change_route_input", "change_input"));
 	add(cases, "route_prefer_partial_fallback", 0, ["route", "--envelope", files.preferPartialFallback, "--json", "--run-id", "prefer-partial-fallback", "--quiet"], selected("chrome-devtools"));
 	add(cases, "route_force_no_fallback_with_full_alternative", 20, ["route", "--envelope", files.forceAgentNoneWithChrome, "--json", "--run-id", "force-no-fallback", "--quiet"], errorShape("adapter_capability_none", "change_route_input", "change_input"));
 	add(cases, "route_boundary_freshness", 0, ["route", "--envelope", files.boundaryFreshness, "--json", "--run-id", "fresh-boundary", "--quiet"], selected("chrome-devtools"));
@@ -910,8 +910,8 @@ function coreCases(fixtures) {
 		["fail_incompat", files.incompatible, "adapter_attachment_incompatible", "change_route_input", "change_input"],
 		["fail_pre_stale", files.preStale, "route_evidence_stale", "change_route_input", "change_input"],
 		["fail_attach_missing", files.attachMissing, "adapter_attachment_unverified", "prove_adapter_attachment", "repair_state"],
-		["fail_auth_missing", files.authMissing, "auth_session_unverified", "change_route_input", "authenticate"],
-		["fail_partial", files.partial, "adapter_capability_partial", "accept_partial_adapter", "change_input"],
+		["fail_auth_missing", files.authMissing, "auth_session_unverified", "verify_auth_session", "authenticate"],
+		["fail_partial", files.partial, "adapter_capability_partial", "change_route_input", "change_input"],
 		["fail_unknown_cap", files.unknownCap, "adapter_capability_unknown", "research_adapter_capability", "change_input"],
 		["fail_stale_cap", files.staleCap, "adapter_capability_stale", "research_adapter_capability", "change_input"],
 		["fail_none", files.none, "adapter_capability_none", "change_route_input", "change_input"],
@@ -961,7 +961,7 @@ function hintsCases(fixtures) {
 	);
 	const scenarios = {
 		none: [files.none, "adapter_capability_none", "change_route_input", "change_input"],
-		partial: [files.partial, "adapter_capability_partial", "accept_partial_adapter", "change_input"],
+		partial: [files.partial, "adapter_capability_partial", "change_route_input", "change_input"],
 		unknownCap: [files.unknownCap, "adapter_capability_unknown", "research_adapter_capability", "change_input"],
 		staleCap: [files.staleCap, "adapter_capability_stale", "research_adapter_capability", "change_input"],
 		staleReport: [files.staleReport, "adapter_capability_stale", "research_adapter_capability", "change_input"],
@@ -972,10 +972,10 @@ function hintsCases(fixtures) {
 		futureFreshness: [files.futureFreshness, "route_evidence_stale", "change_route_input", "change_input"],
 		malformedFreshness: [files.malformedFreshness, "route_evidence_stale", "change_route_input", "change_input"],
 		warmNotReady: [files.warmNotReady, "adapter_attachment_unverified", "prove_adapter_attachment", "repair_state"],
-		authMissing: [files.authMissing, "auth_session_unverified", "change_route_input", "authenticate"],
-		authMismatch: [files.authMismatch, "auth_session_unverified", "change_route_input", "authenticate"],
-		targetMissing: [files.targetMissing, "target_origin_unverified", "change_route_input", "authenticate"],
-		targetMismatch: [files.targetMismatch, "target_origin_unverified", "change_route_input", "authenticate"],
+		authMissing: [files.authMissing, "auth_session_unverified", "verify_auth_session", "authenticate"],
+		authMismatch: [files.authMismatch, "auth_session_unverified", "verify_auth_session", "authenticate"],
+		targetMissing: [files.targetMissing, "target_origin_unverified", "verify_target_origin", "authenticate"],
+		targetMismatch: [files.targetMismatch, "target_origin_unverified", "verify_target_origin", "authenticate"],
 		mixed: [files.mixed, "route_evidence_mixed_run", "change_route_input", "change_input"],
 		invalid: [files.invalid, "route_evidence_invalid", "change_route_input", "change_input"],
 		invalidBundle: [files.invalidBundle, "route_evidence_invalid", "change_route_input", "change_input"],
@@ -1124,8 +1124,10 @@ function hintsCases(fixtures) {
 		assert(summary.includes("bounded docs research"), "missing research hint");
 		assert(summary.includes("advisory only until verified"), "missing advisory hint");
 	});
-	add(cases, "pad_accept_degraded_summary", 20, ["route", "--envelope", files.partial, "--json", "--run-id", "partial-summary", "--quiet"], (response) => {
-		assert(json(response).runtime_actions[0].summary.includes("degraded support"), "missing degraded hint");
+	add(cases, "pad_partial_change_input_summary", 20, ["route", "--envelope", files.partial, "--json", "--run-id", "partial-summary", "--quiet"], (response) => {
+		const parsed = json(response);
+		assert(parsed.continuation.next_action_id === "change_route_input", "partial did not fail closed to input change");
+		assert(parsed.runtime_actions[0].summary.includes("Correct the supplied evidence envelope"), "missing route input hint");
 	});
 	while (cases.length < 100) {
 		const index = cases.length + 1;

@@ -33,14 +33,16 @@ export function continuationForCode(
 		case "adapter_capability_unknown":
 			return "research_adapter_capability";
 		case "adapter_capability_partial":
-			return "accept_partial_adapter";
+			return "change_route_input";
+		case "auth_session_unverified":
+			return "verify_auth_session";
+		case "target_origin_unverified":
+			return "verify_target_origin";
 		case "adapter_capability_none":
 		case "adapter_attachment_incompatible":
 		case "route_evidence_invalid":
 		case "route_evidence_mixed_run":
 		case "route_evidence_stale":
-		case "auth_session_unverified":
-		case "target_origin_unverified":
 			return "change_route_input";
 		default:
 			return assertNeverDiagnosticCode(code);

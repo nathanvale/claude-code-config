@@ -640,9 +640,14 @@ export const browserAdapterRouterFailureActions = [
 		sideEffects: ["check"],
 	},
 	{
-		id: "accept_partial_adapter",
+		id: "verify_auth_session",
 		summary:
-			"Explicit user/agent acceptance of degraded support; only when degraded mode is allowed.",
+			"Verify target origin, profile identity, and account/session match before retrying routing.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "verify_target_origin",
+		summary: "Verify target page/origin evidence before retrying routing.",
 		sideEffects: ["check"],
 	},
 	{

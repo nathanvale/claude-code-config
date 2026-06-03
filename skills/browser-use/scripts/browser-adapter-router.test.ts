@@ -75,7 +75,7 @@ function makeReport(
 			adapter_version: "x@1",
 			source_url: "https://example.test/docs",
 			checked_at: "2026-06-08",
-			verification_method: "maintainer_docs_review",
+			verification_method: "maintainer_verified_manifest",
 			stale_after_days: 30,
 		},
 		capabilities: [
@@ -83,19 +83,19 @@ function makeReport(
 				capability: "snapshot_refs",
 				support: "full",
 				confidence: 90,
-				evidence: { verification_method: "maintainer_docs_review" },
+				evidence: { verification_method: "maintainer_verified_manifest" },
 			},
 			{
 				capability: "element_actions",
 				support: "full",
 				confidence: 90,
-				evidence: { verification_method: "maintainer_docs_review" },
+				evidence: { verification_method: "maintainer_verified_manifest" },
 			},
 			{
 				capability: "screenshot_media",
 				support: "full",
 				confidence: 90,
-				evidence: { verification_method: "maintainer_docs_review" },
+				evidence: { verification_method: "maintainer_verified_manifest" },
 			},
 		],
 		...overrides,
@@ -1443,6 +1443,15 @@ describe("U3 research recovery", () => {
 		expect(continuationForCode("adapter_capability_stale")).toBe(
 			"research_adapter_capability",
 		);
+		expect(continuationForCode("adapter_capability_partial")).toBe(
+			"change_route_input",
+		);
+		expect(continuationForCode("auth_session_unverified")).toBe(
+			"verify_auth_session",
+		);
+		expect(continuationForCode("target_origin_unverified")).toBe(
+			"verify_target_origin",
+		);
 		expect(recoverabilityForCode("auth_session_unverified")).toBe(
 			"authenticate",
 		);
@@ -1453,6 +1462,12 @@ describe("U3 research recovery", () => {
 		expect(action.id).toBe("use_selected_browser_adapter");
 		expect(action.summary.length).toBeGreaterThan(0);
 		expect(action.side_effects).toEqual(["check"]);
+		expect(runtimeActionForId("verify_auth_session").id).toBe(
+			"verify_auth_session",
+		);
+		expect(runtimeActionForId("verify_target_origin").id).toBe(
+			"verify_target_origin",
+		);
 	});
 
 	test("report failure validates through Router recovery helper", async () => {
@@ -1931,7 +1946,7 @@ describe("hardening: report CLI success path + reliability", () => {
 					adapter_version: "x@1",
 					source_url: "https://example.test/docs",
 					checked_at: "2026-01-01",
-					verification_method: "maintainer_docs_review",
+					verification_method: "maintainer_verified_manifest",
 					stale_after_days: 30,
 				},
 			}),
