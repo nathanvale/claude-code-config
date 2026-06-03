@@ -2929,9 +2929,9 @@ describe("usage failures", () => {
 
 	test("redacts unsafe usage arguments in JSON errors", async () => {
 		const scenarios = [
-			["check", "/Users/tester/profile", "--json"],
-			["check", "op://Vault/Item/field", "--json"],
-			["check", "--password=abc", "--json"],
+			["check", "/Users/tester/profile", "--json", "--run-id", "redaction-run"],
+			["check", "op://Vault/Item/field", "--json", "--run-id", "redaction-run"],
+			["check", "--password=abc", "--json", "--run-id", "redaction-run"],
 		];
 
 		for (const argv of scenarios) {
