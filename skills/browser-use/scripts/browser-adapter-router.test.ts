@@ -36,6 +36,7 @@ import {
 	validateRouteEvidenceEnvelope,
 } from "./browser-adapter-router";
 import {
+	authorizesOperationClass,
 	evaluateRoute,
 	isReportStale,
 	rankSelectableForTest,
@@ -119,7 +120,18 @@ function makeEnvelope(
 			run_id,
 			freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
 			warm_chrome_ready: true,
+			warm_chrome_run_id: "warm-1",
 			adapter_attached_verified_browser: { "chrome-devtools": true },
+			// Default proof binding so operation-capable routes (the common
+			// fixture bundle) satisfy the U2 binding gate. Tests that exercise
+			// non-operation or fail-closed paths override preconditions.
+			adapter_proof: {
+				"chrome-devtools": {
+					adapter_proof_id: "proof-abc",
+					warm_chrome_run_id: "warm-1",
+					verified_endpoint_identity: "127.0.0.1:9222",
+				},
+			},
 			...(overrides.preconditions ?? {}),
 		},
 		reports: overrides.reports ?? [makeReport()],
@@ -596,6 +608,8 @@ function adapterProofEnvelope(
 			command: "check",
 			adapter: overrides.adapter ?? "chrome-devtools",
 			warm_chrome_run_id: overrides.warmChromeRunId ?? "run-1",
+			adapter_proof_id: "proof-fixture-id",
+			verified_endpoint_identity: "127.0.0.1:9333",
 			endpoint: "http://127.0.0.1:9333",
 			port: "9333",
 			page_count: 1,
@@ -1559,9 +1573,22 @@ describe("U2 policy resolver", () => {
 				run_id: "run-1",
 				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
 				warm_chrome_ready: true,
+				warm_chrome_run_id: "warm-1",
 				adapter_attached_verified_browser: {
 					"chrome-devtools": true,
 					"agent-browser": true,
+				},
+				adapter_proof: {
+					"chrome-devtools": {
+						adapter_proof_id: "proof-cdp",
+						warm_chrome_run_id: "warm-1",
+						verified_endpoint_identity: "127.0.0.1:9222",
+					},
+					"agent-browser": {
+						adapter_proof_id: "proof-ab",
+						warm_chrome_run_id: "warm-1",
+						verified_endpoint_identity: "127.0.0.1:9222",
+					},
 				},
 			},
 		});
@@ -2619,5 +2646,333 @@ describe("hardening: empty required capabilities", () => {
 		});
 		const evaluation = evaluateRoute(envelope, EVAL_DATE);
 		expect(evaluation.outcome).toBe("fail_closed");
+	});
+});
+
+// Plan U2 (Route And Proof Binding Metadata). These tests pin the binding
+// tuple slice owned by route success + the viewport-emulation capability before
+// any target/operation work ships. Target/operation binding fields
+// (target_envelope_id, target_candidate_id, operation_intent) belong to U5-U7.
+describe("U2 route/proof binding metadata", () => {
+	function makeBoundEnvelope(
+		overrides: Partial<RouteEvidenceEnvelope> = {},
+	): RouteEvidenceEnvelope {
+		return makeEnvelope({
+			preconditions: {
+				run_id: "run-1",
+				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+				warm_chrome_ready: true,
+				warm_chrome_run_id: "warm-1",
+				adapter_attached_verified_browser: { "chrome-devtools": true },
+				adapter_proof: {
+					"chrome-devtools": {
+						adapter_proof_id: "proof-abc",
+						warm_chrome_run_id: "warm-1",
+						verified_endpoint_identity: "127.0.0.1:9222",
+					},
+				},
+			},
+			...overrides,
+		});
+	}
+
+	// Narrow a route evaluation to a defined binding; fails the test loudly if
+	// the route did not select or carries no binding.
+	function expectBinding(
+		evaluation: ReturnType<typeof evaluateRoute>,
+	): NonNullable<
+		Extract<typeof evaluation, { outcome: "selected" }>["binding"]
+	> {
+		expect(evaluation.outcome).toBe("selected");
+		if (evaluation.outcome !== "selected") {
+			throw new Error("expected selected route");
+		}
+		expect(evaluation.binding).toBeDefined();
+		if (!evaluation.binding) {
+			throw new Error("expected route binding");
+		}
+		return evaluation.binding;
+	}
+
+	test("route success exposes the route/proof binding tuple slice", () => {
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(JSON.stringify(makeBoundEnvelope())),
+			EVAL_DATE,
+		);
+		const binding = expectBinding(evaluation);
+		expect(binding.run_id).toBe("run-1");
+		expect(binding.selected_adapter_id).toBe("chrome-devtools");
+		expect(binding.warm_chrome_run_id).toBe("warm-1");
+		expect(binding.adapter_proof_id).toBe("proof-abc");
+		expect(typeof binding.route_evidence_hash).toBe("string");
+		expect(binding.route_evidence_hash.length).toBeGreaterThan(0);
+		expect(binding.emitted_at).toBe(EVAL_DATE);
+		// expires_at derives from precondition freshness, not a wall clock.
+		expect(binding.expires_at).toBe("2026-07-08");
+	});
+
+	test("route_evidence_hash is stable for identical evidence", () => {
+		const a = evaluateRoute(
+			parseEvidenceEnvelope(JSON.stringify(makeBoundEnvelope())),
+			EVAL_DATE,
+		);
+		const b = evaluateRoute(
+			parseEvidenceEnvelope(JSON.stringify(makeBoundEnvelope())),
+			EVAL_DATE,
+		);
+		const bindingA = expectBinding(a);
+		const bindingB = expectBinding(b);
+		expect(bindingA.route_evidence_hash).toBe(bindingB.route_evidence_hash);
+	});
+
+	test("command contract exposes the viewport_emulation capability", () => {
+		expect(BROWSER_ADAPTER_ROUTER_CAPABILITIES).toContain("viewport_emulation");
+	});
+
+	test("route authorizes only capabilities present in route evidence", () => {
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: { required_capabilities: ["snapshot_refs"] },
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		const binding = expectBinding(evaluation);
+		expect(binding.authorized_capabilities).toEqual(["snapshot_refs"]);
+		expect(binding.authorized_capabilities).not.toContain("screenshot_media");
+	});
+
+	test("operation capability mapping fails closed when capability not routed", () => {
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: { required_capabilities: ["snapshot_refs"] },
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		const binding = expectBinding(evaluation);
+		// snapshot routed -> authorized; screenshot + emulate not routed -> closed.
+		expect(authorizesOperationClass(binding, "snapshot")).toBe(true);
+		expect(authorizesOperationClass(binding, "screenshot")).toBe(false);
+		expect(authorizesOperationClass(binding, "emulate")).toBe(false);
+	});
+
+	test("emulate authorizes only when viewport_emulation is routed", () => {
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: { required_capabilities: ["viewport_emulation"] },
+						reports: [
+							makeReport({
+								capabilities: [
+									{
+										capability: "viewport_emulation",
+										support: "full",
+										confidence: 90,
+										evidence: {
+											verification_method: "maintainer_verified_manifest",
+										},
+									},
+								],
+							}),
+						],
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		const binding = expectBinding(evaluation);
+		expect(authorizesOperationClass(binding, "emulate")).toBe(true);
+		expect(authorizesOperationClass(binding, "snapshot")).toBe(false);
+	});
+
+	test("route validation rejects mismatched binding proof evidence", () => {
+		// Precondition proof claims a different selected adapter than was attached:
+		// run-scoped proof id present for an adapter with no attachment verification.
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						preconditions: {
+							run_id: "run-1",
+							freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+							warm_chrome_ready: true,
+							warm_chrome_run_id: "warm-1",
+							adapter_attached_verified_browser: { "chrome-devtools": true },
+							adapter_proof: {
+								"chrome-devtools": {
+									adapter_proof_id: "proof-abc",
+									// Mismatched warm chrome run id vs the run-scoped session.
+									warm_chrome_run_id: "warm-OTHER-RUN",
+									verified_endpoint_identity: "127.0.0.1:9222",
+								},
+							},
+						},
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		expect(evaluation.outcome).toBe("fail_closed");
+		if (evaluation.outcome !== "fail_closed") return;
+		expect(evaluation.code).toBe("route_evidence_binding_mismatch");
+		// Binding mismatch always recovers by re-proving the adapter, the same
+		// canonical continuation the buildSuccess absent-proof path resolves to.
+		expect(evaluation.next_action_id).toBe("prove_adapter_attachment");
+	});
+
+	test("cross-run proof fails closed even when run-scoped warm_chrome_run_id is omitted", () => {
+		// Bypass guard (U2 R9): omitting pre.warm_chrome_run_id must not skip the
+		// cross-run check. Two proofs binding to different warm-Chrome runs fail
+		// closed via the first-proof anchor.
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: {
+							required_capabilities: ["snapshot_refs"],
+							adapter_ranking: ["chrome-devtools", "agent-browser"],
+						},
+						reports: [
+							makeReport({ adapter_id: "chrome-devtools" }),
+							makeReport({ adapter_id: "agent-browser" }),
+						],
+						preconditions: {
+							run_id: "run-1",
+							freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+							warm_chrome_ready: true,
+							// No run-scoped warm_chrome_run_id supplied.
+							adapter_attached_verified_browser: {
+								"chrome-devtools": true,
+								"agent-browser": true,
+							},
+							adapter_proof: {
+								"chrome-devtools": {
+									adapter_proof_id: "proof-cdp",
+									warm_chrome_run_id: "warm-1",
+									verified_endpoint_identity: "127.0.0.1:9222",
+								},
+								"agent-browser": {
+									adapter_proof_id: "proof-ab",
+									// Foreign warm-Chrome run — must be rejected against the anchor.
+									warm_chrome_run_id: "warm-FOREIGN",
+									verified_endpoint_identity: "127.0.0.1:9222",
+								},
+							},
+						},
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		expect(evaluation.outcome).toBe("fail_closed");
+		if (evaluation.outcome !== "fail_closed") return;
+		expect(evaluation.code).toBe("route_evidence_binding_mismatch");
+		expect(evaluation.next_action_id).toBe("prove_adapter_attachment");
+	});
+
+	test("operation-capable route selected without any proof fails closed", () => {
+		// buildSuccess gate (U2 R9, R12): an operation-capable route whose selected
+		// adapter has no proof entry fails closed before returning success.
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: { required_capabilities: ["snapshot_refs"] },
+						preconditions: {
+							run_id: "run-1",
+							freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+							warm_chrome_ready: true,
+							adapter_attached_verified_browser: { "chrome-devtools": true },
+							// No proof entry for the selected adapter.
+							adapter_proof: {},
+						},
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		expect(evaluation.outcome).toBe("fail_closed");
+		if (evaluation.outcome !== "fail_closed") return;
+		expect(evaluation.code).toBe("route_evidence_binding_mismatch");
+		expect(evaluation.next_action_id).toBe("prove_adapter_attachment");
+	});
+
+	test("proof with missing binding identity fields fails closed", () => {
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: { required_capabilities: ["snapshot_refs"] },
+						preconditions: {
+							run_id: "run-1",
+							freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+							warm_chrome_ready: true,
+							warm_chrome_run_id: "warm-1",
+							adapter_attached_verified_browser: { "chrome-devtools": true },
+							adapter_proof: {
+								"chrome-devtools": {
+									adapter_proof_id: "proof-abc",
+									warm_chrome_run_id: "warm-1",
+									// Empty verified endpoint identity.
+									verified_endpoint_identity: "",
+								},
+							},
+						},
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		expect(evaluation.outcome).toBe("fail_closed");
+		if (evaluation.outcome !== "fail_closed") return;
+		expect(evaluation.code).toBe("route_evidence_binding_mismatch");
+	});
+
+	test("non-operation route selects without a binding tuple", () => {
+		// A pure capability-discovery route (no operation capability) carries no
+		// proof binding; binding must be absent, not fabricated.
+		const evaluation = evaluateRoute(
+			parseEvidenceEnvelope(
+				JSON.stringify(
+					makeBoundEnvelope({
+						task: { required_capabilities: ["console_debug"] },
+						reports: [
+							makeReport({
+								capabilities: [
+									{
+										capability: "console_debug",
+										support: "full",
+										confidence: 90,
+										evidence: {
+											verification_method: "maintainer_verified_manifest",
+										},
+									},
+								],
+							}),
+						],
+						preconditions: {
+							run_id: "run-1",
+							freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+							warm_chrome_ready: true,
+							adapter_attached_verified_browser: { "chrome-devtools": true },
+							// No proof binding needed for a non-operation route.
+							adapter_proof: {},
+						},
+					}),
+				),
+			),
+			EVAL_DATE,
+		);
+		expect(evaluation.outcome).toBe("selected");
+		if (evaluation.outcome !== "selected") return;
+		expect(evaluation.binding).toBeUndefined();
 	});
 });

@@ -8,7 +8,9 @@ export const WARM_CHROME_PREFLIGHT_CONTRACT_ID =
 export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "2" as const;
 export const BROWSER_ADAPTER_PROOF_CONTRACT_ID =
 	"browser-use.browser-adapter-proof" as const;
-export const BROWSER_ADAPTER_PROOF_SCHEMA_VERSION = "1" as const;
+// v2 (plan U2 R8): proof output gained required adapter_proof_id and
+// verified_endpoint_identity binding fields; consumers version-discriminate.
+export const BROWSER_ADAPTER_PROOF_SCHEMA_VERSION = "2" as const;
 export const BROWSER_ADAPTER_MAP_CONTRACT_ID =
 	"browser-use.browser-adapter-map" as const;
 export const BROWSER_ADAPTER_MAP_SCHEMA_VERSION = "1" as const;
@@ -559,6 +561,9 @@ export const BROWSER_ADAPTER_ROUTER_CAPABILITIES = [
 	"devtools_performance_insight",
 	"memory_debug",
 	"react_vitals",
+	// Runtime-owned viewport emulation capability (plan U2 R11). Routed evidence
+	// must declare it before `browser-use operate emulate` is authorized.
+	"viewport_emulation",
 ] as const;
 export type BrowserAdapterRouterCapability =
 	(typeof BROWSER_ADAPTER_ROUTER_CAPABILITIES)[number];
@@ -629,6 +634,9 @@ export const BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES = [
 	"route_evidence_invalid",
 	"route_evidence_mixed_run",
 	"route_evidence_stale",
+	// Binding tuple mismatch across route/proof evidence (plan U2 R9): proof id,
+	// warm Chrome run id, selected adapter id, or endpoint identity do not agree.
+	"route_evidence_binding_mismatch",
 	"auth_session_unverified",
 	"target_origin_unverified",
 ] as const;

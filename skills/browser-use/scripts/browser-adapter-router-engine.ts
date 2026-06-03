@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	BROWSER_ADAPTER_ROUTER_ADAPTERS,
 	BROWSER_ADAPTER_ROUTER_COMPATIBLE_ATTACHMENT_MODEL,
@@ -9,11 +10,13 @@ import {
 import type {
 	AdapterCapability,
 	BrowserAdapterId,
+	BrowserOperationClass,
 	CapabilityReport,
 	CapabilityReportProvenance,
 	CandidateDecision,
 	MediaProofMetadata,
 	ResearchRecovery,
+	RouteBinding,
 	RouteEvidenceFreshness,
 	RouteEvaluation,
 	RouteFailure,
@@ -66,6 +69,39 @@ export function resolveRequiredCapabilities(
 		...(task.required_capabilities ?? []),
 	]);
 	return [...merged];
+}
+
+// ---------------------------------------------------------------------------
+// Operation capability mapping (U2 R10, R11). Each Browser Operation class
+// authorizes only when its required capability is present in the route's
+// authorized capability set. Runtime-owned so the public operation vocabulary
+// never leaks adapter method names.
+// ---------------------------------------------------------------------------
+
+const OPERATION_CLASS_CAPABILITY = {
+	snapshot: "snapshot_refs",
+	screenshot: "screenshot_media",
+	emulate: "viewport_emulation",
+} as const satisfies Record<BrowserOperationClass, AdapterCapability>;
+
+// Capabilities that authorize a Browser Operation class (U2 R12). A route that
+// requests any of these is operation-capable and must carry proof binding.
+const OPERATION_CAPABILITIES = new Set<AdapterCapability>(
+	Object.values(OPERATION_CLASS_CAPABILITY),
+);
+
+function requestsOperationCapability(
+	requiredCapabilities: readonly AdapterCapability[],
+): boolean {
+	return requiredCapabilities.some((cap) => OPERATION_CAPABILITIES.has(cap));
+}
+
+export function authorizesOperationClass(
+	binding: RouteBinding,
+	operationClass: BrowserOperationClass,
+): boolean {
+	const required = OPERATION_CLASS_CAPABILITY[operationClass];
+	return binding.authorized_capabilities.includes(required);
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +460,28 @@ function buildSuccess(input: {
 	requiredCapabilities: AdapterCapability[];
 	decisions: readonly CandidateDecision[];
 	reportByAdapter: Map<BrowserAdapterId, CapabilityReport>;
-}): RouteSuccess {
+}): RouteSuccess | RouteFailure {
+	// Operation-capable routes require proof binding for the selected adapter
+	// (U2 R9, R12). The route hands one bound proof to the Browser Operation
+	// Front Door; a selected adapter without proof cannot satisfy that contract,
+	// so fail closed. Non-operation routes (pure capability discovery) carry no
+	// proof binding and select normally.
+	const selectedProof =
+		input.envelope.preconditions.adapter_proof?.[input.selected];
+	if (
+		requestsOperationCapability(input.requiredCapabilities) &&
+		!selectedProof
+	) {
+		return preconditionFailure(
+			input.mode,
+			input.requested,
+			input.requiredCapabilities,
+			input.evaluationDate,
+			"route_evidence_binding_mismatch",
+			`Operation-capable route selected ${input.selected} without Browser Adapter Proof binding.`,
+		);
+	}
+
 	const selectedDecision = input.decisions.find(
 		(d) => d.adapter_id === input.selected,
 	);
@@ -479,10 +536,65 @@ function buildSuccess(input: {
 		ranking,
 		candidate_decisions: input.decisions,
 		provenance_summary,
+		...(() => {
+			const binding = buildRouteBinding(input);
+			return binding ? { binding } : {};
+		})(),
 		...(input.envelope.task.media_proof?.requested
 			? { media_proof: buildMediaProof(input.envelope.task.media_proof) }
 			: {}),
 	};
+}
+
+// Build the route/proof binding tuple slice (U2 R8). The selected adapter's
+// run-scoped proof identity is surfaced so Browser Operations bind to one
+// proof. Returns undefined for non-operation routes that carry no proof
+// binding; checkPreconditions has already failed closed if an operation-capable
+// route reached selection without proof (R9, R12).
+function buildRouteBinding(input: {
+	envelope: ValidatedRouteEvidenceEnvelope;
+	evaluationDate: string;
+	selected: BrowserAdapterId;
+	requiredCapabilities: AdapterCapability[];
+}): RouteBinding | undefined {
+	const proof = input.envelope.preconditions.adapter_proof?.[input.selected];
+	if (!proof) return undefined;
+	return {
+		run_id: input.envelope.run_id,
+		selected_adapter_id: input.selected,
+		warm_chrome_run_id: proof.warm_chrome_run_id,
+		adapter_proof_id: proof.adapter_proof_id,
+		verified_endpoint_identity: proof.verified_endpoint_identity,
+		route_evidence_hash: hashRouteEvidence(input.envelope),
+		authorized_capabilities: [...input.requiredCapabilities],
+		emitted_at: input.evaluationDate,
+		expires_at: deriveExpiry(input.envelope.preconditions.freshness),
+	};
+}
+
+// Deterministic content hash of the validated evidence envelope (U2 R8). No
+// clock or randomness so identical evidence always yields the same hash, which
+// downstream Browser Operations compare against to detect tampering or reuse.
+function hashRouteEvidence(envelope: ValidatedRouteEvidenceEnvelope): string {
+	const canonical = JSON.stringify({
+		run_id: envelope.run_id,
+		policy: envelope.policy,
+		task: envelope.task,
+		preconditions: envelope.preconditions,
+		reports: envelope.reports,
+	});
+	return createHash("sha256").update(canonical).digest("hex");
+}
+
+// Derive route evidence expiry from precondition freshness (U2 R8). Pure date
+// math on caller-supplied values; the runtime never reads a wall clock.
+function deriveExpiry(freshness: RouteEvidenceFreshness): string {
+	const checked = Date.parse(freshness.checked_at);
+	if (Number.isNaN(checked)) return freshness.checked_at;
+	const expiry = new Date(
+		checked + freshness.stale_after_days * 24 * 60 * 60 * 1000,
+	);
+	return expiry.toISOString().slice(0, 10);
 }
 
 function buildMediaProof(request: {
@@ -596,6 +708,38 @@ function buildResearchRecovery(input: {
 	};
 }
 
+// Validate supplied Browser Adapter Proof binding identity (U2 R9). Returns a
+// failure message when proof evidence is incomplete or cross-run, else null.
+// Pure check on supplied facts; selection has not happened yet, so every
+// supplied proof entry is validated.
+function checkProofBinding(
+	pre: RoutePreconditionEvidence,
+): string | null {
+	const proofs = pre.adapter_proof;
+	if (!proofs) return null;
+	// Cross-run anchor (U2 R9). Prefer the explicit run-scoped Warm Chrome run
+	// id; when the caller omits it, fall back to the first supplied proof's run
+	// id so a single warm-Chrome session is still enforced across proofs. This
+	// closes the bypass where omitting pre.warm_chrome_run_id would otherwise
+	// skip the cross-run check entirely and admit foreign-run proof evidence.
+	let anchorRunId = pre.warm_chrome_run_id;
+	for (const [adapter, proof] of Object.entries(proofs)) {
+		if (!proof) continue;
+		if (
+			!proof.adapter_proof_id ||
+			!proof.warm_chrome_run_id ||
+			!proof.verified_endpoint_identity
+		) {
+			return `Browser Adapter Proof for ${adapter} is missing binding identity fields.`;
+		}
+		anchorRunId ??= proof.warm_chrome_run_id;
+		if (proof.warm_chrome_run_id !== anchorRunId) {
+			return `Browser Adapter Proof for ${adapter} binds to a different Warm Chrome run than the route run.`;
+		}
+	}
+	return null;
+}
+
 // ---------------------------------------------------------------------------
 // Precondition gate (U5). Run facts must pass before adapter capability ranking.
 // ---------------------------------------------------------------------------
@@ -631,6 +775,22 @@ function checkPreconditions(input: {
 			evaluationDate,
 			"route_evidence_mixed_run",
 			"Precondition evidence run id does not match the route run id.",
+		);
+	}
+
+	// Binding tuple consistency (U2 R9). Any supplied adapter proof must carry a
+	// complete, self-consistent identity, and when a run-scoped Warm Chrome run
+	// id is supplied, every proof must bind to that same session. Fail closed on
+	// mismatched, incomplete, or cross-run proof evidence before selection.
+	const bindingMismatch = checkProofBinding(pre);
+	if (bindingMismatch) {
+		return preconditionFailure(
+			mode,
+			requested,
+			input.requiredCapabilities,
+			evaluationDate,
+			"route_evidence_binding_mismatch",
+			bindingMismatch,
 		);
 	}
 

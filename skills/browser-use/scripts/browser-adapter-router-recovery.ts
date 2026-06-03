@@ -51,6 +51,11 @@ export function continuationForCode(
 		case "route_evidence_mixed_run":
 		case "route_evidence_stale":
 			return "change_route_input";
+		// Binding mismatch is always repaired by re-proving the adapter, whether
+		// the proof is missing, incomplete, or cross-run (U2 R9). One canonical
+		// continuation for the code regardless of which gate emits it.
+		case "route_evidence_binding_mismatch":
+			return "prove_adapter_attachment";
 		default:
 			return assertNeverDiagnosticCode(code);
 	}
@@ -64,6 +69,10 @@ export function recoverabilityForCode(
 		case "target_origin_unverified":
 			return "authenticate";
 		case "adapter_attachment_unverified":
+		// Binding mismatch recovers by re-proving the adapter (continuation
+		// prove_adapter_attachment), the same repair_state class as an
+		// unverified attachment — not a route-input edit.
+		case "route_evidence_binding_mismatch":
 			return "repair_state";
 		case "route_evidence_invalid":
 		case "route_evidence_mixed_run":
