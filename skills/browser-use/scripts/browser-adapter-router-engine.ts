@@ -479,7 +479,6 @@ function buildSuccess(input: {
 			input.evaluationDate,
 			"route_evidence_binding_mismatch",
 			`Operation-capable route selected ${input.selected} without Browser Adapter Proof binding.`,
-			"prove_adapter_attachment",
 		);
 	}
 
@@ -718,6 +717,12 @@ function checkProofBinding(
 ): string | null {
 	const proofs = pre.adapter_proof;
 	if (!proofs) return null;
+	// Cross-run anchor (U2 R9). Prefer the explicit run-scoped Warm Chrome run
+	// id; when the caller omits it, fall back to the first supplied proof's run
+	// id so a single warm-Chrome session is still enforced across proofs. This
+	// closes the bypass where omitting pre.warm_chrome_run_id would otherwise
+	// skip the cross-run check entirely and admit foreign-run proof evidence.
+	let anchorRunId = pre.warm_chrome_run_id;
 	for (const [adapter, proof] of Object.entries(proofs)) {
 		if (!proof) continue;
 		if (
@@ -727,10 +732,8 @@ function checkProofBinding(
 		) {
 			return `Browser Adapter Proof for ${adapter} is missing binding identity fields.`;
 		}
-		if (
-			pre.warm_chrome_run_id &&
-			proof.warm_chrome_run_id !== pre.warm_chrome_run_id
-		) {
+		anchorRunId ??= proof.warm_chrome_run_id;
+		if (proof.warm_chrome_run_id !== anchorRunId) {
 			return `Browser Adapter Proof for ${adapter} binds to a different Warm Chrome run than the route run.`;
 		}
 	}
@@ -790,7 +793,6 @@ function checkPreconditions(input: {
 			bindingMismatch,
 		);
 	}
-
 
 	if (pre.warm_chrome_ready !== true) {
 		return preconditionFailure(

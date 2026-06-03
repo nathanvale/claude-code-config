@@ -8,7 +8,9 @@ export const WARM_CHROME_PREFLIGHT_CONTRACT_ID =
 export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "2" as const;
 export const BROWSER_ADAPTER_PROOF_CONTRACT_ID =
 	"browser-use.browser-adapter-proof" as const;
-export const BROWSER_ADAPTER_PROOF_SCHEMA_VERSION = "1" as const;
+// v2 (plan U2 R8): proof output gained required adapter_proof_id and
+// verified_endpoint_identity binding fields; consumers version-discriminate.
+export const BROWSER_ADAPTER_PROOF_SCHEMA_VERSION = "2" as const;
 export const BROWSER_ADAPTER_MAP_CONTRACT_ID =
 	"browser-use.browser-adapter-map" as const;
 export const BROWSER_ADAPTER_MAP_SCHEMA_VERSION = "1" as const;
