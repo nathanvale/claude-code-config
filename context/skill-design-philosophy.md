@@ -1,128 +1,108 @@
-# Skill Design Philosophy — prose-trust, steipete weight
+# Skill Design Philosophy
 
-Default model for authoring skills in this repo. Inspired by
-[steipete/agent-scripts](https://github.com/steipete/agent-scripts) (Peter Steinberger's 48-skill
-corpus). Load when authoring or reviewing a `SKILL.md`.
+Default model for authoring, reviewing, healing, and repairing `SKILL.md` files in this repo.
 
-## The rule, stated plainly
+## Core Rule
 
-**Contracts where a machine parses. Prose where a model reasons.**
+- Contracts where a machine parses.
+- Prose where a model reasons.
+- Skill bodies route the model: when to act, what to run, what to read, when to stop.
+- Code, CLI help, generated docs, tests, and scripts own deterministic behavior.
+- Never copy flags, schemas, state machines, output semantics, or generated shapes into `SKILL.md`.
 
-A skill is a routing layer that puts the right knowledge in front of a reasoning model, then gets
-out of the way. The model is the runtime. Write for the runtime you have.
+## Shape
 
-- Skill **bodies** are read by a reasoning model → write prose. Trust it to follow a clear sentence.
-- The **frontmatter** and **infra** (renderers, extractors, runbooks, drift checks) are parsed by
-  scripts → keep deterministic contracts there. A script is a dumb executor and needs them.
-
-This is not "prose vs. contracts." It is one line drawn at machine-parsed vs. model-read. steipete
-keeps exactly one contract — `validate-skills` checks frontmatter shape — because that is the one
-boundary a machine depends on. Everything a model reads is prose.
-
-## Why it works
-
-The consumer is an LLM. An LLM follows a well-written sentence better than a rigid schema it must
-reverse-engineer. Machinery is how you constrain a *dumb* executor; the model is not dumb, so
-machinery is wasted — worse, it is a second source of truth that can disagree with the prose.
-
-| | Heavy (contract) skill | Prose-trust skill |
-|---|---|---|
-| Source of truth | code + prose (can disagree) | prose only (can't disagree with itself) |
-| Drift | constant | near-zero — nothing to drift |
-| Fits in your head | no | yes, by design |
-| Maintenance | a system | edit a sentence |
-| Failure mode | silent wrong behavior | model reads the rule, follows it |
-| Right when | the executor is a script | the executor reasons |
-
-The cautionary tale is the side-quest browser-automation (BA) plugin: surface-manager,
-managed-domain contracts, preflight, BSS, authority locks, 8-round adversarial review chains —
-machinery defending against failure modes that did not matter, treating a reasoning model like a
-dumb executor. Prose-trust is the antidote.
-
-## The shape (steipete weight)
-
-```
+```text
 skills/<name>/
-  SKILL.md          ← only required file. ~50-115 lines typical (avg ~3.7KB; cap ~14KB).
-                       frontmatter = name + double-quoted keyword-phrase description. that's it.
-                       body = terse imperative bullets + copy-paste command blocks.
-  scripts/*         ← optional. repeatable commands a workflow runs. dependency-light. ranges from
-                       a thin shell helper to a proper CLI tool built with the `create-cli` skill.
-  references/*.md   ← optional. only for long docs pulled out of SKILL.md.
+  SKILL.md          required; trigger, workflow, commands, owner paths
+  scripts/*         optional; deterministic helpers or CLIs
+  references/*.md   optional; one-level-deep detail
 ```
 
-Most skills are a single file. Second most common is `SKILL.md` + one thin script. Never
-`scripts/` + `references/` + machinery all at once except the largest skills.
+- Most skills are one file.
+- Add `scripts/` only for repeated deterministic work.
+- Add `references/` only when depth would bloat `SKILL.md`.
+- Avoid `scripts/` plus `references/` plus extra machinery unless the skill is genuinely large.
 
-**`scripts/` is the machine-parsed side of the line, not a contradiction of prose-trust.** A script —
-including a full CLI built with the `create-cli` skill (typed args, flags, exit codes, dry-run) — is a
-deterministic contract a machine executes. The SKILL.md prose says *when* and *why* to invoke it; the
-CLI enforces *how*. This is the create-cli ↔ cli-command-facade pattern: the skill body is the prose
-spec, the CLI under `scripts/` is the enforced contract. Determinism belongs there, not in the body.
+## Frontmatter
 
-## SKILL.md conventions
+- Use `name` plus quoted `description`.
+- Write `description` as trigger phrase, not summary.
+- Exclude personal names unless routing requires them.
+- YAML-parse after edits.
 
-- **Frontmatter:** `name` + `description` only required. `description` is double-quoted, a generic
-  **keyword trigger phrase** optimized for routing, never a summary or workflow narration. No
-  personal names. YAML-parse before commit.
-- **Body:** terse, imperative, telegraphic. Mostly fenced command blocks with one-line intent
-  lead-ins. Prose reserved for judgment, mode selection, and stop conditions — not for restating
-  commands.
-- **Common headings:** `## Workflow` / `## Source(s)` / `## Safety` / `## Secret Handling` /
-  `## Common Commands` / `## Known Pitfalls` / `## Contract`.
+## Body
 
-## Rules as prose, not machinery
+- Write terse prose plus commands.
+- Write triggers, not essays.
+- Give the next safe action.
+- Prefer examples over abstract explanation.
+- Keep one workflow per skill.
+- Use references for depth, one level down.
+- Delete prose that does not change behavior.
 
-Express safety and guardrails as **prose bullets the model follows**, fail-closed, not as enforcement
-code. steipete's strongest examples:
+## Owner Paths
 
-- **Shape-not-value secrets** (`one-password`): "Print presence/shape only, never token or secret
-  values." Verify length/prefix/newline-count, never the value.
-- **Fail-closed redaction** (`agent-transcript`): allow-list what to keep, deny-list
-  secrets/cookies/auth-URLs, sanitize before write, "fail closed on unresolved secrets."
-- **No-noise memory** (`github-author-context`): "Do not record ordinary noise" — append only if it
-  creates future value. One sentence does what a promotion lifecycle would.
-- **Freshness** (`beeper`, `notcrawl`): name the on-disk source + a `doctor`/`status`/`sync` refresh
-  verb; "verify freshness for current questions."
+- Name the owner path instead of copying the contract.
+- Runtime-backed skill docs name commands and env vars for routing only.
+- Code/help/tests own flags, schemas, state machines, validation rules, and output semantics.
+- Use headings like `## Owner`, `## Commands`, `## Verification`, `## Safety`, `## Known Pitfalls`.
+- Use `## Contract` only to point at the authoritative owner path.
 
-For state/memory skills: name the store in a `## Source` block (`DB:` / `Pages:` / `CLI:`), provide a
-refresh verb, do not invent a bespoke persistence format inside the skill.
+## Evidence Loop
 
-## Skill composability — explicit handoff, not auto-firing
+Use this when improving a skill after review, research, or a failed run.
 
-Lean skills compose by a thin **driver** handing off explicitly — not by skills auto-firing off each
-other's descriptions. Research finding: no documented case of one skill auto-triggering another via
-description matching; single-skill auto-activation is ~20-50% reliable from a description alone, and
-only 84-100% with a lifecycle hook. So emergent peer-to-peer routing is a phantom — design for
-explicit handoff. See `docs/research/2026-05-30-skill-composability-handoff-observability.md`.
+1. Pick one skill and one task family.
+2. Run a happy path.
+3. Run adversarial probes: wrong trigger, bad owner path, missing input, invalid flag, stale state,
+   ambiguous prompt.
+4. Record observed failures only.
+5. Patch the smallest sentence, command, or owner pointer that would have prevented the failure.
+6. Validate frontmatter, examples, and owner commands.
+7. Keep the patch only when it improves the observed task without bloating the skill.
 
-- **One lean driver holds the flow and hands off with an explicit `Skill(name)` call.** The driver is
-  a thin skill making a couple of calls — not a framework. It holds no domain knowledge.
-- **Use a lifecycle hook for situational firing** (e.g. a Stop hook fires a capture skill at
-  end-of-run). A hook reliably knows "a run finished"; a description-trigger does not.
-- A `description` is a **trigger phrase for discovery** — it helps the model and the human find the
-  skill. Treat it as discovery, not guaranteed routing.
-- A handed-to skill does ONE job, then **hands back to the driver** (strong default). Whether it may
-  call a third skill is unresolved — leave fan-out to the driver until a brainstorm settles it.
-- Skill = discoverable front-door + handback; the read/write underneath is a script or ledger op
-  (the create-cli ↔ cli-command-facade seam). Mechanical lookups go to code, not re-reasoned prose.
+Research anchor: [SkillOpt](https://microsoft.github.io/SkillOpt/).
 
-The system behaviour emerges from composition, but no single skill is complex — the antidote to the
-one-mega-skill BA-plugin failure.
+## Quality Checks
 
-## Refuse-in-prose, do not engineer-around
+- Compare before/after on happy path and failure path.
+- Prefer prune or substitute before adding instructions.
+- Move repeated planning into code, help, tests, or scripts.
+- Choose invocation mode deliberately: auto, user-only, model-only, or path-scoped.
+- Declare tool permissions when risk matters: allowed tools, user-only, path-scoped, or model-only.
+- Mark personal/local assumptions explicitly; avoid hidden user paths in reusable skills.
+- Do not redefine agent persona or override higher-priority instructions.
+- Omit install boilerplate, changelogs, licenses, TODOs, and generated filler from `SKILL.md`.
 
-When review surfaces a hole (an edge case, a failure mode), the default fix is **refuse it in prose**
-("out of scope — stop and tell the human") or scope it out — NOT new machinery. A pile of
-individually-defensible "but what about—" handlers IS the complexity trap. A dumb thing that JAMS
-(stops, asks the human) on the hard case is the feature, not a gap to engineer around. A thorough
-adversarial pass surfaces every place you *could* add machinery — treat that as a "do not build"
-list, not a backlog.
+## Refusal Line
 
-## The line, restated
+- Hypothetical hole: refuse or scope it out in prose.
+- Real repeatable failure: patch from evidence.
+- Prefer one-line guardrails, owner pointers, or example updates before scripts or new structure.
+- Treat adversarial review as a "do not build" list unless tests prove the failure matters.
 
-- **Model reads it** (skill bodies, rules, guardrails) → prose, trusted, fail-closed.
-- **Machine parses or executes it** (frontmatter shape, render checks, contract-drift extractors,
-  runbook contracts, a CLI under `scripts/` built with `create-cli`) → deterministic contract, kept.
+## Composition
 
-Follow steipete's rule fully by drawing this line — not by removing the one contract he keeps.
+- Skills do not auto-fire each other.
+- Compose through explicit handoff from a driver skill.
+- Driver holds flow; callee does one job and hands back.
+- Description is discovery, not guaranteed routing.
+- Use lifecycle hooks only when the runtime owns the event.
+
+## State And Memory Skills
+
+- Name the store in `## Owner` or `## Source`.
+- Provide a refresh/status verb.
+- Do not invent persistence formats in prose.
+- Record only future-useful state.
+
+## Safety Prose
+
+- Express safety as model-readable fail-closed bullets.
+- Treat third-party skills as untrusted code: inspect `SKILL.md`, scripts, tool permissions, network use,
+  and prompt-injection patterns before install.
+- Treat stdout/stderr as model-visible; never log secrets, tokens, cookies, or raw auth-bearing URLs.
+- Shape-not-value for secrets: inspect presence, length, prefix, newline count; never print values.
+- Redaction: allow-list what to keep; fail closed on unresolved secrets.
+- Freshness: name source plus `doctor`, `status`, or `sync` command.

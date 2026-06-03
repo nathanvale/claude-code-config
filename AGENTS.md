@@ -1,6 +1,6 @@
 # Work Style
 
-Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, skill references.
+Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.md`, `SKILL.md`, skill references.
 
 - Artifacts: telegraph; bullets; no filler; edit source.
 - One idea per bullet.
