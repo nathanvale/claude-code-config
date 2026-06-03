@@ -47,6 +47,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Design failures to expose cause, repair path, or human handoff.
 - For new or changed CLI/runtime surfaces, use `create-cli`.
 - Name contract, model, engine, discovery, and CLI owners before implementation.
+- For code-structure choices, use `context/code-style.md`.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `create-cli` for the contract path.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.

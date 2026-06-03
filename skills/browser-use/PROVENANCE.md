@@ -116,5 +116,6 @@
 
 - Prove `agent-browser` against Warm Chrome before documenting it as routable.
 - Prove `playwright-cdp` against Warm Chrome before documenting it as routable.
+- Revisit Browser Adapter Map CLI value after a second Browser Adapter Map exists.
 - Keep browser-domain-memory consuming this contract instead of duplicating it.
 - Refresh capability manifests only from verified evidence.
