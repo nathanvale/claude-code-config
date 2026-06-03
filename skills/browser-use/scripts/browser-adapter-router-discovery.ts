@@ -46,6 +46,13 @@ export function discoverReport(
 	if (selfReport !== undefined) {
 		const result = validateCapabilityReport(selfReport);
 		if (result.ok && result.report.adapter_id === adapter) {
+			if (isReportStale(result.report.provenance, evaluationDate)) {
+				return {
+					found: false,
+					code: "adapter_capability_stale",
+					diagnostics: ["self-report exceeded its freshness policy"],
+				};
+			}
 			return {
 				found: true,
 				source: "self_report",

@@ -295,9 +295,3 @@ flowchart TB
 - Help tests assert flag names only; prose and layout remain free to evolve.
 - Existing Router behavior remains unchanged.
 - Focused Router tests pass.
-
----
-
-## Follow-Up Prompt
-
-Implement `docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`.

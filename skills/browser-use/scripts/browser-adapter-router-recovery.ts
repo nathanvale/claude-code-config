@@ -1,4 +1,5 @@
 import {
+	type DiagnosticTrailReference,
 	type RuntimeActionGuidance,
 	type StructuredRuntimeError,
 	validateStructuredRuntimeError,
@@ -90,6 +91,20 @@ export function routeValidityConstraint() {
 		summary:
 			"Route is valid for one Bounded Browser Outcome: no adapter switching, no cold-browser fallback; reroute when bundle, target origin, selected adapter, proof, capability evidence, or preconditions change or expire.",
 		forbidden_action_ids: ["adapter_fallback", "cold_browser_fallback"],
+	};
+}
+
+export function researchRecoveryDiagnosticTrail(
+	runId: string,
+): DiagnosticTrailReference {
+	return {
+		run_id: runId,
+		surface: {
+			kind: "diagnostic_capability",
+			id: "browser-adapter-router.research_adapter_capability",
+		},
+		summary:
+			"Router-owned bounded research detail for stale or unknown adapter capability evidence.",
 	};
 }
 

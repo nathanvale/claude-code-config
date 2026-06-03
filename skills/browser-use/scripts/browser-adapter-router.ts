@@ -65,6 +65,7 @@ import {
 import {
 	continuationForCode,
 	recoverabilityForCode,
+	researchRecoveryDiagnosticTrail,
 	routeValidityConstraint,
 	runtimeActionForId,
 	validateRouterContinuationEnvelope,
@@ -89,6 +90,7 @@ export {
 	resolveRequiredCapabilities,
 	routeValidityConstraint,
 	runtimeActionForId,
+	researchRecoveryDiagnosticTrail,
 	validateRouterContinuationEnvelope,
 	validateRouterErrorEnvelope,
 	validateCapabilityReport,
@@ -180,7 +182,7 @@ export async function runBrowserAdapterRouterCli(
 		diagnosticArgv = parseCliDiagnosticArgv(diagnosticInput);
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(diagnosticInput);
-		const outputMode = inferOutputMode(argv);
+		const outputMode = inferCommandOutputMode(argv, findCommand(argv));
 		configureCliDiagnostics({
 			categoryRoot: "browser-use.adapter-router",
 			options: diagnosticArgv.options,
@@ -205,7 +207,10 @@ export async function runBrowserAdapterRouterCli(
 		}
 	}
 
-	const outputMode = inferOutputMode(diagnosticArgv.argv);
+	const outputMode = inferCommandOutputMode(
+		diagnosticArgv.argv,
+		findCommand(diagnosticArgv.argv),
+	);
 	let parsed: ParsedRouterCommand;
 	try {
 		parsed = parseRouterArgv(diagnosticArgv.argv);
@@ -370,6 +375,28 @@ async function executeReport(input: {
 		selfReport,
 	);
 	if (discovery.found) {
+		if (
+			input.parsed.capability &&
+			!discovery.report.capabilities.some(
+				(entry) => entry.capability === input.parsed.capability,
+			)
+		) {
+			return emitReportFailure({
+				adapter: input.parsed.adapter,
+				discovery: {
+					found: false,
+					code: "adapter_capability_unknown",
+					diagnostics: [
+						`No current report for requested capability ${input.parsed.capability}.`,
+					],
+				},
+				outputMode: input.parsed.outputMode,
+				stdout: input.stdout,
+				stderr: input.stderr,
+				runId: input.runId,
+				durationMs: input.durationMs(),
+			});
+		}
 		writeReportSuccess(
 			input.stdout,
 			input.parsed,
@@ -536,6 +563,9 @@ function emitRouteFailure(input: {
 				next_action_id: failure.next_action_id,
 				constraints: [routeValidityConstraint()],
 			},
+			...(failure.next_action_id === "research_adapter_capability"
+				? { diagnostic_trail: researchRecoveryDiagnosticTrail(input.runId) }
+				: {}),
 		});
 	const issues = validateRouterErrorEnvelope(envelope, {
 		requireRouteValidity: true,
@@ -587,6 +617,9 @@ function emitReportFailure(input: {
 			},
 			runtime_actions: [runtimeActionForId(nextAction)],
 			continuation: { next_action_id: nextAction },
+			...(nextAction === "research_adapter_capability"
+				? { diagnostic_trail: researchRecoveryDiagnosticTrail(input.runId) }
+				: {}),
 		});
 	const issues = validateRouterErrorEnvelope(envelope);
 	if (issues.length > 0) {
@@ -632,7 +665,9 @@ function emitRouteEvidenceError(input: {
 				failure_domain: "browser_adapter_router",
 			},
 			runtime_actions: [runtimeActionForId(nextAction)],
-			continuation: { next_action_id: nextAction },
+			continuation: {
+				next_action_id: nextAction,
+			},
 		});
 		const issues = validateRouterErrorEnvelope(envelope);
 		if (issues.length > 0) {
@@ -728,7 +763,7 @@ function parseRouterArgv(argv: readonly string[]): ParsedRouterCommand {
 			"missing command: expected route, report, or status.",
 		);
 	}
-	const outputMode = inferOutputMode(argv);
+	const outputMode = inferCommandOutputMode(argv, command);
 	const rest = argv.filter((arg) => arg !== command);
 
 	if (command === "report") {
@@ -818,8 +853,13 @@ function rejectUnknownFlags(
 	}
 }
 
-function inferOutputMode(argv: readonly string[]): OutputMode {
+function inferCommandOutputMode(
+	argv: readonly string[],
+	command: BrowserAdapterRouterCommand | undefined,
+): OutputMode {
 	if (argv.includes("--plain")) return "plain";
+	if (argv.includes("--json")) return "json";
+	if (command === "status") return "plain";
 	return "json";
 }
 

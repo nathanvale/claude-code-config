@@ -25,23 +25,33 @@ const MANIFEST_CHECKED_AT = "2026-06-02" as const;
 // window emit `adapter_capability_stale` rather than routing on drifted data.
 const MANIFEST_STALE_AFTER_DAYS = 30 as const;
 
-function capability(
+type ManifestCapabilityFactory = (
 	capability: AdapterCapability,
 	support: CapabilityReport["capabilities"][number]["support"],
 	confidence: number,
 	verification_method: string,
-): CapabilityReport["capabilities"][number] {
-	return {
+) => CapabilityReport["capabilities"][number];
+
+function capabilityForSource(source_url: string): ManifestCapabilityFactory {
+	return (capability, support, confidence, verification_method) => ({
 		capability,
 		support,
 		confidence,
 		evidence: {
 			verification_method,
-			source_url:
-				"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
+			source_url,
 		},
-	};
+	});
 }
+
+const CHROME_DEVTOOLS_SOURCE_URL =
+	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
+const AGENT_BROWSER_SOURCE_URL = "https://github.com/vercel-labs/agent-browser";
+const PLAYWRIGHT_CDP_SOURCE_URL =
+	"https://github.com/microsoft/playwright-mcp";
+const chromeCapability = capabilityForSource(CHROME_DEVTOOLS_SOURCE_URL);
+const agentBrowserCapability = capabilityForSource(AGENT_BROWSER_SOURCE_URL);
+const playwrightCapability = capabilityForSource(PLAYWRIGHT_CDP_SOURCE_URL);
 
 const CHROME_DEVTOOLS_MANIFEST: CapabilityReport = {
 	adapter_id: "chrome-devtools",
@@ -52,28 +62,27 @@ const CHROME_DEVTOOLS_MANIFEST: CapabilityReport = {
 	attachment_model: "verified_warm_chrome",
 	provenance: {
 		adapter_version: "chrome-devtools-mcp@latest",
-		source_url:
-			"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
+		source_url: CHROME_DEVTOOLS_SOURCE_URL,
 		checked_at: MANIFEST_CHECKED_AT,
 		verification_method: "maintainer_docs_review",
 		stale_after_days: MANIFEST_STALE_AFTER_DAYS,
 	},
 	capabilities: [
-		capability("snapshot_refs", "full", 90, "maintainer_docs_review"),
-		capability("element_actions", "full", 90, "maintainer_docs_review"),
-		capability("selector_actions", "full", 85, "maintainer_docs_review"),
-		capability("screenshot_media", "full", 90, "maintainer_docs_review"),
-		capability("console_debug", "full", 95, "maintainer_docs_review"),
-		capability("network_inspection", "full", 95, "maintainer_docs_review"),
-		capability("performance_profile", "full", 85, "maintainer_docs_review"),
-		capability(
+		chromeCapability("snapshot_refs", "full", 90, "maintainer_docs_review"),
+		chromeCapability("element_actions", "full", 90, "maintainer_docs_review"),
+		chromeCapability("selector_actions", "full", 85, "maintainer_docs_review"),
+		chromeCapability("screenshot_media", "full", 90, "maintainer_docs_review"),
+		chromeCapability("console_debug", "full", 95, "maintainer_docs_review"),
+		chromeCapability("network_inspection", "full", 95, "maintainer_docs_review"),
+		chromeCapability("performance_profile", "full", 85, "maintainer_docs_review"),
+		chromeCapability(
 			"devtools_performance_insight",
 			"full",
 			90,
 			"maintainer_docs_review",
 		),
-		capability("memory_debug", "partial", 60, "maintainer_docs_review"),
-		capability("react_vitals", "none", 80, "maintainer_docs_review"),
+		chromeCapability("memory_debug", "partial", 60, "maintainer_docs_review"),
+		chromeCapability("react_vitals", "none", 80, "maintainer_docs_review"),
 	],
 };
 
@@ -86,27 +95,32 @@ const AGENT_BROWSER_MANIFEST: CapabilityReport = {
 	attachment_model: "verified_warm_chrome",
 	provenance: {
 		adapter_version: "agent-browser@latest",
-		source_url: "https://github.com/vercel-labs/agent-browser",
+		source_url: AGENT_BROWSER_SOURCE_URL,
 		checked_at: MANIFEST_CHECKED_AT,
 		verification_method: "maintainer_docs_review",
 		stale_after_days: MANIFEST_STALE_AFTER_DAYS,
 	},
 	capabilities: [
-		capability("snapshot_refs", "full", 85, "maintainer_docs_review"),
-		capability("element_actions", "full", 85, "maintainer_docs_review"),
-		capability("selector_actions", "full", 80, "maintainer_docs_review"),
-		capability("screenshot_media", "full", 85, "maintainer_docs_review"),
-		capability("console_debug", "partial", 60, "maintainer_docs_review"),
-		capability("network_inspection", "partial", 55, "maintainer_docs_review"),
-		capability("performance_profile", "none", 70, "maintainer_docs_review"),
-		capability(
+		agentBrowserCapability("snapshot_refs", "full", 85, "maintainer_docs_review"),
+		agentBrowserCapability("element_actions", "full", 85, "maintainer_docs_review"),
+		agentBrowserCapability("selector_actions", "full", 80, "maintainer_docs_review"),
+		agentBrowserCapability("screenshot_media", "full", 85, "maintainer_docs_review"),
+		agentBrowserCapability("console_debug", "partial", 60, "maintainer_docs_review"),
+		agentBrowserCapability(
+			"network_inspection",
+			"partial",
+			55,
+			"maintainer_docs_review",
+		),
+		agentBrowserCapability("performance_profile", "none", 70, "maintainer_docs_review"),
+		agentBrowserCapability(
 			"devtools_performance_insight",
 			"none",
 			75,
 			"maintainer_docs_review",
 		),
-		capability("memory_debug", "unknown", 40, "maintainer_docs_review"),
-		capability("react_vitals", "unknown", 45, "maintainer_docs_review"),
+		agentBrowserCapability("memory_debug", "unknown", 40, "maintainer_docs_review"),
+		agentBrowserCapability("react_vitals", "unknown", 45, "maintainer_docs_review"),
 	],
 };
 
@@ -119,27 +133,32 @@ const PLAYWRIGHT_CDP_MANIFEST: CapabilityReport = {
 	attachment_model: "verified_warm_chrome",
 	provenance: {
 		adapter_version: "@playwright/mcp@latest",
-		source_url: "https://github.com/microsoft/playwright-mcp",
+		source_url: PLAYWRIGHT_CDP_SOURCE_URL,
 		checked_at: MANIFEST_CHECKED_AT,
 		verification_method: "maintainer_docs_review",
 		stale_after_days: MANIFEST_STALE_AFTER_DAYS,
 	},
 	capabilities: [
-		capability("snapshot_refs", "full", 85, "maintainer_docs_review"),
-		capability("element_actions", "full", 90, "maintainer_docs_review"),
-		capability("selector_actions", "full", 90, "maintainer_docs_review"),
-		capability("screenshot_media", "full", 85, "maintainer_docs_review"),
-		capability("console_debug", "full", 80, "maintainer_docs_review"),
-		capability("network_inspection", "full", 80, "maintainer_docs_review"),
-		capability("performance_profile", "partial", 55, "maintainer_docs_review"),
-		capability(
+		playwrightCapability("snapshot_refs", "full", 85, "maintainer_docs_review"),
+		playwrightCapability("element_actions", "full", 90, "maintainer_docs_review"),
+		playwrightCapability("selector_actions", "full", 90, "maintainer_docs_review"),
+		playwrightCapability("screenshot_media", "full", 85, "maintainer_docs_review"),
+		playwrightCapability("console_debug", "full", 80, "maintainer_docs_review"),
+		playwrightCapability("network_inspection", "full", 80, "maintainer_docs_review"),
+		playwrightCapability(
+			"performance_profile",
+			"partial",
+			55,
+			"maintainer_docs_review",
+		),
+		playwrightCapability(
 			"devtools_performance_insight",
 			"none",
 			70,
 			"maintainer_docs_review",
 		),
-		capability("memory_debug", "none", 70, "maintainer_docs_review"),
-		capability("react_vitals", "none", 75, "maintainer_docs_review"),
+		playwrightCapability("memory_debug", "none", 70, "maintainer_docs_review"),
+		playwrightCapability("react_vitals", "none", 75, "maintainer_docs_review"),
 	],
 };
 

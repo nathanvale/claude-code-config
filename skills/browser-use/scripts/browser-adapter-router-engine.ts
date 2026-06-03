@@ -77,6 +77,13 @@ export function isReportStale(
 	provenance: CapabilityReportProvenance,
 	evaluationDate: string,
 ): boolean {
+	if (
+		typeof provenance.stale_after_days !== "number" ||
+		!Number.isFinite(provenance.stale_after_days) ||
+		provenance.stale_after_days <= 0
+	) {
+		return true;
+	}
 	const checked = Date.parse(provenance.checked_at);
 	const now = Date.parse(evaluationDate);
 	if (Number.isNaN(checked) || Number.isNaN(now)) return true;
@@ -408,6 +415,20 @@ function buildSuccess(input: {
 	const taskRanking = input.envelope.task.adapter_ranking ?? [];
 	const ranking = input.decisions
 		.filter((d) => d.status === "selectable")
+		.sort((a, b) => {
+			const taskPriority = (id: BrowserAdapterId): number => {
+				const index = taskRanking.indexOf(id);
+				return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+			};
+			const taskDelta = taskPriority(a.adapter_id) - taskPriority(b.adapter_id);
+			if (taskDelta !== 0) return taskDelta;
+			if (a.registry_rank !== b.registry_rank) {
+				return a.registry_rank - b.registry_rank;
+			}
+			const confDelta = (b.route_confidence ?? 0) - (a.route_confidence ?? 0);
+			if (confDelta !== 0) return confDelta;
+			return a.adapter_id.localeCompare(b.adapter_id);
+		})
 		.map((d) => ({
 			adapter_id: d.adapter_id,
 			ranking: {
@@ -604,7 +625,7 @@ function checkPreconditions(
 		if (
 			!auth.target_origin ||
 			!auth.verified_profile_identity ||
-			auth.account_session_match === false
+			auth.account_session_match !== true
 		) {
 			return preconditionFailure(
 				mode,

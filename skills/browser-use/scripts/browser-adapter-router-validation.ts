@@ -82,8 +82,11 @@ export function validateRouteEvidenceEnvelope(
 		if (policy.adapter_id !== undefined && !isBrowserAdapter(policy.adapter_id)) {
 			issues.push("envelope.policy.adapter_id must be a known registry adapter");
 		}
-		if (policy.mode === "force" && policy.adapter_id === undefined) {
-			issues.push("envelope.policy.adapter_id is required in force mode");
+		if (
+			(policy.mode === "force" || policy.mode === "prefer") &&
+			policy.adapter_id === undefined
+		) {
+			issues.push("envelope.policy.adapter_id is required in force/prefer mode");
 		}
 	}
 	if (!isJsonObject(value.preconditions)) {
@@ -110,6 +113,30 @@ export function validateRouteEvidenceEnvelope(
 			if (!Array.isArray(required) || !required.every(isCapability)) {
 				issues.push(
 					"envelope.task.required_capabilities must be known capabilities",
+				);
+			}
+		}
+		const adapterRanking = value.task.adapter_ranking;
+		if (adapterRanking !== undefined) {
+			if (
+				!Array.isArray(adapterRanking) ||
+				!adapterRanking.every(isBrowserAdapter)
+			) {
+				issues.push(
+					"envelope.task.adapter_ranking must be known registry adapters",
+				);
+			}
+		}
+		const mediaProof = value.task.media_proof;
+		if (mediaProof !== undefined) {
+			if (
+				!isJsonObject(mediaProof) ||
+				typeof mediaProof.requested !== "boolean" ||
+				typeof mediaProof.run_scoped_path !== "string" ||
+				mediaProof.run_scoped_path === ""
+			) {
+				issues.push(
+					"envelope.task.media_proof must include boolean requested and non-empty run_scoped_path",
 				);
 			}
 		}

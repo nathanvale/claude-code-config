@@ -246,8 +246,7 @@ describe("U0 command contract", () => {
 		// V1 report is a pure in-process lookup (env self-report JSON or static
 		// manifest); declared check-only to match reality. No browser action.
 		const sideEffects = browserAdapterRouterContracts.report.sideEffects ?? [];
-		expect(sideEffects).toContain("check");
-		expect(sideEffects).not.toContain("browser");
+		expect(sideEffects).toEqual(["check"]);
 	});
 
 	test("route contract declares check only, no browser action", () => {
@@ -564,6 +563,19 @@ describe("U0 report discovery", () => {
 			}
 		}
 	});
+
+	test("manifest capability evidence uses the manifest source URL", () => {
+		for (const adapter of BROWSER_ADAPTER_ROUTER_ADAPTERS) {
+			const manifest = BROWSER_ADAPTER_ROUTER_MANIFESTS[adapter];
+			expect(manifest).toBeDefined();
+			if (!manifest) continue;
+			for (const capability of manifest.capabilities) {
+				expect(capability.evidence.source_url).toBe(
+					manifest.provenance.source_url,
+				);
+			}
+		}
+	});
 });
 
 describe("U0 evidence envelope input", () => {
@@ -584,7 +596,7 @@ describe("U0 evidence envelope input", () => {
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.diagnostics).toContain(
-				"envelope.policy.adapter_id is required in force mode",
+				"envelope.policy.adapter_id is required in force/prefer mode",
 			);
 		}
 	});
@@ -627,6 +639,17 @@ describe("U0 evidence envelope input", () => {
 		);
 		expect(exitCode).toBe(0);
 		expect(stdout).toContain("adapter_selected");
+	});
+
+	test("status defaults to plain output", async () => {
+		const path = await envelopeFile(makeValidatedEnvelope());
+		const { exitCode, stdout } = await runForTest(
+			["status", "--envelope", path],
+			makeRuntime(),
+		);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("adapter_selected");
+		expect(() => JSON.parse(stdout)).toThrow();
 	});
 
 	test("route and status use the same pure route evaluator", async () => {
@@ -681,6 +704,15 @@ describe("U1 capability report contract", () => {
 		const broken = { ...report, provenance: undefined };
 		const result = validateCapabilityReport(broken);
 		expect(result.ok).toBe(false);
+	});
+
+	test("self-reported validation must be valid", () => {
+		const report: unknown = { ...makeReport(), validation: "invalid" };
+		const result = validateCapabilityReport(report);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.diagnostics).toContain("report.validation must be valid");
+		}
 	});
 
 	test("report requires confidence per declared capability", () => {
@@ -826,6 +858,16 @@ describe("U1 capability report contract", () => {
 		};
 		expect(isReportStale(fresh, "2026-06-10")).toBe(false);
 		expect(isReportStale(fresh, "2026-08-01")).toBe(true);
+	});
+
+	test("isReportStale treats incomplete freshness metadata as stale", () => {
+		const incomplete = {
+			adapter_version: "",
+			source_url: "",
+			verification_method: "",
+			checked_at: "2026-06-08",
+		} as Parameters<typeof isReportStale>[0];
+		expect(isReportStale(incomplete, EVAL_DATE)).toBe(true);
 	});
 });
 
@@ -1134,6 +1176,7 @@ describe("U2 policy resolver", () => {
 		if (evaluation.outcome === "selected") {
 			// task ranking puts agent-browser first despite registry order
 			expect(evaluation.selected_adapter).toBe("agent-browser");
+			expect(evaluation.ranking[0]?.adapter_id).toBe("agent-browser");
 		}
 	});
 
@@ -1315,6 +1358,54 @@ describe("U3 research recovery", () => {
 		).toEqual([]);
 	});
 
+	test("research recovery is surfaced through diagnostic_trail", async () => {
+		const envelope = makeValidatedEnvelope({
+			reports: [
+				makeReport({
+					provenance: {
+						adapter_version: "x@1",
+						source_url: "https://example.test/docs",
+						checked_at: "2026-01-01",
+						verification_method: "m",
+						stale_after_days: 30,
+					},
+				}),
+			],
+		});
+		const path = await envelopeFile(envelope);
+		const { stdout } = await runForTest(
+			["route", "--envelope", path, "--json"],
+			makeRuntime(),
+		);
+		const parsed = parseJson(stdout);
+		expect(
+			(parsed.continuation as { next_action_id?: string }).next_action_id,
+		).toBe("research_adapter_capability");
+		expect(parsed.diagnostic_trail).toMatchObject({
+			run_id: parsed.run_id,
+			surface: {
+				kind: "diagnostic_capability",
+				id: "browser-adapter-router.research_adapter_capability",
+			},
+		});
+		expect(validateRouterErrorEnvelope(parsed)).toEqual([]);
+	});
+
+	test("invalid route evidence is input failure without route validity", async () => {
+		const { stdout } = await runForTest(
+			["route", "--json"],
+			makeRuntime({ readStdin: async () => "{" }),
+		);
+		const parsed = parseJson(stdout);
+		expect((parsed.error as { code?: string }).code).toBe(
+			"route_evidence_invalid",
+		);
+		expect(
+			(parsed.continuation as { constraints?: { id?: string }[] }).constraints,
+		).toBeUndefined();
+		expect(validateRouterErrorEnvelope(parsed)).toEqual([]);
+	});
+
 	test("missing attachment proof recovery uses prove_adapter_attachment", () => {
 		const envelope = makeValidatedEnvelope({
 			policy: { mode: "force", adapter_id: "agent-browser" },
@@ -1374,6 +1465,16 @@ describe("U3 research recovery", () => {
 		expect(
 			(parsed.continuation as { next_action_id?: string }).next_action_id,
 		).toBe("research_adapter_capability");
+		expect(
+			(parsed.continuation as { constraints?: { id?: string }[] }).constraints,
+		).toBeUndefined();
+		expect(parsed.diagnostic_trail).toMatchObject({
+			run_id: parsed.run_id,
+			surface: {
+				kind: "diagnostic_capability",
+				id: "browser-adapter-router.research_adapter_capability",
+			},
+		});
 	});
 
 	test("diagnostic codes are the package-owned vocabulary", () => {
@@ -1549,11 +1650,18 @@ describe("U5 media proof guardrails", () => {
 describe("safety", () => {
 	test("usage errors redact filesystem-looking values", async () => {
 		const { stdout } = await runForTest(
-			["report", "--adapter", "chrome-devtools", "--capability", "nope", "--json"],
+			[
+				"report",
+				"--adapter",
+				"chrome-devtools",
+				"--capability",
+				"/tmp/router-secret.json",
+				"--json",
+			],
 			makeRuntime(),
 		);
-		// invalid enum -> usage error; ensure no raw path leakage patterns
-		expect(stdout).not.toContain("op://");
+		expect(stdout).not.toContain("/tmp/router-secret.json");
+		expect(stdout).toContain("[redacted]");
 	});
 
 	test("all capability names are known vocabulary", () => {
@@ -1670,6 +1778,33 @@ describe("hardening: invalid envelope fields fail closed (correctness P1/P2)", (
 			/force/,
 		);
 	});
+
+	test("prefer mode without adapter_id fails closed", () => {
+		const envelope = { ...makeEnvelope(), policy: { mode: "prefer" } };
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/force\/prefer/,
+		);
+	});
+
+	test("unknown task adapter ranking fails closed", () => {
+		const envelope = {
+			...makeEnvelope(),
+			task: { adapter_ranking: ["selenium"] },
+		};
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/adapter_ranking/,
+		);
+	});
+
+	test("invalid media proof shape fails closed", () => {
+		const envelope = {
+			...makeEnvelope(),
+			task: { media_proof: { requested: true, run_scoped_path: "" } },
+		};
+		expect(() => parseEvidenceEnvelope(JSON.stringify(envelope))).toThrow(
+			/media_proof/,
+		);
+	});
 });
 
 describe("hardening: freshness fail-closed (adversarial)", () => {
@@ -1747,6 +1882,24 @@ describe("hardening: report CLI success path + reliability", () => {
 		).toBe("route_evidence_invalid");
 	});
 
+	test("unreadable route evidence is input failure without route validity", async () => {
+		const { stdout } = await runForTest(
+			["route", "--envelope", "/tmp/definitely-not-here-bar.json", "--json"],
+			makeRuntime(),
+		);
+		const parsed = parseJson(stdout);
+		const constraints = (
+			parsed.continuation as {
+				constraints?: { forbidden_action_ids?: string[] }[];
+			}
+		).constraints;
+		expect((parsed.error as { code?: string }).code).toBe(
+			"route_evidence_invalid",
+		);
+		expect(constraints).toBeUndefined();
+		expect(validateRouterErrorEnvelope(parsed)).toEqual([]);
+	});
+
 	test("every CLI error envelope carries a continuation", async () => {
 		const { stdout } = await runForTest(
 			["bogus-command", "--json"],
@@ -1769,6 +1922,74 @@ describe("hardening: report CLI success path + reliability", () => {
 		const data = parseJson(stdout).data as { report_source?: string };
 		expect(data.report_source).toBe("self_report");
 	});
+
+	test("stale self-report fails closed instead of falling back to manifest", async () => {
+		const selfReport = JSON.stringify(
+			makeReport({
+				adapter_id: "agent-browser",
+				provenance: {
+					adapter_version: "x@1",
+					source_url: "https://example.test/docs",
+					checked_at: "2026-01-01",
+					verification_method: "maintainer_docs_review",
+					stale_after_days: 30,
+				},
+			}),
+		);
+		const { exitCode, stdout } = await runForTest(
+			["report", "--adapter", "agent-browser", "--json"],
+			makeRuntime({
+				env: { BROWSER_USE_ROUTER_SELF_REPORT_JSON: selfReport },
+			}),
+		);
+		expect(exitCode).toBe(20);
+		expect((parseJson(stdout).error as { code?: string }).code).toBe(
+			"adapter_capability_stale",
+		);
+	});
+
+	test("invalid self-report validation fails closed", async () => {
+		const selfReport = JSON.stringify({
+			...makeReport({ adapter_id: "agent-browser" }),
+			validation: "invalid",
+		});
+		const { exitCode, stdout } = await runForTest(
+			["report", "--adapter", "agent-browser", "--json"],
+			makeRuntime({
+				env: { BROWSER_USE_ROUTER_SELF_REPORT_JSON: selfReport },
+			}),
+		);
+		expect(exitCode).toBe(20);
+		expect((parseJson(stdout).error as { code?: string }).code).toBe(
+			"adapter_capability_unknown",
+		);
+	});
+
+	test("report --capability fails when the current report lacks that capability", async () => {
+		const selfReport = makeReport({
+			adapter_id: "agent-browser",
+			capabilities: makeReport().capabilities.filter(
+				(entry) => entry.capability !== "react_vitals",
+			),
+		});
+		const { exitCode, stdout } = await runForTest(
+			[
+				"report",
+				"--adapter",
+				"agent-browser",
+				"--capability",
+				"react_vitals",
+				"--json",
+			],
+			makeRuntime({
+				env: { BROWSER_USE_ROUTER_SELF_REPORT_JSON: JSON.stringify(selfReport) },
+			}),
+		);
+		expect(exitCode).toBe(20);
+		expect((parseJson(stdout).error as { code?: string }).code).toBe(
+			"adapter_capability_unknown",
+		);
+	});
 });
 
 describe("hardening: auth precondition coverage (U5)", () => {
@@ -1784,6 +2005,27 @@ describe("hardening: auth precondition coverage (U5)", () => {
 					target_origin: "https://app.test",
 					verified_profile_identity: "profile-A",
 					account_session_match: false,
+				},
+			},
+		});
+		const evaluation = evaluateRoute(envelope, EVAL_DATE);
+		expect(evaluation.outcome).toBe("fail_closed");
+		if (evaluation.outcome === "fail_closed") {
+			expect(evaluation.code).toBe("auth_session_unverified");
+		}
+	});
+
+	test("auth required without explicit account_session_match fails closed", () => {
+		const envelope = makeValidatedEnvelope({
+			preconditions: {
+				run_id: "run-1",
+				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+				warm_chrome_ready: true,
+				adapter_attached_verified_browser: { "chrome-devtools": true },
+				auth_session: {
+					required: true,
+					target_origin: "https://app.test",
+					verified_profile_identity: "profile-A",
 				},
 			},
 		});

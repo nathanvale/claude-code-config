@@ -236,6 +236,22 @@ _Avoid_: imported thing, tool, plugin, runbook capability
 A runtime-owned browser adapter support fact set with provenance and freshness. It is Adapter capability evidence for Browser Adapter Router decisions, not an Agent Capability Registry capability.
 _Avoid_: capability, docs matrix, adapter truth prose, projection slice
 
+**Router Recovery**:
+Browser Adapter Router failure guidance for how an agent can continue or stop after route evidence fails. It names package-owned recovery meaning; the facade owns only the shared envelope shape.
+_Avoid_: facade recovery payload, error metadata, hint contract
+
+**Route Validity**:
+Browser Adapter Router constraint on a selected route or failed route evaluation. It does not describe report discovery, Adapter capability report freshness, or generic CLI errors.
+_Avoid_: report validity, capability validity, Router validity
+
+**Route Evidence Invalid**:
+Browser Adapter Router input failure where supplied route evidence never becomes a Validated Route Evidence Envelope. It occurs inside the `route` command before route evaluation, so it does not create Route Validity.
+_Avoid_: failed route decision, route validity failure, malformed route
+
+**Research Recovery**:
+Browser Adapter Router recovery for stale or unknown Adapter capability report evidence. Continuation names the next action; a Diagnostic trail pointer names the Router-owned diagnostic detail an agent follows after the Router stops. Research signal is advisory diagnostic metadata, not route confidence.
+_Avoid_: facade research schema, hint metadata, docs-only recovery
+
 **Source**:
 The provenance record for where a capability came from. A source is metadata for review and update decisions, not the unit installed into a harness.
 _Avoid_: install unit, upstream capability, source capability

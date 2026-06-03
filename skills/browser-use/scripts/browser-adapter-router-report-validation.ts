@@ -32,6 +32,9 @@ export function validateCapabilityReport(value: unknown): ReportValidationResult
 	if (!isBrowserAdapter(adapterId)) {
 		diagnostics.push("report.adapter_id must be a known registry adapter id");
 	}
+	if (value.validation !== "valid") {
+		diagnostics.push("report.validation must be valid");
+	}
 	if (typeof value.schema_version !== "string" || value.schema_version === "") {
 		diagnostics.push("report.schema_version must be a non-empty string");
 	}
