@@ -36,6 +36,10 @@ _Avoid_: future contract, aspirational contract, rubric-owned contract, prose co
 An agreed agent-native CLI behavior that may belong in the contract runtime later but is not yet runtime-backed. Keep it in rubric guidance until implementation makes it enforceable.
 _Avoid_: contract-owned, runtime-backed, required field, schema promise
 
+**Minimum CLI design brief**:
+The prose-level starting brief every `create-cli` path captures before choosing basic, agent-native, or facade-backed depth. It names command purpose, users, invocation shape, IO, errors, side effects, config, non-interactive behavior, and a smoke command without claiming runtime enforcement.
+_Avoid_: universal minimum CLI contract, minimum CLI contract, prose contract
+
 **Minimum agent-native CLI bar**:
 The smallest behavior set a skill driver can safely rely on: discoverable command, non-interactive run path, parseable output, structured failure, run correlation, and side-effect stance. Escalate beyond it only when risk, scale, or output shape earns the extra surface.
 _Avoid_: full adoption checklist, maturity model, every rubric item, implementation plan
