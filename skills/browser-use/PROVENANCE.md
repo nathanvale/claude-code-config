@@ -1,91 +1,120 @@
 # Provenance: browser-use
 
-Source: [steipete/agent-scripts](https://github.com/steipete/agent-scripts) — `skills/browser-use/`
-License: MIT © 2026 Peter Steinberger (see `LICENSE.upstream`)
-Pulled: 2026-05-29 (sparse checkout of `main`)
+## Source
 
-## Status: ADAPTED
+- Source: `steipete/agent-scripts`, `skills/browser-use/`.
+- URL: `https://github.com/steipete/agent-scripts`.
+- License: MIT, Peter Steinberger, 2026.
+- Import: sparse checkout from `main` on 2026-05-29.
 
-`SKILL.md`, `references/warm-chrome.md`, and `mcporter-config.md` now carry this repo's
-adapter-neutral Warm Chrome contract.
+## Rationale Sources
 
-- Canonical owner: `browser-use`.
-- Contract: real Google Chrome binary, dedicated persistent profile, loopback CDP, no Chrome for Testing.
-- Current proof adapter: `chrome-devtools`.
-- Future proof targets: `agent-browser`, `playwright-cdp`.
-- Deterministic replay detail: `puppeteer-core` against a verified endpoint.
+- Warm Chrome dedicated profile: `docs/adr/0006-warm-chrome-via-dedicated-debug-profile.md`.
+- Browser-use binding lifecycle: `docs/adr/0008-browser-use-owns-warm-chrome-binding-lifecycle.md`.
+- Fixed CDP convention and runtime proof: `docs/adr/0009-browser-use-fixed-cdp-convention-and-runtime-proof.md`.
+- Evidence-first routing: `docs/adr/0012-browser-adapter-router-uses-evidence-first-routing.md`.
+- Router research recovery: `docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md`.
+- Warm Chrome findings: `docs/research/2026-05-30-browser-use-warm-chrome-findings.md`.
+- Router research stock: `docs/research/2026-06-02-browser-adapter-router-research-stock.md`.
 
-## Why it's here
+## Local Status
 
-steipete's `browser-use` + `one-password` are the lean-substrate existence proof: thin skill over
-CDP + op-inject creds, reattach to existing logged-in Chrome, no governance machinery. This repo keeps
-that substrate and adds a local Warm Chrome contract so browser-memory work consumes one owner.
+- Status: adapted.
+- Owner: `browser-use`.
+- Current contract: Warm Chrome plus Browser Adapter Router.
+- Current proven adapter: `chrome-devtools`.
+- Future adapter proof targets: `agent-browser`, `playwright-cdp`.
+- Deterministic replay detail: `puppeteer-core` against verified Warm Chrome.
 
-## Local additions (not from upstream)
+## Local Contract
 
-- `scripts/preflight-warm-chrome.sh` — thin Warm Chrome Preflight wrapper.
-- `scripts/preflight-warm-chrome.ts` — Bun CLI runtime. `check` is read-only; `status` shows human
-  health; `repair` owns safe profile repair; `launch` starts real Google Chrome only when needed.
-- `scripts/command-contract.ts` — `create-cli` / facade contract for command surface, side effects,
-  result contract, and action affordances.
-- `scripts/preflight-warm-chrome.test.ts` — focused CLI behavior tests.
-- `scripts/preflight-browser-adapter.sh` — thin Browser Adapter Proof wrapper.
-- `scripts/preflight-browser-adapter.ts` — read-only adapter attachment proof. Runs Warm Chrome Preflight first.
-- `scripts/preflight-browser-adapter.test.ts` — focused Browser Adapter Proof contract and `chrome-devtools` tests.
-- `scripts/launch-agent-chrome.sh` — older step-zero launcher. `--auto-connect` attaches but does not
-  launch; this starts real Google Chrome on a known port and writes `DevToolsActivePort` for
-  chrome-devtools-mcp. Treat it as legacy helper under the Warm Chrome contract, not the contract.
-- `references/warm-chrome.md` — canonical Warm Chrome contract.
+- Use real Google Chrome.
+- Use a dedicated persistent profile.
+- Use loopback CDP.
+- Avoid Chrome for Testing.
+- Avoid throwaway profiles.
+- Avoid the everyday default Chrome profile.
+- Keep browser entry in `browser-use`.
+- Keep adapter policy in Browser Adapter Router.
+- Keep adapter dependency/config repair in Browser Adapter Proof.
+- Keep blocking adapter-proof repair local; do not emit `hint.docs_url` for `browser_adapter_proof` failures.
+- Keep adapter-local repair commands in Browser Adapter Maps.
+- Keep capability truth in Router runtime reports and manifests.
+- Keep skill prose as routing, owner paths, and next safe action.
 
-## Validated 2026-05-29
+## Local Owners
 
-Full chain proven live on the real Oncore portal: launch agent Chrome → chrome-devtools MCP
-`--auto-connect` → navigate → `one-password` op-read (secret never printed) → shell-side CDP fill →
-authenticated dashboard ("Welcome: Nathan David Vale"). See
-`side-quest-engineering/docs/brainstorms/2026-05-29-001-two-skill-browser-automation-thesis.md`
-("Validated live, end-to-end") incl. the hard finding: the secret fill must stay inside the auth
-boundary (never route a password through an MCP tool call).
+- Skill driver: `skills/browser-use/SKILL.md`.
+- Warm Chrome contract: `skills/browser-use/references/warm-chrome.md`.
+- `chrome-devtools` Browser Adapter Map: `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
+- Warm Chrome CLI: `skills/browser-use/scripts/preflight-warm-chrome.sh`.
+- Warm Chrome runtime: `skills/browser-use/scripts/preflight-warm-chrome.ts`.
+- Browser Adapter Proof CLI: `skills/browser-use/scripts/preflight-browser-adapter.sh`.
+- Browser Adapter Proof runtime: `skills/browser-use/scripts/preflight-browser-adapter.ts`.
+- Browser Adapter Router CLI: `skills/browser-use/scripts/browser-adapter-router.sh`.
+- Browser Adapter Router runtime: `skills/browser-use/scripts/browser-adapter-router.ts`.
+- Browser Adapter Map CLI: `skills/browser-use/scripts/browser-adapter-map.sh`.
+- Browser Adapter Map runtime: `skills/browser-use/scripts/browser-adapter-map.ts`.
+- Router registry and capability manifests: `skills/browser-use/scripts/browser-adapter-router-manifests.ts`.
+- Router model: `skills/browser-use/scripts/browser-adapter-router-model.ts`.
+- Router engine: `skills/browser-use/scripts/browser-adapter-router-engine.ts`.
+- Router discovery: `skills/browser-use/scripts/browser-adapter-router-discovery.ts`.
+- Router validation: `skills/browser-use/scripts/browser-adapter-router-validation.ts`.
+- Router recovery: `skills/browser-use/scripts/browser-adapter-router-recovery.ts`.
+- CLI command contracts: `skills/browser-use/scripts/command-contract.ts`.
+- Legacy helper: `skills/browser-use/scripts/launch-agent-chrome.sh`.
+- Warm Chrome tests: `skills/browser-use/scripts/preflight-warm-chrome.test.ts`.
+- Browser Adapter Proof tests: `skills/browser-use/scripts/preflight-browser-adapter.test.ts`.
+- Browser Adapter Router tests: `skills/browser-use/scripts/browser-adapter-router.test.ts`.
+- Browser Adapter Map tests: `skills/browser-use/scripts/browser-adapter-map.test.ts`.
+- Live/smoke matrix: `skills/browser-use/TEST_MATRIX.md`.
 
-## Validated 2026-06-01
+## Current Driver Shape
 
-Evaluation confirmed historical incident context:
+- Run Warm Chrome Preflight for browser-entry proof.
+- Ask Router `report` for current capability evidence.
+- Build a route evidence envelope from user request, preconditions, proof, and reports.
+- Run Router `route`.
+- Follow Router continuation.
+- Run Browser Adapter Proof when Router emits `prove_adapter_attachment`.
+- Add attachment proof to the envelope.
+- Reroute.
+- Act only after Router emits `use_selected_browser_adapter`.
 
-- `9444`: real Google Chrome, `~/.agent-warm-profile`, CDP responds.
-- `9223`: real Google Chrome, actual profile `~/.agent-prose-replay-profile`.
-- `mcporter` CLI was not on the shell path, but a `mcporter daemon` plus `chrome-devtools-mcp`
-  process were running.
-- Existing Chrome processes were not relaunched or killed.
-- `preflight-warm-chrome.sh` spike proved facade-shaped JSON and live endpoint checks.
-- Spike `check` repaired `~/.agent-warm-profile` from `0755` → `0700`; current CLI fixes that split.
+## Adaptation History
 
-CLI hardening confirmed:
+- 2026-05-29: Imported upstream skill substrate.
+- 2026-05-29: Proved live Oncore portal path with real Chrome, Chrome DevTools MCP, and `one-password`.
+- 2026-06-01: Added Warm Chrome Preflight facade and live endpoint checks.
+- 2026-06-01: Hardened read-only check, safe repair, launch reuse, diagnostics, and redaction.
+- 2026-06-02: Added Browser Adapter Proof facade.
+- 2026-06-02: Proved `chrome-devtools` attachment through verified Warm Chrome and `mcporter`.
+- 2026-06-02: Added Browser Adapter Router facade.
+- 2026-06-03: Added Router recovery metadata, route-validity constraints, smoke artifacts, and capability report routing.
+- 2026-06-03: Rewrote `SKILL.md` around Router-first adapter selection.
+- 2026-06-03: Proved live Router-first Chrome path: missing attachment proof, `prove_adapter_attachment`, `chrome-devtools` proof, reroute success.
 
-- `command-contract.ts` validates through `defineCommandFacadeContract`.
-- Error envelopes validate with `validateStructuredRuntimeError`.
-- Focused Bun tests cover 108 public CLI cases across command contract, check, repair, launch,
-  status, observability, usage failures, and edge recovery.
-- Observability tests cover stdout envelope discipline, LogTape JSONL stderr diagnostics, quiet mode,
-  error flush, and redaction-safe diagnostic context.
-- `check` is read-only.
-- `repair` owns safe `chmod` and `DevToolsActivePort` rewrite.
-- `launch` does not spawn when endpoint already validates.
-- `launch` validates persistent profile safety before spawning.
-- Explicit `--endpoint` derives its own port when `--port` is absent.
-- Runtime/dependency failures route to `inspect_diagnostics`, not browser-entry repair loops.
-- Browser-entry failures emit specific recovery affordances alongside the hard-stop action.
+## Validated Paths
 
-## Validated 2026-06-02
-
-- Browser Adapter Proof contract validates through `defineCommandFacadeContract`.
-- `chrome-devtools` proof runs Warm Chrome Preflight internally.
-- `chrome-devtools` proof accepts mcporter `--browserUrl` on verified `9222`.
-- Stale mcporter config reports `adapter_config_stale` and `update_adapter_config`.
-- Healthy mcporter plus stale native MCP config emits warning only.
-- Missing PATH `mcporter`, configured runner, or Chrome DevTools MCP reports `adapter_dependency_missing`.
-- Invalid `BROWSER_USE_MCPORTER_COMMAND_JSON` reports `adapter_command_override_invalid`.
-- Proof timeout reports `adapter_proof_timeout`.
+- Warm Chrome Preflight validates current endpoint authority.
+- Warm Chrome `check` is read-only.
+- Warm Chrome `repair` owns safe profile proof repair.
+- Warm Chrome `launch` starts real Google Chrome only when needed.
+- Browser Adapter Proof runs Warm Chrome Preflight internally.
+- `chrome-devtools` proof accepts `mcporter` bound to verified Warm Chrome.
+- Missing `mcporter`, configured runner, or Chrome DevTools MCP reports adapter dependency recovery.
+- Stale `mcporter` config reports adapter config recovery.
+- Router `report` discovers validated capability reports from self-report input or runtime manifests.
+- Router `route` consumes supplied evidence; it does not probe adapters.
+- Missing attachment proof emits `prove_adapter_attachment`.
+- Route success emits `use_selected_browser_adapter`.
+- Route success emits route-validity constraints.
+- Router registry includes `chrome-devtools`, `agent-browser`, and `playwright-cdp`.
+- Live Router-first Chrome path selects `chrome-devtools` with route confidence `90` after attachment proof.
 
 ## Open Work
 
-- [ ] Verify `agent-browser` against the Warm Chrome contract before documenting it as a default.
-- [ ] Keep browser-domain-memory consuming this contract rather than duplicating it.
+- Prove `agent-browser` against Warm Chrome before documenting it as routable.
+- Prove `playwright-cdp` against Warm Chrome before documenting it as routable.
+- Keep browser-domain-memory consuming this contract instead of duplicating it.
+- Refresh capability manifests only from verified evidence.

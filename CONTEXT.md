@@ -317,7 +317,7 @@ A `browser-use` readiness proof run before any Browser Adapter acts. It verifies
 _Avoid_: manual checklist, browser-domain-memory preflight
 
 **Browser Adapter Proof**:
-A read-only `browser-use` proof that a selected Browser Adapter is attached to verified Warm Chrome. It runs after Warm Chrome Preflight and before adapter action.
+A read-only `browser-use` proof that a Router-selected or requested Browser Adapter is attached to verified Warm Chrome. It runs after Warm Chrome Preflight, usually when Router emits `prove_adapter_attachment`, and before adapter action.
 _Avoid_: manual checklist, durable binding, adapter fallback
 
 **Browser Adapter Router**:
@@ -332,8 +332,12 @@ _Avoid_: browser task, action window, runbook step, whole request
 A Warm-Chrome-only mechanism `browser-use` uses to attach to and operate Warm Chrome: `chrome-devtools`, `agent-browser`, or `playwright-cdp`. Browser Adapters may inspect, click, replay, or debug, but they do not own authenticated browser state, browser entry, or durable browser knowledge. `puppeteer-core` is deterministic replay detail, not public adapter name.
 _Avoid_: cold adapter, isolated adapter, driver, playback mode, front door, browser entry point, browser owner, memory owner
 
+**Browser Adapter Map**:
+A local `browser-use` reference for one Browser Adapter that maps Browser Adapter Proof or Router recovery vocabulary to next safe actions, adapter-specific inspection, and operator repair commands. Required sections are `Owners`, `Rules`, `Recovery Map`, and `Verify`; adapter-specific sections stay optional. It is model-readable operational guidance, not a runtime contract or local `docs_url` target.
+_Avoid_: config doc, repair doc, adapter orchestrator, browser adapter facade
+
 **Browser Adapter Command Resolution**:
-Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; post-proof action invocation belongs to later Browser Adapter Router work.
+Runtime-owned Browser Adapter Proof step that resolves how to invoke a Browser Adapter support tool, such as `mcporter`, from local PATH or explicit command-vector override. It emits structured dependency recovery when tooling is missing; Router-selected page action uses the selected adapter surface after proof.
 _Avoid_: bunx requirement, npx requirement, prose runner fallback, public package-runner contract, action facade
 
 **Browser Entry Handoff**:
