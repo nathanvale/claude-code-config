@@ -63,7 +63,11 @@ Remaining follow-up:
 - Same-run-only correlation is rejected because it blocks `report` then `route` workflows.
 - Smoke artifact `parent_run_id` is test lineage only.
 - Smoke artifact `parent_run_id` does not satisfy product evidence/report correlation.
+- No FU3 ADR is needed until implementation reopens meaningful correlation alternatives.
 - Command discovery metadata remains artifact-level unless a product need emerges.
+- Integrate reusable Router CLI smoke fixture generation and scenario execution into code-owned test utilities.
+- Hoist common CLI test helpers and fixture makers into the CLI command facade testing package.
+- Add a `create-cli` skill reference that uses prose prompts plus command contracts to generate optional CLI test and fixture coverage.
 
 ## Ownership Map
 
@@ -105,9 +109,10 @@ Remaining follow-up:
 - `route` accepts caller-supplied route evidence through an envelope path, stdin JSON, or env JSON.
 - `route` does not read implicit latest proof, report, route, or smoke files.
 - `route` validates evidence before adapter ranking.
-- Missing, unreadable, malformed, schema-invalid, stale, or mixed-run evidence fails closed.
-- Invalid route evidence emits no Route Validity constraint.
-- Invalid route evidence emits no route decision `data`.
+- Missing, unreadable, malformed, or schema-invalid evidence emits `route_evidence_invalid`.
+- Stale or mixed-run evidence fails as a validated route-evaluation failure.
+- `route_evidence_invalid` emits no Route Validity constraint.
+- `route_evidence_invalid` emits no route decision `data`.
 - Warm Chrome readiness is checked before adapter capability ranking.
 - Attachment proof is required before routing.
 - Auth/session readiness is a task precondition, not an adapter capability.
@@ -173,11 +178,11 @@ Remaining follow-up:
 - Given Router V1, when command discovery runs, then `verify` is absent.
 - Given `report`, when help and parser paths are checked, then `--verify` is absent.
 - Given command metadata, when rendered help, parser acceptance, and runtime semantics are compared, then advertised flags and accepted flags align.
-- Given `route`, when command flags are inspected, then only envelope and output flags are exposed.
-- Given `status`, when command flags are inspected, then only envelope and output flags are exposed.
-- Given `report`, when command flags are inspected, then only adapter, capability, and output flags are exposed.
-- Given `report`, when it runs, then side effects are check/network only.
-- Given `route`, when it runs, then it does not invoke proof or report commands.
+- Given `--version --json`, when output is emitted, then stdout is a parseable JSON success envelope with `data.name` and `data.version`.
+- Given `--version` without `--json`, when output is emitted, then stdout remains plain human version text.
+- Given `route`, when command-specific flags are inspected, then only envelope and output flags are exposed.
+- Given `status`, when command-specific flags are inspected, then only envelope and output flags are exposed.
+- Given `report`, when command-specific flags are inspected, then only adapter, capability, and output flags are exposed.
 
 ### Evidence Input
 
@@ -191,8 +196,12 @@ Remaining follow-up:
 - Given schema-invalid evidence, when `route` runs, then it emits `route_evidence_invalid`.
 - Given stale route evidence, when `route` runs, then it emits `route_evidence_stale`.
 - Given mixed unrelated run evidence, when `route` runs, then it emits `route_evidence_mixed_run`.
-- Given invalid route evidence, when JSON is emitted, then no Route Validity constraint appears.
-- Given invalid route evidence, when JSON is emitted, then no route decision `data` appears.
+- Given stale route evidence, when JSON is emitted, then Route Validity constraints appear.
+- Given stale route evidence, when JSON is emitted, then route decision `data` appears.
+- Given mixed unrelated run evidence, when JSON is emitted, then Route Validity constraints appear.
+- Given mixed unrelated run evidence, when JSON is emitted, then route decision `data` appears.
+- Given `route_evidence_invalid`, when JSON is emitted, then no Route Validity constraint appears.
+- Given `route_evidence_invalid`, when JSON is emitted, then no route decision `data` appears.
 
 ### Capability Reports
 
@@ -274,6 +283,7 @@ Remaining follow-up:
 - Given a Router smoke artifact, when it is saved, then script hash is present.
 - Given a Router smoke artifact, when it is saved, then evaluation date is present.
 - Given a smoke case record, when it is saved, then case kind, intent, input source, expected status, output format, parse status, hashes, byte counts, assertions, and pass/fail state are present.
+- Given a smoke case record, when it is saved, then `stdout_bytes` and `stderr_bytes` match the UTF-8 byte length of captured stdout and stderr.
 - Given captured command and env/stdin data, when smoke artifacts are saved, then sensitive values are redacted or hashed.
 - Given command discovery metadata, when smoke artifacts are saved, then metadata stays artifact-level unless a product need emerges.
 
@@ -283,10 +293,13 @@ Automated unit tests:
 
 - Validate command contract exposes `route`, `report`, and `status`.
 - Validate command contract excludes `prepare`, `verify`, and `report --verify`.
-- Validate command flags, rendered help, parser acceptance, and runtime semantics align.
+- Validate command-specific flags, rendered help, parser acceptance, and runtime semantics align.
+- Validate `report` side effects remain check/network only with unit or sentinel coverage.
+- Validate `route` does not invoke proof or report commands with unit or sentinel coverage.
 - Validate `route` consumes envelope path, stdin JSON, and env JSON.
-- Validate `route` rejects missing, unreadable, malformed, schema-invalid, stale, and mixed-run evidence.
-- Validate invalid route evidence emits no route decision `data`.
+- Validate `route` rejects missing, unreadable, malformed, schema-invalid, stale, and mixed-run evidence with precise failure kinds.
+- Validate `route_evidence_invalid` emits no Route Validity constraint or route decision `data`.
+- Validate stale and mixed-run evidence emit Route Validity constraints and route decision `data`.
 - Validate report states, provenance, confidence, per-capability `verification_method` evidence, and attachment model.
 - Validate manifest and self-report use the same report validator.
 - Validate valid self-report override wins.
@@ -303,6 +316,7 @@ Automated unit tests:
 Smoke CLI cases:
 
 - `bar-report-chrome-devtools`: manifest report returns fresh Chrome DevTools capabilities.
+- `bar-report-verify-rejected`: `report --verify` is rejected by the parser.
 - `bar-auto-route-chrome-devtools`: auto route selects fully evidenced Chrome DevTools.
 - `bar-status-same-decision`: status projects the same decision as route.
 - `bar-missing-adapter-proof`: missing proof fails closed.
@@ -329,6 +343,7 @@ Smoke CLI cases:
 - `bar-envelope-file-input`: envelope path input works.
 - `bar-env-envelope-input`: env envelope input works.
 - `bar-missing-envelope-input`: missing evidence fails closed.
+- `bar-implicit-latest-files-ignored`: planted latest-looking files are not consumed as route evidence.
 - `bar-malformed-envelope-json`: malformed JSON fails closed.
 - `bar-report-malformed-self-report`: malformed self-report fails closed.
 - `bar-report-self-report-priority`: valid self-report overrides manifest.
@@ -362,6 +377,7 @@ Code-check commands after this plan exists:
 
 - Inspect Router runtime modules against this plan.
 - Inspect Router tests against acceptance criteria.
+- Inspect no-internal-invocation claims through unit/sentinel tests and call-path review.
 - Inspect command discovery, help, parser acceptance, and runtime semantics together.
 - Inspect smoke artifacts and `skills/router-cli-smoke/` against smoke artifact criteria.
 - Run focused Router typecheck and tests.
@@ -373,6 +389,7 @@ Code-check rubric:
 - `implemented but weakly tested`: runtime behaviour exists but coverage is indirect or brittle.
 - `plan says yes, code says no`: acceptance criterion lacks implementation.
 - `code has extra behavior not in plan`: runtime behaviour exceeds accepted policy.
+- `absence claim without sentinel`: no-side-effect or no-internal-invocation claim lacks a direct guard.
 - `plan ambiguity`: criterion is unclear, conflicting, or too schema-specific for prose.
 
 ## Source Map

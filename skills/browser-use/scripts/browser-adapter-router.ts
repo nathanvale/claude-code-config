@@ -152,7 +152,7 @@ type OutputMode = "json" | "plain";
 
 type ParsedRouterCommand =
 	| { kind: "help"; command?: BrowserAdapterRouterCommand }
-	| { kind: "version" }
+	| { kind: "version"; outputMode: OutputMode }
 	| {
 			kind: "route";
 			outputMode: OutputMode;
@@ -242,7 +242,10 @@ export async function runBrowserAdapterRouterCli(
 		return 0;
 	}
 	if (parsed.kind === "version") {
-		stdout.write(`browser-adapter-router ${VERSION}\n`);
+		writeVersion(stdout, parsed.outputMode, {
+			runId: diagnosticArgv.options.runId,
+			durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+		});
 		return 0;
 	}
 
@@ -530,6 +533,28 @@ function writeReportSuccess(
 	);
 }
 
+function writeVersion(
+	stdout: CliWriter,
+	outputMode: OutputMode,
+	runtime: { runId: string; durationMs: number },
+): void {
+	if (outputMode === "plain") {
+		stdout.write(`browser-adapter-router ${VERSION}\n`);
+		return;
+	}
+	writeJsonEnvelope(
+		stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: runtime.runId,
+			data: {
+				name: "browser-adapter-router",
+				version: VERSION,
+			},
+		}),
+		runtime,
+	);
+}
+
 function emitRouteFailure(input: {
 	failure: RouteFailure;
 	outputMode: OutputMode;
@@ -776,7 +801,12 @@ function emitCliError(input: {
 // ---------------------------------------------------------------------------
 
 function parseRouterArgv(argv: readonly string[]): ParsedRouterCommand {
-	if (argv.includes("--version")) return { kind: "version" };
+	if (argv.includes("--version")) {
+		return {
+			kind: "version",
+			outputMode: argv.includes("--json") ? "json" : "plain",
+		};
+	}
 	const command = findCommand(argv);
 	if (argv.includes("-h") || argv.includes("--help")) {
 		return { kind: "help", command };

@@ -260,6 +260,24 @@ describe("U0 command contract", () => {
 		expect(browserAdapterRouterContracts.status.alias?.command).toBe("route");
 	});
 
+	test("version supports plain and JSON output", async () => {
+		const plain = await runForTest(["--version"], makeRuntime());
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout).toBe("browser-adapter-router 0.1.0\n");
+		expect(plain.stderr).toBe("");
+
+		const jsonResult = await runForTest(["--version", "--json"], makeRuntime());
+		expect(jsonResult.exitCode).toBe(0);
+		expect(jsonResult.stderr).toBe("");
+		expect(parseJson(jsonResult.stdout)).toMatchObject({
+			status: "ok",
+			data: {
+				name: "browser-adapter-router",
+				version: "0.1.0",
+			},
+		});
+	});
+
 	test("route does not declare a diagnostic flag the facade reserves", () => {
 		const flags = Object.keys(browserAdapterRouterContracts.route.flags ?? {});
 		for (const reserved of CLI_DIAGNOSTIC_FLAGS) {

@@ -125,6 +125,10 @@ function capturedInput(input) {
 	return { sha256: sha256(input), bytes: input.length };
 }
 
+function byteLength(text) {
+	return Buffer.byteLength(text, "utf8");
+}
+
 function caseIntent(expectedExit, args) {
 	if (args.includes("--help")) return "help";
 	if (args.includes("--version")) return "version";
@@ -156,8 +160,11 @@ function parseStatus(response, parsed) {
 }
 
 function runCli(repo, script, args, options = {}) {
-	const result = spawnSync("bun", [script, ...args], {
-		cwd: repo,
+	const cwd = options.cwd ?? repo;
+	const scriptArg =
+		cwd === repo || path.isAbsolute(script) ? script : path.join(repo, script);
+	const result = spawnSync("bun", [scriptArg, ...args], {
+		cwd,
 		env: {
 			...process.env,
 			BROWSER_USE_ROUTER_EVAL_DATE: "2026-06-10",
@@ -440,6 +447,13 @@ function makeFixtures(suiteName) {
 	});
 	const files = {
 		ok: writeFixture(dir, "ok", envelope()),
+		latestRoute: writeFixture(dir, "latest-route", envelope()),
+		latestRouteEvidence: writeFixture(dir, "latest-route-evidence", envelope()),
+		browserAdapterRouterLatest: writeFixture(
+			dir,
+			"browser-adapter-router-latest",
+			envelope(),
+		),
 		agent: writeFixture(dir, "agent", envelope({ reports: [agent] })),
 		playwright: writeFixture(dir, "playwright", envelope({ reports: [playwright] })),
 		all: writeFixture(
@@ -885,16 +899,17 @@ function coreCases(fixtures) {
 	});
 	add(cases, "help_report_omits_envelope_flag", 0, ["report", "--help"], notIncludes("--envelope"));
 	add(cases, "version", 0, ["--version"], includes("browser-adapter-router 0.1.0"));
-	add(cases, "version_json_flag", 0, ["--version", "--json"], includes("0.1.0"));
+	add(cases, "version_json_flag", 0, ["--version", "--json"], (response) => {
+		const parsed = json(response);
+		assert(parsed.status === "ok", `status ${parsed.status}`);
+		assert(parsed.data?.name === "browser-adapter-router", "missing version name");
+		assert(parsed.data?.version === "0.1.0", `version ${parsed.data?.version}`);
+	});
 	for (const [key, args] of [
 		["missing_command", ["--json", "--run-id", "u1", "--quiet"]],
 		["unknown_command", ["dance", "--json", "--run-id", "u2", "--quiet"]],
 		["route_unknown_flag", ["route", "--wat", "--json", "--run-id", "u3", "--quiet"]],
 		["status_unknown_flag", ["status", "--wat", "--json", "--run-id", "u4", "--quiet"]],
-		[
-			"report_unknown_flag",
-			["report", "--adapter", "chrome-devtools", "--wat", "--json", "--run-id", "u5", "--quiet"],
-		],
 		["route_missing_envelope_value", ["route", "--envelope", "--json", "--run-id", "u6", "--quiet"]],
 		["report_missing_adapter", ["report", "--json", "--run-id", "u7", "--quiet"]],
 		["report_bad_adapter", ["report", "--adapter", "nope", "--json", "--run-id", "u8", "--quiet"]],
@@ -905,6 +920,13 @@ function coreCases(fixtures) {
 	]) {
 		add(cases, key, 2, args, usageShape());
 	}
+	add(
+		cases,
+		"report_verify_rejected",
+		2,
+		["report", "--adapter", "chrome-devtools", "--verify", "--json", "--run-id", "u5", "--quiet"],
+		usageUnknown("--verify"),
+	);
 	add(
 		cases,
 		"route_rejects_adapter_flag",
@@ -1104,6 +1126,7 @@ function coreCases(fixtures) {
 		add(cases, key, 20, ["route", "--envelope", file, "--json", "--run-id", key, "--quiet"], errorShape(code, action, recoverability));
 	}
 	add(cases, "fail_missing_file", 20, ["route", "--envelope", path.join(fixtures.dir, "missing.json"), "--json", "--run-id", "missing-file", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"));
+	add(cases, "route_ignores_implicit_latest_files", 20, ["route", "--json", "--run-id", "implicit-latest", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"), { cwd: fixtures.dir });
 	add(cases, "fail_env_bad_json", 20, ["route", "--json", "--run-id", "env-bad", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"), { env: { BROWSER_USE_ROUTER_ENVELOPE_JSON: "{bad json" } });
 	add(cases, "fail_stdin_bad_json", 20, ["route", "--json", "--run-id", "stdin-bad", "--quiet"], errorShape("route_evidence_invalid", "change_route_input", "change_input"), { input: "{bad json" });
 	add(cases, "fail_plain_none", 20, ["route", "--envelope", files.none, "--plain", "--run-id", "plain-none", "--quiet"], includes("adapter_capability_none", "stderr"));
@@ -1410,7 +1433,9 @@ function runSuite({ suite, repo, script, outDir, timestamp, parentRunId, generat
 			output_format: outputFormat(testCase.args),
 			parse_status: parseStatus(response, parsed),
 			stdout: response.stdout,
+			stdout_bytes: byteLength(response.stdout),
 			stderr: response.stderr,
+			stderr_bytes: byteLength(response.stderr),
 			parsed_stdout: parsed,
 			assertions: [],
 			passed: false,

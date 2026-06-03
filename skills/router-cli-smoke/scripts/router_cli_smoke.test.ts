@@ -70,13 +70,39 @@ describe("router CLI smoke artifact", () => {
 		expect(typeof artifact.generated_at).toBe("string");
 		expect(Array.isArray(artifact.generator_command)).toBe(true);
 		expect(artifact.runtime).toMatchObject({
-			node: process.version,
 			platform: process.platform,
 			arch: process.arch,
 		});
+		expect(typeof (artifact.runtime as { node?: unknown }).node).toBe("string");
 		expect(typeof (artifact.runtime as { bun?: unknown }).bun).toBe("string");
 		expect(typeof artifact.script_sha256).toBe("string");
 		expect(routeSuccess).toBeDefined();
+		expect(responses.report_verify_rejected).toMatchObject({
+			expected_exit_code: 2,
+			exit_code: 2,
+			parse_status: "parsed",
+			passed: true,
+			parsed_stdout: {
+				status: "error",
+				error: { code: "usage_error", message: "unknown option: --verify" },
+			},
+		});
+		expect(responses.route_ignores_implicit_latest_files).toMatchObject({
+			expected_exit_code: 20,
+			exit_code: 20,
+			parse_status: "parsed",
+			passed: true,
+			parsed_stdout: {
+				status: "error",
+				error: { code: "route_evidence_invalid" },
+			},
+		});
+		expect(routeSuccess?.stdout_bytes).toBe(
+			Buffer.byteLength(String(routeSuccess?.stdout), "utf8"),
+		);
+		expect(routeSuccess?.stderr_bytes).toBe(
+			Buffer.byteLength(String(routeSuccess?.stderr), "utf8"),
+		);
 		expect(routeSuccess).toMatchObject({
 			case_kind: "coverage",
 			case_intent: "expected_cli_success",
@@ -86,6 +112,8 @@ describe("router CLI smoke artifact", () => {
 			exit_code: 0,
 			output_format: "json",
 			parse_status: "parsed",
+			stdout_bytes: expect.any(Number),
+			stderr_bytes: expect.any(Number),
 			passed: true,
 		});
 		expect(Array.isArray(routeSuccess.command)).toBe(true);

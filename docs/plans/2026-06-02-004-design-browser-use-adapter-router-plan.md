@@ -23,13 +23,41 @@ Added: 2026-06-03.
 Landed on branch:
 
 - `32d46fd`: implemented Router runtime schema owners for command contract, manifests, validation, routing, and CLI envelopes.
+- `08fae9c`: linked `SKILL.md` workflow prose to Router runtime discovery instead of prose capability truth.
+- `85a579c`: tightened Router runtime structure after simplify pass without changing policy.
+- `15ae107`: hardened fail-closed paths from code review and expanded Router failure tests.
+- `111fd95`: marked this plan completed for the initial runtime scope.
 - `1e900a3`: split Router owners into contract, model, engine, discovery, recovery, validation, and CLI projection.
 - `1e900a3`: proved command discovery flags, rendered help, parser acceptance, and runtime semantics align.
+- `1e900a3`: added Router test matrix, recovery metadata plan, command flag contract plan, operator recovery choices plan, and create-cli reference updates.
+- `efebda0`: normalized type-only imports after Router seam extraction.
 - `6ee3a9c`: kept bounded research detail behind `diagnostic_trail`; did not widen the facade envelope.
 - `6ee3a9c`: hardened stale self-report, missing capability, prefer-mode, freshness, auth/session, and validation paths.
+- `6ee3a9c`: added ADR 0013 for Router research recovery through `diagnostic_trail` and updated domain context.
 - `d51103d`: added Router CLI smoke artifacts for 100 core cases and 100 hints/recovery cases.
+- `6c7f74e`: exposed `router-cli-smoke` through agent discovery.
 - `19e82c7`: named smoke artifact fixture metadata as `temp_fixture_dir`.
 - `67d08ed`: covered run-id arguments for usage-failure scenarios.
+- `ecdb4f9`: aligned recovery schema decisions, manifest verification vocabulary, partial recovery, and auth/target-origin actions.
+- `3174b60`: hardened Router smoke artifacts with schema metadata, command hashes, structured assertions, and expanded coverage.
+- `507eb3f`: recorded product JSON decisions in this plan.
+- `9e09a83`: emitted Router product failure `data` and validated `evaluation_date` for route success/failure outputs.
+
+Branch collateral:
+
+- Added `skills/router-cli-smoke/` as the Router smoke validation skill.
+- Added `.agents/skills/router-cli-smoke` discovery entry.
+- Added `skills/browser-use/TEST_MATRIX.md` as the Router and Browser Adapter Proof verification matrix.
+- Added `docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md`.
+- Added `docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`.
+- Added `docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`.
+- Added `docs/plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md`.
+- Updated `AGENTS.md`, `CONTEXT.md`, `skills/browser-use/SKILL.md`, and create-cli references for Router ownership and CLI surface guardrails.
+- Expanded Warm Chrome and Browser Adapter Proof tests where Router command-surface and run-id behavior intersected existing preflight contracts.
+
+Related cross-repo prerequisite:
+
+- `side-quest-engineering` `00e4db4d`: allowed generic facade error envelopes to carry package-owned `data`; Router still owns route failure field semantics.
 
 Accepted follow-up decisions:
 
@@ -54,6 +82,14 @@ Facade boundary:
 - Router owns adapter policy, recovery action ids, route failure data fields, report provenance vocabulary, parent-run semantics, and smoke assertions.
 - Do not add Router-specific policy or recovery ids to the facade.
 - Open a facade follow-up only if Router failure `data` needs generic facade type, clone, or validation support.
+
+Follow-up unit status:
+
+- FU1 landed in `ecdb4f9`.
+- FU2 landed in `9e09a83`; generic facade `data` support landed separately in `side-quest-engineering` `00e4db4d`.
+- FU3 remains accepted but not landed in Router runtime evidence/report surfaces.
+- FU4 landed in `3174b60`; smoke skill discovery landed in `6c7f74e`.
+- Smoke artifacts include artifact-level `parent_run_id`; this is not FU3 product evidence correlation.
 
 ## Requirements
 

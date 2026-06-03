@@ -44,4 +44,4 @@ node skills/router-cli-smoke/scripts/router_cli_smoke.mjs --suite all --out-dir 
 - Hints artifact base name: `router-cli-hints-observability-recovery-100`.
 - Each artifact stores top-level metadata: `generated_at`, `cwd`, `branch`, `head`, `git_status`, `script`, `temp_fixture_dir`, `suite`, `suite_focus`, and `summary`.
 - Each artifact stores keyed `responses`.
-- Each response stores command, expected exit, actual exit, stdout, stderr, parsed JSON stdout, assertions, and pass/fail state.
+- Each response stores command, expected exit, actual exit, stdout, stderr, stdout/stderr byte counts, parsed JSON stdout, assertions, and pass/fail state.
