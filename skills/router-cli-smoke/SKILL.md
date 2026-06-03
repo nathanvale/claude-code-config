@@ -33,7 +33,7 @@ node skills/router-cli-smoke/scripts/router_cli_smoke.mjs --suite all --out-dir 
 ## Rules
 
 - Treat artifacts as evidence, not source of truth.
-- Record branch, HEAD, git status, and fixture temp dir.
+- Record branch, HEAD, git status, and top-level `temp_fixture_dir`.
 - Preserve existing artifacts unless explicitly asked to overwrite them.
 - Do not edit Router implementation while running this skill.
 - If a validator fails, inspect source truth before changing expectations.
@@ -42,5 +42,6 @@ node skills/router-cli-smoke/scripts/router_cli_smoke.mjs --suite all --out-dir 
 
 - Core artifact base name: `router-cli-smoke-responses-100`.
 - Hints artifact base name: `router-cli-hints-observability-recovery-100`.
+- Each artifact stores top-level metadata: `generated_at`, `cwd`, `branch`, `head`, `git_status`, `script`, `temp_fixture_dir`, `suite`, `suite_focus`, and `summary`.
 - Each artifact stores keyed `responses`.
 - Each response stores command, expected exit, actual exit, stdout, stderr, parsed JSON stdout, assertions, and pass/fail state.
