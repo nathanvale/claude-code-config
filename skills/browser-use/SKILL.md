@@ -86,7 +86,7 @@ skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOP
 - Missing proof emits `prove_adapter_attachment`; stale/unknown capability emits `research_adapter_capability` (advisory until a verified report refresh exists). Follow the single `continuation.next_action_id`; alternatives are informational only.
 - Force proves one adapter or stops; only prefer with `fallback_allowed` may fall back. Partial fails closed in V1.
 - Route success is valid for one Bounded Browser Outcome: no adapter switching, no cold-browser fallback. Reroute when task bundle, target origin, selected adapter, proof, capability evidence, or preconditions change or expire.
-- Contract + capability vocabulary owner: `skills/browser-use/scripts/command-contract.ts` and `browser-adapter-router.ts`.
+- Contract + capability vocabulary owner: `skills/browser-use/scripts/command-contract.ts` and `browser-adapter-router-model.ts`.
 - `puppeteer-core`: deterministic replay detail only; connect to verified `browserURL`.
 - Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
 - Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.

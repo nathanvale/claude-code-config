@@ -13,6 +13,10 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	assertCommandHelpFlagSurface,
+	runCommandSurfaceCases,
+} from "@side-quest/cli-command-facade/testing";
+import {
 	WARM_CHROME_PREFLIGHT_SCHEMA_VERSION,
 	warmChromePreflightContracts,
 } from "./command-contract";
@@ -97,6 +101,13 @@ function expectNoGuardRuntimeActions(envelope: {
 	expect(actionIds(envelope)).not.toContain("do_not_fallback");
 }
 
+function expectNoUnknownOption(result: {
+	stdout: string;
+	stderr: string;
+}): void {
+	expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
+}
+
 describe("Warm Chrome command contract", () => {
 	test("declares honest side effects for check, repair, and launch", () => {
 		expect(warmChromePreflightContracts.check.sideEffects).toEqual([
@@ -177,6 +188,88 @@ describe("Warm Chrome command contract", () => {
 		expect(docs).not.toContain("do_not_fallback");
 		expect(docs).not.toContain("first `runtime_actions`");
 		expect(docs).not.toContain("requires_operator");
+	});
+
+	test("Command Surface Alignment Proof keeps help and public argv aligned", async () => {
+		const profile = await makeProfile(0o700);
+		const runtime = testRuntime({ profile });
+		const checkHelp = await runForTest(["help", "check"], runtime);
+		const repairHelp = await runForTest(["help", "repair"], runtime);
+		const launchHelp = await runForTest(["help", "launch"], runtime);
+		const statusHelp = await runForTest(["help", "status"], runtime);
+
+		assertCommandHelpFlagSurface({
+			command: "check",
+			contract: warmChromePreflightContracts.check,
+			help: checkHelp.stdout,
+			absentFlags: ["--chrome"],
+		});
+		assertCommandHelpFlagSurface({
+			command: "repair",
+			contract: warmChromePreflightContracts.repair,
+			help: repairHelp.stdout,
+			absentFlags: ["--chrome"],
+		});
+		assertCommandHelpFlagSurface({
+			command: "launch",
+			contract: warmChromePreflightContracts.launch,
+			help: launchHelp.stdout,
+		});
+		assertCommandHelpFlagSurface({
+			command: "status",
+			contract: warmChromePreflightContracts.status,
+			help: statusHelp.stdout,
+			absentFlags: ["--chrome"],
+		});
+
+		await runCommandSurfaceCases({
+			runner: (argv) => runForTest(argv, runtime),
+			cases: [
+				{
+					label: "check accepts JSON",
+					argv: ["check", "--port", "9222", "--profile", profile, "--json"],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(0);
+					},
+				},
+				{
+					label: "launch accepts JSON",
+					argv: ["launch", "--port", "9222", "--profile", profile, "--json"],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(0);
+					},
+				},
+				{
+					label: "status accepts plain",
+					argv: ["status", "--port", "9222", "--profile", profile, "--plain"],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(0);
+						expect(result.stdout).toContain("browser_ready command=status");
+					},
+				},
+				{
+					label: "check semantically rejects chrome",
+					argv: [
+						"check",
+						"--chrome",
+						"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+						"--json",
+					],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(2);
+						const envelope = JSON.parse(result.stdout);
+						expect(envelope.error.code).toBe("invalid_usage");
+						expect(envelope.error.message).toContain(
+							"--chrome is only valid with launch",
+						);
+					},
+				},
+			],
+		});
 	});
 });
 

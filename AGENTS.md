@@ -42,6 +42,8 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 - Give maps, invariants, owners, next safe actions, and inspectable state.
 - Prefer legible tools and runtime checks over prose policy.
 - For CLI/tool design, use `create-cli`.
+- For new or changed CLI/runtime surfaces, use `create-cli`; name contract, model, engine, discovery, and CLI owners before implementation.
+- For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `create-cli` for the contract path.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
