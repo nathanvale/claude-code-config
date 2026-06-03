@@ -220,6 +220,10 @@ _Avoid_: ledger schema contract, runtime field list, schema owner
 Legacy committed template that showed the per-issue ledger starting shape before runtime rendering owned initial ledger creation.
 _Avoid_: initial ledger render, generated schema doc, prose schema, contract owner
 
+**Validated Route Evidence Envelope**:
+Browser Adapter Router route input that has passed runtime-owned validation before route evaluation. Use this term for the engine input boundary; keep raw JSON, CLI flags, file paths, and stdin outside it.
+_Avoid_: raw route envelope, trusted CLI envelope, typed envelope
+
 **Initial ledger render**:
 Runtime-emitted complete starting ledger document created after acceptance criteria confirmation; read-only output, not a committed template or filesystem mutation.
 _Avoid_: ledger template scaffold, generated schema doc, mutable ledger init
@@ -227,6 +231,26 @@ _Avoid_: ledger template scaffold, generated schema doc, mutable ledger init
 **Capability**:
 A registry-managed skill or agent, together with the files owned by that skill or agent. In v1, runbooks, prompt fragments, rules, commands, MCP tools, and whole plugins are not capabilities.
 _Avoid_: imported thing, tool, plugin, runbook capability
+
+**Adapter capability report**:
+A runtime-owned browser adapter support fact set with provenance and freshness. It is Adapter capability evidence for Browser Adapter Router decisions, not an Agent Capability Registry capability.
+_Avoid_: capability, docs matrix, adapter truth prose, projection slice
+
+**Router Recovery**:
+Browser Adapter Router failure guidance for how an agent can continue or stop after route evidence fails. It names package-owned recovery meaning; the facade owns only the shared envelope shape.
+_Avoid_: facade recovery payload, error metadata, hint contract
+
+**Route Validity**:
+Browser Adapter Router constraint on a selected route or failed route evaluation. It does not describe report discovery, Adapter capability report freshness, or generic CLI errors.
+_Avoid_: report validity, capability validity, Router validity
+
+**Route Evidence Invalid**:
+Browser Adapter Router input failure where supplied route evidence never becomes a Validated Route Evidence Envelope. It occurs inside the `route` command before route evaluation, so it does not create Route Validity.
+_Avoid_: failed route decision, route validity failure, malformed route
+
+**Research Recovery**:
+Browser Adapter Router recovery for stale or unknown Adapter capability report evidence. Continuation names the next action; a Diagnostic trail pointer names the Router-owned diagnostic detail an agent follows after the Router stops. Research signal is advisory diagnostic metadata, not route confidence.
+_Avoid_: facade research schema, hint metadata, docs-only recovery
 
 **Source**:
 The provenance record for where a capability came from. A source is metadata for review and update decisions, not the unit installed into a harness.

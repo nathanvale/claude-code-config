@@ -19,6 +19,9 @@ Design CLI surface area (syntax + behavior), human-first, script-friendly.
   `references/cli-command-facade.md`) and hand it to
   `defineCommandFacadeContract`; that object is the deliverable, not markdown
   spec.
+- For facade-backed implementation, name contract, help, parser, and runtime
+  owners; add a Command Surface Alignment Proof for discovery metadata,
+  rendered help, public argv outcomes, and runtime semantics.
 
 ## Clarify (fast)
 

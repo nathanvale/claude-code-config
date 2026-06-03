@@ -15,6 +15,7 @@ date: 2026-06-02
 
 ## Consequences
 
-- Router implementation must make evidence envelope validation a first-class path.
+- Router implementation must make evidence envelope validation a first-class runtime path.
+- Route evaluation must accept only a Validated Route Evidence Envelope, not raw caller input.
 - Adapter reports and proof stay runtime-owned; skill prose names workflow, not capability truth.
 - Forced adapter failures stay strict until the user relaxes policy or supplies fresh proof.

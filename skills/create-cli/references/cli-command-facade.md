@@ -263,6 +263,44 @@ For a multi-command tool, the contract record is the single source for:
   the machine catalog an agent reads. The filter IS the "agent view vs human view"
   split — `audience:operator|governance` commands are absent from the agent catalog.
 
+## Command Surface Alignment Proof
+
+For new or changed facade-backed CLI surfaces, prove the four surfaces cannot
+drift:
+
+- **Contract owner:** the `CommandFacadeContract` record that declares command
+  metadata, flags, usage, side effects, and discovery-facing shape.
+- **Help owner:** rendered help, usually through `renderCommandUsage` for
+  command-level help plus a thin root-help renderer for command lists and global
+  diagnostics.
+- **Parser owner:** public argv parsing, command-specific acceptance, and
+  command-specific rejection.
+- **Runtime owner:** command semantics, output branch, exit code, and
+  package-owned result assertions.
+
+Keep the proof scenario-based. At minimum, cover:
+
+- advertised command flags appear in command help
+- command-foreign flags do not leak into command help
+- every advertised flag reaches the public argv parser for its owning command,
+  including required, optional, and value-bearing forms
+- command-foreign or semantically invalid argv examples fail the way the package
+  defines, not necessarily as `unknown option`
+- runtime probes preserve the command's meaning, such as projection vs routing
+  evidence or read-only check vs browser/write action
+
+When facade testing-subpath helpers are available, prefer:
+
+- `assertCommandHelpFlagSurface`: derive present flags from the contract; caller
+  supplies absent flags
+- `runCommandSurfaceCases`: run labeled argv cases; caller callback owns result
+  assertions
+
+Helpers are the happy path, not the invariant. The invariant is the proof:
+discovery metadata, rendered help, public argv outcomes, and runtime semantics
+stay aligned for an agent. Do not derive parser allowlists from the contract
+unless the package deliberately chooses contract-owned parser generation.
+
 ## Wire-up (canonical emit target)
 
 create-cli's recommended deliverable is this object plus the `define()` line:

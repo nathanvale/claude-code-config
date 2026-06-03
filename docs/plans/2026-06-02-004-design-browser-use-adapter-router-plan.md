@@ -1,7 +1,7 @@
 ---
 title: Design browser-use Browser Adapter Router
 type: architecture
-status: accepted
+status: completed
 date: 2026-06-02
 origin: docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md
 ---
@@ -15,6 +15,81 @@ Design `browser-use` as the Browser Adapter Router. The router asks candidate ad
 ## Problem Frame
 
 The `mcporter` fix exposed a larger design pressure: `browser-use` should not hardcode one browser automation tool, but it also must not become a fake universal browser API. Adapters can change over time. Agent Browser may gain memory debugging later; Playwright MCP and Chrome DevTools MCP can shift too. Capability truth should be runtime/discovery data with provenance, not permanent skill prose.
+
+## Branch Schema Addendum
+
+Added: 2026-06-03.
+
+Landed on branch:
+
+- `32d46fd`: implemented Router runtime schema owners for command contract, manifests, validation, routing, and CLI envelopes.
+- `08fae9c`: linked `SKILL.md` workflow prose to Router runtime discovery instead of prose capability truth.
+- `85a579c`: tightened Router runtime structure after simplify pass without changing policy.
+- `15ae107`: hardened fail-closed paths from code review and expanded Router failure tests.
+- `111fd95`: marked this plan completed for the initial runtime scope.
+- `1e900a3`: split Router owners into contract, model, engine, discovery, recovery, validation, and CLI projection.
+- `1e900a3`: proved command discovery flags, rendered help, parser acceptance, and runtime semantics align.
+- `1e900a3`: added Router test matrix, recovery metadata plan, command flag contract plan, operator recovery choices plan, and create-cli reference updates.
+- `efebda0`: normalized type-only imports after Router seam extraction.
+- `6ee3a9c`: kept bounded research detail behind `diagnostic_trail`; did not widen the facade envelope.
+- `6ee3a9c`: hardened stale self-report, missing capability, prefer-mode, freshness, auth/session, and validation paths.
+- `6ee3a9c`: added ADR 0013 for Router research recovery through `diagnostic_trail` and updated domain context.
+- `d51103d`: added Router CLI smoke artifacts for 100 core cases and 100 hints/recovery cases.
+- `6c7f74e`: exposed `router-cli-smoke` through agent discovery.
+- `19e82c7`: named smoke artifact fixture metadata as `temp_fixture_dir`.
+- `67d08ed`: covered run-id arguments for usage-failure scenarios.
+- `ecdb4f9`: aligned recovery schema decisions, manifest verification vocabulary, partial recovery, and auth/target-origin actions.
+- `3174b60`: hardened Router smoke artifacts with schema metadata, command hashes, structured assertions, and expanded coverage.
+- `507eb3f`: recorded product JSON decisions in this plan.
+- `9e09a83`: emitted Router product failure `data` and validated `evaluation_date` for route success/failure outputs.
+
+Branch collateral:
+
+- Added `skills/router-cli-smoke/` as the Router smoke validation skill.
+- Added `.agents/skills/router-cli-smoke` discovery entry.
+- Added `skills/browser-use/TEST_MATRIX.md` as the Router and Browser Adapter Proof verification matrix.
+- Added `docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md`.
+- Added `docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`.
+- Added `docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`.
+- Added `docs/plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md`.
+- Updated `AGENTS.md`, `CONTEXT.md`, `skills/browser-use/SKILL.md`, and create-cli references for Router ownership and CLI surface guardrails.
+- Expanded Warm Chrome and Browser Adapter Proof tests where Router command-surface and run-id behavior intersected existing preflight contracts.
+
+Related cross-repo prerequisite:
+
+- `side-quest-engineering` `00e4db4d`: allowed generic facade error envelopes to carry package-owned `data`; Router still owns route failure field semantics.
+
+Accepted follow-up decisions:
+
+- Keep Router semantics local to `browser-use`.
+- Hoist to `@side-quest/cli-command-facade` only for generic envelope support, such as package-owned `data` typing or validation.
+- Rename routable manifest verification to `maintainer_verified_manifest`.
+- Treat docs review as research/advisory input, not the routable verification method.
+- Map `adapter_capability_partial` to `change_route_input` in V1.
+- Keep `accept_partial_adapter` inactive until degraded routing exists.
+- Add active recovery actions: `verify_auth_session`, `verify_target_origin`.
+- Add concise Router-owned failure `data` for route failures.
+- Add route failure `data` only for validated route-evaluation failures; keep `route_evidence_invalid` outside Route Validity data.
+- Add `evaluation_date` to every validated route evaluation product `data`; the current Router clock is date-only.
+- Keep bounded research payloads behind `diagnostic_trail`.
+- Add explicit parent-run correlation for reusable reports and caller-assembled evidence.
+- Emit command discovery metadata once per Router CLI smoke artifact.
+- Keep command discovery metadata smoke/artifact-level unless agents need it outside tests.
+
+Facade boundary:
+
+- Facade owns generic envelope shape, continuation validation, runtime action validation, diagnostic pointers, and package-owned payload allowance.
+- Router owns adapter policy, recovery action ids, route failure data fields, report provenance vocabulary, parent-run semantics, and smoke assertions.
+- Do not add Router-specific policy or recovery ids to the facade.
+- Open a facade follow-up only if Router failure `data` needs generic facade type, clone, or validation support.
+
+Follow-up unit status:
+
+- FU1 landed in `ecdb4f9`.
+- FU2 landed in `9e09a83`; generic facade `data` support landed separately in `side-quest-engineering` `00e4db4d`.
+- FU3 remains accepted but not landed in Router runtime evidence/report surfaces.
+- FU4 landed in `3174b60`; smoke skill discovery landed in `6c7f74e`.
+- Smoke artifacts include artifact-level `parent_run_id`; this is not FU3 product evidence correlation.
 
 ## Requirements
 
@@ -31,12 +106,15 @@ The `mcporter` fix exposed a larger design pressure: `browser-use` should not ha
 - R5c. `route` consumes supplied precondition, proof, and capability evidence; it does not invoke Browser Adapter Proof in V1.
 - R5d. `route` receives evidence through a machine-readable JSON envelope path or stdin; exact fields stay runtime-owned.
 - R5e. V1 caller/skill driver assembles the evidence envelope from command outputs and task preconditions.
+- R5f. V1 partial support recovery uses `change_route_input`; degraded acceptance is not an active route continuation.
 
 ### Capability Reports
 
 - R6. Capability states are `full`, `partial`, `none`, `unknown`, and `stale`.
 - R7. Reports include provenance: adapter version, source URL, checked date, verification method, per-capability confidence, and stale-after policy.
 - R7a. Reports include report-level provenance plus per-capability evidence references.
+- R7b. Routable manifests use `verification_method: "maintainer_verified_manifest"`.
+- R7c. Docs review may inform a manifest refresh, but does not name routable verification.
 - R8. V1 source is a `browser-use` adapter registry plus provenance-bearing capability manifests.
 - R8a. Manifest-backed routable reports live with Router runtime data/code under `skills/browser-use/scripts/`, not docs or references.
 - R8b. V1 manifests are TypeScript constants in a separate Router manifest module, validated through the same report validator as adapter self-reports.
@@ -58,14 +136,19 @@ The `mcporter` fix exposed a larger design pressure: `browser-use` should not ha
 - R16. Auth/session checks require task-supplied evidence: target origin, verified profile identity, and account/session match when observable.
 - R16a. `browser-use` owns auth/session gate shape and fail-closed behaviour, not domain-specific login knowledge.
 - R16b. Target page/origin evidence is required when the task declares that precondition.
+- R16c. Auth/session failures continue with `verify_auth_session`.
+- R16d. Target-origin failures continue with `verify_target_origin`.
 - R17. Missing, empty, stale, or unverifiable preconditions fail closed before adapter routing.
 - R17a. Router validates evidence freshness from envelope metadata and fails closed when freshness metadata is missing or stale.
 - R17b. Router requires compatible run correlation across supplied evidence and fails closed on mixed-run evidence.
+- R17c. Reusable evidence may correlate through an explicit `parent_run_id`; same-run-only is not required for prepared reports.
 
 ### Recovery
 
 - R18. Research recovery uses the same envelope as CLI recovery: `error.code`, `runtime_actions`, `continuation.next_action_id`, structured hints.
 - R18a. Route execution never auto-runs docs research; it emits `research_adapter_capability` as an explicit recovery action.
+- R18b. Route failure JSON includes concise Router-owned `data`.
+- R18c. Route failure `data` includes decision facts, not full bounded research payloads.
 - R19. Research recovery has loop bounds: last checked, stale reason, retry posture, and terminal condition.
 - R20. `allow_degraded` is out of V1 route execution except explicit prototype demonstration states.
 
@@ -96,6 +179,12 @@ The `mcporter` fix exposed a larger design pressure: `browser-use` should not ha
 - KTD11a. **Self-report cannot self-invoke:** Adapter output cannot declare or alter its own report command path.
 - KTD12. **Research must prove:** Docs lookup can propose a refresh, but only verification updates a routable report.
 - KTD12a. **No human-trust shortcut:** Human acceptance of docs-only evidence does not promote an adapter capability to routable truth.
+- KTD13. **Manifest verification is named as verification:** Router-owned manifests use `maintainer_verified_manifest`; docs review stays advisory input.
+- KTD14. **Partial stays closed in V1:** `adapter_capability_partial` points callers to change route input until degraded routing exists.
+- KTD15. **Task preconditions get task recovery:** Auth/session and target-origin failures use precondition-specific recovery actions, not adapter proof.
+- KTD16. **Failure data is Router-owned:** Route failures emit concise decision data; the facade stays generic.
+- KTD17. **Parent runs correlate prepared evidence:** Reports prepared before route execution use explicit parent-run correlation.
+- KTD18. **Smoke artifacts carry discovery once:** Command discovery metadata is artifact-level audit context, not per-case noise.
 
 ## Capability Model
 
@@ -135,9 +224,12 @@ The `mcporter` fix exposed a larger design pressure: `browser-use` should not ha
 - Missing report: `adapter_capability_unknown`.
 - Empty report: `adapter_capability_unknown`.
 - Malformed report: `adapter_capability_unknown` plus schema diagnostic.
+- Invalid adapter self-report JSON stays report discovery failure: emit `adapter_capability_unknown` plus schema diagnostics, not `route_evidence_invalid`.
 - Stale report: `adapter_capability_stale` only when a valid report exceeded freshness policy.
 - Docs-only result: advisory evidence; does not update report.
 - Docs, references, and research artifacts cannot serve as routable manifests.
+- Routable manifest reports use `maintainer_verified_manifest` as the verification method.
+- `maintainer_docs_review` is not a routable verification method.
 - Full route requires fresh report and confidence `>=75` for every required capability.
 - Route confidence is the minimum confidence across required capabilities.
 - Docs-only research may emit `research_signal` or `advisory_signal`; it is not route confidence.
@@ -202,7 +294,9 @@ The `mcporter` fix exposed a larger design pressure: `browser-use` should not ha
 - `target_origin_unverified`: task-required target origin/page evidence is missing, unverifiable, or mismatched.
 - `research_adapter_capability`: structured docs research action with adapter, capability, query, sources, last checked, stale reason, retry posture, and terminal condition.
 - `prove_adapter_attachment`: run Browser Adapter Proof for a candidate adapter, then retry routing with fresh proof evidence.
-- `accept_partial_adapter`: explicit user/agent action only when degraded mode is allowed.
+- `verify_auth_session`: verify target origin, profile identity, and account/session match, then retry routing.
+- `verify_target_origin`: verify target page/origin evidence, then retry routing.
+- `accept_partial_adapter`: deferred action; do not emit in active V1 route failures.
 - `research_complete_unverified`: docs lookup finished but did not refresh runtime truth.
 - `verify_capability_report`: probe or validate evidence before report refresh.
 - V1 has no `verify` command and no `report --verify`; executable probes remain a recovery action/future implementation path.
@@ -219,6 +313,54 @@ The `mcporter` fix exposed a larger design pressure: `browser-use` should not ha
 - Store artifacts in a run-scoped path.
 - Emit artifact paths to the user, not logs.
 - Delete or expire artifacts per run retention policy.
+
+## Follow-Up Units
+
+### FU1. Align active recovery vocabulary
+
+- Modify `skills/browser-use/scripts/command-contract.ts`.
+- Modify `skills/browser-use/scripts/browser-adapter-router-recovery.ts`.
+- Modify Router tests and Router CLI smoke expectations.
+- Rename manifest verification strings to `maintainer_verified_manifest`.
+- Map `adapter_capability_partial` to `change_route_input`.
+- Add `verify_auth_session` and `verify_target_origin`.
+- Prove `recoverability="authenticate"` stays aligned for auth/session and target-origin failures.
+
+### FU2. Add route failure data
+
+- Keep facade schema unchanged unless generic package-owned `data` support is missing.
+- Add `data.failure_kind`.
+- Add `data.required_capabilities`.
+- Add `data.routing_started`.
+- Add `data.candidate_decisions`.
+- Add `data.informational_alternatives`.
+- Add compact research pointer only when research recovery already exists.
+- Do not embed full bounded research fields.
+- Apply only after route evidence validates into a Validated Route Evidence Envelope.
+- Leave `route_evidence_invalid` as input failure with `error`, `continuation`, and no route decision `data`.
+- Do not add safe parser/input `data` to `route_evidence_invalid`; keep parse diagnostics in smoke artifacts or diagnostic surfaces.
+- Add `data.evaluation_date` to validated route-evaluation failures.
+- Leave `route_evidence_invalid` without `evaluation_date` because no route evaluation occurred.
+
+### FU3. Add parent-run correlation
+
+- Add explicit parent-run field to reusable evidence/report surfaces.
+- Accept same run or explicit parent run.
+- Reject mixed unrelated evidence before routing.
+- Prove prepared report then route workflow.
+- Prefer `parent_run_id` over source-specific fields such as `report_run_id` so proof, auth, report, and caller-assembled evidence share one correlation model.
+- Keep route invocation `run_id` distinct from reusable evidence parent run ids.
+
+### FU4. Enrich smoke artifacts
+
+- Add artifact-level `schema_version`.
+- Add artifact-level `artifact_id`.
+- Add artifact-level generator command.
+- Add artifact-level Bun version and OS.
+- Add artifact-level command discovery metadata.
+- Add structured assertion objects.
+- Redact saved commands and environments consistently.
+- Do not add product command discovery fields or commands in this slice.
 
 ## Example Routes
 

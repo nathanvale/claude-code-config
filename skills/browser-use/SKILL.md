@@ -62,12 +62,22 @@ skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-d
 - `--quiet`: suppress diagnostics; keep stdout envelope.
 - Use `--run-id` or `BROWSER_USE_RUN_ID` for cross-tool correlation.
 
-## Adapter Router
+## Browser Adapter Router
 
-- User-named adapter wins only after Warm Chrome Preflight and Browser Adapter Proof pass.
-- `chrome-devtools`: current proven default; use for general work when configured, Network, Performance, and DevTools-grade inspection.
-- `agent-browser`: future Browser Adapter Proof target; use only after `browser-use` owns its proof.
-- `playwright-cdp`: future Browser Adapter Proof target; use only after `browser-use` owns its proof.
+`browser-use` owns adapter selection. The Router ranks proven candidates from supplied evidence only.
+
+Run `route` once per Bounded Browser Outcome, after preflight + adapter proof + `report` produce the evidence envelope. Supply the envelope via `--envelope <path>`, `BROWSER_USE_ROUTER_ENVELOPE_JSON`, or piped stdin; never interactive. `report` discovers capability, `route` selects or fails closed, `status` projects the same decision for humans.
+
+```bash
+skills/browser-use/scripts/browser-adapter-router.sh report --adapter chrome-devtools --json
+skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$ENVELOPE" --json
+skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOPE" --plain
+```
+
+- `BROWSER_USE_ROUTER_SELF_REPORT_JSON`: inject a fresh capability report object for `report`.
+- `BROWSER_USE_ROUTER_EVAL_DATE`: pin the freshness evaluation date (defaults to today).
+- Follow the single `continuation.next_action_id`; alternatives are informational only.
+- Contract, capability vocabulary, route/report/status semantics, env vars, fail-closed rules, and reroute triggers: `skills/browser-use/scripts/command-contract.ts` and `skills/browser-use/scripts/browser-adapter-router.ts`.
 - `puppeteer-core`: deterministic replay detail only; connect to verified `browserURL`.
 - Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
 - Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.
