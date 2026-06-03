@@ -1,98 +1,107 @@
 ---
 name: create-cli
-description: "CLI UX/spec: args, flags, help, output, errors, config, dry-run."
-argument-hint: "[cli description]"
-allowed-tools: "Bash(bun *), Bash(bunx *)"
+description: "Design CLI UX/specs: basic CLI, agent-native CLI, or facade-backed CLI."
 ---
 
 # Create CLI
 
-Design CLI surface area (syntax + behavior), human-first, script-friendly.
+Design CLI surface area: syntax, behavior, help, output, errors, config,
+safety, and validation depth.
 
 ## Do This First
 
-- Read `references/cli-guidelines.md` and apply it as the default rubric.
-- Upstream/full guidelines: https://clig.dev/ (propose changes: https://github.com/cli-guidelines/cli-guidelines)
-- Ask only the minimum clarifying questions needed to lock the interface.
-- Agent-native or implementing? Read `references/agent-native-cli-design.md`.
-- On the facade path, emit a `CommandFacadeContract` skeleton (see
-  `references/cli-command-facade.md`) and hand it to
-  `defineCommandFacadeContract`; that object is the deliverable, not markdown
-  spec.
-- For facade-backed implementation, name contract, help, parser, and runtime
-  owners; add a Command Surface Alignment Proof for discovery metadata,
-  rendered help, public argv outcomes, and runtime semantics.
+- Read `references/cli-guidelines.md`; apply it as the default Basic CLI
+  rubric.
+- Classify the lane:
+  1. Basic CLI: humans first; scripts welcome; no advanced agent/runtime signal.
+  2. Agent-native CLI: explicit agent-native, machine-readable, repairable,
+     recoverable, autonomous-agent-facing, runtime-contract, or agents/scripts
+     as primary users.
+  3. Facade-backed CLI: explicit facade-backed, reusable facade code, facade
+     runtime validation, or `@side-quest/cli-command-facade`.
+  4. Not sure: ask the numbered router.
+- Treat implementation language alone as ambiguous. Bun TypeScript does not
+  imply Agent-native or Facade-backed.
+- If intent is clear, route directly.
+- If intent is ambiguous, ask which lane fits: humans only, agents/scripts too,
+  reusable runtime validation, or not sure.
 
-## Clarify (fast)
+## Minimum CLI Design Brief
 
-Ask, then proceed with best-guess defaults if user is unsure:
+Capture this before lane-specific depth:
 
-- Command name + one-sentence purpose.
-- Primary user: humans, scripts, or both.
-- Input sources: args vs stdin; files vs URLs; secrets (never via flags).
-- Output contract: human text, `--json`, `--plain`, exit codes.
-- Interactivity: prompts allowed? need `--no-input`? confirmations for destructive ops?
-- Config model: flags/env/config-file; precedence; XDG vs repo-local.
-- Platform/runtime constraints: macOS/Linux/Windows; single binary vs runtime.
+- Command name and one-sentence purpose.
+- Target users: humans, scripts, agents, or mixed.
+- Invocation shape: command tree, args, flags, stdin/files/URLs.
+- Help behavior: `-h/--help`, examples, discoverability.
+- Output streams: primary data to stdout; diagnostics to stderr.
+- Output modes: human text, `--json`, `--plain`, or other stable modes.
+- Exit codes: baseline meanings; command-specific codes only when useful.
+- Error style: invalid usage, runtime failure, recovery guidance.
+- Side-effect stance: read, check, write, destructive, auth, network, browser.
+- Safety gates: dry-run/check, confirmation, `--force`, `--no-input`.
+- Config/env behavior: flags, env, config files, precedence.
+- Non-interactive behavior: prompts, TTY assumptions, CI/agent path.
+- Smoke command: smallest command proving the surface works.
 
-## Deliverables (what to output)
+## Lane Depth
 
-When designing a CLI, produce a compact spec the user can implement:
+- Basic CLI:
+  - Stay human-first and script-friendly.
+  - Ask only the minimum questions needed.
+  - Produce a compact CLI spec.
+- Agent-native CLI:
+  - Read `references/agent-native-cli-design.md`.
+  - Apply the runtime-contract minimum in any language.
+  - Add recipes only when risk or workflow value earns them.
+  - Name behavior owners before implementation.
+  - Add human handoff for destructive, auth, billing, externally visible, or
+    irreversible actions.
+- Facade-backed CLI:
+  - Read `references/agent-native-cli-design.md`.
+  - Read `references/cli-command-facade.md`.
+  - Use the facade path only when explicitly requested or when the existing
+    surface is facade-owned.
+  - Name contract, model, engine, discovery, CLI, and test owners.
+  - Include a Command Surface Alignment Proof.
 
-- Command tree + USAGE synopsis.
-- Args/flags table (types, defaults, required/optional, examples).
-- Subcommand semantics (what each does; idempotence; state changes).
-- Output rules: stdout vs stderr; TTY detection; `--json`/`--plain`; `--quiet`/`--verbose`.
-- Error + exit code map (top failure modes).
-- Safety rules: `--dry-run`, confirmations, `--force`, `--no-input`.
-- Config/env rules + precedence (flags > env > project config > user config > system).
-- Shell completion story (if relevant): install/discoverability; generation command or bundled scripts.
-- 5–10 example invocations (common flows; include piped/stdin examples).
+## Output Skeleton
 
-## Default Conventions (unless user says otherwise)
+Fill what matters; drop irrelevant sections:
 
-- `-h/--help` always shows help and ignores other args.
+- Lane: Basic CLI, Agent-native CLI, or Facade-backed CLI.
+- Name:
+- Purpose:
+- Users:
+- Usage:
+- Commands:
+- Args and flags:
+- I/O contract:
+- Exit codes:
+- Errors and recovery:
+- Safety:
+- Config/env:
+- Non-interactive behavior:
+- Examples:
+- Owners: required for Agent-native and Facade-backed.
+- Validation/proof: required for Facade-backed.
+
+## Defaults
+
+- `-h/--help` shows help and ignores other args.
 - `--version` prints version to stdout.
-- Primary data to stdout; diagnostics/errors to stderr.
-- Add `--json` for machine output; consider `--plain` for stable line-based text.
-- Prompts only when stdin is a TTY; `--no-input` disables prompts.
-- Destructive operations: interactive confirmation + non-interactive requires `--force` or explicit `--confirm=...`.
-- Respect `NO_COLOR`, `TERM=dumb`; provide `--no-color`.
-- Handle Ctrl-C: exit fast; bounded cleanup; be crash-only when possible.
-
-## Templates (copy into your answer)
-
-### CLI spec skeleton
-
-Fill these sections, drop anything irrelevant:
-
-1. **Name**: `mycmd`
-2. **One-liner**: `...`
-3. **USAGE**:
-   - `mycmd [global flags] <subcommand> [args]`
-4. **Subcommands**:
-   - `mycmd init ...`
-   - `mycmd run ...`
-5. **Global flags**:
-   - `-h, --help`
-   - `--version`
-   - `-q, --quiet` / `-v, --verbose` (define exactly)
-   - `--json` / `--plain` (if applicable)
-6. **I/O contract**:
-   - stdout:
-   - stderr:
-7. **Exit codes**:
-   - `0` success
-   - `1` generic failure
-   - `2` invalid usage (parse/validation)
-   - (add command-specific codes only when actually useful)
-8. **Env/config**:
-   - env vars:
-   - config file path + precedence:
-9. **Examples**:
-   - …
+- Primary data goes to stdout.
+- Diagnostics and errors go to stderr.
+- Prompts require TTY unless explicitly allowed.
+- `--no-input` disables prompts.
+- Destructive operations need confirmation; non-interactive execution needs
+  `--force` or an explicit confirmation token.
+- Respect `NO_COLOR` and `TERM=dumb`; provide `--no-color` when color exists.
+- Handle Ctrl-C with fast exit and bounded cleanup.
 
 ## Notes
 
-- Prefer recommending a parsing library (language-specific) only when asked; otherwise keep this skill language-agnostic.
-- If the request is “design parameters”, do not drift into implementation.
+- Prefer language-agnostic design unless the user asks for implementation.
+- If the request is design-only, do not drift into implementation.
+- Do not copy runtime schemas, generated envelopes, parser rules, facade field
+  catalogues, or helper signatures into the answer.
