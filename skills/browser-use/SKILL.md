@@ -64,15 +64,9 @@ skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-d
 
 ## Browser Adapter Router
 
-`browser-use` owns adapter selection. The Router ranks proven candidates from supplied evidence; it never infers from preference, docs familiarity, or adapter folklore. Capability truth is runtime discovery data, not skill prose.
+`browser-use` owns adapter selection. The Router ranks proven candidates from supplied evidence only.
 
-V1 sequence for one Bounded Browser Outcome:
-
-1. Warm Chrome Preflight: browser-entry proof (`preflight-warm-chrome.sh check`).
-2. Browser Adapter Proof: per-candidate attachment proof (`preflight-browser-adapter.sh check`).
-3. Router report: validated capability report per candidate (`browser-adapter-router.sh report`).
-4. Caller-assembled evidence envelope: skill driver assembles proof, reports, task preconditions, and policy into one JSON envelope.
-5. Router route: `browser-adapter-router.sh route` selects an adapter or fails closed (`browser-adapter-router.sh status` projects the same decision for humans).
+Run `route` once per Bounded Browser Outcome, after preflight + adapter proof + `report` produce the evidence envelope. Supply the envelope via `--envelope <path>`, `BROWSER_USE_ROUTER_ENVELOPE_JSON`, or piped stdin; never interactive. `report` discovers capability, `route` selects or fails closed, `status` projects the same decision for humans.
 
 ```bash
 skills/browser-use/scripts/browser-adapter-router.sh report --adapter chrome-devtools --json
@@ -80,13 +74,10 @@ skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$ENVELOPE
 skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOPE" --plain
 ```
 
-- `route` consumes the envelope only; it never invokes proof, runs self-report commands, or reads implicit latest files. Supply the envelope via `--envelope <path>`, `BROWSER_USE_ROUTER_ENVELOPE_JSON`, or piped stdin (never an interactive terminal).
-- `BROWSER_USE_ROUTER_SELF_REPORT_JSON`: inject a fresh capability report object for `report`; `BROWSER_USE_ROUTER_EVAL_DATE`: pin the freshness evaluation date (defaults to today).
-- Registry membership (`chrome-devtools`, `agent-browser`, `playwright-cdp`) is known adapter identity, not routability; current support comes from `report`.
-- Missing proof emits `prove_adapter_attachment`; stale/unknown capability emits `research_adapter_capability` (advisory until a verified report refresh exists). Follow the single `continuation.next_action_id`; alternatives are informational only.
-- Force proves one adapter or stops; only prefer with `fallback_allowed` may fall back. Partial fails closed in V1.
-- Route success is valid for one Bounded Browser Outcome: no adapter switching, no cold-browser fallback. Reroute when task bundle, target origin, selected adapter, proof, capability evidence, or preconditions change or expire.
-- Contract + capability vocabulary owner: `skills/browser-use/scripts/command-contract.ts` and `browser-adapter-router-model.ts`.
+- `BROWSER_USE_ROUTER_SELF_REPORT_JSON`: inject a fresh capability report object for `report`.
+- `BROWSER_USE_ROUTER_EVAL_DATE`: pin the freshness evaluation date (defaults to today).
+- Follow the single `continuation.next_action_id`; alternatives are informational only.
+- Contract, capability vocabulary, route/report/status semantics, env vars, fail-closed rules, and reroute triggers: `skills/browser-use/scripts/command-contract.ts` and `skills/browser-use/scripts/browser-adapter-router.ts`.
 - `puppeteer-core`: deterministic replay detail only; connect to verified `browserURL`.
 - Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
 - Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.

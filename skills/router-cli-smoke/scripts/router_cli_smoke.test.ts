@@ -32,9 +32,15 @@ async function runSmokeArtifact(
 			outDir,
 			"--timestamp",
 		],
-		{ cwd: process.cwd(), encoding: "utf8" },
+		{
+			cwd: process.cwd(),
+			encoding: "utf8",
+			timeout: 120000,
+			killSignal: "SIGKILL",
+		},
 	);
 
+	expect(result.error).toBeUndefined();
 	expect(result.status).toBe(0);
 	const files = await readdir(outDir);
 	const artifactFile = files.find((file) => file.startsWith(artifactPrefix));
@@ -59,12 +65,14 @@ describe("router CLI smoke artifact", () => {
 
 		expect(artifact).toMatchObject({
 			schema_version: "1",
-			cwd: process.cwd(),
+			cwd: ".",
 			suite: "core",
 			suite_focus: "core_route_report_status_cli_smoke",
 			evaluation_date: "2026-06-10",
 			summary: { total: 100, pass: 100, fail: 0 },
 		});
+		expect(artifact.temp_fixture_dir).toMatch(/^\[redacted-path:[0-9a-f]{12}\]$/);
+		expect(artifact.script).not.toMatch(/^\//);
 		expect(typeof artifact.artifact_id).toBe("string");
 		expect(typeof artifact.parent_run_id).toBe("string");
 		expect(typeof artifact.generated_at).toBe("string");

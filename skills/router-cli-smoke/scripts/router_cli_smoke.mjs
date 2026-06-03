@@ -99,14 +99,25 @@ function sha256(text) {
 	return createHash("sha256").update(text).digest("hex");
 }
 
-function redactArg(arg) {
+function redactPathForArtifact(value, repoRoot) {
+	if (!path.isAbsolute(value)) return value;
+	const relative = path.relative(repoRoot, value);
+	if (relative === "") return ".";
+	if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+		return `./${relative}`;
+	}
+	return `[redacted-path:${sha256(value).slice(0, 12)}]`;
+}
+
+function redactArg(arg, repoRoot) {
 	if (SENSITIVE_ARG_PATTERN.test(arg)) return "[redacted]";
 	if (arg.startsWith("/Users/example/")) return "[redacted-path]";
+	if (path.isAbsolute(arg)) return redactPathForArtifact(arg, repoRoot);
 	return arg;
 }
 
-function redactedCommand(script, args) {
-	return ["bun", script, ...args].map(redactArg);
+function redactedCommand(script, args, repoRoot) {
+	return ["bun", script, ...args].map((arg) => redactArg(arg, repoRoot));
 }
 
 function capturedEnv(env = {}) {
@@ -1419,7 +1430,7 @@ function runSuite({ suite, repo, script, outDir, timestamp, parentRunId, generat
 			case_kind: testCase.caseKind,
 			case_intent: caseIntent(testCase.expectedExit, testCase.args),
 			input_source: inputSource(testCase.args, testCase.options),
-			command: redactedCommand(script, testCase.args),
+			command: redactedCommand(script, testCase.args, repo),
 			command_sha256: sha256(["bun", script, ...testCase.args].join("\u0000")),
 			...(testCase.options.env
 				? { env: capturedEnv(testCase.options.env) }
@@ -1474,21 +1485,21 @@ function runSuite({ suite, repo, script, outDir, timestamp, parentRunId, generat
 		artifact_id: randomUUID(),
 		parent_run_id: parentRunId,
 		generated_at: new Date().toISOString(),
-		cwd: repo,
+		cwd: redactPathForArtifact(repo, repo),
 		branch: gitLines(repo, ["branch", "--show-current"])[0] ?? "",
 		head: gitLines(repo, ["rev-parse", "HEAD"])[0] ?? "",
 		git_status: gitLines(repo, ["status", "--short", "--branch"]),
-		generator_command: generatorCommand.map(redactArg),
+		generator_command: generatorCommand.map((arg) => redactArg(arg, repo)),
 		runtime: {
 			node: process.version,
 			bun: commandOutput(repo, ["bun", "--version"]),
 			platform: process.platform,
 			arch: process.arch,
 		},
-		script,
+		script: redactPathForArtifact(script, repo),
 		script_sha256: sha256(readFileSync(path.join(repo, script), "utf8")),
 		evaluation_date: "2026-06-10",
-		temp_fixture_dir: fixtures.dir,
+		temp_fixture_dir: redactPathForArtifact(fixtures.dir, repo),
 		suite,
 		suite_focus:
 			suite === "core"
