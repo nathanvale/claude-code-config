@@ -41,9 +41,12 @@ Accepted follow-up decisions:
 - Keep `accept_partial_adapter` inactive until degraded routing exists.
 - Add active recovery actions: `verify_auth_session`, `verify_target_origin`.
 - Add concise Router-owned failure `data` for route failures.
+- Add route failure `data` only for validated route-evaluation failures; keep `route_evidence_invalid` outside Route Validity data.
+- Add `evaluation_date` to every validated route evaluation product `data`; the current Router clock is date-only.
 - Keep bounded research payloads behind `diagnostic_trail`.
 - Add explicit parent-run correlation for reusable reports and caller-assembled evidence.
 - Emit command discovery metadata once per Router CLI smoke artifact.
+- Keep command discovery metadata smoke/artifact-level unless agents need it outside tests.
 
 Facade boundary:
 
@@ -185,6 +188,7 @@ Facade boundary:
 - Missing report: `adapter_capability_unknown`.
 - Empty report: `adapter_capability_unknown`.
 - Malformed report: `adapter_capability_unknown` plus schema diagnostic.
+- Invalid adapter self-report JSON stays report discovery failure: emit `adapter_capability_unknown` plus schema diagnostics, not `route_evidence_invalid`.
 - Stale report: `adapter_capability_stale` only when a valid report exceeded freshness policy.
 - Docs-only result: advisory evidence; does not update report.
 - Docs, references, and research artifacts cannot serve as routable manifests.
@@ -296,6 +300,11 @@ Facade boundary:
 - Add `data.informational_alternatives`.
 - Add compact research pointer only when research recovery already exists.
 - Do not embed full bounded research fields.
+- Apply only after route evidence validates into a Validated Route Evidence Envelope.
+- Leave `route_evidence_invalid` as input failure with `error`, `continuation`, and no route decision `data`.
+- Do not add safe parser/input `data` to `route_evidence_invalid`; keep parse diagnostics in smoke artifacts or diagnostic surfaces.
+- Add `data.evaluation_date` to validated route-evaluation failures.
+- Leave `route_evidence_invalid` without `evaluation_date` because no route evaluation occurred.
 
 ### FU3. Add parent-run correlation
 
@@ -303,6 +312,8 @@ Facade boundary:
 - Accept same run or explicit parent run.
 - Reject mixed unrelated evidence before routing.
 - Prove prepared report then route workflow.
+- Prefer `parent_run_id` over source-specific fields such as `report_run_id` so proof, auth, report, and caller-assembled evidence share one correlation model.
+- Keep route invocation `run_id` distinct from reusable evidence parent run ids.
 
 ### FU4. Enrich smoke artifacts
 
@@ -313,6 +324,7 @@ Facade boundary:
 - Add artifact-level command discovery metadata.
 - Add structured assertion objects.
 - Redact saved commands and environments consistently.
+- Do not add product command discovery fields or commands in this slice.
 
 ## Example Routes
 
