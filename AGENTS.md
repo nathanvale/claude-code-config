@@ -1,6 +1,6 @@
 # Work Style
 
-Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, skill references.
+Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.md`, `SKILL.md`, skill references.
 
 - Artifacts: telegraph; bullets; no filler; edit source.
 - One idea per bullet.
@@ -12,6 +12,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 - Skills own workflows; startup instructions stay hard rules and routes.
 - Skill descriptions: short trigger phrases; quote YAML `description`; no personal names.
 - Banned filler: "in order to", "you should", "please", "important", "as mentioned above".
+- Critical language: use `must`/`never` only for enforceable invariants; name consequence or check.
 - If terseness hurts clarity, flag it.
 
 ## Nathan
@@ -24,11 +25,11 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 
 ## Core
 
+- Read relevant files before acting.
 - Concrete implementation request: act.
 - Analysis-only or brainstorming request: ask before implementing.
 - Low-risk ambiguity: assume; state it.
 - High-risk ambiguity: ask one question.
-- Read relevant files before acting.
 - Execute in small, reviewable steps.
 - Test meaningful changes.
 - Preserve unrelated user/agent changes.
@@ -38,8 +39,9 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 
 ## Agent-Native Work
 
-- Treat agents as capable collaborators.
+- Treat agents as capable collaborators, not brittle scripts.
 - Give maps, invariants, owners, next safe actions, and inspectable state.
+- Design failures to expose cause, repair path, or human handoff.
 - Prefer legible tools and runtime checks over prose policy.
 - For CLI/tool design, use `create-cli`.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
@@ -50,11 +52,20 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `context/`, `SKILL.md`, ski
 
 ## Skill Authoring
 
+- Read `context/skill-design-philosophy.md` before authoring, reviewing, healing, or repairing `SKILL.md`.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
 - Skill bodies: terse prose + commands; no copied contracts.
+- Name owner paths; don't copy contracts, flags, schemas, state machines, or output semantics.
+- One workflow per skill.
+- Give next safe action.
+- Prefer examples over abstract explanation.
+- Keep references one level down.
+- Risky skills: choose invocation mode and tool permissions deliberately.
+- Add small rules only from documented recurring failure patterns.
+- Prune or substitute before adding instructions.
+- Delete prose that does not change behavior.
 - Frontmatter: quote `description`; YAML-parse after edits.
-- Deeper rule: `context/skill-design-philosophy.md`.
 
 ## Tools
 
