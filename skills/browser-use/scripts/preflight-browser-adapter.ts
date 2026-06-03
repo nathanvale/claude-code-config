@@ -44,6 +44,15 @@ import {
 	runPreflightWarmChromeCli,
 	type PreflightRuntime,
 } from "./preflight-warm-chrome";
+import {
+	type McporterCommandInput,
+	type McporterCommandResult,
+	isMissingCommandResult,
+	mcporterDependencyHintText,
+	mcporterOverrideInvalidHintText,
+	runMcporter,
+	spawnMcporterCommand,
+} from "./mcporter-transport";
 
 const VERSION = "0.1.0";
 const DEFAULT_PORT = "9222";
@@ -52,10 +61,6 @@ const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
 const CHROME_DEVTOOLS_DOCS_URL =
 	"https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
-const MCPORTER_COMMAND_ENV_VAR = "BROWSER_USE_MCPORTER_COMMAND_JSON";
-const MCPORTER_DEFAULT_COMMAND = ["mcporter"] as const;
-const MCPORTER_COMMAND_EXAMPLES =
-	'["bunx","mcporter"], ["npx","-y","mcporter"], or ["pnpm","dlx","mcporter"]';
 const ADAPTER_TIMEOUT_MS = {
 	"chrome-devtools": 8000,
 } as const satisfies Record<BrowserAdapterProofAdapter, number>;
@@ -98,18 +103,11 @@ type ParsedAdapterProofCommand =
 			port: string;
 	  };
 
-export type AdapterCommandInput = {
-	command: string;
-	args: readonly string[];
-	timeoutMs: number;
-};
-
-export type AdapterCommandResult = {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-	timedOut?: boolean;
-};
+// The command-runner shapes are owned by the shared mcporter transport so the
+// two surfaces cannot drift. Kept under the Adapter* names existing importers
+// (tests, runtime type) already use.
+export type AdapterCommandInput = McporterCommandInput;
+export type AdapterCommandResult = McporterCommandResult;
 
 export type AdapterProofRuntime = PreflightRuntime & {
 	cwd: string;
@@ -165,8 +163,6 @@ type AdapterWarning = {
 	source_label?: BrowserAdapterProofConfigSourceLabel;
 	observed_port?: string;
 };
-
-type AdapterCommandVector = readonly [string, ...string[]];
 
 type PageSummary = {
 	id?: string;
@@ -273,7 +269,7 @@ export function createDefaultAdapterProofRuntime(
 		...base,
 		cwd: process.cwd(),
 		readTextFile: (path: string) => readFile(path, "utf-8"),
-		runCommand: (input: AdapterCommandInput) => runCommand(input),
+		runCommand: (input: AdapterCommandInput) => spawnMcporterCommand(input),
 		...overrides,
 	};
 }
@@ -1304,64 +1300,36 @@ function warningsForNonSelectedConfig(
 	});
 }
 
+// Run an mcporter subcommand through the shared transport (plan U4). The
+// transport resolves and prefixes the command vector with the same semantics
+// Browser Operation uses; this surface maps each neutral failure reason onto the
+// Adapter Proof error taxonomy so the proof envelopes stay unchanged.
 async function runMcporterCommand(
 	runtime: AdapterProofRuntime,
 	args: readonly string[],
 ): Promise<AdapterCommandResult> {
-	const [command, ...baseArgs] = resolveMcporterCommand(runtime);
-	try {
-		return await runtime.runCommand({
-			command,
-			args: [...baseArgs, ...args],
-			timeoutMs: ADAPTER_TIMEOUT_MS["chrome-devtools"],
-		});
-	} catch {
-		throw new AdapterProofRuntimeError(
-			"adapter_dependency_missing",
-			"mcporter could not be started.",
-			{
-				primaryActionId: "configure_adapter_dependency",
-				hintSummary: mcporterDependencyHint(
-					`${command} could not be started from the selected mcporter command vector.`,
-				),
-				hintAction: "repair_state",
-				recoverability: "repair_state",
-				hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
-			},
-		);
+	const outcome = await runMcporter(
+		runtime,
+		args,
+		ADAPTER_TIMEOUT_MS["chrome-devtools"],
+	);
+	if (outcome.ok) return outcome.result;
+	if (outcome.reason === "invalid_override") {
+		throw invalidMcporterCommandOverride(outcome.message);
 	}
-}
-
-function resolveMcporterCommand(
-	runtime: AdapterProofRuntime,
-): AdapterCommandVector {
-	const rawOverride = runtime.env[MCPORTER_COMMAND_ENV_VAR];
-	if (rawOverride === undefined) return MCPORTER_DEFAULT_COMMAND;
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(rawOverride);
-	} catch {
-		throw invalidMcporterCommandOverride(
-			`${MCPORTER_COMMAND_ENV_VAR} must be a JSON array of non-empty strings.`,
-		);
-	}
-	if (!Array.isArray(parsed) || parsed.length === 0) {
-		throw invalidMcporterCommandOverride(
-			`${MCPORTER_COMMAND_ENV_VAR} must be a non-empty JSON array of strings.`,
-		);
-	}
-	const vector: string[] = [];
-	for (const value of parsed) {
-		if (typeof value !== "string" || value.trim() === "") {
-			throw invalidMcporterCommandOverride(
-				`${MCPORTER_COMMAND_ENV_VAR} entries must be non-empty strings.`,
-			);
-		}
-		vector.push(value.trim());
-	}
-	const [command, ...args] = vector;
-	return [command, ...args];
+	throw new AdapterProofRuntimeError(
+		"adapter_dependency_missing",
+		"mcporter could not be started.",
+		{
+			primaryActionId: "configure_adapter_dependency",
+			hintSummary: mcporterDependencyHint(
+				`${outcome.command} could not be started from the selected mcporter command vector.`,
+			),
+			hintAction: "repair_state",
+			recoverability: "repair_state",
+			hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
+		},
+	);
 }
 
 function invalidMcporterCommandOverride(message: string): AdapterProofRuntimeError {
@@ -1370,7 +1338,7 @@ function invalidMcporterCommandOverride(message: string): AdapterProofRuntimeErr
 		"mcporter command override is invalid.",
 		{
 			primaryActionId: "configure_adapter_dependency",
-			hintSummary: `${message} Use a command vector such as ${MCPORTER_COMMAND_EXAMPLES}. Browser Adapter Proof does not auto-try package runners.`,
+			hintSummary: mcporterOverrideInvalidHintText(message),
 			hintAction: "repair_state",
 			recoverability: "repair_state",
 			hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
@@ -1379,7 +1347,7 @@ function invalidMcporterCommandOverride(message: string): AdapterProofRuntimeErr
 }
 
 function mcporterDependencyHint(problem: string): string {
-	return `${problem} Expose mcporter on PATH, or set ${MCPORTER_COMMAND_ENV_VAR} to a JSON array command vector. Examples: ${MCPORTER_COMMAND_EXAMPLES}. Choose one; Browser Adapter Proof does not auto-try package runners.`;
+	return mcporterDependencyHintText(problem);
 }
 
 async function listChromeDevToolsPages(
@@ -1533,14 +1501,6 @@ function timeoutOptions(
 		recoverability: "repair_state",
 		hintDocsUrl: CHROME_DEVTOOLS_DOCS_URL,
 	};
-}
-
-function isMissingCommandResult(result: AdapterCommandResult): boolean {
-	const text = `${result.stderr}\n${result.stdout}`;
-	return (
-		result.exitCode === 127 ||
-		/(command not found|not found|ENOENT|No such file or directory)/i.test(text)
-	);
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -2119,45 +2079,11 @@ function isBrowserAdapter(value: string): value is BrowserAdapterProofAdapter {
 	);
 }
 
-export async function runCommand(
-	input: AdapterCommandInput,
-): Promise<AdapterCommandResult> {
-	let proc: ReturnType<typeof Bun.spawn>;
-	try {
-		proc = Bun.spawn([input.command, ...input.args], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-	} catch {
-		return {
-			exitCode: 127,
-			stdout: "",
-			stderr: `${input.command}: command not found`,
-		};
-	}
-	const completion = Promise.all([
-		new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-		new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-		proc.exited,
-	]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	const timeoutResult = new Promise<AdapterCommandResult>((resolve) => {
-		timeout = setTimeout(() => {
-			try {
-				proc.kill("SIGKILL");
-			} catch {
-				// Best effort. Timeout result still preserves bounded CLI behavior.
-			}
-			resolve({ exitCode: 1, stdout: "", stderr: "", timedOut: true });
-		}, input.timeoutMs);
-	});
-	try {
-		return await Promise.race([completion, timeoutResult]);
-	} finally {
-		if (timeout) clearTimeout(timeout);
-		completion.catch(() => undefined);
-	}
-}
+// Re-exported so existing importers (tests, runtime factory) keep a stable
+// surface symbol. The shell-free spawn implementation now lives in the shared
+// mcporter transport so Adapter Proof and Browser Operation run commands the
+// same way.
+export const runCommand = spawnMcporterCommand;
 
 export async function runForTest(
 	argv: readonly string[],
