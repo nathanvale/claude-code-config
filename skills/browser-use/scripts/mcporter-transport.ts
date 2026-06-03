@@ -128,14 +128,45 @@ export function resolveMcporterCommandVector(
 export type RunMcporterResult =
 	| { ok: true; result: McporterCommandResult }
 	| { ok: false; reason: "invalid_override"; message: string }
-	| { ok: false; reason: "command_not_started"; command: string };
+	| { ok: false; reason: "command_not_started"; command: string; error: unknown }
+	| { ok: false; reason: "execution_failed"; command: string; error: unknown };
+
+// True when a thrown error definitively signals the resolved command could not
+// be started (missing binary / spawn failure), versus an opaque failure raised
+// while the command was already running. Node/Bun surface start failures as
+// ENOENT (and related spawn errnos); the message fallback covers runtimes that
+// throw a plain Error.
+function isStartFailureError(error: unknown): boolean {
+	if (error && typeof error === "object") {
+		const code = (error as { code?: unknown }).code;
+		if (
+			code === "ENOENT" ||
+			code === "EACCES" ||
+			code === "ENOTDIR" ||
+			code === "EPERM"
+		) {
+			return true;
+		}
+	}
+	const message = error instanceof Error ? error.message : String(error ?? "");
+	return /(command not found|not found|ENOENT|No such file or directory|spawn\b)/i.test(
+		message,
+	);
+}
 
 // Resolve the override, prefix the command vector, and run the mcporter
 // subcommand through the runtime's structured command runner. The argv vector is
 // passed positionally to the runtime — it is never joined into a shell string,
-// so override or argument input is never shell-evaluated. A runtime that throws
-// when spawning the resolved command (missing binary) is reported as
-// command_not_started rather than crashing the caller.
+// so override or argument input is never shell-evaluated.
+//
+// The default runtime (spawnMcporterCommand) never throws: a missing binary
+// becomes an exit-127 result and a timeout a timedOut result, both handled by
+// callers from the ok:true branch. A custom McporterRuntime.runCommand override
+// may still throw, so a throw is classified rather than collapsed: a definitive
+// spawn/start failure is command_not_started (route to dependency recovery);
+// any other throw (an override bug, cancellation, unexpected I/O fault) is
+// execution_failed and carries the original error rather than being mislabelled
+// as a missing binary.
 export async function runMcporter(
 	runtime: McporterRuntime,
 	args: readonly string[],
@@ -152,8 +183,11 @@ export async function runMcporter(
 			timeoutMs,
 		});
 		return { ok: true, result };
-	} catch {
-		return { ok: false, reason: "command_not_started", command };
+	} catch (error) {
+		if (isStartFailureError(error)) {
+			return { ok: false, reason: "command_not_started", command, error };
+		}
+		return { ok: false, reason: "execution_failed", command, error };
 	}
 }
 

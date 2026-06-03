@@ -1317,6 +1317,24 @@ async function runMcporterCommand(
 	if (outcome.reason === "invalid_override") {
 		throw invalidMcporterCommandOverride(outcome.message);
 	}
+	if (outcome.reason === "execution_failed") {
+		// The command runner threw for a reason other than a spawn/start failure
+		// (an override bug or unexpected fault). Surface it as a runtime failure
+		// rather than misdiagnosing a missing dependency.
+		throw new AdapterProofRuntimeError(
+			"runtime_failure",
+			"mcporter command execution failed unexpectedly.",
+			{
+				exitCode: RUNTIME_FAILURE_EXIT_CODE,
+				failureDomain: "runtime_diagnostics",
+				primaryActionId: "inspect_adapter_config",
+				hintSummary:
+					"Inspect the mcporter command runner; it failed without starting cleanly.",
+				severity: "fatal",
+				recoverability: "none",
+			},
+		);
+	}
 	throw new AdapterProofRuntimeError(
 		"adapter_dependency_missing",
 		"mcporter could not be started.",

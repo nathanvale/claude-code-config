@@ -479,6 +479,12 @@ export type BrowserOperationTransportFailure =
 			code: "browser_operation_transport_timeout";
 			message: string;
 			hintSummary: string;
+	  }
+	| {
+			kind: "execution_failed";
+			code: "browser_operation_transport_failed";
+			message: string;
+			hintSummary: string;
 	  };
 
 export type BrowserOperationTransportResult =
@@ -510,6 +516,21 @@ export async function runBrowserUseMcporter(
 					code: "browser_operation_command_override_invalid",
 					message: "mcporter command override is invalid.",
 					hintSummary: mcporterOverrideInvalidHintText(outcome.message),
+				},
+			};
+		}
+		if (outcome.reason === "execution_failed") {
+			// The command runner threw for a reason other than a spawn/start
+			// failure. Report a distinct transport failure rather than telling the
+			// operator mcporter is missing.
+			return {
+				ok: false,
+				failure: {
+					kind: "execution_failed",
+					code: "browser_operation_transport_failed",
+					message: "mcporter command execution failed unexpectedly.",
+					hintSummary:
+						"The mcporter transport failed without starting cleanly. Inspect the command runner before retrying the operation.",
 				},
 			};
 		}

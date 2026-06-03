@@ -1054,6 +1054,7 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_dependency_missing",
 	"browser_operation_command_override_invalid",
 	"browser_operation_transport_timeout",
+	"browser_operation_transport_failed",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];

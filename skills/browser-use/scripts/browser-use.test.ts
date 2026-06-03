@@ -503,6 +503,23 @@ describe("U4 mcporter transport", () => {
 		expect(outcome.failure.code).toBe("browser_operation_dependency_missing");
 	});
 
+	// Scenario: a runtime override that throws for a reason other than a spawn or
+	// start failure is a transport failure, not a missing-binary diagnosis. It
+	// must not tell the operator mcporter is absent.
+	test("a non-start-failure throw is a transport failure, not dependency recovery", async () => {
+		const runtime = makeRuntime({
+			runCommand: async () => {
+				throw new Error("connection reset mid-call");
+			},
+		});
+		const outcome = await runBrowserUseMcporter(runtime, TRANSPORT_ARGS);
+
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected failure");
+		expect(outcome.failure.code).toBe("browser_operation_transport_failed");
+		expect(outcome.failure.hintSummary).not.toContain("Expose mcporter on PATH");
+	});
+
 	// Scenario: a timed-out transport result is a distinct timeout failure, never
 	// a clean success. Adapter Proof guards timedOut before the missing-command
 	// check; the operation surface must too, or U7 would parse empty output as a
