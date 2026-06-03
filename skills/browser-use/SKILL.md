@@ -1,156 +1,85 @@
 ---
 name: browser-use
-description: "Route browser work through Warm Chrome Preflight and a real Chrome CDP adapter. No Chrome for Testing."
+description: "Browser tasks through Warm Chrome; no Chrome for Testing."
 ---
 
 # Browser Use
 
 Use for browser tasks that need a logged-in, profile-bearing Chrome session.
 
-## Contract
+## Owner
 
-- Owner: `browser-use` owns Warm Chrome readiness, repair, launch, and adapter routing.
-- Warm Chrome: real Google Chrome binary, dedicated persistent profile, loopback CDP.
-- Never Chrome for Testing. Never throwaway profile. Never everyday default profile.
-- `browser-domain-memory`, runbooks, and adapters consume preflight proof; they do not own readiness policy.
-- Details: `references/warm-chrome.md`.
-- MCP config repair: `mcporter-config.md`.
+- Warm Chrome proof, repair, launch: `skills/browser-use/scripts/preflight-warm-chrome.sh`.
+- Browser Adapter Proof: `skills/browser-use/scripts/preflight-browser-adapter.sh`.
+- Browser Adapter Router: `skills/browser-use/scripts/browser-adapter-router.sh`.
+- Browser Adapter Map validation: `skills/browser-use/scripts/browser-adapter-map.sh`.
+- CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/scripts/command-contract.ts`.
+- Router model, validation, recovery: `skills/browser-use/scripts/browser-adapter-router*.ts`.
+- Warm Chrome invariant and auth boundary: `skills/browser-use/references/warm-chrome.md`.
+- Browser Adapter Maps: `skills/browser-use/references/browser-adapter-*.md`.
 
-## Proof Flow
+## Workflow
 
-Before adapter action:
+Name the browser outcome before choosing tools:
+
+- Map the user request to a Router bundle or required capabilities.
+- Set route policy from the request: auto, prefer, or force.
+- Treat auth/session and target-origin checks as route preconditions when the task needs them.
+
+Prove Warm Chrome as the browser-entry precondition:
 
 ```bash
-skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json
-skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
+skills/browser-use/scripts/preflight-warm-chrome.sh check --json
 ```
 
-- Parse stdout envelope. Treat stderr as diagnostics only.
-- Warm Chrome Preflight success: follow `continuation.next_action_id`; candidate endpoint is verified.
-- Browser Adapter Proof success: follow `continuation.next_action_id`; selected adapter is verified.
-- Failure: follow `continuation.next_action_id`; inspect `runtime_actions` for that action's summary and side effects.
-- Obey `continuation.constraints` before choosing adapters; `forbidden_action_ids` are behaviours to skip, not `runtime_actions` ids to look up.
-- Browser Entry Handoff constraint stops adapter fallback and cold-browser fallback. Repair Warm Chrome, then rerun.
-- Browser Adapter Proof constraint also stops adapter fallback and cold-browser fallback. Inspect or update adapter config, then rerun.
-- A login/MFA wall hit after preflight passes is an app step, not browser entry: complete it in the warm profile, do not rerun preflight.
-- Use `repair` or `launch` only when explicitly preparing Warm Chrome entry.
-- Contract owner: `skills/browser-use/scripts/command-contract.ts`.
-- Precedence and auth boundary: `references/warm-chrome.md`.
+- Parse stdout envelope.
+- Follow `continuation.next_action_id`.
+- Obey `continuation.constraints`; skip adapter fallback and cold-browser fallback when forbidden.
+- Use `repair` or `launch` only when browser entry is approved or requested.
 
-Human health:
+Ask the Router for capability evidence, then route:
 
 ```bash
-skills/browser-use/scripts/preflight-warm-chrome.sh status --port "$PORT" --plain
-```
-
-Repair/launch, when browser entry is approved:
-
-```bash
-skills/browser-use/scripts/preflight-warm-chrome.sh repair --port "$PORT" --profile "$PROFILE" --plain
-skills/browser-use/scripts/preflight-warm-chrome.sh launch --port "$PORT" --profile "$PROFILE" --plain
-```
-
-Observability:
-
-```bash
-skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json --debug --run-id "$RUN_ID"
-skills/browser-use/scripts/preflight-warm-chrome.sh check --port "$PORT" --json --quiet
-skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json --run-id "$RUN_ID"
-```
-
-- `--debug`: LogTape JSONL breadcrumbs on stderr.
-- `--quiet`: suppress diagnostics; keep stdout envelope.
-- Use `--run-id` or `BROWSER_USE_RUN_ID` for cross-tool correlation.
-
-## Browser Adapter Router
-
-`browser-use` owns adapter selection. The Router ranks proven candidates from supplied evidence only.
-
-Run `route` once per Bounded Browser Outcome, after preflight + adapter proof + `report` produce the evidence envelope. Supply the envelope via `--envelope <path>`, `BROWSER_USE_ROUTER_ENVELOPE_JSON`, or piped stdin; never interactive. `report` discovers capability, `route` selects or fails closed, `status` projects the same decision for humans.
-
-```bash
-skills/browser-use/scripts/browser-adapter-router.sh report --adapter chrome-devtools --json
+skills/browser-use/scripts/browser-adapter-router.sh report --adapter <id> --json
 skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$ENVELOPE" --json
+```
+
+- Build the route envelope from the user request, Warm Chrome proof, task preconditions, and capability reports.
+- Let `route` select the adapter or fail closed.
+- Follow the Router continuation.
+- Treat Router alternatives as informational unless the Router selects them.
+
+If Router asks for attachment proof:
+
+```bash
+skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter <selected-or-requested-adapter> --json
+skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$UPDATED_ENVELOPE" --json
+```
+
+- Let the selected adapter proof own dependency checks, config checks, port binding, and repair hints.
+- Read the selected Browser Adapter Map for adapter-local inspection or repair commands.
+- Add fresh proof evidence to the route envelope, then reroute.
+- Continue only after Router emits `use_selected_browser_adapter`.
+- A login/MFA wall hit after preflight passes is an app step in the warm profile.
+
+Use `status` for human route projection:
+
+```bash
 skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOPE" --plain
 ```
 
-- `BROWSER_USE_ROUTER_SELF_REPORT_JSON`: inject a fresh capability report object for `report`.
-- `BROWSER_USE_ROUTER_EVAL_DATE`: pin the freshness evaluation date (defaults to today).
-- Follow the single `continuation.next_action_id`; alternatives are informational only.
-- Contract, capability vocabulary, route/report/status semantics, env vars, fail-closed rules, and reroute triggers: `skills/browser-use/scripts/command-contract.ts` and `skills/browser-use/scripts/browser-adapter-router.ts`.
-- `puppeteer-core`: deterministic replay detail only; connect to verified `browserURL`.
-- Explicit fresh/isolated browser request: say it is outside Warm Chrome proof, then use the requested path.
-- Never use `chrome-isolated`, Playwright, Puppeteer auto-launch, Codex in-app browser, AppleScript, `osascript`, GUI scripting, or macOS `open` as fallback.
+## Page Actions
 
-## Chrome DevTools MCP
+- Use the selected adapter after proof.
+- Let the selected adapter own its action surface and dependencies.
+- Use the adapter's current help and snapshot output for action syntax.
+- Re-snapshot before element-ref actions.
+- Treat refs as stale after navigation or DOM-changing actions.
+- Take screenshots only when visual layout, media proof, or user request needs them.
 
-Use after Warm Chrome Preflight and Browser Adapter Proof pass. Config repair details live in `mcporter-config.md`.
+## Safety
 
-- Skill prose names the public tool: `mcporter`.
-- Browser Adapter Proof owns command resolution and dependency recovery.
-- Missing `mcporter`, package runner, or Chrome DevTools MCP is `adapter_dependency_missing`, not Browser Entry Handoff.
-- Don't rewrite hot-path examples to a package runner; fix local command resolution instead.
-
-```bash
-skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
-mcporter call chrome-devtools.list_pages --args '{}' --output text
-mcporter call chrome-devtools.select_page --args '{"pageId":9}' --output text
-mcporter call chrome-devtools.navigate_page --args '{"url":"https://example.com"}' --output text
-mcporter call chrome-devtools.take_snapshot --args '{}' --output text
-mcporter call chrome-devtools.click --args '{"uid":"1_38","includeSnapshot":true}' --output text
-mcporter call chrome-devtools.fill --args '{"uid":"1_13","value":"text","includeSnapshot":true}' --output text
-mcporter call chrome-devtools.evaluate_script --args '{"function":"() => document.title"}' --output json
-```
-
-- Use `take_snapshot` before actions and current `uid` values only.
-- Avoid `take_screenshot` unless visual layout matters.
-- `list_pages` must show warm profile tabs. Blank/isolated browser means reattach failed.
-
-If Browser Adapter Proof fails, follow `continuation.next_action_id`. Inspect or update adapter config outside the proof command, then rerun proof.
-
-```bash
-skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
-```
-
-Do not run `mcporter daemon restart` inside proof. Do not switch to AppleScript, Playwright launch, Puppeteer launch, Codex in-app browser, or `chrome-isolated` as fallback.
-
-## agent-browser
-
-Future Browser Adapter Proof target. Current proof CLI does not accept this adapter.
-
-- Always `--session <name>`; never default session.
-- Always `--headed`.
-- Always pass `--cdp "$PORT"` on every command.
-- Session names come from `~/.config/side-quest/browser-automation/registry.yaml`.
-- Never let `agent-browser` auto-launch; it may spawn Chrome for Testing.
-
-```bash
-agent-browser --session "$S" --headed --cdp "$PORT" get cdp-url
-agent-browser --session "$S" --headed --cdp "$PORT" tab list
-agent-browser --session "$S" --headed --cdp "$PORT" tab new <url>
-agent-browser --session "$S" --headed --cdp "$PORT" snapshot -i
-agent-browser --session "$S" --headed --cdp "$PORT" click @e3
-agent-browser --session "$S" --headed --cdp "$PORT" get attr @e7 id
-```
-
-Refs (`@e1`...) are reassigned on every snapshot and go stale on any page change. Re-snapshot before the next ref interaction. For durable selectors, resolve a ref via `get attr @ref id`/`name`, or `eval` a CSS path.
-
-`connect <port>` alone can report success while later commands use a sticky Chrome for Testing daemon. Proof-grade runs pass `--cdp "$PORT"` on every command and verify `get cdp-url` contains that port.
-
-## puppeteer-core
-
-Use for deterministic replay against a verified endpoint. Do not launch or repair Chrome here.
-
-```ts
-const browser = await puppeteer.connect({
-	browserURL: `http://127.0.0.1:${port}`,
-});
-```
-
-## Live UI Proof
-
-Screenshot regressions, deployed dashboard checks, and rendered-browser bugs require Warm Chrome. `curl`, source inspection, Worker smoke tests, or isolated Playwright are supporting proof only.
-
-## Secret Handling
-
-Never print tokens/passwords from page DOM, network logs, or inputs. For token checks, return shape only: present/absent, length, status code, account/org name.
+- Keep Warm Chrome on a real Google Chrome binary, a dedicated persistent profile, and loopback CDP.
+- Do not use Chrome for Testing, throwaway profiles, everyday default profiles, isolated Playwright launch, Puppeteer launch, AppleScript, `osascript`, macOS `open`, or cold-browser fallback as substitutes.
+- Do not print tokens, passwords, cookies, auth-bearing URLs, raw network secrets, or sensitive input values.
+- Report secret checks by shape only: present/absent, length, status code, account/org name.

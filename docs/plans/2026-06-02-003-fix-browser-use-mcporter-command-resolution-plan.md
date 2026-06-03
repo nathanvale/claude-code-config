@@ -70,7 +70,7 @@ The live Manpower run showed a mismatch: `SKILL.md` examples said `mcporter`, bu
 ### U2. Align tests and docs with ADR 0011
 
 - **Goal:** Update test fixtures and references so they assert runner-neutral public behavior and configured local runner behavior.
-- **Files:** `skills/browser-use/scripts/preflight-browser-adapter.test.ts`, `skills/browser-use/mcporter-config.md`, `skills/browser-use/PROVENANCE.md`
+- **Files:** `skills/browser-use/scripts/preflight-browser-adapter.test.ts`, `skills/browser-use/references/browser-adapter-chrome-devtools.md`, `skills/browser-use/PROVENANCE.md`
 - **Patterns:** Keep `skills/browser-use/SKILL.md` hot path lean; use docs only for local setup and recovery explanation.
 - **Test Scenarios:**
   - Existing successful adapter proof tests pass with PATH-default `mcporter`.

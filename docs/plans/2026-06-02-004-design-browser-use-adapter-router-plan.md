@@ -512,7 +512,7 @@ Follow-up unit status:
   - Route result shows mode, requested adapter, selected adapter or fail-closed status, bundle support, provenance summary, fallback decision, runtime actions, and `continuation.next_action_id`.
   - Matrix, route result, and evidence blocks all state they are research artifacts, not runtime reports.
   - Skill prose links to runtime capability discovery instead of listing adapter truth.
-  - Skill prose shows the V1 sequence: Warm Chrome Preflight, Browser Adapter Proof, Router report, caller-assembled envelope, Router route.
+  - Skill prose shows the V1 driver sequence: Warm Chrome Preflight, Router report, caller-assembled envelope, Router route, Browser Adapter Proof on `prove_adapter_attachment`, then reroute.
 
 ### U5. Add precondition and media-proof guardrails
 

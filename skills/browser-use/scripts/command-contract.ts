@@ -9,6 +9,9 @@ export const WARM_CHROME_PREFLIGHT_SCHEMA_VERSION = "2" as const;
 export const BROWSER_ADAPTER_PROOF_CONTRACT_ID =
 	"browser-use.browser-adapter-proof" as const;
 export const BROWSER_ADAPTER_PROOF_SCHEMA_VERSION = "1" as const;
+export const BROWSER_ADAPTER_MAP_CONTRACT_ID =
+	"browser-use.browser-adapter-map" as const;
+export const BROWSER_ADAPTER_MAP_SCHEMA_VERSION = "1" as const;
 
 export type WarmChromePreflightCommand =
 	| "check"
@@ -26,6 +29,10 @@ export type BrowserAdapterProofCommand = "check" | "status";
 export const BROWSER_ADAPTER_PROOF_ADAPTERS = ["chrome-devtools"] as const;
 export type BrowserAdapterProofAdapter =
 	(typeof BROWSER_ADAPTER_PROOF_ADAPTERS)[number];
+export type BrowserAdapterMapCommand = "check" | "status";
+export const BROWSER_ADAPTER_MAP_ADAPTERS = ["chrome-devtools"] as const;
+export type BrowserAdapterMapAdapter =
+	(typeof BROWSER_ADAPTER_MAP_ADAPTERS)[number];
 export const BROWSER_ADAPTER_PROOF_CONFIG_SOURCE_LABELS = [
 	"mcporter",
 	"repo_mcp",
@@ -77,11 +84,25 @@ export const BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES = [
 ] as const;
 export type BrowserAdapterProofDiagnosticCode =
 	(typeof BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES)[number];
+export const BROWSER_ADAPTER_PROOF_LOCAL_RECOVERY_KEYS = [
+	"browser_entry_handoff",
+	"missing_adapter",
+	"unknown_adapter",
+	"non_loopback_endpoint",
+	"invalid_usage",
+	"runtime_failure",
+] as const;
 type BrowserAdapterProofMutation = "check";
 type BrowserAdapterProofCommandContract = CommandFacadeContract<
 	BrowserAdapterProofCommand,
 	WarmChromeAudience,
 	BrowserAdapterProofMutation
+>;
+type BrowserAdapterMapMutation = "check";
+type BrowserAdapterMapCommandContract = CommandFacadeContract<
+	BrowserAdapterMapCommand,
+	WarmChromeAudience,
+	BrowserAdapterMapMutation
 >;
 
 const readFlags = {
@@ -169,6 +190,32 @@ const adapterProofResultContract = {
 	schema_version: BROWSER_ADAPTER_PROOF_SCHEMA_VERSION,
 } as const satisfies NonNullable<
 	BrowserAdapterProofCommandContract["resultContract"]
+>;
+
+const browserAdapterMapFlags = {
+	"--adapter": {
+		type: "enum",
+		values: BROWSER_ADAPTER_MAP_ADAPTERS,
+		description: "Browser Adapter Map to validate.",
+		required: true,
+	},
+	"--json": { type: "boolean", description: "Emit JSON envelope." },
+	"--plain": { type: "boolean", description: "Emit stable text." },
+} as const satisfies BrowserAdapterMapCommandContract["flags"];
+
+const browserAdapterMapExitCodes = {
+	"0": "Browser Adapter Map valid.",
+	"1": "Runtime dependency failed.",
+	"2": "Usage error.",
+	"20": "Browser Adapter Map invalid.",
+} as const satisfies BrowserAdapterMapCommandContract["exitCodes"];
+
+const browserAdapterMapResultContract = {
+	id: BROWSER_ADAPTER_MAP_CONTRACT_ID,
+	kind: "Browser Adapter Map validation.",
+	schema_version: BROWSER_ADAPTER_MAP_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	BrowserAdapterMapCommandContract["resultContract"]
 >;
 
 export const warmChromeFailureActions = [
@@ -414,6 +461,54 @@ export const browserAdapterProofContracts = defineCommandFacadeContract(
 	} as const satisfies Record<
 		BrowserAdapterProofCommand,
 		BrowserAdapterProofCommandContract
+	>,
+	{
+		path: "skills/browser-use/scripts/command-contract.ts",
+		writeImplyingMutations: new Set(["write", "browser"]),
+	},
+);
+
+export const browserAdapterMapContracts = defineCommandFacadeContract(
+	{
+		check: {
+			script: "scripts/browser-adapter-map.ts",
+			summary: "Validate one Browser Adapter Map.",
+			usage: ["check --adapter chrome-devtools [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: [],
+			resultContract: browserAdapterMapResultContract,
+			flags: browserAdapterMapFlags,
+			exitCodes: browserAdapterMapExitCodes,
+		},
+		status: {
+			script: "scripts/browser-adapter-map.ts",
+			summary: "Show human Browser Adapter Map validation status.",
+			usage: ["status --adapter chrome-devtools [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: [],
+			resultContract: browserAdapterMapResultContract,
+			flags: browserAdapterMapFlags,
+			exitCodes: browserAdapterMapExitCodes,
+			alias: {
+				command: "check",
+				defaultArgs: ["--plain"],
+			},
+		},
+	} as const satisfies Record<
+		BrowserAdapterMapCommand,
+		BrowserAdapterMapCommandContract
 	>,
 	{
 		path: "skills/browser-use/scripts/command-contract.ts",

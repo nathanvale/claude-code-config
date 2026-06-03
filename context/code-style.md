@@ -8,6 +8,15 @@
 - Small modules → single responsibility
 - Abstraction → well-structured over "simple but messy"
 
+### Switch vs Registry
+
+- Use `switch` when variants are tiny, closed, stable, and behavior is mostly shared.
+- Use a registry plus Strategy handlers when variants may grow, each variant owns different behavior, a shared entry point matters, and local tests matter.
+- Use a plugin system only when external packages contribute variants or dynamic loading is required.
+- Name variant count, growth pressure, behavior locality, and extension boundary before choosing.
+- Keep registry entries as lookup metadata; keep variant behavior in local handlers.
+- Avoid turning a registry into a plugin system without a real external extension boundary.
+
 ## Style
 
 - TypeScript strict mode always

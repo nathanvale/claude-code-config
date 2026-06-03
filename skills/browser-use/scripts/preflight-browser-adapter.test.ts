@@ -86,6 +86,12 @@ function expectNoAdapterFallback(envelope: {
 	]);
 }
 
+function expectNoHintDocsUrl(envelope: {
+	error?: { hint?: { docs_url?: unknown } };
+}): void {
+	expect(envelope.error?.hint?.docs_url).toBeUndefined();
+}
+
 function expectNoUnknownOption(result: {
 	stdout: string;
 	stderr: string;
@@ -610,6 +616,7 @@ describe("chrome-devtools proof", () => {
 			expect(envelope.error.recoverability).toBe("repair_state");
 			expect(envelope.error.retryable).toBe(false);
 			expect(envelope.error.hint.action).toBe("repair_state");
+			expectNoHintDocsUrl(envelope);
 			expect(envelope.error.hint.summary).toContain(
 				"BROWSER_USE_MCPORTER_COMMAND_JSON",
 			);
@@ -725,6 +732,7 @@ describe("chrome-devtools proof", () => {
 			expect(result.exitCode).toBe(20);
 			expect(envelope.error.code).toBe("adapter_binding_mismatch");
 			expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+			expectNoHintDocsUrl(envelope);
 			expectContinuation(envelope, "update_adapter_config");
 			expectNoAdapterFallback(envelope);
 			expect(validateErrorEnvelopeForTest(envelope)).toEqual([]);
@@ -753,6 +761,7 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_config_stale");
 		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+		expectNoHintDocsUrl(envelope);
 		expect(envelope.error.message).toContain("9223");
 		expect(result.stderr).toContain("\"observed_port\":\"9223\"");
 		expect(result.stderr).toContain("\"source_label\":\"mcporter\"");
@@ -807,6 +816,11 @@ describe("chrome-devtools proof", () => {
 				observed_port: "9223",
 			}),
 		);
+		expect(
+			warnings.find(
+				(warning: { code?: string }) => warning.code === "adapter_config_stale",
+			)?.docs_url,
+		).toMatch(/^https:\/\//);
 		expect(actionIds(envelope)).toEqual(["use_verified_browser_adapter"]);
 	});
 
@@ -886,6 +900,8 @@ describe("chrome-devtools proof", () => {
 
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_config_missing");
+		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+		expectNoHintDocsUrl(envelope);
 		expect(envelope.error.message).not.toContain("9223");
 		expectContinuation(envelope, "update_adapter_config");
 		expectNoAdapterFallback(envelope);
@@ -973,6 +989,7 @@ describe("chrome-devtools proof", () => {
 			expect(result.exitCode).toBe(20);
 			expect(envelope.error.code).toBe("adapter_binding_mismatch");
 			expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+			expectNoHintDocsUrl(envelope);
 			expectContinuation(envelope, "update_adapter_config");
 			expectNoAdapterFallback(envelope);
 		});
@@ -1014,6 +1031,7 @@ describe("chrome-devtools proof", () => {
 		expect(envelope.error.recoverability).toBe("repair_state");
 		expect(envelope.error.retryable).toBe(false);
 		expect(envelope.error.hint.action).toBe("repair_state");
+		expectNoHintDocsUrl(envelope);
 		expect(envelope.error.hint.summary).toContain("Expose mcporter on PATH");
 		expect(envelope.error.hint.summary).toContain(
 			"BROWSER_USE_MCPORTER_COMMAND_JSON",
@@ -1072,6 +1090,7 @@ describe("chrome-devtools proof", () => {
 		expect(envelope.error.recoverability).toBe("repair_state");
 		expect(envelope.error.retryable).toBe(false);
 		expect(envelope.error.hint.action).toBe("repair_state");
+		expectNoHintDocsUrl(envelope);
 		expect(envelope.error.hint.summary).toContain(
 			"the configured runner is missing",
 		);
@@ -1105,6 +1124,7 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_dependency_missing");
 		expect(envelope.error.message).toContain("Chrome DevTools MCP");
+		expectNoHintDocsUrl(envelope);
 		expectContinuation(envelope, "configure_adapter_dependency");
 		expectNoAdapterFallback(envelope);
 	});
@@ -1125,6 +1145,7 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_output_unparsable");
 		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+		expectNoHintDocsUrl(envelope);
 		expectContinuation(envelope, "inspect_adapter_config");
 		expectNoAdapterFallback(envelope);
 	});
@@ -1152,6 +1173,7 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_command_failed");
 		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+		expectNoHintDocsUrl(envelope);
 		expectContinuation(envelope, "inspect_adapter_config");
 		expectNoAdapterFallback(envelope);
 	});
@@ -1180,6 +1202,7 @@ describe("chrome-devtools proof", () => {
 		expect(result.exitCode).toBe(20);
 		expect(envelope.error.code).toBe("adapter_proof_timeout");
 		expect(envelope.error.failure_domain).toBe("browser_adapter_proof");
+		expectNoHintDocsUrl(envelope);
 		expectContinuation(envelope, "inspect_adapter_config");
 		expectNoAdapterFallback(envelope);
 	});

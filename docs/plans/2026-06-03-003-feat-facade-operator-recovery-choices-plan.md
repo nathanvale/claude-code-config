@@ -75,7 +75,7 @@ This work should make “ask the human to choose among repair paths” a reusabl
 - KTD12. **Retire broad dependency actions from active output:** `configure_adapter_dependency` should not be emitted by Browser Adapter Proof after this slice. Dependency ambiguity uses recovery choices; invalid command-vector input uses `change_adapter_input`; stale, missing, or mismatched config uses `update_adapter_config`; unparsable output uses `inspect_adapter_config`.
 - KTD13. **Treat command-vector override as check posture:** `set_mcporter_command_vector` represents a per-run override such as `BROWSER_USE_MCPORTER_COMMAND_JSON`, not persisted config mutation, so its runtime action side effects are `check`.
 - KTD14. **Keep dependency install actions separate:** `install_mcporter_cli` and `install_chrome_devtools_mcp` stay distinct because missing the public `mcporter` CLI and missing the Chrome DevTools MCP server are different repairs.
-- KTD15. **Omit local docs URLs from browser-use choices:** Browser-use recovery choices should not use `docs_url` for local repair docs. Exact commands and local paths stay in `skills/browser-use/mcporter-config.md`.
+- KTD15. **Omit local docs URLs from browser-use choices:** Browser-use recovery choices should not use `docs_url` for local repair docs. Exact commands and local paths stay in `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
 - KTD16. **Vary choices by dependency problem:** Browser Adapter Proof should emit the smallest relevant recovery choice set for the detected dependency failure, not a full generic dependency menu.
 - KTD17. **Keep plain output posture-only:** Plain output should say `operator_required=true choices=<count>` for operator-choice failures. It should not list choice ids or summaries; JSON remains the machine-readable choice surface.
 - KTD18. **Apply constraints to choices:** A recovery choice must not conflict with `continuation.constraints`. Reject a choice whose `action_id` is forbidden by `forbidden_action_ids` or whose effective side effects are forbidden by `forbidden_side_effects`.
@@ -269,14 +269,14 @@ Representative target envelope:
 - **Requirements:** R12-R15, AE8.
 - **Dependencies:** U3.
 - **Target repo:** `claude-code-config`
-- **Files:** `skills/browser-use/SKILL.md`, `skills/browser-use/mcporter-config.md`, `skills/browser-use/TEST_MATRIX.md`, `skills/browser-use/PROVENANCE.md`
+- **Files:** `skills/browser-use/SKILL.md`, `skills/browser-use/references/browser-adapter-chrome-devtools.md`, `skills/browser-use/TEST_MATRIX.md`, `skills/browser-use/PROVENANCE.md`
 - **Approach:**
   - Update Browser Adapter Proof prose: if `continuation.requires_operator=true`, present `continuation.choices` and wait for the human.
-  - Keep install examples in `mcporter-config.md`, not in the facade.
+  - Keep install examples in `references/browser-adapter-chrome-devtools.md`, not in the facade.
   - Do not document a `selected_choice_id` rerun path; selected repairs use package-owned docs or commands.
   - Add a smoke case for missing dependency with operator choices.
   - Record the smoke result in `TEST_MATRIX.md`.
-- **Patterns to follow:** Keep workflow rules in `skills/browser-use/SKILL.md`; keep exact repair commands and local setup details in `skills/browser-use/mcporter-config.md`.
+- **Patterns to follow:** Keep workflow rules in `skills/browser-use/SKILL.md`; keep exact repair commands and local setup details in `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
 - **Test Scenarios:**
   - Skill prose names `requires_operator` and `choices`.
   - Skill prose does not say to auto-install `mcporter`.
@@ -337,7 +337,7 @@ Representative target envelope:
 - `claude-code-config` Browser Adapter Proof runtime: `skills/browser-use/scripts/preflight-browser-adapter.ts`
 - `claude-code-config` Browser Adapter Proof contract: `skills/browser-use/scripts/command-contract.ts`
 - `claude-code-config` Browser Adapter Proof tests: `skills/browser-use/scripts/preflight-browser-adapter.test.ts`
-- `claude-code-config` Browser-use config docs: `skills/browser-use/mcporter-config.md`
+- `claude-code-config` Browser Adapter Map: `skills/browser-use/references/browser-adapter-chrome-devtools.md`
 - `side-quest-engineering` facade ADR: `docs/adr/0018-runtime-recovery-choices.md`
 - `side-quest-engineering` facade source: `packages/cli-command-facade/src/command-facade.ts`
 - `side-quest-engineering` facade tests: `packages/cli-command-facade/tests/command-facade.test.ts`

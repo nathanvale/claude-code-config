@@ -41,10 +41,13 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 
 - Treat agents as capable collaborators, not brittle scripts.
 - Give maps, invariants, owners, next safe actions, and inspectable state.
-- Design failures to expose cause, repair path, or human handoff.
 - Prefer legible tools and runtime checks over prose policy.
-- For CLI/tool design, use `create-cli`.
-- For new or changed CLI/runtime surfaces, use `create-cli`; name contract, model, engine, discovery, and CLI owners before implementation.
+- Build mechanical CLI surfaces that emit maps, continuations, and repair hints.
+- Keep skills thin: read maps, choose next safe actions, and call owners.
+- Design failures to expose cause, repair path, or human handoff.
+- For new or changed CLI/runtime surfaces, use `create-cli`.
+- Name contract, model, engine, discovery, and CLI owners before implementation.
+- For code-structure choices, use `context/code-style.md`.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `create-cli` for the contract path.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.

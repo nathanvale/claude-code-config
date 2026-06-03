@@ -1746,7 +1746,10 @@ function emitCliError(input: {
 				hint: {
 					summary: error.hintSummary,
 					action: error.hintAction,
-					...(error.hintDocsUrl ? { docs_url: error.hintDocsUrl } : {}),
+					...(error.hintDocsUrl &&
+					guidance.failureDomain !== "browser_adapter_proof"
+						? { docs_url: error.hintDocsUrl }
+						: {}),
 				},
 			},
 			runtime_actions: guidance.runtimeActions,
