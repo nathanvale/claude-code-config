@@ -1045,10 +1045,16 @@ export type BrowserUseCommand =
 	| "operate-emulate";
 
 // Stable diagnostic codes the contract shell emits. Live target/operation
-// failure codes land with U5/U6/U7; these cover the shell scenarios.
+// failure codes land with U5/U6/U7; these cover the shell scenarios plus the
+// U4 shared mcporter transport (operation-side parity with Adapter Proof's
+// adapter_dependency_missing / adapter_command_override_invalid).
 export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_use_not_implemented",
 	"browser_use_mock_failure",
+	"browser_operation_dependency_missing",
+	"browser_operation_command_override_invalid",
+	"browser_operation_transport_timeout",
+	"browser_operation_transport_failed",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -1198,6 +1204,11 @@ const browserUseEnvVars = [
 		name: "BROWSER_USE_MOCK_OUTCOME",
 		description:
 			"Dry-run mock outcome selector: success (default) or failure. Used only with --dry-run.",
+	},
+	{
+		name: "BROWSER_USE_MCPORTER_COMMAND_JSON",
+		description:
+			"Optional mcporter command vector as a JSON array of non-empty strings (e.g. [\"bunx\",\"mcporter\"]). Shared with Browser Adapter Proof; no shell strings, no package-runner fallback.",
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
