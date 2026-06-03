@@ -32,7 +32,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - High-risk ambiguity: ask one question.
 - Execute in small, reviewable steps.
 - Test meaningful changes.
-- Never overwrite unrelated user/agent changes.
+- Preserve unrelated user/agent changes.
 - Generated outputs: edit source, not rendered file.
 - Startup source: `AGENTS.md`; check delivery with `scripts/agent-instructions.sh`.
 - No secrets, tokens, or API keys in source.
