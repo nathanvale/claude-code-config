@@ -5,13 +5,19 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
 	CLI_DIAGNOSTIC_FLAGS,
 	parseCommandFacadeContract,
+	projectCommandDiscoveryTree,
 } from "@side-quest/cli-command-facade";
+import {
+	assertCommandHelpFlagSurface,
+	runCommandSurfaceCases,
+} from "@side-quest/cli-command-facade/testing";
 import {
 	BROWSER_ADAPTER_PROOF_ADAPTERS,
 	BROWSER_ADAPTER_ROUTER_ADAPTERS,
 	BROWSER_ADAPTER_ROUTER_CAPABILITIES,
 	BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES,
 	BROWSER_ADAPTER_ROUTER_SUPPORT_STATES,
+	type BrowserAdapterRouterCommand,
 	browserAdapterProofContracts,
 	browserAdapterRouterContracts,
 } from "./command-contract";
@@ -142,6 +148,67 @@ function parseJson(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
 }
 
+function routerContractFlags(command: BrowserAdapterRouterCommand): string[] {
+	return Object.keys(browserAdapterRouterContracts[command].flags ?? {}).sort();
+}
+
+function routerDiscoveryTree() {
+	return projectCommandDiscoveryTree(
+		Object.entries(browserAdapterRouterContracts) as Array<
+			[
+				BrowserAdapterRouterCommand,
+				(typeof browserAdapterRouterContracts)[BrowserAdapterRouterCommand],
+			]
+		>,
+	);
+}
+
+function routerDiscoveryEnvNames(command: BrowserAdapterRouterCommand): string[] {
+	return (
+		routerDiscoveryTree().commands[command]?.env_vars?.map((envVar) => envVar.name) ??
+		[]
+	).sort();
+}
+
+function expectNoUnknownOption(result: {
+	stdout: string;
+	stderr: string;
+}): void {
+	expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
+}
+
+function expectUnknownOption(
+	result: { exitCode: number; stdout: string; stderr: string },
+	flag: string,
+): void {
+	expect(result.exitCode).not.toBe(0);
+	expect(`${result.stdout}\n${result.stderr}`).toContain(
+		`unknown option: ${flag}`,
+	);
+}
+
+function expectJsonOk(result: {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}): Record<string, unknown> {
+	expect(result.exitCode).toBe(0);
+	expectNoUnknownOption(result);
+	const parsed = parseJson(result.stdout);
+	expect(parsed.status).toBe("ok");
+	return parsed;
+}
+
+function expectPlainSuccess(
+	result: { exitCode: number; stdout: string; stderr: string },
+	marker: string,
+): void {
+	expect(result.exitCode).toBe(0);
+	expectNoUnknownOption(result);
+	expect(result.stdout).toContain(marker);
+	expect(result.stderr).toBe("");
+}
+
 // =========================================================================
 // U0. Adapter registry and discovery interface
 // =========================================================================
@@ -198,6 +265,216 @@ describe("U0 command contract", () => {
 		for (const reserved of CLI_DIAGNOSTIC_FLAGS) {
 			expect(flags).not.toContain(reserved);
 		}
+	});
+
+	test("Router command contracts expose only command-specific flags", () => {
+		expect(routerContractFlags("route")).toEqual([
+			"--envelope",
+			"--json",
+			"--plain",
+		]);
+		expect(routerContractFlags("status")).toEqual([
+			"--envelope",
+			"--json",
+			"--plain",
+		]);
+		expect(routerContractFlags("report")).toEqual([
+			"--adapter",
+			"--capability",
+			"--json",
+			"--plain",
+		]);
+	});
+
+	test("Router command discovery metadata stays command-specific", async () => {
+		const discovery = routerDiscoveryTree();
+
+		expect(routerDiscoveryEnvNames("route")).toEqual([
+			"BROWSER_USE_ROUTER_ENVELOPE_JSON",
+			"BROWSER_USE_ROUTER_EVAL_DATE",
+			"BROWSER_USE_RUN_ID",
+		]);
+		expect(routerDiscoveryEnvNames("status")).toEqual([
+			"BROWSER_USE_ROUTER_ENVELOPE_JSON",
+			"BROWSER_USE_ROUTER_EVAL_DATE",
+			"BROWSER_USE_RUN_ID",
+		]);
+		expect(routerDiscoveryEnvNames("report")).toEqual([
+			"BROWSER_USE_ROUTER_EVAL_DATE",
+			"BROWSER_USE_ROUTER_SELF_REPORT_JSON",
+			"BROWSER_USE_RUN_ID",
+		]);
+
+		expect(discovery.commands.report?.flags["--adapter"]).toMatchObject({
+			type: "enum",
+			required: true,
+		});
+
+		const missingAdapter = await runForTest(
+			["report", "--json"],
+			makeRuntime(),
+		);
+		expect(missingAdapter.exitCode).toBe(2);
+		expect(`${missingAdapter.stdout}\n${missingAdapter.stderr}`).toContain(
+			"report requires --adapter <id>.",
+		);
+		const parsed = parseJson(missingAdapter.stdout);
+		expect(parsed.status).toBe("error");
+		expect((parsed.error as { code?: string }).code).toBe("usage_error");
+	});
+
+	test("Router command help renders only command-specific flags", async () => {
+		const route = await runForTest(["route", "--help"], makeRuntime());
+		const status = await runForTest(["status", "--help"], makeRuntime());
+		const report = await runForTest(["report", "--help"], makeRuntime());
+
+		assertCommandHelpFlagSurface({
+			command: "route",
+			contract: browserAdapterRouterContracts.route,
+			help: route.stdout,
+			absentFlags: ["--adapter", "--capability"],
+		});
+		assertCommandHelpFlagSurface({
+			command: "status",
+			contract: browserAdapterRouterContracts.status,
+			help: status.stdout,
+			absentFlags: ["--adapter", "--capability"],
+		});
+		assertCommandHelpFlagSurface({
+			command: "report",
+			contract: browserAdapterRouterContracts.report,
+			help: report.stdout,
+			absentFlags: ["--envelope"],
+		});
+	});
+
+	test("Router command discovery flags align with parser acceptance", async () => {
+		const path = await envelopeFile(makeValidatedEnvelope());
+		const stdinRuntime = makeRuntime({
+			readStdin: async () => JSON.stringify(makeValidatedEnvelope()),
+		});
+
+		await runCommandSurfaceCases({
+			runner: (argv) => runForTest(argv, makeRuntime()),
+			cases: [
+				{
+					label: "route accepts envelope JSON",
+					argv: ["route", "--envelope", path, "--json"],
+					assert: (result) => {
+						const parsed = expectJsonOk(result);
+						expect(
+							(parsed.data as { selected_adapter?: string }).selected_adapter,
+						).toBe("chrome-devtools");
+					},
+				},
+				{
+					label: "status accepts envelope JSON",
+					argv: ["status", "--envelope", path, "--json"],
+					assert: (result) => {
+						const parsed = expectJsonOk(result);
+						expect(
+							(parsed.data as { selected_adapter?: string }).selected_adapter,
+						).toBe("chrome-devtools");
+					},
+				},
+			],
+		});
+
+		await runCommandSurfaceCases({
+			runner: (argv) => runForTest(argv, stdinRuntime),
+			cases: [
+				{
+					label: "route accepts plain stdin",
+					argv: ["route", "--plain"],
+					assert: (result) => expectPlainSuccess(result, "adapter_selected"),
+				},
+				{
+					label: "status accepts plain stdin",
+					argv: ["status", "--plain"],
+					assert: (result) => expectPlainSuccess(result, "adapter_selected"),
+				},
+			],
+		});
+
+		await runCommandSurfaceCases({
+			runner: (argv) =>
+				runForTest(argv, makeRuntime({ evaluationDate: "2026-06-02" })),
+			cases: [
+				{
+					label: "report accepts adapter JSON",
+					argv: ["report", "--adapter", "chrome-devtools", "--json"],
+					assert: (result) => {
+						const parsed = expectJsonOk(result);
+						const data = parsed.data as {
+							adapter_id?: string;
+							report_source?: string;
+							report?: unknown;
+						};
+						expect(data.adapter_id).toBe("chrome-devtools");
+						expect(data.report_source).toBe("manifest");
+						expect(data.report).toBeDefined();
+					},
+				},
+				{
+					label: "report capability projection stays report-shaped",
+					argv: [
+						"report",
+						"--adapter",
+						"chrome-devtools",
+						"--capability",
+						"snapshot_refs",
+						"--json",
+					],
+					assert: (result) => {
+						const parsed = expectJsonOk(result);
+						const data = parsed.data as {
+							capability?: { capability?: string };
+							report?: unknown;
+						};
+						expect(data.capability?.capability).toBe("snapshot_refs");
+						expect(data.report).toBeUndefined();
+					},
+				},
+			],
+		});
+
+		await runCommandSurfaceCases({
+			runner: (argv) => runForTest(argv, makeRuntime()),
+			cases: [
+				{
+					label: "route rejects adapter flag",
+					argv: ["route", "--adapter", "chrome-devtools", "--json"],
+					assert: (result) => expectUnknownOption(result, "--adapter"),
+				},
+				{
+					label: "route rejects capability flag",
+					argv: ["route", "--capability", "snapshot_refs", "--json"],
+					assert: (result) => expectUnknownOption(result, "--capability"),
+				},
+				{
+					label: "status rejects adapter flag",
+					argv: ["status", "--adapter", "chrome-devtools", "--plain"],
+					assert: (result) => expectUnknownOption(result, "--adapter"),
+				},
+				{
+					label: "status rejects capability flag",
+					argv: ["status", "--capability", "snapshot_refs", "--plain"],
+					assert: (result) => expectUnknownOption(result, "--capability"),
+				},
+				{
+					label: "report rejects envelope flag",
+					argv: [
+						"report",
+						"--adapter",
+						"chrome-devtools",
+						"--envelope",
+						"x.json",
+						"--json",
+					],
+					assert: (result) => expectUnknownOption(result, "--envelope"),
+				},
+			],
+		});
 	});
 
 	test("registry includes chrome-devtools, agent-browser, playwright-cdp", () => {

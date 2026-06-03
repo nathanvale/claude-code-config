@@ -16,6 +16,10 @@ import {
 	parseCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
 import {
+	assertCommandHelpFlagSurface,
+	runCommandSurfaceCases,
+} from "@side-quest/cli-command-facade/testing";
+import {
 	BROWSER_ADAPTER_PROOF_ADAPTERS,
 	BROWSER_ADAPTER_PROOF_BINDING_STATUSES,
 	BROWSER_ADAPTER_PROOF_CONFIG_SOURCE_LABELS,
@@ -80,6 +84,13 @@ function expectNoAdapterFallback(envelope: {
 		"adapter_fallback",
 		"cold_browser_fallback",
 	]);
+}
+
+function expectNoUnknownOption(result: {
+	stdout: string;
+	stderr: string;
+}): void {
+	expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
 }
 
 describe("Browser Adapter Proof command contract", () => {
@@ -183,6 +194,95 @@ describe("Browser Adapter Proof command contract", () => {
 			expect(contract.sideEffects).not.toContain("write");
 			expect(contract.sideEffects).not.toContain("browser");
 		}
+	});
+
+	test("Command Surface Alignment Proof keeps help and public argv aligned", async () => {
+		const checkHelp = await runForTest(["help", "check"], await testRuntime());
+		const statusHelp = await runForTest(["help", "status"], await testRuntime());
+
+		assertCommandHelpFlagSurface({
+			command: "check",
+			contract: browserAdapterProofContracts.check,
+			help: checkHelp.stdout,
+		});
+		assertCommandHelpFlagSurface({
+			command: "status",
+			contract: browserAdapterProofContracts.status,
+			help: statusHelp.stdout,
+		});
+
+		const successRuntime = await testRuntime({
+			runCommand: commandRouter({
+				"mcporter config get chrome-devtools --json": okCommand(
+					JSON.stringify({
+						args: [
+							"chrome-devtools-mcp",
+							"--browserUrl",
+							"http://127.0.0.1:9222",
+						],
+					}),
+				),
+				"mcporter call chrome-devtools.list_pages --args {} --output json":
+					okCommand(JSON.stringify({ pages: [] })),
+			}),
+		});
+
+		await runCommandSurfaceCases({
+			runner: (argv) => runForTest(argv, successRuntime),
+			cases: [
+				{
+					label: "check accepts adapter JSON",
+					argv: [
+						"check",
+						"--adapter",
+						"chrome-devtools",
+						"--port",
+						"9222",
+						"--json",
+					],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(0);
+						const envelope = JSON.parse(result.stdout);
+						expect(envelope.data.adapter).toBe("chrome-devtools");
+					},
+				},
+				{
+					label: "status accepts adapter plain",
+					argv: [
+						"status",
+						"--adapter",
+						"chrome-devtools",
+						"--port",
+						"9222",
+						"--plain",
+					],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(0);
+						expect(result.stdout).toContain("adapter_ready command=status");
+					},
+				},
+			],
+		});
+
+		await runCommandSurfaceCases({
+			runner: async (argv) => runForTest(argv, await testRuntime()),
+			cases: [
+				{
+					label: "check rejects unknown adapter semantically",
+					argv: ["check", "--adapter", "playwright", "--json"],
+					assert: (result) => {
+						expectNoUnknownOption(result);
+						expect(result.exitCode).toBe(2);
+						const envelope = JSON.parse(result.stdout);
+						expect(envelope.error.code).toBe("unknown_adapter");
+						expect(envelope.error.hint.summary).toContain("chrome-devtools");
+						expect(envelope.error.hint.summary).not.toContain("playwright-cdp");
+					},
+				},
+			],
+		});
 	});
 });
 

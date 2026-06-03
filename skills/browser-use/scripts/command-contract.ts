@@ -536,25 +536,6 @@ export const BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES = [
 export type BrowserAdapterRouterDiagnosticCode =
 	(typeof BROWSER_ADAPTER_ROUTER_DIAGNOSTIC_CODES)[number];
 
-const routerReadFlags = {
-	"--envelope": {
-		type: "path",
-		description: "Evidence envelope JSON file. Omit to read envelope from stdin.",
-	},
-	"--adapter": {
-		type: "enum",
-		values: BROWSER_ADAPTER_ROUTER_ADAPTERS,
-		description: "Browser Adapter id for report discovery.",
-	},
-	"--capability": {
-		type: "enum",
-		values: BROWSER_ADAPTER_ROUTER_CAPABILITIES,
-		description: "Capability to report on for report discovery.",
-	},
-	"--json": { type: "boolean", description: "Emit JSON envelope." },
-	"--plain": { type: "boolean", description: "Emit stable text." },
-} as const satisfies BrowserAdapterRouterCommandContract["flags"];
-
 type BrowserAdapterRouterAudience = "agent" | "operator";
 type BrowserAdapterRouterMutation = "check" | "network";
 type BrowserAdapterRouterCommandContract = CommandFacadeContract<
@@ -563,21 +544,57 @@ type BrowserAdapterRouterCommandContract = CommandFacadeContract<
 	BrowserAdapterRouterMutation
 >;
 
-const routerEnvVars = [
+const routerOutputFlags = {
+	"--json": { type: "boolean", description: "Emit JSON envelope." },
+	"--plain": { type: "boolean", description: "Emit stable text." },
+} as const satisfies BrowserAdapterRouterCommandContract["flags"];
+
+const routerEnvelopeFlags = {
+	"--envelope": {
+		type: "path",
+		description: "Evidence envelope JSON file. Omit to read envelope from stdin.",
+	},
+	...routerOutputFlags,
+} as const satisfies BrowserAdapterRouterCommandContract["flags"];
+
+const routerReportFlags = {
+	"--adapter": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_ADAPTERS,
+		required: true,
+		description: "Browser Adapter id for report discovery.",
+	},
+	"--capability": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_CAPABILITIES,
+		description: "Capability to report on for report discovery.",
+	},
+	...routerOutputFlags,
+} as const satisfies BrowserAdapterRouterCommandContract["flags"];
+
+const routerBaseEnvVars = [
 	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
-	{
-		name: "BROWSER_USE_ROUTER_ENVELOPE_JSON",
-		description: "Inline evidence envelope JSON; overridden by --envelope.",
-	},
-	{
-		name: "BROWSER_USE_ROUTER_SELF_REPORT_JSON",
-		description:
-			"Full JSON capability report object for the self-report path; validated by the same report validator as adapter manifests.",
-	},
 	{
 		name: "BROWSER_USE_ROUTER_EVAL_DATE",
 		description:
 			"ISO date (YYYY-MM-DD) used as the freshness evaluation date. Defaults to today; pin in tests and CI for determinism.",
+	},
+] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
+
+const routerEnvelopeEnvVars = [
+	...routerBaseEnvVars,
+	{
+		name: "BROWSER_USE_ROUTER_ENVELOPE_JSON",
+		description: "Inline evidence envelope JSON; overridden by --envelope.",
+	},
+] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
+
+const routerReportEnvVars = [
+	...routerBaseEnvVars,
+	{
+		name: "BROWSER_USE_ROUTER_SELF_REPORT_JSON",
+		description:
+			"Full JSON capability report object for the self-report path; validated by the same report validator as adapter manifests.",
 	},
 ] as const satisfies BrowserAdapterRouterCommandContract["envVars"];
 
@@ -660,13 +677,13 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: routerEnvVars,
+			envVars: routerEnvelopeEnvVars,
 			resultContract: routerResultContract,
 			actionAffordances: {
 				success: browserAdapterRouterSuccessActions,
 				failure: browserAdapterRouterFailureActions,
 			},
-			flags: routerReadFlags,
+			flags: routerEnvelopeFlags,
 			exitCodes: routerExitCodes,
 		},
 		report: {
@@ -687,13 +704,13 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: routerEnvVars,
+			envVars: routerReportEnvVars,
 			resultContract: routerResultContract,
 			actionAffordances: {
 				success: browserAdapterRouterSuccessActions,
 				failure: browserAdapterRouterFailureActions,
 			},
-			flags: routerReadFlags,
+			flags: routerReportFlags,
 			exitCodes: routerExitCodes,
 		},
 		status: {
@@ -710,13 +727,13 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: routerEnvVars,
+			envVars: routerEnvelopeEnvVars,
 			resultContract: routerResultContract,
 			actionAffordances: {
 				success: browserAdapterRouterSuccessActions,
 				failure: browserAdapterRouterFailureActions,
 			},
-			flags: routerReadFlags,
+			flags: routerEnvelopeFlags,
 			exitCodes: routerExitCodes,
 			alias: {
 				command: "route",
