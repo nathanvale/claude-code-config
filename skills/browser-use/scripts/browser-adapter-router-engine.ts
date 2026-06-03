@@ -408,6 +408,13 @@ function rankSelectable(
 	})[0];
 }
 
+export function rankSelectableForTest(
+	selectable: readonly CandidateDecision[],
+	envelope: ValidatedRouteEvidenceEnvelope,
+): CandidateDecision {
+	return rankSelectable(selectable, envelope);
+}
+
 function buildSuccess(input: {
 	envelope: ValidatedRouteEvidenceEnvelope;
 	evaluationDate: string;

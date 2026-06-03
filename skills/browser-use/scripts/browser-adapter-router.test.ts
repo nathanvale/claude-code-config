@@ -34,6 +34,7 @@ import {
 import {
 	evaluateRoute,
 	isReportStale,
+	rankSelectableForTest,
 	resolveRequiredCapabilities,
 } from "./browser-adapter-router-engine";
 import {
@@ -1186,6 +1187,97 @@ describe("U2 policy resolver", () => {
 		}
 	});
 
+	test("route confidence breaks ties after task and registry priority", () => {
+		const lowConfidence = {
+			adapter_id: "agent-browser",
+			status: "selectable",
+			reason: "lower confidence",
+			registry_rank: 1,
+			route_confidence: 82,
+		} as const;
+		const highConfidence = {
+			adapter_id: "chrome-devtools",
+			status: "selectable",
+			reason: "higher confidence",
+			registry_rank: 1,
+			route_confidence: 94,
+		} as const;
+
+		const winner = rankSelectableForTest(
+			[lowConfidence, highConfidence],
+			makeValidatedEnvelope({
+				task: { required_capabilities: ["snapshot_refs"] },
+			}),
+		);
+
+		expect(winner.adapter_id).toBe("chrome-devtools");
+	});
+
+	test("auto narrows candidates by required capability before selection", () => {
+		const envelope = makeValidatedEnvelope({
+			policy: { mode: "auto" },
+			task: { required_capabilities: ["console_debug"] },
+			reports: [
+				makeReport({
+					adapter_id: "chrome-devtools",
+					capabilities: [
+						{
+							capability: "snapshot_refs",
+							support: "full",
+							confidence: 90,
+							evidence: { verification_method: "m" },
+						},
+					],
+				}),
+				makeReport({
+					adapter_id: "agent-browser",
+					capabilities: [
+						{
+							capability: "console_debug",
+							support: "full",
+							confidence: 90,
+							evidence: { verification_method: "m" },
+						},
+					],
+				}),
+			],
+			preconditions: {
+				run_id: "run-1",
+				freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
+				warm_chrome_ready: true,
+				adapter_attached_verified_browser: {
+					"chrome-devtools": true,
+					"agent-browser": true,
+				},
+			},
+		});
+
+		const evaluation = evaluateRoute(envelope, EVAL_DATE);
+
+		expect(evaluation.outcome).toBe("selected");
+		if (evaluation.outcome === "selected") {
+			expect(evaluation.selected_adapter).toBe("agent-browser");
+			expect(evaluation.candidate_decisions).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						adapter_id: "chrome-devtools",
+						status: "rejected",
+						code: "adapter_capability_unknown",
+					}),
+					expect.objectContaining({
+						adapter_id: "agent-browser",
+						status: "selectable",
+					}),
+				]),
+			);
+			expect(evaluation.candidate_decisions[0]).toMatchObject({
+				adapter_id: "chrome-devtools",
+				status: "rejected",
+				code: "adapter_capability_unknown",
+			});
+		}
+	});
+
 	test("explicit required capabilities can narrow a task-facing bundle", () => {
 		const required = resolveRequiredCapabilities({
 			bundle: "visual_proof_capture",
@@ -1233,6 +1325,23 @@ describe("U2 policy resolver", () => {
 		expect(constraints?.[0]?.forbidden_action_ids).toContain(
 			"cold_browser_fallback",
 		);
+	});
+
+	test("route success JSON serializes data.candidate_decisions", async () => {
+		const path = await envelopeFile(makeValidatedEnvelope());
+		const { stdout } = await runForTest(
+			["route", "--envelope", path, "--json"],
+			makeRuntime(),
+		);
+		const envelope = parseJson(stdout);
+		const data = envelope.data as { candidate_decisions?: unknown[] };
+		expect(data.candidate_decisions?.length).toBe(
+			BROWSER_ADAPTER_ROUTER_ADAPTERS.length,
+		);
+		expect(data.candidate_decisions?.[0]).toMatchObject({
+			adapter_id: "chrome-devtools",
+			status: "selectable",
+		});
 	});
 
 	test("route output includes concise candidate decisions", () => {
@@ -1473,6 +1582,9 @@ describe("U3 research recovery", () => {
 			"prove_adapter_attachment",
 		);
 		expect(continuationForCode("adapter_capability_stale")).toBe(
+			"research_adapter_capability",
+		);
+		expect(continuationForCode("adapter_capability_unknown")).toBe(
 			"research_adapter_capability",
 		);
 		expect(continuationForCode("adapter_capability_partial")).toBe(
