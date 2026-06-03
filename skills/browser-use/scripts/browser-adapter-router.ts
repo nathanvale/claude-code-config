@@ -34,7 +34,6 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	type BrowserAdapterRouterCommand,
-	type BrowserAdapterRouterDiagnosticCode,
 	browserAdapterRouterContracts,
 } from "./command-contract";
 import type {

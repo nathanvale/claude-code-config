@@ -1,7 +1,7 @@
 ---
 title: "refactor: Router recovery metadata module"
 type: refactor
-status: active
+status: completed
 date: 2026-06-03
 origin: docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
 ---

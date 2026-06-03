@@ -1,12 +1,12 @@
-import {
-	type BrowserAdapterRouterAdapter,
-	type BrowserAdapterRouterAttachmentModel,
-	type BrowserAdapterRouterBundle,
-	type BrowserAdapterRouterCapability,
-	type BrowserAdapterRouterDiagnosticCode,
-	type BrowserAdapterRouterMode,
-	type BrowserAdapterRouterReportSource,
-	type BrowserAdapterRouterSupportState,
+import type {
+	BrowserAdapterRouterAdapter,
+	BrowserAdapterRouterAttachmentModel,
+	BrowserAdapterRouterBundle,
+	BrowserAdapterRouterCapability,
+	BrowserAdapterRouterDiagnosticCode,
+	BrowserAdapterRouterMode,
+	BrowserAdapterRouterReportSource,
+	BrowserAdapterRouterSupportState,
 	browserAdapterRouterFailureActions,
 	browserAdapterRouterSuccessActions,
 } from "./command-contract";

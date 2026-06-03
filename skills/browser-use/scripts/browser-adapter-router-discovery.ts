@@ -1,6 +1,6 @@
-import {
-	type BrowserAdapterRouterDiagnosticCode,
-	type BrowserAdapterRouterReportSource,
+import type {
+	BrowserAdapterRouterDiagnosticCode,
+	BrowserAdapterRouterReportSource,
 } from "./command-contract";
 import { BROWSER_ADAPTER_ROUTER_MANIFESTS } from "./browser-adapter-router-manifests";
 import type {
