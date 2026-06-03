@@ -997,3 +997,364 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 		writeImplyingMutations: new Set(["write", "browser"]),
 	},
 );
+
+// ---------------------------------------------------------------------------
+// Browser Use CLI (plan 2026-06-04-001, U3)
+//
+// Contract shell for the `browser-use` surface. Router prepares/routes; this
+// surface owns live Browser Targets and Browser Operations (KTD3). U3 declares
+// the full command surface, help, parser acceptance, and result contracts; the
+// subcommand bodies emit dry-run/mock envelopes or structured not-implemented
+// results until U5/U6/U7 land live logic. No live browser calls here.
+// ---------------------------------------------------------------------------
+
+export const BROWSER_USE_TARGETS_CONTRACT_ID =
+	"browser-use.browser-targets" as const;
+export const BROWSER_USE_TARGETS_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_OPERATION_CONTRACT_ID =
+	"browser-use.browser-operation" as const;
+export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "1" as const;
+
+// Command families and their subcommands. Public surface is `browser-use
+// <family> <subcommand>`; facade contract keys flatten to `<family>-<sub>`.
+export const BROWSER_USE_TARGETS_SUBCOMMANDS = [
+	"list",
+	"select",
+	"status",
+] as const;
+export type BrowserUseTargetsSubcommand =
+	(typeof BROWSER_USE_TARGETS_SUBCOMMANDS)[number];
+
+export const BROWSER_USE_OPERATE_SUBCOMMANDS = [
+	"snapshot",
+	"screenshot",
+	"emulate",
+] as const;
+export type BrowserUseOperateSubcommand =
+	(typeof BROWSER_USE_OPERATE_SUBCOMMANDS)[number];
+
+export const BROWSER_USE_FAMILIES = ["targets", "operate"] as const;
+export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
+
+export type BrowserUseCommand =
+	| "targets-list"
+	| "targets-select"
+	| "targets-status"
+	| "operate-snapshot"
+	| "operate-screenshot"
+	| "operate-emulate";
+
+// Stable diagnostic codes the contract shell emits. Live target/operation
+// failure codes land with U5/U6/U7; these cover the shell scenarios.
+export const BROWSER_USE_DIAGNOSTIC_CODES = [
+	"browser_use_not_implemented",
+	"browser_use_mock_failure",
+] as const;
+export type BrowserUseDiagnosticCode =
+	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
+
+type BrowserUseAudience = "agent" | "operator";
+type BrowserUseMutation = "check" | "browser";
+type BrowserUseCommandContract = CommandFacadeContract<
+	BrowserUseCommand,
+	BrowserUseAudience,
+	BrowserUseMutation
+>;
+
+const browserUseOutputFlags = {
+	"--json": { type: "boolean", description: "Emit JSON envelope." },
+	"--plain": { type: "boolean", description: "Emit stable text." },
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// --dry-run + the mock-outcome env exercise success and failure envelopes
+// without any live browser call (R7-shell). --route/--adapter-proof are the
+// route-bound prerequisites the live units (U5/U7) consume; declared here so
+// parser acceptance and help cross-link to Router prepare/route now.
+const browserUseRouteBoundFlags = {
+	"--route": {
+		type: "path",
+		description: "Router success envelope from browser-adapter-router route.",
+	},
+	"--adapter-proof": {
+		type: "path",
+		description: "Fresh Browser Adapter Proof envelope for the selected adapter.",
+	},
+	"--dry-run": {
+		type: "boolean",
+		description: "Emit a mock envelope without any live browser call.",
+	},
+	...browserUseOutputFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseTargetsListFlags = {
+	"--mode": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_MODES,
+		description: "Discovery mode hint (route-bound prerequisite from Router).",
+	},
+	"--adapter": {
+		type: "enum",
+		values: BROWSER_ADAPTER_ROUTER_ADAPTERS,
+		description: "Requested Browser Adapter id for recovery-mode discovery.",
+	},
+	"--show-url": {
+		type: "boolean",
+		description: "Display origin and redacted path shape only.",
+	},
+	...browserUseRouteBoundFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseTargetsSelectFlags = {
+	"--state": {
+		type: "path",
+		description: "Run-scoped selected-target state file.",
+	},
+	"--origin": {
+		type: "string",
+		description: "Browser Target Hint: target origin.",
+	},
+	"--url-contains": {
+		type: "string",
+		description: "Browser Target Hint: URL substring.",
+	},
+	"--title-contains": {
+		type: "string",
+		description: "Browser Target Hint: title substring.",
+	},
+	"--candidate": {
+		type: "string",
+		description: "Candidate ordinal scoped to one target envelope.",
+	},
+	...browserUseRouteBoundFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseTargetsStatusFlags = {
+	"--state": {
+		type: "path",
+		description: "Run-scoped selected-target state file.",
+	},
+	...browserUseOutputFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+// --verbose is facade-reserved (CLI diagnostic). Operations read its parsed
+// value from the diagnostic layer; it is not declared as a command flag.
+const browserUseOperateCommonFlags = {
+	"--origin": {
+		type: "string",
+		description: "Browser Target Hint: target origin.",
+	},
+	"--url-contains": {
+		type: "string",
+		description: "Browser Target Hint: URL substring.",
+	},
+	"--title-contains": {
+		type: "string",
+		description: "Browser Target Hint: title substring.",
+	},
+	"--state": {
+		type: "path",
+		description: "Run-scoped selected-target state file.",
+	},
+	...browserUseRouteBoundFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseSnapshotFlags = {
+	...browserUseOperateCommonFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseScreenshotFlags = {
+	"--out": {
+		type: "path",
+		description: "Run-scoped artifact path for the screenshot.",
+	},
+	"--full-page": {
+		type: "boolean",
+		description: "Capture the full scrollable page.",
+	},
+	"--bring-to-front": {
+		type: "boolean",
+		description: "Record explicit focus side effect before capture.",
+	},
+	...browserUseOperateCommonFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseEmulateFlags = {
+	"--width": { type: "string", description: "Viewport width in CSS pixels." },
+	"--height": { type: "string", description: "Viewport height in CSS pixels." },
+	"--dpr": { type: "string", description: "Device pixel ratio." },
+	"--mobile": { type: "boolean", description: "Emulate a mobile device." },
+	"--touch": { type: "boolean", description: "Emulate touch input." },
+	"--landscape": { type: "boolean", description: "Emulate landscape orientation." },
+	"--bring-to-front": {
+		type: "boolean",
+		description: "Record explicit focus side effect.",
+	},
+	...browserUseOperateCommonFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseEnvVars = [
+	{ name: "BROWSER_USE_RUN_ID", description: "Optional run correlation id." },
+	{
+		name: "BROWSER_USE_MOCK_OUTCOME",
+		description:
+			"Dry-run mock outcome selector: success (default) or failure. Used only with --dry-run.",
+	},
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+const browserUseExitCodes = {
+	"0": "Browser Targets listed or Browser Operation completed.",
+	"1": "Runtime dependency failed.",
+	"2": "Usage error.",
+	"20": "Route/proof/target binding failed closed.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
+
+const browserUseTargetsResultContract = {
+	id: BROWSER_USE_TARGETS_CONTRACT_ID,
+	kind: "Browser Target discovery and selection result.",
+	schema_version: BROWSER_USE_TARGETS_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseOperationResultContract = {
+	id: BROWSER_USE_OPERATION_CONTRACT_ID,
+	kind: "Normalized Browser Operation result.",
+	schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+export const browserUseContracts = defineCommandFacadeContract(
+	{
+		"targets-list": {
+			script: "scripts/browser-use.ts",
+			summary:
+				"List route-bound or recovery Browser Target Candidates. Get route evidence from browser-adapter-router prepare then route.",
+			usage: [
+				"targets list [--mode <mode>] [--adapter <id>] [--route <path>] [--adapter-proof <path>] [--show-url] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			// Discovery reads live tab state but writes no local state; check-only.
+			mutation: "check",
+			sideEffects: ["check", "browser"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Target discovery reads live browser tab state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseEnvVars,
+			resultContract: browserUseTargetsResultContract,
+			flags: browserUseTargetsListFlags,
+			exitCodes: browserUseExitCodes,
+		},
+		"targets-select": {
+			script: "scripts/browser-use.ts",
+			summary:
+				"Select one route-bound Browser Target into run-scoped state using hints or a candidate ordinal.",
+			usage: [
+				"targets select [--state <path>] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--candidate <ordinal>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Select writes run-scoped selected-target state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseEnvVars,
+			resultContract: browserUseTargetsResultContract,
+			flags: browserUseTargetsSelectFlags,
+			exitCodes: browserUseExitCodes,
+		},
+		"targets-status": {
+			script: "scripts/browser-use.ts",
+			summary:
+				"Show the run-scoped selected Browser Target state as a human projection.",
+			usage: ["targets status [--state <path>] [--json|--plain]"],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseEnvVars,
+			resultContract: browserUseTargetsResultContract,
+			flags: browserUseTargetsStatusFlags,
+			exitCodes: browserUseExitCodes,
+		},
+		"operate-snapshot": {
+			script: "scripts/browser-use.ts",
+			summary:
+				"Capture a normalized accessibility snapshot of the resolved Browser Target. Requires route success and fresh Adapter Proof.",
+			usage: [
+				"operate snapshot [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--route <path>] [--adapter-proof <path>] [--verbose] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			// Snapshot reads live page content but writes no local state.
+			mutation: "check",
+			sideEffects: ["check", "browser"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Snapshot reads live page content.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseEnvVars,
+			resultContract: browserUseOperationResultContract,
+			flags: browserUseSnapshotFlags,
+			exitCodes: browserUseExitCodes,
+		},
+		"operate-screenshot": {
+			script: "scripts/browser-use.ts",
+			summary:
+				"Capture a screenshot artifact of the resolved Browser Target. Requires route success and fresh Adapter Proof.",
+			usage: [
+				"operate screenshot --out <path> [--full-page] [--bring-to-front] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Screenshot reads live page content and writes an artifact.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseEnvVars,
+			resultContract: browserUseOperationResultContract,
+			flags: browserUseScreenshotFlags,
+			exitCodes: browserUseExitCodes,
+		},
+		"operate-emulate": {
+			script: "scripts/browser-use.ts",
+			summary:
+				"Emulate viewport metrics on the resolved Browser Target. Requires a route that proves the viewport emulation capability.",
+			usage: [
+				"operate emulate [--width <px>] [--height <px>] [--dpr <n>] [--mobile] [--touch] [--landscape] [--bring-to-front] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--state <path>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			// Emulate changes live viewport metrics but writes no local state.
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Emulate changes live viewport metrics.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseEnvVars,
+			resultContract: browserUseOperationResultContract,
+			flags: browserUseEmulateFlags,
+			exitCodes: browserUseExitCodes,
+		},
+	} as const satisfies Record<BrowserUseCommand, BrowserUseCommandContract>,
+	{
+		path: "skills/browser-use/scripts/command-contract.ts",
+		writeImplyingMutations: new Set(["write", "browser"]),
+	},
+);

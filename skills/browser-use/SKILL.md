@@ -12,6 +12,7 @@ Use for browser tasks that need a logged-in, profile-bearing Chrome session.
 - Warm Chrome proof, repair, launch: `skills/browser-use/scripts/preflight-warm-chrome.sh`.
 - Browser Adapter Proof: `skills/browser-use/scripts/preflight-browser-adapter.sh`.
 - Browser Adapter Router: `skills/browser-use/scripts/browser-adapter-router.sh`.
+- Browser Use targets and operations: `skills/browser-use/scripts/browser-use.sh` (route-bound; run Router `prepare` then `route` first).
 - Browser Adapter Map validation: `skills/browser-use/scripts/browser-adapter-map.sh`.
 - CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/scripts/command-contract.ts`.
 - Router model, validation, recovery: `skills/browser-use/scripts/browser-adapter-router*.ts`.
