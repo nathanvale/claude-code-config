@@ -36,6 +36,16 @@ import {
 	type FallowRunnerRuntime,
 	runForTest,
 } from "./fallow-runner";
+import {
+	FALLOW_MCPORTER_COMMAND_ENV_VAR,
+	type TraceCommandResult,
+	type TraceExportEvidence,
+	deriveEvidenceGrade,
+	failureEvidenceGrade,
+	resolveFallowMcporterCommand,
+	traceExportArgs,
+	traceExportReachability,
+} from "./why-trace";
 
 const ALL_COMMANDS: FallowRunnerCommand[] = [...FALLOW_RUNNER_COMMANDS];
 
@@ -2159,5 +2169,189 @@ describe("U2 resolver action projection", () => {
 		for (const reference of issueReferencesOf(expectEnvelope(json))) {
 			expect(reference.resolver_actions).toBeUndefined();
 		}
+	});
+});
+
+describe("U3 trace adapter", () => {
+	const ROOT = "/repo";
+	const COORDS = { file: "src/x.ts", exportName: "thing", root: ROOT };
+
+	function evidence(
+		overrides: Partial<TraceExportEvidence> = {},
+	): TraceExportEvidence {
+		return {
+			file: "src/x.ts",
+			export_name: "thing",
+			file_reachable: true,
+			is_entry_point: false,
+			is_used: false,
+			direct_references: [],
+			re_export_chains: [],
+			...overrides,
+		};
+	}
+
+	function runnerYielding(result: TraceCommandResult) {
+		const calls: Array<{ command: string; args: string[]; cwd: string }> = [];
+		const runCommand = async (
+			command: string,
+			args: readonly string[],
+			options: { cwd: string },
+		): Promise<TraceCommandResult> => {
+			calls.push({ command, args: [...args], cwd: options.cwd });
+			return result;
+		};
+		return { calls, runCommand };
+	}
+
+	function jsonResult(value: unknown): TraceCommandResult {
+		return { exitCode: 0, stdout: JSON.stringify(value), stderr: "" };
+	}
+
+	test("default command vector resolves and builds the trace call", () => {
+		const resolved = resolveFallowMcporterCommand({});
+		expect(resolved).toEqual({ ok: true, vector: ["mcporter"] });
+
+		const args = traceExportArgs(COORDS);
+		expect(args).toContain("trace_export");
+		expect(args).toContain("--stdio");
+		expect(args).toContain("fallow-mcp");
+		const argsIndex = args.indexOf("--args");
+		expect(JSON.parse(args[argsIndex + 1])).toEqual({
+			file: "src/x.ts",
+			export_name: "thing",
+		});
+	});
+
+	test("env override vector is honored; invalid override reports a reason", () => {
+		const ok = resolveFallowMcporterCommand({
+			[FALLOW_MCPORTER_COMMAND_ENV_VAR]: '["bunx","mcporter"]',
+		});
+		expect(ok).toEqual({ ok: true, vector: ["bunx", "mcporter"] });
+
+		const bad = resolveFallowMcporterCommand({
+			[FALLOW_MCPORTER_COMMAND_ENV_VAR]: "not json",
+		});
+		expect(bad.ok).toBe(false);
+	});
+
+	test("referenced evidence returns typed evidence with references preserved", async () => {
+		const { runCommand, calls } = runnerYielding(
+			jsonResult(
+				evidence({
+					is_used: true,
+					direct_references: [{ from_file: "src/x.test.ts", kind: "import" }],
+				}),
+			),
+		);
+
+		const result = await traceExportReachability({
+			...COORDS,
+			env: {},
+			runCommand,
+		});
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.evidence.is_used).toBe(true);
+			expect(result.evidence.direct_references).toEqual([
+				{ from_file: "src/x.test.ts", kind: "import" },
+			]);
+			expect(deriveEvidenceGrade(result.evidence)).toBe("referenced");
+		}
+		expect(calls[0]?.command).toBe("mcporter");
+		expect(calls[0]?.cwd).toBe(ROOT);
+	});
+
+	test("entry-point evidence grades as entry_point", async () => {
+		const { runCommand } = runnerYielding(
+			jsonResult(evidence({ is_entry_point: true })),
+		);
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(deriveEvidenceGrade(result.evidence)).toBe("entry_point");
+		}
+	});
+
+	test("unreferenced evidence returns zero references and the candidate grade", async () => {
+		const { runCommand } = runnerYielding(
+			jsonResult(evidence({ file_reachable: false, is_used: false })),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.evidence.direct_references).toEqual([]);
+			expect(deriveEvidenceGrade(result.evidence)).toBe("unreferenced_by_trace");
+		}
+	});
+
+	test("tool-level symbol-not-found maps to an input failure class", async () => {
+		const { runCommand } = runnerYielding(
+			jsonResult({ error: true, message: "export not found", exit_code: 2 }),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "symbol_not_found" });
+		if (!result.ok) {
+			expect(failureEvidenceGrade(result.reason)).toBe("unresolved");
+		}
+	});
+
+	test("transport-level offline error maps to transport failure", async () => {
+		const { runCommand } = runnerYielding(
+			jsonResult({ error: "spawn ENOENT", issue: { kind: "offline" } }),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
+		if (!result.ok) {
+			expect(failureEvidenceGrade(result.reason)).toBe("unavailable");
+		}
+	});
+
+	test("missing binary or empty output maps to transport failure", async () => {
+		const { runCommand } = runnerYielding({
+			exitCode: 127,
+			stdout: "",
+			stderr: "mcporter: command not found",
+		});
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
+	});
+
+	test("malformed payload fails closed instead of producing a candidate", async () => {
+		// Present JSON, but missing the required reachability fields.
+		const { runCommand } = runnerYielding(
+			jsonResult({ file: "src/x.ts", export_name: "thing" }),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "malformed_payload" });
+		if (!result.ok) {
+			// A fail-closed payload reports unavailable, never a deletion candidate.
+			expect(failureEvidenceGrade(result.reason)).toBe("unavailable");
+		}
+	});
+
+	test("invalid command override maps to transport failure before running", async () => {
+		let ran = false;
+		const result = await traceExportReachability({
+			...COORDS,
+			env: { [FALLOW_MCPORTER_COMMAND_ENV_VAR]: "{not-an-array}" },
+			runCommand: async () => {
+				ran = true;
+				return { exitCode: 0, stdout: "{}", stderr: "" };
+			},
+		});
+
+		expect(ran).toBe(false);
+		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
 	});
 });
