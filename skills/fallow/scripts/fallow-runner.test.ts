@@ -12,10 +12,14 @@ import {
 	runCommandSurfaceCases,
 } from "@side-quest/cli-command-facade/testing";
 import {
+	FALLOW_EVIDENCE_GRADES,
 	FALLOW_FAILURE_CATEGORIES,
 	FALLOW_OUTPUT_BUDGET_STATUSES,
 	FALLOW_REPAIR_ACTION_BY_KEY,
 	FALLOW_REPAIR_ACTIONS,
+	FALLOW_RESOLVER_ACTIONS,
+	FALLOW_RESOLVER_NEXT_ACTIONS,
+	FALLOW_RESOLVER_VERDICTS,
 	FALLOW_RUNNER_COMMANDS,
 	FALLOW_RUNNER_CONTRACT_ID,
 	FALLOW_RUNNER_SCHEMA_VERSION,
@@ -24,6 +28,7 @@ import {
 	FALLOW_WRITE_EFFECTS,
 	type FallowRunnerCommand,
 	assertFallowRepairAction,
+	assertFallowResolverAction,
 	fallowRunnerContracts,
 } from "./command-contract";
 import {
@@ -33,6 +38,16 @@ import {
 } from "./fallow-runner";
 
 const ALL_COMMANDS: FallowRunnerCommand[] = [...FALLOW_RUNNER_COMMANDS];
+
+// Minimal accepted argv per command: some commands require flags to parse
+// (fix-apply needs the apply marker, why needs both coordinate flags).
+function acceptedArgvFor(command: FallowRunnerCommand): string[] {
+	if (command === "fix-apply") return [command, "--confirm-current-task-apply"];
+	if (command === "why") {
+		return [command, "--file", "src/x.ts", "--export", "x"];
+	}
+	return [command];
+}
 const cleanupPaths: string[] = [];
 type TestRunResult = { exitCode: number; stdout: string; stderr: string };
 type CommandCall = {
@@ -315,6 +330,128 @@ describe("U2 command contract", () => {
 				"--confirm-current-task-apply",
 			);
 		}
+	});
+});
+
+describe("U1 resolver contract surface", () => {
+	test("contract parsing accepts why alongside existing commands", () => {
+		const result = parseCommandFacadeContract(fallowRunnerContracts, {
+			path: "skills/fallow/scripts/command-contract.ts",
+		});
+
+		expect(result.ok).toBe(true);
+		expect(Object.keys(fallowRunnerContracts)).toContain("why");
+		// Pre-existing commands stay present and unchanged in count.
+		for (const command of [
+			"audit",
+			"dead-code",
+			"dupes",
+			"health",
+			"fix-preview",
+			"fix-apply",
+			"doctor",
+		] as const) {
+			expect(Object.keys(fallowRunnerContracts)).toContain(command);
+		}
+	});
+
+	test("discovery projects why with the runner result contract identity", () => {
+		const tree = discoveryTree();
+
+		expect(tree.commands.why?.result_contract).toMatchObject({
+			id: FALLOW_RUNNER_CONTRACT_ID,
+			schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
+		});
+	});
+
+	test("why advertises coordinate flags and no diagnostic flags", () => {
+		const flags = Object.keys(fallowRunnerContracts.why.flags);
+		expect(flags).toContain("--file");
+		expect(flags).toContain("--export");
+		for (const reserved of CLI_DIAGNOSTIC_FLAGS) {
+			expect(flags).not.toContain(reserved);
+		}
+		// Coordinate flags stay scoped to why.
+		for (const command of ALL_COMMANDS.filter((item) => item !== "why")) {
+			const otherFlags = Object.keys(fallowRunnerContracts[command].flags);
+			expect(otherFlags).not.toContain("--file");
+			expect(otherFlags).not.toContain("--export");
+		}
+	});
+
+	test("why declares json and plain output", () => {
+		expect(fallowRunnerContracts.why.outputModes).toContain("json");
+		expect(fallowRunnerContracts.why.outputModes).toContain("plain");
+	});
+
+	test("rendered why help shows coordinate usage without diagnostic flags", async () => {
+		const result = await runForTest(["why", "--help"], makeRuntime());
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("--file");
+		expect(result.stdout).toContain("--export");
+		assertCommandHelpFlagSurface({
+			command: "why",
+			contract: fallowRunnerContracts.why,
+			help: result.stdout,
+			absentFlags: ["--cwd", "--mode", "--base-ref", "--confirm-current-task-apply"],
+		});
+	});
+
+	test("root help lists the why subcommand", async () => {
+		const result = await runForTest(["--help"], makeRuntime());
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("why");
+	});
+
+	test("missing either coordinate flag returns invalid-usage input recovery", async () => {
+		for (const argv of [
+			["why"],
+			["why", "--file", "src/x.ts"],
+			["why", "--export", "x"],
+		]) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(result.exitCode).toBe(2);
+			const envelope = expectEnvelope(result);
+			expect(envelope.mode).toBe("why");
+			expect(envelope.failure_category).toBe("input");
+			expect(primaryRepairHint(envelope).action).toBe("fix-input");
+		}
+	});
+
+	test("resolver vocabularies stay small and stable", () => {
+		expect(FALLOW_RESOLVER_ACTIONS).toEqual(["trace-export-reachability"]);
+		expect(FALLOW_EVIDENCE_GRADES).toEqual([
+			"referenced",
+			"entry_point",
+			"unreferenced_by_trace",
+			"unresolved",
+			"unavailable",
+		]);
+		expect(FALLOW_RESOLVER_VERDICTS).toEqual([
+			"keep",
+			"candidate_remove",
+			"inconclusive",
+		]);
+		expect(FALLOW_RESOLVER_NEXT_ACTIONS).toEqual([
+			"keep-export",
+			"candidate-remove",
+			"stop",
+		]);
+		// Evidence wording never leaks the banned likely-dead grade.
+		expect(FALLOW_EVIDENCE_GRADES).not.toContain("likely-dead");
+		expect(FALLOW_EVIDENCE_GRADES).not.toContain("likely_dead");
+	});
+
+	test("resolver action assert rejects unknown ids", () => {
+		expect(() =>
+			assertFallowResolverAction("trace-export-reachability"),
+		).not.toThrow();
+		expect(() => assertFallowResolverAction("remove-export")).toThrow(
+			/Unknown Fallow resolver action/,
+		);
 	});
 });
 
@@ -1693,19 +1830,22 @@ describe("U3 parser, help, and discovery alignment", () => {
 	test("every accepted subcommand reaches runtime checks", async () => {
 		const root = await makeJsRepo();
 
+		// `why` uses the mcporter trace transport, not the Fallow binary, so its
+		// missing-dependency failure_category is owned by the resolver runtime
+		// tests, not this binary-readiness sweep. Verify it is accepted (not exit
+		// 2) here; assert binary-setup semantics for the Fallow-backed commands.
 		await runCommandSurfaceCases<TestRunResult>({
 			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
 			cases: ALL_COMMANDS.map((command) => ({
 				label: `${command} accepted`,
-				argv:
-					command === "fix-apply"
-						? [command, "--confirm-current-task-apply"]
-						: [command],
+				argv: acceptedArgvFor(command),
 				assert: (result) => {
 					expect(result.exitCode).not.toBe(2);
 					const envelope = expectEnvelope(result);
 					expect(envelope.mode).toBe(command);
-					expect(envelope.failure_category).toBe("setup");
+					if (command !== "why") {
+						expect(envelope.failure_category).toBe("setup");
+					}
 				},
 			})),
 		});
@@ -1718,7 +1858,7 @@ describe("U3 parser, help, and discovery alignment", () => {
 			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
 			cases: ALL_COMMANDS.map((command) => ({
 				label: `${command} accepts plain`,
-				argv: [command, "--plain"],
+				argv: [...acceptedArgvFor(command), "--plain"],
 				assert: (result) => {
 					expect(result.exitCode).not.toBe(2);
 					expect(result.stdout).toContain(`mode=${command}`);

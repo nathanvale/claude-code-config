@@ -37,6 +37,7 @@ export const FALLOW_RUNNER_COMMANDS = [
 	"fix-preview",
 	"fix-apply",
 	"doctor",
+	"why",
 ] as const;
 
 /**
@@ -143,6 +144,112 @@ export const FALLOW_REPAIR_ACTION_BY_KEY = {
 export type FallowRepairAction = (typeof FALLOW_REPAIR_ACTIONS)[number];
 
 /**
+ * Finding resolver action ids.
+ *
+ * A Finding resolver action is a per-finding continuation that names a runnable
+ * evidence-gathering target. It belongs to usable finding evidence and stays
+ * distinct from blocked-run {@link FALLOW_REPAIR_ACTIONS}. V1 ships one action:
+ * trace export reachability for an introduced `remove-export` finding.
+ */
+export const FALLOW_RESOLVER_ACTIONS = ["trace-export-reachability"] as const;
+
+/**
+ * Finding resolver action union.
+ */
+export type FallowResolverAction = (typeof FALLOW_RESOLVER_ACTIONS)[number];
+
+/**
+ * Named resolver action ids so runtime projection sources the contract.
+ */
+export const FALLOW_RESOLVER_ACTION_BY_KEY = {
+	traceExportReachability: "trace-export-reachability",
+} as const satisfies Record<string, FallowResolverAction>;
+
+/**
+ * Resolver evidence grades — the primary meaning of resolver output.
+ *
+ * Verdicts and next actions are derived helpers; the grade is the source of
+ * truth. `unreferenced_by_trace` means deletion candidate, never deletion
+ * proof. `likely-dead` is deliberately absent.
+ */
+export const FALLOW_EVIDENCE_GRADES = [
+	"referenced",
+	"entry_point",
+	"unreferenced_by_trace",
+	"unresolved",
+	"unavailable",
+] as const;
+
+/**
+ * Resolver evidence grade union.
+ */
+export type FallowEvidenceGrade = (typeof FALLOW_EVIDENCE_GRADES)[number];
+
+/**
+ * Named evidence grades so runtime derivation sources the contract.
+ */
+export const FALLOW_EVIDENCE_GRADE_BY_KEY = {
+	referenced: "referenced",
+	entryPoint: "entry_point",
+	unreferencedByTrace: "unreferenced_by_trace",
+	unresolved: "unresolved",
+	unavailable: "unavailable",
+} as const satisfies Record<string, FallowEvidenceGrade>;
+
+/**
+ * Derived resolver verdicts.
+ *
+ * A concise conclusion derived from an evidence grade. Absence of trace
+ * references never derives `keep`; it derives `candidate_remove` at most.
+ */
+export const FALLOW_RESOLVER_VERDICTS = [
+	"keep",
+	"candidate_remove",
+	"inconclusive",
+] as const;
+
+/**
+ * Resolver verdict union.
+ */
+export type FallowResolverVerdict = (typeof FALLOW_RESOLVER_VERDICTS)[number];
+
+/**
+ * Named resolver verdicts so runtime derivation sources the contract.
+ */
+export const FALLOW_RESOLVER_VERDICT_BY_KEY = {
+	keep: "keep",
+	candidateRemove: "candidate_remove",
+	inconclusive: "inconclusive",
+} as const satisfies Record<string, FallowResolverVerdict>;
+
+/**
+ * Derived resolver next safe actions.
+ *
+ * A next-step helper derived from the evidence grade. Deletion is blocked when
+ * evidence is unresolved or unavailable.
+ */
+export const FALLOW_RESOLVER_NEXT_ACTIONS = [
+	"keep-export",
+	"candidate-remove",
+	"stop",
+] as const;
+
+/**
+ * Resolver next action union.
+ */
+export type FallowResolverNextAction =
+	(typeof FALLOW_RESOLVER_NEXT_ACTIONS)[number];
+
+/**
+ * Named resolver next actions so runtime derivation sources the contract.
+ */
+export const FALLOW_RESOLVER_NEXT_ACTION_BY_KEY = {
+	keepExport: "keep-export",
+	candidateRemove: "candidate-remove",
+	stop: "stop",
+} as const satisfies Record<string, FallowResolverNextAction>;
+
+/**
  * Output budget states reported by the runner.
  */
 export const FALLOW_OUTPUT_BUDGET_STATUSES = [
@@ -206,6 +313,18 @@ const applyFlags = {
 	"--confirm-current-task-apply": {
 		type: "boolean",
 		description: "Authorize non-interactive source mutation for this task.",
+	},
+} as const satisfies FallowRunnerCommandContract["flags"];
+
+const whyFlags = {
+	...commonFlags,
+	"--file": {
+		type: "path",
+		description: "Root-relative file holding the export to trace.",
+	},
+	"--export": {
+		type: "string",
+		description: "Export symbol to trace for reachability evidence.",
 	},
 } as const satisfies FallowRunnerCommandContract["flags"];
 
@@ -347,6 +466,25 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			flags: commonFlags,
 			exitCodes,
 		},
+		why: {
+			script: "scripts/fallow-runner.ts",
+			summary:
+				"Trace export reachability evidence for one introduced finding.",
+			usage: [
+				"why --file <path> --export <symbol> [--root <repo>] [--include-raw-output] [--max-output-bytes <bytes>]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "evidence",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			resultContract,
+			actionAffordances: { failure: fallowFailureActions },
+			flags: whyFlags,
+			exitCodes,
+		},
 	} as const satisfies Record<FallowRunnerCommand, FallowRunnerCommandContract>,
 	{
 		path: "skills/fallow/scripts/command-contract.ts",
@@ -370,6 +508,25 @@ export function assertFallowRepairAction(
 ): asserts action is FallowRepairAction {
 	if (!FALLOW_REPAIR_ACTIONS.includes(action as FallowRepairAction)) {
 		throw new Error(`Unknown Fallow repair action: ${action}`);
+	}
+}
+
+/**
+ * Assert that a string is one of the package-owned resolver action ids.
+ *
+ * @param action - Candidate resolver action string from parsed runtime output
+ * @throws {Error} When the action is not in the Fallow resolver action set
+ *
+ * @example
+ * ```typescript
+ * assertFallowResolverAction("trace-export-reachability")
+ * ```
+ */
+export function assertFallowResolverAction(
+	action: string,
+): asserts action is FallowResolverAction {
+	if (!FALLOW_RESOLVER_ACTIONS.includes(action as FallowResolverAction)) {
+		throw new Error(`Unknown Fallow resolver action: ${action}`);
 	}
 }
 

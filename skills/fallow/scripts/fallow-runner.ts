@@ -66,6 +66,8 @@ type ParsedCommand = {
 	outputMode: OutputMode;
 	baseRef?: string;
 	applyAuthorized: boolean;
+	file?: string;
+	exportName?: string;
 };
 
 type ParsedArgv =
@@ -1637,9 +1639,16 @@ function parseCommandOptions(
 
 		if (name === "--root") parsed.root = value;
 		else if (name === "--base-ref") parsed.baseRef = value;
+		else if (name === "--file") parsed.file = value;
+		else if (name === "--export") parsed.exportName = value;
 		else if (name === "--max-output-bytes") {
 			parsed.maxOutputBytes = parseMaxOutputBytes(value);
 		}
+	}
+
+	if (command === "why") {
+		if (!parsed.file) throw usageError("why requires --file <path>");
+		if (!parsed.exportName) throw usageError("why requires --export <symbol>");
 	}
 
 	return parsed;
@@ -1684,6 +1693,7 @@ function parseMaxOutputBytes(value: string): number {
 
 function commandFor(parsed: ParsedCommand): string[] {
 	if (parsed.command === "doctor") return ["fallow-runner", "doctor"];
+	if (parsed.command === "why") return ["fallow-runner", "why"];
 	return ["fallow", ...fallowArgsFor(parsed)];
 }
 
