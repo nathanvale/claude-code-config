@@ -27,6 +27,7 @@
 
 ## Mutation Checks
 
+- Confirm current-task user authorization.
 - Confirm the target repo root.
 - Review config-scope metadata.
 - Prefer preview before apply.

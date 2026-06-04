@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -815,6 +815,167 @@ describe("U6 output budget behavior", () => {
 			raw_output_included: false,
 		});
 		expect(JSON.stringify(envelope.repair_hints)).toContain("reduce-output");
+	});
+});
+
+describe("U7 fix preview and explicit apply safety", () => {
+	test("fix preview invokes dry-run behavior and reports previewed write effect", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = { changes: [{ path: "src/old.ts", action: "remove" }] };
+		const { runtime, calls } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["fix-preview"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls.find((call) => call.command !== "git")).toEqual({
+			command: join(root, "node_modules", ".bin", "fallow"),
+			args: ["fix", "--dry-run", "--format", "json", "--quiet"],
+			cwd: root,
+		});
+		const envelope = expectEnvelope(result);
+		expect(envelope.write_effect).toBe("previewed");
+		expect(envelope.command).toEqual([
+			join(root, "node_modules", ".bin", "fallow"),
+			"fix",
+			"--dry-run",
+			"--format",
+			"json",
+			"--quiet",
+		]);
+	});
+
+	test("fix preview does not mutate source in the runner harness", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const sourcePath = join(root, "source.ts");
+		await writeFile(sourcePath, "export const kept = true;\n", "utf-8");
+		const runtime = readyRuntime(root, {
+			runCommand: async (command, args) => {
+				if (command === "git") {
+					return { exitCode: 0, stdout: "true\n", stderr: "" };
+				}
+				if (args.includes("--yes")) {
+					await writeFile(sourcePath, "mutated\n", "utf-8");
+				}
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ changes: [{ path: "source.ts" }] }),
+					stderr: "",
+				};
+			},
+		});
+
+		const result = await runForTest(["fix-preview"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		expect(await readFile(sourcePath, "utf-8")).toBe(
+			"export const kept = true;\n",
+		);
+		expect(expectEnvelope(result).write_effect).toBe("previewed");
+	});
+
+	test("fix apply invokes explicit apply behavior and reports applied write effect after success", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime, calls } = readyExecutionRuntime(root, [
+			{
+				exitCode: 0,
+				stdout: JSON.stringify({ changes: [{ path: "src/old.ts" }] }),
+				stderr: "",
+			},
+		]);
+
+		const result = await runForTest(["fix-apply"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls.find((call) => call.command !== "git")).toEqual({
+			command: join(root, "node_modules", ".bin", "fallow"),
+			args: ["fix", "--yes", "--format", "json", "--quiet"],
+			cwd: root,
+		});
+		expect(expectEnvelope(result).write_effect).toBe("applied");
+	});
+
+	test("failed apply blocks without reporting an applied write effect", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 7, stdout: "", stderr: "fatal: apply failed" },
+		]);
+
+		const result = await runForTest(["fix-apply"], runtime);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).not.toBe("none");
+		expect(envelope.write_effect).toBe("none");
+	});
+
+	test("apply-shaped requests outside explicit apply return a safety failure", async () => {
+		const result = await runForTest(["fix-preview", "--yes"], makeRuntime());
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("safety");
+		expect(JSON.stringify(envelope.repair_hints)).toContain("inspect-config");
+	});
+
+	test("config-present apply reports inspection hint and config scope without blocking", async () => {
+		const root = await makeRepo({
+			localFallow: true,
+			configFiles: {
+				"fallow.toml": "[rules]\n",
+			},
+		});
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ changes: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(["fix-apply"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).not.toBe("blocked");
+		expect(JSON.stringify(envelope.repair_hints)).toContain("inspect-config");
+		expect(envelope.summary).toMatchObject({
+			mode_evidence: {
+				config_scope: {
+					present: true,
+					paths: [join(root, "fallow.toml")],
+				},
+			},
+		});
+	});
+
+	test("evidence modes never auto-apply fixes", async () => {
+		for (const command of ["audit", "dead-code", "dupes", "health"] as const) {
+			const root = await makeRepo({ localFallow: true });
+			const { runtime, calls } = readyExecutionRuntime(root, [
+				{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
+			]);
+
+			await runForTest([command], runtime);
+
+			const args = calls.find((call) => call.command !== "git")?.args ?? [];
+			expect(args).not.toContain("fix");
+			expect(args).not.toContain("--yes");
+			expect(args).not.toContain("--apply");
+		}
+	});
+
+	test("workflow references require current-task authorization before fix apply", async () => {
+		const workflow = await Bun.file(
+			join(import.meta.dir, "..", "references", "workflows.md"),
+		).text();
+		const safety = await Bun.file(
+			join(import.meta.dir, "..", "references", "safety.md"),
+		).text();
+
+		for (const text of [workflow, safety]) {
+			expect(text).toContain("current-task user authorization");
+			expect(text).toContain("fix-apply");
+		}
 	});
 });
 

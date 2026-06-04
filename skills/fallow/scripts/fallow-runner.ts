@@ -195,6 +195,13 @@ const UNSUPPORTED_PUBLIC_CONTROLS = new Set([
 	"--update-baseline",
 ]);
 
+const APPLY_SHAPED_CONTROLS = new Set([
+	"--apply",
+	"--fix",
+	"--write",
+	"--yes",
+]);
+
 export function createDefaultFallowRuntime(
 	overrides: Partial<FallowRunnerRuntime> = {},
 ): FallowRunnerRuntime {
@@ -413,6 +420,103 @@ async function runParsedCommand(
 			fallowOutput: rawRequested ? parsedOutput.value : null,
 			summary: evidence.summary,
 			issueReferences: evidence.issueReferences,
+		});
+	}
+
+	if (isWriteCommand(parsed.command)) {
+		const invocation = fallowInvocationFor(parsed, readiness);
+		const command = [invocation.command, ...invocation.args];
+		const configSafetyHints = configSafetyHintsFor(parsed.command, readiness);
+		const result = await runtime.runCommand(invocation.command, invocation.args, {
+			cwd: root,
+		});
+		const stderrCategory = categorizeStderr(result.stderr);
+
+		if (result.exitCode !== 0) {
+			writeEnvelope(
+				stdout,
+				makeEnvelope({
+					status: "blocked",
+					mode: parsed.command,
+					runId,
+					command,
+					cwd: root,
+					exitCode: result.exitCode,
+					stderrCategory,
+					failureCategory: "fallow",
+					writeEffect: "none",
+					maxOutputBytes,
+					rawRequested,
+					summary: writeSummaryWithReadiness(parsed.command, null, readiness),
+					repairHints:
+						configSafetyHints.length > 0
+							? configSafetyHints
+							: [
+									{
+										action: "run-doctor",
+										message: "Run diagnostics before retrying Fallow.",
+										retry_safe: false,
+									},
+								],
+				}),
+			);
+			return 1;
+		}
+
+		const parsedOutput = parseJsonOutput(result.stdout);
+		if (!parsedOutput.ok) {
+			writeEnvelope(
+				stdout,
+				makeEnvelope({
+					status: "blocked",
+					mode: parsed.command,
+					runId,
+					command,
+					cwd: root,
+					exitCode: 1,
+					stderrCategory,
+					failureCategory: "parse",
+					writeEffect: "none",
+					maxOutputBytes,
+					rawRequested,
+					summary: writeSummaryWithReadiness(parsed.command, null, readiness),
+					repairHints:
+						configSafetyHints.length > 0
+							? configSafetyHints
+							: [
+									{
+										action: "run-doctor",
+										message: "Confirm Fallow JSON output before retrying.",
+										retry_safe: false,
+									},
+								],
+				}),
+			);
+			return 1;
+		}
+
+		const writeSummary = summarizeFallowWrite(
+			parsed.command,
+			parsedOutput.value,
+			readiness,
+		);
+		return writeBudgetedEnvelope(stdout, {
+			status: writeSummary.status,
+			mode: parsed.command,
+			runId,
+			command,
+			cwd: root,
+			exitCode: result.exitCode,
+			stderrCategory,
+			failureCategory: "none",
+			writeEffect: parsed.command === "fix-preview" ? "previewed" : "applied",
+			maxOutputBytes,
+			rawRequested,
+			rawOutputIncluded: rawRequested,
+			fallowOutput: rawRequested ? parsedOutput.value : null,
+			summary: writeSummary.summary,
+			issueReferences: writeSummary.issueReferences,
+			repairHints: configSafetyHints,
 		});
 	}
 
@@ -709,6 +813,12 @@ function isEvidenceCommand(
 	);
 }
 
+function isWriteCommand(
+	command: FallowRunnerCommand,
+): command is Extract<FallowRunnerCommand, "fix-preview" | "fix-apply"> {
+	return command === "fix-preview" || command === "fix-apply";
+}
+
 function fallowInvocationFor(
 	parsed: ParsedCommand,
 	readiness: ReadinessSummary,
@@ -758,6 +868,77 @@ function summarizeFallowEvidence(
 		summary,
 		issueReferences,
 	};
+}
+
+function summarizeFallowWrite(
+	mode: Extract<FallowRunnerCommand, "fix-preview" | "fix-apply">,
+	output: unknown,
+	readiness: ReadinessSummary,
+): {
+	status: FallowStatus;
+	summary: FallowRunnerSummary;
+	issueReferences: FallowIssueReference[];
+} {
+	const issueItems = collectIssueItems(output);
+	const issueReferences = issueItems
+		.map(issueReferenceFrom)
+		.filter(isIssueReference);
+	const totalFindings =
+		directFindingsCount(output) ?? (issueItems.length > 0 ? issueItems.length : 0);
+	const summary = writeSummaryWithReadiness(mode, output, readiness);
+
+	return {
+		status: totalFindings > 0 ? "issues" : "ok",
+		summary,
+		issueReferences,
+	};
+}
+
+function writeSummaryWithReadiness(
+	mode: Extract<FallowRunnerCommand, "fix-preview" | "fix-apply">,
+	output: unknown,
+	readiness: ReadinessSummary,
+): FallowRunnerSummary {
+	const issueItems = collectIssueItems(output);
+	const totalFindings =
+		output === null
+			? 0
+			: directFindingsCount(output) ??
+				(issueItems.length > 0 ? issueItems.length : 0);
+	const summary: FallowRunnerSummary = {
+		total_findings: totalFindings,
+		auto_fixable: issueItems.filter(isAutoFixable).length,
+		needs_trace: issueItems.filter(hasTraceNeed).length,
+		needs_human: issueItems.filter(hasHumanNeed).length,
+	};
+	const modeEvidence = compactRecord({
+		write_operation: mode === "fix-preview" ? "preview" : "apply",
+		config_scope:
+			mode === "fix-apply"
+				? {
+						present: readiness.config.present,
+						paths: readiness.config.paths,
+					}
+				: undefined,
+	});
+	if (Object.keys(modeEvidence).length > 0) {
+		summary.mode_evidence = modeEvidence;
+	}
+	return summary;
+}
+
+function configSafetyHintsFor(
+	command: Extract<FallowRunnerCommand, "fix-preview" | "fix-apply">,
+	readiness: ReadinessSummary,
+): RepairHint[] {
+	if (command !== "fix-apply" || !readiness.config.present) return [];
+	return [
+		{
+			action: "inspect-config",
+			message: "Inspect Fallow config paths before apply.",
+			retry_safe: false,
+		},
+	];
 }
 
 function totalFindingsFor(
@@ -1347,8 +1528,9 @@ function emitUsageError(
 	stdout: CliWriter,
 	error: CliUsageError,
 ): number {
-	const exitCode = error.options.exitCode ?? 2;
 	const command = safeFindCommand(argv);
+	const safetyBlock = isApplyShapedOutsideApply(argv, command);
+	const exitCode = safetyBlock ? 1 : error.options.exitCode ?? 2;
 	const placeholderCommand: ParsedCommand | undefined = command
 		? {
 				kind: "command",
@@ -1366,20 +1548,39 @@ function emitUsageError(
 			command: placeholderCommand ? commandFor(placeholderCommand) : ["fallow-runner"],
 			cwd: runtime.cwd,
 			exitCode,
-			failureCategory: "input",
+			failureCategory: safetyBlock ? "safety" : "input",
 			writeEffect: "none",
 			maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
 			rawRequested: false,
-			repairHints: [
-				{
-					action: "fix-input",
-					message: error.message,
-					retry_safe: false,
-				},
-			],
+			repairHints: safetyBlock
+				? [
+						{
+							action: "inspect-config",
+							message:
+								"Use fix-preview first, then explicit fix-apply after current-task authorization.",
+							retry_safe: false,
+						},
+					]
+				: [
+						{
+							action: "fix-input",
+							message: error.message,
+							retry_safe: false,
+						},
+					],
 		}),
 	);
 	return exitCode;
+}
+
+function isApplyShapedOutsideApply(
+	argv: readonly string[],
+	command: FallowRunnerCommand | undefined,
+): boolean {
+	return (
+		command !== "fix-apply" &&
+		argv.some((arg) => APPLY_SHAPED_CONTROLS.has(splitFlag(arg).name))
+	);
 }
 
 function safeFindCommand(argv: readonly string[]): FallowRunnerCommand | undefined {

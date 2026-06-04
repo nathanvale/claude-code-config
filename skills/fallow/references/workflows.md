@@ -42,5 +42,5 @@
 ## Stop
 
 - Stop when the runner cannot produce usable evidence and no repair hint applies.
-- Stop before apply when user authorization is missing.
+- Stop before `fix-apply` when current-task user authorization is missing.
 - Stop before broad refactors that exceed the current task.
