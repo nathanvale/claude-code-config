@@ -1495,3 +1495,688 @@ Consequences:
 Next:
 
 - Paste the handoff prompt into a new `ce-plan` session.
+
+## Decision 27: Resolver Surface Shape
+
+```yaml
+id: fallow-agent-native-027
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: What should the next Fallow resolver work define as the primary product shape?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-skill
+  - fallow-runner-contract
+  - fallow-runner-model
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_surface_shape: actions-first
+source:
+  - docs/ideation/2026-06-05-fallow-why-resolver-ideation.md
+```
+
+Decision:
+
+- Use actions-first resolver design.
+- Let findings advertise resolver actions.
+- Treat `why` as a continuation when trace can change the decision.
+- Do not make routine audit triage depend on a visible `why` command.
+
+Rationale:
+
+- Per-finding actions give agents the next safe move at the point of decision.
+- Audit attribution already handles zero-introduced stop.
+- A command-first design would make agents remember another route before the finding proves it is worth tracing.
+
+Consequences:
+
+- Requirements should center finding-level continuation, not command marketing.
+- `SKILL.md` should route to the owner surfaces without copying resolver contracts.
+- Runner contract and tests own exact action literals, command targets, and output semantics.
+
+Next:
+
+- Decision 28 accepted runnable targets for finding resolver actions.
+
+## Decision 28: Finding Resolver Action Target
+
+```yaml
+id: fallow-agent-native-028
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: In v1, does an advertised resolver action need a runnable command target?
+  option: 1
+  confidence: strong
+scope: skills/fallow/scripts
+owner:
+  - fallow-runner-contract
+  - fallow-runner-cli
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_action_target: runnable-target
+language:
+  canonical_term: Finding resolver action
+  glossary_owner: CONTEXT.md
+```
+
+Decision:
+
+- A finding resolver action includes a runnable target.
+- Keep resolver actions distinct from blocked-run repair actions.
+- Use the canonical term `Finding resolver action`.
+- Avoid hidden command plumbing as the primary design.
+- Avoid metadata-only resolver hints in v1.
+
+Rationale:
+
+- Agent-native continuations need mechanical follow-through.
+- Metadata-only hints invite prose interpretation.
+- Hidden commands create discovery drift.
+- `CONTEXT.md` now defines the term and distinguishes it from repair actions.
+
+Consequences:
+
+- Findings that advertise a resolver action must provide enough structured input for the target.
+- Command discovery, rendered help, parser acceptance, and runtime semantics must stay aligned before the surface ships.
+- The runner owns exact command target semantics.
+
+Next:
+
+- Decision 29 accepted introduced traceable findings as the v1 advertising scope.
+
+## Decision 29: Resolver Action Advertising Scope
+
+```yaml
+id: fallow-agent-native-029
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: Which findings may advertise a finding resolver action in v1?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-model
+  - fallow-runner-output
+  - fallow-workflow-reference
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_action_advertising_scope: introduced-traceable-findings-only
+evidence:
+  - audit attribution separates introduced findings from inherited findings
+  - introduced=0 means stop without per-finding triage
+  - trace_export needs file plus export name
+```
+
+Decision:
+
+- Advertise finding resolver actions only for introduced traceable findings in v1.
+- Do not advertise resolver actions for inherited findings in normal audit output.
+- Do not advertise resolver actions when the finding lacks the required trace target.
+
+Rationale:
+
+- This preserves audit attribution as the first gate.
+- It prevents inherited baseline noise from regaining per-finding triage pressure.
+- It keeps resolver action availability tied to a runnable target.
+
+Consequences:
+
+- Ad hoc cleanup can use a later explicit manual path if needed.
+- Non-audit modes still need attribution or baseline/regression work before broad resolver action advertising.
+- Plain output should continue to stop on zero introduced findings.
+
+Next:
+
+- Decision 30 accepted decision-log tracking for follower work.
+
+## Decision 30: Resolver Work Decision Tracking
+
+```yaml
+id: fallow-agent-native-030
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How should follow-on resolver work preserve decisions as they crystallise?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-decision-log
+  - fallow-brainstorm
+  - fallow-plan
+durability:
+  current: decision-log
+  escalate_to_adr_if:
+    - the decision is hard to reverse
+    - the decision would surprise a future maintainer
+    - the decision resolves a real trade-off
+decision_tracking: append-to-fallow-decision-log-as-we-go
+```
+
+Decision:
+
+- Track resolver design decisions in this Fallow decision log as they are made.
+- Let follower planning and implementation work read this log as source context.
+- Create ADRs only when the ADR threshold is met.
+- Keep requirements and plans linked back to this log when they inherit these decisions.
+
+Rationale:
+
+- The Fallow decision log already owns agent-native runner decisions.
+- Inline decision capture reduces handoff drift.
+- ADRs would be too heavy for reversible product-shape decisions at this stage.
+
+Consequences:
+
+- Brainstorm requirements should cite this decision log as a source.
+- Planning should not rediscover accepted resolver boundaries.
+- Implementation workers should preserve these decisions unless a new decision explicitly supersedes them.
+
+Next:
+
+- Decision 31 accepted the v1 traceable finding boundary.
+
+## Decision 31: V1 Traceable Finding Boundary
+
+```yaml
+id: fallow-agent-native-031
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: What counts as traceable in v1?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-model
+  - fallow-runner-output
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+traceable_finding_boundary: introduced-remove-export-with-file-and-export
+language:
+  canonical_term: Traceable finding
+  glossary_owner: CONTEXT.md
+evidence:
+  - trace_export was proven only for export reachability
+  - trace_export requires file plus export_name
+  - runner issue references already carry path, action, symbol, and introduced when present
+```
+
+Decision:
+
+- In v1, treat only introduced `remove-export` findings with file and export coordinates as traceable findings.
+- Do not treat every `needs_trace` signal as traceable.
+- Do not introduce a resolver registry in v1.
+
+Rationale:
+
+- The prototype proved exactly one resolver shape.
+- `needs_trace` is too broad until the runner can prove a runnable target.
+- A registry is attractive later, but premature before one resolver is boring.
+
+Consequences:
+
+- Resolver action advertising is narrow and testable.
+- Missing file or export coordinate means no resolver action is advertised.
+- Inherited `remove-export` findings do not advertise resolver actions in normal audit output.
+- Broader finding-kind resolver work stays deferred.
+
+Next:
+
+- Decision 32 accepted coordinate-addressed resolver targets for v1.
+
+## Decision 32: V1 Resolver Target Addressing
+
+```yaml
+id: fallow-agent-native-032
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How should the runnable target be addressed in v1?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-contract
+  - fallow-runner-cli
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_target_addressing: coordinates-first
+target_coordinates:
+  - file
+  - export
+evidence:
+  - prototype proved file plus export_name
+  - finding-id resolution needs persisted envelope or last-run state
+  - runner issue references already expose path and symbol when present
+```
+
+Decision:
+
+- Address v1 resolver targets with file plus export coordinates.
+- Do not require finding-id resolution in v1.
+- Do not add last-run state in v1.
+
+Rationale:
+
+- Coordinates match the proven `trace_export` input.
+- Finding-id addressing creates persistence and lookup questions beyond the resolver's core value.
+- Existing issue references can carry the coordinates the user or agent needs.
+
+Consequences:
+
+- Finding resolver actions can render a runnable coordinate-addressed target.
+- A later finding-id shortcut may be added after envelope persistence or command history exists.
+- Parser and help design should prove coordinate addressing mechanically.
+
+Next:
+
+- Decision 33 accepted evidence grade as the resolver meaning source.
+
+## Decision 33: Resolver Result Meaning
+
+```yaml
+id: fallow-agent-native-033
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: What should the resolver target return as its main meaning?
+  option: 3
+  confidence: soft
+scope: skills/fallow
+owner:
+  - fallow-runner-contract
+  - fallow-runner-output
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_result_meaning: evidence-grade-primary-derived-verdict
+candidate_evidence_grades:
+  - referenced
+  - entry_point
+  - unreferenced_by_trace
+  - unresolved
+  - trace_unavailable
+derived_verdict_role: plain-output-and-branch-helper
+```
+
+Decision:
+
+- Make evidence grade the primary resolver result meaning.
+- Derive verdict and next action from the evidence grade.
+- Do not make deletion verdict the source of truth.
+- Avoid numeric confidence in v1.
+
+Rationale:
+
+- Static trace evidence proves graph reachability under configured roots, not universal runtime deletion safety.
+- Agents still need branchable plain output.
+- Evidence grades keep the JSON contract honest while derived verdicts keep routine reading fast.
+
+Consequences:
+
+- JSON output should expose the evidence grade and raw supporting graph facts.
+- Plain output may render a concise derived verdict.
+- `unreferenced_by_trace` is a deletion candidate, not automatic deletion permission.
+- `trace_unavailable` and `unresolved` block action rather than becoming weak deletion verdicts.
+
+Next:
+
+- Decision 34 accepted the resolver MVP boundary.
+
+## Decision 34: Resolver MVP Boundary
+
+```yaml
+id: fallow-agent-native-034
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: What recommendations define the resolver MVP?
+  option: strong-recommendation-bundle
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-brainstorm
+  - fallow-plan
+  - fallow-runner-contract
+  - fallow-runner-output
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+mvp_boundary:
+  surface: actions-first
+  eligible_findings: introduced-traceable-remove-export-only
+  target_addressing: coordinates-first
+  top_level_status: reuse-ok-issues-blocked
+  resolver_meaning: evidence-grade-primary
+  verdict_role: derived-helper
+  transport_owner: fallow-owned-mcporter-adapter
+  cli_surface_gate:
+    - discovery-metadata
+    - rendered-help
+    - parser-acceptance
+    - runtime-semantics
+v2_capture:
+  - finding-id-addressing
+  - resolver-registry
+  - non-audit-baseline-regression
+  - batch-trace
+  - broader-trace-family
+  - shared-mcporter-utility-after-third-consumer
+  - trace-evidence-ledger
+  - cleanup-mode-resolver-actions
+```
+
+Decision:
+
+- Build the resolver MVP around introduced traceable `remove-export` findings.
+- Advertise Finding resolver actions from findings, not from routine audit prose.
+- Use coordinate-addressed runnable targets in v1.
+- Keep top-level runner status as `ok | issues | blocked`.
+- Put resolver grade and supporting graph evidence inside mode evidence.
+- Keep derived verdicts and next actions as helpers.
+- Keep mcporter behind a Fallow-owned evidence adapter.
+- Capture v2 candidates without expanding MVP scope.
+
+Rationale:
+
+- The MVP should prove one boring resolver before growing a trace framework.
+- The accepted boundary preserves audit attribution as the first gate.
+- Agent-native value comes from mechanical continuations with testable discovery, not prose hints.
+
+Consequences:
+
+- `why` is not the product center; resolver actions are.
+- A visible command may exist only as the runnable target behind an advertised resolver action.
+- Planning should treat v2 candidates as parking-lot scope unless a later decision promotes them.
+
+Next:
+
+- Decision 35 rejected `likely-dead` wording in the MVP.
+
+## Decision 35: Resolver Wording Safety
+
+```yaml
+id: fallow-agent-native-035
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How should MVP wording avoid overclaiming deletion safety?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-output
+  - fallow-runner-tests
+  - fallow-workflow-reference
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+wording_boundary:
+  avoid_in_mvp:
+    - likely-dead
+  prefer:
+    - unreferenced_by_trace
+    - candidate_remove
+```
+
+Decision:
+
+- Avoid `likely-dead` in the resolver MVP.
+- Use evidence wording such as `unreferenced_by_trace`.
+- Use action wording such as `candidate_remove`.
+- Do not present static trace absence as deletion proof.
+
+Rationale:
+
+- `likely-dead` reads like a verdict.
+- `unreferenced_by_trace` reads like evidence.
+- The resolver should reduce false positives without creating deletion overconfidence.
+
+Consequences:
+
+- JSON evidence grades avoid `likely-dead`.
+- Plain output avoids `likely-dead`.
+- Deletion remains a candidate action that needs judgment or follow-up verification.
+
+Next:
+
+- Decision 36 accepted tiny resolver action payloads.
+
+## Decision 36: Resolver Action Payload Size
+
+```yaml
+id: fallow-agent-native-036
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How much metadata should a finding resolver action carry?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-model
+  - fallow-runner-output
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_action_payload_size: tiny
+payload_members_conceptual:
+  - action-id
+  - target-command
+  - required-coordinates
+  - reason
+```
+
+Decision:
+
+- Keep Finding resolver action payloads tiny.
+- Include only action id, runnable target, required coordinates, and reason.
+- Do not copy command help into issue references.
+- Do not copy expected output shape into issue references.
+
+Rationale:
+
+- Issue references should stay scannable.
+- Command discovery and help own command detail.
+- Tests and runtime contracts own exact output semantics.
+
+Consequences:
+
+- Resolver action payloads point to owner surfaces instead of duplicating them.
+- Richer resolver explanation appears only after running the resolver target.
+- Payload drift risk stays low.
+
+Next:
+
+- Decision 37 accepted visible but secondary resolver command discovery.
+
+## Decision 37: Resolver Command Visibility
+
+```yaml
+id: fallow-agent-native-037
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How visible should the resolver command be?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-discovery
+  - fallow-runner-cli
+  - fallow-skill
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+resolver_command_visibility: visible-but-secondary
+```
+
+Decision:
+
+- Make the resolver command discoverable through help and command discovery.
+- Keep docs and route guidance centered on Finding resolver actions.
+- Do not hide the runnable command.
+- Do not make command-first UX the primary teaching path.
+
+Rationale:
+
+- Runnable targets need mechanical discovery.
+- Hidden commands create drift.
+- Actions-first UX can coexist with visible command discovery.
+
+Consequences:
+
+- `SKILL.md` should not market `why` as routine audit triage.
+- Command references may name the resolver target as the action continuation.
+- Discovery, help, parser acceptance, and runtime semantics stay required gates.
+
+Next:
+
+- Decision 38 separated `needs_trace` from Traceable finding.
+
+## Decision 38: Trace Signal Vocabulary Boundary
+
+```yaml
+id: fallow-agent-native-038
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How should `needs_trace` relate to Traceable finding?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-runner-model
+  - fallow-runner-output
+  - fallow-workflow-reference
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+trace_signal_boundary:
+  needs_trace: broad-summary-signal
+  traceable_finding: runnable-action-gate
+```
+
+Decision:
+
+- Keep `needs_trace` separate from Traceable finding.
+- Treat `needs_trace` as broad summary or analyzer signal.
+- Treat Traceable finding as the gate for advertising a Finding resolver action.
+- Do not rename `needs_trace` in the resolver MVP.
+
+Rationale:
+
+- Existing runner summary already uses `needs_trace`.
+- Renaming it would broaden the MVP.
+- Collapsing the concepts would advertise resolver actions too broadly.
+
+Consequences:
+
+- Resolver eligibility checks should not rely on `needs_trace` alone.
+- Requirements should define Traceable finding in terms of runnable coordinates and attribution.
+- Later cleanup may rename or refine `needs_trace` if real confusion appears.
+
+Next:
+
+- Decision 39 accepted docs-route/code-contract ownership.
+
+## Decision 39: Resolver Documentation Boundary
+
+```yaml
+id: fallow-agent-native-039
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How should docs describe resolver actions without copying contracts?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-skill
+  - fallow-workflow-reference
+  - fallow-runner-contract
+  - fallow-runner-tests
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+documentation_boundary: docs-route-code-owns-contract
+```
+
+Decision:
+
+- Use docs to route agents to resolver actions.
+- Keep exact payloads, flags, literals, parser rules, and output semantics in code, help, generated discovery, and tests.
+- Do not copy resolver contracts into `SKILL.md`.
+- Do not omit resolver routing from docs once the surface exists.
+
+Rationale:
+
+- Skills own workflows.
+- Runtime code and checks own deterministic contracts.
+- Prose examples with literals drift faster than command discovery and tests.
+
+Consequences:
+
+- Requirements should name owner surfaces, not exact schemas.
+- `SKILL.md` can say when to follow a Finding resolver action.
+- `references/workflows.md` can explain the audit gate and cleanup boundary.
+
+Next:
+
+- Decision 40 accepted v2 parking-lot scope control.
+
+## Decision 40: Resolver V2 Scope Control
+
+```yaml
+id: fallow-agent-native-040
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: How should v2 ideas be captured without expanding the resolver MVP?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-brainstorm
+  - fallow-plan
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver implementation starts
+v2_scope_control: parking-lot-only
+```
+
+Decision:
+
+- Capture v2 candidates in a parking lot only.
+- Do not turn v2 candidates into MVP acceptance criteria.
+- Do not add inline future hooks to every MVP requirement.
+- Do not design the MVP as a resolver framework.
+
+Rationale:
+
+- The MVP should prove one resolver path.
+- Parking-lot capture preserves future ideas without expanding implementation scope.
+- Frameworking now would weaken the accepted narrow traceable-finding boundary.
+
+Consequences:
+
+- Requirements should separate MVP scope from v2 parking lot.
+- Planning should ignore v2 items unless a later decision promotes one.
+- Implementation workers should treat v2 mentions as non-goals.
