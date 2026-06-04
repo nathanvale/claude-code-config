@@ -25,11 +25,14 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 
 - Pass `--root <repo>` when the target repo differs from the current directory.
 - Let `audit` use Fallow defaults unless the current task needs an explicit base ref.
+- Pass public `--base-ref <ref>` for `audit`; the runner maps it to Fallow's base ref flag.
 - Do not use public `--cwd`, `--mode`, watch, baseline, or CI-generation controls.
 
 ## Output
 
 - Read the normalized summary first.
+- Use `status: issues` only as analyzer-finding evidence.
+- Inspect issue references for file, range, rule, category, action, or finding ids.
 - Request raw parsed Fallow output only for inspection.
 - Lower the output budget only when the caller needs a tighter context cap.
 - Treat omitted raw output as intentional when summary evidence remains.

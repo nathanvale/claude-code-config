@@ -103,11 +103,27 @@ type ReadinessSummary = {
 };
 
 type FallowRunnerSummary = {
-	total_findings: number;
+	total_findings: number | null;
 	auto_fixable: number;
 	needs_trace: number;
 	needs_human: number;
+	mode_evidence?: Record<string, unknown>;
 	readiness?: ReadinessSummary;
+};
+
+type FallowIssueReference = {
+	id?: string;
+	path?: string;
+	range?: {
+		start_line?: number;
+		start_column?: number;
+		end_line?: number;
+		end_column?: number;
+	};
+	rule?: string;
+	category?: string;
+	action?: string;
+	symbol?: string;
 };
 
 type FallowRunnerEnvelope = {
@@ -123,6 +139,7 @@ type FallowRunnerEnvelope = {
 	failure_category: FallowFailureCategory;
 	write_effect: FallowWriteEffect;
 	fallow_output: unknown;
+	issue_references: FallowIssueReference[];
 	output_budget: {
 		status: "within-budget";
 		max_output_bytes: number;
@@ -288,6 +305,98 @@ async function runParsedCommand(
 			}),
 		);
 		return 1;
+	}
+
+	if (isEvidenceCommand(parsed.command)) {
+		const invocation = fallowInvocationFor(parsed, readiness);
+		const command = [invocation.command, ...invocation.args];
+		const result = await runtime.runCommand(invocation.command, invocation.args, {
+			cwd: root,
+		});
+		const stderrCategory = categorizeStderr(result.stderr);
+
+		if (result.exitCode !== 0 && result.stdout.trim() === "") {
+			writeEnvelope(
+				stdout,
+				makeEnvelope({
+					status: "blocked",
+					mode: parsed.command,
+					runId,
+					command,
+					cwd: root,
+					exitCode: result.exitCode,
+					stderrCategory,
+					failureCategory: "fallow",
+					writeEffect: "none",
+					maxOutputBytes,
+					rawRequested,
+					summary: summaryWithReadiness(readiness),
+					repairHints: [
+						{
+							action: "run-doctor",
+							message: "Run diagnostics before retrying Fallow.",
+							retry_safe: false,
+						},
+					],
+				}),
+			);
+			return 1;
+		}
+
+		const parsedOutput = parseJsonOutput(result.stdout);
+		if (!parsedOutput.ok) {
+			writeEnvelope(
+				stdout,
+				makeEnvelope({
+					status: "blocked",
+					mode: parsed.command,
+					runId,
+					command,
+					cwd: root,
+					exitCode: result.exitCode === 0 ? 1 : result.exitCode,
+					stderrCategory,
+					failureCategory: "parse",
+					writeEffect: "none",
+					maxOutputBytes,
+					rawRequested,
+					summary: summaryWithReadiness(readiness),
+					repairHints: [
+						{
+							action: "run-doctor",
+							message: "Confirm Fallow JSON output before retrying.",
+							retry_safe: false,
+						},
+					],
+				}),
+			);
+			return 1;
+		}
+
+		const evidence = summarizeFallowEvidence(
+			parsed.command,
+			parsedOutput.value,
+		);
+		writeEnvelope(
+			stdout,
+			makeEnvelope({
+				status: evidence.status,
+				mode: parsed.command,
+				runId,
+				command,
+				cwd: root,
+				exitCode: result.exitCode,
+				stderrCategory,
+				failureCategory: "none",
+				writeEffect: "none",
+				maxOutputBytes,
+				rawRequested,
+				rawOutputIncluded: rawRequested,
+				fallowOutput: rawRequested ? parsedOutput.value : null,
+				summary: evidence.summary,
+				issueReferences: evidence.issueReferences,
+			}),
+		);
+		return 0;
 	}
 
 	writeEnvelope(
@@ -491,11 +600,15 @@ function makeEnvelope(input: {
 	command: string[];
 	cwd: string;
 	exitCode: number;
+	stderrCategory?: FallowStderrCategory;
 	failureCategory: FallowFailureCategory;
 	writeEffect: FallowWriteEffect;
 	maxOutputBytes: number;
 	rawRequested: boolean;
+	rawOutputIncluded?: boolean;
+	fallowOutput?: unknown;
 	summary?: FallowRunnerSummary;
+	issueReferences?: FallowIssueReference[];
 	repairHints?: RepairHint[];
 }): FallowRunnerEnvelope {
 	return {
@@ -507,15 +620,16 @@ function makeEnvelope(input: {
 		command: input.command,
 		cwd: input.cwd,
 		exit_code: input.exitCode,
-		stderr_category: "empty",
+		stderr_category: input.stderrCategory ?? "empty",
 		failure_category: input.failureCategory,
 		write_effect: input.writeEffect,
-		fallow_output: null,
+		fallow_output: input.fallowOutput ?? null,
+		issue_references: input.issueReferences ?? [],
 		output_budget: {
 			status: "within-budget",
 			max_output_bytes: input.maxOutputBytes,
 			raw_output_requested: input.rawRequested,
-			raw_output_included: false,
+			raw_output_included: input.rawOutputIncluded ?? false,
 		},
 		summary: input.summary ?? emptySummary(),
 		repair_hints: input.repairHints ?? [],
@@ -529,6 +643,423 @@ function emptySummary(): FallowRunnerSummary {
 		needs_trace: 0,
 		needs_human: 0,
 	};
+}
+
+function isEvidenceCommand(
+	command: FallowRunnerCommand,
+): command is Extract<
+	FallowRunnerCommand,
+	"audit" | "dead-code" | "dupes" | "health"
+> {
+	return (
+		command === "audit" ||
+		command === "dead-code" ||
+		command === "dupes" ||
+		command === "health"
+	);
+}
+
+function fallowInvocationFor(
+	parsed: ParsedCommand,
+	readiness: ReadinessSummary,
+): { command: string; args: string[] } {
+	return {
+		command: readiness.fallow_binary.path ?? "fallow",
+		args: fallowArgsFor(parsed),
+	};
+}
+
+function parseJsonOutput(
+	stdout: string,
+): { ok: true; value: unknown } | { ok: false } {
+	try {
+		return { ok: true, value: JSON.parse(stdout) as unknown };
+	} catch {
+		return { ok: false };
+	}
+}
+
+function summarizeFallowEvidence(
+	mode: Extract<FallowRunnerCommand, "audit" | "dead-code" | "dupes" | "health">,
+	output: unknown,
+): {
+	status: FallowStatus;
+	summary: FallowRunnerSummary;
+	issueReferences: FallowIssueReference[];
+} {
+	const issueItems = collectIssueItems(output);
+	const issueReferences = issueItems
+		.map(issueReferenceFrom)
+		.filter(isIssueReference);
+	const totalFindings = totalFindingsFor(mode, output, issueItems);
+	const summary: FallowRunnerSummary = {
+		total_findings: totalFindings,
+		auto_fixable: issueItems.filter(isAutoFixable).length,
+		needs_trace: issueItems.filter(hasTraceNeed).length,
+		needs_human: issueItems.filter(hasHumanNeed).length,
+	};
+	const modeEvidence = modeEvidenceFor(mode, output);
+	if (Object.keys(modeEvidence).length > 0) {
+		summary.mode_evidence = modeEvidence;
+	}
+
+	return {
+		status: hasAnalyzerIssues(output, totalFindings) ? "issues" : "ok",
+		summary,
+		issueReferences,
+	};
+}
+
+function totalFindingsFor(
+	mode: Extract<FallowRunnerCommand, "audit" | "dead-code" | "dupes" | "health">,
+	output: unknown,
+	issueItems: unknown[],
+): number | null {
+	if (mode === "audit") return auditTotalFindings(output);
+	if (mode === "dead-code") return deadCodeTotalFindings(output, issueItems);
+	if (mode === "dupes") return duplicationTotalFindings(output, issueItems);
+	if (mode === "health") return healthTotalFindings(output, issueItems);
+	return directFindingsCount(output) ?? (issueItems.length > 0 ? issueItems.length : null);
+}
+
+function auditTotalFindings(output: unknown): number | null {
+	const summary = objectValue(objectValue(output, "summary"));
+	const summaryTotal = sumPresentNumbers(summary, [
+		"dead_code_issues",
+		"complexity_findings",
+		"duplication_clone_groups",
+	]);
+	if (summaryTotal !== null) return summaryTotal;
+
+	const attribution = objectValue(objectValue(output, "attribution"));
+	const introducedTotal = sumPresentNumbers(attribution, [
+		"dead_code_introduced",
+		"complexity_introduced",
+		"duplication_introduced",
+	]);
+	if (introducedTotal !== null) return introducedTotal;
+
+	return directFindingsCount(output);
+}
+
+function deadCodeTotalFindings(
+	output: unknown,
+	issueItems: unknown[],
+): number | null {
+	return (
+		numberAt(output, ["total_issues"]) ??
+		numberAt(output, ["summary", "total_issues"]) ??
+		numberAt(output, ["summary", "dead_code_issues"]) ??
+		directFindingsCount(output) ??
+		(issueItems.length > 0 ? issueItems.length : null)
+	);
+}
+
+function duplicationTotalFindings(
+	output: unknown,
+	issueItems: unknown[],
+): number | null {
+	return (
+		arrayAt(output, ["clone_groups"])?.length ??
+		numberAt(output, ["summary", "clone_groups"]) ??
+		numberAt(output, ["summary", "duplication_clone_groups"]) ??
+		directFindingsCount(output) ??
+		(issueItems.length > 0 ? issueItems.length : null)
+	);
+}
+
+function healthTotalFindings(
+	output: unknown,
+	issueItems: unknown[],
+): number | null {
+	const vitalCounts = objectValue(
+		objectValue(objectValue(output, "vital_signs")),
+		"counts",
+	);
+	const vitalTotal = sumPresentNumbers(vitalCounts, [
+		"dead_files",
+		"dead_exports",
+		"unused_deps",
+		"circular_deps",
+	]);
+	return (
+		directFindingsCount(output) ??
+		arrayAt(output, ["targets"])?.length ??
+		numberAt(output, ["summary", "functions_above_threshold"]) ??
+		vitalTotal ??
+		(issueItems.length > 0 ? issueItems.length : null)
+	);
+}
+
+function directFindingsCount(output: unknown): number | null {
+	return (
+		arrayAt(output, ["findings"])?.length ??
+		arrayAt(output, ["issues"])?.length ??
+		null
+	);
+}
+
+function hasAnalyzerIssues(output: unknown, totalFindings: number | null): boolean {
+	if (totalFindings !== null) return totalFindings > 0;
+	const verdict = stringField(output, ["verdict", "status"]);
+	if (!verdict) return false;
+	return ["fail", "failed", "issues", "error"].includes(verdict.toLowerCase());
+}
+
+function modeEvidenceFor(
+	mode: Extract<FallowRunnerCommand, "audit" | "dead-code" | "dupes" | "health">,
+	output: unknown,
+): Record<string, unknown> {
+	if (mode === "audit") {
+		return compactRecord({
+			verdict: stringField(output, ["verdict"]),
+			base_ref: stringField(output, ["base_ref"]),
+			changed_files_count: numberAt(output, ["changed_files_count"]),
+		});
+	}
+	if (mode === "health") {
+		return compactRecord({
+			files_analyzed: numberAt(output, ["summary", "files_analyzed"]),
+			functions_analyzed: numberAt(output, ["summary", "functions_analyzed"]),
+			functions_above_threshold: numberAt(output, [
+				"summary",
+				"functions_above_threshold",
+			]),
+			maintainability_avg: numberAt(output, [
+				"vital_signs",
+				"maintainability_avg",
+			]),
+			unused_dep_count: numberAt(output, ["vital_signs", "unused_dep_count"]),
+			circular_dep_count: numberAt(output, ["vital_signs", "circular_dep_count"]),
+		});
+	}
+	if (mode === "dupes") {
+		return compactRecord({
+			duplication_percentage: numberAt(output, [
+				"stats",
+				"duplication_percentage",
+			]),
+		});
+	}
+	return compactRecord({
+		total_issues: numberAt(output, ["total_issues"]),
+	});
+}
+
+function collectIssueItems(output: unknown): unknown[] {
+	const issueKeys = new Set([
+		"findings",
+		"issues",
+		"unused_exports",
+		"unused_dependencies",
+		"clone_groups",
+		"targets",
+		"changes",
+	]);
+	const items: unknown[] = [];
+	collectIssueItemsFrom(output, issueKeys, items);
+	return items;
+}
+
+function collectIssueItemsFrom(
+	value: unknown,
+	issueKeys: Set<string>,
+	items: unknown[],
+): void {
+	if (Array.isArray(value)) {
+		for (const item of value) collectIssueItemsFrom(item, issueKeys, items);
+		return;
+	}
+	if (!isRecord(value)) return;
+
+	for (const [key, child] of Object.entries(value)) {
+		if (issueKeys.has(key) && Array.isArray(child)) {
+			items.push(...child.filter(isRecord));
+			continue;
+		}
+		if (key !== "actions") collectIssueItemsFrom(child, issueKeys, items);
+	}
+}
+
+function issueReferenceFrom(value: unknown): FallowIssueReference | undefined {
+	if (!isRecord(value)) return undefined;
+	const line = numberField(value, ["line", "start_line", "line_number"]);
+	const column = numberField(value, ["col", "column", "start_column"]);
+	const range = rangeFrom(value, line, column);
+	const reference = compactRecord({
+		id: stringField(value, ["id", "finding_id", "findingId", "key"]),
+		path: stringField(value, ["path", "file", "filename", "filepath"]),
+		range,
+		rule: stringField(value, ["rule", "rule_id", "ruleId", "code"]),
+		category: stringField(value, ["category", "kind"]),
+		action: actionFrom(value),
+		symbol: stringField(value, ["symbol", "export_name", "name"]),
+	}) as FallowIssueReference;
+	return Object.keys(reference).length > 0 ? reference : undefined;
+}
+
+function rangeFrom(
+	value: Record<string, unknown>,
+	line: number | undefined,
+	column: number | undefined,
+): FallowIssueReference["range"] | undefined {
+	const nested = objectValue(value.range);
+	const range = compactRecord({
+		start_line:
+			numberField(nested, ["start_line", "startLine", "line"]) ?? line,
+		start_column:
+			numberField(nested, ["start_column", "startColumn", "column", "col"]) ??
+			column,
+		end_line: numberField(nested, ["end_line", "endLine"]),
+		end_column: numberField(nested, ["end_column", "endColumn"]),
+	}) as FallowIssueReference["range"];
+	return range && Object.keys(range).length > 0 ? range : undefined;
+}
+
+function actionFrom(value: Record<string, unknown>): string | undefined {
+	const direct = stringField(value, ["action", "suggested_action", "type"]);
+	if (direct) return direct;
+	const actions = value.actions;
+	if (!Array.isArray(actions)) return undefined;
+	for (const action of actions) {
+		if (!isRecord(action)) continue;
+		const actionId = stringField(action, ["id", "kind", "type", "action"]);
+		if (actionId) return actionId;
+	}
+	return undefined;
+}
+
+function isAutoFixable(value: unknown): boolean {
+	return hasTruthyDeep(value, [
+		"auto_fixable",
+		"autofixable",
+		"fixable",
+		"can_fix",
+		"safe_to_fix",
+	]);
+}
+
+function hasTraceNeed(value: unknown): boolean {
+	return hasTruthyDeep(value, [
+		"needs_trace",
+		"requires_trace",
+		"trace_required",
+	]);
+}
+
+function hasHumanNeed(value: unknown): boolean {
+	return hasTruthyDeep(value, [
+		"needs_human",
+		"requires_human",
+		"manual_review",
+	]);
+}
+
+function hasTruthyDeep(value: unknown, keys: readonly string[]): boolean {
+	if (Array.isArray(value)) return value.some((item) => hasTruthyDeep(item, keys));
+	if (!isRecord(value)) return false;
+	for (const [key, child] of Object.entries(value)) {
+		if (keys.includes(key) && child === true) return true;
+		if (hasTruthyDeep(child, keys)) return true;
+	}
+	return false;
+}
+
+function categorizeStderr(stderr: string): FallowStderrCategory {
+	const text = stderr.trim();
+	if (!text) return "empty";
+	if (/\b(error|failed|fatal|exception|panic)\b/i.test(text)) return "error";
+	if (/\bwarn(ing)?\b/i.test(text)) return "warning";
+	return "progress";
+}
+
+function compactRecord(
+	input: Record<string, unknown | undefined>,
+): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(input).filter(([, value]) => value !== undefined),
+	);
+}
+
+function numberAt(value: unknown, path: readonly string[]): number | undefined {
+	let current = value;
+	for (const key of path) {
+		current = propertyValue(current, key);
+	}
+	return typeof current === "number" && Number.isFinite(current)
+		? current
+		: undefined;
+}
+
+function arrayAt(value: unknown, path: readonly string[]): unknown[] | undefined {
+	let current = value;
+	for (const key of path) {
+		current = propertyValue(current, key);
+	}
+	return Array.isArray(current) ? current : undefined;
+}
+
+function sumPresentNumbers(
+	value: Record<string, unknown> | undefined,
+	keys: readonly string[],
+): number | null {
+	if (!value) return null;
+	let total = 0;
+	let found = false;
+	for (const key of keys) {
+		const item = value[key];
+		if (typeof item === "number" && Number.isFinite(item)) {
+			total += item;
+			found = true;
+		}
+	}
+	return found ? total : null;
+}
+
+function stringField(
+	value: unknown,
+	keys: readonly string[],
+): string | undefined {
+	if (!isRecord(value)) return undefined;
+	for (const key of keys) {
+		const item = value[key];
+		if (typeof item === "string" && item.length > 0) return item;
+	}
+	return undefined;
+}
+
+function numberField(
+	value: unknown,
+	keys: readonly string[],
+): number | undefined {
+	if (!isRecord(value)) return undefined;
+	for (const key of keys) {
+		const item = value[key];
+		if (typeof item === "number" && Number.isFinite(item)) return item;
+	}
+	return undefined;
+}
+
+function objectValue(
+	value: unknown,
+	key?: string,
+): Record<string, unknown> | undefined {
+	const item = key === undefined ? value : propertyValue(value, key);
+	return isRecord(item) ? item : undefined;
+}
+
+function propertyValue(value: unknown, key: string): unknown {
+	return isRecord(value) ? value[key] : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIssueReference(
+	value: FallowIssueReference | undefined,
+): value is FallowIssueReference {
+	return value !== undefined;
 }
 
 function parseFallowArgv(argv: readonly string[]): ParsedArgv {
@@ -638,11 +1169,23 @@ function parseMaxOutputBytes(value: string): number {
 
 function commandFor(parsed: ParsedCommand): string[] {
 	if (parsed.command === "doctor") return ["fallow-runner", "doctor"];
-	const command = ["fallow", parsed.command, "--format", "json", "--quiet"];
-	if (parsed.command === "audit" && parsed.baseRef) {
-		command.push("--base-ref", parsed.baseRef);
+	return ["fallow", ...fallowArgsFor(parsed)];
+}
+
+function fallowArgsFor(parsed: ParsedCommand): string[] {
+	if (parsed.command === "fix-preview") {
+		return ["fix", "--dry-run", "--format", "json", "--quiet"];
 	}
-	return command;
+	if (parsed.command === "fix-apply") {
+		return ["fix", "--yes", "--format", "json", "--quiet"];
+	}
+
+	const args = [parsed.command] as string[];
+	if (parsed.command === "audit" && parsed.baseRef) {
+		args.push("--base", parsed.baseRef);
+	}
+	args.push("--format", "json", "--quiet");
+	return args;
 }
 
 function renderHelp(command?: FallowRunnerCommand): string {
