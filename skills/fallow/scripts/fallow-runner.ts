@@ -15,6 +15,7 @@ import {
 	DEFAULT_MAX_OUTPUT_BYTES,
 	FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY,
 	FALLOW_REPAIR_ACTION_BY_KEY,
+	FALLOW_RESOLVER_ACTION_BY_KEY,
 	FALLOW_RUNNER_COMMANDS,
 	FALLOW_RUNNER_CONTRACT_ID,
 	FALLOW_RUNNER_SCHEMA_VERSION,
@@ -22,6 +23,7 @@ import {
 	type FallowFailureCategory,
 	type FallowOutputBudgetStatus,
 	type FallowRepairAction,
+	type FallowResolverAction,
 	type FallowRunnerCommand,
 	type FallowStatus,
 	type FallowStderrCategory,
@@ -136,6 +138,19 @@ type FallowRunnerSummary = {
 	readiness?: ReadinessSummary;
 };
 
+// A tiny per-finding continuation that names a runnable evidence-gathering
+// target for one finding. Distinct from blocked-run repair_hints: resolver
+// actions belong to usable finding evidence, not failure recovery. Payload
+// stays minimal (R6/R9): action identity, runnable target, required
+// coordinates, and reason. Exact contracts live in command help and discovery,
+// not in this payload (R10).
+type FallowResolverActionRef = {
+	action: FallowResolverAction;
+	target: FallowRunnerCommand;
+	coordinates: { file: string; export: string };
+	reason: string;
+};
+
 type FallowIssueReference = {
 	id?: string;
 	path?: string;
@@ -152,6 +167,8 @@ type FallowIssueReference = {
 	// audit `--gate new-only`: true when the changeset introduced the finding,
 	// false when inherited from the base. Absent outside audit.
 	introduced?: boolean;
+	// Advertised only for introduced traceable `remove-export` findings (U2).
+	resolver_actions?: FallowResolverActionRef[];
 };
 
 type FallowRunnerEnvelope = {
@@ -920,7 +937,10 @@ function summarizeFallowEvidence(
 	const issueItems = collectIssueItems(output);
 	const issueReferences = issueItems
 		.map(issueReferenceFrom)
-		.filter(isIssueReference);
+		.filter(isIssueReference)
+		.map((reference) =>
+			mode === "audit" ? withResolverActions(reference) : reference,
+		);
 	const totalFindings = totalFindingsFor(mode, output, issueItems);
 	const summary: FallowRunnerSummary = {
 		total_findings: totalFindings,
@@ -1421,6 +1441,30 @@ function actionFrom(value: Record<string, unknown>): string | undefined {
 		if (actionId) return actionId;
 	}
 	return undefined;
+}
+
+// Attach a Finding resolver action only to introduced traceable findings: an
+// introduced `remove-export` finding that carries both coordinates (R1-R3,
+// R5). Inherited findings, coordinate-missing findings, and broad needs_trace
+// signals get no action (R4, R6). The action points at the discoverable `why`
+// target; exact command syntax stays in help and discovery, not this payload.
+function withResolverActions(
+	reference: FallowIssueReference,
+): FallowIssueReference {
+	if (reference.introduced !== true) return reference;
+	if (reference.action !== "remove-export") return reference;
+	const file = reference.path;
+	const symbol = reference.symbol;
+	if (!file || !symbol) return reference;
+
+	const resolverAction: FallowResolverActionRef = {
+		action: FALLOW_RESOLVER_ACTION_BY_KEY.traceExportReachability,
+		target: "why",
+		coordinates: { file, export: symbol },
+		reason:
+			"Introduced remove-export finding; gather reachability evidence before removal.",
+	};
+	return { ...reference, resolver_actions: [resolverAction] };
 }
 
 function isAutoFixable(value: unknown): boolean {

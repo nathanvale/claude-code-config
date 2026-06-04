@@ -1952,3 +1952,212 @@ describe("U3 parser, help, and discovery alignment", () => {
 		});
 	});
 });
+
+type ResolverActionRef = {
+	action: string;
+	target: string;
+	coordinates: { file: string; export: string };
+	reason: string;
+};
+
+type IssueRefWithResolver = {
+	path?: string;
+	introduced?: boolean;
+	resolver_actions?: ResolverActionRef[];
+};
+
+function issueReferencesOf(
+	envelope: Record<string, unknown>,
+): IssueRefWithResolver[] {
+	return envelope.issue_references as IssueRefWithResolver[];
+}
+
+describe("U2 resolver action projection", () => {
+	// AE1: only the introduced traceable remove-export finding advertises a
+	// Finding resolver action; the inherited one does not.
+	test("introduced traceable remove-export advertises a resolver action", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "audit",
+			verdict: "fail",
+			summary: { dead_code_issues: 2 },
+			attribution: {
+				gate: "new-only",
+				dead_code_introduced: 1,
+				dead_code_inherited: 1,
+			},
+			dead_code: {
+				unused_exports: [
+					{
+						path: "src/new.ts",
+						export_name: "freshThing",
+						introduced: true,
+						actions: [{ kind: "remove-export", auto_fixable: true }],
+					},
+					{
+						path: "src/old.ts",
+						export_name: "staleThing",
+						introduced: false,
+						actions: [{ kind: "remove-export", auto_fixable: true }],
+					},
+				],
+			},
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["audit"], runtime);
+		const references = issueReferencesOf(expectEnvelope(result));
+
+		const introduced = references.find((ref) => ref.path === "src/new.ts");
+		const inherited = references.find((ref) => ref.path === "src/old.ts");
+
+		expect(introduced?.resolver_actions).toEqual([
+			{
+				action: "trace-export-reachability",
+				target: "why",
+				coordinates: { file: "src/new.ts", export: "freshThing" },
+				reason: expect.any(String),
+			},
+		]);
+		expect(inherited?.resolver_actions).toBeUndefined();
+	});
+
+	// AE2: an introduced remove-export finding missing a coordinate gets no
+	// resolver action.
+	test("introduced remove-export missing coordinates advertises no action", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "audit",
+			verdict: "fail",
+			summary: { dead_code_issues: 2 },
+			attribution: { gate: "new-only", dead_code_introduced: 2 },
+			dead_code: {
+				unused_exports: [
+					{
+						// No export_name -> missing the export coordinate.
+						path: "src/missing-export.ts",
+						introduced: true,
+						actions: [{ kind: "remove-export" }],
+					},
+					{
+						// No path -> missing the file coordinate.
+						export_name: "noFile",
+						introduced: true,
+						actions: [{ kind: "remove-export" }],
+					},
+				],
+			},
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["audit"], runtime);
+		const references = issueReferencesOf(expectEnvelope(result));
+
+		for (const reference of references) {
+			expect(reference.resolver_actions).toBeUndefined();
+		}
+	});
+
+	// AE3: a broad needs_trace signal without the v1 traceable finding shape
+	// does not advertise a runnable resolver action.
+	test("needs_trace without traceable shape advertises no resolver action", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "audit",
+			verdict: "fail",
+			summary: { dead_code_issues: 1 },
+			attribution: { gate: "new-only", dead_code_introduced: 1 },
+			dead_code: {
+				unused_exports: [
+					{
+						path: "src/complex.ts",
+						export_name: "tangled",
+						introduced: true,
+						needs_trace: true,
+						// Not a remove-export action.
+						actions: [{ kind: "extract-shared" }],
+					},
+				],
+			},
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["audit"], runtime);
+		const envelope = expectEnvelope(result);
+		const references = issueReferencesOf(envelope);
+
+		for (const reference of references) {
+			expect(reference.resolver_actions).toBeUndefined();
+		}
+		// needs_trace remains a broad summary signal.
+		expect((envelope.summary as { needs_trace: number }).needs_trace).toBe(1);
+	});
+
+	// Edge: non-audit dead-code findings never get resolver actions in v1.
+	test("non-audit dead-code findings advertise no resolver actions", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			findings: [
+				{
+					path: "src/button.ts",
+					export_name: "OldButton",
+					introduced: true,
+					action: "remove-export",
+				},
+			],
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["dead-code"], runtime);
+		const references = issueReferencesOf(expectEnvelope(result));
+
+		for (const reference of references) {
+			expect(reference.resolver_actions).toBeUndefined();
+		}
+	});
+
+	// Integration: zero-introduced audit still says continue and does not push
+	// toward JSON issue triage; resolver projection does not change that gate.
+	test("zero-introduced audit still signals continue", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "audit",
+			verdict: "fail",
+			summary: { dead_code_issues: 3 },
+			attribution: {
+				gate: "new-only",
+				dead_code_introduced: 0,
+				dead_code_inherited: 3,
+			},
+			dead_code: {
+				unused_exports: [
+					{
+						path: "src/old.ts",
+						export_name: "stale",
+						introduced: false,
+						actions: [{ kind: "remove-export" }],
+					},
+				],
+			},
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const plain = await runForTest(["audit", "--plain"], runtime);
+		expect(plain.stdout).toContain("next_action=continue introduced=0");
+
+		const json = await runForTest(["audit"], runtime);
+		for (const reference of issueReferencesOf(expectEnvelope(json))) {
+			expect(reference.resolver_actions).toBeUndefined();
+		}
+	});
+});
