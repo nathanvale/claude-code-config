@@ -68,6 +68,10 @@ _Avoid_: full exit taxonomy, package exit policy, prose-only exit convention
 The runtime-backed promise that an agent-native CLI exposes a parseable output path and keeps primary data separate from diagnostics. Exact payload content, mode names beyond the baseline, summaries, pagination, and field selection remain package-owned design choices.
 _Avoid_: JSON everywhere, prose-only output, mixed stdout diagnostics, package result schema
 
+**Runner Benchmark Harness**:
+A reusable local comparison surface for runner strategies and token-optimization variants. It proves adoption decisions and supports later A/B tests over stable fixtures without turning one benchmark result into permanent policy.
+_Avoid_: one-time benchmark, test-runner benchmark only, adoption gate only, token experiment script
+
 **Package-owned result vocabulary**:
 Stable literal values a package emits or relies on inside its own command result surface, such as `data.*` status strings, source labels, diagnostic codes, failure domains, package runtime action ids, and exit codes beyond the facade baseline. Keep vocabulary in the package's contract-owned module cluster; facade docs own envelope shape, baseline exit keys, and result-contract field shape.
 _Avoid_: facade enum registry, generic result vocabulary, prose-owned literal list
