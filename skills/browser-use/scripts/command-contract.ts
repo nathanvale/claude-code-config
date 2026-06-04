@@ -1077,6 +1077,26 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"target_discovery_transport_timeout",
 	"target_discovery_transport_failed",
 	"target_discovery_command_override_invalid",
+	// Browser Target Selection (U6). `targets select` resolves a route-bound
+	// discovery envelope to one candidate and writes run-scoped state; `targets
+	// status` projects it. Each distinct cause maps to its own code + continuation
+	// so selection and state failures never resolve silently to success or the
+	// wrong recovery (handoff envelope-mapping class).
+	//
+	// Selection-time (targets select):
+	"target_selection_envelope_invalid",
+	"target_selection_recovery_rejected",
+	"target_selection_candidate_invalid",
+	"target_selection_hint_ambiguous",
+	"target_selection_hint_no_match",
+	"target_selection_state_path_missing",
+	"target_selection_state_write_failed",
+	// State-read-time (targets status, and operation-time resolution U7 reuses):
+	"target_state_missing",
+	"target_state_unreadable",
+	"target_state_stale",
+	"target_state_mismatch",
+	"target_state_cross_run",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -1141,6 +1161,70 @@ export const browserUseTargetDiscoverySuccessActions = [
 		id: "prepare_with_target_discovery",
 		summary:
 			"Pass recovery target discovery output to browser-adapter-router prepare --target-discovery.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+// Browser Target Selection runtime action ids (plan U6). The stable
+// continuation.next_action_id vocabulary `targets select` and `targets status`
+// emit. refine_target_hint / choose_target_candidate are the ambiguity
+// continuations the plan names (R, AE6); refresh_target_selection is the stale-
+// state continuation (AE in U7); rerun_route_bound_target_discovery is reused
+// from discovery for stale/cross-run target evidence. change_selection_input
+// covers usage and recoverable input correction.
+export const browserUseTargetSelectionFailureActions = [
+	{
+		id: "refine_target_hint",
+		summary:
+			"Add or narrow a Browser Target Hint (origin, URL substring, title substring) so it matches exactly one candidate, then re-run targets select.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "choose_target_candidate",
+		summary:
+			"Pick one candidate ordinal from the route-bound targets list envelope, then re-run targets select.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_target_selection",
+		summary:
+			"Re-run targets select to refresh the run-scoped selected-target state; the current state is stale or no longer valid.",
+		sideEffects: ["check"],
+	},
+	{
+		// Shared continuation id with browserUseTargetDiscoveryFailureActions; keep
+		// the summary identical so one next_action_id never documents two different
+		// recovery prose strings across the discovery and selection surfaces.
+		id: "rerun_route_bound_target_discovery",
+		summary:
+			"Supply a fresh Router route success envelope, then re-run route-bound targets list.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair_target_state",
+		summary:
+			"Repair or remove the run-scoped selected-target state file, then re-run targets select.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "change_selection_input",
+		summary:
+			"Correct targets select route, proof, candidate, hint, or state arguments.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseTargetSelectionSuccessActions = [
+	{
+		id: "operate_selected_browser_target",
+		summary:
+			"Run a Browser Operation (browser-use operate) against the run-scoped selected Browser Target.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_selected_target_state",
+		summary:
+			"Inspect the run-scoped selected Browser Target state with browser-use targets status.",
 		sideEffects: ["check"],
 	},
 ] as const;
@@ -1299,6 +1383,34 @@ const browserUseEnvVars = [
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
+// Run-scoped selected-target state path env vars (plan U6). `--state` wins; when
+// absent the state path is derived deterministically from this base directory
+// and the run id (BROWSER_USE_TARGET_STATE_DIR + run id). Shared by select
+// (writes) and status (reads); a state file is never placed implicitly with
+// neither a flag nor a base dir supplied.
+const browserUseStateEnvVars = [
+	...browserUseEnvVars,
+	{
+		name: "BROWSER_USE_TARGET_STATE_DIR",
+		description:
+			"Base directory for run-scoped selected-target state when --state is omitted. The state path is derived deterministically from this directory and the run id.",
+	},
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+// `targets select` also accepts the route-bound `targets list` success envelope
+// to resolve against: piped on stdin, or inline via this env var (env overridden
+// by stdin when both are present, mirroring the Router envelope contract). The
+// envelope is the candidate source; --route/--adapter-proof, when supplied, are
+// cross-checked against its binding and must agree.
+const browserUseSelectEnvVars = [
+	...browserUseStateEnvVars,
+	{
+		name: "BROWSER_USE_TARGETS_ENVELOPE_JSON",
+		description:
+			"Inline route-bound targets list success envelope JSON to select against; overridden by piped stdin.",
+	},
+] as const satisfies BrowserUseCommandContract["envVars"];
+
 const browserUseExitCodes = {
 	"0": "Browser Targets listed or Browser Operation completed.",
 	"1": "Runtime dependency failed.",
@@ -1347,8 +1459,9 @@ export const browserUseContracts = defineCommandFacadeContract(
 		"targets-select": {
 			script: "scripts/browser-use.ts",
 			summary:
-				"Select one route-bound Browser Target into run-scoped state using hints or a candidate ordinal.",
+				"Select one route-bound Browser Target into run-scoped state using hints or a candidate ordinal. Pipe the route-bound targets list success envelope on stdin.",
 			usage: [
+				"targets list --mode route-bound --route <path> --adapter-proof <path> --json | targets select --candidate <ordinal> [--state <path>] [--json|--plain]",
 				"targets select [--state <path>] [--origin <origin>] [--url-contains <s>] [--title-contains <s>] [--candidate <ordinal>] [--route <path>] [--adapter-proof <path>] [--dry-run] [--json|--plain]",
 			],
 			json: true,
@@ -1361,7 +1474,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseEnvVars,
+			envVars: browserUseSelectEnvVars,
 			resultContract: browserUseTargetsResultContract,
 			flags: browserUseTargetsSelectFlags,
 			exitCodes: browserUseExitCodes,
@@ -1378,7 +1491,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			executionModes: ["check"],
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseEnvVars,
+			envVars: browserUseStateEnvVars,
 			resultContract: browserUseTargetsResultContract,
 			flags: browserUseTargetsStatusFlags,
 			exitCodes: browserUseExitCodes,
