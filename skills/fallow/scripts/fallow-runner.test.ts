@@ -1,0 +1,525 @@
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+	CLI_DIAGNOSTIC_FLAGS,
+	parseCommandFacadeContract,
+	projectCommandDiscoveryTree,
+} from "@side-quest/cli-command-facade";
+import {
+	assertCommandHelpFlagSurface,
+	runCommandSurfaceCases,
+} from "@side-quest/cli-command-facade/testing";
+import {
+	FALLOW_FAILURE_CATEGORIES,
+	FALLOW_OUTPUT_BUDGET_STATUSES,
+	FALLOW_REPAIR_ACTIONS,
+	FALLOW_RUNNER_COMMANDS,
+	FALLOW_RUNNER_CONTRACT_ID,
+	FALLOW_RUNNER_SCHEMA_VERSION,
+	FALLOW_STATUS_VALUES,
+	FALLOW_STDERR_CATEGORIES,
+	FALLOW_WRITE_EFFECTS,
+	type FallowRunnerCommand,
+	assertFallowRepairAction,
+	fallowRunnerContracts,
+} from "./command-contract";
+import {
+	createDefaultFallowRuntime,
+	type FallowRunnerRuntime,
+	runForTest,
+} from "./fallow-runner";
+
+const ALL_COMMANDS: FallowRunnerCommand[] = [...FALLOW_RUNNER_COMMANDS];
+const cleanupPaths: string[] = [];
+type TestRunResult = { exitCode: number; stdout: string; stderr: string };
+
+afterEach(async () => {
+	await Promise.all(
+		cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+	);
+});
+
+function discoveryTree() {
+	return projectCommandDiscoveryTree(
+		Object.entries(fallowRunnerContracts) as Array<
+			[
+				FallowRunnerCommand,
+				(typeof fallowRunnerContracts)[FallowRunnerCommand],
+			]
+		>,
+	);
+}
+
+async function makeRepo(
+	options: {
+		packageJson?: boolean;
+		localFallow?: boolean;
+		configFiles?: Record<string, string>;
+	} = {},
+): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), "fallow-runner-test-"));
+	cleanupPaths.push(dir);
+	if (options.packageJson ?? true) {
+		await writeFile(join(dir, "package.json"), "{}\n", "utf-8");
+	}
+	if (options.localFallow) {
+		const binDir = join(dir, "node_modules", ".bin");
+		await mkdir(binDir, { recursive: true });
+		const fallowPath = join(binDir, "fallow");
+		await writeFile(fallowPath, "#!/usr/bin/env sh\nexit 0\n", "utf-8");
+		await chmod(fallowPath, 0o755);
+	}
+	for (const [relative, content] of Object.entries(options.configFiles ?? {})) {
+		await writeFile(join(dir, relative), content, "utf-8");
+	}
+	return dir;
+}
+
+async function makeJsRepo(): Promise<string> {
+	return makeRepo();
+}
+
+function makeRuntime(
+	overrides: Partial<FallowRunnerRuntime> = {},
+): FallowRunnerRuntime {
+	return createDefaultFallowRuntime({
+		cwd: "/tmp/fallow-test",
+		now: () => Date.parse("2026-06-04T00:00:00.000Z"),
+		randomId: () => "test",
+		lookupExecutable: async () => undefined,
+		runCommand: async () => ({
+			exitCode: 127,
+			stdout: "",
+			stderr: "not found",
+		}),
+		...overrides,
+	});
+}
+
+function parseJson(stdout: string): Record<string, unknown> {
+	return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+function readyRuntime(
+	root: string,
+	overrides: Partial<FallowRunnerRuntime> & {
+		pathFallow?: string;
+		gitReady?: boolean;
+	} = {},
+): FallowRunnerRuntime {
+	const { pathFallow, gitReady = true, ...runtimeOverrides } = overrides;
+	return makeRuntime({
+		cwd: root,
+		lookupExecutable: async () => pathFallow,
+		runCommand: async (command) => {
+			if (command !== "git") {
+				return { exitCode: 1, stdout: "", stderr: "unexpected command" };
+			}
+			return gitReady
+				? { exitCode: 0, stdout: "true\n", stderr: "" }
+				: { exitCode: 127, stdout: "", stderr: "git not found" };
+		},
+		...runtimeOverrides,
+	});
+}
+
+function readinessOf(envelope: Record<string, unknown>) {
+	const summary = envelope.summary as { readiness?: unknown };
+	expect(summary.readiness).toBeDefined();
+	return summary.readiness as {
+		root: { path: string; status: string };
+		repo_shape: { status: string; detected: string[] };
+		fallow_binary: { status: string; source?: string; path?: string };
+		config: { present: boolean; paths: string[] };
+		git: { status: string; message?: string };
+	};
+}
+
+function expectEnvelope(
+	result: { exitCode: number; stdout: string; stderr: string },
+): Record<string, unknown> {
+	expect(result.stdout).not.toBe("");
+	expect(result.stderr).toBe("");
+	return parseJson(result.stdout);
+}
+
+describe("U2 command contract", () => {
+	test("contract parses and exposes every accepted v1 subcommand", () => {
+		const result = parseCommandFacadeContract(fallowRunnerContracts, {
+			path: "skills/fallow/scripts/command-contract.ts",
+		});
+
+		expect(result.ok).toBe(true);
+		expect(Object.keys(fallowRunnerContracts).sort()).toEqual(
+			[...ALL_COMMANDS].sort(),
+		);
+	});
+
+	test("facade dependency resolves from the script-local test surface", () => {
+		expect(typeof parseCommandFacadeContract).toBe("function");
+		expect(typeof projectCommandDiscoveryTree).toBe("function");
+	});
+
+	test("no command declares facade-reserved diagnostic flags", () => {
+		for (const command of ALL_COMMANDS) {
+			const flags = Object.keys(fallowRunnerContracts[command].flags ?? {});
+			for (const reserved of CLI_DIAGNOSTIC_FLAGS) {
+				expect(flags).not.toContain(reserved);
+			}
+		}
+	});
+
+	test("command discovery projects result contract identity and schema version", () => {
+		const tree = discoveryTree();
+
+		for (const command of ALL_COMMANDS) {
+			expect(tree.commands[command]?.result_contract).toMatchObject({
+				id: FALLOW_RUNNER_CONTRACT_ID,
+				schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
+			});
+		}
+	});
+
+	test("audit owns base-ref and non-audit commands do not", () => {
+		expect(Object.keys(fallowRunnerContracts.audit.flags)).toContain(
+			"--base-ref",
+		);
+
+		for (const command of ALL_COMMANDS.filter((item) => item !== "audit")) {
+			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
+				"--base-ref",
+			);
+		}
+	});
+
+	test("contract-owned literals stay small and stable", () => {
+		expect(FALLOW_STATUS_VALUES).toEqual(["ok", "issues", "blocked"]);
+		expect(FALLOW_WRITE_EFFECTS).toEqual(["none", "previewed", "applied"]);
+		expect(FALLOW_FAILURE_CATEGORIES).toEqual([
+			"none",
+			"setup",
+			"input",
+			"fallow",
+			"parse",
+			"budget",
+			"safety",
+		]);
+		expect(FALLOW_STDERR_CATEGORIES).toEqual([
+			"empty",
+			"progress",
+			"warning",
+			"error",
+		]);
+		expect(FALLOW_OUTPUT_BUDGET_STATUSES).toEqual([
+			"within-budget",
+			"raw-omitted",
+			"summary-impossible",
+		]);
+	});
+
+	test("repair action vocabulary rejects unknown actions", () => {
+		expect(FALLOW_REPAIR_ACTIONS).toEqual([
+			"run-doctor",
+			"setup-fallow",
+			"fix-input",
+			"inspect-config",
+			"reduce-output",
+			"retry",
+		]);
+
+		expect(() => assertFallowRepairAction("run-doctor")).not.toThrow();
+		expect(() => assertFallowRepairAction("install-fallow")).toThrow(
+			/Unknown Fallow repair action/,
+		);
+	});
+});
+
+describe("U4 discovery and doctor runtime", () => {
+	test("doctor uses cwd by default and explicit root when supplied", async () => {
+		const defaultRoot = await makeRepo({ localFallow: true });
+		const explicitRoot = await makeRepo({ localFallow: true });
+
+		const defaultResult = await runForTest(
+			["doctor"],
+			readyRuntime(defaultRoot),
+		);
+		const explicitResult = await runForTest(
+			["doctor", "--root", explicitRoot],
+			readyRuntime(defaultRoot),
+		);
+
+		expect(defaultResult.exitCode).toBe(0);
+		expect(expectEnvelope(defaultResult).cwd).toBe(defaultRoot);
+		expect(explicitResult.exitCode).toBe(0);
+		expect(expectEnvelope(explicitResult).cwd).toBe(explicitRoot);
+	});
+
+	test("unsupported repo shape blocks doctor with setup evidence", async () => {
+		const root = await makeRepo({ packageJson: false, localFallow: true });
+		const result = await runForTest(["doctor"], readyRuntime(root));
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("setup");
+		expect(readinessOf(envelope).repo_shape.status).toBe("unsupported");
+	});
+
+	test("binary discovery prefers local Fallow before PATH", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const result = await runForTest(
+			["doctor"],
+			readyRuntime(root, { pathFallow: "/usr/local/bin/fallow" }),
+		);
+
+		expect(result.exitCode).toBe(0);
+		const binary = readinessOf(expectEnvelope(result)).fallow_binary;
+		expect(binary.status).toBe("ok");
+		expect(binary.source).toBe("local");
+		expect(binary.path).toBe(join(root, "node_modules", ".bin", "fallow"));
+	});
+
+	test("binary discovery falls back to PATH and reports missing setup", async () => {
+		const pathRoot = await makeRepo();
+		const pathResult = await runForTest(
+			["doctor"],
+			readyRuntime(pathRoot, { pathFallow: "/usr/local/bin/fallow" }),
+		);
+
+		expect(pathResult.exitCode).toBe(0);
+		const pathBinary = readinessOf(expectEnvelope(pathResult)).fallow_binary;
+		expect(pathBinary.status).toBe("ok");
+		expect(pathBinary.source).toBe("path");
+		expect(pathBinary.path).toBe("/usr/local/bin/fallow");
+
+		const missingRoot = await makeRepo();
+		const missingResult = await runForTest(
+			["doctor"],
+			readyRuntime(missingRoot),
+		);
+
+		expect(missingResult.exitCode).toBe(1);
+		const missingEnvelope = expectEnvelope(missingResult);
+		expect(missingEnvelope.status).toBe("blocked");
+		expect(readinessOf(missingEnvelope).fallow_binary.status).toBe("missing");
+		expect(JSON.stringify(missingEnvelope)).toContain("setup-fallow");
+	});
+
+	test("doctor reports ok, issues, and blocked readiness states", async () => {
+		const okRoot = await makeRepo({ localFallow: true });
+		const ok = await runForTest(["doctor"], readyRuntime(okRoot));
+		expect(ok.exitCode).toBe(0);
+		expect(expectEnvelope(ok).status).toBe("ok");
+
+		const issuesRoot = await makeRepo({ localFallow: true });
+		const issues = await runForTest(
+			["doctor"],
+			readyRuntime(issuesRoot, { gitReady: false }),
+		);
+		expect(issues.exitCode).toBe(0);
+		const issuesEnvelope = expectEnvelope(issues);
+		expect(issuesEnvelope.status).toBe("issues");
+		expect(readinessOf(issuesEnvelope).git.status).toBe("blocked");
+
+		const blockedRoot = await makeRepo();
+		const blocked = await runForTest(["doctor"], readyRuntime(blockedRoot));
+		expect(blocked.exitCode).toBe(1);
+		expect(expectEnvelope(blocked).status).toBe("blocked");
+	});
+
+	test("doctor reports config presence and paths without parsing content", async () => {
+		const root = await makeRepo({
+			localFallow: true,
+			configFiles: {
+				".fallowrc": "not: parsed\n",
+				"fallow.toml": "also not parsed\n",
+			},
+		});
+		const result = await runForTest(["doctor"], readyRuntime(root));
+
+		expect(result.exitCode).toBe(0);
+		const config = readinessOf(expectEnvelope(result)).config;
+		expect(config.present).toBe(true);
+		expect(config.paths.sort()).toEqual(
+			[join(root, ".fallowrc"), join(root, "fallow.toml")].sort(),
+		);
+		expect(result.stdout).not.toContain("not: parsed");
+		expect(result.stdout).not.toContain("also not parsed");
+	});
+
+	test("audit treats missing git as setup-blocking readiness", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const result = await runForTest(
+			["audit"],
+			readyRuntime(root, { gitReady: false }),
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.mode).toBe("audit");
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("setup");
+		expect(readinessOf(envelope).git.status).toBe("blocked");
+		expect(JSON.stringify(envelope)).toContain("fix-input");
+	});
+});
+
+describe("U3 parser, help, and discovery alignment", () => {
+	test("root help lists accepted subcommands and no unsupported controls", async () => {
+		const result = await runForTest(["--help"], makeRuntime());
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		for (const command of ALL_COMMANDS) {
+			expect(result.stdout).toContain(command);
+		}
+		for (const unsupported of [
+			"--cwd",
+			"--mode",
+			"--watch",
+			"watch",
+			"baseline",
+			"generate-ci",
+		]) {
+			expect(result.stdout).not.toContain(unsupported);
+		}
+	});
+
+	test("subcommand help advertises only command-owned flags", async () => {
+		for (const command of ALL_COMMANDS) {
+			const result = await runForTest([command, "--help"], makeRuntime());
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+			assertCommandHelpFlagSurface({
+				command,
+				contract: fallowRunnerContracts[command],
+				help: result.stdout,
+				absentFlags: [
+					"--cwd",
+					"--mode",
+					"--watch",
+					"--baseline",
+					"--generate-ci",
+					...(command === "audit" ? [] : ["--base-ref"]),
+				],
+			});
+		}
+	});
+
+	test("help and version do not invoke Fallow discovery or execution", async () => {
+		let lookupCount = 0;
+		let runCount = 0;
+		const runtime = makeRuntime({
+			lookupExecutable: async () => {
+				lookupCount += 1;
+				return undefined;
+			},
+			runCommand: async () => {
+				runCount += 1;
+				return { exitCode: 0, stdout: "", stderr: "" };
+			},
+		});
+
+		for (const argv of [
+			["-h"],
+			["doctor", "--help"],
+			["--version"],
+		] as const) {
+			const result = await runForTest(argv, runtime);
+			expect(result.exitCode).toBe(0);
+		}
+		expect(lookupCount).toBe(0);
+		expect(runCount).toBe(0);
+	});
+
+	test("version prints plain text", async () => {
+		const result = await runForTest(["--version"], makeRuntime());
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toBe("fallow-runner 0.1.0\n");
+		expect(result.stderr).toBe("");
+	});
+
+	test("every accepted subcommand reaches runtime checks", async () => {
+		const root = await makeJsRepo();
+
+		await runCommandSurfaceCases<TestRunResult>({
+			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
+			cases: ALL_COMMANDS.map((command) => ({
+				label: `${command} accepted`,
+				argv: [command],
+				assert: (result) => {
+					expect(result.exitCode).not.toBe(2);
+					const envelope = expectEnvelope(result);
+					expect(envelope.mode).toBe(command);
+					expect(envelope.failure_category).toBe("setup");
+				},
+			})),
+		});
+	});
+
+	test("audit accepts base-ref and non-audit commands reject it", async () => {
+		const root = await makeJsRepo();
+		const audit = await runForTest(
+			["audit", "--root", root, "--base-ref", "origin/main"],
+			makeRuntime(),
+		);
+
+		expect(audit.exitCode).not.toBe(2);
+		expect(expectEnvelope(audit).mode).toBe("audit");
+
+		for (const command of ALL_COMMANDS.filter((item) => item !== "audit")) {
+			const result = await runForTest(
+				[command, "--root", root, "--base-ref", "origin/main"],
+				makeRuntime(),
+			);
+			expect(result.exitCode).toBe(2);
+			const envelope = expectEnvelope(result);
+			expect(envelope.failure_category).toBe("input");
+			expect(JSON.stringify(envelope)).toContain("unknown option: --base-ref");
+		}
+	});
+
+	test("root accepts valid paths and rejects invalid paths", async () => {
+		const root = await makeJsRepo();
+		const valid = await runForTest(["doctor", "--root", root], makeRuntime());
+		expect(valid.exitCode).not.toBe(2);
+		expect(expectEnvelope(valid).cwd).toBe(root);
+
+		const invalid = await runForTest(
+			["doctor", "--root", join(root, "missing")],
+			makeRuntime(),
+		);
+		expect(invalid.exitCode).toBe(1);
+		const envelope = expectEnvelope(invalid);
+		expect(envelope.failure_category).toBe("input");
+		expect(JSON.stringify(envelope)).toContain("fix-input");
+	});
+
+	test("unknown subcommands, unknown flags, and excluded controls fail usage", async () => {
+		const root = await makeJsRepo();
+
+		await runCommandSurfaceCases({
+			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
+			cases: [
+				{ label: "unknown subcommand", argv: ["watch"] },
+				{ label: "unknown flag", argv: ["audit", "--unknown"] },
+				{ label: "cwd flag", argv: ["audit", "--cwd", root] },
+				{ label: "mode flag", argv: ["audit", "--mode", "check"] },
+				{ label: "watch flag", argv: ["audit", "--watch"] },
+				{ label: "baseline flag", argv: ["audit", "--baseline"] },
+				{ label: "CI generation flag", argv: ["audit", "--generate-ci"] },
+			].map((commandCase) => ({
+				...commandCase,
+				assert: (result: { exitCode: number; stdout: string; stderr: string }) => {
+					expect(result.exitCode).toBe(2);
+					const envelope = expectEnvelope(result);
+					expect(envelope.failure_category).toBe("input");
+				},
+			})),
+		});
+	});
+});
