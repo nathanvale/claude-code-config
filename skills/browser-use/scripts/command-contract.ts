@@ -1476,6 +1476,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUseSelectEnvVars,
 			resultContract: browserUseTargetsResultContract,
+			actionAffordances: {
+				success: browserUseTargetSelectionSuccessActions,
+				failure: browserUseTargetSelectionFailureActions,
+			},
 			flags: browserUseTargetsSelectFlags,
 			exitCodes: browserUseExitCodes,
 		},
@@ -1493,6 +1497,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUseStateEnvVars,
 			resultContract: browserUseTargetsResultContract,
+			actionAffordances: {
+				success: browserUseTargetSelectionSuccessActions,
+				failure: browserUseTargetSelectionFailureActions,
+			},
 			flags: browserUseTargetsStatusFlags,
 			exitCodes: browserUseExitCodes,
 		},

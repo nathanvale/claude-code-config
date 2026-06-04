@@ -132,11 +132,24 @@ export function createDefaultBrowserUseRuntime(
 // #5); Buffer.concat then a single decode keeps codepoints intact.
 async function readAllStdin(): Promise<string> {
 	if (process.stdin.isTTY) return "";
-	const chunks: Buffer[] = [];
+	const chunks: Uint8Array[] = [];
 	for await (const chunk of Bun.stdin.stream()) {
-		chunks.push(Buffer.from(chunk));
+		chunks.push(chunk);
 	}
-	return Buffer.concat(chunks).toString("utf-8");
+	return decodeStdinChunks(chunks);
+}
+
+// Concatenate raw stdin byte chunks and decode ONCE as UTF-8. Decoding each
+// chunk independently corrupts a multi-byte codepoint that straddles a chunk
+// boundary; joining the bytes first then decoding keeps codepoints intact
+// (finding #5). Exported so the boundary-decode behavior is unit-testable
+// without a live stdin pipe.
+export function decodeStdinChunks(
+	chunks: readonly Uint8Array[],
+): string {
+	return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
+		"utf-8",
+	);
 }
 
 // Atomic, owner-only state write. Write a temp sibling in the same directory
@@ -1776,6 +1789,22 @@ function parseSelectionEnvelope(raw: string): SelectionEnvelopeParse {
 	const candidates = parseEnvelopeCandidates(data.candidates);
 	if (!candidates) return invalid("candidates are missing or malformed");
 	if (candidates.length === 0) return invalid("candidate set is empty");
+	// Ordinals and candidate ids must be unique within the envelope: `--candidate
+	// <ordinal>` and hint resolution both assume one candidate per handle, so a
+	// duplicate would let resolveSelectionCandidate silently pick the first match.
+	// Reject the malformed envelope rather than resolve ambiguously.
+	const seenOrdinals = new Set<number>();
+	const seenIds = new Set<string>();
+	for (const candidate of candidates) {
+		if (seenOrdinals.has(candidate.candidate_ordinal)) {
+			return invalid("duplicate candidate_ordinal in envelope");
+		}
+		if (seenIds.has(candidate.candidate_id)) {
+			return invalid("duplicate candidate_id in envelope");
+		}
+		seenOrdinals.add(candidate.candidate_ordinal);
+		seenIds.add(candidate.candidate_id);
+	}
 	// candidate_count, when present, must match the candidate array length.
 	if (
 		typeof data.candidate_count === "number" &&
@@ -1885,9 +1914,16 @@ async function crossCheckSelectionEvidence(
 			};
 		}
 		const route = routeParse.facts;
+		// Compare the FULL route binding, not a subset. readRouteFacts already
+		// parsed warm_chrome_run_id and verified_endpoint_identity; omitting them
+		// would let a route that agrees on adapter/proof/hash but disagrees on the
+		// warm-Chrome run or endpoint pass the cross-check and bind selected state
+		// to the wrong endpoint facts.
 		if (
 			route.selectedAdapter !== binding.selectedAdapter ||
 			route.adapterProofId !== binding.adapterProofId ||
+			route.warmChromeRunId !== binding.warmChromeRunId ||
+			route.verifiedEndpointIdentity !== binding.verifiedEndpointIdentity ||
 			route.routeEvidenceHash !== binding.routeEvidenceHash ||
 			route.runId !== binding.runId
 		) {
@@ -2158,16 +2194,37 @@ async function loadSelectedState(
 	let raw: string;
 	try {
 		raw = await runtime.readTextFile(path);
-	} catch {
+	} catch (error) {
+		// Distinguish "no state selected yet" (ENOENT) from "state exists but the
+		// file could not be read" (permission, EISDIR, other IO). The contract
+		// promises distinct target_state_missing vs target_state_unreadable
+		// outcomes; collapsing both into "missing" sends the wrong recovery.
+		const code =
+			error && typeof error === "object" && "code" in error
+				? String((error as { code?: unknown }).code)
+				: undefined;
+		if (code === "ENOENT") {
+			return {
+				ok: false,
+				failure: {
+					code: "target_state_missing",
+					message:
+						"No run-scoped selected-target state was found; select a Browser Target first.",
+					actionId: "refresh_target_selection",
+					exitCode: TARGET_SELECTION_EXIT_CODE,
+					recoverability: "change_input",
+				},
+			};
+		}
 		return {
 			ok: false,
 			failure: {
-				code: "target_state_missing",
+				code: "target_state_unreadable",
 				message:
-					"No run-scoped selected-target state was found; select a Browser Target first.",
-				actionId: "refresh_target_selection",
+					"The selected-target state file could not be read; repair or replace it before retrying.",
+				actionId: "repair_target_state",
 				exitCode: TARGET_SELECTION_EXIT_CODE,
-				recoverability: "change_input",
+				recoverability: "repair_state",
 			},
 		};
 	}

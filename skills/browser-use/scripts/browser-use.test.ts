@@ -19,6 +19,7 @@ import {
 	type BrowserUseRuntime,
 	type OperationResolutionInput,
 	createDefaultBrowserUseRuntime,
+	decodeStdinChunks,
 	resolveOperationTarget,
 	runBrowserUseMcporter,
 	runForTest,
@@ -1384,7 +1385,10 @@ function selectionRuntime(input: {
 		readStdin: async () => input.stdin ?? "",
 		readTextFile: async (path) => {
 			if (path in files) return files[path];
-			throw new Error(`ENOENT: ${path}`);
+			// Mirror node:fs: a missing file rejects with an Error carrying
+			// code "ENOENT", so loadSelectedState can map it to target_state_missing
+			// rather than the unreadable branch.
+			throw enoent(path);
 		},
 		writeTextFile: async (path, contents) => {
 			if (input.writeThrows) throw new Error("EACCES");
@@ -1393,6 +1397,13 @@ function selectionRuntime(input: {
 		},
 	});
 	return { runtime, writes };
+}
+
+// An ENOENT error shaped like node:fs rejections (carries a `code` field).
+function enoent(path: string): Error & { code: string } {
+	const error = new Error(`ENOENT: no such file or directory, open '${path}'`);
+	(error as Error & { code: string }).code = "ENOENT";
+	return error as Error & { code: string };
 }
 
 function parsedWrite(write: { contents: string }): Record<string, any> {
@@ -1446,6 +1457,45 @@ describe("U6 target selection — envelope acceptance", () => {
 	test("rejects an internally inconsistent binding (requested_adapter vs binding)", async () => {
 		const { runtime } = selectionRuntime({
 			stdin: targetsListEnvelope({ requested_adapter: "playwright-cdp" }),
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_selection_envelope_invalid",
+		});
+	});
+
+	test("rejects an envelope with duplicate candidate ordinals", async () => {
+		const { runtime, writes } = selectionRuntime({
+			stdin: targetsListEnvelope({
+				candidates: [
+					{ candidate_ordinal: 1, candidate_id: "cid-1", origin: "https://a.example" },
+					{ candidate_ordinal: 1, candidate_id: "cid-2", origin: "https://b.example" },
+				],
+			}),
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_selection_envelope_invalid",
+		});
+		expect(writes).toHaveLength(0);
+	});
+
+	test("rejects an envelope with duplicate candidate ids", async () => {
+		const { runtime } = selectionRuntime({
+			stdin: targetsListEnvelope({
+				candidates: [
+					{ candidate_ordinal: 1, candidate_id: "dup", origin: "https://a.example" },
+					{ candidate_ordinal: 2, candidate_id: "dup", origin: "https://b.example" },
+				],
+			}),
 		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
@@ -1856,7 +1906,10 @@ describe("U6 target selection — state write", () => {
 			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json", "--", "--run-id"],
 			runtime,
 		);
-		expect(result.exitCode).not.toBe(20);
+		// The trailing post-`--` token is an unknown positional, so the parser
+		// rejects with a usage error (exit 2) — scoped to parser behavior, not
+		// merely "some non-cross-run failure".
+		expect(result.exitCode).toBe(2);
 		const json = parseJson(result.stdout);
 		expect((json.error as Record<string, string> | undefined)?.code).not.toBe(
 			"target_state_cross_run",
@@ -1902,10 +1955,26 @@ describe("U6 target selection — state write", () => {
 		expect(writes[0].contents.endsWith("\n")).toBe(true);
 	});
 
-	test("a multi-byte UTF-8 title in the envelope round-trips intact into state (finding #5)", async () => {
-		// The envelope arrives as a decoded string here, but this guards the
-		// end-to-end parse->state path keeping non-ASCII display facts intact (the
-		// stdin reader decodes bytes once, never per chunk).
+	test("the real stdin decoder keeps a multi-byte codepoint split across chunk boundaries intact (finding #5)", () => {
+		// Exercise the concrete decoder, not a pre-decoded string. Encode a
+		// multi-byte payload, then split it MID-CODEPOINT across two chunks; a
+		// per-chunk decode would corrupt the boundary character, the byte-join
+		// decode must not.
+		const text = "ダッシュボード — café";
+		const bytes = new TextEncoder().encode(text);
+		// Find a split index that lands inside a multi-byte sequence (continuation
+		// byte 0x80-0xBF), guaranteeing the boundary straddles a codepoint.
+		const splitAt = Array.from(bytes).findIndex(
+			(b, i) => i > 0 && b >= 0x80 && b <= 0xbf,
+		);
+		expect(splitAt).toBeGreaterThan(0);
+		const chunks = [bytes.slice(0, splitAt), bytes.slice(splitAt)];
+		expect(decodeStdinChunks(chunks)).toBe(text);
+		// And a single chunk decodes identically.
+		expect(decodeStdinChunks([bytes])).toBe(text);
+	});
+
+	test("a multi-byte UTF-8 title round-trips end-to-end into state (finding #5)", async () => {
 		const title = "ダッシュボード — café";
 		const { runtime, writes } = selectionRuntime({
 			stdin: targetsListEnvelope({
@@ -1960,6 +2029,38 @@ describe("U6 target selection — state write", () => {
 		});
 		const result = await runForTest(
 			["targets", "select", "--candidate", "1", "--adapter-proof", "/p.json", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(writes).toHaveLength(1);
+	});
+
+	test("a supplied --route agreeing on adapter/proof/hash/run but NOT warm-chrome run is rejected", async () => {
+		// The default targetsListEnvelope binding uses warm_chrome_run_id "warm-1".
+		// This route agrees on every field the old cross-check compared, but differs
+		// on warm_chrome_run_id — which must now fail closed (full-binding compare).
+		const { runtime, writes } = selectionRuntime({
+			stdin: targetsListEnvelope(),
+			files: { "/route.json": routeSuccessEnvelope({ warm_chrome_run_id: "warm-OTHER" }) },
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--route", "/route.json", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_selection_envelope_invalid",
+		});
+		expect(writes).toHaveLength(0);
+	});
+
+	test("a supplied --route matching the full envelope binding is accepted", async () => {
+		const { runtime, writes } = selectionRuntime({
+			stdin: targetsListEnvelope(),
+			files: { "/route.json": routeSuccessEnvelope() },
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--route", "/route.json", "--state", "/state.json", "--json"],
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
@@ -2062,6 +2163,32 @@ describe("U6 target status — projection and distinct failures", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "target_state_unreadable",
 		});
+	});
+
+	test("a non-ENOENT read error (e.g. EACCES) fails with target_state_unreadable, not missing", async () => {
+		// A read that fails for a reason other than file-not-found must NOT be
+		// reported as "missing"; the state may exist but be unreadable. Distinct
+		// code + repair continuation (thread #3).
+		const readError = Object.assign(new Error("EACCES: permission denied"), {
+			code: "EACCES",
+		});
+		const runtime = makeRuntime({
+			readStdin: async () => "",
+			readTextFile: async () => {
+				throw readError;
+			},
+			writeTextFile: async () => {},
+		});
+		const result = await runForTest(
+			["targets", "status", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "target_state_unreadable" });
+		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
+			"repair_target_state",
+		);
 	});
 
 	test("a state file with the wrong contract fails with target_state_mismatch", async () => {
