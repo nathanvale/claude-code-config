@@ -31,8 +31,8 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 
 - Use the runner root input when the target repo differs from the current directory.
 - Let `audit` use Fallow defaults unless the current task needs an explicit base.
-- Use subcommand help for accepted audit base input.
-- Do not use runner-excluded cwd, mode, watch, baseline, or CI-generation controls.
+- Use subcommand help for accepted inputs.
+- Treat unsupported control errors as input failures.
 
 ## Output
 
@@ -41,6 +41,5 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 - Inspect issue references before editing files.
 - Request raw parsed Fallow output only for inspection.
 - Tighten the output budget only when the caller needs a smaller context cap.
-- Treat omitted raw output as complete when summary evidence remains.
-- Treat summary budget failure as blocked evidence; retry with a larger budget or no raw output.
-- Do not expect partial raw-output truncation.
+- Use runner help and tests for budget behavior.
+- Follow repair hints when budget output is blocked.

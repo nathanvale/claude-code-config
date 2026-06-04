@@ -28,9 +28,8 @@
 ## Preview And Apply
 
 - Run `fix-preview` before source mutation.
-- Inspect the preview and config-scope signals.
-- Ask for current-task user authorization before `fix-apply` unless the user already authorized apply in this task.
-- Run `fix-apply` only through the explicit apply subcommand.
+- Read `references/safety.md`.
+- Apply only through authorized `fix-apply`.
 - Rerun the prior evidence command after apply.
 
 ## Blocked Runs

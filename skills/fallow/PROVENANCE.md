@@ -34,8 +34,8 @@
 
 - Keep the official Fallow skill as source material.
 - Keep this repo skill as a thin self-review router.
-- Keep exact Fallow syntax in official docs, live CLI help, runner code, and tests.
-- Keep exact runner flags, result vocab, repair action ids, and output semantics in contract code, help, generated output, and tests.
+- Keep deterministic runner contract in code, help, generated output, and tests.
+- Keep workflow prose in `SKILL.md` and one-level references.
 - Keep CI adoption reference-only in v1.
 - Keep apply as an explicit mutation boundary.
 
@@ -43,7 +43,7 @@
 
 - Skill router: `skills/fallow/SKILL.md`.
 - Provenance: `skills/fallow/PROVENANCE.md`.
-- CLI design brief: `skills/fallow/references/cli-design-brief.md`.
+- Historical CLI design brief: `skills/fallow/references/cli-design-brief.md`.
 - Command recipes: `skills/fallow/references/commands.md`.
 - Workflow recipes: `skills/fallow/references/workflows.md`.
 - Safety reference: `skills/fallow/references/safety.md`.

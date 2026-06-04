@@ -32,14 +32,13 @@ Fallow analyzer evidence.
 
 ## Safety
 
-- Treat `fix-preview` as the normal write-inspection path.
-- Run `fix-apply` only after current-task user authorization.
-- Never install Fallow, enable telemetry, run watch mode, create baselines, generate CI workflows, or invoke other skills from this workflow.
-- Inspect config paths before mutation when the runner reports config presence.
+- Read `references/safety.md` before mutation.
+- Stop before `fix-apply` unless current-task user authorization exists.
+- Keep install, telemetry, watch, baseline, CI generation, and cross-skill orchestration outside this workflow.
 
 ## References
 
 - Read `references/commands.md` for mode selection and help pointers.
 - Read `references/workflows.md` for self-review, cleanup, preview, apply, and rerun loops.
-- Read `references/safety.md` before any mutation.
+- Read `references/safety.md` for the mutation boundary and trust rules.
 - Read `references/ci.md` only for adoption guidance; CI setup is reference-only in v1.

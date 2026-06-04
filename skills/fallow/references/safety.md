@@ -23,7 +23,8 @@
 - Do not create or update baselines.
 - Do not generate CI workflows.
 - Do not invoke other skills from the runner.
-- Do not add public `--cwd` or `--mode` controls.
+- Use runner help for accepted public inputs.
+- Treat unsupported control errors as usage failures.
 
 ## Mutation Checks
 
