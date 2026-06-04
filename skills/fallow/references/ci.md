@@ -6,8 +6,9 @@ CI adoption is reference-only in v1.
 
 - Clean meaningful full-repo findings first.
 - Add PR-only audit after the baseline is understood.
-- Keep workflow generation outside the runner.
-- Use official Fallow CI docs and action inputs as the owner source.
+- Keep workflow generation outside the runner and this reference.
+- Use official Fallow CI docs and action inputs as owner sources.
+- Check official docs before copying workflow syntax.
 
 ## Runner Boundary
 
@@ -18,7 +19,8 @@ CI adoption is reference-only in v1.
 
 ## Owner Sources
 
-- Official docs: `https://docs.fallow.tools`.
+- Official docs index: `https://docs.fallow.tools/llms.txt`.
+- Official CI docs: `https://docs.fallow.tools/integrations/ci`.
 - GitHub Action: `https://github.com/marketplace/actions/fallow-codebase-intelligence`.
 - Local research: `docs/research/2026-06-04-fallow-agent-lens.md`.
 - Local decision: `docs/decisions/2026-06-04-fallow-agent-native-decision-log.md`.

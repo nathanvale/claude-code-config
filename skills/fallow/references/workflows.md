@@ -5,6 +5,7 @@
 - Finish the implementation slice first.
 - Run `doctor` if readiness is unknown.
 - Choose one evidence command that matches the risk.
+- Use command help when exact syntax matters.
 - Fix or flag findings using local judgment and project rules.
 - Rerun the same evidence command.
 - Report before/after summary when evidence changed.
@@ -38,7 +39,7 @@
 - Follow the first safe repair hint.
 - Run `doctor` when setup cause is unclear.
 - Retry the same input only when the hint says retry is safe.
-- Avoid per-finding repair plans for blocked runner failures.
+- Keep per-finding repair plans outside blocked runner recovery.
 
 ## Stop
 

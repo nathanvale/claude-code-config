@@ -1,7 +1,7 @@
 ---
 title: "feat: Fallow Agent-Native MVP v1"
 type: feat
-status: active
+status: completed
 date: 2026-06-04
 sources:
   - docs/decisions/2026-06-04-fallow-agent-native-decision-log.md

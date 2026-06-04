@@ -19,11 +19,11 @@ Lane: Facade-backed CLI.
 ## Usage
 
 - Use one executable with v1 subcommands.
-- Target the repo with `--root`.
+- Target the repo through the runner root input.
 - Default root to the current directory.
-- Accept audit base input only on `audit`.
+- Accept audit base input only on audit.
 - Omit raw Fallow output unless explicitly requested.
-- Apply a public output-byte budget.
+- Apply a public output budget.
 
 ## Help
 
@@ -74,6 +74,7 @@ Lane: Facade-backed CLI.
 - Discovery owner: `skills/fallow/scripts/fallow-runner.ts`.
 - CLI owner: `skills/fallow/scripts/fallow-runner.ts`.
 - Test owner: `skills/fallow/scripts/fallow-runner.test.ts`.
+- Live smoke owner: `skills/fallow/scripts/fallow-runner.live.test.ts`.
 
 ## Proof
 

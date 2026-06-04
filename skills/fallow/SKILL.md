@@ -11,7 +11,7 @@ Fallow analyzer evidence.
 ## Owner
 
 - Runner: `skills/fallow/scripts/fallow-runner.ts`.
-- CLI contract, flags, result vocab, and repair actions: `skills/fallow/scripts/command-contract.ts`.
+- Public command contract, result vocab, and repair action ids: `skills/fallow/scripts/command-contract.ts`.
 - Runner tests: `skills/fallow/scripts/fallow-runner.test.ts`.
 - Live compatibility smoke: `skills/fallow/scripts/fallow-runner.live.test.ts`.
 - Command recipes: `skills/fallow/references/commands.md`.
@@ -23,7 +23,8 @@ Fallow analyzer evidence.
 ## Workflow
 
 - Run `doctor` first when Fallow availability, repo shape, git readiness, or config scope is unknown.
-- Choose one evidence command for the current question; use `commands.md` for the mode map.
+- Choose one evidence command for the current question.
+- Use `commands.md` for mode selection and `--help` for exact syntax.
 - Parse the runner JSON from stdout.
 - Follow runner repair hints before retrying blocked runs.
 - Rerun the same evidence command after code changes.

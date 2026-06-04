@@ -2,7 +2,9 @@
 
 ## Source
 
-- Official docs: `https://docs.fallow.tools/integrations/agent-skills`.
+- Official docs index: `https://docs.fallow.tools/llms.txt`.
+- Official Agent Skills docs: `https://docs.fallow.tools/integrations/agent-skills`.
+- Official CI docs: `https://docs.fallow.tools/integrations/ci`.
 - Official repository: `https://github.com/fallow-rs/fallow`.
 - Official skill repository: `https://github.com/fallow-rs/fallow-skills`.
 - GitHub Action: `https://github.com/marketplace/actions/fallow-codebase-intelligence`.
@@ -32,8 +34,8 @@
 
 - Keep the official Fallow skill as source material.
 - Keep this repo skill as a thin self-review router.
-- Keep exact Fallow syntax in Fallow owner docs, live CLI help, runner code, and tests.
-- Keep exact runner flags, result vocab, repair actions, and output semantics in contract code, help, generated output, and tests.
+- Keep exact Fallow syntax in official docs, live CLI help, runner code, and tests.
+- Keep exact runner flags, result vocab, repair action ids, and output semantics in contract code, help, generated output, and tests.
 - Keep CI adoption reference-only in v1.
 - Keep apply as an explicit mutation boundary.
 

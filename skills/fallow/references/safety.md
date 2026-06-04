@@ -11,9 +11,9 @@
 ## Config Trust
 
 - Inspect reported config paths before mutation.
-- Treat config presence as scope evidence, not a blocker by itself.
+- Treat config presence and paths as scope evidence, not a blocker by itself.
 - Let Fallow own config semantics.
-- Do not parse or judge `.fallowrc`, `fallow.toml`, or equivalent config in the runner.
+- Do not parse or judge Fallow config contents in the runner.
 
 ## Excluded Behavior
 
@@ -37,4 +37,4 @@
 ## Secret Safety
 
 - Do not print tokens, cookies, credentials, or auth-bearing URLs from Fallow output.
-- Report setup and config checks by presence and paths only.
+- Report setup and config checks by presence, categories, and paths only.
