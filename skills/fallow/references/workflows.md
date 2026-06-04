@@ -44,6 +44,24 @@ replaces manual coverage-intersect for audit.
 - Read `summary.mode_evidence.attribution` for per-category introduced counts.
 - Attribution covers audit only; `dead-code`, `health`, and `dupes` need the coverage-intersect pass below.
 
+## Finding Resolver Actions
+
+Audit issue references may advertise a Finding resolver action: a tiny runnable
+continuation for one introduced finding. Start from the finding, not a remembered
+command.
+
+- Follow the action only when an introduced `remove-export` finding advertises one;
+  inherited and coordinate-missing findings never do.
+- Run the advertised target (`why`) to gather reachability evidence for that one
+  export; use runner help for current coordinates.
+- Read the evidence grade first; the verdict and next action are derived helpers.
+- Referenced or entry-point evidence means keep the export.
+- Absence of trace references is a removal candidate, not deletion proof; keep
+  judgment local before deleting.
+- Unresolved or unavailable trace evidence blocks deletion; follow the repair hint.
+- This is the audit resolver path. It is distinct from the non-audit
+  coverage-intersect cleanup below, which has no per-finding resolver action.
+
 ## Coverage Intersect
 
 Use for non-audit modes (`dead-code`, `health`, `dupes`), which carry no attribution.

@@ -15,6 +15,7 @@ Fallow analyzer evidence.
 - Current-task reporting: list current-task findings first; keep pre-existing findings as count or status context.
 - Changed-code review: use `audit`; escalate to JSON only for issue references, repair planning, structured evidence, or before/after comparison.
 - Audit triage: read the attribution split first; act on introduced findings, treat inherited as base context. Zero introduced means the changeset added nothing; stop without per-finding triage.
+- Introduced remove-export finding: follow the finding's advertised Finding resolver action (the `why` target) for reachability evidence before treating removal as a candidate; act on the evidence grade, not absence of references as proof.
 - Noisy non-audit scan on a skill/CLI folder: `dead-code`, `health`, and `dupes` carry no attribution; `add-tests` and `remove-export` run mostly false-positive against contract exports and integration-tested code; intersect with coverage per `references/workflows.md` before treating findings as real.
 - Cleanup / refactor scan: use `dead-code`, `dupes`, or `health` from the request shape; use `health` first for bare cleanup asks.
 - Readiness check: use `doctor` when setup, JS/TS target fit, git readiness, JSON capability, or config scope is unknown.

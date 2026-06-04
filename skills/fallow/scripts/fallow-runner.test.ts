@@ -1758,6 +1758,45 @@ describe("U10 skill route index docs", () => {
 			expect(text).not.toContain("schema_version");
 		}
 	});
+
+	// AE7: docs explain the action-first resolver route without copying command
+	// payloads, flags, parser rules, or output schemas.
+	test("docs route the resolver action without copying runtime contracts", async () => {
+		const skill = await readFile(join(import.meta.dir, "../SKILL.md"), "utf-8");
+		const commands = await readFile(
+			join(import.meta.dir, "..", "references", "commands.md"),
+			"utf-8",
+		);
+		const workflow = await readFile(
+			join(import.meta.dir, "..", "references", "workflows.md"),
+			"utf-8",
+		);
+
+		// Action-first routing is present.
+		expect(skill).toContain("Finding resolver action");
+		expect(workflow).toContain("Finding Resolver Actions");
+		expect(workflow).toContain("evidence grade first");
+		expect(commands).toContain("Finding resolver action");
+
+		// Boundary against non-audit cleanup is explicit.
+		expect(workflow).toContain("distinct from the non-audit");
+
+		// No copied resolver runtime literals: banned wording, coordinate flags,
+		// the resolver action id, or evidence-grade literals.
+		for (const text of [skill, commands, workflow]) {
+			expect(text).not.toContain("likely-dead");
+			expect(text).not.toContain("likely_dead");
+			expect(text).not.toContain("--file");
+			expect(text).not.toContain("--export");
+			expect(text).not.toContain("trace-export-reachability");
+			expect(text).not.toContain("unreferenced_by_trace");
+		}
+		// SKILL.md prose never copies plain-output next_action literals or the
+		// mode_evidence schema path; the attribution section in workflows.md is
+		// the documented exception for both.
+		expect(skill).not.toContain("next_action=");
+		expect(skill).not.toContain("mode_evidence");
+	});
 });
 
 describe("U3 parser, help, and discovery alignment", () => {
