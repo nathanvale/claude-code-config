@@ -2355,3 +2355,233 @@ describe("U3 trace adapter", () => {
 		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
 	});
 });
+
+describe("U4 resolver execution and evidence-grade-first output", () => {
+	function traceEvidence(
+		overrides: Partial<TraceExportEvidence> = {},
+	): TraceExportEvidence {
+		return {
+			file: "src/x.ts",
+			export_name: "thing",
+			file_reachable: true,
+			is_entry_point: false,
+			is_used: false,
+			direct_references: [],
+			re_export_chains: [],
+			...overrides,
+		};
+	}
+
+	// Runtime whose mcporter call yields a fixed trace payload. Git is irrelevant
+	// to `why`; only the trace transport command matters.
+	function whyRuntime(
+		traceStdout: string | TraceCommandResult,
+		overrides: Partial<FallowRunnerRuntime> = {},
+	): FallowRunnerRuntime {
+		const traceResult: TraceCommandResult =
+			typeof traceStdout === "string"
+				? { exitCode: 0, stdout: traceStdout, stderr: "" }
+				: traceStdout;
+		return makeRuntime({
+			cwd: "/repo",
+			isDirectory: async () => true,
+			runCommand: async () => traceResult,
+			...overrides,
+		});
+	}
+
+	function resolverOf(envelope: Record<string, unknown>) {
+		const summary = envelope.summary as {
+			mode_evidence?: { resolver?: Record<string, unknown> };
+		};
+		expect(summary.mode_evidence?.resolver).toBeDefined();
+		return summary.mode_evidence?.resolver as Record<string, unknown>;
+	}
+
+	// AE4: referenced evidence -> grade is the source of truth and the derived
+	// action keeps the export.
+	test("referenced evidence keeps the export in JSON and plain", async () => {
+		const stdout = JSON.stringify(
+			traceEvidence({
+				is_used: true,
+				direct_references: [{ from_file: "src/x.test.ts", kind: "import" }],
+			}),
+		);
+
+		const json = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing"],
+			whyRuntime(stdout),
+		);
+		const envelope = expectEnvelope(json);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.mode).toBe("why");
+		const resolver = resolverOf(envelope);
+		expect(resolver.grade).toBe("referenced");
+		expect(resolver.verdict).toBe("keep");
+		expect(resolver.next_action).toBe("keep-export");
+		expect(resolver.references).toBe(1);
+
+		const plain = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing", "--plain"],
+			whyRuntime(stdout),
+		);
+		expect(plain.stdout).toContain("resolver grade=referenced");
+		expect(plain.stdout).toContain("verdict=keep");
+		expect(plain.stdout).toContain("next_action=keep-export");
+		// No raw trace payload dumped into plain output.
+		expect(plain.stdout).not.toContain("direct_references");
+	});
+
+	test("entry-point evidence keeps the export", async () => {
+		const stdout = JSON.stringify(traceEvidence({ is_entry_point: true }));
+		const result = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing"],
+			whyRuntime(stdout),
+		);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("ok");
+		expect(resolverOf(envelope).grade).toBe("entry_point");
+		expect(resolverOf(envelope).next_action).toBe("keep-export");
+	});
+
+	// AE5: no direct references -> unreferenced_by_trace wording and a
+	// candidate-remove action, never deletion-proof wording.
+	test("unreferenced evidence is a candidate, not deletion proof", async () => {
+		const stdout = JSON.stringify(
+			traceEvidence({ file_reachable: false, is_used: false }),
+		);
+
+		const json = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing"],
+			whyRuntime(stdout),
+		);
+		const envelope = expectEnvelope(json);
+		expect(envelope.status).toBe("issues");
+		const resolver = resolverOf(envelope);
+		expect(resolver.grade).toBe("unreferenced_by_trace");
+		expect(resolver.verdict).toBe("candidate_remove");
+		expect(resolver.next_action).toBe("candidate-remove");
+
+		// Banned overclaiming wording never appears.
+		const blob = JSON.stringify(envelope);
+		expect(blob).not.toContain("likely-dead");
+		expect(blob).not.toContain("likely_dead");
+		expect(blob).not.toContain("safe to remove");
+
+		const plain = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing", "--plain"],
+			whyRuntime(stdout),
+		);
+		expect(plain.stdout).toContain("resolver grade=unreferenced_by_trace");
+		expect(plain.stdout).toContain("next_action=candidate-remove");
+		expect(plain.stdout).not.toContain("likely-dead");
+	});
+
+	// AE6: every resolver result keeps top-level status in the runner set, with
+	// resolver-specific meaning in package-owned mode evidence.
+	test("every resolver path keeps top-level status in the runner set", async () => {
+		const cases: Array<{ stdout: string | TraceCommandResult; status: string }> =
+			[
+				{
+					stdout: JSON.stringify(traceEvidence({ is_used: true })),
+					status: "ok",
+				},
+				{
+					stdout: JSON.stringify(traceEvidence()),
+					status: "issues",
+				},
+				{
+					stdout: JSON.stringify({ error: true, message: "not found" }),
+					status: "blocked",
+				},
+				{
+					stdout: JSON.stringify({
+						error: "offline",
+						issue: { kind: "offline" },
+					}),
+					status: "blocked",
+				},
+			];
+
+		for (const testCase of cases) {
+			const result = await runForTest(
+				["why", "--file", "src/x.ts", "--export", "thing"],
+				whyRuntime(testCase.stdout),
+			);
+			const envelope = expectEnvelope(result);
+			expect(["ok", "issues", "blocked"]).toContain(
+				envelope.status as string,
+			);
+			expect(envelope.status).toBe(testCase.status);
+			// Resolver meaning lives in mode evidence, not top-level status.
+			expect(resolverOf(envelope).grade).toBeDefined();
+		}
+	});
+
+	test("symbol-not-found blocks with input recovery and the first safe hint", async () => {
+		const stdout = JSON.stringify({ error: true, message: "export not found" });
+		const result = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "ghost"],
+			whyRuntime(stdout),
+		);
+		const envelope = expectEnvelope(result);
+		expect(result.exitCode).toBe(1);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("input");
+		expect(resolverOf(envelope).grade).toBe("unresolved");
+		expect(primaryRepairHint(envelope).action).toBe("fix-input");
+	});
+
+	test("transport unavailable blocks with setup recovery and the first safe hint", async () => {
+		const result = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing"],
+			whyRuntime({
+				exitCode: 127,
+				stdout: "",
+				stderr: "mcporter: command not found",
+			}),
+		);
+		const envelope = expectEnvelope(result);
+		expect(result.exitCode).toBe(1);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("setup");
+		expect(resolverOf(envelope).grade).toBe("unavailable");
+		expect(primaryRepairHint(envelope).action).toBe("setup-fallow");
+	});
+
+	test("missing root blocks why before tracing", async () => {
+		let traced = false;
+		const runtime = makeRuntime({
+			cwd: "/repo",
+			isDirectory: async () => false,
+			runCommand: async () => {
+				traced = true;
+				return { exitCode: 0, stdout: "{}", stderr: "" };
+			},
+		});
+		const result = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing", "--root", "/missing"],
+			runtime,
+		);
+		expect(traced).toBe(false);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("input");
+	});
+
+	test("raw trace evidence is included only when explicitly requested", async () => {
+		const stdout = JSON.stringify(traceEvidence({ is_used: true }));
+		const omitted = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing"],
+			whyRuntime(stdout),
+		);
+		expect(expectEnvelope(omitted).fallow_output).toBeNull();
+
+		const included = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "thing", "--include-raw-output"],
+			whyRuntime(stdout),
+		);
+		const envelope = expectEnvelope(included);
+		expect((envelope.fallow_output as { is_used?: boolean }).is_used).toBe(true);
+	});
+});

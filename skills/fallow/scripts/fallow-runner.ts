@@ -13,23 +13,36 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	DEFAULT_MAX_OUTPUT_BYTES,
+	FALLOW_EVIDENCE_GRADE_BY_KEY,
 	FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY,
 	FALLOW_REPAIR_ACTION_BY_KEY,
 	FALLOW_RESOLVER_ACTION_BY_KEY,
+	FALLOW_RESOLVER_NEXT_ACTION_BY_KEY,
+	FALLOW_RESOLVER_VERDICT_BY_KEY,
 	FALLOW_RUNNER_COMMANDS,
 	FALLOW_RUNNER_CONTRACT_ID,
 	FALLOW_RUNNER_SCHEMA_VERSION,
 	FALLOW_STDERR_CATEGORY_BY_KEY,
+	type FallowEvidenceGrade,
 	type FallowFailureCategory,
 	type FallowOutputBudgetStatus,
 	type FallowRepairAction,
 	type FallowResolverAction,
+	type FallowResolverNextAction,
+	type FallowResolverVerdict,
 	type FallowRunnerCommand,
 	type FallowStatus,
 	type FallowStderrCategory,
 	type FallowWriteEffect,
 	fallowRunnerContracts,
 } from "./command-contract";
+import {
+	type TraceFailureReason,
+	type TraceResult,
+	deriveEvidenceGrade,
+	failureEvidenceGrade,
+	traceExportReachability,
+} from "./why-trace";
 
 const VERSION = "0.1.0";
 const FALLOW_PROCESS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -95,7 +108,9 @@ type RepairHintKind =
 	| "reduce-output"
 	| "apply-shaped"
 	| "config-before-apply"
-	| "transient-retry";
+	| "transient-retry"
+	| "trace-symbol"
+	| "trace-transport";
 
 type BinaryReadiness = {
 	status: "ok" | "missing";
@@ -367,6 +382,12 @@ async function runParsedCommand(
 			parsed.outputMode,
 		);
 		return 1;
+	}
+
+	// The resolver target runs on the mcporter trace transport, not the Fallow
+	// CLI, so it skips Fallow-binary readiness and ordinary evidence dispatch.
+	if (parsed.command === "why") {
+		return emitWhy(parsed, root, runtime, stdout, runId);
 	}
 
 	const readiness = await inspectReadiness(root, runtime);
@@ -679,6 +700,120 @@ function emitDoctor(
 		parsed.outputMode,
 	);
 	return exitCode;
+}
+
+type ResolverDerivation = {
+	status: FallowStatus;
+	failureCategory: FallowFailureCategory;
+	exitCode: number;
+	verdict: FallowResolverVerdict;
+	nextAction: FallowResolverNextAction;
+};
+
+// Evidence grade is the source of truth; verdict, next action, and runner
+// status are derived helpers (R14-R19). Absence of references is a candidate
+// removal, never deletion proof; unresolved or unavailable evidence blocks
+// deletion and stops.
+function deriveResolver(grade: FallowEvidenceGrade): ResolverDerivation {
+	if (
+		grade === FALLOW_EVIDENCE_GRADE_BY_KEY.referenced ||
+		grade === FALLOW_EVIDENCE_GRADE_BY_KEY.entryPoint
+	) {
+		return {
+			status: "ok",
+			failureCategory: "none",
+			exitCode: 0,
+			verdict: FALLOW_RESOLVER_VERDICT_BY_KEY.keep,
+			nextAction: FALLOW_RESOLVER_NEXT_ACTION_BY_KEY.keepExport,
+		};
+	}
+	if (grade === FALLOW_EVIDENCE_GRADE_BY_KEY.unreferencedByTrace) {
+		return {
+			status: "issues",
+			failureCategory: "none",
+			exitCode: 0,
+			verdict: FALLOW_RESOLVER_VERDICT_BY_KEY.candidateRemove,
+			nextAction: FALLOW_RESOLVER_NEXT_ACTION_BY_KEY.candidateRemove,
+		};
+	}
+	// unresolved (bad coordinates) -> input; unavailable (transport) -> setup.
+	return {
+		status: "blocked",
+		failureCategory:
+			grade === FALLOW_EVIDENCE_GRADE_BY_KEY.unresolved ? "input" : "setup",
+		exitCode: 1,
+		verdict: FALLOW_RESOLVER_VERDICT_BY_KEY.inconclusive,
+		nextAction: FALLOW_RESOLVER_NEXT_ACTION_BY_KEY.stop,
+	};
+}
+
+function repairKindForTraceFailure(reason: TraceFailureReason): RepairHintKind {
+	return reason === "symbol_not_found" ? "trace-symbol" : "trace-transport";
+}
+
+async function emitWhy(
+	parsed: ParsedCommand,
+	root: string,
+	runtime: FallowRunnerRuntime,
+	stdout: CliWriter,
+	runId: string,
+): Promise<number> {
+	// parseCommandOptions guarantees both coordinates for `why`.
+	const file = parsed.file as string;
+	const exportName = parsed.exportName as string;
+
+	const trace: TraceResult = await traceExportReachability({
+		file,
+		exportName,
+		root,
+		env: runtime.env,
+		runCommand: runtime.runCommand,
+	});
+
+	const grade = trace.ok
+		? deriveEvidenceGrade(trace.evidence)
+		: failureEvidenceGrade(trace.reason);
+	const derivation = deriveResolver(grade);
+
+	const resolver: Record<string, unknown> = {
+		grade,
+		verdict: derivation.verdict,
+		next_action: derivation.nextAction,
+		file,
+		export: exportName,
+	};
+	if (trace.ok) {
+		resolver.references = trace.evidence.direct_references.length;
+		resolver.entry_point = trace.evidence.is_entry_point;
+		resolver.file_reachable = trace.evidence.file_reachable;
+	} else {
+		resolver.detail = trace.message;
+	}
+
+	// Repair hints attach only to blocked trace failures; clean evidence (keep
+	// or candidate-remove) carries its next action in the resolver block.
+	const repairHints = trace.ok
+		? []
+		: [repairHintFor(repairKindForTraceFailure(trace.reason))];
+
+	return writeBudgetedEnvelope(stdout, {
+		status: derivation.status,
+		mode: "why",
+		runId,
+		command: ["fallow-runner", "why"],
+		cwd: root,
+		exitCode: derivation.exitCode,
+		failureCategory: derivation.failureCategory,
+		writeEffect: "none",
+		maxOutputBytes: parsed.maxOutputBytes,
+		rawRequested: parsed.includeRawOutput,
+		rawOutputIncluded: parsed.includeRawOutput,
+		fallowOutput:
+			parsed.includeRawOutput && trace.ok ? trace.evidence : null,
+		summary: { ...emptySummary(), mode_evidence: { resolver } },
+		repairHints,
+		outputMode: parsed.outputMode,
+	});
 }
 
 async function inspectReadiness(
@@ -1091,6 +1226,20 @@ function repairHintFor(
 		return repairHint(
 			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
 			"Choose a valid audit base ref.",
+		);
+	}
+	if (kind === "trace-symbol") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
+			messageOverride ??
+				"Confirm the file and export coordinates name a real export.",
+		);
+	}
+	if (kind === "trace-transport") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.setupFallow,
+			messageOverride ??
+				"Expose the Fallow trace transport (fallow-mcp and mcporter) before retrying.",
 		);
 	}
 	if (kind === "runtime-failure") {
@@ -1819,10 +1968,36 @@ function renderPlainEnvelope(envelope: FallowRunnerEnvelope): string {
 	const attributionLine = renderAttributionLine(summary);
 	if (attributionLine) lines.push(attributionLine);
 
+	const resolverLine = renderResolverLine(summary);
+	if (resolverLine) lines.push(resolverLine);
+
 	const nextAction = nextPlainAction(envelope);
 	if (nextAction) lines.push(nextAction);
 
 	return `${lines.join("\n")}\n`;
+}
+
+// Resolver output names the evidence grade first, then the derived verdict and
+// next action. Raw trace references are summarized as a count, never dumped.
+function renderResolverLine(
+	summary: FallowRunnerSummary,
+): string | undefined {
+	const resolver = objectValue(objectValue(summary.mode_evidence), "resolver");
+	if (!resolver) return undefined;
+	const grade = stringField(resolver, ["grade"]);
+	if (!grade) return undefined;
+	const verdict = stringField(resolver, ["verdict"]);
+	const nextAction = stringField(resolver, ["next_action"]);
+	const references = numberAt(resolver, ["references"]);
+	return [
+		"resolver",
+		`grade=${grade}`,
+		verdict ? `verdict=${verdict}` : undefined,
+		nextAction ? `next_action=${nextAction}` : undefined,
+		references !== undefined ? `references=${references}` : undefined,
+	]
+		.filter((token): token is string => token !== undefined)
+		.join(" ");
 }
 
 // Audit attribution is the signal worth reading first: surface introduced vs
@@ -1869,6 +2044,13 @@ function nextPlainAction(envelope: FallowRunnerEnvelope): string | undefined {
 	if (hint) {
 		return `next_action=${hint.action} retry_safe=${hint.retry_safe}`;
 	}
+	// The resolver line already carries the derived next action; do not append a
+	// generic continue/inspect-json signal that would compete with it.
+	const resolver = objectValue(
+		objectValue(envelope.summary.mode_evidence),
+		"resolver",
+	);
+	if (resolver) return undefined;
 	if (envelope.status === "issues") {
 		// Audit with zero introduced findings means the changeset added nothing;
 		// inherited findings are not this run's concern.
