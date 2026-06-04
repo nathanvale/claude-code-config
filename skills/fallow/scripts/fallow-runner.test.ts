@@ -2007,6 +2007,7 @@ type ResolverActionRef = {
 	target: string;
 	coordinates: { file: string; export: string };
 	reason: string;
+	discover: string;
 };
 
 type IssueRefWithResolver = {
@@ -2068,6 +2069,7 @@ describe("U2 resolver action projection", () => {
 				target: "why",
 				coordinates: { file: "src/new.ts", export: "freshThing" },
 				reason: expect.any(String),
+				discover: expect.any(String),
 			},
 		]);
 		expect(inherited?.resolver_actions).toBeUndefined();
@@ -2325,6 +2327,72 @@ describe("U3 trace adapter", () => {
 			expect(result.evidence.direct_references).toEqual([]);
 			expect(deriveEvidenceGrade(result.evidence)).toBe("unreferenced_by_trace");
 		}
+	});
+
+	test("references-only evidence (is_used false) still grades as referenced", async () => {
+		const { runCommand } = runnerYielding(
+			jsonResult(
+				evidence({
+					is_used: false,
+					direct_references: [{ from_file: "src/y.ts", kind: "import" }],
+				}),
+			),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(deriveEvidenceGrade(result.evidence)).toBe("referenced");
+		}
+	});
+
+	test("non-empty references that all fail the shape check fail closed", async () => {
+		// References exist in an unrecognized key shape; with is_used false this
+		// must not normalize to zero references and grade as a removal candidate.
+		const { runCommand } = runnerYielding(
+			jsonResult({
+				file: "src/x.ts",
+				export_name: "thing",
+				file_reachable: false,
+				is_entry_point: false,
+				is_used: false,
+				direct_references: [{ importer: "src/y.ts", type: "import" }],
+				re_export_chains: [],
+			}),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "malformed_payload" });
+	});
+
+	test("non-zero exit with evidence-shaped stdout maps to transport failure", async () => {
+		// The transport flagged failure but printed evidence anyway; it must never
+		// surface as clean reachability.
+		const { runCommand } = runnerYielding({
+			exitCode: 3,
+			stdout: JSON.stringify(evidence({ is_used: true })),
+			stderr: "trace crashed after partial output",
+		});
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
+	});
+
+	test("structured tool error keeps its class even with a non-zero exit", async () => {
+		// mcporter emits symbol-not-found with a non-zero exit; the exitCode gate
+		// must not reclassify it as a transport failure.
+		const { runCommand } = runnerYielding({
+			exitCode: 2,
+			stdout: JSON.stringify({ error: true, message: "export not found" }),
+			stderr: "",
+		});
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "symbol_not_found" });
 	});
 
 	test("tool-level symbol-not-found maps to an input failure class", async () => {

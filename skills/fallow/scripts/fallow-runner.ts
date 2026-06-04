@@ -157,13 +157,15 @@ type FallowRunnerSummary = {
 // target for one finding. Distinct from blocked-run repair_hints: resolver
 // actions belong to usable finding evidence, not failure recovery. Payload
 // stays minimal (R6/R9): action identity, runnable target, required
-// coordinates, and reason. Exact contracts live in command help and discovery,
-// not in this payload (R10).
+// coordinates, a reason, and a discovery pointer. Exact flags and output shape
+// live in command help and discovery, not in this payload (R10) — `discover`
+// names where a prompt-free agent resolves `target` into exact syntax.
 type FallowResolverActionRef = {
 	action: FallowResolverAction;
 	target: FallowRunnerCommand;
 	coordinates: { file: string; export: string };
 	reason: string;
+	discover: string;
 };
 
 type FallowIssueReference = {
@@ -1612,6 +1614,10 @@ function withResolverActions(
 		coordinates: { file, export: symbol },
 		reason:
 			"Introduced remove-export finding; gather reachability evidence before removal.",
+		// Names the discovery owner so a JSON-only agent resolves `target` into
+		// exact flags via runner help/command discovery, without this payload
+		// copying the command contract.
+		discover: "why --help",
 	};
 	return { ...reference, resolver_actions: [resolverAction] };
 }

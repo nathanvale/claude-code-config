@@ -245,6 +245,20 @@ export async function traceExportReachability(input: {
 		};
 	}
 
+	// A non-zero exit that is not one of the structured error envelopes above
+	// means the transport failed even though it printed evidence-shaped output
+	// (stale cache, best-effort dump before a crash). Never treat that as clean
+	// reachability; classify it as a transport failure.
+	if (result.exitCode !== 0) {
+		return {
+			ok: false,
+			reason: "transport_unavailable",
+			message:
+				result.stderr.trim() ||
+				`trace transport exited ${result.exitCode} with non-error output.`,
+		};
+	}
+
 	const evidence = asTraceEvidence(parsed);
 	if (!evidence) {
 		// Fail closed: an incomplete payload must never become a deletion
@@ -311,6 +325,18 @@ function asTraceEvidence(value: unknown): TraceExportEvidence | undefined {
 		typeof value.is_used !== "boolean"
 	) {
 		return undefined;
+	}
+	// Fail closed on reference-shape drift: if the payload reports references but
+	// none match the known shape, the export may be referenced. Treating that as
+	// zero references would grade it `unreferenced_by_trace` (a removal
+	// candidate) — a fail-open. Reject the payload instead so the resolver
+	// reports `unavailable`, never a false candidate.
+	if (
+		Array.isArray(value.direct_references) &&
+		value.direct_references.length > 0
+	) {
+		const directReferences = value.direct_references.filter(isDirectReference);
+		if (directReferences.length === 0) return undefined;
 	}
 	const directReferences = Array.isArray(value.direct_references)
 		? value.direct_references.filter(isDirectReference)
