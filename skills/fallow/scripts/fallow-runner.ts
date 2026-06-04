@@ -13,6 +13,7 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	DEFAULT_MAX_OUTPUT_BYTES,
+	FALLOW_REPAIR_ACTION_BY_KEY,
 	FALLOW_RUNNER_COMMANDS,
 	FALLOW_RUNNER_CONTRACT_ID,
 	FALLOW_RUNNER_SCHEMA_VERSION,
@@ -70,6 +71,20 @@ type RepairHint = {
 	message: string;
 	retry_safe: boolean;
 };
+
+type RepairHintKind =
+	| "invalid-root"
+	| "invalid-usage"
+	| "unsupported-root"
+	| "missing-fallow"
+	| "git-readiness"
+	| "invalid-base-ref"
+	| "runtime-failure"
+	| "parse-output"
+	| "reduce-output"
+	| "apply-shaped"
+	| "config-before-apply"
+	| "transient-retry";
 
 type BinaryReadiness = {
 	status: "ok" | "missing";
@@ -296,13 +311,7 @@ async function runParsedCommand(
 				writeEffect: "none",
 				maxOutputBytes,
 				rawRequested,
-				repairHints: [
-					{
-						action: "fix-input",
-						message: "Choose an existing target repository root.",
-						retry_safe: false,
-					},
-				],
+				repairHints: [repairHintFor("invalid-root")],
 			}),
 		);
 		return 1;
@@ -335,6 +344,28 @@ async function runParsedCommand(
 		return 1;
 	}
 
+	const auditBaseRefHint = await validateAuditBaseRef(parsed, root, runtime);
+	if (auditBaseRefHint) {
+		writeEnvelope(
+			stdout,
+			makeEnvelope({
+				status: "blocked",
+				mode: parsed.command,
+				runId,
+				command: commandFor(parsed),
+				cwd: root,
+				exitCode: 1,
+				failureCategory: "input",
+				writeEffect: "none",
+				maxOutputBytes,
+				rawRequested,
+				summary: summaryWithReadiness(readiness),
+				repairHints: [auditBaseRefHint],
+			}),
+		);
+		return 1;
+	}
+
 	if (isEvidenceCommand(parsed.command)) {
 		const invocation = fallowInvocationFor(parsed, readiness);
 		const command = [invocation.command, ...invocation.args];
@@ -360,11 +391,7 @@ async function runParsedCommand(
 					rawRequested,
 					summary: summaryWithReadiness(readiness),
 					repairHints: [
-						{
-							action: "run-doctor",
-							message: "Run diagnostics before retrying Fallow.",
-							retry_safe: false,
-						},
+						repairHintFor(runtimeFailureHintKind(parsed.command, result.stderr)),
 					],
 				}),
 			);
@@ -388,13 +415,7 @@ async function runParsedCommand(
 					maxOutputBytes,
 					rawRequested,
 					summary: summaryWithReadiness(readiness),
-					repairHints: [
-						{
-							action: "run-doctor",
-							message: "Confirm Fallow JSON output before retrying.",
-							retry_safe: false,
-						},
-					],
+					repairHints: [repairHintFor("parse-output")],
 				}),
 			);
 			return 1;
@@ -451,13 +472,7 @@ async function runParsedCommand(
 					repairHints:
 						configSafetyHints.length > 0
 							? configSafetyHints
-							: [
-									{
-										action: "run-doctor",
-										message: "Run diagnostics before retrying Fallow.",
-										retry_safe: false,
-									},
-								],
+							: [repairHintFor("runtime-failure")],
 				}),
 			);
 			return 1;
@@ -483,13 +498,7 @@ async function runParsedCommand(
 					repairHints:
 						configSafetyHints.length > 0
 							? configSafetyHints
-							: [
-									{
-										action: "run-doctor",
-										message: "Confirm Fallow JSON output before retrying.",
-										retry_safe: false,
-									},
-								],
+							: [repairHintFor("parse-output")],
 				}),
 			);
 			return 1;
@@ -534,13 +543,7 @@ async function runParsedCommand(
 			maxOutputBytes,
 			rawRequested,
 			summary: summaryWithReadiness(readiness),
-			repairHints: [
-				{
-					action: "retry",
-					message: "Fallow execution is implemented in a later runner unit.",
-					retry_safe: false,
-				},
-			],
+			repairHints: [repairHintFor("runtime-failure")],
 		}),
 	);
 	return 1;
@@ -566,13 +569,7 @@ function emitDoctor(
 		? [blockingReadinessHint("doctor", readiness)].filter(isRepairHint)
 		: readiness.git.status === "ok"
 			? []
-			: [
-					{
-						action: "fix-input",
-						message: "Repair git readiness before audit.",
-						retry_safe: false,
-					} satisfies RepairHint,
-				];
+			: [repairHintFor("git-readiness")];
 
 	writeEnvelope(
 		stdout,
@@ -684,27 +681,29 @@ function blockingReadinessHint(
 	readiness: ReadinessSummary,
 ): RepairHint | undefined {
 	if (readiness.repo_shape.status !== "ok") {
-		return {
-			action: "fix-input",
-			message: "Choose a JavaScript or TypeScript repository root.",
-			retry_safe: false,
-		};
+		return repairHintFor("unsupported-root");
 	}
 	if (readiness.fallow_binary.status !== "ok") {
-		return {
-			action: "setup-fallow",
-			message: "Expose a project-local or PATH Fallow binary.",
-			retry_safe: false,
-		};
+		return repairHintFor("missing-fallow");
 	}
 	if (command === "audit" && readiness.git.status !== "ok") {
-		return {
-			action: "fix-input",
-			message: "Repair git readiness before audit.",
-			retry_safe: false,
-		};
+		return repairHintFor("git-readiness");
 	}
 	return undefined;
+}
+
+async function validateAuditBaseRef(
+	parsed: ParsedCommand,
+	root: string,
+	runtime: FallowRunnerRuntime,
+): Promise<RepairHint | undefined> {
+	if (parsed.command !== "audit" || !parsed.baseRef) return undefined;
+	const result = await runtime.runCommand(
+		"git",
+		["-C", root, "rev-parse", "--verify", parsed.baseRef],
+		{ cwd: root },
+	);
+	return result.exitCode === 0 ? undefined : repairHintFor("invalid-base-ref");
 }
 
 function summaryWithReadiness(readiness: ReadinessSummary): FallowRunnerSummary {
@@ -747,13 +746,7 @@ function writeBudgetedEnvelope(
 			fallowOutput: null,
 			rawOutputIncluded: false,
 			outputBudgetStatus: "summary-impossible",
-			repairHints: [
-				{
-					action: "reduce-output",
-					message: "Increase output budget or omit raw output before retrying.",
-					retry_safe: false,
-				},
-			],
+			repairHints: [repairHintFor("reduce-output")],
 		}),
 	);
 	return 1;
@@ -932,13 +925,112 @@ function configSafetyHintsFor(
 	readiness: ReadinessSummary,
 ): RepairHint[] {
 	if (command !== "fix-apply" || !readiness.config.present) return [];
-	return [
-		{
-			action: "inspect-config",
-			message: "Inspect Fallow config paths before apply.",
-			retry_safe: false,
-		},
-	];
+	return [repairHintFor("config-before-apply")];
+}
+
+function runtimeFailureHintKind(
+	command: FallowRunnerCommand,
+	stderr: string,
+): RepairHintKind {
+	if (isEvidenceCommand(command) && isTransientRuntimeFailure(stderr)) {
+		return "transient-retry";
+	}
+	return "runtime-failure";
+}
+
+function isTransientRuntimeFailure(stderr: string): boolean {
+	return /\b(timeout|timed out|temporar(y|ily)|econnreset|again|busy)\b/i.test(
+		stderr,
+	);
+}
+
+function repairHintFor(
+	kind: RepairHintKind,
+	messageOverride?: string,
+): RepairHint {
+	if (kind === "invalid-root") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
+			messageOverride ?? "Choose an existing target repository root.",
+		);
+	}
+	if (kind === "invalid-usage") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
+			messageOverride ?? "Correct runner arguments before retrying.",
+		);
+	}
+	if (kind === "unsupported-root") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
+			"Choose a JavaScript or TypeScript repository root.",
+		);
+	}
+	if (kind === "missing-fallow") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.setupFallow,
+			"Expose a project-local or PATH Fallow binary.",
+		);
+	}
+	if (kind === "git-readiness") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
+			"Repair git readiness before audit.",
+		);
+	}
+	if (kind === "invalid-base-ref") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.fixInput,
+			"Choose a valid audit base ref.",
+		);
+	}
+	if (kind === "runtime-failure") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.runDoctor,
+			"Run diagnostics before retrying Fallow.",
+		);
+	}
+	if (kind === "parse-output") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.runDoctor,
+			"Confirm Fallow JSON output before retrying.",
+		);
+	}
+	if (kind === "reduce-output") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.reduceOutput,
+			"Increase output budget or omit raw output before retrying.",
+		);
+	}
+	if (kind === "apply-shaped") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.inspectConfig,
+			"Use fix-preview first, then explicit fix-apply after current-task authorization.",
+		);
+	}
+	if (kind === "config-before-apply") {
+		return repairHint(
+			FALLOW_REPAIR_ACTION_BY_KEY.inspectConfig,
+			"Inspect Fallow config paths before apply.",
+		);
+	}
+	return repairHint(
+		FALLOW_REPAIR_ACTION_BY_KEY.retry,
+		"Retry the same input; the failure looks transient.",
+		true,
+	);
+}
+
+function repairHint(
+	action: FallowRepairAction,
+	message: string,
+	retrySafe = false,
+): RepairHint {
+	return {
+		action,
+		message,
+		retry_safe: retrySafe,
+	};
 }
 
 function totalFindingsFor(
@@ -1553,21 +1645,8 @@ function emitUsageError(
 			maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
 			rawRequested: false,
 			repairHints: safetyBlock
-				? [
-						{
-							action: "inspect-config",
-							message:
-								"Use fix-preview first, then explicit fix-apply after current-task authorization.",
-							retry_safe: false,
-						},
-					]
-				: [
-						{
-							action: "fix-input",
-							message: error.message,
-							retry_safe: false,
-						},
-					],
+				? [repairHintFor("apply-shaped")]
+				: [repairHintFor("invalid-usage", error.message)],
 		}),
 	);
 	return exitCode;

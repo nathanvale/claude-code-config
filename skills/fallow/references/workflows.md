@@ -38,6 +38,7 @@
 - Follow the first safe repair hint.
 - Run `doctor` when setup cause is unclear.
 - Retry the same input only when the hint says retry is safe.
+- Avoid per-finding repair plans for blocked runner failures.
 
 ## Stop
 

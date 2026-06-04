@@ -14,6 +14,7 @@ import {
 import {
 	FALLOW_FAILURE_CATEGORIES,
 	FALLOW_OUTPUT_BUDGET_STATUSES,
+	FALLOW_REPAIR_ACTION_BY_KEY,
 	FALLOW_REPAIR_ACTIONS,
 	FALLOW_RUNNER_COMMANDS,
 	FALLOW_RUNNER_CONTRACT_ID,
@@ -177,6 +178,18 @@ function readinessOf(envelope: Record<string, unknown>) {
 	};
 }
 
+function primaryRepairHint(envelope: Record<string, unknown>) {
+	const hints = envelope.repair_hints as Array<{
+		action: string;
+		message: string;
+		retry_safe: boolean;
+	}>;
+	expect(hints).toHaveLength(1);
+	expect(typeof hints[0].message).toBe("string");
+	expect(typeof hints[0].retry_safe).toBe("boolean");
+	return hints[0];
+}
+
 type CommandResult = {
 	exitCode: number;
 	stdout: string;
@@ -274,8 +287,13 @@ describe("U2 command contract", () => {
 			"reduce-output",
 			"retry",
 		]);
+		expect(Object.values(FALLOW_REPAIR_ACTION_BY_KEY)).toEqual(
+			[...FALLOW_REPAIR_ACTIONS],
+		);
 
-		expect(() => assertFallowRepairAction("run-doctor")).not.toThrow();
+		for (const action of Object.values(FALLOW_REPAIR_ACTION_BY_KEY)) {
+			expect(() => assertFallowRepairAction(action)).not.toThrow();
+		}
 		expect(() => assertFallowRepairAction("install-fallow")).toThrow(
 			/Unknown Fallow repair action/,
 		);
@@ -976,6 +994,151 @@ describe("U7 fix preview and explicit apply safety", () => {
 			expect(text).toContain("current-task user authorization");
 			expect(text).toContain("fix-apply");
 		}
+	});
+});
+
+describe("U8 blocked-run repair hints", () => {
+	test("missing Fallow emits setup repair guidance", async () => {
+		const root = await makeRepo();
+
+		const result = await runForTest(["dead-code"], readyRuntime(root));
+
+		expect(result.exitCode).toBe(1);
+		const hint = primaryRepairHint(expectEnvelope(result));
+		expect(hint.action).toBe("setup-fallow");
+		expect(hint.retry_safe).toBe(false);
+	});
+
+	test("invalid root emits input repair guidance", async () => {
+		const root = await makeRepo();
+
+		const result = await runForTest(
+			["doctor", "--root", join(root, "missing")],
+			makeRuntime(),
+		);
+
+		expect(result.exitCode).toBe(1);
+		const hint = primaryRepairHint(expectEnvelope(result));
+		expect(hint.action).toBe("fix-input");
+		expect(hint.retry_safe).toBe(false);
+	});
+
+	test("invalid audit base ref emits input repair guidance before Fallow runs", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const calls: CommandCall[] = [];
+		const runtime = readyRuntime(root, {
+			runCommand: async (command, args, options) => {
+				calls.push({ command, args: [...args], cwd: options.cwd });
+				if (args.includes("--is-inside-work-tree")) {
+					return { exitCode: 0, stdout: "true\n", stderr: "" };
+				}
+				if (args.includes("--verify")) {
+					return { exitCode: 128, stdout: "", stderr: "unknown revision" };
+				}
+				return {
+					exitCode: 0,
+					stdout: JSON.stringify({ findings: [] }),
+					stderr: "",
+				};
+			},
+		});
+
+		const result = await runForTest(
+			["audit", "--base-ref", "origin/missing"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("input");
+		expect(primaryRepairHint(envelope).action).toBe("fix-input");
+		expect(calls.some((call) => call.command !== "git")).toBe(false);
+	});
+
+	test("non-JSON stdout emits parse repair guidance", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: "not json", stderr: "scanned files" },
+		]);
+
+		const result = await runForTest(["dead-code"], runtime);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("parse");
+		const hint = primaryRepairHint(envelope);
+		expect(hint.action).toBe("run-doctor");
+		expect(hint.retry_safe).toBe(false);
+	});
+
+	test("Fallow runtime failure emits run recovery guidance", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 7, stdout: "", stderr: "fatal: config failed" },
+		]);
+
+		const result = await runForTest(["dupes"], runtime);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("fallow");
+		const hint = primaryRepairHint(envelope);
+		expect(hint.action).toBe("run-doctor");
+		expect(hint.retry_safe).toBe(false);
+	});
+
+	test("budget failure emits output reduction guidance", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(
+			["dead-code", "--max-output-bytes", "64"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("budget");
+		const hint = primaryRepairHint(envelope);
+		expect(hint.action).toBe("reduce-output");
+		expect(hint.retry_safe).toBe(false);
+	});
+
+	test("safety block emits config inspection guidance", async () => {
+		const result = await runForTest(["health", "--apply"], makeRuntime());
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("safety");
+		const hint = primaryRepairHint(envelope);
+		expect(hint.action).toBe("inspect-config");
+		expect(hint.retry_safe).toBe(false);
+	});
+
+	test("retry action appears only when same-input retry is safe", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 75, stdout: "", stderr: "timeout while scanning" },
+		]);
+
+		const result = await runForTest(["health"], runtime);
+
+		expect(result.exitCode).toBe(1);
+		const hint = primaryRepairHint(expectEnvelope(result));
+		expect(hint.action).toBe("retry");
+		expect(hint.retry_safe).toBe(true);
+	});
+
+	test("workflow reference keeps blocked repair branchable", async () => {
+		const workflow = await Bun.file(
+			join(import.meta.dir, "..", "references", "workflows.md"),
+		).text();
+
+		expect(workflow).toContain("Follow the first safe repair hint.");
+		expect(workflow).toContain("Retry the same input only when the hint says");
+		expect(workflow).toContain("per-finding repair plans");
 	});
 });
 

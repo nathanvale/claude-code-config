@@ -116,6 +116,18 @@ export const FALLOW_REPAIR_ACTIONS = [
 ] as const;
 
 /**
+ * Named repair action ids for runner-owned failure normalization.
+ */
+export const FALLOW_REPAIR_ACTION_BY_KEY = {
+	runDoctor: "run-doctor",
+	setupFallow: "setup-fallow",
+	fixInput: "fix-input",
+	inspectConfig: "inspect-config",
+	reduceOutput: "reduce-output",
+	retry: "retry",
+} as const satisfies Record<string, FallowRepairAction>;
+
+/**
  * Repair action union.
  */
 export type FallowRepairAction = (typeof FALLOW_REPAIR_ACTIONS)[number];
