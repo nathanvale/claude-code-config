@@ -13,7 +13,7 @@ describe("multi failure fixture", () => {
 	});
 
 	test("handles empty names", () => {
-		expect(initials("")).toBe("");
+		expect(initials("")).toBe("?");
 	});
 });
 

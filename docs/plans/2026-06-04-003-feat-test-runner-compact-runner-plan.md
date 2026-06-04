@@ -1,7 +1,7 @@
 ---
 title: "feat(test-runner): add skill-local compact Bun runner"
 type: feat
-status: active
+status: completed
 date: 2026-06-04
 origin: docs/brainstorms/2026-06-04-test-runner-compact-runner-requirements.md
 ---

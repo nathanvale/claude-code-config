@@ -338,7 +338,7 @@ async function runLocalRunnerFixture(
 			...splitCommand(command),
 			"--cwd",
 			cwd,
-			"--json",
+			"--plain",
 			"--",
 			fixture.file,
 			...fixture.bunArgs,
@@ -539,10 +539,10 @@ function scoreFidelity(
 		failing_file: fixture.expectedSignals.failingFile
 			? output.includes(fixture.expectedSignals.failingFile)
 			: true,
-		failing_test: fixture.expectedSignals.failingTests.some((testName) =>
+		failing_test: fixture.expectedSignals.failingTests.every((testName) =>
 			output.includes(testName),
 		),
-		assertion_signal: fixture.expectedSignals.assertionPatterns.some((pattern) =>
+		assertion_signal: fixture.expectedSignals.assertionPatterns.every((pattern) =>
 			lowerOutput.includes(pattern.toLowerCase()),
 		),
 		bounded_diagnostics: output.length <= DEFAULT_FAILURE_BUDGET_CHARS,
@@ -607,9 +607,12 @@ async function evaluateFixedGates(
 	if (!gateFile) return { status: "not_applicable", failures: [] };
 	const gates = JSON.parse(await readFile(join(cwd, gateFile), "utf-8")) as {
 		candidate_gates?: CandidateGate[];
+		calibration?: { candidate_gates?: CandidateGate[] };
 	};
+	const candidateGates =
+		gates.candidate_gates ?? gates.calibration?.candidate_gates ?? [];
 	const failures: string[] = [];
-	for (const gate of gates.candidate_gates ?? []) {
+	for (const gate of candidateGates) {
 		const row = rows.find(
 			(candidate) =>
 				candidate.fixture === gate.fixture && candidate.variant === gate.variant,
@@ -760,4 +763,3 @@ if (import.meta.main) {
 		process.exit(2);
 	}
 }
-
