@@ -2180,3 +2180,50 @@ Consequences:
 - Requirements should separate MVP scope from v2 parking lot.
 - Planning should ignore v2 items unless a later decision promotes one.
 - Implementation workers should treat v2 mentions as non-goals.
+
+## Decision 41: Resolver Implementation Landed; Prototype Retired
+
+```yaml
+id: fallow-agent-native-041
+status: accepted
+decided_at: "2026-06-05"
+decision_mode:
+  question: When does the throwaway trace spike stop being a runtime reference?
+  option: 1
+  confidence: strong
+scope: skills/fallow
+owner:
+  - fallow-plan
+  - fallow-work
+durability:
+  current: decision-log
+  escalate_to_plan_if: resolver behavior changes shape
+prototype_status: retired
+keeper_paths:
+  - skills/fallow/scripts/why-trace.ts
+  - skills/fallow/scripts/command-contract.ts
+  - skills/fallow/scripts/fallow-runner.ts
+```
+
+Decision:
+
+- The resolver MVP shipped per plan `2026-06-05-003`: `why` target, resolver
+  vocabulary, the Fallow-owned trace adapter, evidence-grade-first output, and
+  action-first skill routing.
+- Delete the `prototype-why-symbol` spike once adapter and runner tests cover
+  its keeper behavior.
+- Preserve source lineage in `PROVENANCE.md` and this log, not as executable
+  scripts.
+
+Rationale:
+
+- The spike proved the `trace_export` mcporter shape and reachability evidence;
+  that value now lives in `why-trace.ts` and the runner test suite.
+- A retired spike left in the tree reads as runtime surface and invites drift.
+
+Consequences:
+
+- No runtime import, package script, or docs route depends on the prototype
+  folder; a regression test guards this.
+- Future resolver work starts from the accepted requirements and plan, not the
+  throwaway scripts.

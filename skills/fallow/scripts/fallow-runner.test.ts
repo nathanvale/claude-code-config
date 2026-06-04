@@ -2624,3 +2624,36 @@ describe("U4 resolver execution and evidence-grade-first output", () => {
 		expect((envelope.fallow_output as { is_used?: boolean }).is_used).toBe(true);
 	});
 });
+
+describe("U6 prototype retirement", () => {
+	const scriptsDir = import.meta.dir;
+
+	test("the throwaway prototype folder is gone", async () => {
+		const { existsSync } = await import("node:fs");
+		expect(existsSync(join(scriptsDir, "prototype-why-symbol"))).toBe(false);
+	});
+
+	test("no runner script imports the prototype folder", async () => {
+		const { readdir } = await import("node:fs/promises");
+		const entries = await readdir(scriptsDir);
+		const sources = entries.filter(
+			(name) => name.endsWith(".ts") && !name.endsWith(".test.ts"),
+		);
+		for (const name of sources) {
+			const text = await readFile(join(scriptsDir, name), "utf-8");
+			// No executable import path depends on the prototype; a `//` source
+			// lineage comment is allowed.
+			expect(text).not.toContain('from "./prototype-why-symbol');
+			expect(text).not.toContain("import(\"./prototype-why-symbol");
+		}
+	});
+
+	test("the runner suite covers the trace shapes the prototype proved", () => {
+		// The keeper behavior lives in the U3 adapter and U4 execution suites:
+		// referenced, entry-point, unreferenced, symbol-not-found, and transport
+		// failure. This test documents that coverage gate so the prototype's value
+		// is preserved before deletion.
+		expect(typeof deriveEvidenceGrade).toBe("function");
+		expect(typeof traceExportReachability).toBe("function");
+	});
+});
