@@ -1,20 +1,20 @@
 ---
-title: "feat: Add Fallow Progressive Disclosure Index"
+title: "feat: Add Fallow Skill Route Index"
 type: feat
 status: active
 date: 2026-06-04
 origin: docs/brainstorms/2026-06-04-fallow-progressive-disclosure-index-requirements.md
 ---
 
-# feat: Add Fallow Progressive Disclosure Index
+# feat: Add Fallow Skill Route Index
 
 ## Summary
 
-Redesign the Fallow skill front door around request-shaped progressive
-disclosure, with PR self-review as the first path and mutation safety visible
-before any apply route. Add a runner-owned `--plain` output mode so routine
-skill-driver judgment starts from compact human-readable evidence while JSON
-remains the structured inspection path.
+Redesign the Fallow skill front door around a request-shaped Skill Route Index,
+using progressive disclosure so PR self-review is the first route and mutation
+safety is visible before any apply route. Add a runner-owned `--plain` summary
+projection so routine skill-driver judgment starts from compact evidence while
+JSON remains the structured inspection path.
 
 ---
 
@@ -26,25 +26,25 @@ in code and tests. Its skill entry is still flat. A fresh skill driver has to
 read owner paths and workflow prose before it can answer the common request:
 "I just built this; check the diff before PR."
 
-This plan turns that front door into a small progressive-disclosure index and
-adds the missing human-readable runner projection the previous MVP deferred
-until usage proved the need. The origin document supplies that usage signal
-(see origin: `docs/brainstorms/2026-06-04-fallow-progressive-disclosure-index-requirements.md`).
+This plan turns that front door into a small Skill Route Index and adds the
+missing summary projection the previous MVP deferred until usage proved the
+need. The origin document supplies that usage signal (see origin:
+`docs/brainstorms/2026-06-04-fallow-progressive-disclosure-index-requirements.md`).
 
 ---
 
 ## Requirements
 
-**Progressive disclosure routing**
+**Skill Route Index routing**
 
-- R1. `skills/fallow/SKILL.md` starts with a request-shaped progressive
-  disclosure index before owner paths.
+- R1. `skills/fallow/SKILL.md` starts with a request-shaped Skill Route Index
+  before owner paths.
 - R2. The index puts implemented-work / PR self-review first and routes clear
   PR-prep asks toward changed-code audit without making the user choose a menu
   item.
 - R3. Secondary routes cover changed-code review, cleanup/refactor scan,
-  readiness check, fix preview, apply gate, and target mismatch.
-- R4. The index names user questions before command families and points to
+  readiness check, fix preview, apply gate, and target-fit challenge.
+- R4. The index names request shapes before command families and points to
   owner help or references for exact command syntax.
 - R5. `doctor` remains the readiness route when setup, target fit, git
   readiness, JSON capability, or config scope is unknown.
@@ -59,10 +59,12 @@ until usage proved the need. The origin document supplies that usage signal
   raw findings.
 - R8. Routing escalates from `--plain` to JSON only for issue references,
   repair planning, structured evidence, or before/after comparison.
-- R9. Self-review reporting keeps inherited baseline findings separate from
+- R9. Self-review reporting keeps pre-existing findings separate from
   current-task work unless the user explicitly asks for cleanup.
-- R9a. Self-review reports current-task findings first, then inherited baseline
-  count or status separately without listing every baseline issue by default.
+- R9a. Self-review reports current-task findings first, then pre-existing
+  finding count or status separately without listing every prior issue by
+  default. Baseline terminology remains deferred until Fallow owns baseline
+  semantics.
 - R10. Self-review reruns the same evidence command after changes and reports
   before/after evidence when a rerun exists.
 - R10a. PR self-review starts with changed-code `audit --plain` when target fit
@@ -95,12 +97,12 @@ until usage proved the need. The origin document supplies that usage signal
 - R19. Interactive runtime confirmation is evaluated during planning and
   documented as a deliberate non-goal for this pass.
 
-**Human-readable output**
+**Summary projection**
 
-- R20. The runner exposes `--plain` as a compact human-readable output mode for
+- R20. The runner exposes `--plain` as a compact summary projection for
   routine summary judgment.
 - R21. Plain output projects readiness, command outcome, finding counts,
-  top-level risk, and next safe action when available.
+  issue status, and next safe action when available.
 - R22. Plain output avoids raw issue dumps.
 - R23. JSON output remains available and unchanged for structured inspection
   and existing automation.
@@ -117,8 +119,8 @@ until usage proved the need. The origin document supplies that usage signal
 - R28. Workflow depth stays in `skills/fallow/references/workflows.md`.
 - R29. Command recipes stay in `skills/fallow/references/commands.md`.
 - R30. Safety policy stays in `skills/fallow/references/safety.md`.
-- R31. References may include tiny request-shaped examples, but examples name
-  routes and owners rather than full command tutorials.
+- R31. `references/workflows.md` may include tiny request-shaped examples, but
+  examples name routes and owners rather than full command tutorials.
 - R32. Shared skill-entry guidance remains deferred until Fallow proves the
   pattern.
 - R33. Fallow records enough rationale to decide later whether the pattern
@@ -162,10 +164,11 @@ until usage proved the need. The origin document supplies that usage signal
   readiness route for plausible JS/TS targets, not proof that an irrelevant root
   is worth reviewing. When target fit is suspect, retarget or challenge the
   premise before treating readiness output as useful.
-- KTD5b. **Separate inherited baseline from current-task work:** PR
+- KTD5b. **Separate pre-existing findings from current-task work:** PR
   self-review should keep the report centered on current changes. Baseline
-  findings remain visible as count or status context and move into cleanup only
-  when the user asks for that scope.
+  terminology remains deferred until Fallow owns baseline semantics; until
+  then, pre-existing findings remain visible as count or status context and
+  move into cleanup only when the user asks for that scope.
 - KTD6. **Keep broader cleanup workflows opt-in:** Fallow evidence can reveal
   architecture pressure, but Fallow should not dispatch architecture or review
   skills. It reports evidence and suggests the broader route only when the
@@ -180,13 +183,13 @@ until usage proved the need. The origin document supplies that usage signal
 
 ```mermaid
 flowchart TB
-  Ask["User ask"] --> Index["Fallow progressive disclosure index"]
+  Ask["Request shape"] --> Index["Fallow Skill Route Index"]
   Index -->|implemented work / PR next| SelfReview["Changed-code self-review"]
   Index -->|module or repo cleanup| Cleanup["Cleanup evidence route"]
   Index -->|unknown readiness on plausible target| Doctor["Readiness check"]
   Index -->|fix request| Preview["Fix preview"]
   Index -->|apply request| ApplyGate["Skill-owned apply gate"]
-  Index -->|unsupported target| Retarget["Challenge premise or retarget"]
+  Index -->|target-fit challenge| Retarget["Challenge premise or retarget"]
 
   SelfReview --> Plain["Runner --plain summary"]
   Cleanup --> Plain
@@ -322,7 +325,7 @@ required facts and JSON parity.
 and JSON runs over the same stubbed Fallow results semantically project the
 same status, counts, failure category, budget state, and primary repair action.
 
-### U3. Rewrite The Fallow Skill Front Door As Progressive Disclosure
+### U3. Rewrite The Fallow Skill Front Door As A Skill Route Index
 
 **Goal:** Make `SKILL.md` route the common PR self-review ask before owner paths
 while staying small and contract-light.
@@ -340,8 +343,9 @@ R15, R17, R18, R19, R27, R28, R29, R30, R31, R32
 
 **Approach:** Move the first screen from owner-path inventory to route
 selection. Put the PR self-review path first, then a short numbered index for
-cleanup, readiness, fix preview, apply gate, and target mismatch. Use
-request-shaped labels before command families. Point to owner files for
+cleanup, readiness, fix preview, apply gate, and target-fit challenge. Use
+request-shaped labels before command families. Keep the index a judgment aid,
+not a menu the user must choose from. Point to owner files for
 commands, workflow depth, and safety instead of copying parser details or
 output semantics. Record the before/after rationale in provenance so the team
 can later decide whether the pattern should generalize.
@@ -364,16 +368,16 @@ before editing `SKILL.md`.
   already suspect.
 - Happy path: the first screen shows PR self-review before owner paths.
 - Happy path: secondary routes cover cleanup/refactor scan, readiness check,
-  fix preview, apply gate, and target mismatch.
+  fix preview, apply gate, and target-fit challenge.
 - Edge case: unsupported target wording tells the skill driver to run readiness
   checks only after retargeting or challenging the premise rather than treating
   irrelevant evidence as useful.
 - Edge case: blocked changed-code evidence routes to `doctor` instead of
   treating the blocked run as usable review evidence.
-- Edge case: inherited baseline findings stay separate from current-task work
+- Edge case: pre-existing findings stay separate from current-task work
   unless the user asks for cleanup.
-- Edge case: inherited baseline reporting uses count or status context instead
-  of dumping all baseline issue references by default.
+- Edge case: pre-existing finding reporting uses count or status context
+  instead of dumping all prior issue references by default.
 - Error path: apply-shaped requests stop at the skill-owned authorization gate
   when current-task mutation authorization is missing.
 - Regression: `SKILL.md` frontmatter YAML parses and `description` stays a
@@ -411,9 +415,9 @@ inputs to runner help. Keep `workflows.md` focused on self-review, cleanup,
 rerun, preview, apply, blocked-run, and stop loops. Keep `safety.md` as the
 single source for when skill drivers may use the runner-owned apply marker,
 config-scope review, and excluded behavior. Document that interactive runtime
-confirmation was evaluated and deferred. Add tiny request-shaped examples only
-where they reduce route hesitation; examples name the route and next owner, not
-full command syntax.
+confirmation was evaluated and deferred. Add tiny request-shaped examples to
+`references/workflows.md` only where they reduce route hesitation; examples
+name the route and next owner, not full command syntax.
 
 **Patterns to follow:**
 
@@ -433,7 +437,8 @@ full command syntax.
 - Happy path: `workflows.md` preserves self-review rerun and before/after
   reporting guidance.
 - Happy path: `workflows.md` reports current-task findings before inherited
-  baseline count or status.
+  baseline count or status when baseline semantics exist, otherwise before
+  pre-existing finding count or status.
 - Happy path: cleanup guidance routes module/repo cleanup asks to dead-code,
   duplication, or health evidence.
 - Happy path: bare cleanup starts with health summary evidence.
@@ -496,7 +501,7 @@ startup sources are touched.
   path; other plain tests assert semantic facts.
 - Integration: route prose gives the skill driver visible judgment aids for PR
   self-review, cleanup/refactor scan, readiness, fix preview, apply gate, and
-  target mismatch.
+  target-fit challenge.
 - Regression: JSON automation remains available and default behavior is
   unchanged without `--plain`.
 - Regression: output budget tests still pass for raw omission, summary
@@ -523,7 +528,7 @@ changed, the startup instruction check reports no drift.
 
 ### In Scope
 
-- Redesign `skills/fallow/SKILL.md` around a progressive disclosure index.
+- Redesign `skills/fallow/SKILL.md` around a Skill Route Index.
 - Update Fallow references where route pointers, summary-first flow, or safety
   wording need support.
 - Add runner support for compact `--plain` summary output.
@@ -569,8 +574,8 @@ changed, the startup instruction check reports no drift.
 - **Safety posture:** Mutation remains skill-authorized and reference-owned;
   bare `fix-apply` fails closed through a runner-owned marker, and the runner
   stays non-interactive in this pass.
-- **Documentation topology:** `SKILL.md` becomes a route index; references and
-  runner owners keep depth and deterministic contracts.
+- **Documentation topology:** `SKILL.md` starts with a Skill Route Index;
+  references and runner owners keep depth and deterministic contracts.
 
 ---
 
@@ -597,7 +602,7 @@ changed, the startup instruction check reports no drift.
   passes `--plain`, then it receives compact triage evidence. When issue
   references or repair planning are needed, JSON remains available.
 - AE6. Covers R27-R32. Given a reviewer reads `skills/fallow/SKILL.md`, then the
-  progressive disclosure index is visible before owner paths and exact command
+  Skill Route Index is visible before owner paths and exact command
   contracts still live in runner help, references, code, and tests.
 - AE7. Covers R32-R33. Given this redesign ships, then no shared skill-entry rule
   changes until Fallow usage proves the index pattern.

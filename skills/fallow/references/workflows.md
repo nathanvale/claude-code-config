@@ -27,11 +27,26 @@
 ## Changed-Code Audit
 
 - Use `audit` after implementation or before review.
-- Provide an explicit base only when the task or branch context needs it.
+- Audit auto-detects the base branch; provide an explicit base only when the task or branch context needs it.
+- Read the attribution split before triaging individual findings.
 - Treat pre-existing findings as separate cleanup unless the current task owns them.
+
+## Audit Attribution
+
+Audit runs `--gate new-only`: it separates findings the changeset introduced from
+inherited base findings, so the runner does the changed-vs-pre-existing split for you. This
+replaces manual coverage-intersect for audit.
+
+- Read the plain `attribution gate=new-only introduced=N inherited=M` line first.
+- Act on findings tagged `introduced: true`; treat `introduced: false` as base context.
+- `next_action=continue introduced=0` means the changeset added nothing; stop without per-finding triage.
+- Parse JSON and filter `issue_references` on `introduced` when a finding list is needed.
+- Read `summary.mode_evidence.attribution` for per-category introduced counts.
+- Attribution covers audit only; `dead-code`, `health`, and `dupes` need the coverage-intersect pass below.
 
 ## Coverage Intersect
 
+Use for non-audit modes (`dead-code`, `health`, `dupes`), which carry no attribution.
 Fallow cannot see indirect coverage or distinguish a contract export from dead code. On
 skill or CLI folders that export a public contract and test through an integration entry
 point, raw `add-tests` and `remove-export` findings run mostly false-positive. Intersect

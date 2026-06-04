@@ -298,6 +298,24 @@ describe("U2 command contract", () => {
 			/Unknown Fallow repair action/,
 		);
 	});
+
+	test("declares json and plain output for every command", () => {
+		for (const command of ALL_COMMANDS) {
+			expect(fallowRunnerContracts[command].outputModes).toContain("json");
+			expect(fallowRunnerContracts[command].outputModes).toContain("plain");
+		}
+	});
+
+	test("fix-apply alone owns the source-mutation authorization marker", () => {
+		expect(Object.keys(fallowRunnerContracts["fix-apply"].flags)).toContain(
+			"--confirm-current-task-apply",
+		);
+		for (const command of ALL_COMMANDS.filter((item) => item !== "fix-apply")) {
+			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
+				"--confirm-current-task-apply",
+			);
+		}
+	});
 });
 
 describe("U4 discovery and doctor runtime", () => {
@@ -568,6 +586,64 @@ describe("U5 Fallow execution and summary semantics", () => {
 		]);
 	});
 
+	test("clone groups fan out to per-instance references with locations", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "dupes",
+			clone_groups: [
+				{
+					instances: [
+						{
+							file: "src/a.ts",
+							start_line: 218,
+							end_line: 227,
+							start_col: 47,
+							end_col: 33,
+						},
+						{
+							file: "src/b.ts",
+							start_line: 314,
+							end_line: 323,
+							start_col: 68,
+							end_col: 33,
+						},
+					],
+					fingerprint: "dup:9644d4f5",
+					actions: [{ type: "extract-shared", auto_fixable: false }],
+				},
+			],
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["dupes"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("issues");
+		expect(envelope.summary).toMatchObject({ total_findings: 2 });
+		expect(envelope.issue_references).toEqual([
+			expect.objectContaining({
+				id: "dup:9644d4f5",
+				path: "src/a.ts",
+				action: "extract-shared",
+				range: expect.objectContaining({
+					start_line: 218,
+					start_column: 47,
+					end_line: 227,
+					end_column: 33,
+				}),
+			}),
+			expect.objectContaining({
+				id: "dup:9644d4f5",
+				path: "src/b.ts",
+				action: "extract-shared",
+				range: expect.objectContaining({ start_line: 314, end_line: 323 }),
+			}),
+		]);
+	});
+
 	test("audit and health outputs without a uniform findings array remain truthful", async () => {
 		const auditRoot = await makeRepo({ localFallow: true });
 		const auditRuntime = readyExecutionRuntime(auditRoot, [
@@ -638,6 +714,98 @@ describe("U5 Fallow execution and summary semantics", () => {
 				maintainability_avg: 72.4,
 			},
 		});
+	});
+
+	test("audit surfaces introduced-vs-inherited attribution and tags findings", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "audit",
+			command: "audit",
+			verdict: "fail",
+			base_ref: "main",
+			changed_files_count: 26,
+			summary: {
+				dead_code_issues: 2,
+				complexity_findings: 0,
+				duplication_clone_groups: 0,
+			},
+			attribution: {
+				gate: "new-only",
+				dead_code_introduced: 1,
+				dead_code_inherited: 1,
+				complexity_introduced: 0,
+				complexity_inherited: 0,
+				duplication_introduced: 0,
+				duplication_inherited: 0,
+			},
+			dead_code: {
+				unused_exports: [
+					{
+						path: "src/new.ts",
+						export_name: "freshThing",
+						introduced: true,
+						actions: [{ kind: "remove-export", auto_fixable: true }],
+					},
+					{
+						path: "src/old.ts",
+						export_name: "staleThing",
+						introduced: false,
+						actions: [{ kind: "remove-export", auto_fixable: true }],
+					},
+				],
+			},
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["audit"], runtime);
+		const envelope = expectEnvelope(result);
+
+		expect(envelope.summary).toMatchObject({
+			mode_evidence: {
+				verdict: "fail",
+				base_ref: "main",
+				attribution: { gate: "new-only", introduced: 1, inherited: 1 },
+			},
+		});
+		expect(envelope.issue_references).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ path: "src/new.ts", introduced: true }),
+				expect.objectContaining({ path: "src/old.ts", introduced: false }),
+			]),
+		);
+	});
+
+	test("audit with zero introduced findings signals continue, not inspect", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			kind: "audit",
+			verdict: "fail",
+			summary: {
+				dead_code_issues: 50,
+				complexity_findings: 0,
+				duplication_clone_groups: 0,
+			},
+			attribution: {
+				gate: "new-only",
+				dead_code_introduced: 0,
+				dead_code_inherited: 50,
+			},
+			dead_code: {
+				unused_exports: [
+					{ path: "src/old.ts", export_name: "x", introduced: false },
+				],
+			},
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["audit", "--plain"], runtime);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("attribution gate=new-only introduced=0");
+		expect(result.stdout).toContain("next_action=continue introduced=0");
 	});
 
 	test("raw Fallow output is included only when explicitly requested", async () => {
@@ -735,6 +903,115 @@ describe("U5 Fallow execution and summary semantics", () => {
 
 			expect(expectEnvelope(result).stderr_category).toBe(category);
 		}
+	});
+});
+
+describe("U9 plain output projection", () => {
+	test("clean audit plain output has a compact golden shape", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(["audit", "--plain"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toBe(
+			[
+				"fallow mode=audit status=ok exit_code=0 failure=none write=none findings=0 auto_fixable=0 needs_trace=0 needs_human=0 references=0 budget=within-budget raw_included=false run_id=fallow:2026-06-04T00:00:00.000Z:test",
+				"next_action=continue",
+				"",
+			].join("\n"),
+		);
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("plain findings summarize aggregates without dumping raw issues", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = {
+			findings: [
+				{
+					id: "unused:OldButton",
+					path: "src/button.ts",
+					line: 4,
+					rule: "unused-export",
+					auto_fixable: true,
+				},
+				{
+					finding_id: "complex:render",
+					file: "src/render.ts",
+					requires_human: true,
+				},
+			],
+		};
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(["health", "--plain"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("status=issues");
+		expect(result.stdout).toContain("findings=2");
+		expect(result.stdout).toContain("auto_fixable=1");
+		expect(result.stdout).toContain("needs_human=1");
+		expect(result.stdout).toContain("references=2");
+		expect(result.stdout).toContain("next_action=inspect-json");
+		expect(result.stdout).not.toContain("unused:OldButton");
+		expect(result.stdout).not.toContain("src/button.ts");
+	});
+
+	test("plain doctor reports readiness and target-fit signal", async () => {
+		const root = await makeRepo({ localFallow: true });
+
+		const result = await runForTest(["doctor", "--plain"], readyRuntime(root));
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("mode=doctor");
+		expect(result.stdout).toContain("status=ok");
+		expect(result.stdout).toContain("readiness root=ok");
+		expect(result.stdout).toContain("repo_shape=ok");
+		expect(result.stdout).toContain("target_fit=plausible-js-ts");
+		expect(result.stdout).toContain("fallow_binary=ok");
+		expect(result.stdout).toContain("git=ok");
+		expect(result.stdout).toContain("next_action=continue");
+	});
+
+	test("plain blocked output names the same primary repair action as JSON", async () => {
+		const root = await makeRepo();
+		const json = await runForTest(["dead-code"], readyRuntime(root));
+		const plain = await runForTest(["dead-code", "--plain"], readyRuntime(root));
+		const primary = primaryRepairHint(expectEnvelope(json)).action;
+
+		expect(plain.exitCode).toBe(1);
+		expect(plain.stdout).toContain("status=blocked");
+		expect(plain.stdout).toContain("failure=setup");
+		expect(plain.stdout).toContain(`next_action=${primary}`);
+		expect(plain.stdout).toContain("readiness root=ok");
+	});
+
+	test("plain raw-output requests do not dump raw Fallow output", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{
+				exitCode: 0,
+				stdout: JSON.stringify({
+					findings: [],
+					debug_payload: "do-not-print-this",
+				}),
+				stderr: "",
+			},
+		]);
+
+		const result = await runForTest(
+			["dead-code", "--plain", "--include-raw-output"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("raw_included=true");
+		expect(result.stdout).not.toContain("do-not-print-this");
 	});
 });
 
@@ -968,7 +1245,10 @@ describe("U7 fix preview and explicit apply safety", () => {
 			},
 		]);
 
-		const result = await runForTest(["fix-apply"], runtime);
+		const result = await runForTest(
+			["fix-apply", "--confirm-current-task-apply"],
+			runtime,
+		);
 
 		expect(result.exitCode).toBe(0);
 		expect(calls.find((call) => call.command !== "git")).toEqual({
@@ -992,7 +1272,10 @@ describe("U7 fix preview and explicit apply safety", () => {
 			{ exitCode: 7, stdout: "", stderr: "fatal: apply failed" },
 		]);
 
-		const result = await runForTest(["fix-apply"], runtime);
+		const result = await runForTest(
+			["fix-apply", "--confirm-current-task-apply"],
+			runtime,
+		);
 
 		expect(result.exitCode).toBe(1);
 		const envelope = expectEnvelope(result);
@@ -1011,6 +1294,44 @@ describe("U7 fix preview and explicit apply safety", () => {
 		expect(JSON.stringify(envelope.repair_hints)).toContain("inspect-config");
 	});
 
+	test("bare fix-apply fails closed before Fallow execution", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime, calls } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ changes: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(["fix-apply"], runtime);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("safety");
+		expect(envelope.write_effect).toBe("none");
+		expect(JSON.stringify(envelope.repair_hints)).toContain("inspect-config");
+		expect(calls).toEqual([]);
+	});
+
+	test("fix-apply accepts the runner-owned authorization marker", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime, calls } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ changes: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(
+			["fix-apply", "--confirm-current-task-apply"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls.find((call) => call.command !== "git")?.args).toEqual([
+			"fix",
+			"--yes",
+			"--format",
+			"json",
+			"--quiet",
+		]);
+	});
+
 	test("config-present apply reports inspection hint and config scope without blocking", async () => {
 		const root = await makeRepo({
 			localFallow: true,
@@ -1022,7 +1343,10 @@ describe("U7 fix preview and explicit apply safety", () => {
 			{ exitCode: 0, stdout: JSON.stringify({ changes: [] }), stderr: "" },
 		]);
 
-		const result = await runForTest(["fix-apply"], runtime);
+		const result = await runForTest(
+			["fix-apply", "--confirm-current-task-apply"],
+			runtime,
+		);
 
 		expect(result.exitCode).toBe(0);
 		const envelope = expectEnvelope(result);
@@ -1219,6 +1543,76 @@ describe("U8 blocked-run repair hints", () => {
 	});
 });
 
+describe("U10 skill route index docs", () => {
+	test("SKILL frontmatter stays parseable and trigger-shaped", async () => {
+		const skill = await readFile(join(import.meta.dir, "../SKILL.md"), "utf-8");
+		const frontmatter = skill.match(/^---\n(?<body>[\s\S]*?)\n---\n/);
+
+		expect(frontmatter?.groups?.body).toContain("name: fallow");
+		expect(frontmatter?.groups?.body).toContain(
+			'description: "Run Fallow code-quality self-review."',
+		);
+		expect(frontmatter?.groups?.body).not.toContain("Nathan");
+	});
+
+	test("SKILL starts with a request-shaped route index before owner paths", async () => {
+		const skill = await readFile(join(import.meta.dir, "../SKILL.md"), "utf-8");
+		const routeIndex = skill.indexOf("## Skill Route Index");
+		const owner = skill.indexOf("## Owner");
+		const prPrep = skill.indexOf("Implemented work / PR prep");
+
+		expect(routeIndex).toBeGreaterThan(0);
+		expect(owner).toBeGreaterThan(routeIndex);
+		expect(prPrep).toBeGreaterThan(routeIndex);
+		expect(prPrep).toBeLessThan(owner);
+		expect(skill).toContain("audit --plain");
+		expect(skill).toContain("Blocked PR evidence");
+		expect(skill).toContain("Cleanup / refactor scan");
+		expect(skill).toContain("Readiness check");
+		expect(skill).toContain("Fix request");
+		expect(skill).toContain("Apply request");
+		expect(skill).toContain("Suspect target");
+	});
+
+	test("SKILL challenges suspect targets before doctor and keeps deterministic contracts out", async () => {
+		const skill = await readFile(join(import.meta.dir, "../SKILL.md"), "utf-8");
+
+		expect(skill).toContain("Challenge suspect targets before readiness checks");
+		expect(skill).toContain("use runner help for the apply marker");
+		expect(skill).not.toContain("--confirm-current-task-apply");
+		expect(skill).not.toContain("contract_id");
+		expect(skill).not.toContain("schema_version");
+		expect(skill).not.toContain("next_action=");
+	});
+
+	test("references teach summary-first routing without copying apply marker syntax", async () => {
+		const commands = await readFile(
+			join(import.meta.dir, "..", "references", "commands.md"),
+			"utf-8",
+		);
+		const workflow = await readFile(
+			join(import.meta.dir, "..", "references", "workflows.md"),
+			"utf-8",
+		);
+		const safety = await readFile(
+			join(import.meta.dir, "..", "references", "safety.md"),
+			"utf-8",
+		);
+
+		expect(commands).toContain("audit --plain");
+		expect(commands).toContain("Use JSON for issue references");
+		expect(workflow).toContain("Request Examples");
+		expect(workflow).toContain("pre-existing findings as count or status");
+		expect(workflow).toContain("Keep broader workflows opt-in");
+		expect(safety).toContain("runner-owned non-interactive apply marker");
+		for (const text of [commands, workflow, safety]) {
+			expect(text).not.toContain("--confirm-current-task-apply");
+			expect(text).not.toContain("contract_id");
+			expect(text).not.toContain("schema_version");
+		}
+	});
+});
+
 describe("U3 parser, help, and discovery alignment", () => {
 	test("root help lists accepted subcommands and no unsupported controls", async () => {
 		const result = await runForTest(["--help"], makeRuntime());
@@ -1303,7 +1697,10 @@ describe("U3 parser, help, and discovery alignment", () => {
 			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
 			cases: ALL_COMMANDS.map((command) => ({
 				label: `${command} accepted`,
-				argv: [command],
+				argv:
+					command === "fix-apply"
+						? [command, "--confirm-current-task-apply"]
+						: [command],
 				assert: (result) => {
 					expect(result.exitCode).not.toBe(2);
 					const envelope = expectEnvelope(result);
@@ -1312,6 +1709,31 @@ describe("U3 parser, help, and discovery alignment", () => {
 				},
 			})),
 		});
+	});
+
+	test("every subcommand accepts subcommand-local plain output", async () => {
+		const root = await makeJsRepo();
+
+		await runCommandSurfaceCases<TestRunResult>({
+			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
+			cases: ALL_COMMANDS.map((command) => ({
+				label: `${command} accepts plain`,
+				argv: [command, "--plain"],
+				assert: (result) => {
+					expect(result.exitCode).not.toBe(2);
+					expect(result.stdout).toContain(`mode=${command}`);
+				},
+			})),
+		});
+	});
+
+	test("global plain output flag is rejected", async () => {
+		const result = await runForTest(["--plain", "audit"], makeRuntime());
+
+		expect(result.exitCode).toBe(2);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("input");
+		expect(JSON.stringify(envelope)).toContain("flags must follow the subcommand");
 	});
 
 	test("audit accepts base-ref and non-audit commands reject it", async () => {

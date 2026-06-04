@@ -33,6 +33,8 @@ const VERSION = "0.1.0";
 const FALLOW_PROCESS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
+type OutputMode = "json" | "plain";
+
 type CommandResult = {
 	exitCode: number;
 	stdout: string;
@@ -61,7 +63,9 @@ type ParsedCommand = {
 	root?: string;
 	includeRawOutput: boolean;
 	maxOutputBytes: number;
+	outputMode: OutputMode;
 	baseRef?: string;
+	applyAuthorized: boolean;
 };
 
 type ParsedArgv =
@@ -143,6 +147,9 @@ type FallowIssueReference = {
 	category?: string;
 	action?: string;
 	symbol?: string;
+	// audit `--gate new-only`: true when the changeset introduced the finding,
+	// false when inherited from the base. Absent outside audit.
+	introduced?: boolean;
 };
 
 type FallowRunnerEnvelope = {
@@ -187,6 +194,7 @@ type FallowEnvelopeInput = {
 	summary?: FallowRunnerSummary;
 	issueReferences?: FallowIssueReference[];
 	repairHints?: RepairHint[];
+	outputMode?: OutputMode;
 };
 
 const COMMON_CONFIG_PATHS = [
@@ -316,6 +324,28 @@ async function runParsedCommand(
 				rawRequested,
 				repairHints: [repairHintFor("invalid-root")],
 			}),
+			parsed.outputMode,
+		);
+		return 1;
+	}
+
+	if (parsed.command === "fix-apply" && !parsed.applyAuthorized) {
+		writeEnvelope(
+			stdout,
+			makeEnvelope({
+				status: "blocked",
+				mode: parsed.command,
+				runId,
+				command: ["fallow-runner", "fix-apply"],
+				cwd: root,
+				exitCode: 1,
+				failureCategory: "safety",
+				writeEffect: "none",
+				maxOutputBytes,
+				rawRequested,
+				repairHints: [repairHintFor("apply-shaped")],
+			}),
+			parsed.outputMode,
 		);
 		return 1;
 	}
@@ -343,6 +373,7 @@ async function runParsedCommand(
 				summary: summaryWithReadiness(readiness),
 				repairHints: [blockingHint],
 			}),
+			parsed.outputMode,
 		);
 		return 1;
 	}
@@ -365,6 +396,7 @@ async function runParsedCommand(
 				summary: summaryWithReadiness(readiness),
 				repairHints: [auditBaseRefHint],
 			}),
+			parsed.outputMode,
 		);
 		return 1;
 	}
@@ -397,6 +429,7 @@ async function runParsedCommand(
 						repairHintFor(runtimeFailureHintKind(parsed.command, result.stderr)),
 					],
 				}),
+				parsed.outputMode,
 			);
 			return 1;
 		}
@@ -420,6 +453,7 @@ async function runParsedCommand(
 					summary: summaryWithReadiness(readiness),
 					repairHints: [repairHintFor("parse-output")],
 				}),
+				parsed.outputMode,
 			);
 			return 1;
 		}
@@ -447,6 +481,7 @@ async function runParsedCommand(
 						repairHintFor(runtimeFailureHintKind(parsed.command, result.stderr)),
 					],
 				}),
+				parsed.outputMode,
 			);
 			return 1;
 		}
@@ -471,6 +506,7 @@ async function runParsedCommand(
 			fallowOutput: rawRequested ? parsedOutput.value : null,
 			summary: evidence.summary,
 			issueReferences: evidence.issueReferences,
+			outputMode: parsed.outputMode,
 		});
 	}
 
@@ -504,6 +540,7 @@ async function runParsedCommand(
 							? configSafetyHints
 							: [repairHintFor("runtime-failure")],
 				}),
+				parsed.outputMode,
 			);
 			return 1;
 		}
@@ -530,6 +567,7 @@ async function runParsedCommand(
 							? configSafetyHints
 							: [repairHintFor("parse-output")],
 				}),
+				parsed.outputMode,
 			);
 			return 1;
 		}
@@ -556,6 +594,7 @@ async function runParsedCommand(
 			summary: writeSummary.summary,
 			issueReferences: writeSummary.issueReferences,
 			repairHints: configSafetyHints,
+			outputMode: parsed.outputMode,
 		});
 	}
 
@@ -575,6 +614,7 @@ async function runParsedCommand(
 			summary: summaryWithReadiness(readiness),
 			repairHints: [repairHintFor("runtime-failure")],
 		}),
+		parsed.outputMode,
 	);
 	return 1;
 }
@@ -617,6 +657,7 @@ function emitDoctor(
 			summary: summaryWithReadiness(readiness),
 			repairHints,
 		}),
+		parsed.outputMode,
 	);
 	return exitCode;
 }
@@ -749,7 +790,7 @@ function writeBudgetedEnvelope(
 ): number {
 	const envelope = makeEnvelope(input);
 	if (envelopeByteLength(envelope) <= input.maxOutputBytes) {
-		writeEnvelope(stdout, envelope);
+		writeEnvelope(stdout, envelope, input.outputMode ?? "json");
 		return input.status === "blocked" ? 1 : 0;
 	}
 
@@ -761,7 +802,7 @@ function writeBudgetedEnvelope(
 			outputBudgetStatus: FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.rawOmitted,
 		});
 		if (envelopeByteLength(summaryOnly) <= input.maxOutputBytes) {
-			writeEnvelope(stdout, summaryOnly);
+			writeEnvelope(stdout, summaryOnly, input.outputMode ?? "json");
 			return input.status === "blocked" ? 1 : 0;
 		}
 	}
@@ -778,6 +819,7 @@ function writeBudgetedEnvelope(
 			outputBudgetStatus: FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.summaryImpossible,
 			repairHints: [repairHintFor("reduce-output")],
 		}),
+		input.outputMode ?? "json",
 	);
 	return 1;
 }
@@ -1090,6 +1132,34 @@ function totalFindingsFor(
 	return directFindingsCount(output) ?? (issueItems.length > 0 ? issueItems.length : null);
 }
 
+// Audit's `--gate new-only` attribution is its highest-signal output: it
+// separates findings the changeset introduced from inherited base findings.
+// Surface the gate, the per-category split, and introduced/inherited totals so
+// callers can act on "what did my change add" instead of the raw finding count.
+function auditAttribution(output: unknown): Record<string, unknown> | undefined {
+	const attribution = objectValue(objectValue(output, "attribution"));
+	if (!attribution || Object.keys(attribution).length === 0) return undefined;
+	const introduced = sumPresentNumbers(attribution, [
+		"dead_code_introduced",
+		"complexity_introduced",
+		"duplication_introduced",
+	]);
+	const inherited = sumPresentNumbers(attribution, [
+		"dead_code_inherited",
+		"complexity_inherited",
+		"duplication_inherited",
+	]);
+	const summary = compactRecord({
+		gate: stringField(attribution, ["gate"]),
+		introduced: introduced ?? undefined,
+		inherited: inherited ?? undefined,
+		dead_code_introduced: numberAt(attribution, ["dead_code_introduced"]),
+		complexity_introduced: numberAt(attribution, ["complexity_introduced"]),
+		duplication_introduced: numberAt(attribution, ["duplication_introduced"]),
+	});
+	return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
 function auditTotalFindings(output: unknown): number | null {
 	const summary = objectValue(objectValue(output, "summary"));
 	const summaryTotal = sumPresentNumbers(summary, [
@@ -1127,12 +1197,15 @@ function duplicationTotalFindings(
 	output: unknown,
 	issueItems: unknown[],
 ): number | null {
+	// issueItems are the fanned-out clone instances (one per duplicated site).
+	// Count those so total_findings matches the emitted references, rather than
+	// the clone-group count, which undercounts the actual duplicated sites.
+	if (issueItems.length > 0) return issueItems.length;
 	return (
 		arrayAt(output, ["clone_groups"])?.length ??
 		numberAt(output, ["summary", "clone_groups"]) ??
 		numberAt(output, ["summary", "duplication_clone_groups"]) ??
-		directFindingsCount(output) ??
-		(issueItems.length > 0 ? issueItems.length : null)
+		directFindingsCount(output)
 	);
 }
 
@@ -1183,6 +1256,7 @@ function modeEvidenceFor(
 			verdict: stringField(output, ["verdict"]),
 			base_ref: stringField(output, ["base_ref"]),
 			changed_files_count: numberAt(output, ["changed_files_count"]),
+			attribution: auditAttribution(output),
 		});
 	}
 	if (mode === "health") {
@@ -1241,6 +1315,10 @@ function collectIssueItemsFrom(
 	if (!isRecord(value)) return;
 
 	for (const [key, child] of Object.entries(value)) {
+		if (key === "clone_groups" && Array.isArray(child)) {
+			for (const group of child) items.push(...cloneGroupInstances(group));
+			continue;
+		}
 		if (issueKeys.has(key) && Array.isArray(child)) {
 			items.push(...child.filter(isRecord));
 			continue;
@@ -1249,21 +1327,56 @@ function collectIssueItemsFrom(
 	}
 }
 
+// Clone groups nest their locations one level deeper than every other mode: the
+// file/line live in `instances[]`, while the action and fingerprint live on the
+// group. Fan each instance into its own item so `issueReferenceFrom` finds a
+// path and range; carry the group's actions and fingerprint down for an action
+// and a stable id that re-groups duplicate sites.
+function cloneGroupInstances(group: unknown): Record<string, unknown>[] {
+	if (!isRecord(group) || !Array.isArray(group.instances)) return [];
+	const shared = compactRecord({
+		actions: group.actions,
+		fingerprint: group.fingerprint,
+	});
+	return group.instances
+		.filter(isRecord)
+		.map((instance) => ({ ...shared, ...instance }));
+}
+
 function issueReferenceFrom(value: unknown): FallowIssueReference | undefined {
 	if (!isRecord(value)) return undefined;
 	const line = numberField(value, ["line", "start_line", "line_number"]);
-	const column = numberField(value, ["col", "column", "start_column"]);
+	const column = numberField(value, ["col", "column", "start_column", "start_col"]);
 	const range = rangeFrom(value, line, column);
 	const reference = compactRecord({
-		id: stringField(value, ["id", "finding_id", "findingId", "key"]),
+		id: stringField(value, [
+			"id",
+			"finding_id",
+			"findingId",
+			"key",
+			"fingerprint",
+		]),
 		path: stringField(value, ["path", "file", "filename", "filepath"]),
 		range,
 		rule: stringField(value, ["rule", "rule_id", "ruleId", "code"]),
 		category: stringField(value, ["category", "kind"]),
 		action: actionFrom(value),
 		symbol: stringField(value, ["symbol", "export_name", "name"]),
+		introduced: boolField(value, ["introduced"]),
 	}) as FallowIssueReference;
 	return Object.keys(reference).length > 0 ? reference : undefined;
+}
+
+function boolField(
+	value: unknown,
+	keys: readonly string[],
+): boolean | undefined {
+	if (!isRecord(value)) return undefined;
+	for (const key of keys) {
+		const item = value[key];
+		if (typeof item === "boolean") return item;
+	}
+	return undefined;
 }
 
 function rangeFrom(
@@ -1276,10 +1389,21 @@ function rangeFrom(
 		start_line:
 			numberField(nested, ["start_line", "startLine", "line"]) ?? line,
 		start_column:
-			numberField(nested, ["start_column", "startColumn", "column", "col"]) ??
-			column,
-		end_line: numberField(nested, ["end_line", "endLine"]),
-		end_column: numberField(nested, ["end_column", "endColumn"]),
+			numberField(nested, [
+				"start_column",
+				"startColumn",
+				"column",
+				"col",
+				"start_col",
+			]) ?? column,
+		// End fields may sit on a nested `range` object or, for clone instances,
+		// directly on the item; check both.
+		end_line:
+			numberField(nested, ["end_line", "endLine"]) ??
+			numberField(value, ["end_line", "endLine"]),
+		end_column:
+			numberField(nested, ["end_column", "endColumn", "end_col"]) ??
+			numberField(value, ["end_column", "endColumn", "end_col"]),
 	}) as FallowIssueReference["range"];
 	return range && Object.keys(range).length > 0 ? range : undefined;
 }
@@ -1448,6 +1572,9 @@ function parseFallowArgv(argv: readonly string[]): ParsedArgv {
 	}
 
 	const commandIndex = argv.findIndex((arg) => arg === command);
+	if (commandIndex > 0) {
+		throw usageError("flags must follow the subcommand");
+	}
 	const rest = [
 		...argv.slice(0, commandIndex),
 		...argv.slice(commandIndex + 1),
@@ -1464,6 +1591,8 @@ function parseCommandOptions(
 		command,
 		includeRawOutput: false,
 		maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+		outputMode: "json",
+		applyAuthorized: false,
 	};
 	const allowedFlags = new Set(Object.keys(fallowRunnerContracts[command].flags));
 
@@ -1483,6 +1612,20 @@ function parseCommandOptions(
 				throw usageError(`${name} does not accept a value`);
 			}
 			parsed.includeRawOutput = true;
+			continue;
+		}
+		if (name === "--plain") {
+			if (inlineValue !== undefined) {
+				throw usageError(`${name} does not accept a value`);
+			}
+			parsed.outputMode = "plain";
+			continue;
+		}
+		if (name === "--confirm-current-task-apply") {
+			if (inlineValue !== undefined) {
+				throw usageError(`${name} does not accept a value`);
+			}
+			parsed.applyAuthorized = true;
 			continue;
 		}
 
@@ -1582,8 +1725,114 @@ function makeRunId(runtime: FallowRunnerRuntime): string {
 	return `fallow:${new Date(runtime.now()).toISOString()}:${runtime.randomId()}`;
 }
 
-function writeEnvelope(stdout: CliWriter, envelope: FallowRunnerEnvelope): void {
+function writeEnvelope(
+	stdout: CliWriter,
+	envelope: FallowRunnerEnvelope,
+	outputMode: OutputMode = "json",
+): void {
+	if (outputMode === "plain") {
+		stdout.write(renderPlainEnvelope(envelope));
+		return;
+	}
 	stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+}
+
+function renderPlainEnvelope(envelope: FallowRunnerEnvelope): string {
+	const summary = envelope.summary;
+	const lines = [
+		[
+			"fallow",
+			`mode=${envelope.mode}`,
+			`status=${envelope.status}`,
+			`exit_code=${envelope.exit_code}`,
+			`failure=${envelope.failure_category}`,
+			`write=${envelope.write_effect}`,
+			`findings=${countLabel(summary.total_findings)}`,
+			`auto_fixable=${summary.auto_fixable}`,
+			`needs_trace=${summary.needs_trace}`,
+			`needs_human=${summary.needs_human}`,
+			`references=${envelope.issue_references.length}`,
+			`budget=${envelope.output_budget.status}`,
+			`raw_included=${envelope.output_budget.raw_output_included}`,
+			`run_id=${envelope.run_id}`,
+		].join(" "),
+	];
+
+	if (summary.readiness) {
+		lines.push(renderReadinessLine(summary.readiness));
+	}
+
+	const attributionLine = renderAttributionLine(summary);
+	if (attributionLine) lines.push(attributionLine);
+
+	const nextAction = nextPlainAction(envelope);
+	if (nextAction) lines.push(nextAction);
+
+	return `${lines.join("\n")}\n`;
+}
+
+// Audit attribution is the signal worth reading first: surface introduced vs
+// inherited in the plain summary so callers do not need JSON to see whether the
+// changeset added anything.
+function renderAttributionLine(
+	summary: FallowRunnerSummary,
+): string | undefined {
+	const attribution = objectValue(
+		objectValue(summary.mode_evidence),
+		"attribution",
+	);
+	if (!attribution) return undefined;
+	const introduced = numberAt(attribution, ["introduced"]);
+	const inherited = numberAt(attribution, ["inherited"]);
+	const gate = stringField(attribution, ["gate"]);
+	if (introduced === undefined && inherited === undefined) return undefined;
+	return [
+		"attribution",
+		gate ? `gate=${gate}` : undefined,
+		introduced !== undefined ? `introduced=${introduced}` : undefined,
+		inherited !== undefined ? `inherited=${inherited}` : undefined,
+	]
+		.filter((token): token is string => token !== undefined)
+		.join(" ");
+}
+
+function renderReadinessLine(readiness: ReadinessSummary): string {
+	const targetFit =
+		readiness.repo_shape.status === "ok" ? "plausible-js-ts" : "unsupported";
+	return [
+		"readiness",
+		`root=${readiness.root.status}`,
+		`repo_shape=${readiness.repo_shape.status}`,
+		`target_fit=${targetFit}`,
+		`fallow_binary=${readiness.fallow_binary.status}`,
+		`git=${readiness.git.status}`,
+		`config=${readiness.config.present}`,
+	].join(" ");
+}
+
+function nextPlainAction(envelope: FallowRunnerEnvelope): string | undefined {
+	const hint = envelope.repair_hints[0];
+	if (hint) {
+		return `next_action=${hint.action} retry_safe=${hint.retry_safe}`;
+	}
+	if (envelope.status === "issues") {
+		// Audit with zero introduced findings means the changeset added nothing;
+		// inherited findings are not this run's concern.
+		const attribution = objectValue(
+			objectValue(envelope.summary.mode_evidence),
+			"attribution",
+		);
+		if (attribution && numberAt(attribution, ["introduced"]) === 0) {
+			return "next_action=continue introduced=0";
+		}
+		return "next_action=inspect-json";
+	}
+	if (envelope.status === "ok") return "next_action=continue";
+	return undefined;
+}
+
+function countLabel(value: number | null): string {
+	return value === null ? "unknown" : String(value);
 }
 
 function isRepairHint(value: RepairHint | undefined): value is RepairHint {
@@ -1679,6 +1928,8 @@ function emitUsageError(
 				command,
 				includeRawOutput: false,
 				maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
+				outputMode: "json",
+				applyAuthorized: false,
 			}
 		: undefined;
 	writeEnvelope(
@@ -1698,8 +1949,21 @@ function emitUsageError(
 				? [repairHintFor("apply-shaped")]
 				: [repairHintFor("invalid-usage", error.message)],
 		}),
+		usageOutputMode(argv, command),
 	);
 	return exitCode;
+}
+
+function usageOutputMode(
+	argv: readonly string[],
+	command: FallowRunnerCommand | undefined,
+): OutputMode {
+	if (!command) return "json";
+	const commandIndex = argv.findIndex((arg) => arg === command);
+	if (commandIndex === -1) return "json";
+	return argv.slice(commandIndex + 1).some((arg) => splitFlag(arg).name === "--plain")
+		? "plain"
+		: "json";
 }
 
 function isApplyShapedOutsideApply(

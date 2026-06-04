@@ -6,7 +6,10 @@
 - Treat `fix-preview` as write inspection, not source mutation.
 - Treat `fix-apply` as the only mutation boundary.
 - Require current-task user authorization before `fix-apply`.
+- Require the runner-owned non-interactive apply marker before `fix-apply`.
 - Do not infer apply permission from auto-fixable findings.
+- Do not infer apply permission from preview output.
+- Keep interactive runtime confirmation deferred in this pass.
 
 ## Config Trust
 
@@ -31,6 +34,7 @@
 - Confirm the target repo root.
 - Review config-scope metadata.
 - Prefer preview before apply.
+- Use runner help for the current apply marker.
 - Rerun evidence after apply.
 - Preserve unrelated user changes.
 

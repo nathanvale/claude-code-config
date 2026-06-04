@@ -179,6 +179,10 @@ const commonFlags = {
 		type: "path",
 		description: "Target repository root.",
 	},
+	"--plain": {
+		type: "boolean",
+		description: "Emit compact plain summary output.",
+	},
 	"--include-raw-output": {
 		type: "boolean",
 		description: "Include parsed raw Fallow output when budget allows.",
@@ -194,6 +198,14 @@ const auditFlags = {
 	"--base-ref": {
 		type: "string",
 		description: "Optional audit base ref.",
+	},
+} as const satisfies FallowRunnerCommandContract["flags"];
+
+const applyFlags = {
+	...commonFlags,
+	"--confirm-current-task-apply": {
+		type: "boolean",
+		description: "Authorize non-interactive source mutation for this task.",
 	},
 } as const satisfies FallowRunnerCommandContract["flags"];
 
@@ -264,7 +276,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			mutation: "evidence",
 			sideEffects: ["check"],
 			executionModes: ["check"],
-			outputModes: ["json"],
+			outputModes: ["json", "plain"],
 			interactivity: "none",
 			resultContract,
 			actionAffordances: { failure: fallowFailureActions },
@@ -288,7 +300,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			mutation: "preview",
 			sideEffects: ["check"],
 			executionModes: ["dry_run"],
-			outputModes: ["json"],
+			outputModes: ["json", "plain"],
 			interactivity: "none",
 			resultContract,
 			actionAffordances: { failure: fallowFailureActions },
@@ -309,11 +321,11 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			previewExemption: {
 				reason: "Fix preview is a separate public subcommand.",
 			},
-			outputModes: ["json"],
+			outputModes: ["json", "plain"],
 			interactivity: "none",
 			resultContract,
 			actionAffordances: { failure: fallowFailureActions },
-			flags: commonFlags,
+			flags: applyFlags,
 			exitCodes,
 		},
 		doctor: {
@@ -327,7 +339,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			mutation: "diagnostic",
 			sideEffects: ["check"],
 			executionModes: ["check"],
-			outputModes: ["json"],
+			outputModes: ["json", "plain"],
 			capabilityRoles: ["diagnostic"],
 			interactivity: "none",
 			resultContract,
@@ -379,7 +391,7 @@ function evidenceContract(
 		mutation: "evidence",
 		sideEffects: ["check"],
 		executionModes: ["check"],
-		outputModes: ["json"],
+		outputModes: ["json", "plain"],
 		interactivity: "none",
 		resultContract,
 		actionAffordances: { failure: fallowFailureActions },

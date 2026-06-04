@@ -14,7 +14,8 @@ Fallow analyzer evidence.
 - Blocked PR evidence: run `doctor`, follow the first safe repair hint, then retry the same evidence command.
 - Current-task reporting: list current-task findings first; keep pre-existing findings as count or status context.
 - Changed-code review: use `audit`; escalate to JSON only for issue references, repair planning, structured evidence, or before/after comparison.
-- Noisy audit on a skill/CLI folder: `add-tests` and `remove-export` run mostly false-positive against contract exports and integration-tested code; intersect with coverage per `references/workflows.md` before treating findings as real.
+- Audit triage: read the attribution split first; act on introduced findings, treat inherited as base context. Zero introduced means the changeset added nothing; stop without per-finding triage.
+- Noisy non-audit scan on a skill/CLI folder: `dead-code`, `health`, and `dupes` carry no attribution; `add-tests` and `remove-export` run mostly false-positive against contract exports and integration-tested code; intersect with coverage per `references/workflows.md` before treating findings as real.
 - Cleanup / refactor scan: use `dead-code`, `dupes`, or `health` from the request shape; use `health` first for bare cleanup asks.
 - Readiness check: use `doctor` when setup, JS/TS target fit, git readiness, JSON capability, or config scope is unknown.
 - Fix request: run `fix-preview` before source mutation.
@@ -53,6 +54,6 @@ Fallow analyzer evidence.
 ## References
 
 - Read `references/commands.md` for mode selection and help pointers.
-- Read `references/workflows.md` for self-review, cleanup, coverage-intersect, preview, apply, and rerun loops.
+- Read `references/workflows.md` for self-review, audit attribution, cleanup, coverage-intersect, preview, apply, and rerun loops.
 - Read `references/safety.md` for the mutation boundary and trust rules.
 - Read `references/ci.md` only for adoption guidance; CI setup is reference-only in v1.

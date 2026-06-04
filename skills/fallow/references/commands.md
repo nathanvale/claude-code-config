@@ -19,24 +19,28 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 
 ## Mode Map
 
-- Use `doctor` when setup, repo shape, git readiness, JSON capability, or config scope is unknown.
+- Use `audit --plain` first for implemented-work or PR-prep self-review when target fit is plausible.
+- Use `doctor` when setup, repo shape, git readiness, JSON capability, or config scope is unknown on a plausible JS/TS target.
 - Use `audit` for changed-code risk.
 - Use `dead-code` for unused files, exports, types, or dependency cleanup evidence.
 - Use `dupes` for duplicated-code evidence.
 - Use `health` for complexity, coupling, and score evidence.
+- Use `health` first for bare cleanup asks.
 - Use `fix-preview` for write-inspection requests.
 - Read `references/safety.md` before applying Fallow fixes.
 
 ## Targeting
 
 - Use the runner root input when the target repo differs from the current directory.
+- Challenge or retarget suspect non-JS/TS roots before readiness checks.
 - Let `audit` use Fallow defaults unless the current task needs an explicit base.
 - Use subcommand help for accepted inputs.
 - Treat unsupported control errors as input failures.
 
 ## Output
 
-- Read the normalized summary first.
+- Read plain summary output first for routine judgment.
+- Use JSON for issue references, repair planning, structured evidence, and before/after comparison.
 - Treat issue status as analyzer-finding evidence.
 - Inspect issue references before editing files.
 - Request raw parsed Fallow output only for inspection.
