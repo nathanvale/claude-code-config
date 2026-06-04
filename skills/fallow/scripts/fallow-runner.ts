@@ -13,10 +13,12 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	DEFAULT_MAX_OUTPUT_BYTES,
+	FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY,
 	FALLOW_REPAIR_ACTION_BY_KEY,
 	FALLOW_RUNNER_COMMANDS,
 	FALLOW_RUNNER_CONTRACT_ID,
 	FALLOW_RUNNER_SCHEMA_VERSION,
+	FALLOW_STDERR_CATEGORY_BY_KEY,
 	type FallowFailureCategory,
 	type FallowOutputBudgetStatus,
 	type FallowRepairAction,
@@ -28,6 +30,7 @@ import {
 } from "./command-contract";
 
 const VERSION = "0.1.0";
+const FALLOW_PROCESS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
 type CommandResult = {
@@ -421,6 +424,33 @@ async function runParsedCommand(
 			return 1;
 		}
 
+		if (
+			result.exitCode !== 0 &&
+			!hasRecognizableAnalyzerEvidence(parsed.command, parsedOutput.value)
+		) {
+			writeEnvelope(
+				stdout,
+				makeEnvelope({
+					status: "blocked",
+					mode: parsed.command,
+					runId,
+					command,
+					cwd: root,
+					exitCode: result.exitCode,
+					stderrCategory,
+					failureCategory: "fallow",
+					writeEffect: "none",
+					maxOutputBytes,
+					rawRequested,
+					summary: summaryWithReadiness(readiness),
+					repairHints: [
+						repairHintFor(runtimeFailureHintKind(parsed.command, result.stderr)),
+					],
+				}),
+			);
+			return 1;
+		}
+
 		const evidence = summarizeFallowEvidence(
 			parsed.command,
 			parsedOutput.value,
@@ -728,7 +758,7 @@ function writeBudgetedEnvelope(
 			...input,
 			fallowOutput: null,
 			rawOutputIncluded: false,
-			outputBudgetStatus: "raw-omitted",
+			outputBudgetStatus: FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.rawOmitted,
 		});
 		if (envelopeByteLength(summaryOnly) <= input.maxOutputBytes) {
 			writeEnvelope(stdout, summaryOnly);
@@ -745,7 +775,7 @@ function writeBudgetedEnvelope(
 			failureCategory: "budget",
 			fallowOutput: null,
 			rawOutputIncluded: false,
-			outputBudgetStatus: "summary-impossible",
+			outputBudgetStatus: FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.summaryImpossible,
 			repairHints: [repairHintFor("reduce-output")],
 		}),
 	);
@@ -767,13 +797,16 @@ function makeEnvelope(input: FallowEnvelopeInput): FallowRunnerEnvelope {
 		command: input.command,
 		cwd: input.cwd,
 		exit_code: input.exitCode,
-		stderr_category: input.stderrCategory ?? "empty",
+		stderr_category:
+			input.stderrCategory ?? FALLOW_STDERR_CATEGORY_BY_KEY.empty,
 		failure_category: input.failureCategory,
 		write_effect: input.writeEffect,
 		fallow_output: input.fallowOutput ?? null,
 		issue_references: input.issueReferences ?? [],
 		output_budget: {
-			status: input.outputBudgetStatus ?? "within-budget",
+			status:
+				input.outputBudgetStatus ??
+				FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.withinBudget,
 			max_output_bytes: input.maxOutputBytes,
 			raw_output_requested: input.rawRequested,
 			raw_output_included: input.rawOutputIncluded ?? false,
@@ -861,6 +894,18 @@ function summarizeFallowEvidence(
 		summary,
 		issueReferences,
 	};
+}
+
+function hasRecognizableAnalyzerEvidence(
+	mode: Extract<FallowRunnerCommand, "audit" | "dead-code" | "dupes" | "health">,
+	output: unknown,
+): boolean {
+	const issueItems = collectIssueItems(output);
+	return (
+		directFindingsCount(output) !== null ||
+		totalFindingsFor(mode, output, issueItems) !== null ||
+		Object.keys(modeEvidenceFor(mode, output)).length > 0
+	);
 }
 
 function summarizeFallowWrite(
@@ -1290,10 +1335,12 @@ function hasTruthyDeep(value: unknown, keys: readonly string[]): boolean {
 
 function categorizeStderr(stderr: string): FallowStderrCategory {
 	const text = stderr.trim();
-	if (!text) return "empty";
-	if (/\b(error|failed|fatal|exception|panic)\b/i.test(text)) return "error";
-	if (/\bwarn(ing)?\b/i.test(text)) return "warning";
-	return "progress";
+	if (!text) return FALLOW_STDERR_CATEGORY_BY_KEY.empty;
+	if (/\b(error|failed|fatal|exception|panic)\b/i.test(text)) {
+		return FALLOW_STDERR_CATEGORY_BY_KEY.error;
+	}
+	if (/\bwarn(ing)?\b/i.test(text)) return FALLOW_STDERR_CATEGORY_BY_KEY.warning;
+	return FALLOW_STDERR_CATEGORY_BY_KEY.progress;
 }
 
 function compactRecord(
@@ -1439,9 +1486,11 @@ function parseCommandOptions(
 			continue;
 		}
 
-		const value =
-			inlineValue ?? readRequiredFlagValue(argv, index, name);
+		const value = inlineValue ?? readRequiredFlagValue(argv, index, name);
 		if (inlineValue === undefined) index += 1;
+		else if (value.startsWith("-")) {
+			throw usageError(`${name} value cannot start with '-'`);
+		}
 
 		if (name === "--root") parsed.root = value;
 		else if (name === "--base-ref") parsed.baseRef = value;
@@ -1566,6 +1615,7 @@ async function runCommand(
 		const result = await execFileAsync(command, [...args], {
 			cwd: options.cwd,
 			encoding: "utf-8",
+			maxBuffer: FALLOW_PROCESS_MAX_BUFFER_BYTES,
 		});
 		return {
 			exitCode: 0,

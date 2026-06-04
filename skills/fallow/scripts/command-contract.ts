@@ -104,6 +104,16 @@ export type FallowStderrCategory =
 	(typeof FALLOW_STDERR_CATEGORIES)[number];
 
 /**
+ * Named stderr categories so runtime classification sources the contract.
+ */
+export const FALLOW_STDERR_CATEGORY_BY_KEY = {
+	empty: "empty",
+	progress: "progress",
+	warning: "warning",
+	error: "error",
+} as const satisfies Record<string, FallowStderrCategory>;
+
+/**
  * Tiny repair action vocabulary for branchable blocked-run recovery.
  */
 export const FALLOW_REPAIR_ACTIONS = [
@@ -146,6 +156,15 @@ export const FALLOW_OUTPUT_BUDGET_STATUSES = [
  */
 export type FallowOutputBudgetStatus =
 	(typeof FALLOW_OUTPUT_BUDGET_STATUSES)[number];
+
+/**
+ * Named output budget statuses so runtime defaults source the contract.
+ */
+export const FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY = {
+	withinBudget: "within-budget",
+	rawOmitted: "raw-omitted",
+	summaryImpossible: "summary-impossible",
+} as const satisfies Record<string, FallowOutputBudgetStatus>;
 
 type FallowRunnerAudience = "agent" | "operator";
 type FallowRunnerMutation = "evidence" | "preview" | "apply" | "diagnostic";

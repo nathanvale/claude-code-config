@@ -698,6 +698,27 @@ describe("U5 Fallow execution and summary semantics", () => {
 		expect(JSON.stringify(envelope.repair_hints)).toContain("run-doctor");
 	});
 
+	test("non-zero JSON without analyzer evidence remains a Fallow failure", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{
+				exitCode: 2,
+				stdout: JSON.stringify({ error: "config failed" }),
+				stderr: "configuration error",
+			},
+		]);
+
+		const result = await runForTest(["dead-code"], runtime);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.exit_code).toBe(2);
+		expect(envelope.failure_category).toBe("fallow");
+		expect(envelope.summary).toMatchObject({ total_findings: 0 });
+		expect(JSON.stringify(envelope.repair_hints)).toContain("run-doctor");
+	});
+
 	test("stderr category remains coarse and stable", async () => {
 		for (const [stderr, category] of [
 			["", "empty"],
@@ -787,6 +808,47 @@ describe("U6 output budget behavior", () => {
 		});
 	});
 
+	test("large real subprocess output reaches budget handling", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const fallowPath = join(root, "node_modules", ".bin", "fallow");
+		await writeFile(
+			fallowPath,
+			[
+				"#!/usr/bin/env bun",
+				"const output = { findings: [], debug_payload: 'x'.repeat(1_200_000) };",
+				"process.stdout.write(JSON.stringify(output));",
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+		await chmod(fallowPath, 0o755);
+		const runtime = createDefaultFallowRuntime({
+			cwd: root,
+			now: () => Date.parse("2026-06-04T00:00:00.000Z"),
+			randomId: () => "large",
+		});
+
+		const result = await runForTest(
+			[
+				"dead-code",
+				"--include-raw-output",
+				"--max-output-bytes",
+				"2000",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.fallow_output).toBeNull();
+		expect(envelope.output_budget).toMatchObject({
+			status: "raw-omitted",
+			raw_output_requested: true,
+			raw_output_included: false,
+		});
+	});
+
 	test("small requested raw output is included when within budget", async () => {
 		const root = await makeRepo({ localFallow: true });
 		const output = { findings: [], note: "small" };
@@ -854,6 +916,9 @@ describe("U7 fix preview and explicit apply safety", () => {
 		});
 		const envelope = expectEnvelope(result);
 		expect(envelope.write_effect).toBe("previewed");
+		expect(envelope.summary).toMatchObject({
+			mode_evidence: { write_operation: "preview" },
+		});
 		expect(envelope.command).toEqual([
 			join(root, "node_modules", ".bin", "fallow"),
 			"fix",
@@ -911,7 +976,14 @@ describe("U7 fix preview and explicit apply safety", () => {
 			args: ["fix", "--yes", "--format", "json", "--quiet"],
 			cwd: root,
 		});
-		expect(expectEnvelope(result).write_effect).toBe("applied");
+		const envelope = expectEnvelope(result);
+		expect(envelope.write_effect).toBe("applied");
+		expect(envelope.summary).toMatchObject({
+			mode_evidence: {
+				write_operation: "apply",
+				config_scope: { present: false, paths: [] },
+			},
+		});
 	});
 
 	test("failed apply blocks without reporting an applied write effect", async () => {
@@ -1257,6 +1329,20 @@ describe("U3 parser, help, and discovery alignment", () => {
 			expect(envelope.failure_category).toBe("input");
 			expect(JSON.stringify(envelope)).toContain("unknown option: --base-ref");
 		}
+	});
+
+	test("inline flag value starting with dash is rejected", async () => {
+		const result = await runForTest(
+			["audit", "--base-ref=--option"],
+			makeRuntime(),
+		);
+
+		expect(result.exitCode).toBe(2);
+		const envelope = expectEnvelope(result);
+		expect(envelope.failure_category).toBe("input");
+		expect(JSON.stringify(envelope)).toContain(
+			"--base-ref value cannot start with '-'",
+		);
 	});
 
 	test("root accepts valid paths and rejects invalid paths", async () => {
