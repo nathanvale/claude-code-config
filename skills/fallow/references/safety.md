@@ -5,7 +5,7 @@
 - Treat evidence commands as read-only.
 - Treat `fix-preview` as write inspection, not source mutation.
 - Treat `fix-apply` as the only mutation boundary.
-- Run `fix-apply` only after current-task user authorization.
+- Require current-task user authorization before `fix-apply`.
 - Do not infer apply permission from auto-fixable findings.
 
 ## Config Trust
@@ -28,7 +28,6 @@
 
 ## Mutation Checks
 
-- Confirm current-task user authorization.
 - Confirm the target repo root.
 - Review config-scope metadata.
 - Prefer preview before apply.

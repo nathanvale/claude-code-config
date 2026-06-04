@@ -24,8 +24,8 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 - Use `dead-code` for unused files, exports, types, or dependency cleanup evidence.
 - Use `dupes` for duplicated-code evidence.
 - Use `health` for complexity, coupling, and score evidence.
-- Use `fix-preview` before any Fallow fix apply request.
-- Use `fix-apply` only after current-task user authorization.
+- Use `fix-preview` for write-inspection requests.
+- Read `references/safety.md` before applying Fallow fixes.
 
 ## Targeting
 

@@ -33,8 +33,7 @@ Fallow analyzer evidence.
 ## Safety
 
 - Read `references/safety.md` before mutation.
-- Stop before `fix-apply` unless current-task user authorization exists.
-- Keep install, telemetry, watch, baseline, CI generation, and cross-skill orchestration outside this workflow.
+- Treat `references/safety.md` as owner for apply policy, excluded behavior, and config trust.
 
 ## References
 

@@ -28,8 +28,7 @@
 ## Preview And Apply
 
 - Run `fix-preview` before source mutation.
-- Read `references/safety.md`.
-- Apply only through authorized `fix-apply`.
+- Read `references/safety.md` for the apply boundary.
 - Rerun the prior evidence command after apply.
 
 ## Blocked Runs
@@ -43,5 +42,5 @@
 ## Stop
 
 - Stop when the runner cannot produce usable evidence and no repair hint applies.
-- Stop before `fix-apply` when current-task user authorization is missing.
+- Stop before mutation when `references/safety.md` blocks the next action.
 - Stop before broad refactors that exceed the current task.

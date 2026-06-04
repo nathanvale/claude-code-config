@@ -16,6 +16,7 @@
 - Tool research: `docs/research/2026-06-04-fallow-ai-code-quality-tool.md`.
 - Agent-lens research: `docs/research/2026-06-04-fallow-agent-lens.md`.
 - Implementation plan: `docs/plans/2026-06-04-003-feat-fallow-agent-native-mvp-v1-plan.md`.
+- Progressive disclosure plan: `docs/plans/2026-06-04-004-feat-fallow-progressive-disclosure-index-plan.md`.
 - Skill design rule: `context/skill-design-philosophy.md`.
 - CLI design rule: `skills/create-cli/SKILL.md`.
 - Facade-backed path: `skills/create-cli/references/cli-command-facade.md`.
@@ -38,12 +39,20 @@
 - Keep workflow prose in `SKILL.md` and one-level references.
 - Keep CI adoption reference-only in v1.
 - Keep apply as an explicit mutation boundary.
+- Treat the progressive disclosure index as a judgment aid, not a deterministic route classifier.
+- Challenge or retarget suspect Fallow targets before running readiness checks.
+- Start routine PR self-review with `audit --plain`; reserve `doctor` for unknown readiness or blocked evidence.
+- Report current-task findings first; keep inherited baseline findings as separate count or status context.
+- Start cleanup with one request-shaped evidence lane; use health first for bare cleanup asks.
+- Keep reference examples request-shaped; point to routes and owners instead of full command syntax.
+- Require bare `fix-apply` to fail closed through a runner-owned authorization marker.
+- Accept `--plain` as a subcommand-local output flag in this pass, not a global flag.
+- Prove `--plain` with one tiny golden shape fixture and semantic parity checks elsewhere.
 
 ## Local Owners
 
 - Skill router: `skills/fallow/SKILL.md`.
 - Provenance: `skills/fallow/PROVENANCE.md`.
-- Historical CLI design brief: `skills/fallow/references/cli-design-brief.md`.
 - Command recipes: `skills/fallow/references/commands.md`.
 - Workflow recipes: `skills/fallow/references/workflows.md`.
 - Safety reference: `skills/fallow/references/safety.md`.

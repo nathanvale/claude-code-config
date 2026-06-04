@@ -1054,18 +1054,23 @@ describe("U7 fix preview and explicit apply safety", () => {
 		}
 	});
 
-	test("workflow references require current-task authorization before fix apply", async () => {
+	test("workflow references delegate apply policy to safety reference", async () => {
 		const workflow = await Bun.file(
 			join(import.meta.dir, "..", "references", "workflows.md"),
+		).text();
+		const commands = await Bun.file(
+			join(import.meta.dir, "..", "references", "commands.md"),
 		).text();
 		const safety = await Bun.file(
 			join(import.meta.dir, "..", "references", "safety.md"),
 		).text();
 
-		for (const text of [workflow, safety]) {
-			expect(text).toContain("current-task user authorization");
-			expect(text).toContain("fix-apply");
+		for (const text of [workflow, commands]) {
+			expect(text).toContain("references/safety.md");
+			expect(text).not.toContain("current-task user authorization");
 		}
+		expect(safety).toContain("current-task user authorization");
+		expect(safety).toContain("fix-apply");
 	});
 });
 
