@@ -238,6 +238,22 @@ function report(adapterId = "chrome-devtools", overrides = {}) {
 	return merged;
 }
 
+// Run-scoped Warm Chrome session id shared by every proof binding in a default
+// smoke envelope. Operation-capable routes (U2 R9) require a per-adapter
+// adapter_proof binding that ties to this same warm-Chrome run; the engine fails
+// closed with route_evidence_binding_mismatch otherwise.
+const SMOKE_WARM_CHROME_RUN_ID = "smoke-warm-1";
+
+// Browser Adapter Proof binding tuple for one adapter (U2 R8/R9). All three
+// identity fields are required and must bind to the shared warm-Chrome run.
+function proofBinding(adapterId) {
+	return {
+		adapter_proof_id: `smoke-proof-${adapterId}`,
+		warm_chrome_run_id: SMOKE_WARM_CHROME_RUN_ID,
+		verified_endpoint_identity: "127.0.0.1:9222",
+	};
+}
+
 function envelope(overrides = {}) {
 	const runId = overrides.run_id ?? "smoke-envelope-run";
 	return {
@@ -248,10 +264,18 @@ function envelope(overrides = {}) {
 			run_id: runId,
 			freshness: { checked_at: "2026-06-08", stale_after_days: 30 },
 			warm_chrome_ready: true,
+			warm_chrome_run_id: SMOKE_WARM_CHROME_RUN_ID,
 			adapter_attached_verified_browser: {
 				"chrome-devtools": true,
 				"agent-browser": true,
 				"playwright-cdp": true,
+			},
+			// Per-adapter proof binding the engine requires for operation-capable
+			// routes (U2 R9). Without it the route fails closed before ranking.
+			adapter_proof: {
+				"chrome-devtools": proofBinding("chrome-devtools"),
+				"agent-browser": proofBinding("agent-browser"),
+				"playwright-cdp": proofBinding("playwright-cdp"),
 			},
 			...(overrides.preconditions ?? {}),
 		},
