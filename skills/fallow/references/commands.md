@@ -36,6 +36,9 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 - Request raw parsed Fallow output only for inspection.
 - Lower the output budget only when the caller needs a tighter context cap.
 - Treat omitted raw output as intentional when summary evidence remains.
+- Treat `raw-omitted` as complete summary evidence without raw payload.
+- Treat `summary-impossible` as a budget failure; retry with a larger budget or no raw output.
+- Do not expect partial raw-output truncation.
 
 ## Owner Paths
 

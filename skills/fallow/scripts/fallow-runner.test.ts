@@ -699,6 +699,125 @@ describe("U5 Fallow execution and summary semantics", () => {
 	});
 });
 
+describe("U6 output budget behavior", () => {
+	test("valid output budget values are accepted and reported", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(
+			["dead-code", "--max-output-bytes", "10000"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(expectEnvelope(result).output_budget).toMatchObject({
+			status: "within-budget",
+			max_output_bytes: 10000,
+		});
+	});
+
+	test("invalid output budget values return usage failure", async () => {
+		for (const value of ["0", "-1", "1.5", "abc"]) {
+			const result = await runForTest(
+				["dead-code", "--max-output-bytes", value],
+				makeRuntime(),
+			);
+
+			expect(result.exitCode).toBe(2);
+			const envelope = expectEnvelope(result);
+			expect(envelope.failure_category).toBe("input");
+			expect(JSON.stringify(envelope.repair_hints)).toContain(
+				"--max-output-bytes",
+			);
+		}
+	});
+
+	test("large requested raw output is omitted while summary remains", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{
+				exitCode: 0,
+				stdout: JSON.stringify({
+					findings: [],
+					debug_payload: "x".repeat(20_000),
+				}),
+				stderr: "",
+			},
+		]);
+
+		const result = await runForTest(
+			[
+				"dead-code",
+				"--include-raw-output",
+				"--max-output-bytes",
+				"2000",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.fallow_output).toBeNull();
+		expect(envelope.summary).toMatchObject({ total_findings: 0 });
+		expect(envelope.output_budget).toMatchObject({
+			status: "raw-omitted",
+			raw_output_requested: true,
+			raw_output_included: false,
+		});
+	});
+
+	test("small requested raw output is included when within budget", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const output = { findings: [], note: "small" };
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify(output), stderr: "" },
+		]);
+
+		const result = await runForTest(
+			[
+				"dead-code",
+				"--include-raw-output",
+				"--max-output-bytes",
+				"10000",
+			],
+			runtime,
+		);
+
+		const envelope = expectEnvelope(result);
+		expect(envelope.fallow_output).toEqual(output);
+		expect(envelope.output_budget).toMatchObject({
+			status: "within-budget",
+			raw_output_requested: true,
+			raw_output_included: true,
+		});
+	});
+
+	test("summary-impossible output returns budget failure with repair guidance", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
+		]);
+
+		const result = await runForTest(
+			["dead-code", "--max-output-bytes", "64"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = expectEnvelope(result);
+		expect(envelope.status).toBe("blocked");
+		expect(envelope.failure_category).toBe("budget");
+		expect(envelope.output_budget).toMatchObject({
+			status: "summary-impossible",
+			raw_output_included: false,
+		});
+		expect(JSON.stringify(envelope.repair_hints)).toContain("reduce-output");
+	});
+});
+
 describe("U3 parser, help, and discovery alignment", () => {
 	test("root help lists accepted subcommands and no unsupported controls", async () => {
 		const result = await runForTest(["--help"], makeRuntime());

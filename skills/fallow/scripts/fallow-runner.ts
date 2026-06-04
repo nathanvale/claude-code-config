@@ -17,6 +17,7 @@ import {
 	FALLOW_RUNNER_CONTRACT_ID,
 	FALLOW_RUNNER_SCHEMA_VERSION,
 	type FallowFailureCategory,
+	type FallowOutputBudgetStatus,
 	type FallowRepairAction,
 	type FallowRunnerCommand,
 	type FallowStatus,
@@ -141,13 +142,33 @@ type FallowRunnerEnvelope = {
 	fallow_output: unknown;
 	issue_references: FallowIssueReference[];
 	output_budget: {
-		status: "within-budget";
+		status: FallowOutputBudgetStatus;
 		max_output_bytes: number;
 		raw_output_requested: boolean;
 		raw_output_included: boolean;
 	};
 	summary: FallowRunnerSummary;
 	repair_hints: RepairHint[];
+};
+
+type FallowEnvelopeInput = {
+	status: FallowStatus;
+	mode: FallowRunnerCommand;
+	runId: string;
+	command: string[];
+	cwd: string;
+	exitCode: number;
+	stderrCategory?: FallowStderrCategory;
+	failureCategory: FallowFailureCategory;
+	writeEffect: FallowWriteEffect;
+	maxOutputBytes: number;
+	rawRequested: boolean;
+	rawOutputIncluded?: boolean;
+	outputBudgetStatus?: FallowOutputBudgetStatus;
+	fallowOutput?: unknown;
+	summary?: FallowRunnerSummary;
+	issueReferences?: FallowIssueReference[];
+	repairHints?: RepairHint[];
 };
 
 const COMMON_CONFIG_PATHS = [
@@ -376,27 +397,23 @@ async function runParsedCommand(
 			parsed.command,
 			parsedOutput.value,
 		);
-		writeEnvelope(
-			stdout,
-			makeEnvelope({
-				status: evidence.status,
-				mode: parsed.command,
-				runId,
-				command,
-				cwd: root,
-				exitCode: result.exitCode,
-				stderrCategory,
-				failureCategory: "none",
-				writeEffect: "none",
-				maxOutputBytes,
-				rawRequested,
-				rawOutputIncluded: rawRequested,
-				fallowOutput: rawRequested ? parsedOutput.value : null,
-				summary: evidence.summary,
-				issueReferences: evidence.issueReferences,
-			}),
-		);
-		return 0;
+		return writeBudgetedEnvelope(stdout, {
+			status: evidence.status,
+			mode: parsed.command,
+			runId,
+			command,
+			cwd: root,
+			exitCode: result.exitCode,
+			stderrCategory,
+			failureCategory: "none",
+			writeEffect: "none",
+			maxOutputBytes,
+			rawRequested,
+			rawOutputIncluded: rawRequested,
+			fallowOutput: rawRequested ? parsedOutput.value : null,
+			summary: evidence.summary,
+			issueReferences: evidence.issueReferences,
+		});
 	}
 
 	writeEnvelope(
@@ -593,24 +610,57 @@ function summaryWithReadiness(readiness: ReadinessSummary): FallowRunnerSummary 
 	};
 }
 
-function makeEnvelope(input: {
-	status: FallowStatus;
-	mode: FallowRunnerCommand;
-	runId: string;
-	command: string[];
-	cwd: string;
-	exitCode: number;
-	stderrCategory?: FallowStderrCategory;
-	failureCategory: FallowFailureCategory;
-	writeEffect: FallowWriteEffect;
-	maxOutputBytes: number;
-	rawRequested: boolean;
-	rawOutputIncluded?: boolean;
-	fallowOutput?: unknown;
-	summary?: FallowRunnerSummary;
-	issueReferences?: FallowIssueReference[];
-	repairHints?: RepairHint[];
-}): FallowRunnerEnvelope {
+function writeBudgetedEnvelope(
+	stdout: CliWriter,
+	input: FallowEnvelopeInput,
+): number {
+	const envelope = makeEnvelope(input);
+	if (envelopeByteLength(envelope) <= input.maxOutputBytes) {
+		writeEnvelope(stdout, envelope);
+		return input.status === "blocked" ? 1 : 0;
+	}
+
+	if (input.rawRequested && input.rawOutputIncluded) {
+		const summaryOnly = makeEnvelope({
+			...input,
+			fallowOutput: null,
+			rawOutputIncluded: false,
+			outputBudgetStatus: "raw-omitted",
+		});
+		if (envelopeByteLength(summaryOnly) <= input.maxOutputBytes) {
+			writeEnvelope(stdout, summaryOnly);
+			return input.status === "blocked" ? 1 : 0;
+		}
+	}
+
+	writeEnvelope(
+		stdout,
+		makeEnvelope({
+			...input,
+			status: "blocked",
+			exitCode: 1,
+			failureCategory: "budget",
+			fallowOutput: null,
+			rawOutputIncluded: false,
+			outputBudgetStatus: "summary-impossible",
+			repairHints: [
+				{
+					action: "reduce-output",
+					message: "Increase output budget or omit raw output before retrying.",
+					retry_safe: false,
+				},
+			],
+		}),
+	);
+	return 1;
+}
+
+function envelopeByteLength(envelope: FallowRunnerEnvelope): number {
+	return new TextEncoder().encode(`${JSON.stringify(envelope, null, 2)}\n`)
+		.length;
+}
+
+function makeEnvelope(input: FallowEnvelopeInput): FallowRunnerEnvelope {
 	return {
 		contract_id: FALLOW_RUNNER_CONTRACT_ID,
 		schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
@@ -626,7 +676,7 @@ function makeEnvelope(input: {
 		fallow_output: input.fallowOutput ?? null,
 		issue_references: input.issueReferences ?? [],
 		output_budget: {
-			status: "within-budget",
+			status: input.outputBudgetStatus ?? "within-budget",
 			max_output_bytes: input.maxOutputBytes,
 			raw_output_requested: input.rawRequested,
 			raw_output_included: input.rawOutputIncluded ?? false,
