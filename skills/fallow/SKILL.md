@@ -8,6 +8,19 @@ description: "Run Fallow code-quality self-review."
 Use after implementation, cleanup, or review prep when JS/TS code needs
 Fallow analyzer evidence.
 
+## Skill Route Index
+
+- Implemented work / PR prep: start with changed-code `audit --plain` when the target fit is plausible.
+- Blocked PR evidence: run `doctor`, follow the first safe repair hint, then retry the same evidence command.
+- Current-task reporting: list current-task findings first; keep pre-existing findings as count or status context.
+- Changed-code review: use `audit`; escalate to JSON only for issue references, repair planning, structured evidence, or before/after comparison.
+- Noisy audit on a skill/CLI folder: `add-tests` and `remove-export` run mostly false-positive against contract exports and integration-tested code; intersect with coverage per `references/workflows.md` before treating findings as real.
+- Cleanup / refactor scan: use `dead-code`, `dupes`, or `health` from the request shape; use `health` first for bare cleanup asks.
+- Readiness check: use `doctor` when setup, JS/TS target fit, git readiness, JSON capability, or config scope is unknown.
+- Fix request: run `fix-preview` before source mutation.
+- Apply request: stop unless current-task source-mutation authorization exists; read `references/safety.md`; use runner help for the apply marker.
+- Suspect target: challenge the premise or retarget before treating readiness or evidence as useful.
+
 ## Owner
 
 - Runner: `skills/fallow/scripts/fallow-runner.ts`.
@@ -22,10 +35,12 @@ Fallow analyzer evidence.
 
 ## Workflow
 
-- Run `doctor` first when Fallow availability, repo shape, git readiness, or config scope is unknown.
+- Challenge suspect targets before readiness checks.
+- Run `doctor` when Fallow availability, repo shape, git readiness, or config scope is unknown on a plausible JS/TS target.
 - Choose one evidence command for the current question.
 - Use `commands.md` for mode selection and `--help` for exact syntax.
-- Parse the runner JSON from stdout.
+- Read plain summary output first for routine judgment.
+- Parse runner JSON when issue references or structured evidence are needed.
 - Follow runner repair hints before retrying blocked runs.
 - Rerun the same evidence command after code changes.
 - Report before/after summary when a rerun exists.
@@ -38,6 +53,6 @@ Fallow analyzer evidence.
 ## References
 
 - Read `references/commands.md` for mode selection and help pointers.
-- Read `references/workflows.md` for self-review, cleanup, preview, apply, and rerun loops.
+- Read `references/workflows.md` for self-review, cleanup, coverage-intersect, preview, apply, and rerun loops.
 - Read `references/safety.md` for the mutation boundary and trust rules.
 - Read `references/ci.md` only for adoption guidance; CI setup is reference-only in v1.
