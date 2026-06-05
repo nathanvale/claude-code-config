@@ -952,8 +952,13 @@ function writeBudgetedEnvelope(
 	input: FallowEnvelopeInput,
 ): number {
 	const envelope = makeEnvelope(input);
+	if ((input.outputMode ?? "json") === "plain") {
+		writeEnvelope(stdout, envelope, "plain");
+		return input.status === "blocked" ? 1 : 0;
+	}
+
 	if (envelopeByteLength(envelope) <= input.maxOutputBytes) {
-		writeEnvelope(stdout, envelope, input.outputMode ?? "json");
+		writeEnvelope(stdout, envelope, "json");
 		return input.status === "blocked" ? 1 : 0;
 	}
 
@@ -965,7 +970,7 @@ function writeBudgetedEnvelope(
 			outputBudgetStatus: FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.rawOmitted,
 		});
 		if (envelopeByteLength(summaryOnly) <= input.maxOutputBytes) {
-			writeEnvelope(stdout, summaryOnly, input.outputMode ?? "json");
+			writeEnvelope(stdout, summaryOnly, "json");
 			return input.status === "blocked" ? 1 : 0;
 		}
 	}
@@ -982,7 +987,7 @@ function writeBudgetedEnvelope(
 			outputBudgetStatus: FALLOW_OUTPUT_BUDGET_STATUS_BY_KEY.summaryImpossible,
 			repairHints: [repairHintFor("reduce-output")],
 		}),
-		input.outputMode ?? "json",
+		"json",
 	);
 	return 1;
 }

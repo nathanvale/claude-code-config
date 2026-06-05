@@ -536,6 +536,33 @@ describe("U4 discovery and doctor runtime", () => {
 		expect(JSON.stringify(missingEnvelope)).toContain("setup-fallow");
 	});
 
+	test("default runtime discovers Fallow on PATH", async () => {
+		const root = await makeRepo();
+		const binDir = join(root, "bin");
+		await mkdir(binDir, { recursive: true });
+		const fallowPath = join(binDir, "fallow");
+		await writeFile(fallowPath, "#!/usr/bin/env sh\nexit 0\n", "utf-8");
+		await chmod(fallowPath, 0o755);
+
+		const runtime = createDefaultFallowRuntime({
+			cwd: root,
+			env: { PATH: binDir },
+			runCommand: async (command) => {
+				if (command !== "git") {
+					return { exitCode: 1, stdout: "", stderr: "unexpected command" };
+				}
+				return { exitCode: 0, stdout: "true\n", stderr: "" };
+			},
+		});
+		const result = await runForTest(["doctor"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		const binary = readinessOf(expectEnvelope(result)).fallow_binary;
+		expect(binary.status).toBe("ok");
+		expect(binary.source).toBe("path");
+		expect(binary.path).toBe(fallowPath);
+	});
+
 	test("doctor reports ok, issues, and blocked readiness states", async () => {
 		const okRoot = await makeRepo({ localFallow: true });
 		const ok = await runForTest(["doctor"], readyRuntime(okRoot));
@@ -1319,6 +1346,34 @@ describe("U6 output budget behavior", () => {
 			raw_output_included: false,
 		});
 		expect(JSON.stringify(envelope.repair_hints)).toContain("reduce-output");
+	});
+
+	test("plain output remains usable when JSON summary exceeds the budget", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const { runtime } = readyExecutionRuntime(root, [
+			{
+				exitCode: 1,
+				stdout: JSON.stringify({
+					findings: Array.from({ length: 20 }, (_, index) => ({
+						file: `src/file-${index}.ts`,
+						line: 1,
+						action: "add-tests",
+						message: `finding ${index}`,
+					})),
+				}),
+				stderr: "",
+			},
+		]);
+
+		const result = await runForTest(
+			["dead-code", "--plain", "--max-output-bytes", "64"],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("fallow mode=dead-code status=issues");
+		expect(result.stdout).toContain("budget=within-budget");
+		expect(result.stdout).toContain("next_action=inspect-json");
 	});
 
 	test("CLI entry point flushes large JSON before process exit", async () => {

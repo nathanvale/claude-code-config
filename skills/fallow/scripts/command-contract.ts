@@ -346,7 +346,7 @@ const exitCodes = {
  * The runner chooses one repair hint at runtime; discovery exposes the stable
  * action vocabulary without prescribing command-specific workflows.
  */
-export const fallowFailureActions = [
+const fallowFailureActions = [
 	{
 		id: "run-doctor",
 		summary: "Run readiness diagnostics before retrying.",
