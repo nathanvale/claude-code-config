@@ -8,10 +8,6 @@ This context defines the durable language for the agent configuration, prompt, s
 The workflow promise for how an operator starts the Issue-to-PR helper. It covers runner shape and documented invocation, not helper semantics, command modes, or ledger validation behaviour. When contrasting runner families, say package-runner shape, not package-runner path.
 _Avoid_: helper invocation contract, command contract, runner path, package-runner path
 
-**Package-owned result vocabulary**:
-Stable agent-facing literal values emitted by a package wherever they appear in a shared CLI facade output shape. The facade owns fields; the package owns package-specific values once docs, tests, parsers, callers, or agents rely on them.
-_Avoid_: facade-owned literals, implementation-local strings, result payload values only
-
 **CLI evidence recipe**:
 A workflow-guide pattern that pairs a confusing operator state with the observable CLI facts that identify it and the recovery meaning of those facts. Use this for Issue-to-PR gotchas where the operator needs evidence from the CLI, not memory or inference.
 _Avoid_: evidence proof, proof recipe, CLI proof
@@ -47,6 +43,18 @@ _Avoid_: full adoption checklist, maturity model, every rubric item, implementat
 **Agent-native CLI design layer**:
 The judgment layer that applies the CLI baseline to skill-driver workflows: discovery, non-interactive execution, parseability, recovery, observability, safety, and token budget. It sits between the CLI baseline and contract runtime path; it is not an Overlay in the harness-installation sense.
 _Avoid_: overlay, rubric, contract runtime, agent-only skill
+
+**Skill Route Index**:
+A first-screen skill section that maps request shapes to next safe routes and owners. It guides model judgment; it is not a command menu, deterministic route table, Workflow Facade, or state machine.
+_Avoid_: progressive disclosure index, command menu, route table, workflow router, state machine
+
+**Runner Facade**:
+A thin runtime wrapper that normalizes one tool invocation into discoverable, parseable, repairable agent evidence. It owns command execution, output projection, and recovery hints, not multi-step workflow policy.
+_Avoid_: workflow engine, workflow facade, raw tool passthrough, skill prose contract
+
+**Workflow Facade**:
+A runtime owner for multi-step workflow orchestration, route policy, state transitions, and repair loops after a Runner Facade is too small. Use only when the workflow behavior is stable enough to move from skill judgment into runtime checks.
+_Avoid_: runner facade, bigger runner, prose workflow, premature orchestrator
 
 **Run correlation ID**:
 An identifier that connects one command invocation's result, human diagnostics, and diagnostic trail. Use concept wording in design prose; exact payload field names belong to the contract runtime.
@@ -87,6 +95,14 @@ _Avoid_: prose-only recovery, full repair schema, package recovery engine, gener
 **Repair affordance spine**:
 The runtime-backed shape that exposes possible runtime actions, side-effect classes, and continuation/stop guidance without owning package repair semantics. Rubric guidance owns evidence quality, ranking, preconditions, reversibility, and documentation-link judgment.
 _Avoid_: full repair option schema, executable auto-repair, package recovery policy, confidence gate
+
+**Finding resolver action**:
+A package-owned per-finding continuation that names a runnable evidence-gathering target for one analyzer finding. It belongs to usable finding evidence; blocked-run recovery still uses repair actions.
+_Avoid_: repair action, resolver metadata, hidden command, workflow action
+
+**Traceable finding**:
+An analyzer finding with enough package-owned coordinates to run a Finding resolver action. It is narrower than a finding that merely asks for human review or mentions tracing in raw analyzer output.
+_Avoid_: needs_trace, trace hint, every removable finding, manual review finding
 
 **Diagnostic trail pointer**:
 The design-layer failure affordance whose runtime-backed narrowing connects one CLI invocation to a package-owned Diagnostic capability for the same run. Storage, access, retention, deletion, and diagnostic event meaning stay package or platform policy.

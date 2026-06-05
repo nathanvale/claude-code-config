@@ -195,13 +195,20 @@
     "memory-os@side-quest-engineering": false,
     "playground@claude-plugins-official": false,
     "explanatory-output-style@claude-code-plugins": false,
-    "microsoft-docs@claude-plugins-official": true
+    "microsoft-docs@claude-plugins-official": true,
+    "superwhisper@superwhisper": true
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
       "source": {
         "source": "github",
         "repo": "anthropics/claude-plugins-official"
+      }
+    },
+    "superwhisper": {
+      "source": {
+        "source": "github",
+        "repo": "superultrainc/superwhisper-claude-code"
       }
     }
   },
