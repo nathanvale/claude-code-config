@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
 	CLI_DIAGNOSTIC_FLAGS,
@@ -70,6 +71,10 @@ function commandVector(input: McporterCommandInput): string[] {
 
 function parseJson(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+function stateRunKey(runId: string): string {
+	return createHash("sha256").update(runId).digest("hex").slice(0, 32);
 }
 
 const ALL_COMMANDS: BrowserUseCommand[] = [
@@ -1822,7 +1827,31 @@ describe("U6 target selection — state write", () => {
 			runtime,
 		);
 		expect(result.exitCode).toBe(0);
-		expect(writes[0].path).toBe("/tmp/states/browser-use-target-state-route-run.json");
+		expect(writes[0].path).toBe(
+			`/tmp/states/browser-use-target-state-${stateRunKey("route-run")}.json`,
+		);
+	});
+
+	test("env-derived state paths hash explicit run ids before building filenames", async () => {
+		const runId = "route.run_77-abc";
+		const { runtime, writes } = selectionRuntime({
+			stdin: targetsListEnvelope({
+				binding: { run_id: runId },
+			}),
+			env: {
+				BROWSER_USE_TARGET_STATE_DIR: "/tmp/states",
+				BROWSER_USE_RUN_ID: runId,
+			},
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(writes[0].path).toBe(
+			`/tmp/states/browser-use-target-state-${stateRunKey(runId)}.json`,
+		);
+		expect(writes[0].path).not.toContain(runId);
 	});
 
 	test("selecting an envelope from a different run than the asserted run id fails cross-run", async () => {
@@ -1943,6 +1972,34 @@ describe("U6 target selection — state write", () => {
 		// Short TTL applied.
 		expect(state.expires_at_ms).toBeGreaterThan(state.emitted_at_ms);
 		expect(state.display).toMatchObject({ origin: "https://example.com", path_shape: "/app", title: "App" });
+	});
+
+	test("selection sanitizes forged display fields before writing state", async () => {
+		const { runtime, writes } = selectionRuntime({
+			stdin: targetsListEnvelope({
+				candidates: [
+					{
+						candidate_ordinal: 1,
+						candidate_id: "cid-1",
+						origin: "https://example.com",
+						path_shape: "/app?token=secret-token#frag",
+						title: "Dashboard ?token=secret-token#frag",
+					},
+				],
+			}),
+		});
+		const result = await runForTest(
+			["targets", "select", "--candidate", "1", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		const state = parsedWrite(writes[0]);
+		expect(state.display).toEqual({
+			origin: "https://example.com",
+			title: "Dashboard",
+		});
+		expect(writes[0].contents).not.toContain("secret-token");
+		expect(writes[0].contents).not.toContain("#frag");
 	});
 
 	test("state contents end with a trailing newline (single atomic write)", async () => {
@@ -2163,6 +2220,29 @@ describe("U6 target status — projection and distinct failures", () => {
 		expect(parseJson(result.stdout).error).toMatchObject({
 			code: "target_state_unreadable",
 		});
+	});
+
+	test("state status sanitizes forged persisted display fields", async () => {
+		const { runtime } = selectionRuntime({
+			files: {
+				"/state.json": stateFile({
+					display: {
+						origin: "https://example.com",
+						path_shape: "/app?token=secret-token#frag",
+						title: "Dashboard ?token=secret-token#frag",
+					},
+				}),
+			},
+			now: () => 2_000,
+		});
+		const result = await runForTest(
+			["targets", "status", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Dashboard");
+		expect(result.stdout).not.toContain("secret-token");
+		expect(result.stdout).not.toContain("#frag");
 	});
 
 	test("a non-ENOENT read error (e.g. EACCES) fails with target_state_unreadable, not missing", async () => {

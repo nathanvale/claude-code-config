@@ -1,0 +1,16 @@
+{
+	"name": "fallow-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "file:../../../../side-quest-engineering/packages/cli-command-facade"
+	},
+	"devDependencies": {
+		"bun-types": "1.3.10",
+		"typescript": "^5.9.3"
+	}
+}
