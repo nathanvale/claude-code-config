@@ -89,8 +89,15 @@ export type TraceCommandResult = {
 export type TraceCommandRunner = (
 	command: string,
 	args: readonly string[],
-	options: { cwd: string },
+	options: { cwd: string; timeoutMs?: number },
 ) => Promise<TraceCommandResult>;
+
+/**
+ * Default trace transport timeout. fallow-mcp is a long-lived stdio server; a
+ * bounded wait turns a hung server into a transport failure instead of an
+ * indefinite hang.
+ */
+export const FALLOW_TRACE_TIMEOUT_MS = 90_000;
 
 export type ResolveMcporterCommandResult =
 	| { ok: true; vector: readonly [string, ...string[]] }
@@ -184,6 +191,7 @@ export async function traceExportReachability(input: {
 	root: string;
 	env: Record<string, string | undefined>;
 	runCommand: TraceCommandRunner;
+	timeoutMs?: number;
 }): Promise<TraceResult> {
 	const resolved = resolveFallowMcporterCommand(input.env);
 	if (!resolved.ok) {
@@ -200,7 +208,10 @@ export async function traceExportReachability(input: {
 		}),
 	];
 
-	const result = await input.runCommand(command, args, { cwd: input.root });
+	const result = await input.runCommand(command, args, {
+		cwd: input.root,
+		timeoutMs: input.timeoutMs ?? FALLOW_TRACE_TIMEOUT_MS,
+	});
 
 	const json = extractJson(result.stdout);
 	if (json === undefined) {
@@ -303,12 +314,13 @@ export function failureEvidenceGrade(
 	return FALLOW_EVIDENCE_GRADE_BY_KEY.unavailable;
 }
 
+// A string `error` field is mcporter's transport-level failure shape (server
+// unreachable, spawn failure). The `issue` sub-object is optional — keying on
+// it would misclassify a bare `{error: "..."}` as a malformed payload and emit
+// the wrong recovery. A tool-level failure uses `error: true` (see isToolError),
+// so the string check cleanly separates the two layers.
 function isTransportError(value: unknown): boolean {
-	return (
-		isRecord(value) &&
-		typeof value.error === "string" &&
-		"issue" in value
-	);
+	return isRecord(value) && typeof value.error === "string";
 }
 
 function isToolError(value: unknown): boolean {
@@ -326,21 +338,18 @@ function asTraceEvidence(value: unknown): TraceExportEvidence | undefined {
 	) {
 		return undefined;
 	}
-	// Fail closed on reference-shape drift: if the payload reports references but
-	// none match the known shape, the export may be referenced. Treating that as
-	// zero references would grade it `unreferenced_by_trace` (a removal
-	// candidate) — a fail-open. Reject the payload instead so the resolver
-	// reports `unavailable`, never a false candidate.
-	if (
-		Array.isArray(value.direct_references) &&
-		value.direct_references.length > 0
-	) {
-		const directReferences = value.direct_references.filter(isDirectReference);
-		if (directReferences.length === 0) return undefined;
+	// Fail closed on reference drift. `direct_references` must be a present
+	// array: a missing, null, or non-array field means the schema changed, and
+	// trusting its absence as "zero references" would grade a possibly-referenced
+	// export `unreferenced_by_trace` (a removal candidate) — a fail-open. An
+	// explicit `[]` is the only signal that no references exist.
+	if (!Array.isArray(value.direct_references)) return undefined;
+	const directReferences = value.direct_references.filter(isDirectReference);
+	// Reference-shape drift: the array reports references but none match the
+	// known shape. The export may be referenced, so reject rather than read zero.
+	if (value.direct_references.length > 0 && directReferences.length === 0) {
+		return undefined;
 	}
-	const directReferences = Array.isArray(value.direct_references)
-		? value.direct_references.filter(isDirectReference)
-		: [];
 	const reExportChains = Array.isArray(value.re_export_chains)
 		? value.re_export_chains
 		: [];
@@ -365,12 +374,24 @@ function isDirectReference(
 	);
 }
 
-// bunx/npx print resolver lines before the JSON body. Take from the first `{`
-// to the end — the call payload is the last JSON object on stdout.
+// bunx/npx and mcporter print resolver/progress lines — sometimes JSON objects
+// — before the result body. The call payload is the LAST top-level JSON object
+// on stdout, so scan candidate `{` positions from the last backward and return
+// the first that parses cleanly to end-of-string. Taking the first `{` instead
+// would concatenate a preamble object with the result and fail to parse,
+// discarding valid evidence.
 function extractJson(stdout: string): string | undefined {
-	const start = stdout.indexOf("{");
-	if (start === -1) return undefined;
-	return stdout.slice(start);
+	for (let index = stdout.lastIndexOf("{"); index !== -1; index = stdout.lastIndexOf("{", index - 1)) {
+		const candidate = stdout.slice(index);
+		try {
+			JSON.parse(candidate);
+			return candidate;
+		} catch {
+			// Not a clean trailing object from here; try an earlier `{`.
+		}
+		if (index === 0) break;
+	}
+	return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

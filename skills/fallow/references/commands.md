@@ -45,6 +45,6 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 - Treat issue status as analyzer-finding evidence.
 - Inspect issue references before editing files.
 - Request raw parsed Fallow output only for inspection.
-- Tighten the output budget only when the caller needs a smaller context cap.
+- Raise the output budget when summary evidence is too large, or narrow the target when the caller needs a smaller context cap.
 - Use runner help and tests for budget behavior.
 - Follow repair hints when budget output is blocked.

@@ -51,7 +51,7 @@ continuation for one introduced finding. Start from the finding, not a remembere
 command.
 
 - Follow the action only when an introduced `remove-export` finding advertises one;
-  inherited and coordinate-missing findings never do.
+  inherited and coordinate-missing findings carry no resolver action.
 - Run the advertised target (`why`) to gather reachability evidence for that one
   export; use runner help for current coordinates.
 - Read the evidence grade first; the verdict and next action are derived helpers.

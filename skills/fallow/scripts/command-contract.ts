@@ -369,7 +369,7 @@ export const fallowFailureActions = [
 	},
 	{
 		id: "reduce-output",
-		summary: "Reduce output size or omit raw output before retrying.",
+		summary: "Raise the output budget, omit raw output, or narrow the target before retrying.",
 		sideEffects: ["check"],
 	},
 	{
@@ -533,7 +533,7 @@ export function assertFallowResolverAction(
 function evidenceContract(
 	command: Exclude<
 		FallowRunnerCommand,
-		"audit" | "fix-preview" | "fix-apply" | "doctor"
+		"audit" | "fix-preview" | "fix-apply" | "doctor" | "why"
 	>,
 	summary: string,
 ): FallowRunnerCommandContract {

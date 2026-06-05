@@ -3,6 +3,8 @@
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { once } from "node:events";
+import type { Writable } from "node:stream";
 import { promisify } from "node:util";
 import { delimiter, join, resolve } from "node:path";
 import {
@@ -68,7 +70,7 @@ export type FallowRunnerRuntime = {
 	runCommand: (
 		command: string,
 		args: readonly string[],
-		options: { cwd: string },
+		options: { cwd: string; timeoutMs?: number },
 	) => Promise<CommandResult>;
 };
 
@@ -760,9 +762,14 @@ async function emitWhy(
 	stdout: CliWriter,
 	runId: string,
 ): Promise<number> {
-	// parseCommandOptions guarantees both coordinates for `why`.
-	const file = parsed.file as string;
-	const exportName = parsed.exportName as string;
+	// parseCommandOptions rejects `why` without both coordinates, so this is a
+	// defensive invariant check rather than user-facing validation — assert it
+	// instead of casting so a future caller bypassing the parser fails loudly.
+	if (!parsed.file || !parsed.exportName) {
+		throw new Error("emitWhy requires both --file and --export coordinates");
+	}
+	const file = parsed.file;
+	const exportName = parsed.exportName;
 
 	const trace: TraceResult = await traceExportReachability({
 		file,
@@ -1259,7 +1266,7 @@ function repairHintFor(
 	if (kind === "reduce-output") {
 		return repairHint(
 			FALLOW_REPAIR_ACTION_BY_KEY.reduceOutput,
-			"Increase output budget or omit raw output before retrying.",
+			"Raise --max-output-bytes, omit raw output, or narrow the target before retrying.",
 		);
 	}
 	if (kind === "apply-shaped") {
@@ -2100,13 +2107,20 @@ async function lookupExecutable(
 async function runCommand(
 	command: string,
 	args: readonly string[],
-	options: { cwd: string },
+	options: { cwd: string; timeoutMs?: number },
 ): Promise<CommandResult> {
 	try {
 		const result = await execFileAsync(command, [...args], {
 			cwd: options.cwd,
 			encoding: "utf-8",
 			maxBuffer: FALLOW_PROCESS_MAX_BUFFER_BYTES,
+			// A bounded timeout matters most for the trace transport: fallow-mcp is
+			// a long-lived stdio server that could hang after handshake. A killed
+			// process surfaces as a non-zero exit, which the trace adapter maps to
+			// transport_unavailable. Unset (CLI evidence) keeps prior behavior.
+			...(options.timeoutMs !== undefined
+				? { timeout: options.timeoutMs, killSignal: "SIGKILL" as const }
+				: {}),
 		});
 		return {
 			exitCode: 0,
@@ -2143,6 +2157,12 @@ class BufferWriter implements CliWriter {
 	toString(): string {
 		return this.content;
 	}
+}
+
+async function writeFully(stream: Writable, value: string): Promise<void> {
+	if (value === "") return;
+	if (stream.write(value)) return;
+	await once(stream, "drain");
 }
 
 export async function runForTest(
@@ -2230,16 +2250,20 @@ function safeFindCommand(argv: readonly string[]): FallowRunnerCommand | undefin
 }
 
 if (import.meta.main) {
+	const stdout = new BufferWriter();
+	const stderr = new BufferWriter();
 	let exitCode = 0;
 	try {
-		exitCode = await runFallowRunnerCli(Bun.argv.slice(2));
+		exitCode = await runFallowRunnerCli(Bun.argv.slice(2), { stdout, stderr });
 	} catch (error) {
 		if (error instanceof CliUsageError) {
-			process.stderr.write(`${error.message}\n`);
+			stderr.write(`${error.message}\n`);
 			exitCode = error.options.exitCode ?? 2;
 		} else {
 			throw error;
 		}
 	}
+	await writeFully(process.stdout, stdout.toString());
+	await writeFully(process.stderr, stderr.toString());
 	process.exit(exitCode);
 }

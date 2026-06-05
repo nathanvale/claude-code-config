@@ -1320,6 +1320,55 @@ describe("U6 output budget behavior", () => {
 		});
 		expect(JSON.stringify(envelope.repair_hints)).toContain("reduce-output");
 	});
+
+	test("CLI entry point flushes large JSON before process exit", async () => {
+		const root = await makeRepo({ localFallow: true });
+		const fallowPath = join(root, "node_modules", ".bin", "fallow");
+		const largeOutput = {
+			findings: Array.from({ length: 900 }, (_, index) => ({
+				file: `src/file-${index}.ts`,
+				line: 1,
+				action: "add-tests",
+				message: `large output finding ${index}`,
+			})),
+		};
+		await writeFile(
+			fallowPath,
+			[
+				"#!/usr/bin/env bun",
+				`process.stdout.write(${JSON.stringify(JSON.stringify(largeOutput))});`,
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+		await chmod(fallowPath, 0o755);
+
+		const result = Bun.spawnSync({
+			cmd: [
+				"bun",
+				"run",
+				join(import.meta.dir, "fallow-runner.ts"),
+				"dead-code",
+				"--root",
+				root,
+				"--max-output-bytes",
+				"5000000",
+			],
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const stdout = new TextDecoder().decode(result.stdout);
+		const stderr = new TextDecoder().decode(result.stderr);
+
+		expect(result.exitCode).toBe(0);
+		expect(stderr).toBe("");
+		expect(new TextEncoder().encode(stdout).length).toBeGreaterThan(65_536);
+		expect(() => JSON.parse(stdout)).not.toThrow();
+		expect(JSON.parse(stdout)).toMatchObject({
+			status: "issues",
+			failure_category: "none",
+		});
+	});
 });
 
 describe("U7 fix preview and explicit apply safety", () => {
@@ -2367,6 +2416,106 @@ describe("U3 trace adapter", () => {
 		expect(result).toMatchObject({ ok: false, reason: "malformed_payload" });
 	});
 
+	test("missing or null direct_references field fails closed, not unreferenced", async () => {
+		// A schema that drops or nulls direct_references while is_used is false must
+		// not be trusted as zero references (a removal candidate). Only an explicit
+		// [] grades unreferenced_by_trace.
+		for (const driftedRefs of [undefined, null, "oops"]) {
+			const payload: Record<string, unknown> = {
+				file: "src/x.ts",
+				export_name: "thing",
+				file_reachable: false,
+				is_entry_point: false,
+				is_used: false,
+				re_export_chains: [],
+			};
+			if (driftedRefs !== undefined) payload.direct_references = driftedRefs;
+
+			const { runCommand } = runnerYielding(jsonResult(payload));
+			const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+			expect(result).toMatchObject({ ok: false, reason: "malformed_payload" });
+		}
+
+		// The explicit empty array is the only signal that grades unreferenced.
+		const { runCommand } = runnerYielding(
+			jsonResult(evidence({ is_used: false, direct_references: [] })),
+		);
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(deriveEvidenceGrade(result.evidence)).toBe("unreferenced_by_trace");
+		}
+	});
+
+	test("transport error without an issue key still maps to transport failure", async () => {
+		const { runCommand } = runnerYielding(
+			jsonResult({ error: "connection refused" }),
+		);
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
+		if (!result.ok) {
+			expect(failureEvidenceGrade(result.reason)).toBe("unavailable");
+		}
+	});
+
+	test("leading mcporter JSON preamble does not discard the trace result", async () => {
+		// mcporter/bunx can print a progress JSON object before the result. The
+		// adapter must read the last top-level object, not concatenate from the
+		// first brace.
+		const preamble = JSON.stringify({ progress: "resolving", step: 1 });
+		const body = JSON.stringify(
+			evidence({
+				is_used: true,
+				direct_references: [{ from_file: "src/y.ts", kind: "import" }],
+			}),
+		);
+		const { runCommand } = runnerYielding({
+			exitCode: 0,
+			stdout: `Resolving dependencies\n${preamble}\n${body}\n`,
+			stderr: "",
+		});
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(deriveEvidenceGrade(result.evidence)).toBe("referenced");
+			expect(result.evidence.direct_references).toHaveLength(1);
+		}
+	});
+
+	test("the trace call requests a bounded timeout", async () => {
+		let seenTimeout: number | undefined;
+		const runCommand = async (
+			_command: string,
+			_args: readonly string[],
+			options: { cwd: string; timeoutMs?: number },
+		): Promise<TraceCommandResult> => {
+			seenTimeout = options.timeoutMs;
+			return jsonResult(evidence({ is_used: true }));
+		};
+
+		await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(typeof seenTimeout).toBe("number");
+		expect(seenTimeout).toBeGreaterThan(0);
+	});
+
+	test("a timed-out transport (non-zero exit, empty stdout) blocks as transport failure", async () => {
+		const { runCommand } = runnerYielding({
+			exitCode: 1,
+			stdout: "",
+			stderr: "trace timed out",
+		});
+
+		const result = await traceExportReachability({ ...COORDS, env: {}, runCommand });
+
+		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
+	});
+
 	test("non-zero exit with evidence-shaped stdout maps to transport failure", async () => {
 		// The transport flagged failure but printed evidence anyway; it must never
 		// surface as clean reachability.
@@ -2520,6 +2669,7 @@ describe("U4 resolver execution and evidence-grade-first output", () => {
 			whyRuntime(stdout),
 		);
 		const envelope = expectEnvelope(json);
+		expect(json.exitCode).toBe(0);
 		expect(envelope.status).toBe("ok");
 		expect(envelope.mode).toBe("why");
 		const resolver = resolverOf(envelope);
@@ -2563,6 +2713,8 @@ describe("U4 resolver execution and evidence-grade-first output", () => {
 			whyRuntime(stdout),
 		);
 		const envelope = expectEnvelope(json);
+		// Unreferenced is usable evidence (issues, exit 0), not a blocked run.
+		expect(json.exitCode).toBe(0);
 		expect(envelope.status).toBe("issues");
 		const resolver = resolverOf(envelope);
 		expect(resolver.grade).toBe("unreferenced_by_trace");
