@@ -335,6 +335,9 @@ describe("U2 command contract", () => {
 		expect(Object.keys(fallowRunnerContracts["fix-apply"].flags)).toContain(
 			"--confirm-current-task-apply",
 		);
+		expect(fallowRunnerContracts["fix-apply"].usage.join("\n")).toContain(
+			"--confirm-current-task-apply",
+		);
 		for (const command of ALL_COMMANDS.filter((item) => item !== "fix-apply")) {
 			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
 				"--confirm-current-task-apply",
@@ -547,6 +550,33 @@ describe("U4 discovery and doctor runtime", () => {
 		const runtime = createDefaultFallowRuntime({
 			cwd: root,
 			env: { PATH: binDir },
+			runCommand: async (command) => {
+				if (command !== "git") {
+					return { exitCode: 1, stdout: "", stderr: "unexpected command" };
+				}
+				return { exitCode: 0, stdout: "true\n", stderr: "" };
+			},
+		});
+		const result = await runForTest(["doctor"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		const binary = readinessOf(expectEnvelope(result)).fallow_binary;
+		expect(binary.status).toBe("ok");
+		expect(binary.source).toBe("path");
+		expect(binary.path).toBe(fallowPath);
+	});
+
+	test("default runtime discovers PATHEXT Fallow variants on PATH", async () => {
+		const root = await makeRepo();
+		const binDir = join(root, "bin");
+		await mkdir(binDir, { recursive: true });
+		const fallowPath = join(binDir, "fallow.CMD");
+		await writeFile(fallowPath, "#!/usr/bin/env sh\nexit 0\n", "utf-8");
+		await chmod(fallowPath, 0o755);
+
+		const runtime = createDefaultFallowRuntime({
+			cwd: root,
+			env: { PATH: binDir, PATHEXT: ".CMD;.EXE" },
 			runCommand: async (command) => {
 				if (command !== "git") {
 					return { exitCode: 1, stdout: "", stderr: "unexpected command" };
@@ -2303,14 +2333,16 @@ describe("U2 resolver action projection", () => {
 				],
 			},
 		};
-		const { runtime } = readyExecutionRuntime(root, [
+		const pending = [
 			{ exitCode: 1, stdout: JSON.stringify(output), stderr: "" },
-		]);
+		];
+		const { runtime: plainRuntime } = readyExecutionRuntime(root, pending);
 
-		const plain = await runForTest(["audit", "--plain"], runtime);
+		const plain = await runForTest(["audit", "--plain"], plainRuntime);
 		expect(plain.stdout).toContain("next_action=continue introduced=0");
 
-		const json = await runForTest(["audit"], runtime);
+		const { runtime: jsonRuntime } = readyExecutionRuntime(root, pending);
+		const json = await runForTest(["audit"], jsonRuntime);
 		for (const reference of issueReferencesOf(expectEnvelope(json))) {
 			expect(reference.resolver_actions).toBeUndefined();
 		}
@@ -2636,6 +2668,22 @@ describe("U3 trace adapter", () => {
 		expect(result).toMatchObject({ ok: false, reason: "transport_unavailable" });
 	});
 
+	test("rejected trace command runner maps to transport failure", async () => {
+		const result = await traceExportReachability({
+			...COORDS,
+			env: {},
+			runCommand: async () => {
+				throw new Error("spawn ENOENT");
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			reason: "transport_unavailable",
+			message: "spawn ENOENT",
+		});
+	});
+
 	test("malformed payload fails closed instead of producing a candidate", async () => {
 		// Present JSON, but missing the required reachability fields.
 		const { runCommand } = runnerYielding(
@@ -2897,6 +2945,19 @@ describe("U4 resolver execution and evidence-grade-first output", () => {
 		);
 		const envelope = expectEnvelope(included);
 		expect((envelope.fallow_output as { is_used?: boolean }).is_used).toBe(true);
+	});
+
+	test("failed trace does not report raw output as included", async () => {
+		const result = await runForTest(
+			["why", "--file", "src/x.ts", "--export", "ghost", "--include-raw-output"],
+			whyRuntime(JSON.stringify({ error: true, message: "not found" })),
+		);
+		const envelope = expectEnvelope(result);
+		expect(envelope.fallow_output).toBeNull();
+		expect(envelope.output_budget).toMatchObject({
+			raw_output_requested: true,
+			raw_output_included: false,
+		});
 	});
 });
 

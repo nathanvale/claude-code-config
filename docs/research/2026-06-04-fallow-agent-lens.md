@@ -66,7 +66,7 @@ fallow dead-code --format json --quiet --unused-exports   # unused exports, mach
 fallow dupes                                              # duplication
 fallow audit                                              # changed-code gate
 fallow dupes --mode semantic                              # catch renamed-variable clones
---trace                                                   # debug false positives
+fallow dead-code --trace src/utils.ts:formatDate          # debug one export
 ```
 
 JSON contract for autonomy:

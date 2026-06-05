@@ -68,10 +68,6 @@ _Avoid_: full logging policy, trace vendor contract, raw log access, privacy sch
 A runtime-backed package-owned command role for discoverable readiness diagnostics across environment, auth, config, service reachability, and local dependencies. Prefer `doctor` as CLI spelling when a package has no established diagnostic route; facade validation owns the role, not route spelling or diagnostic event meaning.
 _Avoid_: mandatory doctor command, health route, status-only command, diagnostics prose
 
-**Warm Chrome Preflight**:
-Browser Use's browser-entry proof that verifies a real Google Chrome binary, dedicated persistent profile, and loopback CDP endpoint before adapter routing. It is endpoint authority for Browser Adapter Proof and Browser Adapter Router; it is not an adapter selector.
-_Avoid_: Chrome plugin check, browser adapter proof, cold browser launch, Chrome for Testing preflight
-
 **Baseline exit semantics**:
 A facade-owned minimum exit meaning set for agent-native command contracts: success, generic or runtime failure, and invalid usage. Extra exit codes remain package-owned and justified by distinct agent routing value.
 _Avoid_: full exit taxonomy, package exit policy, prose-only exit convention

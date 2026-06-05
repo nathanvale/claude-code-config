@@ -19,7 +19,10 @@
 - Skill Route Index plan: `docs/plans/2026-06-04-004-feat-fallow-progressive-disclosure-index-plan.md`.
 - Finding resolver actions plan: `docs/plans/2026-06-05-003-feat-fallow-finding-resolver-actions-plan.md`.
 - Finding resolver requirements: `docs/brainstorms/2026-06-05-fallow-finding-resolver-actions-requirements.md`.
-- Trace adapter lineage: lifted from the retired `prototype-why-symbol` spike; keeper behavior now lives in `skills/fallow/scripts/why-trace.ts` and runner tests. The spike proved the `trace_export` mcporter shape and reachability evidence; decisions 27-40 in the log record why.
+- Trace adapter lineage: lifted from the retired `prototype-why-symbol` spike.
+- Trace adapter keeper: behavior now lives in `skills/fallow/scripts/why-trace.ts` and runner tests.
+- Trace adapter proof scope: spike proved the `trace_export` mcporter shape and reachability evidence.
+- Trace adapter decision trail: decisions 27-40 in the log record why.
 - Skill design rule: `context/skill-design-philosophy.md`.
 - CLI design rule: `skills/create-cli/SKILL.md`.
 - Facade-backed path: `skills/create-cli/references/cli-command-facade.md`.

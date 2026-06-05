@@ -15,6 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
@@ -1839,24 +1840,65 @@ function parseEnvelopeCandidates(
 	const candidates: BrowserTargetCandidate[] = [];
 	for (const entry of value) {
 		if (!isJsonObject(entry)) return undefined;
-		const ordinal = entry.candidate_ordinal;
-		const candidateId = stringField(entry.candidate_id);
-		const origin = entry.origin;
-		if (typeof ordinal !== "number" || !Number.isInteger(ordinal) || ordinal < 1) {
-			return undefined;
+			const ordinal = entry.candidate_ordinal;
+			const candidateId = stringField(entry.candidate_id);
+			if (typeof ordinal !== "number" || !Number.isInteger(ordinal) || ordinal < 1) {
+				return undefined;
+			}
+			if (!candidateId) return undefined;
+			const display = safeDisplayFacts(candidateId, entry);
+			if (!display) return undefined;
+			candidates.push({
+				candidate_ordinal: ordinal,
+				candidate_id: candidateId,
+				origin: display.origin,
+				...(display.path_shape ? { path_shape: display.path_shape } : {}),
+				...(display.title ? { title: display.title } : {}),
+			});
 		}
-		if (!candidateId || typeof origin !== "string") return undefined;
-		const pathShape = stringField(entry.path_shape);
-		const title = stringField(entry.title);
-		candidates.push({
-			candidate_ordinal: ordinal,
-			candidate_id: candidateId,
-			origin,
-			...(pathShape ? { path_shape: pathShape } : {}),
-			...(title ? { title } : {}),
-		});
+		return candidates;
 	}
-	return candidates;
+
+function safeDisplayFacts(
+	candidateId: string,
+	display: Record<string, unknown>,
+): { origin: string; path_shape?: string; title?: string } | undefined {
+	const candidateUrl = parseUrlSafe(candidateId);
+	if (candidateUrl) {
+		return {
+			origin: candidateUrl.origin,
+			path_shape: redactPathShape(candidateUrl),
+			title: safeDisplayTitle(display.title),
+		};
+	}
+
+	const origin = safeDisplayOrigin(display.origin);
+	if (!origin) return undefined;
+	const pathShape = safeDisplayPathShape(display.path_shape);
+	const title = safeDisplayTitle(display.title);
+	return {
+		origin,
+		...(pathShape ? { path_shape: pathShape } : {}),
+		...(title ? { title } : {}),
+	};
+}
+
+function safeDisplayOrigin(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const parsed = parseUrlSafe(value);
+	if (!parsed || parsed.origin !== value) return undefined;
+	return parsed.origin;
+}
+
+function safeDisplayPathShape(value: unknown): string | undefined {
+	if (typeof value !== "string" || value.trim() === "") return undefined;
+	if (value.includes("?") || value.includes("#")) return undefined;
+	if (value.length > 140) return undefined;
+	return truncateText(value.trim(), 120);
+}
+
+function safeDisplayTitle(value: unknown): string | undefined {
+	return typeof value === "string" ? redactTitle(value) : undefined;
 }
 
 // --- Route/proof cross-check (optional, fail-closed on disagreement) -------
@@ -2159,7 +2201,11 @@ function resolveStatePath(
 	if (explicit) return { ok: true, path: explicit };
 	const dir = stringField(env.BROWSER_USE_TARGET_STATE_DIR);
 	if (dir && runIdExplicit && stringField(runId)) {
-		return { ok: true, path: `${dir}/browser-use-target-state-${runId}.json` };
+		const runKey = createHash("sha256").update(runId).digest("hex").slice(0, 32);
+		return {
+			ok: true,
+			path: join(dir, `browser-use-target-state-${runKey}.json`),
+		};
 	}
 	const detail =
 		dir && !runIdExplicit
@@ -2343,10 +2389,8 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 	) {
 		return undefined;
 	}
-	const origin = display.origin;
-	if (typeof origin !== "string") return undefined;
-	const pathShape = stringField(display.path_shape);
-	const title = stringField(display.title);
+	const safeDisplay = safeDisplayFacts(targetCandidateId, display);
+	if (!safeDisplay) return undefined;
 	return {
 		contract,
 		schema_version: schemaVersion,
@@ -2362,9 +2406,9 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 		emitted_at_ms: emittedAtMs,
 		expires_at_ms: expiresAtMs,
 		display: {
-			origin,
-			...(pathShape ? { path_shape: pathShape } : {}),
-			...(title ? { title } : {}),
+			origin: safeDisplay.origin,
+			...(safeDisplay.path_shape ? { path_shape: safeDisplay.path_shape } : {}),
+			...(safeDisplay.title ? { title: safeDisplay.title } : {}),
 		},
 	};
 }

@@ -430,7 +430,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "scripts/fallow-runner.ts",
 			summary: "Apply Fallow fixes through an explicit mutation path.",
 			usage: [
-				"fix-apply [--root <repo>] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"fix-apply --confirm-current-task-apply [--root <repo>] [--plain] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "operator",

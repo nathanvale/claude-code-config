@@ -816,7 +816,7 @@ async function emitWhy(
 		writeEffect: "none",
 		maxOutputBytes: parsed.maxOutputBytes,
 		rawRequested: parsed.includeRawOutput,
-		rawOutputIncluded: parsed.includeRawOutput,
+		rawOutputIncluded: parsed.includeRawOutput && trace.ok,
 		fallowOutput:
 			parsed.includeRawOutput && trace.ok ? trace.evidence : null,
 		summary: { ...emptySummary(), mode_evidence: { resolver } },
@@ -2097,16 +2097,33 @@ async function lookupExecutable(
 	name: string,
 	env: Record<string, string | undefined>,
 ): Promise<string | undefined> {
+	const candidates = executableCandidates(name, env);
 	for (const directory of (env.PATH ?? "").split(delimiter).filter(Boolean)) {
-		const path = join(directory, name);
-		try {
-			await access(path, constants.X_OK);
-			return path;
-		} catch {
-			// Continue searching PATH.
+		for (const candidate of candidates) {
+			const path = join(directory, candidate);
+			try {
+				await access(path, constants.X_OK);
+				return path;
+			} catch {
+				// Continue searching PATH.
+			}
 		}
 	}
 	return undefined;
+}
+
+function executableCandidates(
+	name: string,
+	env: Record<string, string | undefined>,
+): string[] {
+	const extensions =
+		process.platform === "win32" || env.PATHEXT
+			? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+					.split(";")
+					.map((item) => item.trim())
+					.filter(Boolean)
+			: [];
+	return Array.from(new Set([name, ...extensions.map((extension) => `${name}${extension}`)]));
 }
 
 async function runCommand(

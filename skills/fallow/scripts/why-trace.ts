@@ -208,10 +208,19 @@ export async function traceExportReachability(input: {
 		}),
 	];
 
-	const result = await input.runCommand(command, args, {
-		cwd: input.root,
-		timeoutMs: input.timeoutMs ?? FALLOW_TRACE_TIMEOUT_MS,
-	});
+	let result: TraceCommandResult;
+	try {
+		result = await input.runCommand(command, args, {
+			cwd: input.root,
+			timeoutMs: input.timeoutMs ?? FALLOW_TRACE_TIMEOUT_MS,
+		});
+	} catch (error) {
+		return {
+			ok: false,
+			reason: "transport_unavailable",
+			message: error instanceof Error ? error.message : "trace transport failed.",
+		};
+	}
 
 	const json = extractJson(result.stdout);
 	if (json === undefined) {

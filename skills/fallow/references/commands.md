@@ -27,7 +27,8 @@ bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
 - Use `health` for complexity, coupling, and score evidence.
 - Use `health` first for bare cleanup asks.
 - Use `fix-preview` for write-inspection requests.
-- Use `why` to trace one introduced export's reachability when an audit finding advertises a Finding resolver action; discover its coordinates through runner help and command discovery.
+- Use `why` to trace one introduced export's reachability when an audit finding advertises a Finding resolver action.
+- Discover resolver coordinates through runner help and command discovery.
 - Read `references/safety.md` before applying Fallow fixes.
 
 ## Targeting
