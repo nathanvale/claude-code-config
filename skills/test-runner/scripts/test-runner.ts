@@ -99,6 +99,19 @@ export type TestRunnerDiagnostic = {
 	next_action: string;
 };
 
+export type TestRunnerCoverageFile = {
+	file: string;
+	functions_percent: number | null;
+	lines_percent: number | null;
+	uncovered_lines: string | null;
+};
+
+export type TestRunnerCoverage = {
+	functions_percent: number | null;
+	lines_percent: number | null;
+	files: TestRunnerCoverageFile[];
+};
+
 export type TestRunnerResult = {
 	action:
 		| "tests_passed"
@@ -124,6 +137,7 @@ export type TestRunnerResult = {
 		failed: number | null;
 		expect_calls: number | null;
 	};
+	coverage?: TestRunnerCoverage;
 	failures: TestRunnerFailure[];
 	diagnostic?: TestRunnerDiagnostic;
 	detail_available?: boolean;
@@ -431,6 +445,7 @@ async function runBunTests(input: {
 				exitCode: RUNTIME_FAILURE_EXIT_CODE,
 				failures: parsedOutput.failures,
 				summary: parsedOutput.summary,
+				coverage: parsedOutput.coverage,
 				mode: input.parsed.runMode,
 				detailDiagnostic,
 			}),
@@ -450,6 +465,7 @@ async function runBunTests(input: {
 		runId: input.runId,
 		durationMs: processResult.wallTimeMs,
 		summary: parsedOutput.summary,
+		coverage: parsedOutput.coverage,
 		failures: parsedOutput.failures,
 		diagnostic: passed
 			? undefined
@@ -508,12 +524,13 @@ async function lookupFailureDetail(input: {
 	startedAt: number;
 }): Promise<TestRunnerResult> {
 	const cwd = resolve(input.runtime.cwd());
+	const diagnosticCwd = ".";
 	const handle = input.parsed.handle;
 	const diagnostic = validateDetailHandle(handle);
 	if (diagnostic) {
 		return createRunnerDiagnosticResult({
 			command: "detail",
-			cwd,
+			cwd: diagnosticCwd,
 			bunCommand: null,
 			bunArgs: [],
 			runId: input.runId,
@@ -531,7 +548,7 @@ async function lookupFailureDetail(input: {
 		} catch {
 			return createRunnerDiagnosticResult({
 				command: "detail",
-				cwd,
+				cwd: diagnosticCwd,
 				bunCommand: null,
 				bunArgs: [],
 				runId: input.runId,
@@ -543,7 +560,7 @@ async function lookupFailureDetail(input: {
 	} catch {
 		return createRunnerDiagnosticResult({
 			command: "detail",
-			cwd,
+			cwd: diagnosticCwd,
 			bunCommand: null,
 			bunArgs: [],
 			runId: input.runId,
@@ -556,7 +573,7 @@ async function lookupFailureDetail(input: {
 	if (!isDetailArtifact(parsed)) {
 		return createRunnerDiagnosticResult({
 			command: "detail",
-			cwd,
+			cwd: diagnosticCwd,
 			bunCommand: null,
 			bunArgs: [],
 			runId: input.runId,
@@ -569,7 +586,7 @@ async function lookupFailureDetail(input: {
 	if (parsed.handle !== handle || !handle.includes(shortRunKey(parsed.run_id))) {
 		return createRunnerDiagnosticResult({
 			command: "detail",
-			cwd,
+			cwd: diagnosticCwd,
 			bunCommand: null,
 			bunArgs: [],
 			runId: input.runId,
@@ -582,7 +599,7 @@ async function lookupFailureDetail(input: {
 	if (parsed.expires_at_ms <= input.runtime.now()) {
 		return createRunnerDiagnosticResult({
 			command: "detail",
-			cwd,
+			cwd: diagnosticCwd,
 			bunCommand: null,
 			bunArgs: [],
 			runId: input.runId,
@@ -847,7 +864,9 @@ function renderPlain(result: TestRunnerResult): string {
 		`duration_ms=${result.duration_ms}`,
 		`run_id=${result.run_id}`,
 	];
+	appendCoverageHead(head, result);
 	const lines = [head.join(" ")];
+	appendCoverageLines(lines, result);
 	appendDetailDiagnostic(lines, result);
 
 	for (const failure of result.failures.slice(0, MAX_FAILURES)) {
@@ -911,6 +930,15 @@ function renderCompactJson(result: TestRunnerResult): string {
 		...(result.failures.length > MAX_FAILURES
 			? { o: result.failures.length - MAX_FAILURES }
 			: {}),
+		...(result.coverage
+			? {
+					c: result.coverage.files.map((file) => [
+						file.file,
+						formatPercent(file.functions_percent),
+						formatPercent(file.lines_percent),
+					]),
+				}
+			: {}),
 		...(result.diagnostic && result.status === "error"
 			? {
 					d: {
@@ -935,7 +963,9 @@ function renderCompactJson(result: TestRunnerResult): string {
 function renderToon(result: TestRunnerResult): string {
 	if (result.command === "detail") return renderDetailToon(result);
 	if (result.status === "passed") {
-		return `p{x,failed}:${result.exit_code},0\n`;
+		const lines = [`p{x,failed}:${result.exit_code},0`];
+		appendCoverageToon(lines, result);
+		return `${lines.join("\n")}\n`;
 	}
 	const failures = result.failures.slice(0, MAX_FAILURES);
 	const lines = [`f[${failures.length}]{l,t,a,e,r,d}:`];
@@ -994,7 +1024,9 @@ function escapeToonCell(value: string): string {
 
 function renderRepairPlain(result: TestRunnerResult): string {
 	if (result.status === "passed") {
-		return `tests_passed exit=${result.exit_code} failed=0\n`;
+		const lines = [`tests_passed exit=${result.exit_code} failed=0`];
+		appendCoverageLines(lines, result);
+		return `${lines.join("\n")}\n`;
 	}
 	const lines = ["repair"];
 	appendDetailDiagnostic(lines, result);
@@ -1039,7 +1071,9 @@ function compactTestName(testName: string): string {
 
 function renderTriagePlain(result: TestRunnerResult): string {
 	if (result.status === "passed") {
-		return `tests_passed exit=${result.exit_code} failed=0\n`;
+		const lines = [`tests_passed exit=${result.exit_code} failed=0`];
+		appendCoverageLines(lines, result);
+		return `${lines.join("\n")}\n`;
 	}
 	const lines = ["triage"];
 	appendDetailDiagnostic(lines, result);
@@ -1100,10 +1134,45 @@ function appendDetailDiagnostic(lines: string[], result: TestRunnerResult): void
 	lines.push(`detail_next=${result.detail_diagnostic.next_action}`);
 }
 
+function appendCoverageHead(parts: string[], result: TestRunnerResult): void {
+	if (!result.coverage) return;
+	parts.push(`coverage_lines=${formatPercent(result.coverage.lines_percent)}`);
+	parts.push(`coverage_funcs=${formatPercent(result.coverage.functions_percent)}`);
+}
+
+function appendCoverageLines(lines: string[], result: TestRunnerResult): void {
+	if (!result.coverage) return;
+	for (const file of result.coverage.files) {
+		lines.push(
+			`coverage ${file.file} funcs=${formatPercent(file.functions_percent)} lines=${formatPercent(file.lines_percent)}`,
+		);
+	}
+}
+
+function appendCoverageToon(lines: string[], result: TestRunnerResult): void {
+	if (!result.coverage) return;
+	lines.push("c{file,funcs,lines}:");
+	for (const file of result.coverage.files) {
+		lines.push(
+			[
+				file.file,
+				formatPercent(file.functions_percent),
+				formatPercent(file.lines_percent),
+			]
+				.map(escapeToonCell)
+				.join(","),
+		);
+	}
+}
+
+function formatPercent(value: number | null): string {
+	return value === null ? "-" : value.toFixed(2);
+}
+
 function parseBunOutput(input: {
 	output: string;
 	runId: string;
-}): Pick<TestRunnerResult, "summary" | "failures"> {
+}): Pick<TestRunnerResult, "summary" | "coverage" | "failures"> {
 	const lines = input.output.split(/\r?\n/);
 	let currentFile: string | null = null;
 	const failures: TestRunnerFailure[] = [];
@@ -1150,7 +1219,34 @@ function parseBunOutput(input: {
 
 	return {
 		summary: parseSummary(lines),
+		coverage: parseCoverage(lines),
 		failures,
+	};
+}
+
+function parseCoverage(lines: readonly string[]): TestRunnerCoverage | undefined {
+	const files: TestRunnerCoverageFile[] = [];
+	for (const line of lines) {
+		if (!line.includes("|")) continue;
+		const cells = line.split("|").map((cell) => cell.trim());
+		if (cells.length < 3) continue;
+		const [file, functionsPercent, linesPercent, uncoveredLines] = cells;
+		if (!file || file === "File" || file.startsWith("-")) continue;
+		if (!/^\d+(?:\.\d+)?$/.test(functionsPercent ?? "")) continue;
+		if (!/^\d+(?:\.\d+)?$/.test(linesPercent ?? "")) continue;
+		files.push({
+			file,
+			functions_percent: Number(functionsPercent),
+			lines_percent: Number(linesPercent),
+			uncovered_lines: uncoveredLines || null,
+		});
+	}
+	if (files.length === 0) return undefined;
+	const allFiles = files.find((file) => file.file === "All files");
+	return {
+		functions_percent: allFiles?.functions_percent ?? null,
+		lines_percent: allFiles?.lines_percent ?? null,
+		files: files.filter((file) => file.file !== "All files"),
 	};
 }
 
@@ -1396,6 +1492,7 @@ function createRunnerDiagnosticResult(input: {
 	diagnostic: TestRunnerDiagnostic;
 	exitCode: number;
 	summary?: TestRunnerResult["summary"];
+	coverage?: TestRunnerCoverage;
 	failures?: TestRunnerFailure[];
 	mode?: TestRunnerRunMode;
 	detail?: TestRunnerDetail;
@@ -1412,6 +1509,7 @@ function createRunnerDiagnosticResult(input: {
 		runId: input.runId,
 		durationMs: input.durationMs,
 		summary: input.summary ?? emptySummary(),
+		coverage: input.coverage,
 		failures: input.failures ?? [],
 		diagnostic: input.diagnostic,
 		mode: input.mode,
@@ -1431,6 +1529,7 @@ function baseResult(input: {
 	runId: string;
 	durationMs: number;
 	summary: TestRunnerResult["summary"];
+	coverage?: TestRunnerCoverage;
 	failures: readonly TestRunnerFailure[];
 	diagnostic?: TestRunnerDiagnostic;
 	mode?: TestRunnerRunMode;
@@ -1451,6 +1550,7 @@ function baseResult(input: {
 		run_id: input.runId,
 		duration_ms: Math.max(0, Math.round(input.durationMs)),
 		summary: input.summary,
+		...(input.coverage ? { coverage: input.coverage } : {}),
 		failures: [...input.failures],
 		...(input.diagnostic ? { diagnostic: input.diagnostic } : {}),
 		detail_available: !input.detailDiagnostic,

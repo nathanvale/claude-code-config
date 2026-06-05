@@ -155,6 +155,68 @@ describe("runner benchmark fidelity", () => {
 		expect(row?.fidelity?.score).toBe(1);
 	});
 
+	test("can produce benchmark evidence without MCP artifact rows", async () => {
+		const result = await runBenchmark(
+			[
+				"--fixture",
+				"fail",
+				"--no-mcp-baseline",
+				"--local-runner",
+				"./test-runner.sh",
+				"--run-id",
+				"unit-no-mcp-baseline",
+			],
+			{ cwd: scriptsDir, now: new Date("2026-06-05T00:00:00.000Z") },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.evidence.rows.some((row) => row.variant_kind === "mcp_artifact")).toBe(
+			false,
+		);
+		expect(result.evidence.rows.some((row) => row.variant === "native-bun")).toBe(
+			true,
+		);
+		expect(
+			result.evidence.rows.some((row) => row.variant === "local-runner-repair-toon"),
+		).toBe(true);
+	});
+
+	test("surfaces Bun coverage in plain and compact outputs", async () => {
+		const plain = await runForTest([
+			"run",
+			"--plain",
+			"--",
+			"fixtures/coverage.test.ts",
+			"--coverage",
+		]);
+		const compact = await runForTest([
+			"run",
+			"--format",
+			"json-compact",
+			"--",
+			"fixtures/coverage.test.ts",
+			"--coverage",
+		]);
+		const toon = await runForTest([
+			"run",
+			"--format",
+			"toon",
+			"--",
+			"fixtures/coverage.test.ts",
+			"--coverage",
+		]);
+
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout).toContain("coverage_lines=75.00");
+		expect(plain.stdout).toContain("coverage fixtures/coverage-target.ts");
+		expect(compact.exitCode).toBe(0);
+		expect(compact.stdout).toContain("coverage-target.ts");
+		expect(compact.stdout).toContain("75.00");
+		expect(toon.exitCode).toBe(0);
+		expect(toon.stdout).toContain("c{file,funcs,lines}:");
+		expect(toon.stdout).toContain("coverage-target.ts");
+	});
+
 	test("reports repair, triage, and detail roundtrip dimensions separately", async () => {
 		const result = await runBenchmark(
 			[
@@ -334,6 +396,140 @@ describe("runner benchmark fidelity", () => {
 		expect(result.evidence.gate_result?.status).toBe("fail");
 		expect(result.evidence.gate_result?.failures.join("\n")).toContain(
 			"lookup unavailable",
+		);
+	});
+
+	test("fixed gates compare token estimates against named variants", async () => {
+		const gatePath = ".benchmark-output/unit-comparative-token-gate.json";
+		const baselinePath = ".benchmark-output/unit-comparative-token-baseline.json";
+		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		await writeFile(
+			join(scriptsDir, baselinePath),
+			`${JSON.stringify({
+				rows: [
+					{
+						fixture: "fail",
+						variant: "mcp-runner",
+						exit_code: 1,
+						token_estimate: 1,
+						stdout_sample: [
+							"fail.test.ts failing fixture > calculates tax-inclusive price",
+							"error: expect(received).toBe(expected)",
+							"Expected: 13",
+							"Received: 11",
+						].join("\n"),
+						stderr_sample: "",
+					},
+				],
+			})}\n`,
+		);
+		await writeFile(
+			join(scriptsDir, gatePath),
+			`${JSON.stringify({
+				candidate_gates: [
+					{
+						fixture: "fail",
+						variant: "local-runner-repair",
+						exit_correctness_required: true,
+						max_token_estimate: null,
+						max_token_estimate_variant: "mcp-runner",
+						max_token_estimate_variant_kind: "mcp_artifact",
+						min_fidelity_score: 1,
+						require_lookup_available: true,
+						require_detail_roundtrip: true,
+						max_detail_test_reruns: 0,
+						source: "observed_calibration",
+					},
+				],
+			})}\n`,
+		);
+
+		const result = await runBenchmark(
+			[
+				"--fixture",
+				"fail",
+				"--local-runner",
+				"./test-runner.sh",
+				"--mode",
+				"fixed-gate",
+				"--gate-file",
+				gatePath,
+				"--mcp-baseline",
+				baselinePath,
+				"--run-id",
+				"unit-comparative-token-gate",
+			],
+			{ cwd: scriptsDir, now: new Date("2026-06-05T00:00:00.000Z") },
+		);
+
+		expect(result.evidence.gate_result?.status).toBe("fail");
+		expect(result.evidence.gate_result?.failures.join("\n")).toContain(
+			"token estimate exceeded mcp-runner",
+		);
+	});
+
+	test("fixed gates report skipped comparison rows with reason", async () => {
+		const gatePath = ".benchmark-output/unit-skipped-comparison-gate.json";
+		const baselinePath = ".benchmark-output/unit-skipped-comparison-baseline.json";
+		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		await writeFile(
+			join(scriptsDir, baselinePath),
+			`${JSON.stringify({
+				rows: [
+					{
+						fixture: "timeout",
+						variant: "mcp-runner",
+						exit_code: null,
+						skip_reason:
+							"MCP bun_testFile cannot pass fixture Bun args: --timeout 50",
+						stdout_sample: "",
+						stderr_sample: "",
+					},
+				],
+			})}\n`,
+		);
+		await writeFile(
+			join(scriptsDir, gatePath),
+			`${JSON.stringify({
+				candidate_gates: [
+					{
+						fixture: "timeout",
+						variant: "local-runner-repair",
+						exit_correctness_required: true,
+						max_token_estimate: null,
+						max_token_estimate_variant: "mcp-runner",
+						max_token_estimate_variant_kind: "mcp_artifact",
+						min_fidelity_score: 1,
+						require_lookup_available: true,
+						require_detail_roundtrip: true,
+						max_detail_test_reruns: 0,
+						source: "observed_calibration",
+					},
+				],
+			})}\n`,
+		);
+
+		const result = await runBenchmark(
+			[
+				"--fixture",
+				"timeout",
+				"--local-runner",
+				"./test-runner.sh",
+				"--mode",
+				"fixed-gate",
+				"--gate-file",
+				gatePath,
+				"--mcp-baseline",
+				baselinePath,
+				"--run-id",
+				"unit-skipped-comparison-gate",
+			],
+			{ cwd: scriptsDir, now: new Date("2026-06-05T00:00:00.000Z") },
+		);
+
+		expect(result.evidence.gate_result?.status).toBe("fail");
+		expect(result.evidence.gate_result?.failures.join("\n")).toContain(
+			"comparison row mcp-runner skipped - MCP bun_testFile cannot pass fixture Bun args: --timeout 50",
 		);
 	});
 

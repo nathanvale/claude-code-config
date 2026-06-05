@@ -5,16 +5,17 @@ description: "Prove or benchmark the skill-local Agent Runner."
 
 # Test Runner
 
-Proof-only Agent Runner for Bun test output.
+Agent Runner for Bun test context.
 
 ## Status
 
-- Use for runner proof, benchmark evidence, and output-contract development.
+- Use for Bun pass/fail, coverage, failure repair, triage, benchmark evidence, and output-contract development.
+- Use compact mode for routine Bun test gates.
 - Use repair mode for hot-context failures in files already being edited.
 - Use triage mode for cold-context failures from broader suites or unopened files.
 - Use detail lookup when a repair or triage packet lacks enough context.
-- Keep routine test runs on `context/bun-runner.md` until adoption gates pass.
-- Do not treat this skill as the default test path yet.
+- Keep lint, format, and type gates on MCP runners.
+- Treat Agent Runner as the default Bun test path.
 
 ## Owner
 
@@ -31,7 +32,8 @@ Proof-only Agent Runner for Bun test output.
 
 - Inspect exact runner usage: `skills/test-runner/scripts/test-runner.sh --help`.
 - Inspect benchmark usage: `cd skills/test-runner/scripts && bun run test-runner.benchmark.ts --help`.
-- For normal repo tests, read `context/bun-runner.md` and use the MCP runners.
+- Prove no-MCP Bun adoption: `cd skills/test-runner/scripts && bun run test-runner.benchmark.ts --no-mcp-baseline --local-runner ./test-runner.sh --mode fixed-gate --gate-preset bun-no-mcp`.
+- For runner routing, read `context/bun-runner.md`.
 
 ## Workflow
 
@@ -39,7 +41,7 @@ Proof-only Agent Runner for Bun test output.
 - Choose repair mode when the failing file is already in context.
 - Choose triage mode when the failure source may be unopened.
 - Use detail lookup with a source-run handle when the packet is too terse.
-- Run the focused local runner only when proving this skill or comparing Agent Runner output.
+- Run the focused local runner for Bun test, coverage, repair, or triage context.
 - Run the Runner Benchmark Harness before any guidance change.
 - Require fixed-gate benchmark evidence before changing normal runner guidance.
 - Keep lint and typecheck on current guidance.
@@ -54,5 +56,8 @@ Proof-only Agent Runner for Bun test output.
 
 ## Next Safe Action
 
-- If adoption has not passed, gather mode-aware benchmark evidence.
-- If adoption passed and evidence was reviewed, update `context/bun-runner.md`, `rules/code-quality.md`, and this routing text together.
+- For a routine Bun test gate, run compact mode.
+- For coverage, pass Bun coverage args after `--`.
+- For a failing edited test file, run repair mode and use detail lookup only if needed.
+- For a broader failing suite, run triage mode and then narrow with compact or repair mode.
+- For future guidance changes, run fixed-gate benchmark evidence first.

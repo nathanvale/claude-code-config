@@ -24,6 +24,7 @@ export type ContextMode =
 	| "repair-toon"
 	| "triage";
 export type BenchmarkMode = "calibration" | "fixed-gate";
+export type GatePreset = "bun-no-mcp";
 
 export type BenchmarkFixture = {
 	label: string;
@@ -112,9 +113,15 @@ type CandidateGate = {
 	variant: string;
 	exit_correctness_required: true;
 	max_token_estimate: number | null;
+	max_token_estimate_variant?: string;
+	max_token_estimate_variant_kind?: VariantKind;
+	token_exception?: string;
 	min_fidelity_score: number | null;
 	require_lookup_available?: boolean;
 	require_detail_roundtrip?: boolean;
+	max_detail_test_reruns?: number;
+	max_diagnostic_chars?: number;
+	require_no_false_expected_received?: boolean;
 	source: "observed_calibration";
 };
 
@@ -130,9 +137,11 @@ type ParsedArgs = {
 	runId: string;
 	outputDir: string;
 	mcpBaselinePath: string;
+	includeMcpBaseline: boolean;
 	localRunnerCommand: string | null;
 	includeSynthetic: boolean;
 	gateFile: string | null;
+	gatePreset: GatePreset | null;
 	fixtureLabels: Set<string> | null;
 };
 
@@ -220,6 +229,17 @@ export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 		},
 	},
 	{
+		label: "coverage",
+		kind: "pass",
+		file: "fixtures/coverage.test.ts",
+		expectedExitCode: 0,
+		bunArgs: ["--coverage"],
+		expectedSignals: {
+			failingTests: [],
+			assertionPatterns: ["coverage-target.ts", "75.00"],
+		},
+	},
+	{
 		label: "multi-fail",
 		kind: "fail",
 		file: "fixtures/multi-fail.test.ts",
@@ -239,7 +259,7 @@ export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 		kind: "timeout",
 		file: "fixtures/timeout.test.ts",
 		expectedExitCode: 1,
-		bunArgs: ["--timeout", "50"],
+		bunArgs: [],
 		expectedSignals: {
 			failingFile: "timeout.test.ts",
 			failingTests: ["times out a slow promise"],
@@ -420,7 +440,9 @@ export async function runBenchmark(
 		rows.push(await runNativeBunFixture(cwd, fixture));
 	}
 
-	rows.push(...(await loadMcpRows(cwd, args.mcpBaselinePath, fixtures)));
+	if (args.includeMcpBaseline) {
+		rows.push(...(await loadMcpRows(cwd, args.mcpBaselinePath, fixtures)));
+	}
 
 	if (args.localRunnerCommand) {
 		for (const fixture of fixtures) {
@@ -455,10 +477,11 @@ export async function runBenchmark(
 		calibration: {
 			candidate_gates: createCandidateGates(rows),
 			...(args.gateFile ? { fixed_gate_input: args.gateFile } : {}),
+			...(args.gatePreset ? { fixed_gate_input: args.gatePreset } : {}),
 		},
 		gate_result:
 			args.mode === "fixed-gate"
-				? await evaluateFixedGates(cwd, args.gateFile, rows)
+				? await evaluateFixedGates(cwd, args.gateFile, args.gatePreset, rows)
 				: null,
 		output_path: relative(cwd, outputPath),
 	};
@@ -484,9 +507,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 		runId: createRunId(),
 		outputDir: DEFAULT_OUTPUT_DIR,
 		mcpBaselinePath: DEFAULT_MCP_BASELINE_PATH,
+		includeMcpBaseline: true,
 		localRunnerCommand: null,
 		includeSynthetic: false,
 		gateFile: null,
+		gatePreset: null,
 		fixtureLabels: null,
 	};
 
@@ -521,6 +546,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 				parsed.mcpBaselinePath = requireNext(args, index, "--mcp-baseline");
 				index += 1;
 				break;
+			case "--no-mcp-baseline":
+				parsed.includeMcpBaseline = false;
+				break;
 			case "--local-runner":
 				parsed.localRunnerCommand = requireNext(args, index, "--local-runner");
 				index += 1;
@@ -529,6 +557,15 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 				parsed.gateFile = requireNext(args, index, "--gate-file");
 				index += 1;
 				break;
+			case "--gate-preset": {
+				const value = requireNext(args, index, "--gate-preset");
+				if (value !== "bun-no-mcp") {
+					throw new Error("--gate-preset must be bun-no-mcp.");
+				}
+				parsed.gatePreset = value;
+				index += 1;
+				break;
+			}
 			case "--include-synthetic":
 				parsed.includeSynthetic = true;
 				break;
@@ -546,8 +583,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 		}
 	}
 
-	if (parsed.mode === "fixed-gate" && !parsed.gateFile) {
-		throw new Error("--mode fixed-gate requires --gate-file.");
+	if (parsed.mode === "fixed-gate" && !parsed.gateFile && !parsed.gatePreset) {
+		throw new Error("--mode fixed-gate requires --gate-file or --gate-preset.");
 	}
 
 	return parsed;
@@ -756,6 +793,9 @@ function normalizeArtifactRow(
 	fixture: BenchmarkFixture,
 	source: Partial<BenchmarkRow>,
 ): BenchmarkRow {
+	if (source.skip_reason) {
+		return createSkippedMcpRow(fixture, source.skip_reason, source.variant);
+	}
 	const output = `${source.stdout_sample ?? ""}\n${source.stderr_sample ?? ""}`;
 	const exitCode = typeof source.exit_code === "number" ? source.exit_code : null;
 	const fidelity = isCurrentFidelityScore(source.fidelity)
@@ -779,17 +819,18 @@ function normalizeArtifactRow(
 		stdout_sample: source.stdout_sample,
 		stderr_sample: source.stderr_sample,
 		lookup_available: fixture.kind !== "pass" && fidelity.signals.lookup_handle,
-		notes: ["loaded from MCP baseline artifact"],
+		notes: source.notes ?? ["loaded from MCP baseline artifact"],
 	};
 }
 
 function createSkippedMcpRow(
 	fixture: BenchmarkFixture,
 	reason: string,
+	variant = "mcp-artifact",
 ): BenchmarkRow {
 	return {
 		fixture: fixture.label,
-		variant: "mcp-artifact",
+		variant,
 		variant_kind: "mcp_artifact",
 		context_mode: "mcp",
 		status: "skipped",
@@ -858,7 +899,10 @@ function scoreFidelity(
 	fixture: BenchmarkFixture,
 	output: string,
 ): FidelityScore {
-	if (fixture.kind === "pass") {
+	if (
+		fixture.kind === "pass" &&
+		fixture.expectedSignals.assertionPatterns.length === 0
+	) {
 		return {
 			applicable: false,
 			score: 1,
@@ -879,6 +923,35 @@ function scoreFidelity(
 	const lowerOutput = output.toLowerCase();
 	const compactRows = parseCompactJsonFailureRows(output);
 	const toonRows = parseToonFailureRows(output);
+	if (fixture.kind === "pass") {
+		const signals: FidelitySignal = {
+			failure_count: true,
+			failing_file: true,
+			failing_test: true,
+			assertion_signal: fixture.expectedSignals.assertionPatterns.every((pattern) =>
+				lowerOutput.includes(pattern.toLowerCase()),
+			),
+			bounded_diagnostics: output.length <= DEFAULT_FAILURE_BUDGET_CHARS,
+			lookup_handle: true,
+			expected_value: true,
+			received_value: true,
+		};
+		const fidelitySignalEntries = Object.entries(signals).filter(
+			([name]) => name !== "lookup_handle",
+		);
+		const missing = fidelitySignalEntries
+			.filter(([, present]) => !present)
+			.map(([name]) => name);
+		return {
+			applicable: true,
+			score:
+				fidelitySignalEntries.filter(([, present]) => present).length /
+				fidelitySignalEntries.length,
+			signals,
+			missing,
+		};
+	}
+
 	const expectedFailureCount = fixture.expectedSignals.expectedFailureCount ?? 1;
 	const expectedValueAvailable =
 		fixture.expectedSignals.expectedValueAvailable ?? fixture.kind !== "timeout";
@@ -1137,20 +1210,25 @@ function createCandidateGates(rows: BenchmarkRow[]): CandidateGate[] {
 async function evaluateFixedGates(
 	cwd: string,
 	gateFile: string | null,
+	gatePreset: GatePreset | null,
 	rows: BenchmarkRow[],
 ): Promise<GateResult> {
-	if (!gateFile) return { status: "not_applicable", failures: [] };
-	const gates = JSON.parse(await readFile(join(cwd, gateFile), "utf-8")) as {
-		candidate_gates?: CandidateGate[];
-		calibration?: { candidate_gates?: CandidateGate[] };
-	};
-	const candidateGates =
-		gates.candidate_gates ?? gates.calibration?.candidate_gates ?? [];
+	const candidateGates = gatePreset
+		? createPresetGates(gatePreset)
+		: await loadFixedGateFile(cwd, gateFile);
 	const failures: string[] = [];
 	for (const gate of candidateGates) {
 		const row = findGateRow(rows, gate);
 		if (!row) {
 			failures.push(`${gate.variant}/${gate.fixture}: row missing`);
+			continue;
+		}
+		if (row.status === "skipped") {
+			failures.push(
+				`${gate.variant}/${gate.fixture}: skipped - ${
+					row.skip_reason ?? "reason unavailable"
+				}`,
+			);
 			continue;
 		}
 		if (row.exit_correct !== true) {
@@ -1162,6 +1240,29 @@ async function evaluateFixedGates(
 			(row.token_estimate === null || row.token_estimate > gate.max_token_estimate)
 		) {
 			failures.push(`${gate.variant}/${gate.fixture}: token estimate exceeded gate`);
+		}
+		if (gate.max_token_estimate_variant) {
+			const comparison = findComparisonRow(rows, gate);
+			if (comparison?.status === "skipped") {
+				failures.push(
+					`${gate.variant}/${gate.fixture}: comparison row ${
+						gate.max_token_estimate_variant
+					} skipped - ${comparison.skip_reason ?? "reason unavailable"}`,
+				);
+			} else if (!comparison || comparison.token_estimate === null) {
+				failures.push(
+					`${gate.variant}/${gate.fixture}: comparison row ${gate.max_token_estimate_variant} missing`,
+				);
+			} else if (
+				row.token_estimate === null ||
+				row.token_estimate > comparison.token_estimate
+			) {
+				if (!gate.token_exception) {
+					failures.push(
+						`${gate.variant}/${gate.fixture}: token estimate exceeded ${gate.max_token_estimate_variant}`,
+					);
+				}
+			}
 		}
 		if (
 			gate.min_fidelity_score !== null &&
@@ -1178,8 +1279,78 @@ async function evaluateFixedGates(
 		) {
 			failures.push(`${gate.variant}/${gate.fixture}: detail roundtrip failed`);
 		}
+		if (
+			gate.max_detail_test_reruns !== undefined &&
+			(row.detail_roundtrip?.test_reruns ?? 0) > gate.max_detail_test_reruns
+		) {
+			failures.push(`${gate.variant}/${gate.fixture}: detail lookup reran tests`);
+		}
+		if (
+			gate.max_diagnostic_chars !== undefined &&
+			(row.diagnostic_chars ?? Number.POSITIVE_INFINITY) > gate.max_diagnostic_chars
+		) {
+			failures.push(`${gate.variant}/${gate.fixture}: diagnostic chars exceeded gate`);
+		}
+		if (
+			gate.require_no_false_expected_received &&
+			(row.fidelity?.signals.expected_value !== true ||
+				row.fidelity.signals.received_value !== true)
+		) {
+			failures.push(
+				`${gate.variant}/${gate.fixture}: expected/received availability gate failed`,
+			);
+		}
 	}
 	return { status: failures.length === 0 ? "pass" : "fail", failures };
+}
+
+async function loadFixedGateFile(
+	cwd: string,
+	gateFile: string | null,
+): Promise<CandidateGate[]> {
+	if (!gateFile) return [];
+	const gates = JSON.parse(await readFile(join(cwd, gateFile), "utf-8")) as {
+		candidate_gates?: CandidateGate[];
+		calibration?: { candidate_gates?: CandidateGate[] };
+	};
+	return gates.candidate_gates ?? gates.calibration?.candidate_gates ?? [];
+}
+
+function createPresetGates(preset: GatePreset): CandidateGate[] {
+	if (preset !== "bun-no-mcp") return [];
+	const gates: CandidateGate[] = [];
+	for (const fixture of BENCHMARK_FIXTURES) {
+		gates.push({
+			fixture: fixture.label,
+			variant: "native-bun",
+			exit_correctness_required: true,
+			max_token_estimate: null,
+			min_fidelity_score: 1,
+			max_diagnostic_chars: DEFAULT_FAILURE_BUDGET_CHARS,
+			source: "observed_calibration",
+		});
+		for (const variant of ["local-runner-repair-toon", "local-runner-triage"]) {
+			gates.push({
+				fixture: fixture.label,
+				variant,
+				exit_correctness_required: true,
+				max_token_estimate: null,
+				max_token_estimate_variant: "native-bun",
+				max_token_estimate_variant_kind: "native_bun",
+				min_fidelity_score: 1,
+				...(fixture.kind !== "pass"
+					? {
+							require_lookup_available: true,
+							require_detail_roundtrip: true,
+							max_detail_test_reruns: 0,
+						}
+					: {}),
+				max_diagnostic_chars: DEFAULT_FAILURE_BUDGET_CHARS,
+				source: "observed_calibration",
+			});
+		}
+	}
+	return gates;
 }
 
 function findGateRow(
@@ -1195,6 +1366,19 @@ function findGateRow(
 		(candidate) =>
 			candidate.fixture === gate.fixture &&
 			candidate.variant === "local-runner-compact",
+	);
+}
+
+function findComparisonRow(
+	rows: readonly BenchmarkRow[],
+	gate: CandidateGate,
+): BenchmarkRow | undefined {
+	return rows.find(
+		(candidate) =>
+			candidate.fixture === gate.fixture &&
+			candidate.variant === gate.max_token_estimate_variant &&
+			(!gate.max_token_estimate_variant_kind ||
+				candidate.variant_kind === gate.max_token_estimate_variant_kind),
 	);
 }
 
@@ -1313,9 +1497,11 @@ function renderHelp(): string {
 		"  --json                         Print JSON evidence to stdout.",
 		"  --mode calibration|fixed-gate  Select evidence mode.",
 		"  --gate-file <path>             Fixed-gate JSON from a prior calibration.",
+		"  --gate-preset bun-no-mcp       Use built-in no-MCP Bun adoption gate.",
 		"  --run-id <id>                  Set evidence run id.",
 		"  --output-dir <path>            Write evidence JSON under this directory.",
 		"  --mcp-baseline <path>          Read MCP baseline artifact when present.",
+		"  --no-mcp-baseline              Omit MCP artifact rows from this evidence run.",
 		"  --local-runner <command>       Add local runner comparison.",
 		"  --include-synthetic            Include scoring probe variants.",
 		"  --fixture <a,b>                Limit fixtures by label.",
