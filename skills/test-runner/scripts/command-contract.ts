@@ -4,9 +4,11 @@ import {
 } from "@side-quest/cli-command-facade";
 
 export const TEST_RUNNER_CONTRACT_ID = "test-runner.bun-test" as const;
-export const TEST_RUNNER_SCHEMA_VERSION = "1" as const;
+export const TEST_RUNNER_SCHEMA_VERSION = "2" as const;
 
-export type TestRunnerCommand = "run" | "status";
+export type TestRunnerCommand = "run" | "status" | "detail";
+export type TestRunnerRunMode = "compact" | "repair" | "triage";
+export type TestRunnerOutputFormat = "plain" | "json" | "json-compact" | "toon";
 type TestRunnerAudience = "agent" | "operator";
 type TestRunnerMutation = "check";
 type TestRunnerCommandContract = CommandFacadeContract<
@@ -21,6 +23,12 @@ export const TEST_RUNNER_DIAGNOSTIC_CODES = [
 	"runner_timeout",
 	"invocation_error",
 	"usage_error",
+	"detail_not_found",
+	"detail_expired",
+	"detail_wrong_run",
+	"detail_malformed",
+	"detail_unsafe",
+	"detail_unavailable",
 ] as const;
 export type TestRunnerDiagnosticCode =
 	(typeof TEST_RUNNER_DIAGNOSTIC_CODES)[number];
@@ -36,8 +44,13 @@ export type TestRunnerResultStatus =
 export const TEST_RUNNER_FAILURE_ACTIONS = [
 	{
 		id: "fix_test_failure",
-		summary: "Use the compact failure context to edit the failing code or test.",
+		summary: "Use the failure context to edit the failing code or test.",
 		sideEffects: ["write"],
+	},
+	{
+		id: "lookup_failure_detail",
+		summary: "Use the failure handle to fetch source-run stored detail.",
+		sideEffects: ["check"],
 	},
 	{
 		id: "change_runner_input",
@@ -68,6 +81,10 @@ const flags = {
 	"--cwd": { type: "path", description: "Directory where tests run." },
 	"--json": { type: "boolean", description: "Emit JSON envelope." },
 	"--plain": { type: "boolean", description: "Emit compact text." },
+	"--format": {
+		type: "string",
+		description: "Select plain, json, json-compact, or toon output.",
+	},
 	"--timeout-ms": {
 		type: "string",
 		description: "Kill the test process after this many milliseconds.",
@@ -76,11 +93,19 @@ const flags = {
 		type: "boolean",
 		description: "Include bounded raw output samples in JSON.",
 	},
+	"--mode": {
+		type: "string",
+		description: "Select compact, repair, or triage projection.",
+	},
+	"--handle": {
+		type: "string",
+		description: "Lookup handle from a prior source-run failure packet.",
+	},
 } as const satisfies TestRunnerCommandContract["flags"];
 
 const resultContract = {
 	id: TEST_RUNNER_CONTRACT_ID,
-	kind: "Compact test result.",
+	kind: "Agent runner test result.",
 	schema_version: TEST_RUNNER_SCHEMA_VERSION,
 } as const satisfies NonNullable<TestRunnerCommandContract["resultContract"]>;
 
@@ -94,9 +119,9 @@ export const testRunnerContracts = defineCommandFacadeContract(
 	{
 		run: {
 			script: "scripts/test-runner.ts",
-			summary: "Execute tests with compact plain or JSON output.",
+			summary: "Execute tests with compact, repair, triage, or JSON output.",
 			usage: [
-				"run [--cwd <dir>] [--json|--plain] [--timeout-ms <ms>] [--debug-output] -- <test args>",
+				"run [--cwd <dir>] [--mode compact|repair|triage] [--format plain|json|json-compact|toon] [--json|--plain] [--timeout-ms <ms>] [--debug-output] -- <test args>",
 			],
 			json: true,
 			audience: "agent",
@@ -116,13 +141,21 @@ export const testRunnerContracts = defineCommandFacadeContract(
 				success: TEST_RUNNER_SUCCESS_ACTIONS,
 				failure: TEST_RUNNER_FAILURE_ACTIONS,
 			},
-			flags,
+			flags: {
+				"--cwd": flags["--cwd"],
+				"--json": flags["--json"],
+				"--plain": flags["--plain"],
+				"--format": flags["--format"],
+				"--timeout-ms": flags["--timeout-ms"],
+				"--debug-output": flags["--debug-output"],
+				"--mode": flags["--mode"],
+			},
 			exitCodes,
 		},
 		status: {
 			script: "scripts/test-runner.ts",
 			summary: "Show compact runner readiness without executing tests.",
-			usage: ["status [--cwd <dir>] [--json|--plain]"],
+			usage: ["status [--cwd <dir>] [--format plain|json|json-compact|toon] [--json|--plain]"],
 			json: true,
 			audience: "operator",
 			mutation: "check",
@@ -145,12 +178,43 @@ export const testRunnerContracts = defineCommandFacadeContract(
 				"--cwd": flags["--cwd"],
 				"--json": flags["--json"],
 				"--plain": flags["--plain"],
+				"--format": flags["--format"],
 			},
 			exitCodes,
 			alias: {
 				command: "run",
 				defaultArgs: ["--plain"],
 			},
+		},
+		detail: {
+			script: "scripts/test-runner.ts",
+			summary: "Return source-run stored detail for a failure lookup handle.",
+			usage: ["detail --handle <handle> [--format plain|json|json-compact|toon] [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: [
+				{
+					name: "TEST_RUNNER_RUN_ID",
+					description: "Optional run correlation id.",
+				},
+			],
+			resultContract,
+			actionAffordances: {
+				success: TEST_RUNNER_SUCCESS_ACTIONS,
+				failure: TEST_RUNNER_FAILURE_ACTIONS,
+			},
+			flags: {
+				"--handle": flags["--handle"],
+				"--json": flags["--json"],
+				"--plain": flags["--plain"],
+				"--format": flags["--format"],
+			},
+			exitCodes,
 		},
 	} as const satisfies Record<TestRunnerCommand, TestRunnerCommandContract>,
 	{

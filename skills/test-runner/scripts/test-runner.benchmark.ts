@@ -7,6 +7,7 @@ const TOKEN_ESTIMATE_METHOD = "estimate: chars/4 rounded up" as const;
 const DEFAULT_MCP_BASELINE_PATH = ".benchmark-input/mcp-baseline.json";
 const DEFAULT_OUTPUT_DIR = ".benchmark-output";
 const DEFAULT_FAILURE_BUDGET_CHARS = 12_000;
+const DEFAULT_PROCESS_TIMEOUT_MS = 5_000;
 
 export type FixtureKind = "pass" | "fail" | "timeout";
 export type VariantKind =
@@ -14,6 +15,14 @@ export type VariantKind =
 	| "mcp_artifact"
 	| "local_runner"
 	| "synthetic";
+export type ContextMode =
+	| "raw"
+	| "mcp"
+	| "compact"
+	| "repair"
+	| "repair-json"
+	| "repair-toon"
+	| "triage";
 export type BenchmarkMode = "calibration" | "fixed-gate";
 
 export type BenchmarkFixture = {
@@ -26,14 +35,21 @@ export type BenchmarkFixture = {
 		failingFile?: string;
 		failingTests: string[];
 		assertionPatterns: string[];
+		expectedFailureCount?: number;
+		expectedValueAvailable?: boolean;
+		receivedValueAvailable?: boolean;
 	};
 };
 
 export type FidelitySignal = {
+	failure_count: boolean;
 	failing_file: boolean;
 	failing_test: boolean;
 	assertion_signal: boolean;
 	bounded_diagnostics: boolean;
+	lookup_handle: boolean;
+	expected_value: boolean;
+	received_value: boolean;
 };
 
 export type FidelityScore = {
@@ -47,6 +63,7 @@ export type BenchmarkRow = {
 	fixture: string;
 	variant: string;
 	variant_kind: VariantKind;
+	context_mode: ContextMode;
 	status: "measured" | "skipped";
 	exit_code: number | null;
 	expected_exit_code: number;
@@ -60,11 +77,22 @@ export type BenchmarkRow = {
 	diagnostic_chars?: number;
 	stdout_sample?: string;
 	stderr_sample?: string;
+	lookup_available?: boolean;
+	detail_roundtrip?: DetailRoundtripScore;
 	notes: string[];
 };
 
+export type DetailRoundtripScore = {
+	applicable: boolean;
+	handle: string | null;
+	lookup_exit_code: number | null;
+	lookup_available: boolean;
+	richer_detail: boolean;
+	test_reruns: number;
+};
+
 export type BenchmarkEvidence = {
-	schema_version: "1";
+	schema_version: "2";
 	mode: BenchmarkMode;
 	run_id: string;
 	generated_at: string;
@@ -85,6 +113,8 @@ type CandidateGate = {
 	exit_correctness_required: true;
 	max_token_estimate: number | null;
 	min_fidelity_score: number | null;
+	require_lookup_available?: boolean;
+	require_detail_roundtrip?: boolean;
 	source: "observed_calibration";
 };
 
@@ -111,12 +141,56 @@ type ProcessResult = {
 	stdout: string;
 	stderr: string;
 	wallTimeMs: number;
+	timedOut: boolean;
 };
 
 type McpArtifact = {
 	rows?: Partial<BenchmarkRow>[];
 	fixtures?: Record<string, Partial<BenchmarkRow>>;
 };
+
+type LocalRunnerProjection = {
+	variant: string;
+	contextMode: Extract<
+		ContextMode,
+		"compact" | "repair" | "repair-json" | "repair-toon" | "triage"
+	>;
+	runMode: "compact" | "repair" | "triage";
+	format: "plain" | "json-compact" | "toon";
+};
+
+const LOCAL_RUNNER_PROJECTIONS: LocalRunnerProjection[] = [
+	{
+		variant: "local-runner-compact",
+		contextMode: "compact",
+		runMode: "compact",
+		format: "plain",
+	},
+	{
+		variant: "local-runner-repair",
+		contextMode: "repair",
+		runMode: "repair",
+		format: "plain",
+	},
+	{
+		variant: "local-runner-repair-json",
+		contextMode: "repair-json",
+		runMode: "repair",
+		format: "json-compact",
+	},
+	{
+		variant: "local-runner-repair-toon",
+		contextMode: "repair-toon",
+		runMode: "repair",
+		format: "toon",
+	},
+	{
+		variant: "local-runner-triage",
+		contextMode: "triage",
+		runMode: "triage",
+		format: "plain",
+	},
+];
 
 export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 	{
@@ -140,6 +214,9 @@ export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 			failingFile: "fail.test.ts",
 			failingTests: ["calculates tax-inclusive price"],
 			assertionPatterns: ["expect", "toBe", "13"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
 		},
 	},
 	{
@@ -152,6 +229,9 @@ export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 			failingFile: "multi-fail.test.ts",
 			failingTests: ["builds initials", "handles empty names"],
 			assertionPatterns: ["expect", "toBe"],
+			expectedFailureCount: 2,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
 		},
 	},
 	{
@@ -164,6 +244,163 @@ export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 			failingFile: "timeout.test.ts",
 			failingTests: ["times out a slow promise"],
 			assertionPatterns: ["timeout", "50"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: false,
+			receivedValueAvailable: false,
+		},
+	},
+	{
+		label: "string-quotes",
+		kind: "fail",
+		file: "fixtures/string-quotes.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "string-quotes.test.ts",
+			failingTests: ["preserves quoted plan label"],
+			assertionPatterns: ["alpha", "beta", "toBe"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
+		},
+	},
+	{
+		label: "string-commas",
+		kind: "fail",
+		file: "fixtures/string-commas.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "string-commas.test.ts",
+			failingTests: ["keeps comma separated status line"],
+			assertionPatterns: ["ready, blocked, done", "ready, waiting, done"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
+		},
+	},
+	{
+		label: "string-newlines",
+		kind: "fail",
+		file: "fixtures/string-newlines.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "string-newlines.test.ts",
+			failingTests: ["keeps multiline summary shape"],
+			assertionPatterns: ["expect(received).toBe(expected)"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: false,
+			receivedValueAvailable: false,
+		},
+	},
+	{
+		label: "deep-nested",
+		kind: "fail",
+		file: "fixtures/deep-nested.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "deep-nested.test.ts",
+			failingTests: ["renders leaf packet"],
+			assertionPatterns: ["expected", "received", "leaf-packet-v2"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
+		},
+	},
+	{
+		label: "long-message",
+		kind: "fail",
+		file: "fixtures/long-message.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "long-message.test.ts",
+			failingTests: ["surfaces long assertion message"],
+			assertionPatterns: ["expected operation packet", "repair hints"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
+		},
+	},
+	{
+		label: "snapshot-inline",
+		kind: "fail",
+		file: "fixtures/snapshot-inline.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "snapshot-inline.test.ts",
+			failingTests: ["matches inline snapshot"],
+			assertionPatterns: ["toMatchInlineSnapshot", "stable snapshot"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
+		},
+	},
+	{
+		label: "thrown-error",
+		kind: "fail",
+		file: "fixtures/thrown-error.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "thrown-error.test.ts",
+			failingTests: ["reports domain exception"],
+			assertionPatterns: ["domain exception", "customer id missing"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: false,
+			receivedValueAvailable: false,
+		},
+	},
+	{
+		label: "runtime-error",
+		kind: "fail",
+		file: "fixtures/runtime-error.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "runtime-error.test.ts",
+			failingTests: ["reports runtime type failure"],
+			assertionPatterns: ["TypeError"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: false,
+			receivedValueAvailable: false,
+		},
+	},
+	{
+		label: "three-plus-fail",
+		kind: "fail",
+		file: "fixtures/three-plus-fail.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "three-plus-fail.test.ts",
+			failingTests: [
+				"formats account code",
+				"rounds invoice total",
+				"marks overdue invoice",
+			],
+			assertionPatterns: ["expect", "toBe"],
+			expectedFailureCount: 4,
+			expectedValueAvailable: true,
+			receivedValueAvailable: true,
+		},
+	},
+	{
+		label: "fallback-incomplete",
+		kind: "fail",
+		file: "fixtures/fallback-incomplete.test.ts",
+		expectedExitCode: 1,
+		bunArgs: [],
+		expectedSignals: {
+			failingFile: "fallback-incomplete.test.ts",
+			failingTests: ["keeps parser fallback useful"],
+			assertionPatterns: ["manual failure without matcher facts"],
+			expectedFailureCount: 1,
+			expectedValueAvailable: false,
+			receivedValueAvailable: false,
 		},
 	},
 ];
@@ -187,7 +424,16 @@ export async function runBenchmark(
 
 	if (args.localRunnerCommand) {
 		for (const fixture of fixtures) {
-			rows.push(await runLocalRunnerFixture(cwd, fixture, args.localRunnerCommand));
+			for (const projection of LOCAL_RUNNER_PROJECTIONS) {
+				rows.push(
+					await runLocalRunnerFixture(
+						cwd,
+						fixture,
+						args.localRunnerCommand,
+						projection,
+					),
+				);
+			}
 		}
 	}
 
@@ -199,7 +445,7 @@ export async function runBenchmark(
 	await mkdir(outputDir, { recursive: true });
 	const outputPath = join(outputDir, `${args.runId}-${args.mode}.json`);
 	const evidence: BenchmarkEvidence = {
-		schema_version: "1",
+		schema_version: "2",
 		mode: args.mode,
 		run_id: args.runId,
 		generated_at: (options.now ?? new Date()).toISOString(),
@@ -325,27 +571,50 @@ async function runNativeBunFixture(
 		["bun", "test", fixture.file, ...fixture.bunArgs],
 		cwd,
 	);
-	return createMeasuredRow("native-bun", "native_bun", fixture, result);
+	return createMeasuredRow("native-bun", "native_bun", "raw", fixture, result);
 }
 
 async function runLocalRunnerFixture(
 	cwd: string,
 	fixture: BenchmarkFixture,
 	command: string,
+	projection: LocalRunnerProjection,
 ): Promise<BenchmarkRow> {
+	const outputFormatArgs =
+		projection.format === "plain"
+			? ["--plain"]
+			: ["--format", projection.format];
 	const result = await runProcess(
 		[
 			...splitCommand(command),
 			"--cwd",
 			cwd,
-			"--plain",
+			...outputFormatArgs,
+			"--mode",
+			projection.runMode,
 			"--",
 			fixture.file,
 			...fixture.bunArgs,
 		],
 		cwd,
 	);
-	return createMeasuredRow("local-runner", "local_runner", fixture, result);
+	const row = createMeasuredRow(
+		projection.variant,
+		"local_runner",
+		projection.contextMode,
+		fixture,
+		result,
+	);
+	if (
+		projection.contextMode === "repair" ||
+		projection.contextMode === "repair-json" ||
+		projection.contextMode === "repair-toon" ||
+		projection.contextMode === "triage"
+	) {
+		row.detail_roundtrip = await measureDetailRoundtrip(cwd, command, fixture, result);
+		row.lookup_available = row.detail_roundtrip.lookup_available;
+	}
+	return row;
 }
 
 async function runProcess(command: string[], cwd: string): Promise<ProcessResult> {
@@ -355,43 +624,104 @@ async function runProcess(command: string[], cwd: string): Promise<ProcessResult
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		proc.kill("SIGTERM");
+	}, DEFAULT_PROCESS_TIMEOUT_MS);
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
 		proc.exited,
-	]);
+	]).finally(() => clearTimeout(timer));
 	return {
 		exitCode,
 		stdout,
 		stderr,
 		wallTimeMs: Math.round(performance.now() - startedAt),
+		timedOut,
 	};
+}
+
+async function measureDetailRoundtrip(
+	cwd: string,
+	command: string,
+	fixture: BenchmarkFixture,
+	result: ProcessResult,
+): Promise<DetailRoundtripScore> {
+	if (fixture.kind === "pass") {
+		return {
+			applicable: false,
+			handle: null,
+			lookup_exit_code: null,
+			lookup_available: false,
+			richer_detail: false,
+			test_reruns: 0,
+		};
+	}
+	const handle = `${result.stdout}\n${result.stderr}`.match(/tr_[a-z0-9._-]+/)?.[0] ?? null;
+	if (!handle) {
+		return {
+			applicable: true,
+			handle: null,
+			lookup_exit_code: null,
+			lookup_available: false,
+			richer_detail: false,
+			test_reruns: 0,
+		};
+	}
+	const lookup = await runProcess(
+		[...splitCommand(command), "detail", "--handle", handle],
+		cwd,
+	);
+	const output = sanitizeBenchmarkOutput(`${lookup.stdout}\n${lookup.stderr}`);
+	return {
+		applicable: true,
+		handle,
+		lookup_exit_code: lookup.exitCode,
+		lookup_available: lookup.exitCode === 0,
+		richer_detail:
+			lookup.exitCode === 0 &&
+			output.includes("context:") &&
+			output.includes(fixture.expectedSignals.failingTests[0] ?? fixture.file),
+		test_reruns: countObservedTestReruns(output),
+	};
+}
+
+function countObservedTestReruns(output: string): number {
+	return (output.match(/^bun test v/gm) ?? []).length;
 }
 
 function createMeasuredRow(
 	variant: string,
 	variantKind: VariantKind,
+	contextMode: ContextMode,
 	fixture: BenchmarkFixture,
 	result: ProcessResult,
 ): BenchmarkRow {
-	const combined = `${result.stdout}\n${result.stderr}`;
+	const stdout = sanitizeBenchmarkOutput(result.stdout);
+	const stderr = sanitizeBenchmarkOutput(result.stderr);
+	const combined = `${stdout}\n${stderr}`;
+	const fidelity = scoreFidelity(fixture, combined);
 	return {
 		fixture: fixture.label,
 		variant,
 		variant_kind: variantKind,
+		context_mode: contextMode,
 		status: "measured",
 		exit_code: result.exitCode,
 		expected_exit_code: fixture.expectedExitCode,
-		exit_correct: result.exitCode === fixture.expectedExitCode,
+		exit_correct: result.timedOut ? false : result.exitCode === fixture.expectedExitCode,
 		wall_time_ms: result.wallTimeMs,
 		token_estimate: estimateTokens(combined),
 		token_estimate_method: TOKEN_ESTIMATE_METHOD,
-		fidelity: scoreFidelity(fixture, combined),
+		fidelity,
 		score: null,
 		diagnostic_chars: combined.length,
-		stdout_sample: truncateSample(result.stdout),
-		stderr_sample: truncateSample(result.stderr),
-		notes: [],
+		stdout_sample: truncateSample(stdout),
+		stderr_sample: truncateSample(stderr),
+		lookup_available: fixture.kind !== "pass" && fidelity.signals.lookup_handle,
+		notes: result.timedOut ? ["benchmark subprocess timed out"] : [],
 	};
 }
 
@@ -428,10 +758,14 @@ function normalizeArtifactRow(
 ): BenchmarkRow {
 	const output = `${source.stdout_sample ?? ""}\n${source.stderr_sample ?? ""}`;
 	const exitCode = typeof source.exit_code === "number" ? source.exit_code : null;
+	const fidelity = isCurrentFidelityScore(source.fidelity)
+		? source.fidelity
+		: scoreFidelity(fixture, output);
 	return {
 		fixture: fixture.label,
 		variant: source.variant ?? "mcp-artifact",
 		variant_kind: "mcp_artifact",
+		context_mode: "mcp",
 		status: "measured",
 		exit_code: exitCode,
 		expected_exit_code: fixture.expectedExitCode,
@@ -439,11 +773,12 @@ function normalizeArtifactRow(
 		wall_time_ms: source.wall_time_ms ?? null,
 		token_estimate: source.token_estimate ?? estimateTokens(output),
 		token_estimate_method: TOKEN_ESTIMATE_METHOD,
-		fidelity: source.fidelity ?? scoreFidelity(fixture, output),
+		fidelity,
 		score: null,
 		diagnostic_chars: source.diagnostic_chars ?? output.length,
 		stdout_sample: source.stdout_sample,
 		stderr_sample: source.stderr_sample,
+		lookup_available: fixture.kind !== "pass" && fidelity.signals.lookup_handle,
 		notes: ["loaded from MCP baseline artifact"],
 	};
 }
@@ -456,6 +791,7 @@ function createSkippedMcpRow(
 		fixture: fixture.label,
 		variant: "mcp-artifact",
 		variant_kind: "mcp_artifact",
+		context_mode: "mcp",
 		status: "skipped",
 		exit_code: null,
 		expected_exit_code: fixture.expectedExitCode,
@@ -481,6 +817,7 @@ function createSyntheticRows(fixtures: BenchmarkFixture[]): BenchmarkRow[] {
 			fixture: failingFixture.label,
 			variant: "tiny-envelope",
 			variant_kind: "synthetic",
+			context_mode: "repair",
 			status: "measured",
 			exit_code: failingFixture.expectedExitCode,
 			expected_exit_code: failingFixture.expectedExitCode,
@@ -499,6 +836,7 @@ function createSyntheticRows(fixtures: BenchmarkFixture[]): BenchmarkRow[] {
 			fixture: failingFixture.label,
 			variant: "wrong-exit",
 			variant_kind: "synthetic",
+			context_mode: "repair",
 			status: "measured",
 			exit_code: 0,
 			expected_exit_code: failingFixture.expectedExitCode,
@@ -525,17 +863,31 @@ function scoreFidelity(
 			applicable: false,
 			score: 1,
 			signals: {
+				failure_count: true,
 				failing_file: true,
 				failing_test: true,
 				assertion_signal: true,
 				bounded_diagnostics: output.length <= DEFAULT_FAILURE_BUDGET_CHARS,
+				lookup_handle: true,
+				expected_value: true,
+				received_value: true,
 			},
 			missing: [],
 		};
 	}
 
 	const lowerOutput = output.toLowerCase();
+	const compactRows = parseCompactJsonFailureRows(output);
+	const toonRows = parseToonFailureRows(output);
+	const expectedFailureCount = fixture.expectedSignals.expectedFailureCount ?? 1;
+	const expectedValueAvailable =
+		fixture.expectedSignals.expectedValueAvailable ?? fixture.kind !== "timeout";
+	const receivedValueAvailable =
+		fixture.expectedSignals.receivedValueAvailable ?? fixture.kind !== "timeout";
+	const expectedValuePresent = hasExpectedValueSignal(output, compactRows, toonRows);
+	const receivedValuePresent = hasReceivedValueSignal(output, compactRows, toonRows);
 	const signals: FidelitySignal = {
+		failure_count: observedFailureCount(output, compactRows, toonRows) === expectedFailureCount,
 		failing_file: fixture.expectedSignals.failingFile
 			? output.includes(fixture.expectedSignals.failingFile)
 			: true,
@@ -546,17 +898,153 @@ function scoreFidelity(
 			lowerOutput.includes(pattern.toLowerCase()),
 		),
 		bounded_diagnostics: output.length <= DEFAULT_FAILURE_BUDGET_CHARS,
+		lookup_handle: /tr_[a-z0-9._-]+/.test(output),
+		expected_value: expectedValueAvailable
+			? expectedValuePresent
+			: !expectedValuePresent,
+		received_value: receivedValueAvailable
+			? receivedValuePresent
+			: !receivedValuePresent,
 	};
-	const missing = Object.entries(signals)
+	const fidelitySignalEntries = Object.entries(signals).filter(
+		([name]) => name !== "lookup_handle",
+	);
+	const missing = fidelitySignalEntries
 		.filter(([, present]) => !present)
 		.map(([name]) => name);
 	return {
 		applicable: true,
 		score:
-			Object.values(signals).filter(Boolean).length / Object.values(signals).length,
+			fidelitySignalEntries.filter(([, present]) => present).length /
+			fidelitySignalEntries.length,
 		signals,
 		missing,
 	};
+}
+
+function observedFailureCount(
+	output: string,
+	compactRows: readonly unknown[][],
+	toonRows: readonly string[][],
+): number | null {
+	if (compactRows.length > 0) return compactRows.length + observedOmittedCount(output);
+	if (toonRows.length > 0) return toonRows.length + observedOmittedCount(output);
+	const bunSummary = output.match(/^\s*(\d+) fail$/m);
+	if (bunSummary?.[1]) return Number(bunSummary[1]);
+	const compactSummary = output.match(/failed=(\d+)/);
+	if (compactSummary?.[1]) return Number(compactSummary[1]);
+	const jsonSummary = output.match(/"failed"\s*:\s*(\d+)/);
+	if (jsonSummary?.[1]) return Number(jsonSummary[1]);
+	const failMarkers = (output.match(/^\(fail\) /gm) ?? []).length;
+	const detailHandles = new Set(output.match(/tr_[a-z0-9._-]+/g) ?? []);
+	const renderedFailures = Math.max(failMarkers, detailHandles.size);
+	if (renderedFailures > 0) return renderedFailures + observedOmittedCount(output);
+	return null;
+}
+
+function observedOmittedCount(output: string): number {
+	const toonOmitted = output.match(/^o:(\d+)$/m);
+	if (toonOmitted?.[1]) return Number(toonOmitted[1]);
+	const plainOmitted = output.match(/- (\d+) more failure\(s\) omitted/);
+	if (plainOmitted?.[1]) return Number(plainOmitted[1]);
+	const compactOmitted = output.match(/"o"\s*:\s*(\d+)/);
+	if (compactOmitted?.[1]) return Number(compactOmitted[1]);
+	return 0;
+}
+
+function hasExpectedValueSignal(
+	output: string,
+	compactRows: readonly unknown[][],
+	toonRows: readonly string[][],
+): boolean {
+	return (
+		compactRows.some((row) => row[3] !== null && row[3] !== undefined) ||
+		toonRows.some((row) => row[3] !== "") ||
+		output.includes("Expected:") ||
+		output.includes("expected=")
+	);
+}
+
+function hasReceivedValueSignal(
+	output: string,
+	compactRows: readonly unknown[][],
+	toonRows: readonly string[][],
+): boolean {
+	return (
+		compactRows.some((row) => row[4] !== null && row[4] !== undefined) ||
+		toonRows.some((row) => row[4] !== "") ||
+		output.includes("Received:") ||
+		output.includes("received=")
+	);
+}
+
+function parseCompactJsonFailureRows(output: string): unknown[][] {
+	try {
+		const payload = JSON.parse(output) as { f?: unknown };
+		return Array.isArray(payload.f)
+			? payload.f.filter((row): row is unknown[] => Array.isArray(row))
+			: [];
+	} catch {
+		return [];
+	}
+}
+
+function parseToonFailureRows(output: string): string[][] {
+	const lines = output.split(/\r?\n/);
+	const headerIndex = lines.findIndex((line) => /^f\[\d+\]\{l,t,a,e,r,d\}:$/.test(line));
+	if (headerIndex === -1) return [];
+	const rows: string[][] = [];
+	for (const line of lines.slice(headerIndex + 1)) {
+		if (!line || /^[a-z]\{/.test(line) || /^[a-z]:/.test(line)) break;
+		const row = parseToonCsvLine(line);
+		if (row.length >= 6) rows.push(row);
+	}
+	return rows;
+}
+
+function parseToonCsvLine(line: string): string[] {
+	const cells: string[] = [];
+	let current = "";
+	let quoted = false;
+	for (let index = 0; index < line.length; index += 1) {
+		const char = line[index];
+		const next = line[index + 1];
+		if (quoted && char === '"' && next === '"') {
+			current += '"';
+			index += 1;
+			continue;
+		}
+		if (char === '"') {
+			quoted = !quoted;
+			continue;
+		}
+		if (!quoted && char === ",") {
+			cells.push(current);
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+	cells.push(current);
+	return cells;
+}
+
+function isCurrentFidelityScore(
+	value: Partial<FidelityScore> | null | undefined,
+): value is FidelityScore {
+	const signals = value?.signals as Partial<FidelitySignal> | undefined;
+	return (
+		typeof value?.score === "number" &&
+		Array.isArray(value.missing) &&
+			typeof signals?.failing_file === "boolean" &&
+			typeof signals.failure_count === "boolean" &&
+			typeof signals.failing_test === "boolean" &&
+		typeof signals.assertion_signal === "boolean" &&
+		typeof signals.bounded_diagnostics === "boolean" &&
+		typeof signals.lookup_handle === "boolean" &&
+		typeof signals.expected_value === "boolean" &&
+		typeof signals.received_value === "boolean"
+	);
 }
 
 function applyScores(rows: BenchmarkRow[]): void {
@@ -583,6 +1071,44 @@ function applyScores(rows: BenchmarkRow[]): void {
 				: 0;
 		const fidelityScore = row.fidelity?.score ?? 0;
 		row.score = round2(tokenReduction * 50 + fidelityScore * 50);
+		if (
+			row.context_mode === "repair" ||
+			row.context_mode === "repair-json" ||
+			row.context_mode === "repair-toon"
+		) {
+			const mcp = rows.find(
+				(candidate) =>
+					candidate.fixture === row.fixture &&
+					candidate.variant_kind === "mcp_artifact" &&
+					candidate.token_estimate !== null,
+			);
+			if (mcp?.token_estimate !== null && mcp?.token_estimate !== undefined) {
+				const label =
+					row.context_mode === "repair-json"
+						? "repair JSON"
+						: row.context_mode === "repair-toon"
+							? "repair TOON"
+							: "repair";
+				row.notes.push(
+					row.token_estimate !== null && row.token_estimate < mcp.token_estimate
+						? `${label} token estimate beats MCP artifact`
+						: `${label} token estimate does not beat MCP artifact`,
+				);
+			}
+		}
+		if (row.context_mode === "triage") {
+			const raw = rows.find(
+				(candidate) =>
+					candidate.fixture === row.fixture && candidate.context_mode === "raw",
+			);
+			if (raw?.token_estimate !== null && raw?.token_estimate !== undefined) {
+				row.notes.push(
+					row.token_estimate !== null && row.token_estimate < raw.token_estimate
+						? "triage is smaller than raw Bun"
+						: "triage is not smaller than raw Bun",
+				);
+			}
+		}
 	}
 }
 
@@ -595,6 +1121,15 @@ function createCandidateGates(rows: BenchmarkRow[]): CandidateGate[] {
 			exit_correctness_required: true,
 			max_token_estimate: row.token_estimate,
 			min_fidelity_score: row.fidelity?.score ?? null,
+			...(row.context_mode === "repair" ||
+			row.context_mode === "repair-json" ||
+			row.context_mode === "repair-toon" ||
+			row.context_mode === "triage"
+				? {
+						require_lookup_available: true,
+						require_detail_roundtrip: true,
+					}
+				: {}),
 			source: "observed_calibration",
 		}));
 }
@@ -613,10 +1148,7 @@ async function evaluateFixedGates(
 		gates.candidate_gates ?? gates.calibration?.candidate_gates ?? [];
 	const failures: string[] = [];
 	for (const gate of candidateGates) {
-		const row = rows.find(
-			(candidate) =>
-				candidate.fixture === gate.fixture && candidate.variant === gate.variant,
-		);
+		const row = findGateRow(rows, gate);
 		if (!row) {
 			failures.push(`${gate.variant}/${gate.fixture}: row missing`);
 			continue;
@@ -637,28 +1169,57 @@ async function evaluateFixedGates(
 		) {
 			failures.push(`${gate.variant}/${gate.fixture}: fidelity score below gate`);
 		}
+		if (gate.require_lookup_available && row.lookup_available !== true) {
+			failures.push(`${gate.variant}/${gate.fixture}: lookup unavailable`);
+		}
+		if (
+			gate.require_detail_roundtrip &&
+			row.detail_roundtrip?.richer_detail !== true
+		) {
+			failures.push(`${gate.variant}/${gate.fixture}: detail roundtrip failed`);
+		}
 	}
 	return { status: failures.length === 0 ? "pass" : "fail", failures };
+}
+
+function findGateRow(
+	rows: readonly BenchmarkRow[],
+	gate: CandidateGate,
+): BenchmarkRow | undefined {
+	const exact = rows.find(
+		(candidate) =>
+			candidate.fixture === gate.fixture && candidate.variant === gate.variant,
+	);
+	if (exact || gate.variant !== "local-runner") return exact;
+	return rows.find(
+		(candidate) =>
+			candidate.fixture === gate.fixture &&
+			candidate.variant === "local-runner-compact",
+	);
 }
 
 export function renderEvidenceTable(evidence: BenchmarkEvidence): string {
 	const header = [
 		"fixture",
 		"variant",
+		"mode",
 		"status",
 		"exit",
 		"tokens(est)",
 		"fidelity",
+		"lookup",
 		"score",
 		"notes",
 	];
 	const rows = evidence.rows.map((row) => [
 		row.fixture,
 		row.variant,
+		row.context_mode,
 		row.status,
 		renderExit(row),
 		row.token_estimate === null ? "-" : String(row.token_estimate),
 		row.fidelity ? renderFidelity(row.fidelity) : "-",
+		renderLookup(row),
 		row.score === null ? "-" : String(row.score),
 		row.skip_reason ?? row.notes.join("; ") ?? "",
 	]);
@@ -685,6 +1246,13 @@ function renderFidelity(fidelity: FidelityScore): string {
 	return `${round2(fidelity.score)} missing=${fidelity.missing.length}`;
 }
 
+function renderLookup(row: BenchmarkRow): string {
+	if (!row.detail_roundtrip?.applicable) return row.lookup_available ? "yes" : "-";
+	return row.detail_roundtrip.lookup_available && row.detail_roundtrip.richer_detail
+		? "roundtrip"
+		: "missing";
+}
+
 function formatRow(row: string[], widths: number[]): string {
 	return row.map((cell, index) => cell.padEnd(widths[index] ?? 0)).join("  ");
 }
@@ -696,6 +1264,13 @@ function estimateTokens(text: string): number {
 function truncateSample(text: string): string {
 	if (text.length <= 1_500) return text;
 	return `${text.slice(0, 1_500)}\n[truncated ${text.length - 1_500} chars]`;
+}
+
+function sanitizeBenchmarkOutput(text: string): string {
+	return text.replace(
+		/\((?:[^()]*\/)?([^/()]+\.test\.[cm]?[tj]sx?:\d+:\d+)\)/g,
+		"($1)",
+	);
 }
 
 function splitCommand(command: string): string[] {
@@ -715,7 +1290,7 @@ function createRunId(): string {
 
 function emptyEvidence(cwd: string, args: ParsedArgs): BenchmarkEvidence {
 	return {
-		schema_version: "1",
+		schema_version: "2",
 		mode: args.mode,
 		run_id: args.runId,
 		generated_at: new Date().toISOString(),
@@ -759,7 +1334,33 @@ if (import.meta.main) {
 		process.exit(result.exitCode);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "Unknown benchmark error.";
+		if (Bun.argv.includes("--json")) {
+			process.stdout.write(
+				`${JSON.stringify(
+					{
+						schema_version: "2",
+						status: "error",
+						run_id: inferBenchmarkRunId(Bun.argv.slice(2)),
+						error: {
+							code: "benchmark_usage_error",
+							message,
+							exit_code: 2,
+							hint: "Correct benchmark arguments and rerun.",
+						},
+					},
+					null,
+					2,
+				)}\n`,
+			);
+			process.exit(2);
+		}
 		process.stderr.write(`test-runner benchmark error: ${message}\n`);
 		process.exit(2);
 	}
+}
+
+function inferBenchmarkRunId(argv: readonly string[]): string {
+	const index = argv.indexOf("--run-id");
+	if (index !== -1 && argv[index + 1]) return argv[index + 1] ?? "unknown";
+	return createRunId();
 }

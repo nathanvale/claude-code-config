@@ -19,6 +19,15 @@ while [[ $index -lt ${#scan_args[@]} ]]; do
 	--plain)
 		OUTPUT_MODE="plain"
 		;;
+	--format)
+		if [[ $((index + 1)) -lt ${#scan_args[@]} ]]; then
+			OUTPUT_MODE="${scan_args[$((index + 1))]}"
+			index=$((index + 1))
+		fi
+		;;
+	--format=*)
+		OUTPUT_MODE="${arg#--format=}"
+		;;
 	--run-id)
 		if [[ $((index + 1)) -lt ${#scan_args[@]} ]]; then
 			RUN_ID="${scan_args[$((index + 1))]}"
@@ -38,7 +47,11 @@ fi
 
 if ! command -v bun >/dev/null 2>&1; then
 	if [[ "$OUTPUT_MODE" == "json" ]]; then
-		printf '{"status":"error","run_id":"%s","error":{"run_id":"%s","code":"missing_bun","message":"Required test runtime is missing.","exit_code":1,"severity":"fatal","recoverability":"repair_state","retryable":false,"failure_domain":"runtime_diagnostics","hint":{"summary":"Install the required runtime, then rerun.","action":"repair_state"}},"data":{"action":"runner_error","contract":"test-runner.bun-test","schema_version":"1","status":"error","command":"run","cwd":null,"bun_command":null,"bun_args":[],"exit_code":1,"run_id":"%s","duration_ms":0,"summary":{"files":null,"tests":null,"passed":null,"failed":null,"expect_calls":null},"failures":[],"diagnostic":{"code":"missing_bun","message":"Required test runtime is missing.","cause":"runtime executable was not found on PATH.","retryable":false,"next_action":"Install the required runtime or expose it on PATH, then rerun."}}}\n' "$RUN_ID" "$RUN_ID" "$RUN_ID"
+		printf '{"status":"error","run_id":"%s","error":{"run_id":"%s","code":"missing_bun","message":"Required test runtime is missing.","exit_code":1,"severity":"fatal","recoverability":"repair_state","retryable":false,"failure_domain":"runtime_diagnostics","hint":{"summary":"Install the required runtime, then rerun.","action":"repair_state"}},"data":{"action":"runner_error","contract":"test-runner.bun-test","schema_version":"2","status":"error","command":"run","cwd":null,"bun_command":null,"bun_args":[],"exit_code":1,"run_id":"%s","duration_ms":0,"summary":{"files":null,"tests":null,"passed":null,"failed":null,"expect_calls":null},"failures":[],"diagnostic":{"code":"missing_bun","message":"Required test runtime is missing.","cause":"runtime executable was not found on PATH.","retryable":false,"next_action":"Install the required runtime or expose it on PATH, then rerun."}}}\n' "$RUN_ID" "$RUN_ID" "$RUN_ID"
+	elif [[ "$OUTPUT_MODE" == "json-compact" ]]; then
+		printf '{"s":2,"x":1,"k":"loc,test,assertion,expected,received,detail","f":[],"d":{"code":"missing_bun","message":"Required test runtime is missing.","next":"Install the required runtime or expose it on PATH, then rerun."}}\n'
+	elif [[ "$OUTPUT_MODE" == "toon" ]]; then
+		printf 'f[0]{l,t,a,e,r,d}:\nd{code,next}:missing_bun,Install the required runtime or expose it on PATH then rerun.\n'
 	else
 		printf 'test_runner missing_bun: Required test runtime is missing. next=Install the required runtime or expose it on PATH, then rerun. run_id=%s\n' "$RUN_ID" >&2
 	fi
