@@ -1812,7 +1812,9 @@ function parseCommandOptions(
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (!arg.startsWith("-")) {
-			throw usageError(`unexpected argument: ${arg}`);
+			throw usageError(
+				`unexpected argument: ${arg}; use --root <repo> for target repositories`,
+			);
 		}
 
 		const { name, inlineValue } = splitFlag(arg);
@@ -1832,6 +1834,13 @@ function parseCommandOptions(
 				throw usageError(`${name} does not accept a value`);
 			}
 			parsed.outputMode = "plain";
+			continue;
+		}
+		if (name === "--json") {
+			if (inlineValue !== undefined) {
+				throw usageError(`${name} does not accept a value`);
+			}
+			parsed.outputMode = "json";
 			continue;
 		}
 		if (name === "--confirm-current-task-apply") {
