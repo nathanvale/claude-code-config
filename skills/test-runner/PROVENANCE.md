@@ -19,6 +19,9 @@
 - Agent Runner benchmark ran: `scripts/.benchmark-output/agent-runner-u5-calibration.json`.
 - Agent Runner repair result: lookup available and detail roundtrip passed for fail, multi-fail, and timeout fixtures.
 - Agent Runner repair adoption result: keep MCP guidance unchanged; repair token estimates did not beat MCP artifact rows for comparable assertion fixtures.
+- Agent Runner repair follow-up benchmark ran: `scripts/.benchmark-output/agent-runner-repair-beats-mcp-fixed-fixed-gate.json`.
+- Agent Runner repair follow-up result: fixed gate passed; plain repair beat MCP artifact rows on comparable hot-context assertion fixtures while preserving fidelity, lookup, and detail roundtrip.
+- Normal guidance remains unchanged; this proof updates repair-mode evidence, not default test routing.
 - Agent Runner triage result: lookup available and detail roundtrip passed for fail, multi-fail, and timeout fixtures.
 - Agent Runner triage adoption result: keep proof-only guidance; triage beat raw Bun on assertion fixtures, but timeout triage did not beat raw Bun and MCP timeout evidence is missing.
 - Follow-up variant example: compare a smaller failure-context budget against the same fixtures with the Runner Benchmark Harness.

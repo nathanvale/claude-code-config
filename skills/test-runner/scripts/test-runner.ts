@@ -507,7 +507,7 @@ async function lookupFailureDetail(input: {
 	runId: string;
 	startedAt: number;
 }): Promise<TestRunnerResult> {
-	const cwd = resolve(input.runtime.cwd());
+	const cwd = ".runner-output";
 	const handle = input.parsed.handle;
 	const diagnostic = validateDetailHandle(handle);
 	if (diagnostic) {

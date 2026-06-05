@@ -337,6 +337,116 @@ describe("runner benchmark fidelity", () => {
 		);
 	});
 
+	test("fixed gates require repair rows to beat comparable MCP artifact rows", async () => {
+		const gatePath = ".benchmark-output/unit-repair-beats-mcp-gate.json";
+		const baselinePath = ".benchmark-output/unit-repair-mcp-baseline.json";
+		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		await writeFile(
+			join(scriptsDir, baselinePath),
+			`${JSON.stringify({
+				rows: [
+					{
+						fixture: "fail",
+						variant: "mcp-artifact",
+						exit_code: 1,
+						token_estimate: 999,
+						stdout_sample: [
+							"fixtures/fail.test.ts:9 failing fixture > calculates tax-inclusive price",
+							"error: expect(received).toBe(expected)",
+							"Expected: 13",
+							"Received: 11",
+						].join("\n"),
+						stderr_sample: "",
+					},
+				],
+			})}\n`,
+		);
+
+		const calibration = await runBenchmark(
+			[
+				"--fixture",
+				"fail",
+				"--local-runner",
+				"./test-runner.sh",
+				"--mcp-baseline",
+				baselinePath,
+				"--run-id",
+				"unit-repair-beats-mcp-calibration",
+			],
+			{ cwd: scriptsDir, now: new Date("2026-06-05T00:00:00.000Z") },
+		);
+		const repairGate = calibration.evidence.calibration.candidate_gates.find(
+			(gate) =>
+				gate.fixture === "fail" && gate.variant === "local-runner-repair",
+		);
+		expect(repairGate?.require_token_less_than_variant).toBe("mcp-artifact");
+		await writeFile(
+			join(scriptsDir, gatePath),
+			`${JSON.stringify({ candidate_gates: [repairGate] })}\n`,
+		);
+
+		const pass = await runBenchmark(
+			[
+				"--fixture",
+				"fail",
+				"--local-runner",
+				"./test-runner.sh",
+				"--mcp-baseline",
+				baselinePath,
+				"--mode",
+				"fixed-gate",
+				"--gate-file",
+				gatePath,
+				"--run-id",
+				"unit-repair-beats-mcp-pass",
+			],
+			{ cwd: scriptsDir, now: new Date("2026-06-05T00:00:00.000Z") },
+		);
+		expect(pass.evidence.gate_result?.status).toBe("pass");
+
+		await writeFile(
+			join(scriptsDir, baselinePath),
+			`${JSON.stringify({
+				rows: [
+					{
+						fixture: "fail",
+						variant: "mcp-artifact",
+						exit_code: 1,
+						token_estimate: 1,
+						stdout_sample: [
+							"fixtures/fail.test.ts:9 failing fixture > calculates tax-inclusive price",
+							"error: expect(received).toBe(expected)",
+							"Expected: 13",
+							"Received: 11",
+						].join("\n"),
+						stderr_sample: "",
+					},
+				],
+			})}\n`,
+		);
+		const fail = await runBenchmark(
+			[
+				"--fixture",
+				"fail",
+				"--local-runner",
+				"./test-runner.sh",
+				"--mcp-baseline",
+				baselinePath,
+				"--mode",
+				"fixed-gate",
+				"--gate-file",
+				gatePath,
+				"--run-id",
+				"unit-repair-beats-mcp-fail",
+			],
+			{ cwd: scriptsDir, now: new Date("2026-06-05T00:00:00.000Z") },
+		);
+		expect(fail.evidence.gate_result?.status).toBe("fail");
+		expect(fail.evidence.gate_result?.failures.join("\n")).toContain(
+			"token estimate did not beat mcp-artifact",
+		);
+	});
+
 	test("legacy fixed gate local-runner resolves to compact row", async () => {
 		const gatePath = ".benchmark-output/unit-legacy-local-runner-gate.json";
 		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });

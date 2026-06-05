@@ -115,6 +115,7 @@ type CandidateGate = {
 	min_fidelity_score: number | null;
 	require_lookup_available?: boolean;
 	require_detail_roundtrip?: boolean;
+	require_token_less_than_variant?: string;
 	source: "observed_calibration";
 };
 
@@ -1130,8 +1131,38 @@ function createCandidateGates(rows: BenchmarkRow[]): CandidateGate[] {
 						require_detail_roundtrip: true,
 					}
 				: {}),
+			...(row.context_mode === "repair" &&
+			hasMeasuredComparator(rows, row.fixture, "mcp-artifact") &&
+			isComparableHotAssertionFixture(row.fixture)
+				? { require_token_less_than_variant: "mcp-artifact" }
+				: {}),
 			source: "observed_calibration",
 		}));
+}
+
+function hasMeasuredComparator(
+	rows: readonly BenchmarkRow[],
+	fixture: string,
+	variant: string,
+): boolean {
+	return rows.some(
+		(row) =>
+			row.fixture === fixture &&
+			row.variant === variant &&
+			row.status === "measured" &&
+			row.token_estimate !== null,
+	);
+}
+
+function isComparableHotAssertionFixture(fixtureLabel: string): boolean {
+	const fixture = BENCHMARK_FIXTURES.find(
+		(candidate) => candidate.label === fixtureLabel,
+	);
+	return (
+		fixture?.kind === "fail" &&
+		fixture.expectedSignals.expectedValueAvailable === true &&
+		fixture.expectedSignals.receivedValueAvailable === true
+	);
 }
 
 async function evaluateFixedGates(
@@ -1177,6 +1208,30 @@ async function evaluateFixedGates(
 			row.detail_roundtrip?.richer_detail !== true
 		) {
 			failures.push(`${gate.variant}/${gate.fixture}: detail roundtrip failed`);
+		}
+		if (gate.require_token_less_than_variant) {
+			const comparator = rows.find(
+				(candidate) =>
+					candidate.fixture === gate.fixture &&
+					candidate.variant === gate.require_token_less_than_variant,
+			);
+			if (!comparator) {
+				failures.push(
+					`${gate.variant}/${gate.fixture}: comparator ${gate.require_token_less_than_variant} missing`,
+				);
+			} else if (comparator.status !== "measured") {
+				failures.push(
+					`${gate.variant}/${gate.fixture}: comparator ${gate.require_token_less_than_variant} skipped`,
+				);
+			} else if (
+				row.token_estimate === null ||
+				comparator.token_estimate === null ||
+				row.token_estimate >= comparator.token_estimate
+			) {
+				failures.push(
+					`${gate.variant}/${gate.fixture}: token estimate did not beat ${gate.require_token_less_than_variant}`,
+				);
+			}
 		}
 	}
 	return { status: failures.length === 0 ? "pass" : "fail", failures };
