@@ -284,11 +284,15 @@ type FallowRunnerCommandContract = CommandFacadeContract<
 const commonFlags = {
 	"--root": {
 		type: "path",
-		description: "Target repository root.",
+		description: "Target repository root, resolved from invocation cwd.",
 	},
 	"--plain": {
 		type: "boolean",
 		description: "Emit compact plain summary output.",
+	},
+	"--json": {
+		type: "boolean",
+		description: "Emit JSON envelope output; this is the default.",
 	},
 	"--include-raw-output": {
 		type: "boolean",
@@ -388,7 +392,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "scripts/fallow-runner.ts",
 			summary: "Run Fallow changed-code risk evidence.",
 			usage: [
-				"audit [--root <repo>] [--base-ref <ref>] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"audit [--root <repo>] [--base-ref <ref>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "agent",
@@ -412,7 +416,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "scripts/fallow-runner.ts",
 			summary: "Preview Fallow fix output without mutating source.",
 			usage: [
-				"fix-preview [--root <repo>] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"fix-preview [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "agent",
@@ -430,7 +434,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "scripts/fallow-runner.ts",
 			summary: "Apply Fallow fixes through an explicit mutation path.",
 			usage: [
-				"fix-apply --confirm-current-task-apply [--root <repo>] [--plain] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"fix-apply --confirm-current-task-apply [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "operator",
@@ -451,7 +455,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "scripts/fallow-runner.ts",
 			summary: "Inspect Fallow runner readiness without mutation.",
 			usage: [
-				"doctor [--root <repo>] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"doctor [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "agent",
@@ -471,7 +475,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			summary:
 				"Trace export reachability evidence for one introduced finding.",
 			usage: [
-				"why --file <path> --export <symbol> [--root <repo>] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"why --file <path> --export <symbol> [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "agent",
@@ -541,7 +545,7 @@ function evidenceContract(
 		script: "scripts/fallow-runner.ts",
 		summary,
 		usage: [
-			`${command} [--root <repo>] [--include-raw-output] [--max-output-bytes <bytes>]`,
+			`${command} [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]`,
 		],
 		json: true,
 		audience: "agent",

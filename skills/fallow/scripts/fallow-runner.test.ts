@@ -2050,6 +2050,23 @@ describe("U3 parser, help, and discovery alignment", () => {
 		});
 	});
 
+	test("every subcommand accepts explicit json output", async () => {
+		const root = await makeJsRepo();
+
+		await runCommandSurfaceCases<TestRunResult>({
+			runner: (argv) => runForTest(argv, makeRuntime({ cwd: root })),
+			cases: ALL_COMMANDS.map((command) => ({
+				label: `${command} accepts explicit json`,
+				argv: [...acceptedArgvFor(command), "--json"],
+				assert: (result) => {
+					expect(result.exitCode).not.toBe(2);
+					const envelope = expectEnvelope(result);
+					expect(envelope.mode).toBe(command);
+				},
+			})),
+		});
+	});
+
 	test("global plain output flag is rejected", async () => {
 		const result = await runForTest(["--plain", "audit"], makeRuntime());
 
@@ -2133,6 +2150,22 @@ describe("U3 parser, help, and discovery alignment", () => {
 				},
 			})),
 		});
+	});
+
+	test("positional targets point to root flag repair", async () => {
+		const plain = await runForTest(
+			["dead-code", "--plain", "skills/fallow/scripts"],
+			makeRuntime(),
+		);
+		const json = await runForTest(
+			["dead-code", "skills/fallow/scripts"],
+			makeRuntime(),
+		);
+
+		expect(plain.exitCode).toBe(2);
+		expect(plain.stdout).toContain("next_action=fix-input");
+		expect(json.exitCode).toBe(2);
+		expect(json.stdout).toContain("use --root <repo>");
 	});
 });
 
