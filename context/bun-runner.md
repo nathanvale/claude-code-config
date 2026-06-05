@@ -1,13 +1,15 @@
 # Code Quality Runners
 
-Prefer MCP runners over raw CLIs when available. Always pass
-`response_format: "json"`.
+Use Agent Runner for Bun tests. Prefer MCP runners for lint, format, and type
+checks when available. Always pass `response_format: "json"` to MCP tools.
 
 ## Tests
 
-- `bun_runTests`: suite or pattern run.
-- `bun_testFile`: one exact test file.
-- `bun_testCoverage`: coverage summary.
+- `skills/test-runner/scripts/test-runner.sh`: Bun test pass/fail, repair, triage, and detail lookup.
+- Pass Bun coverage args after `--`, for example `-- --coverage`.
+- Use repair mode for hot-context failing files.
+- Use triage mode for cold-context suite failures.
+- Use detail lookup when the compact packet is too terse.
 
 ## Lint And Format
 
@@ -20,3 +22,9 @@ Prefer MCP runners over raw CLIs when available. Always pass
 - `tsc_check`: `tsc --noEmit` from nearest config.
 
 Exit codes: `0` success, `2` blocking error.
+
+## Routing
+
+- Use Agent Runner for Bun test gates and failure context.
+- Use Biome MCP for lint and format gates.
+- Use TypeScript MCP for type gates.

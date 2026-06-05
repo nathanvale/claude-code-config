@@ -1,0 +1,17 @@
+{
+	"name": "test-runner-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"benchmark": "bun run test-runner.benchmark.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "*"
+	},
+	"devDependencies": {
+		"bun-types": "1.3.10",
+		"typescript": "^5.9.3"
+	}
+}
