@@ -204,6 +204,10 @@ _Avoid_: lookup flow, doc link list, table of contents only, prompt memory
 The durable owner for a class of instruction or knowledge. Startup may route to it, but must not duplicate its content.
 _Avoid_: backup copy, duplicated policy, rendered summary, startup restatement
 
+**Decision surface**:
+The smallest stable future lookup surface a decision log belongs to. Use it for product areas, workflows, skills, implementation slices, operational areas, or long-running systems; source sessions, tags, dates, agents, and people are metadata, not owners.
+_Avoid_: chat owner, tag owner, date owner, agent owner, mini ADR
+
 **Light janitor pass**:
 Bounded cleanup pass that removes obvious agent-runtime and context drift: broken owner routes, stale generated outputs, appendix bloat, duplicate policy, or leftover fragments. It is not a broad documentation rewrite.
 _Avoid_: governance program, documentation overhaul, content audit, policy review
