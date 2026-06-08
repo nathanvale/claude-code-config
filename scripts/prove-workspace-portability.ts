@@ -39,6 +39,7 @@ const excludedNames = new Set([
 	"tsconfig.tsbuildinfo",
 ]);
 const excludedRelativePaths = new Set([
+	"skills/browser-use/dist",
 	"skills/test-runner/var",
 ]);
 const commands: CommandStep[] = [
@@ -65,6 +66,10 @@ const commands: CommandStep[] = [
 	{
 		label: "browser-use tests",
 		command: ["bun", "--filter", "browser-use-scripts", "test"],
+	},
+	{
+		label: "browser-use pack dry run",
+		command: ["bun", "--filter", "browser-use-scripts", "pack:dry-run"],
 	},
 	{
 		label: "create-cli typecheck",

@@ -88,6 +88,8 @@ bun run browser-use targets list --mode route-bound --route "$ROUTE" --adapter-p
 
 ## Verification
 
+- Run `bun --filter browser-use-scripts build` after package bin or distribution edits.
+- Run `bun --filter browser-use-scripts pack:dry-run` before publishing or reviewing package payload changes.
 - Run `bun --filter browser-use-scripts test` after router, adapter-map, preflight, or browser-use script changes.
 - Run `bun --filter browser-use-scripts typecheck` after TypeScript edits.
 - Run `cd skills/browser-use`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.

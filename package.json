@@ -14,7 +14,7 @@
     "biome:fix": "biome check --write .",
     "biome:format": "biome format --write .",
     "biome:lint": "biome lint --diagnostic-level=error .",
-    "check:workspace-facade": "bun run scripts/check-workspace-facade-invariants.ts",
+    "check:workspace-facade": "bun --filter browser-use-scripts build && bun run scripts/check-workspace-facade-invariants.ts",
     "prove:workspace-portability": "bun run scripts/prove-workspace-portability.ts"
   },
   "devDependencies": {

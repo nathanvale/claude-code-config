@@ -53,6 +53,25 @@ const requiredWorkspaceGlobs = [
 ];
 const expectedBins = {
 	"skills/browser-use": {
+		"browser-adapter-map": "dist/browser-adapter-map.js",
+		"browser-adapter-router": "dist/browser-adapter-router.js",
+		"browser-use": "dist/browser-use.js",
+		"preflight-browser-adapter": "dist/preflight-browser-adapter.js",
+		"preflight-warm-chrome": "dist/preflight-warm-chrome.js",
+	},
+	"skills/create-cli": {
+		"create-cli-facade-smoke": "./src/facade-resolution-smoke.ts",
+	},
+	"skills/fallow": {
+		"fallow-runner": "./src/fallow-runner.ts",
+	},
+	"skills/test-runner": {
+		"test-runner": "./src/test-runner.sh",
+		"test-runner-benchmark": "./src/test-runner.benchmark.ts",
+	},
+} satisfies Record<string, Record<string, string>>;
+const expectedLocalScripts = {
+	"skills/browser-use": {
 		"browser-adapter-map": "./src/browser-adapter-map.ts",
 		"browser-adapter-router": "./src/browser-adapter-router.ts",
 		"browser-use": "./src/browser-use.ts",
@@ -70,6 +89,12 @@ const expectedBins = {
 		"test-runner-benchmark": "./src/test-runner.benchmark.ts",
 	},
 } satisfies Record<string, Record<string, string>>;
+const allowedFacadeSpecs = {
+	"skills/browser-use": "0.1.0",
+	"skills/create-cli": "workspace:*",
+	"skills/fallow": "workspace:*",
+	"skills/test-runner": "workspace:*",
+} satisfies Record<string, string>;
 const commandContractPaths = [
 	"skills/browser-use/src/command-contract.ts",
 	"skills/fallow/src/command-contract.ts",
@@ -108,7 +133,7 @@ function readPackageJson(path: string): PackageJson | null {
 }
 
 function expectedShebangForBinTarget(binTarget: string): string | null {
-	if (binTarget.endsWith(".ts")) {
+	if (binTarget.endsWith(".ts") || binTarget.endsWith(".js")) {
 		return "#!/usr/bin/env bun";
 	}
 
@@ -199,6 +224,7 @@ function findDistributedTestOrFixturePaths(
 		const allowlistPath = repoPath(join(packagePath, fileEntry));
 
 		if (!existsSync(allowlistPath)) {
+			matches.push(`${packagePath}/${fileEntry} (missing)`);
 			continue;
 		}
 
@@ -215,6 +241,36 @@ function findDistributedTestOrFixturePaths(
 				/\.(test|live\.test|benchmark)\.ts$/.test(relativeCandidatePath)
 			) {
 				matches.push(relativeCandidatePath);
+			}
+		}
+	}
+
+	return matches;
+}
+
+function findDistributedWorkspaceMarkers(packagePath: string, files: string[]): string[] {
+	const matches: string[] = [];
+
+	for (const fileEntry of files) {
+		const allowlistPath = repoPath(join(packagePath, fileEntry));
+
+		if (!existsSync(allowlistPath)) {
+			continue;
+		}
+
+		const stats = statSync(allowlistPath);
+		const candidatePaths = stats.isDirectory()
+			? walkFiles(allowlistPath)
+			: [allowlistPath];
+
+		for (const candidatePath of candidatePaths) {
+			const text = readFileSync(candidatePath, "utf8");
+
+			if (
+				text.includes("@side-quest/cli-command-facade") ||
+				text.includes("workspace:")
+			) {
+				matches.push(displayPath(candidatePath));
 			}
 		}
 	}
@@ -349,7 +405,14 @@ function checkDistributionReadiness(
 	for (const evidencePath of findDistributedTestOrFixturePaths(packagePath, files)) {
 		findings.push({
 			path: packageJsonPath,
-			message: `Public package files allowlist includes test or fixture payload ${evidencePath}.`,
+			message: `Public package files allowlist includes missing, test, or fixture payload ${evidencePath}.`,
+		});
+	}
+
+	for (const evidencePath of findDistributedWorkspaceMarkers(packagePath, files)) {
+		findings.push({
+			path: packageJsonPath,
+			message: `Public package payload includes workspace-only marker in ${evidencePath}.`,
 		});
 	}
 
@@ -361,10 +424,13 @@ function checkDistributionReadiness(
 			});
 		}
 
-		if (binTarget.endsWith(".ts") && hasBlankValue(packageJson.engines?.bun)) {
+		if (
+			(binTarget.endsWith(".ts") || binTarget.endsWith(".js")) &&
+			hasBlankValue(packageJson.engines?.bun)
+		) {
 			findings.push({
 				path: packageJsonPath,
-				message: `Direct TypeScript bin ${binName} needs engines.bun before private is false.`,
+				message: `Direct Bun bin ${binName} needs engines.bun before private is false.`,
 			});
 		}
 	}
@@ -466,12 +532,15 @@ if (!existsSync(rootLockPath)) {
 		}
 
 		for (const [binName, binTarget] of Object.entries(bins)) {
-			const binMarker = `        "${binName}": "${binTarget}",`;
+			const lockBinTarget = binTarget.startsWith("./")
+				? binTarget
+				: `./${binTarget}`;
+			const binMarker = `        "${binName}": "${lockBinTarget}",`;
 
 			if (!rootLock.includes(binMarker)) {
 				findings.push({
 					path: "bun.lock",
-					message: `Missing lockfile bin marker ${binName} -> ${binTarget}.`,
+					message: `Missing lockfile bin marker ${binName} -> ${lockBinTarget}.`,
 				});
 			}
 		}
@@ -505,11 +574,12 @@ for (const packagePath of facadeConsumers) {
 	const facadeSpec =
 		packageJson?.dependencies?.[facadeName] ??
 		packageJson?.devDependencies?.[facadeName];
+	const expectedFacadeSpec = allowedFacadeSpecs[packagePath];
 
-	if (facadeSpec !== "workspace:*") {
+	if (facadeSpec !== expectedFacadeSpec) {
 		findings.push({
 			path: `${packagePath}/package.json`,
-			message: `${facadeName} must use workspace:* in active consumers.`,
+			message: `${facadeName} must use ${expectedFacadeSpec} in this active consumer.`,
 		});
 	}
 }
@@ -518,6 +588,7 @@ for (const [packagePath, bins] of Object.entries(expectedBins)) {
 	const packageJson = readPackageJson(repoPath(packagePath));
 	const binsByName = packageBins(packageJson);
 	const packageScripts = packageJson?.scripts ?? {};
+	const localScripts = expectedLocalScripts[packagePath];
 
 	for (const [binName, binTarget] of Object.entries(bins)) {
 		if (binsByName[binName] !== binTarget) {
@@ -527,10 +598,10 @@ for (const [packagePath, bins] of Object.entries(expectedBins)) {
 			});
 		}
 
-		if (packageScripts[binName] !== binTarget) {
+		if (packageScripts[binName] !== localScripts[binName]) {
 			findings.push({
 				path: `${packagePath}/package.json`,
-				message: `Missing local script ${binName} -> ${binTarget}.`,
+				message: `Missing local script ${binName} -> ${localScripts[binName]}.`,
 			});
 		}
 

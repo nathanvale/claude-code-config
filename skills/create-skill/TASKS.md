@@ -210,9 +210,10 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Keep Bun package tests collocated beside owner files unless a cross-owner suite earns a separate folder.
 - Keep package-bin shebangs enforced by `scripts/check-workspace-facade-invariants.ts`.
 - Keep package-bin lockfile markers enforced by `scripts/check-workspace-facade-invariants.ts`.
-- Keep packages `private: true` until distribution governance passes.
+- Keep packages `private: true` until distribution governance passes; `browser-use-scripts` is the first accepted `private: false` built-dist package.
 - Run dry-run pack or publish checks before turning any package private flag off.
 - Keep bundled dependency payloads and collocated tests out of public packages unless a distribution decision accepts them.
+- Keep `browser-use-scripts` package bins pointed at generated `dist/*.js`; keep local dev scripts pointed at `src/*.ts`.
 - Keep root workspace metadata, root lockfile, workspace invariant checks, and portability proof aligned with package roots.
 - Preserve current package names, bin names, and command metadata through future package moves.
 - Leave archived package-bearing skills as historical until an archive refresh explicitly selects them.
@@ -384,6 +385,7 @@ Migration order:
 Tracked packages:
 
 - `skills/browser-use/package.json`: status moved to skill-root package shape; verify with `bun --filter browser-use-scripts test` and `bun --filter browser-use-scripts typecheck`.
+- `skills/browser-use/package.json`: distribution status `private: false`, restricted access, built `dist/` payload only; verify with `bun --filter browser-use-scripts build`, `bun --filter browser-use-scripts pack:dry-run`, and `npm pack --dry-run`.
 - `skills/test-runner/package.json`: status moved to skill-root package shape; verify with `bun --filter test-runner-scripts test` and `bun --filter test-runner-scripts typecheck`.
 - `skills/fallow/package.json`: status moved to skill-root package shape; verify with `bun --filter fallow-scripts test` and `bun --filter fallow-scripts typecheck`.
 - `skills/create-cli/package.json`: status moved to skill-root package pilot; verify with `bun --filter create-cli-scripts smoke` and `bun --filter create-cli-scripts typecheck`.

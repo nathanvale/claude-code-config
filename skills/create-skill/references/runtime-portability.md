@@ -155,6 +155,8 @@ Rules:
 - Declare `engines.bun` when a distributed package exposes direct TypeScript Bun entrypoints.
 - Choose source distribution only when Bun is the named consumer runtime and collocated tests or fixtures are excluded from the payload.
 - Choose built distribution when consumers should not receive source tests, fixtures, or TypeScript runtime assumptions.
+- Treat built `dist/` folders as generated package payloads; rebuild them from source during proof instead of relying on checked-in output.
+- For built distribution, verify the packed payload has no tests, fixtures, workspace-only dependency markers, generated evidence, or local temp state.
 - Prove publish readiness with `bun publish --dry-run --frozen-lockfile` before flipping `private` off.
 - Use `bun pm pack --dry-run` when validating tarball contents without registry semantics.
 - Use `npm pack --dry-run` as a compatibility cross-check when npm install or npm publish behavior is a target.
