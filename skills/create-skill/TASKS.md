@@ -1,0 +1,330 @@
+# Create Skill Hardening Tracker
+
+Goal: make `skills/create-skill/` the canonical capability for skill authoring, review, healing, repair, cleanup, and consolidation.
+
+## Current Status
+
+- Current active batch: none; cleanup queue is clear after validation.
+- Adversarial cleanup findings are closed.
+- Previous completed batch: script-backed skill owner and verification audit.
+- Do not redo the script-backed skill audit unless a script-backed skill is added, archived, renamed, or changes helper scripts.
+- The script-backed skill audit is marked done in `Hardened`.
+- The script-backed skill audit is removed from `Candidate Audits`.
+- No live candidate audits remain; continue only from `Open Questions`, `Conditional Triggers`, or a new observed failure.
+
+## Pickup Workflow
+
+- Start by reading `skills/create-skill/SKILL.md`, `skills/create-skill/CONTEXT.md`, and this tracker.
+- Read only the owner paths needed for the next task.
+- Use `grill-with-docs` when language, boundaries, workflow shape, or plan fit is fuzzy.
+- Use `decision-mode` when the next move has real options.
+- Ask questions like Nathan is 10 with ADHD: tiny, concrete, low-load, one idea at a time.
+- Offer five options at a time when batching audit choices.
+- Use Firecrawl for external research, current docs, community examples, or claims that may have changed.
+- Store accepted decisions in `docs/decisions/2026-06-06-001-decisions-skill-decision-log.md`.
+- Keep unresolved ideas in this tracker, not in the decision log.
+- Update this tracker after every accepted hardening decision or completed audit batch.
+- Route storage-placement questions to `skills/context-advisor/SKILL.md`.
+- Route CLI contract changes through `create-cli`.
+- Preserve `productivity-sync` as the only protected live productivity workflow.
+- Treat `context/` as the durable recall and synthesis folder; do not create new `memory/` folders.
+- Keep `PROVENANCE.md` as source history only.
+- Archive dead skills under `skills/archive/<name>/`; do not delete useful source history.
+- Validate before handoff.
+- Report the next safe action before stopping.
+
+## Owner Paths
+
+- Portable skill owner path: `skills/create-skill/SKILL.md`.
+- Vocabulary owner path: `skills/create-skill/CONTEXT.md`.
+- Skill design owner path: `skills/create-skill/references/skill-design-philosophy.md`.
+- Storage routing map: `skills/context-advisor/references/storage-routing.md`.
+- Storage routing legacy pointer: `skills/create-skill/references/skill-memory-storage-routing.md`.
+- I/O shape examples: `skills/create-skill/references/skill-io-shape-examples.md`.
+- Agent-native skill design: `skills/create-skill/references/agent-native-skill-design.md`.
+- Runtime portability: `skills/create-skill/references/runtime-portability.md`.
+- Community-skill source note: `skills/create-skill/references/community-skill-research-sources.md`.
+- Skill collision and routing evidence audit: `skills/create-skill/scripts/skill-description-audit.ts`.
+- Decision trail: `docs/decisions/2026-06-06-001-decisions-skill-decision-log.md`.
+- Archived agent-native skill source: `skills/archive/create-agent-native-skill/SKILL.md`.
+- Context advisor: `skills/context-advisor/SKILL.md`.
+
+## Hardened
+
+- Split skill-design vocabulary out of root `CONTEXT.md`.
+- Split capability-registry vocabulary out of skill-design context.
+- Defined descriptions as routing evidence, not routing contracts.
+- Required manual fallback for reliability-sensitive skill invocation.
+- Optimized progressive disclosure for entry-screen route clarity.
+- Set observed failures as the first hardening source.
+- Resolved skill collisions in descriptions before body prose or driver machinery.
+- Treated published skill names as stable skill routing surfaces.
+- Made rename skill bridges temporary by default.
+- Required skill bridge removal by reference audit.
+- Kept skill bridge metadata prose-only until clutter earns schema/checks.
+- Added lightweight nearby skill bridge cleanup to skill review.
+- Limited setup/config to user-specific or environment-specific context.
+- Added owner-first durable memory storage routing.
+- Added `choose-skill-memory-store` for unclear storage decisions.
+- Hardened memory routing through adversarial review.
+- Added two-phase memory routing: owner/privacy/canonicity/write authority before format.
+- Added explicit credential routing and durable-store safety gates.
+- Added chooser output status, assumptions, safety stance, truth stance, operations, and next action.
+- Classified scoped `TASKS.md` files as durable project tracker memory.
+- Split agent-native CLI vocabulary out of root `CONTEXT.md`.
+- Defined `CONTEXT.md` as the project-specific domain-language owner for architecture-aware agents.
+- Routed architecture-shaped `CONTEXT.md` maintenance through `improve-codebase-architecture`.
+- Kept skill description audits event-triggered until repeated observed failures justify periodic review.
+- Deferred skill bridge checker until repeated old-name references, stale skill bridges, or skill bridge clutter show manual audit is failing.
+- Deferred memory storage routing examples until observed routing confusion justifies sourced examples in the routing reference.
+- Deferred project-tracker shape examples until repeated drift appears across multiple trackers.
+- Deferred `CONTEXT.md` examples until repeated routing drift justifies a routing reference.
+- Added maintained source note for community-skill research inputs.
+- Kept runtime-backed skill design inside `create-skill` as `references/agent-native-skill-design.md`.
+- Kept existing-skill audits scoped to selected audit targets or observed failures.
+- Kept old-skill alias wrapper cleanup gated by rename evidence, old-name references, or selected scoped audit.
+- Verified current Codex and Claude skill/memory docs without changing vendor-memory rules.
+- Recorded XDG runtime, absolute-path, and private-directory routing rules.
+- Added durable agent memory privacy gates while deferring schema/check machinery.
+- Re-ran QMD recall before broadening community-skill rules; no new rule mismatch found.
+- Reviewed public skill marketplaces and repos as examples; no new rule mismatch found.
+- Audited selected skill descriptions for trigger quality, collision boundaries, and YAML frontmatter validity.
+- Audited selected `SKILL.md` bodies for copied contracts; moved exact flags, schemas, artifacts, and command shapes back to owners.
+- Audited skill references for hidden required context; exposed unreferenced references and marked legacy XML guidance as historical.
+- Added a read-only description audit script for future skill-description crossover checks.
+- Created `skills/create-skill/` as the portable skill bundle for skill authoring, cleanup, and research portability.
+- Drafted first-pass active, archive-review, user-workflow-review, and consolidation buckets for archive-first cleanup.
+- Consolidated `context/agent-native-cli`, `context/capability-registry`, `context/references`, and `context/skill-design` into `skills/create-skill/`.
+- Aligned `create-skill` skill and references to locked context vocabulary.
+- Resolved owner split: `create-skill` owns all skill authoring routes, `create-cli` owns CLI contract design, and `context-advisor` owns storage routing advice.
+- Converted `create-agent-skills` into a temporary skill bridge before archive.
+- Researched current XML guidance with Firecrawl; rejected pure XML skill-body structure and kept XML only for scoped prompt/content boundaries.
+- Accepted the first keep-active skill list for archive-first cleanup.
+- Added `peekaboo`, `one-password`, and `classic-cinema` to the keep-active list.
+- Promoted hard-routed protected skills: `test-runner` and `work-style-convert`.
+- Archived `capture` because Nathan is pivoting away from the legacy storage framework.
+- Set `skill-memory-storage-routing.md` as the seed for the legacy storage-framework replacement direction.
+- Added migration work to review the legacy storage framework and fold reusable storage-contract rules into the new routing owner.
+- Created `context-advisor` as the portable storage routing owner.
+- Kept `create-skill` storage routing as an owner-reference fallback, not a hard dependency.
+- Archived `choose-skill-memory-store` after extracting reusable routing and output guidance.
+- Classified `issue-to-pr` and `runbook-orchestrator` as protected user-invocable runbook control planes.
+- Moved runtime-backed skill guidance into `create-skill`.
+- Archived `create-agent-native-skill` without a bridge because it had not been used as a real route.
+- Archived `create-agent-skills` after extraction review found no reusable owner material beyond existing `create-skill` references.
+- Archived archive-safe low/no-active-route skills from the accepted cleanup batch.
+- Protected dependency skills that still serve active routes: `agent-reliability-guardrails`, `imessage-reader`, `prompt-system-router`, and `prompt-system-workflow`.
+- Reduced live skills to accepted keep-active skills plus protected dependency and runbook control-plane skills.
+- Repaired `skills/find-skills` and `skills/grill-me` symlinks to external skill owners.
+- Pivoted active durable-context placement routes from the legacy storage framework to `context-advisor`.
+- Replaced active productivity legacy-framework reads with owner-routing through `context-advisor`.
+- Reviewed legacy storage-framework contract inputs and kept only reusable owner, privacy, write-gate, retention, deletion, recovery, and routing rules in `context-advisor`.
+- Accepted forward rule: new durable recall and synthesis goes under `context/`.
+- Patched `productivity-setup` so new productivity setups scaffold `context/`.
+- Patched `productivity-sync` so active sync reads and writes `context/`.
+- Kept `productivity-sync` as the only protected live productivity workflow.
+- Demoted `productivity-connectors` to support reference for `productivity-sync`.
+- Removed `productivity-sync` handoffs to retired setup/enrichment workflows.
+- Migrated existing durable note content from repo `memory/` folders into `context/`.
+- Archived old storage/QMD/NotebookLM/bootstrap framework files under `context/archive/legacy-memory-framework/`.
+- Hard-cut the legacy user memory config path; `~/.config/context` is the stable user context path.
+- Renamed the active legacy storage rule to context routing.
+- Replaced the multi-agent legacy storage smoke test with a context-routing smoke test.
+- Resolved the `to-issues` / `to-prd` skill description collision.
+- Added first-pass skill dependency rules for hard dependency, optional handoff, owner-reference fallback, bundled reference, blocked state, and degraded state.
+- Added first-pass skill role runbooks and required one primary role per active skill.
+- Added `role` frontmatter labels to active skills.
+- Used Firecrawl research to sharpen skill roles into execution role cards.
+- Added `skill-role-audit.ts` to check active skill role frontmatter.
+- Added optional skill abilities for small extra powers without changing primary role.
+- Renamed confusing `front-door` role to `main-entry`.
+- Archived `browser-domain-memory`; future browser memory work should live in `browser-use`.
+- Accepted provenance rule: keep `PROVENANCE.md` only when source history matters.
+- Shrunk live `PROVENANCE.md` files to source-only notes.
+- Added a pickup workflow so future sessions can resume from this tracker.
+- Audited first-party provenance files; removed redundant `skills/decisions/PROVENANCE.md`.
+- Audited live skill dependencies and labeled missing states for active handoffs.
+- Added dependency-drift guardrail: dependency sections stay tiny routing cards, not copied manuals.
+- Audited active skill roles; no role changes needed.
+- Removed old context owner-path redirect stubs after active-reference audit.
+- Audited residual legacy storage-framework wording on active surfaces.
+- Tried to import handover `/private/tmp/skill-philosophy-handoff-2026-06-08.md`; file is missing.
+- Recovered the missing skill-philosophy handoff from Codex session `019ea54d-86fe-7a10-9954-166992a6659d`; the original temp file no longer exists.
+- Audited memory-writing skills against `context-advisor`; added storage safety to `imessage-reader`.
+- Audited script-backed active skills for owner paths and first-screen verification commands.
+- Patched script packages that used private facade wildcard deps to use the local facade owner path.
+- Started portability audit; split portable export payload from local project state.
+- Updated moved-context guidance so redirect stubs are temporary and removable after active-reference audit.
+- Rewrote user-scope symlink findings without absolute local paths.
+- Classified remaining create-skill export scan hits as audit patterns, source notes, or local cleanup receipt.
+- Found the `2026-06-08` portability session with `ce-sessions` and promoted runtime portability rules into `references/runtime-portability.md`.
+- Added `prove:workspace-portability` to build a clean temp export, run frozen install, run workspace invariant checks, and run focused package tests/typechecks.
+- Proved bundled workspace portability for `runtime/cli-command-facade` plus the four tracked facade consumers.
+- Fixed the test-runner benchmark flake exposed by clean export: benchmark tests now use temp evidence paths, and the broad matrix has an explicit timeout budget.
+- Re-scanned active skill roles after archive cleanup; `skill-role-audit.ts --json` passed with no diagnostics.
+- Re-scanned active skill descriptions after archive cleanup; `skill-description-audit.ts --json` passed with no diagnostics or collisions.
+- Verified archived skill payloads exist under `skills/archive/` for the accepted cleanup batch.
+- Classified `browser-use operate snapshot/screenshot/emulate` as WIP browser-use implementation, not a skills-cleanup blocker.
+- Removed active `productivity-sync` dependency on archived `people-enrich`; people-note updates now stay as structured proposals until `context-advisor` resolves write owner and target path.
+- Classified `find-skills` and `grill-me` as user-scope symlink skills, not repo-owned active or archived payloads.
+- Re-ran active archived-path scan; remaining matches are cleanup receipts, explicit rejected compatibility routes, or ordinary non-skill words.
+- Audited active `context/` contracts for legacy storage-framework residue; removed archived `people-enrich` runtime owner paths, replaced `qmd-findings` with `search-findings`, and fixed doubled `context/context` path references.
+- Re-ran create-skill portable-owner scan for local paths, retired folders, archived skills, package-link shapes, and unbundled runtime hints.
+- Classified remaining create-skill portability hits as portable audit patterns, runtime portability rules, source notes, or local cleanup receipt.
+- Cleared stale consolidation-map extraction queue entries after context legacy audit and symlink classification.
+- Re-audited live `PROVENANCE.md` files; all remaining files are short source-history or evidence-path notes.
+- Fixed `draft-message` active context lookup from stale doubled context path to `context/comms-style.md`; description audit still passes.
+- Added `skills/test-runner/scripts/var/` to generated-output ignores and workspace export excludes; removed the generated evidence folder from the live skill tree.
+- Re-ran `bun run prove:workspace-portability`; proof passed with `skills/test-runner/scripts/var` excluded from the clean export payload.
+- Closed active skill count mismatch: role and description audits follow external symlink skills, while repo-owned `find` sees 30 local `SKILL.md` files.
+- Verified archive move coverage: every tracked deleted `skills/*/SKILL.md` front door has a matching `skills/archive/*/SKILL.md` payload.
+- Classified extra archive payloads for `choose-skill-memory-store` and `create-agent-native-skill` as preserved retired sources from absent untracked old paths, not archive mismatches.
+- Closed the handoff open question: the recovered handoff's research queue was already completed and reflected in this tracker.
+- Tightened archive cleanup receipt wording so completed context audits and empty candidate buckets read as closed.
+
+## Active
+
+- Treat external symlink skills as active user-scope links, not archive debt.
+- Keep project tracker current after each accepted hardening decision.
+- Keep decisions log current when a durable rule changes.
+
+## Open Questions
+
+- None currently.
+
+## Research Queue
+
+- Re-audit live roles only after a skill is added, archived, split, or repurposed.
+
+## Dependency Research Notes
+
+- `create-skill` now uses optional handoff plus owner-reference fallback for `context-advisor`.
+- `productivity-sync` uses `productivity-connectors` as support reference for tool-name maps.
+- `productivity-sync` uses `imessage-reader` as a CLI fallback owner path.
+- `to-issues`, `to-prd`, and `triage` use `docs/agents/` owner files instead of retired setup skill routes.
+- `context-advisor`, `decisions`, `prompt-system-workflow`, `runbook-orchestrator`, `triage`, and `improve-codebase-architecture` now label helper-skill missing states.
+- Archived `browser-domain-memory`; future browser memory work routes to `browser-use`.
+- `create-skill` runtime-backed guidance routes CLI contract changes to `create-cli`.
+- `ship-by-unit` borrows `ce-work` patterns but forbids invoking `/ce-work`.
+- Missing-skill policy now has first-pass labels for hard dependency, optional handoff, owner-reference fallback, bundled reference, blocked state, and degraded state.
+- Dependency sections are routing cards only: type, missing state, owner path, fallback, next repair.
+- If dependency prose drifts or grows, shrink it back to owner-path routing before adding machinery.
+
+## Portability Notes
+
+- Portable payload: `SKILL.md`, `CONTEXT.md`, `references/`, `scripts/`, templates, assets.
+- Local state: `TASKS.md`, decision logs, handover paths, cleanup queues, historical receipts.
+- Promote reusable rules out of `TASKS.md` before exporting a skill.
+- Missing local source-note paths do not block skill operation.
+- Absolute local paths in portable owner files are blockers unless marked as historical receipts or examples.
+- Runtime portability owner: `references/runtime-portability.md`.
+- Source session: Codex `019ea54d-86fe-7a10-9954-166992a6659d`, found with `ce-sessions` on `2026-06-08`.
+- Firecrawl source: Bun workspaces docs, Bun filter docs, and Bun install docs checked on `2026-06-08`.
+- Bun-backed skills need named runtime, owner scripts, package metadata, lockfile when reproducibility matters, and first-screen verification.
+- Non-Bun runtime-backed skills follow the same rule: name runtime, bundle owners, expose verification, and label missing dependencies.
+- Local `file:` dependencies outside the skill bundle mean local development portability unless the dependency owner travels with the export payload.
+- Workspace portable bundle: export includes root `package.json`, root `bun.lock`, skill packages, and `runtime/` owners.
+- Standalone skill zip: every runtime dependency is public/installable or bundled inside that single skill zip.
+- Allowed create-skill export scan hit: audit patterns in `references/research-portability.md`.
+- Allowed create-skill export scan hit: source freshness notes in `references/community-skill-research-sources.md`.
+- Allowed create-skill export scan hit: provenance source note in `references/runtime-portability.md`.
+- Allowed create-skill export scan hit: local cleanup receipt in `references/archive-cleanup.md`.
+
+## Bun Facade Migration Tracker
+
+Goal: move Bun script packages from local development portability to universal portability, or keep the local-only status explicit.
+
+Status key:
+
+- Local development portable: works in this repo because a named local owner exists, but the owner does not travel with the export payload.
+- Workspace portable: root workspace metadata, root `bun.lock`, skill packages, and required `runtime/` owners travel together.
+- Standalone zip portable: every runtime dependency is public, privately installable, or bundled inside that single skill zip.
+- Accepted migration target: one shared portable runtime owner travels with the workspace export payload.
+- Accepted package manager shape: Bun workspaces.
+- Shared owner path: `runtime/cli-command-facade/`.
+- Current workspace status: all four tracked facade consumers are migrated and verified.
+
+Current blocker:
+
+- No bundled workspace blocker remains for the tracked facade consumers.
+- Standalone single-skill zips are not portable until `@side-quest/cli-command-facade` is public, privately installable, or bundled inside each zip.
+
+Standalone repair options:
+
+- Publish or version the facade package.
+- Make the facade privately installable.
+- Bundle the facade owner inside each standalone skill zip.
+- Replace the facade dependency with a smaller public or skill-local runtime owner.
+
+Standalone zip rule:
+
+- Workspace migration is enough for bundled repo exports.
+- Standalone single-skill zips need `@side-quest/cli-command-facade` published, privately installable, or bundled inside the zip.
+- Publishing can wait until standalone skill zips are the target.
+
+Workspace migration steps:
+
+- Add root `package.json` workspaces for `runtime/*` and script packages that depend on shared runtime owners.
+- Done: root `package.json` includes `runtime/*`.
+- Done: facade package source copied into `runtime/cli-command-facade/`.
+- Done: root `bun.lock` updated by `bun install`.
+- Done: shared runtime tests pass with `bun --filter @side-quest/cli-command-facade test`.
+- Done: shared runtime typecheck passes with `bun --filter @side-quest/cli-command-facade typecheck`.
+- Keep package name `@side-quest/cli-command-facade` unless a rename decision is accepted.
+- Done: changed tracked facade-backed script package dependencies from local `file:` paths to `workspace:*`.
+- Done: `skills/browser-use/scripts` is a workspace package using `workspace:*`.
+- Done: `skills/create-cli/scripts` is a workspace package using `workspace:*`.
+- Done: `skills/fallow/scripts` is a workspace package using `workspace:*`.
+- Done: `skills/test-runner/scripts` is a workspace package using `workspace:*`.
+- Done: `skills/test-runner/scripts` package `test` script runs the focused runner suite, not intentionally failing fixtures.
+- Done: all four tracked facade consumers are workspace packages.
+- Run `bun install` from repo root and keep root `bun.lock` as the workspace lockfile.
+- Verify each tracked package through its focused test and typecheck command.
+- Run `bun run prove:workspace-portability` before claiming bundled workspace portability.
+
+Tracked packages:
+
+- `skills/browser-use/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter browser-use-scripts test` and `bun --filter browser-use-scripts typecheck`.
+- `skills/test-runner/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter test-runner-scripts test` and `bun --filter test-runner-scripts typecheck`.
+- `skills/fallow/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter fallow-scripts test` and `bun --filter fallow-scripts typecheck`.
+- `skills/create-cli/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter create-cli-scripts smoke` and `bun --filter create-cli-scripts typecheck`.
+- Bundled workspace portability proof: passed with `bun run prove:workspace-portability` on `2026-06-08`.
+- Clean export proof payload: root `package.json`, root `bun.lock`, workspace scanner, portability proof script, `runtime/cli-command-facade`, `skills/browser-use`, `skills/create-cli/scripts`, `skills/fallow`, and `skills/test-runner`.
+- Clean export proof excludes generated dependency and evidence folders: `node_modules`, `tsconfig.tsbuildinfo`, `skills/test-runner/scripts/.runner-output`, `skills/test-runner/scripts/.benchmark-output`, and `skills/test-runner/scripts/var`.
+
+## Candidate Audits
+
+- None currently.
+
+## Conditional Triggers
+
+- Before future archive: audit protected dependency skills `agent-reliability-guardrails`, `imessage-reader`, `prompt-system-router`, and `prompt-system-workflow`.
+- When browser-use implementation resumes: decide whether to implement or hide advertised `operate snapshot`, `operate screenshot`, and `operate emulate`.
+- Before changing facade-backed script dependencies: use the Bun facade migration tracker.
+- Before changing runtime-backed skill creation guidance: keep the owner in `skills/create-skill/references/agent-native-skill-design.md`.
+- After any rename: audit skill bridges and alias wrappers.
+- After repeated unlabeled or stale helper routes survive manual review: consider a dependency audit script.
+- If a future replacement explicitly accepts it: revisit legacy storage-framework folder taxonomy, hot-context policy, or old `/capture` workflow.
+
+## Decision Log Queue
+
+- Record accepted rules only.
+- Put unresolved branches here, not in `docs/decisions/`.
+- Escalate to ADR only when hard to reverse, surprising without context, and a real trade-off.
+
+## Validation
+
+- Run `scripts/agent-instructions.sh check --json`.
+- Run `bun run skills/create-skill/scripts/skill-description-audit.ts` after adding, renaming, or changing skill descriptions.
+- Run `bun run skills/create-skill/scripts/skill-role-audit.ts` after adding, archiving, or changing active skill roles.
+- Run `bash -n scripts/agent-instructions.sh`.
+- Run decision-log YAML parse after decision edits.
+- Run `git diff --check`.
+- Run banned filler scan on touched instruction docs.
+- YAML-parse edited `SKILL.md` frontmatter.
+
+## Next Safe Action
+
+- Start next session by reading `skills/create-skill/SKILL.md`, `skills/create-skill/CONTEXT.md`, and this file.
+- If a conditional trigger fires, read the named owner paths and run the matching audit.
+- Otherwise validate before handoff.
