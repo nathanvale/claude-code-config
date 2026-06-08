@@ -16,8 +16,8 @@ Task: Rewrite the attached EnrichmentReport with Perel-Baldwin voice, preserving
 
 ## 2. Nathan Profile
 
-<!-- Load: ~/code/my-second-brain/memory/people/nathan-vale.md -->
-<!-- Optional supplement: ~/code/my-second-brain/memory/context/personal.md -->
+<!-- Load: ~/code/my-second-brain/context/people/nathan-vale.md -->
+<!-- Optional supplement: ~/code/my-second-brain/context/personal.md -->
 
 Source: profile
 
@@ -27,7 +27,7 @@ Source: profile
 
 ## 3. Target Person
 
-<!-- Load: ~/code/my-second-brain/memory/people/<slug>.md -->
+<!-- Load: ~/code/my-second-brain/context/people/<slug>.md -->
 <!-- OR provide a fallback summary paragraph (must be at least one useful paragraph) -->
 
 Name: [target person name]
@@ -57,7 +57,7 @@ Kind: enrichment-report
 [Paste or reference the EnrichmentReport JSON]
 
 ### Evidence 2 (optional)
-Kind: [analyst-report | email | text-message | thread-summary | psychometrics | qmd-findings | argument-summary | note]
+Kind: [analyst-report | email | text-message | thread-summary | psychometrics | search-findings | argument-summary | note]
 [Content]
 
 ---

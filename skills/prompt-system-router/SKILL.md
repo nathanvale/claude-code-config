@@ -1,6 +1,7 @@
 ---
 name: prompt-system-router
 description: "Classify startup-instruction changes. Routes hot rules, runtime mechanics, owner docs, and deterministic checks."
+role: advisor
 disable-model-invocation: true
 ---
 
@@ -25,7 +26,7 @@ Answer where instruction changes belong without recreating a routing table.
 - Deep reference: edit `context/`, `docs/`, or skill `references/`.
 - Deterministic contract: move to code, CLI help, generated docs, or runtime checks.
 - Repo-specific fact: keep in repo-local `docs/agents/`, not global startup.
-- Personal lookup fact: `context/personal.md` or memory docs.
+- Personal lookup fact: `context/personal.md` or the nearest owning `context/` file.
 
 ## Misroutes
 
@@ -37,7 +38,7 @@ Answer where instruction changes belong without recreating a routing table.
 
 ## Output
 
-- Surface
-- Owner
-- Verification
-- Risk
+- **Surface** — which startup file/rule/context the change touches (`AGENTS.md`, `CLAUDE.md`, `skills/*`, `context/`, `docs/`).
+- **Owner** — what owns that surface: a skill, rule file, generated doc, code, or runtime check.
+- **Verification** — the check that proves delivery (e.g. `scripts/agent-instructions.sh`).
+- **Risk** — what breaks if the routing is wrong (drift, duplicated contract, repo-fact in global startup).

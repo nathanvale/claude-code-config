@@ -68,7 +68,7 @@ All relationships involve power. The question is: **power over** (controlling, z
 ## Your Inputs
 
 You will receive:
-- **Person profile** from `~/code/my-second-brain/memory/people/<slug>.md`
+- **Person profile** from `~/code/my-second-brain/context/people/<slug>.md`
 - **Contact stats** from `~/code/my-second-brain/runtime/people-enrichment/<slug>.json`
 - **Corpus access** via QMD MCP (`collection: "repo-personal-messages"`)
 - **Context about Nathan** — software engineer, single dad to Levi (9), partner Melanie, lives in South Caulfield, Melbourne

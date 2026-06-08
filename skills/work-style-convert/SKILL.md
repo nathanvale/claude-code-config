@@ -1,6 +1,7 @@
 ---
 name: work-style-convert
 description: "Rewrite a file to match work-style rules: terse, telegraph density, no filler, no nested H3s. Triggers via /work-style-convert <path>."
+role: tool-workflow
 argument-hint: <file-path>
 disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Bash(wc *), Bash(grep *), Bash(./scripts/agent-instructions.sh *)

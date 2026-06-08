@@ -7,7 +7,7 @@ This contract defines the required input shape for all Perel-Baldwin invocations
 Always assemble the context bundle in this order:
 
 1. **TaskBrief** -- what the agent is being asked to produce and in which mode (`rewrite`, `review`, or `create`)
-2. **NathanProfile** -- Nathan's canonical person note (`memory/people/nathan-vale.md`)
+2. **NathanProfile** -- Nathan's canonical person note (`context/people/nathan-vale.md`)
 3. **TargetPersonProfile** or **TargetPersonSummary** -- the subject's person note or a fallback summary
 4. **Guidance** -- confidence mode and recommendations
 5. **Evidence** -- any supporting material supplied by the caller
@@ -17,12 +17,12 @@ Always assemble the context bundle in this order:
 
 ### NathanProfile (always required)
 
-- Canonical source: `~/code/my-second-brain/memory/people/nathan-vale.md`
-- Optional supplemental: `~/code/my-second-brain/memory/context/personal.md`
+- Canonical source: `~/code/my-second-brain/context/people/nathan-vale.md`
+- Optional supplemental: `~/code/my-second-brain/context/personal.md`
 
 ### TargetPersonProfile (required when available)
 
-- Source: `~/code/my-second-brain/memory/people/<slug>.md`
+- Source: `~/code/my-second-brain/context/people/<slug>.md`
 
 ### TargetPersonSummary (fallback when no profile exists)
 
@@ -63,7 +63,7 @@ Attach only evidence explicitly supplied by the caller. Supported kinds:
 - `email` -- incoming email
 - `thread-summary` -- conversation summary
 - `psychometrics` -- Big Five, attachment, etc.
-- `qmd-findings` -- search results already gathered upstream
+- `search-findings` -- search results already gathered upstream
 - `argument-summary` -- conflict description
 
 Rules:

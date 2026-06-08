@@ -1,9 +1,10 @@
 ---
 name: runbook-orchestrator
-description: Orchestrate iterative code-review runbooks driven by /goal. Status, launch, new (via /ce-brainstorm), or audit. Works on any folder following the README.md + seam.md + seam-ledger.md convention.
-argument-hint: [status|launch|new|audit|report] [area-path] [seam-name|--all]
+description: "Orchestrate iterative code-review runbooks driven by /goal. Status, launch, new (via /ce-brainstorm), or audit. Works on any folder following the README.md + seam.md + seam-ledger.md convention."
+role: control-plane
+argument-hint: "[status|launch|new|audit|report] [area-path] [seam-name|--all]"
 disable-model-invocation: true
-allowed-tools: Read, Edit, Write, Glob, Grep, Bash(find:*), Bash(git rev-parse:*), Bash(git status:*), Bash(git cat-file:*), Bash(git log:*)
+allowed-tools: [Read, Edit, Write, Glob, Grep, "Bash(find:*)", "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git cat-file:*)", "Bash(git log:*)"]
 ---
 
 # Runbook Orchestrator
@@ -13,6 +14,16 @@ runbooks. Knows nothing about a specific kit - works on any runbook area
 that follows the convention.
 
 For the runbook convention this skill expects, see [convention.md](references/convention.md).
+
+## Dependencies
+
+- `references/preflight.md`: bundled reference, hard dependency.
+- `references/convention.md`: bundled reference, hard dependency.
+- `/ce-brainstorm`: optional handoff for `new` add-seam flow.
+- `skills/improve-codebase-architecture/SKILL.md`: optional handoff for bootstrap and report tightness passes.
+- Missing bundled reference: blocked.
+- Missing `/ce-brainstorm`: degraded; draft the seam prompt and ask the user to run the brainstorm manually.
+- Missing `improve-codebase-architecture`: degraded for `status`, `launch`, and `audit`; blocked for bootstrap or report tightness pass.
 
 ## Quick start
 

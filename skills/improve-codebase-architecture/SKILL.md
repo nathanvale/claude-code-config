@@ -1,11 +1,25 @@
 ---
 name: improve-codebase-architecture
-description: Find deepening opportunities in a codebase, informed by the domain language in CONTEXT.md and the decisions in docs/adr/. Use when the user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a codebase more testable and AI-navigable.
+description: "Use when the user wants to improve architecture, find refactoring opportunities, consolidate tightly-coupled modules, or make a codebase more testable and AI-navigable. Finds deepening opportunities informed by the domain language in CONTEXT.md and the decisions in docs/adr/."
+role: advisor
+abilities:
+  - accepted-doc-capture
+  - temp-report-generation
 ---
 
 # Improve Codebase Architecture
 
 Surface architectural friction and propose **deepening opportunities** — refactors that turn shallow modules into deep ones. The aim is testability and AI-navigability.
+
+## Dependencies
+
+- `LANGUAGE.md`: bundled reference, hard dependency for architecture vocabulary.
+- `HTML-REPORT.md`: bundled reference, hard dependency for report shape.
+- `skills/grill-with-docs/CONTEXT-FORMAT.md`: owner-reference fallback for glossary capture format.
+- `skills/grill-with-docs/ADR-FORMAT.md`: owner-reference fallback for ADR capture format.
+- `grill-with-docs`: optional handoff for the design grilling loop.
+- Missing architecture vocabulary or report shape: blocked.
+- Missing `grill-with-docs`: continue the grilling loop inline and use the format owner paths.
 
 ## Glossary
 
@@ -34,7 +48,7 @@ This skill is _informed_ by the project's domain model. The domain language give
 
 Read the project's domain glossary and any ADRs in the area you're touching first.
 
-Then use the Agent tool with `subagent_type=Explore` to walk the codebase. Don't follow rigid heuristics — explore organically and note where you experience friction:
+Then dispatch an Explore subagent via the Agent tool to walk the codebase. Don't follow rigid heuristics — explore organically and note where you experience friction:
 
 - Where does understanding one concept require bouncing between many small modules?
 - Where are modules **shallow** — interface nearly as complex as the implementation?

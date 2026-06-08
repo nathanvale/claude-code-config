@@ -1,6 +1,7 @@
 ---
 name: triage
-description: Triage issues through a state machine driven by triage roles. Use when user wants to create an issue, triage issues, review incoming bugs or feature requests, prepare issues for an AFK agent, or manage issue workflow.
+description: "Use when the user wants to create an issue, triage issues, review incoming bugs or feature requests, prepare issues for an AFK agent, or manage issue workflow. Triages issues through a state machine driven by triage roles."
+role: control-plane
 ---
 
 # Triage
@@ -35,7 +36,19 @@ Five **state** roles:
 
 Every triaged issue should carry exactly one category role and one state role. If state roles conflict, flag it and ask the maintainer before doing anything else.
 
-These are canonical role names — the actual label strings used in the issue tracker may differ. The mapping should have been provided to you - run `/setup-matt-pocock-skills` if not.
+These are canonical role names. Actual tracker labels may differ.
+
+## Dependencies
+
+- Issue tracker map: `docs/agents/issue-tracker.md`.
+- Triage label map: `docs/agents/triage-labels.md`.
+- Agent brief owner: `skills/triage/AGENT-BRIEF.md`.
+- Out-of-scope owner: `skills/triage/OUT-OF-SCOPE.md`.
+- `grill-with-docs`: optional handoff for issue fleshing.
+- Missing state: blocked for label changes, issue comments, closing, or publishing.
+- Degraded state: continue read-only issue analysis when tracker access works but brief/out-of-scope owners are missing.
+- Missing `grill-with-docs`: continue with direct questions and capture resolved issue context in triage notes.
+- Next repair: add the missing owner file or ask for the tracker target.
 
 State transitions: an unlabeled issue normally goes to `needs-triage` first; from there it moves to `needs-info`, `ready-for-agent`, `ready-for-human`, or `wontfix`. `needs-info` returns to `needs-triage` once the reporter replies. The maintainer can override at any time — flag transitions that look unusual and ask before proceeding.
 

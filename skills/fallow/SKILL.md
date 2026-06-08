@@ -1,6 +1,7 @@
 ---
 name: fallow
-description: "Run Fallow code-quality self-review."
+description: "Use after implementation or before review prep when changed code needs a Fallow code-quality self-review."
+role: quality-gate
 ---
 
 # Fallow
@@ -26,7 +27,8 @@ Fallow analyzer evidence.
 
 ## Owner
 
-- Runner: `skills/fallow/scripts/fallow-runner.ts`.
+- Front door: `skills/fallow/scripts/package.json#bin` (`fallow-runner`).
+- Runner implementation: `skills/fallow/scripts/fallow-runner.ts`.
 - Public command contract, result vocab, and repair action ids: `skills/fallow/scripts/command-contract.ts`.
 - Runner tests: `skills/fallow/scripts/fallow-runner.test.ts`.
 - Live compatibility smoke: `skills/fallow/scripts/fallow-runner.live.test.ts`.
@@ -47,6 +49,12 @@ Fallow analyzer evidence.
 - Follow runner repair hints before retrying blocked runs.
 - Rerun the same evidence command after code changes.
 - Report before/after summary when a rerun exists.
+
+## Verification
+
+- Run `cd skills/fallow/scripts`, then `bun test fallow-runner.test.ts` after runner, command-contract, or workflow behavior changes.
+- Run `cd skills/fallow/scripts`, then `bun run typecheck` after TypeScript edits.
+- Run live smoke only when checking installed Fallow compatibility.
 
 ## Safety
 

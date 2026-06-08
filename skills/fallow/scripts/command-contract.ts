@@ -389,7 +389,7 @@ const fallowFailureActions = [
 export const fallowRunnerContracts = defineCommandFacadeContract(
 	{
 		audit: {
-			script: "scripts/fallow-runner.ts",
+			script: "fallow-runner",
 			summary: "Run Fallow changed-code risk evidence.",
 			usage: [
 				"audit [--root <repo>] [--base-ref <ref>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
@@ -413,7 +413,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 		dupes: evidenceContract("dupes", "Run Fallow duplication evidence."),
 		health: evidenceContract("health", "Run Fallow health evidence."),
 		"fix-preview": {
-			script: "scripts/fallow-runner.ts",
+			script: "fallow-runner",
 			summary: "Preview Fallow fix output without mutating source.",
 			usage: [
 				"fix-preview [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
@@ -431,7 +431,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		"fix-apply": {
-			script: "scripts/fallow-runner.ts",
+			script: "fallow-runner",
 			summary: "Apply Fallow fixes through an explicit mutation path.",
 			usage: [
 				"fix-apply --confirm-current-task-apply [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
@@ -452,7 +452,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		doctor: {
-			script: "scripts/fallow-runner.ts",
+			script: "fallow-runner",
 			summary: "Inspect Fallow runner readiness without mutation.",
 			usage: [
 				"doctor [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
@@ -471,7 +471,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		why: {
-			script: "scripts/fallow-runner.ts",
+			script: "fallow-runner",
 			summary:
 				"Trace export reachability evidence for one introduced finding.",
 			usage: [
@@ -542,7 +542,7 @@ function evidenceContract(
 	summary: string,
 ): FallowRunnerCommandContract {
 	return {
-		script: "scripts/fallow-runner.ts",
+		script: "fallow-runner",
 		summary,
 		usage: [
 			`${command} [--root <repo>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]`,

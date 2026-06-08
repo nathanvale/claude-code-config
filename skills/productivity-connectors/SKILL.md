@@ -1,12 +1,20 @@
 ---
 name: productivity-connectors
-description: Use when selecting which tool or bash command to invoke for calendar, email, project tracker, knowledge base, chat, or messages operations. Read before dispatching any connector call. Lists MCP and Bash-backed connectors with per-project config via .productivity.yml.
+description: "Use when selecting which tool or bash command to invoke for calendar, email, project tracker, knowledge base, chat, or messages operations. Read before dispatching any connector call. Lists MCP and Bash-backed connectors with per-project config via .productivity.yml."
+role: support-reference
 user-invocable: false
 ---
 
 # Connectors
 
 Tool routing table for external data sources. Reference this skill when you need to know which MCP tools to call for calendar, email, project tracking, knowledge base, or chat operations.
+
+## Owner
+
+- Connector routing and dispatch safety: this file.
+- Exact `gog` commands, flags, pagination, auth checks, and date constraints: `skills/productivity-connectors/references/gogcli-commands.md`.
+- iMessage CLI fallback contracts: `skills/imessage-reader/SKILL.md` and `skills/imessage-reader/scripts/query-imessage.ts`.
+- Project connector config shape: `.productivity.yml` in the owning repo.
 
 ## Per-Project Config
 
@@ -42,7 +50,7 @@ connectors:
 1. Read `.productivity.yml` to determine which connectors are active
 2. Map the connector value to the tool table below
 3. If a declared connector's MCP tool isn't available in the session, skip with a note
-4. If `.productivity.yml` doesn't exist, tell the user to run `/productivity-setup` first
+4. If `.productivity.yml` doesn't exist, stop and tell the caller connector config is missing
 
 **Bash connector dispatch protocol:**
 When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read the connector-specific fields from `.productivity.yml` before dispatching. For `gog` connectors specifically:
@@ -59,7 +67,7 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 |-----------|-------|
 | `google-calendar` | `gcal_list_events`, `gcal_get_event`, `gcal_list_calendars`, `gcal_find_my_free_time` |
 | `microsoft-365` | Microsoft Graph calendar tools |
-| `gog` | `gog calendar events --account <email> --client <name> --from today --days 3 --json` (via Bash — see references/gogcli-commands.md) |
+| `gog` | Bash via `gog`; see `references/gogcli-commands.md` |
 
 **Common patterns:**
 - Past 2 days + next 3 days for default sync
@@ -72,7 +80,7 @@ When a connector is Bash-backed (e.g., `gog`, `github-issues`, `imessage`), read
 |-----------|-------|
 | `gmail` | `gmail_search_messages`, `gmail_read_message`, `gmail_read_thread`, `gmail_list_labels` |
 | `microsoft-365` | Microsoft Graph mail tools |
-| `gog` | `gog gmail search "is:unread" --account <email> --client <name> --json --max 20` (via Bash — see references/gogcli-commands.md) |
+| `gog` | Bash via `gog`; see `references/gogcli-commands.md` |
 
 **Body-reading invariant:** When surfacing email during sync or triage, read the full body before presenting results. Extract products, amounts, actions, and dates. Never ask Nathan what an accessible email says. Decode base64 HTML bodies and parse the content before summarising.
 
@@ -142,7 +150,7 @@ transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion c
 
 | Connector | Primary (MCP) | Fallback (CLI) |
 |-----------|---------------|----------------|
-| `imessage` | `sync_archive`, `search_messages`, `list_contacts`, `list_threads`, `reply` | `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts` |
+| `imessage` | `sync_archive`, `search_messages`, `list_contacts`, `list_threads`, `reply` | `bun run skills/imessage-reader/scripts/query-imessage.ts` |
 
 **MCP tool routing (preferred — use when `plugin:imessage` tools are available):**
 
@@ -160,9 +168,8 @@ transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion c
 - **Contacts:** `list_contacts()` / **Threads:** `list_threads()`
 
 **CLI fallback (use when MCP tools are unavailable):**
-- Default sync: `bun run ~/.claude/skills/imessage-reader/scripts/query-imessage.ts sync --save-dir ~/code/personal-messages/docs/messages/imessage/`
-- Deep sync: `sync --since <7-days-ago> --save-dir ~/code/personal-messages/docs/messages/imessage/`
-- Read-through query: `messages --since <date> --search <term>`
+- Use `skills/imessage-reader/SKILL.md` for routing.
+- Use `skills/imessage-reader/scripts/query-imessage.ts help` for available commands.
 - `enrich` and `migrate-notes` commands are CLI-only (no MCP equivalent)
 
 **Notes:**
@@ -174,7 +181,7 @@ transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion c
 
 | Connector | Tools |
 |-----------|-------|
-| `gog` | `gog contacts list --account <email> --client <name> --json` or `gog contacts search "<query>" --account <email> --client <name> --json` (via Bash — see references/gogcli-commands.md) |
+| `gog` | Bash via `gog`; see `references/gogcli-commands.md` |
 
 **Common patterns:**
 - Search by name for people cross-referencing
@@ -184,7 +191,7 @@ transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion c
 
 | Connector | Tools |
 |-----------|-------|
-| `gog` | `gog sheets get <spreadsheetId> <range> --account <email> --client <name> --json` (read) • `gog sheets update <spreadsheetId> <range> <values> --account <email> --client <name>` (write) • `gog sheets append <spreadsheetId> <range> <values> --account <email> --client <name>` (append) (via Bash — see references/gogcli-commands.md) |
+| `gog` | Bash via `gog`; see `references/gogcli-commands.md` |
 
 **Common patterns:**
 - Read a range for review loops (e.g., reconciliation CSVs round-tripped via Sheets)
@@ -196,7 +203,7 @@ transcriptions-db: collection://190a3712-3878-8141-9c9d-000b7c4c72a2  # Notion c
 
 | Connector | Tools |
 |-----------|-------|
-| `gog` | `gog drive ls --account <email> --client <name> --json` (list) • `gog drive search "<query>" --account <email> --client <name> --json` (search) • `gog drive download <fileId> --account <email> --client <name>` (download) • `gog drive upload <localPath> --account <email> --client <name>` (upload) (via Bash — see references/gogcli-commands.md) |
+| `gog` | Bash via `gog`; see `references/gogcli-commands.md` |
 
 **Common patterns:**
 - Search by name/content to resolve a file before acting on it (never guess file IDs)
@@ -260,11 +267,10 @@ Before any `gog` command, verify the account and client are configured:
 - If absent: do not pass `--client` (gog uses its built-in default)
 - Never invent a client name. If the value in `.productivity.yml` doesn't appear in `gog auth credentials list`, stop and tell the user: "`<connector>-client: <name>` not registered — run `gog auth credentials set <json> --client <name>` first"
 
-### 3. Exit code handling
-| Exit Code | Meaning | Action |
-|-----------|---------|--------|
-| 0 | Success | Parse JSON output |
-| Non-zero | Error | Read stderr, skip with: "Skipped [source] — gog error for [account]: [stderr summary]" |
+### 3. Command result handling
+
+- On success, parse output according to the command owner.
+- On failure, read stderr and skip with: `Skipped [source] -- gog error for [account]: [stderr summary]`.
 
 ### 4. Auth error recovery
 If stderr mentions token expiry or auth failure:

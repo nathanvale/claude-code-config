@@ -20,20 +20,20 @@ as the enforcement backend.
 ## Owner Paths
 
 - Package instructions:
-  `side-quest-engineering:packages/cli-command-facade/AGENTS.md`
+  `runtime/cli-command-facade/AGENTS.md`
 - Package vocabulary:
-  `side-quest-engineering:packages/cli-command-facade/CONTEXT.md`
+  `runtime/cli-command-facade/CONTEXT.md`
 - Public production interface:
-  `side-quest-engineering:packages/cli-command-facade/src/index.ts`
+  `runtime/cli-command-facade/src/index.ts`
 - Contract grammar, drift checks, usage helpers, discovery projection, and JSON
   writer mechanics:
-  `side-quest-engineering:packages/cli-command-facade/src/command-facade.ts`
+  `runtime/cli-command-facade/src/command-facade.ts`
 - Diagnostics mechanics:
-  `side-quest-engineering:packages/cli-command-facade/src/cli-diagnostics.ts`
+  `runtime/cli-command-facade/src/cli-diagnostics.ts`
 - Test-support subpath:
-  `side-quest-engineering:packages/cli-command-facade/src/testing.ts`
+  `runtime/cli-command-facade/src/testing.ts`
 - Package tests and fixtures:
-  `side-quest-engineering:packages/cli-command-facade/tests/command-facade.test.ts`
+  `runtime/cli-command-facade/tests/command-facade.test.ts`
 
 ## Workflow
 
@@ -83,10 +83,9 @@ judgment for:
 
 ## Local Link
 
-- This skill's `scripts/` folder may npm-link the private package for local
-  validation.
-- Treat the link as machine-local.
-- Portable consumers need their own link or a published package.
+- This repo wires the facade through Bun workspaces.
+- Portable consumers need a published package or export payload that includes
+  `runtime/cli-command-facade`.
 
 ## Review
 

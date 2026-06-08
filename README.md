@@ -1,25 +1,17 @@
 # Claude Code Config
 
-Nathan's user-scope Claude Code configuration — prompt system, memory, rules, skills, agents, and QMD federated search.
+Nathan's user-scope Claude Code configuration: prompt system, context routing, rules, skills, agents, and install scripts.
 
 ## New Machine Setup
 
 ### Prerequisites
 
 ```sh
-brew install sqlite yq
+brew install yq
 fnm install --lts
 ```
 
 You also need [Homebrew](https://brew.sh) and [fnm](https://github.com/Schniz/fnm) (`brew install fnm`).
-
-### Install QMD
-
-Use **npm**, not bun — `better-sqlite3` must compile against Node's ABI:
-
-```sh
-npm install -g @tobilu/qmd
-```
 
 ### Clone and bootstrap
 
@@ -29,34 +21,12 @@ cd ~/code/claude-code-config
 ./install.sh
 ```
 
-This symlinks everything into `~/.claude/` and `~/.config/memory/`.
-
-### Bootstrap QMD federation
-
-```sh
-~/.config/memory/scripts/qmd-refresh.sh
-```
-
-This applies the roster, indexes collections, and generates embeddings. Repos not cloned locally are skipped automatically.
-
-Use `--skip-embed` for a faster first run (lexical search only):
-
-```sh
-~/.config/memory/scripts/qmd-refresh.sh --skip-embed
-```
+This symlinks active startup rules, skills, agents, commands, hooks, and `~/.config/context/`.
 
 ### Verify
 
 ```sh
-~/.config/memory/scripts/qmd-node.sh status
-```
-
-### Clone more repos
-
-The more roster repos you have cloned locally, the more collections QMD can search. After cloning additional repos, re-run:
-
-```sh
-~/.config/memory/scripts/qmd-refresh.sh
+scripts/agent-instructions.sh check
 ```
 
 ## Existing Machine
@@ -72,10 +42,9 @@ The more roster repos you have cloned locally, the more collections QMD can sear
 | Directory | Purpose |
 |-----------|---------|
 | `rules/` | Auto-applied rules (git safety, code quality, etc.) |
-| `context/` | On-demand context docs loaded with `@~/.claude/context/` |
+| `context/` | Durable context, references, project summaries, and reusable recall |
 | `skills/` | User-invocable skills (`/name`) |
 | `agents/` | Specialized sub-agent definitions |
 | `commands/` | Simple one-shot slash commands |
 | `hooks/` | Shell hooks for Claude Code events |
-| `memory/` | Memory OS — durable recall, federation, scripts |
 | `scripts/` | Prompt rendering and build scripts |

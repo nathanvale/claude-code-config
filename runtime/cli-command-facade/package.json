@@ -1,0 +1,22 @@
+{
+	"name": "@side-quest/cli-command-facade",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./testing": "./src/testing.ts"
+	},
+	"scripts": {
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@logtape/logtape": "^2.0.2"
+	},
+	"devDependencies": {
+		"@types/node": "^25.6.2",
+		"typescript": "^5.9.3"
+	},
+	"// stability": "Pre-1.0. Production consumers must import from @side-quest/cli-command-facade. Test code may import package-agnostic fixtures from @side-quest/cli-command-facade/testing. Other deep imports are not public and may break in v2."
+}

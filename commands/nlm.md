@@ -10,9 +10,9 @@ Use the shared user-scope NotebookLM workflow.
 
 ## Read Order
 
-1. `~/.config/memory/AGENTS.md`
-2. `~/.config/memory/docs/notebooklm-operations.md`
-3. `~/.config/memory/docs/notebooklm-source-pack-workflow.md`
+1. `~/.config/context/AGENTS.md`
+2. `~/.config/context/docs/notebooklm-operations.md`
+3. `~/.config/context/docs/notebooklm-source-pack-workflow.md`
 4. local `.nlm.yml` in the owning repo, if present
 
 ## Rules

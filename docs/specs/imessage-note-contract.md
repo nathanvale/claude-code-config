@@ -43,11 +43,7 @@ Lock the Markdown note shape, filename convention, and frontmatter schema before
 | `imessage` | Literal | Source system identifier |
 | `{guid-slug-v2}` | Canonical GUID slugifier v2 | Stable unique suffix |
 
-Canonical GUID slugifier v2:
-- lowercase the GUID
-- replace any non-alphanumeric character with `-`
-- collapse repeated `-`
-- trim leading/trailing `-`
+Canonical GUID slugifier v2 produces a stable, filesystem-safe suffix from the GUID -- owned by `guidSlugV2()` in `skills/imessage-reader/scripts/lib.ts`.
 
 This replaces older slug variants that used `_` for `/` and produced orphan-prone filenames.
 
@@ -163,7 +159,7 @@ These fields are readable during migration but should not be written by new v2 s
 
 ```yaml
 related:
-  - /Users/nathanvale/code/my-second-brain/memory/people/melanie.md
+  - /Users/nathanvale/code/my-second-brain/context/people/melanie.md
 attachments:
   - id: "att-001"
     kind: image

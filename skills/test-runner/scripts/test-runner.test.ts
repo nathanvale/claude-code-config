@@ -1,5 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
 	CLI_DIAGNOSTIC_FLAGS,
@@ -19,6 +20,28 @@ import {
 } from "./test-runner";
 
 const scriptsDir = import.meta.dir;
+const BROAD_BENCHMARK_TIMEOUT_MS = 20_000;
+
+async function makeBenchmarkOutputDir(label: string): Promise<string> {
+	return mkdtemp(join(tmpdir(), `test-runner-${label}-`));
+}
+
+async function makeBenchmarkPath(
+	label: string,
+	filename: string,
+): Promise<string> {
+	return relative(scriptsDir, join(await makeBenchmarkOutputDir(label), filename));
+}
+
+async function runBenchmarkForTest(
+	argv: string[],
+	options: Parameters<typeof runBenchmark>[1],
+) {
+	return runBenchmark(
+		["--output-dir", await makeBenchmarkOutputDir("evidence"), ...argv],
+		options,
+	);
+}
 
 // biome-ignore lint/suspicious/noExplicitAny: JSON envelope tests assert many package-owned fields.
 function parseEnvelope(result: { stdout: string }): any {
@@ -90,8 +113,11 @@ describe("test runner command contract", () => {
 
 describe("runner benchmark fidelity", () => {
 	test("requires every expected failing test signal", async () => {
-		const baselinePath = ".benchmark-output/partial-fidelity-baseline.json";
-		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		const baselinePath = await makeBenchmarkPath(
+			"partial-fidelity",
+			"partial-fidelity-baseline.json",
+		);
+		await mkdir(join(scriptsDir, baselinePath, ".."), { recursive: true });
 		await writeFile(
 			join(scriptsDir, baselinePath),
 			`${JSON.stringify(
@@ -116,7 +142,7 @@ describe("runner benchmark fidelity", () => {
 			)}\n`,
 		);
 
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"multi-fail",
@@ -135,7 +161,7 @@ describe("runner benchmark fidelity", () => {
 	});
 
 	test("scores local Bun timeout context as complete", async () => {
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"timeout",
@@ -156,7 +182,7 @@ describe("runner benchmark fidelity", () => {
 	});
 
 	test("can produce benchmark evidence without MCP artifact rows", async () => {
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"fail",
@@ -218,7 +244,7 @@ describe("runner benchmark fidelity", () => {
 	});
 
 	test("reports repair, triage, and detail roundtrip dimensions separately", async () => {
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"fail",
@@ -285,7 +311,7 @@ describe("runner benchmark fidelity", () => {
 			"three-plus-fail",
 			"fallback-incomplete",
 		];
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				fixtures.join(","),
@@ -334,12 +360,19 @@ describe("runner benchmark fidelity", () => {
 		expect(threePlusToon?.stdout_sample).toContain("o:1");
 		expect(fallbackJson?.fidelity?.signals.expected_value).toBe(true);
 		expect(fallbackJson?.fidelity?.signals.received_value).toBe(true);
-	});
+	}, BROAD_BENCHMARK_TIMEOUT_MS);
 
 	test("fixed gates require lookup and detail roundtrip for repair rows", async () => {
-		const gatePath = ".benchmark-output/unit-repair-lookup-gate.json";
-		const baselinePath = ".benchmark-output/unit-repair-no-lookup-baseline.json";
-		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		const gatePath = await makeBenchmarkPath(
+			"repair-lookup-gate",
+			"unit-repair-lookup-gate.json",
+		);
+		const baselinePath = await makeBenchmarkPath(
+			"repair-lookup-baseline",
+			"unit-repair-no-lookup-baseline.json",
+		);
+		await mkdir(join(scriptsDir, gatePath, ".."), { recursive: true });
+		await mkdir(join(scriptsDir, baselinePath, ".."), { recursive: true });
 		await writeFile(
 			join(scriptsDir, baselinePath),
 			`${JSON.stringify({
@@ -377,7 +410,7 @@ describe("runner benchmark fidelity", () => {
 			})}\n`,
 		);
 
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"fail",
@@ -400,9 +433,16 @@ describe("runner benchmark fidelity", () => {
 	});
 
 	test("fixed gates compare token estimates against named variants", async () => {
-		const gatePath = ".benchmark-output/unit-comparative-token-gate.json";
-		const baselinePath = ".benchmark-output/unit-comparative-token-baseline.json";
-		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		const gatePath = await makeBenchmarkPath(
+			"comparative-token-gate",
+			"unit-comparative-token-gate.json",
+		);
+		const baselinePath = await makeBenchmarkPath(
+			"comparative-token-baseline",
+			"unit-comparative-token-baseline.json",
+		);
+		await mkdir(join(scriptsDir, gatePath, ".."), { recursive: true });
+		await mkdir(join(scriptsDir, baselinePath, ".."), { recursive: true });
 		await writeFile(
 			join(scriptsDir, baselinePath),
 			`${JSON.stringify({
@@ -444,7 +484,7 @@ describe("runner benchmark fidelity", () => {
 			})}\n`,
 		);
 
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"fail",
@@ -469,9 +509,16 @@ describe("runner benchmark fidelity", () => {
 	});
 
 	test("fixed gates report skipped comparison rows with reason", async () => {
-		const gatePath = ".benchmark-output/unit-skipped-comparison-gate.json";
-		const baselinePath = ".benchmark-output/unit-skipped-comparison-baseline.json";
-		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		const gatePath = await makeBenchmarkPath(
+			"skipped-comparison-gate",
+			"unit-skipped-comparison-gate.json",
+		);
+		const baselinePath = await makeBenchmarkPath(
+			"skipped-comparison-baseline",
+			"unit-skipped-comparison-baseline.json",
+		);
+		await mkdir(join(scriptsDir, gatePath, ".."), { recursive: true });
+		await mkdir(join(scriptsDir, baselinePath, ".."), { recursive: true });
 		await writeFile(
 			join(scriptsDir, baselinePath),
 			`${JSON.stringify({
@@ -509,7 +556,7 @@ describe("runner benchmark fidelity", () => {
 			})}\n`,
 		);
 
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"timeout",
@@ -534,8 +581,11 @@ describe("runner benchmark fidelity", () => {
 	});
 
 	test("legacy fixed gate local-runner resolves to compact row", async () => {
-		const gatePath = ".benchmark-output/unit-legacy-local-runner-gate.json";
-		await mkdir(join(scriptsDir, ".benchmark-output"), { recursive: true });
+		const gatePath = await makeBenchmarkPath(
+			"legacy-local-runner-gate",
+			"unit-legacy-local-runner-gate.json",
+		);
+		await mkdir(join(scriptsDir, gatePath, ".."), { recursive: true });
 		await writeFile(
 			join(scriptsDir, gatePath),
 			`${JSON.stringify({
@@ -552,7 +602,7 @@ describe("runner benchmark fidelity", () => {
 			})}\n`,
 		);
 
-		const result = await runBenchmark(
+		const result = await runBenchmarkForTest(
 			[
 				"--fixture",
 				"fail",

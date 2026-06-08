@@ -202,12 +202,16 @@ async function main(): Promise<void> {
 	if (options.dryRun && !options.json) {
 		for (const testId of options.tests) {
 			for (const harness of options.harnesses) {
-				const command = buildSmokeCommand({
+				const { command, cleanup } = buildSmokeCommand({
 					testId,
 					harness,
 					cwd: options.cwd,
 				});
-				console.log(`${harness}:${testId} -> ${command.join(" ")}`);
+				try {
+					console.log(`${harness}:${testId} -> ${command.join(" ")}`);
+				} finally {
+					cleanup();
+				}
 			}
 		}
 		return;

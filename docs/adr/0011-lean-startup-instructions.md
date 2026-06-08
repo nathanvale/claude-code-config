@@ -47,6 +47,21 @@ Lean authoring keeps the model simple:
 - Git procedure: `docs/git/`
 - Workflow owners: `skills/*/SKILL.md`
 
+## Delivery Topology
+
+- Configured startup owner: `agent-instructions.config` `startup_owner`.
+- Claude startup wrapper: `~/.claude/CLAUDE.md` symlinks to the configured owner `CLAUDE.md`.
+- Claude shared startup: `~/.claude/AGENTS.md` symlinks to the configured owner `AGENTS.md`.
+- Codex user startup: `~/.codex/AGENTS.md` symlinks to, or is a managed copy of, the configured owner `AGENTS.md`.
+- Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, and delivery drift.
+
+## Registered Owners
+
+Registered context owners and Claude rules are checked into the repo and loaded by the harness at startup. They are not startup prose; the ADR records the routing principle, not the live inventory.
+
+- Context owners live under `context/`: on-demand lookup facts and durable recall (e.g. `context/personal.md`, `context/bun-runner.md`). Inventory owner: `context/AGENTS.md`.
+- Claude rules live under `rules/`: Claude runtime behavior, not shared Codex startup behavior (e.g. `rules/security-boundaries.md`). Inventory owner: the harness rules-discovery system.
+
 ## Supersedes
 
 - `docs/decisions/2026-03-22-fragment-rendering-over-manual-sync.md`

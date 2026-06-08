@@ -65,7 +65,7 @@ personal-messages/
 
 - `docs/messages/` is the QMD-searchable Markdown surface
 - `runtime/` holds sync cursors, manifests, attachment bookkeeping, and binary files
-- Durable people context lives in `my-second-brain/memory/people/` or the owning work repo, not here
+- Durable people context lives in `my-second-brain/context/people/` or the owning work repo, not here
 - Binary attachments live in `runtime/`, never in `docs/`
 - `runtime/` state is local operational state and should be gitignored by default
 
@@ -75,7 +75,7 @@ personal-messages/
 |----------|------|
 | Raw message notes | `personal-messages/docs/messages/` |
 | Attachment binaries | `personal-messages/runtime/imessage/attachments/` |
-| Person notes | `my-second-brain/memory/people/` or owning work repo |
+| Person notes | `my-second-brain/context/people/` or owning work repo |
 | Cross-project synthesis | `my-second-brain` |
 | Durable summaries | `my-second-brain` or owning repo |
 | Interpreted commitments (tasks) | Owning repo's `TASKS.md` |

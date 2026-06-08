@@ -5,7 +5,7 @@ Use when Browser Adapter Proof emits a `chrome-devtools` dependency, config, bin
 ## Owners
 
 - Proof runtime: `skills/browser-use/scripts/preflight-browser-adapter.ts`.
-- Proof CLI: `skills/browser-use/scripts/preflight-browser-adapter.sh`.
+- Proof front door: `skills/browser-use/scripts/package.json#bin` (`preflight-browser-adapter`).
 - Command contract: `skills/browser-use/scripts/command-contract.ts`.
 - Warm Chrome map: `skills/browser-use/references/warm-chrome.md`.
 
@@ -116,7 +116,8 @@ mcporter call chrome-devtools.list_pages --args '{}' --output json
 ## Verify
 
 ```bash
-skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter chrome-devtools --port "$PORT" --json
+cd skills/browser-use/scripts
+bun run preflight-browser-adapter check --adapter chrome-devtools --port "$PORT" --json
 ```
 
 - Pass: proof emits `use_verified_browser_adapter`.

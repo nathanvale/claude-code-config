@@ -2,11 +2,20 @@
   "name": "claude-code-config",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "runtime/*",
+    "skills/browser-use/scripts",
+    "skills/create-cli/scripts",
+    "skills/fallow/scripts",
+    "skills/test-runner/scripts"
+  ],
   "scripts": {
     "biome:check": "biome check --diagnostic-level=error .",
     "biome:fix": "biome check --write .",
     "biome:format": "biome format --write .",
-    "biome:lint": "biome lint --diagnostic-level=error ."
+    "biome:lint": "biome lint --diagnostic-level=error .",
+    "check:workspace-facade": "bun run scripts/check-workspace-facade-invariants.ts",
+    "prove:workspace-portability": "bun run scripts/prove-workspace-portability.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",

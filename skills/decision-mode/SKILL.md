@@ -1,6 +1,7 @@
 ---
 name: decision-mode
-description: Guides collaborative planning, product design, architecture, and implementation choices at real decision boundaries. Use when the user asks for Decision Mode, explicitly asks for a decision, or a discussion has multiple viable options, ownership/scope/reversibility impact, user-outcome tradeoffs, or architectural or implementation consequences.
+description: "Use when the user asks for Decision Mode, explicitly asks to decide, pick, or choose, or a discussion reaches a decision boundary with multiple viable options, ownership/scope/reversibility impact, user-outcome tradeoffs, or architectural or implementation consequences. Guides collaborative planning, product design, architecture, and implementation choices."
+role: advisor
 ---
 
 # Decision Mode
@@ -41,16 +42,11 @@ A real choice has at least one of:
 
 For reversible details, state the safe default and continue.
 
-## Style
+## Decision bias
 
-Keep it low-friction, high-signal, dopamine-friendly, lightly fun when natural,
-and architecturally disciplined. Optimize for ADHD: reduce cognitive load, make
-progress visible, keep choices small, use whitespace, and prefer concrete
-examples.
-
-Help make decisions that reduce entropy. Prefer choices that clarify ownership,
-simplify mental models, improve handoff, and avoid unnecessary abstraction or
-drift.
+Prefer choices that reduce entropy: clarify ownership, simplify mental models,
+improve handoff, and avoid unnecessary abstraction or drift. Keep choices small
+and progress visible (global tone/accessibility defaults already apply).
 
 ## Timebox
 

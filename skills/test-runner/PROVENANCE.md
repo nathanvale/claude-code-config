@@ -1,61 +1,6 @@
 # Provenance: test-runner
 
-- Origin: first-party skill in this repo.
-- Active plan: `docs/plans/2026-06-05-001-feat-agent-runner-context-escalation-plan.md`.
-- Requirements source: `docs/brainstorms/2026-06-05-agent-runner-context-escalation-requirements.md`.
-- Prior plan: `docs/plans/2026-06-04-003-feat-test-runner-compact-runner-plan.md`.
-- Prior requirements source: `docs/brainstorms/2026-06-04-test-runner-compact-runner-requirements.md`.
-- Decision log: `docs/decisions/2026-06-04-test-runner-compact-runner-decision-log.md`.
-- Glossary owner: `CONTEXT.md`.
-
-## Status
-
-- Proof-only skill prose landed with local runner scripts.
-- Agent Runner repair, triage, JSON, and detail lookup surfaces landed.
-- Normal test guidance remains `context/bun-runner.md`.
-- MCP deprecation needs reviewed fixed-gate benchmark evidence.
-- U5 benchmark ran: local runner passed exit and fidelity gates.
-- U5 adoption result: keep MCP guidance unchanged; MCP artifact rows beat local token estimates where comparable, and timeout MCP evidence is missing.
-- Agent Runner benchmark ran: `scripts/.benchmark-output/agent-runner-u5-calibration.json`.
-- Agent Runner repair result: lookup available and detail roundtrip passed for fail, multi-fail, and timeout fixtures.
-- Agent Runner repair adoption result: keep MCP guidance unchanged; repair token estimates did not beat MCP artifact rows for comparable assertion fixtures.
-- Agent Runner triage result: lookup available and detail roundtrip passed for fail, multi-fail, and timeout fixtures.
-- Agent Runner triage adoption result: keep proof-only guidance; triage beat raw Bun on assertion fixtures, but timeout triage did not beat raw Bun and MCP timeout evidence is missing.
-- Follow-up variant example: compare a smaller failure-context budget against the same fixtures with the Runner Benchmark Harness.
-- MCP deprecation calibration ran against broad fixture matrix.
-- MCP baseline capture used `scripts/capture-mcp-baseline.ts` through the `@side-quest/bun-runner` MCP stdio server.
-- MCP baseline now covers 14 of 14 fixtures after moving timeout control into the timeout fixture's per-test timeout argument.
-- MCP timeout surface probe: extra `timeout` argument is ignored by the published tool schema.
-- MCP timeout surface probe: `bun_runTests` with `fixtures/timeout.test.ts --timeout 50` returns a zero-test pass, not comparable failure evidence.
-- MCP timeout parser row failed current fidelity; parser returned no failure details.
-- MCP runtime-error row failed current fidelity; parser returned no failure details.
-- MCP runtime-error cause: published parser counts `1 fail` from summary, but finalizes no failure when Bun emits the stack before the `(fail)` marker.
-- Strict MCP deprecation fixed gate failed on MCP parser fidelity for timeout and runtime-error rows.
-- Fixed gate failures: `mcp-runner/timeout` fidelity below gate, `local-runner-repair/timeout` exceeds the unfaithful MCP token row, `mcp-runner/runtime-error` fidelity below gate, `local-runner-repair/runtime-error` exceeds the unfaithful MCP token row.
-- Recommendation: mark Agent Runner as replacement candidate pending MCP parser fix for Bun `(fail)` rows without prior `error:` blocks; do not deprecate MCP guidance yet.
-- Upstream MCP parser fix landed in `@side-quest/bun-runner@2.0.1`.
-- MCP baseline recaptured after `@side-quest/bun-runner@2.0.1`; timeout and runtime-error rows now have fidelity `1`.
-- Fixed gate passed: `scripts/.benchmark-output/mcp-deprecation-fixed-after-bun-runner-2-0-1-fixed-gate.json`.
-- Adoption result: use Agent Runner as the compact failure-context repair path; keep MCP runners for routine gates.
-- No-MCP benchmark switch landed: `scripts/test-runner.benchmark.ts --no-mcp-baseline`.
-- No-MCP adoption gate preset landed: `scripts/test-runner.benchmark.ts --gate-preset bun-no-mcp`.
-- Coverage fixture landed: `scripts/fixtures/coverage.test.ts` and `scripts/fixtures/coverage-target.ts`.
-- Agent Runner now parses Bun `--coverage` text reports and emits compact coverage signals.
-- No-MCP fixed gate passed with coverage included: `scripts/.benchmark-output/bun-no-mcp-coverage-preset-fixed-gate.json`.
-- No-MCP evidence rows: 15 native Bun rows, 75 local runner rows, 0 MCP artifact rows.
-- Adoption result: use Agent Runner as the default Bun test path; keep MCP runners for Biome and TypeScript gates.
-
-## Owners
-
-- `SKILL.md`: routing and next safe action.
-- `scripts/command-contract.ts`: command contract and discovery metadata.
-- `scripts/test-runner.ts`: parser, result model, renderer, and runtime behavior.
-- `scripts/test-runner.sh`: stable entrypoint and missing-runtime preflight.
-- `scripts/test-runner.test.ts`: help, parser, runtime, and wrapper proof.
-- `scripts/test-runner.benchmark.ts`: Runner Benchmark Harness.
-- `scripts/capture-mcp-baseline.ts`: MCP baseline artifact capture.
-
-## Generated Outputs
-
-- `scripts/.runner-output/`: source-run detail artifacts generated by `scripts/test-runner.ts`.
-- `scripts/.benchmark-output/`: benchmark evidence generated by `scripts/test-runner.benchmark.ts`.
+- Source: first-party skill in this repo.
+- Requirements: `docs/brainstorms/2026-06-05-agent-runner-context-escalation-requirements.md`.
+- Plan: `docs/plans/2026-06-05-001-feat-agent-runner-context-escalation-plan.md`.
+- Decision trail: `docs/decisions/2026-06-04-test-runner-compact-runner-decision-log.md`.

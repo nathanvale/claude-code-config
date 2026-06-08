@@ -1,6 +1,7 @@
 ---
 name: issue-to-pr
 description: "Drive one GitHub issue to PR via Issue-to-PR v2 ledger workflow. Triggers on 'ship issue #N', 'drive issue-to-pr for #N', '/issue-to-pr <N>'."
+role: control-plane
 argument-hint: <issue-number> [target-repo]
 user-invocable: true
 disable-model-invocation: true

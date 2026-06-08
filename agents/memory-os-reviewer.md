@@ -23,9 +23,9 @@ Your lens: **"Does this follow the contract?"** — not "is this discoverable?" 
 
 Find what you need — don't load everything upfront.
 
-- `~/.config/memory/docs/memory-os-contract.md` — the authoritative contract. Read the relevant section when checking a specific rule.
+- `~/.config/context/docs/memory-os-contract.md` — the authoritative contract. Read the relevant section when checking a specific rule.
 - The target repo's `CLAUDE.md` — check for hot memory violations (durable facts dumped here, token bloat).
-- The target repo's `memory/` folder — the audit target.
+- The target repo's `context/` folder — the audit target.
 
 ## What You Know
 
@@ -95,19 +95,19 @@ Follow the agent loop: **gather → act → verify → repeat.**
 Useful bash recipes:
 ```bash
 # Count memory files
-find memory/ -name "*.md" | wc -l
+find context/ -name "*.md" | wc -l
 
 # Check date format compliance
-grep -rn "updated:" memory/ | grep -v "[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}"
+grep -rn "updated:" context/ | grep -v "[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}"
 
 # Find files missing type field
-for f in memory/**/*.md; do grep -L "^type:" "$f" 2>/dev/null; done
+for f in context/**/*.md; do grep -L "^type:" "$f" 2>/dev/null; done
 
 # Check CLAUDE.md token budget (rough word count)
 wc -w CLAUDE.md
 
 # Find potential ownership violations (personal content in work repo)
-grep -rli "my-second-brain\|personal\|birthday\|holiday" memory/ --include="*.md"
+grep -rli "my-second-brain\|personal\|birthday\|holiday" context/ --include="*.md"
 ```
 
 ## Output Format

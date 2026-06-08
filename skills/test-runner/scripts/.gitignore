@@ -2,3 +2,4 @@ node_modules/
 .benchmark-input/
 .benchmark-output/
 .runner-output/
+var/

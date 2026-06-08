@@ -3,10 +3,10 @@
 Use this when Nathan wants Perel-Baldwin to review or refine existing people-note prose without automatically mutating the note.
 
 Canonical specs:
-- `~/code/my-second-brain/docs/specs/people-note-contract.md`
-- `~/code/my-second-brain/docs/specs/perel-baldwin-review-mode.md`
+- nearest owning `context/people/` contract or repo-local people-note spec
+- nearest owning Perel-Baldwin review-mode spec, when present
 
-This contract is for **human review output**, not for `apply-enrichment.ts`.
+This contract is for **human review output**, not runtime mutation.
 Do not return `EnrichmentReport` JSON in this mode.
 
 ## Scope

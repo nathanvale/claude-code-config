@@ -1,6 +1,7 @@
 ---
 name: create-cli
 description: "Design CLI UX/specs: basic CLI, agent-native CLI, or facade-backed CLI."
+role: main-entry
 ---
 
 # Create CLI
@@ -104,4 +105,7 @@ Fill what matters; drop irrelevant sections:
 - Prefer language-agnostic design unless the user asks for implementation.
 - If the request is design-only, do not drift into implementation.
 - Do not copy runtime schemas, generated envelopes, parser rules, facade field
-  catalogues, or helper signatures into the answer.
+  catalogues, or helper signatures into the answer; those are owned by
+  `references/agent-native-cli-design.md` and `references/cli-command-facade.md` — name them.
+- Before and after meaningful edits to this skill, run
+  `references/behavior-regression-checklist.md` against the changed behavior.

@@ -1,6 +1,7 @@
 ---
 name: summarize
-description: "Summarize or transcribe URLs, YouTube/videos, podcasts, articles, transcripts, PDFs, and local files."
+description: "Summarize or transcribe URLs, YouTube/videos, podcasts, articles, transcripts, PDFs, and local files. Not for community sentiment research or durable context routing."
+role: tool-workflow
 homepage: https://summarize.sh
 metadata:
   {
@@ -42,6 +43,8 @@ summarize "https://example.com"
 summarize "/path/to/file.pdf"
 summarize "https://youtu.be/dQw4w9WgXcQ" --youtube auto
 ```
+
+**Next action:** default is `summarize <URL>`. For local files or PDFs, pass the path. For YouTube transcripts, add `--youtube auto --extract` (see Useful flags).
 
 ## YouTube: summary vs transcript
 
