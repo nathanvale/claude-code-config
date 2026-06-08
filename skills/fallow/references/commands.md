@@ -19,6 +19,11 @@ bun run fallow-runner --help
 bun run fallow-runner <subcommand> --help
 ```
 
+- Use the runner package script, not the raw `fallow` binary.
+- JSON envelope output is default.
+- Use `--plain` for compact summaries.
+- Passing `--json` is accepted as an explicit default.
+
 ## Mode Map
 
 - Use `audit --plain` first for implemented-work or PR-prep self-review when target fit is plausible.
@@ -35,7 +40,8 @@ bun run fallow-runner <subcommand> --help
 
 ## Targeting
 
-- Use the runner root input when the target repo differs from the current directory.
+- Use `--root <repo>` when the target repo differs from the invocation directory.
+- Do not pass positional targets.
 - Challenge or retarget suspect non-JS/TS roots before readiness checks.
 - Let `audit` use Fallow defaults unless the current task needs an explicit base.
 - Use subcommand help for accepted inputs.
@@ -49,5 +55,6 @@ bun run fallow-runner <subcommand> --help
 - Inspect issue references before editing files.
 - Request raw parsed Fallow output only for inspection.
 - Raise the JSON output budget when structured evidence is too large, or narrow the target when the caller needs a smaller context cap.
+- For broad JSON audit budget blocks, retry with a larger output budget or use `audit --plain` first.
 - Use runner help and tests for budget behavior.
 - Follow repair hints when budget output is blocked.
