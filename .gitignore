@@ -4,3 +4,6 @@
 
 # Fallow analyzer cache (generated)
 skills/fallow/scripts/.fallow/
+
+# Review-convergence workflow scratch (generated)
+.review/
