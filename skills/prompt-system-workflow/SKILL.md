@@ -25,6 +25,13 @@ Route startup-instruction changes to the right owner and prove health after edit
 - Missing router or health contract: blocked.
 - Missing ADR: degraded; use `CONTEXT.md` and startup checks, then report the missing ADR.
 
+## Resume State
+
+- Treat canonical owner files, ADRs, and check output as durable state.
+- Re-read `AGENTS.md`, `CLAUDE.md`, router guidance, and touched owner files before resuming after compaction or a new session.
+- Before stopping mid-change, record touched files, accepted decisions, remaining edits, and remaining checks in the owning tracker or handoff.
+- Do not rely on transcript memory for which startup surface owns the rule.
+
 ## Workflow
 
 1. Classify with router skill.

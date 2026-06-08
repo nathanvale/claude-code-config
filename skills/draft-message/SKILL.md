@@ -43,5 +43,6 @@ After the agent returns the draft, present it to the user and offer clipboard co
 
 - Always dispatch to `work-message-drafter` — don't draft inline
 - Pass conversation context to the agent so it has the full picture
-- If the user just says "/draft-message" with no args, ask: "Who's the message for, and what's it about?"
+- If recipient or topic is missing, ask one compact question for both.
+- Include channel and tone only when the request makes them ambiguous or consequential.
 - If the agent's draft needs adjustment, relay the feedback back to the agent via SendMessage

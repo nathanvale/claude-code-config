@@ -24,6 +24,7 @@ skills/<name>/
 
 - Most skills are one file.
 - Add `scripts/` only for repeated deterministic work.
+- For package-backed runtime files, read `runtime-portability.md` before choosing `scripts/` or `src/`.
 - Add `references/` only when depth would bloat `SKILL.md`.
 - Avoid `scripts/` plus `references/` plus extra machinery unless the skill is genuinely large.
 
@@ -77,6 +78,7 @@ skills/<name>/
 - Keep the first screen small and route-complete with entry-screen route clarity.
 - Move depth into one-level `references/`.
 - Move repeated deterministic work into `scripts/`.
+- Route package-backed runtime shape through `runtime-portability.md`.
 - Use assets or templates when output shape matters.
 - Do not hide required context in unreferenced files.
 - Avoid copying reference detail back into `SKILL.md`.
@@ -91,7 +93,7 @@ skills/<name>/
 - Use references for depth, one level down.
 - Delete prose that does not change behavior.
 - Use Markdown headings for `SKILL.md` sections unless a host runtime requires another format.
-- Reject pure XML skill-body structure; current Claude Code skills use YAML frontmatter plus Markdown instructions.
+- Reject pure XML skill-body structure; current Codex and Claude Code skills use YAML frontmatter plus Markdown instructions.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
 - Keep helper-validated YAML, JSON envelopes, Markdown references, CLI help, and generated docs outside XML wrappers; those surfaces already have owners.
 - Treat legacy `create-agent-skills` XML rules as extraction rejects unless a scoped prompt-boundary example is worth moving.
@@ -260,6 +262,21 @@ Research anchor: [SkillOpt](https://microsoft.github.io/SkillOpt/).
 - Provide a refresh/status verb when the skill relies on mutable stored state.
 - Do not invent persistence formats in prose.
 - Record only future-useful state.
+
+## Observability Additions
+
+- Treat telemetry, append-only logs, persisted diagnostics, and session summaries as durable context until proven temporary.
+- Add observability only when repeated evidence shows manual review, status, or repair is failing.
+- Name the purpose: usage measurement, debugging, recovery, audit trail, or handoff.
+- Name data class, privacy boundary, retention, deletion route, and review owner before writing.
+- Use `context-advisor` when the owner store or privacy boundary is unclear.
+- Keep success paths quiet unless the skill driver needs the signal.
+- Prefer failure diagnostics and status commands before broad telemetry.
+- Use allow-listed fields; reject or redact unknown fields.
+- Never record raw prompts, raw message bodies, secrets, cookies, tokens, auth-bearing URLs, or private payload values.
+- Add schema/check ownership when agents rely on logged fields.
+- Add a repair path for corrupt, partial, stale, or privacy-invalid records.
+- Do not add session summaries as a substitute for updating the owning tracker, decision log, context file, or runtime state.
 
 ## Safety Prose
 

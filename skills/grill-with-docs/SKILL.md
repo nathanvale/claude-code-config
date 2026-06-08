@@ -14,6 +14,15 @@ Ask the questions one at a time, waiting for feedback on each question before co
 
 If a question can be answered by exploring the codebase, explore the codebase instead.
 
+## Question Shape
+
+- Ask one decision per turn.
+- Lead with the recommended answer.
+- Offer 2-3 concrete options when the branch has real alternatives.
+- Name the consequence of each option in one short clause.
+- Ask free-form only when the answer space cannot be narrowed without losing the user's intent.
+- After an answer, restate the accepted decision before writing docs or moving to the next branch.
+
 ## Domain awareness
 
 During codebase exploration, also look for existing documentation:
@@ -83,3 +92,9 @@ Only offer to create an ADR when all three are true:
 3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
 
 If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
+
+## Post-Action Verification
+
+- After editing `CONTEXT.md`, read back the changed glossary entry and verify it has no implementation detail.
+- After creating or editing an ADR, read back the decision, status, context, consequences, and alternatives.
+- Report changed files and unresolved questions before ending the session.

@@ -26,6 +26,13 @@ Check with the user that these modules match their expectations. Check with the 
 
 3. Write the PRD using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
 
+## Post-Action Verification
+
+- After publishing, read back the created issue or PRD record from the tracker.
+- Verify title, body sections, and `ready-for-agent` label are present.
+- Verify the tracker URL or issue ID is captured in the response.
+- If publishing is blocked and a draft-only PRD is produced, report that no tracker record exists.
+
 ### PRD template
 
 ```markdown
@@ -39,13 +46,13 @@ The solution to the problem, from the user's perspective.
 
 ## User Stories
 
-A LONG, numbered list of user stories. Each user story should be in the format of:
+A long, numbered list of user stories. Use this format:
 
 1. As an <actor>, I want a <feature>, so that <benefit>
 
 Example: "As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending."
 
-This list of user stories should be extremely extensive and cover all aspects of the feature.
+Cover all user-visible aspects of the feature.
 
 ## Implementation Decisions
 

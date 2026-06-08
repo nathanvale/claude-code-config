@@ -4,7 +4,7 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 
 ## Current Status
 
-- Current active batch: none; cleanup queue is clear after validation.
+- Current active batch: none; QMD research leftover audit is closed.
 - Adversarial cleanup findings are closed.
 - Previous completed batch: script-backed skill owner and verification audit.
 - Do not redo the script-backed skill audit unless a script-backed skill is added, archived, renamed, or changes helper scripts.
@@ -174,19 +174,55 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Cleared stale consolidation-map extraction queue entries after context legacy audit and symlink classification.
 - Re-audited live `PROVENANCE.md` files; all remaining files are short source-history or evidence-path notes.
 - Fixed `draft-message` active context lookup from stale doubled context path to `context/comms-style.md`; description audit still passes.
-- Added `skills/test-runner/scripts/var/` to generated-output ignores and workspace export excludes; removed the generated evidence folder from the live skill tree.
-- Re-ran `bun run prove:workspace-portability`; proof passed with `skills/test-runner/scripts/var` excluded from the clean export payload.
+- Added `skills/test-runner/var/` to generated-output ignores and workspace export excludes; removed generated evidence from package source.
+- Re-ran `bun run prove:workspace-portability`; proof passed with `skills/test-runner/var` excluded from the clean export payload.
 - Closed active skill count mismatch: role and description audits follow external symlink skills, while repo-owned `find` sees 30 local `SKILL.md` files.
 - Verified archive move coverage: every tracked deleted `skills/*/SKILL.md` front door has a matching `skills/archive/*/SKILL.md` payload.
 - Classified extra archive payloads for `choose-skill-memory-store` and `create-agent-native-skill` as preserved retired sources from absent untracked old paths, not archive mismatches.
 - Closed the handoff open question: the recovered handoff's research queue was already completed and reflected in this tracker.
 - Tightened archive cleanup receipt wording so completed context audits and empty candidate buckets read as closed.
+- Ran QMD research recall for create-skill hardening on 2026-06-08.
+- Classified QMD hits as absorbed rules, deferred machinery, or candidate audits.
+- Audited package-bearing skill bundles for Bun package governance.
+- Promoted target Bun-backed skill shape to `references/runtime-portability.md`.
+- Migrated active Bun-backed skill packages to skill-root `package.json` plus `src/`.
+- Proved bundled workspace portability for all tracked facade consumers after package-shape migration.
+- Added Bun package test-layout guidance to `references/runtime-portability.md`.
+- Added package-bin shebang guidance to `references/runtime-portability.md`.
+- Added workspace invariant checks for package-bin shebangs.
+- Added workspace invariant checks for package-bin lockfile markers.
+- Removed pure delegate browser-use shell bin wrappers; package bins now target executable Bun entrypoints directly.
+- Added distribution governance for future `private` false packages.
+- Added workspace invariant checks for publish-readiness metadata, payload allowlists, and local dependency blockers.
+- Cross-checked distribution governance with Context7 Bun and npm docs.
+- Added workspace invariant checks for bundled dependency payloads and accidental test or fixture distribution.
+- Audited active skill bodies for obvious/default instructions; patched only behavior-neutral wording.
+- Audited pipeline-heavy and control-plane skills for compaction-survival state; added resume-state rules where durable state was implicit.
+- Audited workflow skills for post-action verification; added read-back checks for publishing, handoff, glossary, and ADR writes.
+- Audited user-input-heavy skills for structured elicitation; added answer shapes for grilling, issue slicing, triage, and message drafting.
+- Audited skill observability needs; added privacy, retention, deletion, review-owner, allowlist, and repair-path gates before telemetry, logs, diagnostics, or session summaries.
+- Audited QMD-research leftovers against active skill names after archive cleanup; no promoted rule uses archived skill names as active routes.
 
 ## Active
 
 - Treat external symlink skills as active user-scope links, not archive debt.
+- Keep active Bun-backed skill packages at skill-root `package.json` plus `src/`.
+- Keep Bun package tests collocated beside owner files unless a cross-owner suite earns a separate folder.
+- Keep package-bin shebangs enforced by `scripts/check-workspace-facade-invariants.ts`.
+- Keep package-bin lockfile markers enforced by `scripts/check-workspace-facade-invariants.ts`.
+- Keep packages `private: true` until distribution governance passes.
+- Run dry-run pack or publish checks before turning any package private flag off.
+- Keep bundled dependency payloads and collocated tests out of public packages unless a distribution decision accepts them.
+- Keep root workspace metadata, root lockfile, workspace invariant checks, and portability proof aligned with package roots.
+- Preserve current package names, bin names, and command metadata through future package moves.
+- Leave archived package-bearing skills as historical until an archive refresh explicitly selects them.
+- Use active owner names in promoted rules; keep archived skill names only in historical receipts, rejected routes, or archive-review notes.
 - Keep project tracker current after each accepted hardening decision.
 - Keep decisions log current when a durable rule changes.
+
+## Candidate Audits
+
+- None currently.
 
 ## Open Questions
 
@@ -212,6 +248,14 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 
 ## Portability Notes
 
+- QMD source: local index status checked on `2026-06-08`; index updated 8h earlier; `repo-claude-code-config` collection updated 2d earlier.
+- QMD source: `vault/docs/research/2026-03-22-thariq-applied-analysis.md`.
+- QMD source: `repo-claude-code-config/docs/brainstorms/2026-03-26-thariq-improvements.md`.
+- QMD source: `repo-claude-code-config/docs/research/2026-05-30-skill-composability-handoff-observability.md`.
+- QMD source: `repo-claude-code-config/docs/brainstorms/2026-05-30-skill-composability-handoff-principle.md`.
+- QMD source: `repo-claude-code-config/docs/research/2026-03-23-agent-prompt-best-practices.md`.
+- QMD source: `repo-claude-code-config/docs/plans/2026-06-04-003-feat-test-runner-compact-runner-plan.md`.
+- QMD source: `repo-claude-code-config/docs/brainstorms/2026-06-04-test-runner-compact-runner-requirements.md`.
 - Portable payload: `SKILL.md`, `CONTEXT.md`, `references/`, `scripts/`, templates, assets.
 - Local state: `TASKS.md`, decision logs, handover paths, cleanup queues, historical receipts.
 - Promote reusable rules out of `TASKS.md` before exporting a skill.
@@ -220,7 +264,9 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Runtime portability owner: `references/runtime-portability.md`.
 - Source session: Codex `019ea54d-86fe-7a10-9954-166992a6659d`, found with `ce-sessions` on `2026-06-08`.
 - Firecrawl source: Bun workspaces docs, Bun filter docs, and Bun install docs checked on `2026-06-08`.
-- Bun-backed skills need named runtime, owner scripts, package metadata, lockfile when reproducibility matters, and first-screen verification.
+- Bun-backed skills need named runtime, owner source, package metadata, lockfile when reproducibility matters, and first-screen verification.
+- Bun-backed skill packages use skill-root `package.json` plus `src/`.
+- `scripts/` is reserved for non-Bun helpers in skills without `package.json`.
 - Non-Bun runtime-backed skills follow the same rule: name runtime, bundle owners, expose verification, and label missing dependencies.
 - Local `file:` dependencies outside the skill bundle mean local development portability unless the dependency owner travels with the export payload.
 - Workspace portable bundle: export includes root `package.json`, root `bun.lock`, skill packages, and `runtime/` owners.
@@ -232,12 +278,32 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 
 ## Bun Facade Migration Tracker
 
-Goal: move Bun script packages from local development portability to universal portability, or keep the local-only status explicit.
+Goal: move Bun skill packages from local development portability to universal portability, or keep the local-only status explicit.
+
+Governance target:
+
+- Package metadata lives at `skills/<skill>/package.json`.
+- Bun-owned source, tests, contracts, and TS config live under `skills/<skill>/src/`.
+- Root workspaces point at `skills/<skill>`.
+- Package `bin` and `scripts` preserve the current public command names.
+- Package `bin` targets move to `./src/...` or another skill-root-relative target.
+- Non-Bun helper-only skills may keep `scripts/` when no `package.json` exists.
+- Current `scripts/package.json` packages are allowed only for archived packages or explicit migration exceptions named here.
+- Archived package-bearing skills stay historical until selected for archive refresh.
+
+Current package audit:
+
+- Pilot passed: `skills/browser-use/package.json` plus `skills/browser-use/src/`.
+- Pilot passed: `skills/create-cli/package.json` plus `skills/create-cli/src/`.
+- Pilot passed: `skills/fallow/package.json` plus `skills/fallow/src/`.
+- Pilot passed: `skills/test-runner/package.json` plus `skills/test-runner/src/`.
+- Archived Bun package: `skills/archive/browser-domain-memory/scripts/package.json`; leave historical.
+- Archived Bun package: `skills/archive/people-enrich/scripts/package.json`; leave historical.
 
 Status key:
 
 - Local development portable: works in this repo because a named local owner exists, but the owner does not travel with the export payload.
-- Workspace portable: root workspace metadata, root `bun.lock`, skill packages, and required `runtime/` owners travel together.
+- Workspace portable: root workspace metadata, root `bun.lock`, skill-root packages, and required `runtime/` owners travel together.
 - Standalone zip portable: every runtime dependency is public, privately installable, or bundled inside that single skill zip.
 - Accepted migration target: one shared portable runtime owner travels with the workspace export payload.
 - Accepted package manager shape: Bun workspaces.
@@ -246,7 +312,7 @@ Status key:
 
 Current blocker:
 
-- No bundled workspace blocker remains for the tracked facade consumers.
+- No active bundled workspace package-shape blocker remains.
 - Standalone single-skill zips are not portable until `@side-quest/cli-command-facade` is public, privately installable, or bundled inside each zip.
 
 Standalone repair options:
@@ -264,7 +330,7 @@ Standalone zip rule:
 
 Workspace migration steps:
 
-- Add root `package.json` workspaces for `runtime/*` and script packages that depend on shared runtime owners.
+- Add root `package.json` workspaces for `runtime/*` and skill packages that depend on shared runtime owners.
 - Done: root `package.json` includes `runtime/*`.
 - Done: facade package source copied into `runtime/cli-command-facade/`.
 - Done: root `bun.lock` updated by `bun install`.
@@ -272,29 +338,58 @@ Workspace migration steps:
 - Done: shared runtime typecheck passes with `bun --filter @side-quest/cli-command-facade typecheck`.
 - Keep package name `@side-quest/cli-command-facade` unless a rename decision is accepted.
 - Done: changed tracked facade-backed script package dependencies from local `file:` paths to `workspace:*`.
-- Done: `skills/browser-use/scripts` is a workspace package using `workspace:*`.
-- Done: `skills/create-cli/scripts` is a workspace package using `workspace:*`.
-- Done: `skills/fallow/scripts` is a workspace package using `workspace:*`.
-- Done: `skills/test-runner/scripts` is a workspace package using `workspace:*`.
-- Done: `skills/test-runner/scripts` package `test` script runs the focused runner suite, not intentionally failing fixtures.
+- Done: `skills/browser-use` is a workspace package using `workspace:*`.
+- Done: pilot moved `skills/create-cli` to skill-root package shape.
+- Done: `skills/fallow` is a workspace package using `workspace:*`.
+- Done: `skills/test-runner` is a workspace package using `workspace:*`.
+- Done: `skills/test-runner` package `test` script runs the focused runner suite, not intentionally failing fixtures.
 - Done: all four tracked facade consumers are workspace packages.
+- Done: moved active package metadata from `skills/*/scripts/package.json` to `skills/*/package.json`.
+- Done: moved Bun-owned TypeScript, tests, contracts, and `tsconfig.json` from `scripts/` to `src/`.
+- Done: updated root workspace paths from `skills/*/scripts` to `skills/*`.
+- Done: updated `scripts/check-workspace-facade-invariants.ts` expected package paths, bin targets, bin shebang checks, and lockfile bin markers.
+- Done: updated `scripts/prove-workspace-portability.ts` export paths, excluded paths, and proof receipt expectations.
+- Done: create-cli pilot passed `bun --filter create-cli-scripts typecheck`.
+- Done: create-cli pilot passed `bun --filter create-cli-scripts smoke`.
+- Done: create-cli pilot passed `bun run check:workspace-facade`.
+- Done: create-cli pilot passed `bun run prove:workspace-portability`.
+- Done: fallow package-shape migration passed `bun --filter fallow-scripts typecheck`.
+- Done: fallow package-shape migration passed `bun --filter fallow-scripts test`.
+- Done: fallow package-shape migration passed `bun run check:workspace-facade`.
+- Done: fallow package-shape migration passed `bun run prove:workspace-portability`.
+- Done: test-runner package-shape migration passed `bun --filter test-runner-scripts typecheck`.
+- Done: test-runner package-shape migration passed `bun --filter test-runner-scripts test`.
+- Done: test-runner package-shape migration passed `bun run check:workspace-facade`.
+- Done: test-runner package-shape migration passed `bun run prove:workspace-portability`.
+- Done: browser-use package-shape migration passed `bun --filter browser-use-scripts typecheck`.
+- Done: browser-use package-shape migration passed `bun --filter browser-use-scripts test`.
+- Done: browser-use package-shape migration passed `bun run check:workspace-facade`.
+- Done: browser-use package-shape migration passed `bun run prove:workspace-portability`.
+- Done: browser-use bin simplification passed direct executable `--version` checks for all five package bins.
+- Done: updated docs and active owner paths that refer to Bun-owned files under `scripts/`.
+- Done: updated active front-door references in `skills/browser-use/SKILL.md`, `skills/browser-use/references/warm-chrome.md`, and `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
+- Done: reviewed `skill-design-philosophy.md` and `agent-native-skill-design.md` wording; package-backed runtime shape routes to `runtime-portability.md`.
+- Done: ran `bun install` after workspace path changes.
+- Historical plans, ideation, and decision logs may keep old `skills/*/scripts` paths as source evidence.
 - Run `bun install` from repo root and keep root `bun.lock` as the workspace lockfile.
 - Verify each tracked package through its focused test and typecheck command.
 - Run `bun run prove:workspace-portability` before claiming bundled workspace portability.
 
+Migration order:
+
+- Pilot package: `skills/create-cli/package.json` plus `skills/create-cli/src/`.
+- Create-cli pilot passed workspace install, invariant check, focused package checks, and portability proof.
+- Migration complete for active tracked facade consumers.
+
 Tracked packages:
 
-- `skills/browser-use/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter browser-use-scripts test` and `bun --filter browser-use-scripts typecheck`.
-- `skills/test-runner/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter test-runner-scripts test` and `bun --filter test-runner-scripts typecheck`.
-- `skills/fallow/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter fallow-scripts test` and `bun --filter fallow-scripts typecheck`.
-- `skills/create-cli/scripts/package.json`: status migrated to workspace facade; verify with `bun --filter create-cli-scripts smoke` and `bun --filter create-cli-scripts typecheck`.
+- `skills/browser-use/package.json`: status moved to skill-root package shape; verify with `bun --filter browser-use-scripts test` and `bun --filter browser-use-scripts typecheck`.
+- `skills/test-runner/package.json`: status moved to skill-root package shape; verify with `bun --filter test-runner-scripts test` and `bun --filter test-runner-scripts typecheck`.
+- `skills/fallow/package.json`: status moved to skill-root package shape; verify with `bun --filter fallow-scripts test` and `bun --filter fallow-scripts typecheck`.
+- `skills/create-cli/package.json`: status moved to skill-root package pilot; verify with `bun --filter create-cli-scripts smoke` and `bun --filter create-cli-scripts typecheck`.
 - Bundled workspace portability proof: passed with `bun run prove:workspace-portability` on `2026-06-08`.
-- Clean export proof payload: root `package.json`, root `bun.lock`, workspace scanner, portability proof script, `runtime/cli-command-facade`, `skills/browser-use`, `skills/create-cli/scripts`, `skills/fallow`, and `skills/test-runner`.
-- Clean export proof excludes generated dependency and evidence folders: `node_modules`, `tsconfig.tsbuildinfo`, `skills/test-runner/scripts/.runner-output`, `skills/test-runner/scripts/.benchmark-output`, and `skills/test-runner/scripts/var`.
-
-## Candidate Audits
-
-- None currently.
+- Clean export proof payload: root `package.json`, root `bun.lock`, workspace scanner, portability proof script, `runtime/cli-command-facade`, `skills/browser-use`, `skills/create-cli`, `skills/fallow`, and `skills/test-runner`.
+- Clean export proof excludes generated dependency and evidence folders: `node_modules`, `tsconfig.tsbuildinfo`, and `skills/test-runner/var`.
 
 ## Conditional Triggers
 
