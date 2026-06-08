@@ -97,7 +97,7 @@ Use the productivity memory workflow like this:
 Hot-memory rules:
 - use exactly one repo-level `CLAUDE.md` surface
 - keep it compact and broadly relevant
-- prefer `memory/` for durable decoder-style detail
+- prefer `context/` for durable decoder-style detail
 - prefer pointers over copied inventories
 
 ## External Connectors
@@ -119,7 +119,7 @@ Some connectors dispatch via Bash CLI rather than MCP tools (e.g., `gog` for mul
 
 Claude Code and Codex should both use the same shared productivity rules:
 
-- read `~/.config/memory/AGENTS.md`
+- read `~/.config/context/AGENTS.md`
 - read this integration doc
 - use the same repo-resolution logic
 - use the same keep-local vs promote rules

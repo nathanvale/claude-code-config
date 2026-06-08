@@ -178,7 +178,7 @@ Some families have canonical folder homes because tools (Compound Engineering sk
 - `decision` → `docs/decisions/`
 - `adr` → `docs/decisions/` with `ADR-NNN-*` filename
 - `runbook` → `docs/runbooks/`
-- `log` → `memory/logs/` (session logs) or `docs/logs/` (other episodic logs)
+- `log` → `context/logs/` (session logs) or `docs/logs/` (other episodic logs)
 - `solution` → `docs/solutions/` organized into category subfolders (e.g. `best-practices/`, `integration-issues/`, `logic-errors/`, `runtime-errors/`, `workflow-issues/`)
 - `artifact-sidecar` → lives next to the parent note, or under `docs/artifacts/` when no parent note exists
 
@@ -216,8 +216,8 @@ Prefer filenames and folder names that are scannable out of context.
 - Use lowercase hyphenated slugs.
 - In `my-second-brain`, prefer domain-prefixed project names when the plain slug would be ambiguous.
 - Good examples:
-  - `memory/projects/holiday-fnq-july-2026.md`
-  - `memory/projects/holiday-easter-2026.md`
+  - `context/projects/holiday-fnq-july-2026.md`
+  - `context/projects/holiday-easter-2026.md`
   - `docs/plans/holiday-fnq-july-2026/`
 - Avoid context-thin names when the note will be hard to spot later in a long list.
 

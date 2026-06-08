@@ -25,11 +25,11 @@ Use QMD for:
 
 Access preference:
 - QMD MCP when the agent session exposes it
-- local QMD wrappers in `~/.config/memory/scripts/`
+- local QMD wrappers in `~/.config/context/scripts/`
 - direct repo reads only as fallback
 
 Local default:
-- prefer `~/.config/memory/scripts/qmd-recall.sh` for lightweight everyday recall
+- prefer `~/.config/context/scripts/qmd-recall.sh` for lightweight everyday recall
 - use rich `qmd query` mode only as an explicit opt-in
 - keep vector-only recall out of the default workflow on this machine until its model behavior is more predictable
 

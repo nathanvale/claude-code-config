@@ -12,7 +12,7 @@ This repository is the operating record for <system/project>.
 
 ## Memory OS Integration
 
-- Shared user-scope contract: `~/.config/memory/AGENTS.md`
+- Shared user-scope contract: `~/.config/context/AGENTS.md`
 - Repo profile: `infra-repo`
 - This repo owns specs, runbooks, ADRs, verification, gotchas, and implementation history for <system/project>.
 - Promote upward only durable operating patterns, reusable infrastructure lessons, and high-value personal preferences.

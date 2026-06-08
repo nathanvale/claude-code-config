@@ -29,8 +29,8 @@ That larger model is useful, but it should be a deliberate choice rather than a 
 ## Practical Rule
 
 Use:
-- `~/.config/memory/scripts/qmd-recall.sh "topic"` for fast default recall
-- `~/.config/memory/scripts/qmd-recall.sh --rich "topic"` only when you explicitly want richer query expansion and accept the larger model path
+- `~/.config/context/scripts/qmd-recall.sh "topic"` for fast default recall
+- `~/.config/context/scripts/qmd-recall.sh --rich "topic"` only when you explicitly want richer query expansion and accept the larger model path
 
 Avoid treating `vsearch` as part of the standard day-to-day workflow on this machine until its model behavior is better understood.
 

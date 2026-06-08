@@ -12,7 +12,7 @@ This repository is the source of truth for Nathan's <product/company> work.
 
 ## Memory OS Integration
 
-- Shared user-scope contract: `~/.config/memory/AGENTS.md`
+- Shared user-scope contract: `~/.config/context/AGENTS.md`
 - Repo profile: `personal-product`
 - This repo owns roadmap, research, specs, decisions, implementation history, and product operations for <product/company>.
 - Promote upward only durable founder lessons, strategic product direction, personal commitments, and cross-product patterns.

@@ -8,7 +8,7 @@
 
 - Keep this file lean.
 - Use it for active product context only.
-- Move durable detail into `memory/` and full authored material into `docs/`.
+- Move durable detail into `context/` and full authored material into `docs/`.
 
 ## Always / Never
 
@@ -21,10 +21,10 @@
 - `AGENTS.md` for durable repo rules
 - `TASKS.md` for active work
 - `docs/brainstorms/`, `docs/specs/`, and `docs/plans/` for product shaping
-- `memory/` for durable compact recall
+- `context/` for durable compact recall
 
 ## Memory OS
 
-- Shared user-scope contract: `~/.config/memory/AGENTS.md`
+- Shared user-scope contract: `~/.config/context/AGENTS.md`
 - Repo profile: `personal-product`
 - Use exactly one repo-level hot-memory file.

@@ -37,7 +37,7 @@ It is not for:
 Use:
 
 ```sh
-~/.config/memory/scripts/qmd-recall.sh "your topic"
+~/.config/context/scripts/qmd-recall.sh "your topic"
 ```
 
 Prefer QMD MCP when the active agent session exposes it.
@@ -55,7 +55,7 @@ Prefer QMD MCP when the active agent session exposes it.
 Use:
 
 ```sh
-~/.config/memory/scripts/notebooklm-pack.sh \
+~/.config/context/scripts/notebooklm-pack.sh \
   --output ~/Desktop/mac-mini-briefing-pack.md \
   --title "Mac Mini Phase Briefing" \
   --goal "Create a short implementation briefing for the current Mac Mini phase." \

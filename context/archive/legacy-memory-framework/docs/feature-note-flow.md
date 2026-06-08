@@ -126,11 +126,11 @@ Do not create a separate `decision` or `adr` note for:
 
 Use these starter templates:
 
-- `~/.config/memory/templates/brainstorm.md`
-- `~/.config/memory/templates/product-brief.md`
-- `~/.config/memory/templates/spec-prd.md`
-- `~/.config/memory/templates/implementation-plan.md`
-- `~/.config/memory/templates/TASKS.md`
+- `~/.config/context/templates/brainstorm.md`
+- `~/.config/context/templates/product-brief.md`
+- `~/.config/context/templates/spec-prd.md`
+- `~/.config/context/templates/implementation-plan.md`
+- `~/.config/context/templates/TASKS.md`
 
 ## Skill Handoffs
 
@@ -157,7 +157,7 @@ This should treat brainstorm docs as the upstream origin when they exist, then t
 
 ### `productivity-memory`
 
-This should not absorb authored brainstorm, spec, or plan documents into `memory/`.
+This should not absorb authored brainstorm, spec, or plan documents into `context/`.
 It can store compact project summaries or durable shorthand that point at those docs.
 
 ### `productivity-tasks`
@@ -185,6 +185,6 @@ Task surfaces:
 Common pattern for new product work:
 - `docs/brainstorms/<product-idea>.md`
 - `docs/specs/<product-name>-brief.md`
-- `memory/projects/<product-name>.md` or another repo-local `project` note once committed
+- `context/projects/<product-name>.md` or another repo-local `project` note once committed
 
 Avoid inventing extra top-level systems when these cover the lifecycle cleanly.

@@ -33,10 +33,10 @@ NotebookLM is not for:
 
 ## Read Order
 
-1. `~/.config/memory/AGENTS.md`
-2. `~/.config/memory/docs/memory-os-contract.md`
-3. `~/.config/memory/docs/retrieval-and-synthesis.md`
-4. `~/.config/memory/docs/notebooklm-source-pack-workflow.md`
+1. `~/.config/context/AGENTS.md`
+2. `~/.config/context/docs/memory-os-contract.md`
+3. `~/.config/context/docs/retrieval-and-synthesis.md`
+4. `~/.config/context/docs/notebooklm-source-pack-workflow.md`
 5. local `.nlm.yml` in the owning repo, if present
 
 ## Default Flow

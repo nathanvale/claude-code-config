@@ -16,9 +16,9 @@ QMD is the default federated search substrate across participating repos. It sho
 
 ## Canonical Roster
 
-Use `~/.config/memory/federation/roster.yml` as the machine-readable source of participating repos and collection names.
+Use `~/.config/context/federation/roster.yml` as the machine-readable source of participating repos and collection names.
 
-Use `bun run ~/.config/memory/scripts/qmd-roster-sync.ts` from any repo, or `bun run memory:qmd-federation` from the dotfiles repo, to turn that roster into a plan, command list, or applied QMD configuration.
+Use `bun run ~/.config/context/scripts/qmd-roster-sync.ts` from any repo, or `bun run memory:qmd-federation` from the dotfiles repo, to turn that roster into a plan, command list, or applied QMD configuration.
 
 The sync script should do two things from the roster:
 - build a collection mask from `primary_paths` so indexing stays within the intended docs surface
@@ -55,12 +55,12 @@ From the `claude-code-config` repo root:
 ./install.sh
 ```
 
-This creates `~/.config/memory` → `<repo>/memory/`, which all QMD wrapper scripts resolve through.
+This creates `~/.config/context` → `<repo>/context/`, which all QMD wrapper scripts resolve through.
 
 ### Bootstrap federation
 
 ```sh
-~/.config/memory/scripts/qmd-refresh.sh
+~/.config/context/scripts/qmd-refresh.sh
 ```
 
 This runs three steps sequentially:
@@ -71,8 +71,8 @@ This runs three steps sequentially:
 ### Verify
 
 ```sh
-~/.config/memory/scripts/qmd-node.sh status
-~/.config/memory/scripts/qmd-node.sh embed   # should complete without sqlite-vec errors
+~/.config/context/scripts/qmd-node.sh status
+~/.config/context/scripts/qmd-node.sh embed   # should complete without sqlite-vec errors
 ```
 
 ### MCP server
@@ -80,7 +80,7 @@ This runs three steps sequentially:
 The `.mcp.json` in this repo is symlinked to `~/.claude/.mcp.json` by `install.sh`. It points to the stable wrapper:
 
 ```sh
-~/.config/memory/scripts/qmd-mcp.sh
+~/.config/context/scripts/qmd-mcp.sh
 ```
 
 This delegates through `qmd-node.sh` so the MCP server gets the same brew prefix and Node runtime as all other QMD operations.
@@ -100,11 +100,11 @@ Examples:
 - Index note bodies and metadata.
 - Prefer one collection per repo docs surface.
 - Build the collection mask from the roster's `primary_paths`, not from the entire repo root.
-- Add path-level context for major note surfaces such as `docs/`, `memory/`, `TASKS.md`, and `CLAUDE.md`.
+- Add path-level context for major note surfaces such as `docs/`, `context/`, `TASKS.md`, and `CLAUDE.md`.
 - Prefer conservative `update_command` values. On git-backed repos, `git fetch --all --prune --quiet || true` is safer than auto-stashing and pulling.
 - For reference-corpus repos, index converted Markdown surfaces such as `apis/` or `repos/`, not raw upstream downloads.
 - Run QMD CLI maintenance and inspection commands sequentially against a given index; concurrent calls can hit SQLite lock errors.
-- Always use `~/.config/memory/scripts/qmd-node.sh` for QMD operations. The wrapper runs QMD under Node (not Bun) to avoid macOS SQLite extension loading issues, auto-detects Homebrew's `BREW_PREFIX`, and probes both npm and bun global paths for the CLI. Install QMD with `npm install -g` so `better-sqlite3` compiles against Node's ABI.
+- Always use `~/.config/context/scripts/qmd-node.sh` for QMD operations. The wrapper runs QMD under Node (not Bun) to avoid macOS SQLite extension loading issues, auto-detects Homebrew's `BREW_PREFIX`, and probes both npm and bun global paths for the CLI. Install QMD with `npm install -g` so `better-sqlite3` compiles against Node's ABI.
 - Keep source-of-truth ownership with the repo.
 - Add a new repo to the roster before relying on it in shared recall workflows.
 - Treat the roster as canonical and regenerate commands from it rather than hand-maintaining setup snippets.
@@ -118,7 +118,7 @@ Examples:
 If you see `ERR_DLOPEN_FAILED` or `NODE_MODULE_VERSION` mismatch errors:
 
 1. Check which node QMD is installed under: `npm root -g`
-2. Trace the wrapper: `bash -x ~/.config/memory/scripts/qmd-node.sh status`
+2. Trace the wrapper: `bash -x ~/.config/context/scripts/qmd-node.sh status`
 3. If needed, reinstall: `fnm use default && npm install -g @tobilu/qmd`
 
 ### Roster sync and subprocesses
@@ -131,7 +131,7 @@ For each repo, prefer the narrowest useful docs surface rather than the entire w
 
 Examples:
 - `my-second-brain`: vault markdown plus selected system docs
-- `monash-smst`: `docs/`, `memory/`, `TASKS.md`, `CLAUDE.md`, `AGENTS.md`
-- `mac-mini-home-server`: `docs/`, `memory/`, `TASKS.md`, `CLAUDE.md`, `AGENTS.md`
+- `monash-smst`: `docs/`, `context/`, `TASKS.md`, `CLAUDE.md`, `AGENTS.md`
+- `mac-mini-home-server`: `docs/`, `context/`, `TASKS.md`, `CLAUDE.md`, `AGENTS.md`
 - `ellucian-api-catalog`: `apis/`, `CLAUDE.md`, `AGENTS.md`
 - `ellucian-developer`: `repos/`, `CLAUDE.md`, `AGENTS.md`

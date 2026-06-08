@@ -47,7 +47,7 @@ Typical good content:
 Move these elsewhere:
 
 - stable repo policy -> `AGENTS.md`
-- durable facts, people, glossary, tools, and project context -> `memory/`
+- durable facts, people, glossary, tools, and project context -> `context/`
 - active task details -> `TASKS.md` or `todos/`
 - plans, specs, research, runbooks, and decisions -> `docs/`
 - path-specific or workflow-specific instructions -> `.claude/rules/` or repo docs
@@ -108,7 +108,7 @@ Scaffold items should be removed, rewritten, or promoted once they stabilize.
 If a fact survives more than a couple of sessions, ask whether it should move:
 
 - to `AGENTS.md` if it is a stable repo rule
-- to `memory/` if it is durable context
+- to `context/` if it is durable context
 - to `docs/` if it deserves a full authored note
 
 Do not let `CLAUDE.md` become the place where unclassified information goes to hide.
@@ -119,7 +119,7 @@ When auditing a repo:
 
 - exactly one repo-level `CLAUDE.md` exists
 - the file is still easy to scan quickly
-- `AGENTS.md`, `TASKS.md`, `memory/`, and `docs/` boundaries are explicit
+- `AGENTS.md`, `TASKS.md`, `context/`, and `docs/` boundaries are explicit
 - durable people, glossary, and tool inventories are not duplicated unnecessarily
 - scaffold items are marked and still relevant
 
@@ -128,5 +128,5 @@ When auditing a repo:
 - `AGENTS.md` = durable repo rules and source-of-truth boundaries
 - `CLAUDE.md` = hot memory and launch pad
 - `TASKS.md` = active work dashboard
-- `memory/` = durable compact recall
+- `context/` = durable compact recall
 - `docs/` = full authored documents

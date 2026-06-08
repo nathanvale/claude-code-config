@@ -22,7 +22,7 @@ summary: "Minimal checklist for bringing a new repo into the shared Memory OS."
 
 ## Minimum Local Files
 
-- `AGENTS.md` or repo-local instructions that point at `~/.config/memory/AGENTS.md`
+- `AGENTS.md` or repo-local instructions that point at `~/.config/context/AGENTS.md`
 - one canonical repo-level hot-memory file if the repo benefits from one
 - a task surface if work is ongoing
 - any repo-specific metadata contract only if the global contract is not enough

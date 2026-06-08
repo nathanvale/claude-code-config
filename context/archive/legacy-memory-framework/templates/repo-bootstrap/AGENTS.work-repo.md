@@ -12,7 +12,7 @@ This repository is the source of truth for Nathan's <work/client/org> work conte
 
 ## Memory OS Integration
 
-- Shared user-scope contract: `~/.config/memory/AGENTS.md`
+- Shared user-scope contract: `~/.config/context/AGENTS.md`
 - Repo profile: `work-repo`
 - This repo owns meetings, stakeholder context, imported docs, work research, and local task context for <work/client/org>.
 - Promote upward only durable learnings, reusable workflows, and cross-project insights.

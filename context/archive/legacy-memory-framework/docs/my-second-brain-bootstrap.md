@@ -10,7 +10,7 @@ summary: "Create a clean life-hub repo that starts from the shared Memory OS con
 
 ## Goal
 
-Create a clean new `my-second-brain` repo that starts from the Memory OS contract, with a minimal `CLAUDE.md` + `memory/` + `docs/` structure and no bulk migration.
+Create a clean new `my-second-brain` repo that starts from the Memory OS contract, with a minimal `CLAUDE.md` + `context/` + `docs/` structure and no bulk migration.
 
 Follow `docs/claude-md-contract.md` for hot-memory sizing and placement.
 
@@ -37,7 +37,7 @@ This workflow is not for:
 Use:
 
 ```sh
-~/.config/memory/scripts/bootstrap-life-hub.sh \
+~/.config/context/scripts/bootstrap-life-hub.sh \
   --repo /Users/nathanvale/code/my-second-brain \
   --name "my-second-brain"
 ```
@@ -52,25 +52,25 @@ This creates:
 - `docs/decisions/`
 - `docs/logs/`
 - `docs/artifacts/`
-- `memory/`
-- `memory/people/`
-- `memory/pets/`
-- `memory/projects/`
-- `memory/context/`
+- `context/`
+- `context/people/`
+- `context/pets/`
+- `context/projects/`
+- `context/context/`
 
 ## Recommended First Commit Shape
 
 Keep the first repo intentionally boring:
 - shared Memory OS adapter
 - hot-memory starter
-- base `docs/` and `memory/` directories
+- base `docs/` and `context/` directories
 - no imported legacy notes yet
 
 ## QMD Join Step
 
 After the repo exists:
-1. add it to `~/.config/memory/federation/roster.yml`
-2. run `~/.config/memory/scripts/qmd-refresh.sh --skip-embed`
+1. add it to `~/.config/context/federation/roster.yml`
+2. run `~/.config/context/scripts/qmd-refresh.sh --skip-embed`
 
 ## Recommended First Migrated Material
 

@@ -57,10 +57,10 @@ mkdir -p \
 	"$TARGET_REPO/docs/decisions" \
 	"$TARGET_REPO/docs/logs" \
 	"$TARGET_REPO/docs/artifacts" \
-	"$TARGET_REPO/memory/people" \
-	"$TARGET_REPO/memory/pets" \
-	"$TARGET_REPO/memory/projects" \
-	"$TARGET_REPO/memory/context"
+	"$TARGET_REPO/context/people" \
+	"$TARGET_REPO/context/pets" \
+	"$TARGET_REPO/context/projects" \
+	"$TARGET_REPO/context/context"
 
 sed "s/<Repo Name> Agent Rules/$REPO_NAME Agent Rules/g" "$AGENTS_TEMPLATE" >"$TARGET_REPO/AGENTS.md"
 cp "$CLAUDE_TEMPLATE" "$TARGET_REPO/CLAUDE.md"
@@ -72,6 +72,6 @@ echo "This repo is a fresh my-second-brain bootstrap created from Nathan's share
 echo "Bootstrapped my-second-brain repo at: $TARGET_REPO"
 echo "Next steps:"
 echo "  1. git init \"$TARGET_REPO\""
-echo "  2. add the repo to ~/.config/memory/federation/roster.yml"
-echo "  3. run ~/.config/memory/scripts/qmd-refresh.sh --skip-embed"
+echo "  2. add the repo to ~/.config/context/federation/roster.yml"
+echo "  3. run ~/.config/context/scripts/qmd-refresh.sh --skip-embed"
 echo "  4. migrate durable notes in curated batches"

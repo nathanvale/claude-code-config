@@ -9,7 +9,7 @@ updated: 2026-03-17
 
 This directory is the canonical user-scope contract for Nathan's Markdown-first memory system.
 
-It lives at `~/code/claude-code-config/memory` and is exposed at the stable runtime path `~/.config/memory`.
+It lives at `~/code/claude-code-config/memory` and is exposed at the stable runtime path `~/.config/context`.
 
 It is shared by:
 - Claude Code
