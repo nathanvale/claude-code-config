@@ -118,7 +118,7 @@ const exitCodes = {
 export const testRunnerContracts = defineCommandFacadeContract(
 	{
 		run: {
-			script: "scripts/test-runner.ts",
+			script: "test-runner",
 			summary: "Execute tests with compact, repair, triage, or JSON output.",
 			usage: [
 				"run [--cwd <dir>] [--mode compact|repair|triage] [--format plain|json|json-compact|toon] [--json|--plain] [--timeout-ms <ms>] [--debug-output] -- <test args>",
@@ -153,7 +153,7 @@ export const testRunnerContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		status: {
-			script: "scripts/test-runner.ts",
+			script: "test-runner",
 			summary: "Show compact runner readiness without executing tests.",
 			usage: ["status [--cwd <dir>] [--format plain|json|json-compact|toon] [--json|--plain]"],
 			json: true,
@@ -187,7 +187,7 @@ export const testRunnerContracts = defineCommandFacadeContract(
 			},
 		},
 		detail: {
-			script: "scripts/test-runner.ts",
+			script: "test-runner",
 			summary: "Return source-run stored detail for a failure lookup handle.",
 			usage: ["detail --handle <handle> [--format plain|json|json-compact|toon] [--json|--plain]"],
 			json: true,

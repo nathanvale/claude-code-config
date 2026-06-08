@@ -303,7 +303,7 @@ export const browserAdapterProofSuccessActions = [
 export const warmChromePreflightContracts = defineCommandFacadeContract(
 	{
 		check: {
-			script: "scripts/preflight-warm-chrome.ts",
+			script: "preflight-warm-chrome",
 			summary: "Verify Warm Chrome without changing local state.",
 			usage: [
 				"check [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
@@ -325,7 +325,7 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		repair: {
-			script: "scripts/preflight-warm-chrome.ts",
+			script: "preflight-warm-chrome",
 			summary: "Repair safe Warm Chrome profile proof, then verify.",
 			usage: [
 				"repair [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
@@ -350,7 +350,7 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		launch: {
-			script: "scripts/preflight-warm-chrome.ts",
+			script: "preflight-warm-chrome",
 			summary: "Launch real Google Chrome if needed, then verify.",
 			usage: [
 				"launch [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--chrome <path>] [--json|--plain]",
@@ -375,7 +375,7 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 			exitCodes,
 		},
 		status: {
-			script: "scripts/preflight-warm-chrome.ts",
+			script: "preflight-warm-chrome",
 			summary: "Show human Warm Chrome status without changing local state.",
 			usage: [
 				"status [--port <port> | --endpoint <endpoint>] [--profile <dir>] [--json|--plain]",
@@ -413,7 +413,7 @@ export const warmChromePreflightContracts = defineCommandFacadeContract(
 export const browserAdapterProofContracts = defineCommandFacadeContract(
 	{
 		check: {
-			script: "scripts/preflight-browser-adapter.ts",
+			script: "preflight-browser-adapter",
 			summary: "Verify a Browser Adapter against Warm Chrome.",
 			usage: [
 				"check --adapter chrome-devtools [--port <port> | --endpoint <endpoint>] [--json|--plain]",
@@ -435,7 +435,7 @@ export const browserAdapterProofContracts = defineCommandFacadeContract(
 			exitCodes: adapterProofExitCodes,
 		},
 		status: {
-			script: "scripts/preflight-browser-adapter.ts",
+			script: "preflight-browser-adapter",
 			summary: "Show human Browser Adapter proof status.",
 			usage: [
 				"status --adapter chrome-devtools [--port <port> | --endpoint <endpoint>] [--json|--plain]",
@@ -473,7 +473,7 @@ export const browserAdapterProofContracts = defineCommandFacadeContract(
 export const browserAdapterMapContracts = defineCommandFacadeContract(
 	{
 		check: {
-			script: "scripts/browser-adapter-map.ts",
+			script: "browser-adapter-map",
 			summary: "Validate one Browser Adapter Map.",
 			usage: ["check --adapter chrome-devtools [--json|--plain]"],
 			json: true,
@@ -489,7 +489,7 @@ export const browserAdapterMapContracts = defineCommandFacadeContract(
 			exitCodes: browserAdapterMapExitCodes,
 		},
 		status: {
-			script: "scripts/browser-adapter-map.ts",
+			script: "browser-adapter-map",
 			summary: "Show human Browser Adapter Map validation status.",
 			usage: ["status --adapter chrome-devtools [--json|--plain]"],
 			json: true,
@@ -887,7 +887,7 @@ export const browserAdapterRouterPrepareSuccessActions = [
 export const browserAdapterRouterContracts = defineCommandFacadeContract(
 	{
 		prepare: {
-			script: "scripts/browser-adapter-router.ts",
+			script: "browser-adapter-router",
 			summary:
 				"Assemble route evidence from proof, report, and task facts; emit a route-ready envelope or dependency-ordered recovery.",
 			usage: [
@@ -912,7 +912,7 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			exitCodes: routerExitCodes,
 		},
 		route: {
-			script: "scripts/browser-adapter-router.ts",
+			script: "browser-adapter-router",
 			summary:
 				"Select a Browser Adapter from a supplied evidence envelope without probing. Get the envelope from `prepare`.",
 			usage: [
@@ -935,7 +935,7 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			exitCodes: routerExitCodes,
 		},
 		report: {
-			script: "scripts/browser-adapter-router.ts",
+			script: "browser-adapter-router",
 			summary:
 				"Discover and validate one adapter capability report from registry or manifest.",
 			usage: [
@@ -962,7 +962,7 @@ export const browserAdapterRouterContracts = defineCommandFacadeContract(
 			exitCodes: routerExitCodes,
 		},
 		status: {
-			script: "scripts/browser-adapter-router.ts",
+			script: "browser-adapter-router",
 			summary:
 				"Project a supplied evidence envelope as a human route decision.",
 			usage: [
@@ -1433,7 +1433,7 @@ const browserUseOperationResultContract = {
 export const browserUseContracts = defineCommandFacadeContract(
 	{
 		"targets-list": {
-			script: "scripts/browser-use.ts",
+			script: "browser-use",
 			summary:
 				"List route-bound or recovery Browser Target Candidates. Get route evidence from browser-adapter-router prepare then route.",
 			usage: [
@@ -1457,7 +1457,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			exitCodes: browserUseExitCodes,
 		},
 		"targets-select": {
-			script: "scripts/browser-use.ts",
+			script: "browser-use",
 			summary:
 				"Select one route-bound Browser Target into run-scoped state using hints or a candidate ordinal. Pipe the route-bound targets list success envelope on stdin.",
 			usage: [
@@ -1484,7 +1484,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			exitCodes: browserUseExitCodes,
 		},
 		"targets-status": {
-			script: "scripts/browser-use.ts",
+			script: "browser-use",
 			summary:
 				"Show the run-scoped selected Browser Target state as a human projection.",
 			usage: ["targets status [--state <path>] [--json|--plain]"],
@@ -1505,7 +1505,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			exitCodes: browserUseExitCodes,
 		},
 		"operate-snapshot": {
-			script: "scripts/browser-use.ts",
+			script: "browser-use",
 			summary:
 				"Capture a normalized accessibility snapshot of the resolved Browser Target. Requires route success and fresh Adapter Proof.",
 			usage: [
@@ -1528,7 +1528,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			exitCodes: browserUseExitCodes,
 		},
 		"operate-screenshot": {
-			script: "scripts/browser-use.ts",
+			script: "browser-use",
 			summary:
 				"Capture a screenshot artifact of the resolved Browser Target. Requires route success and fresh Adapter Proof.",
 			usage: [
@@ -1550,7 +1550,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			exitCodes: browserUseExitCodes,
 		},
 		"operate-emulate": {
-			script: "scripts/browser-use.ts",
+			script: "browser-use",
 			summary:
 				"Emulate viewport metrics on the resolved Browser Target. Requires a route that proves the viewport emulation capability.",
 			usage: [

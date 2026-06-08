@@ -277,7 +277,7 @@ The tree is a scope declaration, not a constraint — the implementer may adjust
 
 ## Open Questions
 
-- **Memory root location.** Where `<memory-root>` lives on disk (e.g. under the repo, under `~/.config/`, or a per-domain dir near `browser-use`) is not yet pinned. Resolve at U2 implementation against the Memory OS contract (`~/.config/memory/AGENTS.md`) — repos own their own truth; this is browser-run operational memory, likely repo-owned. Does not block U1.
+- **Memory root location.** Where `<memory-root>` lives on disk (e.g. under the repo, under `~/.config/`, or a per-domain dir near `browser-use`) is not yet pinned. Resolve at U2 implementation against the Memory OS contract (`~/.config/context/AGENTS.md`) — repos own their own truth; this is browser-run operational memory, likely repo-owned. Does not block U1.
 
 ---
 

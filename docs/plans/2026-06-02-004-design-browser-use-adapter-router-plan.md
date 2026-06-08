@@ -192,48 +192,25 @@ Follow-up unit status:
   - `warm_chrome_ready`: verified loopback CDP endpoint and profile.
   - `adapter_attached_verified_browser`: adapter can act against that browser/session model.
   - `auth_session_ready`: task/domain check confirms target origin and session when needed.
-- Adapter capabilities:
-  - `snapshot_refs`
-  - `element_actions`
-  - `selector_actions`
-  - `screenshot_media`
-  - `console_debug`
-  - `network_inspection`
-  - `performance_profile`
-  - `devtools_performance_insight`
-  - `memory_debug`
-  - `react_vitals`
-- Capability distinction:
-  - `performance_profile`: capture or expose profile/trace data.
-  - `devtools_performance_insight`: produce DevTools-specific performance analysis or insight.
-  - `memory_debug`: inspect browser memory/debugging state without adapter-name bias; evidence decides support.
+- Adapter capabilities span four intent categories: action (element/selector/snapshot), media (screenshot), debug (console/network/performance/memory), and specialized (React vitals).
+  - Capability distinctions matter: profile capture differs from DevTools-specific performance insight, and memory inspection stays adapter-name-neutral with evidence deciding support.
+  - The complete capability enum is runtime-owned by the adapter/router code under `skills/browser-use/scripts/`; this plan does not duplicate it (see Scope Boundaries).
 
 ## Capability Discovery V1
+
+Intent only. The exact report-source-order state machine, the report-discovery error codes, the named verification-method strings, the route-confidence threshold/floor, and the research-signal cap are deterministic contract owned by `skills/browser-use/scripts/browser-adapter-router-engine.ts`, `browser-adapter-router-report-validation.ts`, `browser-adapter-router-manifests.ts`, and `command-contract.ts`; this plan states intent, not the exact codes, names, or numbers (see Scope Boundaries).
 
 - Registry source: `browser-use` runtime code, not skill prose.
 - Registry ids: `chrome-devtools`, `agent-browser`, `playwright-cdp`.
 - Registry membership does not imply safe routing.
 - Manifest source: Router runtime data/code under `skills/browser-use/scripts/`.
-- Manifest format: TypeScript constants in `browser-adapter-router-manifests.ts`.
-- Report source order:
-  - Validated adapter self-report command when available.
-  - Validated `browser-use` owned TypeScript manifest with provenance and stale-after.
-  - No routable report when neither exists.
+- Report source order prefers a validated adapter self-report, then a validated provenance-bearing `browser-use` manifest, then no routable report.
 - `report` owns self-report execution and manifest validation; `route` consumes supplied reports.
 - `report` side effects are check/network only; it does not click, navigate, capture media, or otherwise perform browser action.
-- Missing report: `adapter_capability_unknown`.
-- Empty report: `adapter_capability_unknown`.
-- Malformed report: `adapter_capability_unknown` plus schema diagnostic.
-- Invalid adapter self-report JSON stays report discovery failure: emit `adapter_capability_unknown` plus schema diagnostics, not `route_evidence_invalid`.
-- Stale report: `adapter_capability_stale` only when a valid report exceeded freshness policy.
-- Docs-only result: advisory evidence; does not update report.
-- Docs, references, and research artifacts cannot serve as routable manifests.
-- Routable manifest reports use `maintainer_verified_manifest` as the verification method.
-- `maintainer_docs_review` is not a routable verification method.
-- Full route requires fresh report and confidence `>=75` for every required capability.
-- Route confidence is the minimum confidence across required capabilities.
-- Docs-only research may emit `research_signal` or `advisory_signal`; it is not route confidence.
-- Numeric research signals are capped below the route threshold.
+- Missing, empty, malformed, or invalid reports fail closed as capability-unknown with a schema diagnostic; they never degrade to a stale or input-invalid code.
+- A valid report past freshness policy fails closed as capability-stale.
+- Docs-only and research artifacts are advisory evidence only: they cannot serve as routable manifests, cannot supply the routable verification method, and cannot reach route confidence.
+- Full route requires a fresh report clearing the confidence floor for every required capability; route confidence is the minimum across required capabilities.
 - `full` support requires verified Warm Chrome attachment compatibility for Browser Adapter Router V1.
 
 ## Trust Boundaries
@@ -251,58 +228,14 @@ Follow-up unit status:
 
 ## Policy Semantics
 
-- `auto`: ask candidate adapters, filter to fresh full matches, choose by ranking.
-- `auto` considers only fully evidenced candidates; missing-proof candidates are skipped with recovery evidence.
-- `prefer adapter`: ask preferred adapter first; if not full, fall back only when `fallback_allowed=true`.
-- `prefer adapter` with missing preferred proof falls back only when `fallback_allowed=true`; otherwise it emits `prove_adapter_attachment`.
-- `prefer adapter` with `fallback_allowed=false` fails closed when the preferred adapter is not full.
-- `force adapter`: ask forced adapter only; fail closed if not full.
-- `force adapter` with missing proof emits `prove_adapter_attachment`; alternatives are informational only.
-- `minimum_support`: default `full`.
-- `allow_degraded`: explicit per action or user choice, never implicit; not routed in V1.
-- Ranking:
-  - Task bundle priority when declared.
-  - Registry priority when task priority is absent.
-  - Route confidence after task and registry priority.
-  - Lexicographic adapter id as final tie-break.
-  - Emit ranking evidence on every `auto` selection.
-- Output:
-  - Emit concise candidate decisions for selected, skipped, and rejected candidates.
-  - Do not emit full raw reports unless a debug mode explicitly asks.
-  - Use existing CLI diagnostic flags for verbose evidence; no bespoke raw-report flag in V1.
-- Bundles:
-  - Task-facing bundle names are presets, not guarantees.
-  - Runtime routing evaluates resolved required capabilities.
-  - Extra required capabilities may narrow a bundle.
-  - Seed bundle names: `snapshot_page_action`, `visual_proof_capture`, `runtime_debug_inspection`, `performance_profile`, `runbook_step_execution`.
-  - Exact bundle members stay runtime-owned.
-  - Framework-specific needs such as `react_vitals` start as extra required capabilities, not seed bundles.
-  - No weighted capability scoring in V1.
+- Router supports three modes: `auto` (poll all candidates, choose the best fully-evidenced match by ranking), `prefer` (try the preferred adapter first, fall back only when fallback is allowed), and `force` (route only the forced adapter, fail closed otherwise).
+- Ranking, bundle resolution, the `minimum_support`/`allow_degraded` defaults, candidate-decision output shape, and seed bundle membership are deterministic contract owned by `skills/browser-use/scripts/browser-adapter-router.ts` and its `command-contract.ts`; this plan states intent, not the exact rules or names.
 
 ## Recovery Semantics
 
-- `adapter_capability_none`: required capability reports `none`.
-- `adapter_capability_unknown`: no valid current report exists.
-- `adapter_capability_stale`: a valid report exists but exceeded freshness policy.
-- `adapter_capability_partial`: adapter has adjacent/weaker support.
-- `adapter_attachment_unverified`: required Browser Adapter Proof evidence is missing or unverifiable.
-- `adapter_attachment_incompatible`: supplied attachment evidence is verified but incompatible with Browser Adapter Router V1.
-- `route_evidence_invalid`: supplied evidence envelope is missing, unreadable, malformed, or schema-invalid.
-- `route_evidence_mixed_run`: supplied evidence cannot be tied to the same route run or explicit parent run.
-- `route_evidence_stale`: supplied route evidence expired before selection.
-- `auth_session_unverified`: task-required auth/session evidence is missing, unverifiable, or mismatched.
-- `target_origin_unverified`: task-required target origin/page evidence is missing, unverifiable, or mismatched.
-- `research_adapter_capability`: structured docs research action with adapter, capability, query, sources, last checked, stale reason, retry posture, and terminal condition.
-- `prove_adapter_attachment`: run Browser Adapter Proof for a candidate adapter, then retry routing with fresh proof evidence.
-- `verify_auth_session`: verify target origin, profile identity, and account/session match, then retry routing.
-- `verify_target_origin`: verify target page/origin evidence, then retry routing.
-- `accept_partial_adapter`: deferred action; do not emit in active V1 route failures.
-- `research_complete_unverified`: docs lookup finished but did not refresh runtime truth.
-- `verify_capability_report`: probe or validate evidence before report refresh.
-- V1 has no `verify` command and no `report --verify`; executable probes remain a recovery action/future implementation path.
-- `use_selected_browser_adapter`: use the Router-selected Browser Adapter and emitted constraints.
-- Router emits one `continuation.next_action_id` per route failure; alternatives are explanatory only.
-- Router success is valid for one Bounded Browser Outcome and emits route validity constraints such as no adapter switching, no cold-browser fallback, and reroute when task bundle, target origin/page, selected adapter, proof, capability evidence, or preconditions change or expire.
+- On failure the router emits recovery actions that name the problem and the next step: capability gaps (none/unknown/stale/partial), attachment problems, evidence-envelope problems (invalid/mixed-run/stale), and task-precondition problems (auth/session, target origin) each map to a corresponding recovery or verification action.
+- Docs research is itself a bounded recovery action, not auto-run route continuation; verification, not docs review, refreshes a routable report.
+- The exact action IDs, diagnostic/error codes, their wording, the single-continuation rule, and the route-validity constraints are deterministic contract owned by `skills/browser-use/scripts/browser-adapter-router-recovery.ts`, `browser-adapter-router.ts`, and `command-contract.ts`; this plan does not duplicate the catalogue (see Scope Boundaries).
 
 ## Media Proof Policy
 

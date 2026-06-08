@@ -1,15 +1,7 @@
 ---
 name: imessage-reader
-description: >
-  Query and search macOS iMessage history directly from the Messages.app SQLite database,
-  like a Gmail MCP for your texts. Every query automatically saves returned messages as
-  markdown files with YAML frontmatter — no separate export step needed. Use this skill
-  whenever the user asks about their text messages, iMessages, SMS history, or wants to
-  search conversations. Triggers include: "what did I text", "messages from", "texts with",
-  "iMessage", "show me my texts", "search my messages", "who texted me", "conversation
-  with", "what was that text about", or any reference to looking up past messages or
-  texting history. Even if the user doesn't say "iMessage" explicitly, if they're asking
-  about text conversations, phone messages, or chat history on their Mac, this skill applies.
+description: "Query and search macOS iMessage history directly from the Messages.app SQLite database, like a Gmail MCP for texts. Use when the user asks about text messages, iMessages, SMS history, message search, phone-message history, or Mac chat history."
+role: tool-workflow
 ---
 
 # iMessage Reader
@@ -18,180 +10,74 @@ Read and search your iMessage/SMS history by querying the macOS Messages.app
 database directly. Works like the Gmail MCP — stateless queries that return
 results and automatically persist them as markdown.
 
+## Owner
+
+- CLI, parser, defaults, flags, exit codes, and JSON envelopes: `skills/imessage-reader/scripts/query-imessage.ts`.
+- Message parsing, persistence layout, contact resolution, markdown frontmatter, and migration behavior: `skills/imessage-reader/scripts/lib.ts`.
+- Runtime tests: `skills/imessage-reader/scripts/lib.test.ts`.
+- Storage routing when save location is unclear: `skills/context-advisor/SKILL.md`.
+
 ## Prerequisites
 
-This skill runs on the host Mac (not inside a VM). It needs:
-
-1. **Bun** installed (`bun --version` to check)
-2. **Full Disk Access** granted to the calling process (Terminal, Claude Code, etc.)
+- Run on the host Mac.
+- Check Bun with `bun --version`.
+- Require Full Disk Access for the calling process.
 
 If the user gets an "unable to open database" error, they need to enable
-Full Disk Access: System Settings → Privacy & Security → Full Disk Access.
+Full Disk Access: System Settings > Privacy & Security > Full Disk Access.
 
 ## Core Concept: Read-Through Persistence
 
-Every message query automatically saves each returned message as a `.md` file
-with YAML frontmatter. Files are always overwritten — no dedup logic. This means:
+Message queries save returned messages as `.md` files with YAML frontmatter.
+Files are overwritten so edited messages refresh on next read. This means:
 
 - Messages that have been edited get the latest version on next read
 - The markdown archive grows naturally as the user queries different date ranges
-- Semantic search tools (like QMD) can index the markdown folder
+- Search and indexing tools can index the markdown folder
 - No separate "export" step — reading IS saving
 
-Default save location: `~/Documents/messages/`
-Override with `--save-dir` flag. Disable with `--no-save`.
+Save defaults, save overrides, and no-save behavior live in
+`skills/imessage-reader/scripts/query-imessage.ts`.
+
+## Storage Safety
+
+- Treat saved message archives as durable sensitive context.
+- Use `--no-save` when the user wants a one-off inspection without durable files.
+- Use `skills/context-advisor/SKILL.md` when save directory, owning repo, privacy boundary, retention, deletion, or cross-repo promotion is unclear.
+- If `context-advisor` is unavailable, read `skills/context-advisor/references/storage-routing.md`.
+- Do not save raw message archives into a project repo unless that repo is the accepted owner.
 
 ## Commands
 
-Run the script with:
-```bash
-bun run <skill-path>/scripts/query-imessage.ts <command> [options]
-```
+- Inspect available commands: `bun run skills/imessage-reader/scripts/query-imessage.ts help`.
+- Inspect database shape only when debugging: `bun run skills/imessage-reader/scripts/query-imessage.ts schema`.
+- Use `messages` for text search, contact search, date windows, direction filters, attachments, and archive seeding.
+- Use `contacts` to find high-volume contacts before narrowing a query.
+- Use `threads` for group or 1:1 conversation summaries.
+- Use `sync` for incremental corpus sync.
+- Use `migrate-notes` only when rewriting legacy saved notes.
 
-### messages — Search and read messages
-
-```bash
-# Messages from the past week
-bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-12
-
-# Messages with a specific contact
-bun run <skill-path>/scripts/query-imessage.ts messages --contact "+61412345678" --limit 50
-
-# Search message text
-bun run <skill-path>/scripts/query-imessage.ts messages --search "school move" --since 2025-01-01
-
-# Date range
-bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-01 --until 2026-03-15
-
-# Only sent messages
-bun run <skill-path>/scripts/query-imessage.ts messages --from-me --since 2026-03-01
-
-# Include attachment-backed media parts
-bun run <skill-path>/scripts/query-imessage.ts messages --contact "Sarah" --include-attachments
-
-# Oldest first (default is newest first)
-bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-01 --oldest-first
-
-# Save to a specific directory
-bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-01 --save-dir ~/my-vault/messages
-
-# Query without saving (just read)
-bun run <skill-path>/scripts/query-imessage.ts messages --contact "Sarah" --no-save
-
-# Pretty-print JSON output (for human debugging)
-bun run <skill-path>/scripts/query-imessage.ts messages --since 2026-03-01 --limit 5 --no-save --pretty
-```
-
-Options:
-- `--since` / `--until` — Date range (YYYY-MM-DD for local calendar days, or ISO 8601 for exact timestamps)
-- `--contact` — Filter by handle (phone/email, partial match)
-- `--search` — Case-insensitive substring search on decoded message text
-- `--from-me` / `--to-me` — Direction filter (mutually exclusive)
-- `--service` — `iMessage` or `SMS`
-- `--limit` — Max results (default 100, max 50000)
-- `--oldest-first` — Chronological order (default: newest first)
-- `--include-attachments` — Include standalone media parts and attachment metadata
-- `--save-dir` — Override markdown save location
-- `--no-save` — Skip markdown persistence
-- `--pretty` — Pretty-print JSON output (default: compact for token efficiency)
-
-### contacts — List contacts with message counts
+Examples:
 
 ```bash
-bun run <skill-path>/scripts/query-imessage.ts contacts
-bun run <skill-path>/scripts/query-imessage.ts contacts --limit 20
+bun run skills/imessage-reader/scripts/query-imessage.ts messages --since 2026-03-01
+bun run skills/imessage-reader/scripts/query-imessage.ts messages --contact "+61412345678" --limit 50
+bun run skills/imessage-reader/scripts/query-imessage.ts messages --search "school move" --since 2025-01-01
+bun run skills/imessage-reader/scripts/query-imessage.ts messages --contact "Sarah" --no-save
 ```
 
-Returns each contact's handle, service type, total message count, and
-first/last message dates. Useful for answering "who do I text the most?"
+## Verification
 
-### threads — List conversation threads
+- Run `bun test skills/imessage-reader/scripts/lib.test.ts` after parser, persistence, migration, or contact-resolution changes.
+- Run `bun run skills/imessage-reader/scripts/query-imessage.ts help` after CLI interface edits.
+- Run host-Mac database checks only when debugging permissions, database shape, or saved-message behavior.
 
-```bash
-bun run <skill-path>/scripts/query-imessage.ts threads
-bun run <skill-path>/scripts/query-imessage.ts threads --contact "Sarah"
-```
+## Output And Errors
 
-Shows group vs 1:1, participant lists, and message counts per thread.
-
-### sync — Incremental corpus sync
-
-```bash
-bun run <skill-path>/scripts/query-imessage.ts sync
-bun run <skill-path>/scripts/query-imessage.ts sync --since 2026-03-01
-```
-
-Reads messages incrementally and writes v2 corpus notes plus a sync cursor and
-manifest under the personal-messages corpus root.
-
-### migrate-notes — Rewrite legacy notes to v2 paths
-
-```bash
-bun run <skill-path>/scripts/query-imessage.ts migrate-notes
-```
-
-Migrates legacy saved markdown notes into the canonical v2 note layout.
-
-### schema — Inspect database structure
-
-```bash
-bun run <skill-path>/scripts/query-imessage.ts schema
-```
-
-Dumps table names, columns, types, and row counts. Useful for debugging.
-
-### help — Show available commands
-
-```bash
-bun run <skill-path>/scripts/query-imessage.ts help
-```
-
-Returns JSON listing all available commands and schema version.
-
-## Output Format
-
-All commands output **compact JSON** to stdout by default (add `--pretty` for
-human-readable formatting). Every success and error envelope includes a
-`schema_version` field for forward compatibility. Null fields are pruned from
-message objects to minimize token usage.
-
-The `messages` command returns:
-
-```json
-{"schema_version":3,"count":42,"saved":38,"save_dir":"~/Documents/messages","filters":{"since":"2026-03-01","contact":"Sarah"},"messages":[{"source_guid":"abc123","group_guid":"abc123","guid":"p:0/abc123","part_index":0,"message_kind":"text","text":"Are you picking up Levi today?","is_from_me":false,"date":"2026-03-18T09:32:00.000Z","date_local":"2026-03-18T20:32:00+11:00","handle":"+61412345678","contact_name":"Sarah Vale","chat_name":"Sarah Vale","chat_id":"+61412345678","is_group":false}]}
-```
-
-Messages are emitted as stable parts: text parts, media parts, and tapbacks.
-When `--include-attachments` is omitted, standalone media parts are excluded
-from JSON output and markdown persistence to keep output smaller. If file I/O
-errors occur, a `save_errors` count is included in the success envelope.
-
-## Error Handling
-
-All errors are output as structured JSON to stdout for agent consumption:
-
-```json
-{"schema_version":3,"error":true,"code":"INVALID_DATE","message":"Invalid date: \"garbage\"","hint":"Use YYYY-MM-DD or ISO 8601 format"}
-```
-
-Exit codes:
-
-| Exit Code | Error Code | Meaning |
-|-----------|-----------|---------|
-| 0 | — | Success |
-| 1 | `UNKNOWN_ERROR` | Unexpected failure |
-| 2 | `INVALID_ARGS` / `INVALID_DATE` / `INVALID_LIMIT` / `UNKNOWN_FLAG` / `UNKNOWN_COMMAND` | Bad CLI arguments |
-| 3 | `DB_ACCESS_DENIED` | Full Disk Access missing |
-| 4 | `QUERY_FAILED` | SQL execution error |
-
-Unknown flags are rejected (strict mode) — typos like `--sinc` produce a
-structured error instead of being silently ignored, including `help`, `--help`,
-and `-h`.
-
-Date validation rejects impossible calendar dates such as `2026-02-31`.
-For date-only filters, `--since YYYY-MM-DD` means the start of that local day
-on the host Mac, and `--until YYYY-MM-DD` means the end of that local day.
-Use ISO 8601 timestamps for exact instants.
+- Parse JSON stdout.
+- Read success fields, error fields, exit codes, date parsing, strict flags, and message part semantics from `skills/imessage-reader/scripts/query-imessage.ts`.
+- Read saved-note shape and migration behavior from `skills/imessage-reader/scripts/lib.ts`.
+- Do not copy output envelopes, frontmatter fields, parser rules, or exit tables into this file.
 
 ## macOS Ventura+ Support (attributedBody)
 
@@ -220,46 +106,12 @@ includes Google Contacts, iCloud, and any other CardDAV accounts.
 - The `from` field in markdown frontmatter reflects the actual sender:
   `me` for sent messages, resolved contact name for inbound messages when available
 
-The `contact_name` field appears in `messages` and `contacts` output. It's
-pruned from output when null (no match found).
+## Saved-Message Shape
 
-## Markdown File Structure
-
-Files are saved as `{save-dir}/YYYY/YYYY-MM-DD/{guid}.md`:
-
-```
-messages/
-├── 2026/
-│   ├── 2026-03-17/
-│   │   ├── abc123.md
-│   │   └── def456.md
-│   └── 2026-03-18/
-│       └── ghi789.md
-```
-
-Each file has frontmatter with full metadata (special characters are escaped):
-
-```yaml
----
-guid: "p:0/abc123"
-source_guid: "abc123"
-message_kind: "text"
-from: "Sarah Vale"
-handle: "+61412345678"
-date: 2026-03-18T09:32:00.000Z
-date_local: 2026-03-18T20:32:00+11:00
-is_from_me: false
-service: iMessage
-thread: "Sarah Vale"
-is_group: false
-group_guid: "abc123"
-part_index: 0
-contact_name: "Sarah Vale"
-reply_to: "parent-guid"
----
-
-Are you picking up Levi today?
-```
+Saved-message shape and persistence (markdown structure, frontmatter fields,
+tapback codes, contact resolution) are owned by
+`skills/imessage-reader/scripts/lib.ts` — see its TypeScript types and output
+contract. This file covers when to run the CLI, not the output shape.
 
 ## Presenting Results
 
@@ -268,12 +120,8 @@ When showing messages to the user conversationally:
 - Format dates in natural language ("last Tuesday at 3pm"), not raw ISO
 - Show the contact name/handle clearly
 - For group chats, note the chat name and that it's a group
-- Tapback reaction codes: 2000=Love, 2001=Like, 2002=Dislike, 2003=Laugh,
-  2004=Emphasis, 2005=Question
-- `thread_originator` links a reply to its parent message GUID
-- Handles are phone numbers or emails — the skill resolves them to contact
-  names via AddressBook when available (shown as `contact_name`). If no
-  match is found, the raw handle is shown
+- Decode tapback reaction codes to their labels (owner: `lib.ts`)
+- For replies, surface the parent message they thread from
 
 ## Seeding a Full Archive
 
@@ -281,16 +129,16 @@ To build up a complete searchable archive, the user just needs to run a
 broad query. Since every read persists, a wide date range seeds the folder:
 
 ```bash
-bun run <skill-path>/scripts/query-imessage.ts messages --since 2024-01-01 --limit 10000 \
-  --oldest-first --save-dir ~/my-vault/messages
+bun run skills/imessage-reader/scripts/query-imessage.ts messages --since 2024-01-01 --limit 10000 \
+  --oldest-first --save-dir ~/code/personal-messages/docs/messages/imessage
 ```
 
 Subsequent queries for the same date range will overwrite the same files
 (capturing any edits). There's no state file or checkpoint — it's idempotent
 by design.
 
-For very large histories (50k+ messages), increase `--limit` (max 50000) or
-run multiple date-range queries to keep memory usage reasonable.
+For large histories, run multiple date-range queries to keep memory usage
+reasonable. Check the runtime owner for current limits.
 
 ## Limitations
 
@@ -303,6 +151,4 @@ run multiple date-range queries to keep memory usage reasonable.
   point to `~/Library/Messages/Attachments/`
 - **Full Disk Access**: Required, or the database won't open
 - **macOS only**: Queries the local Messages.app database
-- **Search behavior**: `--search` performs case-insensitive substring matching on
-  decoded message text after retrieval, so it can match `attributedBody` text on
-  Ventura+. Broad searches may be slower than narrow date or contact filters
+- **Search behavior**: broad searches may be slower than narrow date or contact filters.

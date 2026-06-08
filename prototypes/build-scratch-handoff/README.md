@@ -38,7 +38,7 @@ Drive it by hand. Press keys to load different fake handoffs and watch:
 
 ## Open question this punts on
 
-Memory-root location (repo-local vs `~/.config/memory/`) is a brainstorm/plan
+Memory-root location (repo-local vs `~/.config/context/`) is a brainstorm/plan
 decision. The prototype writes to a temp dir and prints the path.
 
 ## Verdict
@@ -88,7 +88,7 @@ the re-brainstorm:
   tests in the real plan must cover value-shape hits **in isolation** (clean
   field name + secret-shaped value), or that detector could rot undetected.
 - **memory-root still unpinned** — prototype writes to a temp dir
-  (`mkdtempSync`). Repo-local vs `~/.config/memory/` per the Memory OS contract
+  (`mkdtempSync`). Repo-local vs `~/.config/context/` per the Memory OS contract
   is a real brainstorm/plan decision, unchanged by this prototype.
 - **Whole-batch-refuse names only the FIRST offender.** If browser-use leaks
   several secrets, the operator fixes one, re-runs, hits the next. Acceptable

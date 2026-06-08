@@ -1,13 +1,20 @@
 ---
 name: to-issues
-description: Break a plan, spec, or PRD into independently-grabbable issues on the project issue tracker using tracer-bullet vertical slices. Use when user wants to convert a plan into issues, create implementation tickets, or break down work into issues.
+description: "Split an accepted plan or spec into independently grabbable implementation tickets using tracer-bullet vertical slices. Not for writing a PRD."
+role: tool-workflow
 ---
 
 # To Issues
 
 Break a plan into independently-grabbable issues using vertical slices (tracer bullets).
 
-The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
+## Dependencies
+
+- Issue tracker map: `docs/agents/issue-tracker.md`.
+- Triage label map: `docs/agents/triage-labels.md`.
+- Domain map: `docs/agents/domain.md`.
+- Missing state: blocked for publishing; continue for draft-only breakdown.
+- Next repair: add the missing `docs/agents/` owner file or ask for the tracker target.
 
 ## Process
 
@@ -25,11 +32,11 @@ Break the plan into **tracer bullet** issues. Each issue is a thin vertical slic
 
 Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an architectural decision or a design review. AFK slices can be implemented and merged without human interaction. Prefer AFK over HITL where possible.
 
-<vertical-slice-rules>
+Vertical slice rules:
+
 - Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
 - A completed slice is demoable or verifiable on its own
 - Prefer many thin slices over few thick ones
-</vertical-slice-rules>
 
 ### 4. Quiz the user
 
@@ -55,7 +62,9 @@ For each approved slice, publish a new issue to the issue tracker. Use the issue
 
 Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
 
-<issue-template>
+### Issue body template
+
+```markdown
 ## Parent
 
 A reference to the parent issue on the issue tracker (if the source was an existing issue, otherwise omit this section).
@@ -77,7 +86,6 @@ Avoid specific file paths or code snippets — they go stale fast. Exception: if
 - A reference to the blocking ticket (if any)
 
 Or "None - can start immediately" if no blockers.
-
-</issue-template>
+```
 
 Do NOT close or modify any parent issue.

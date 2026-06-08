@@ -1,6 +1,7 @@
 ---
 name: browser-use
 description: "Browser tasks through Warm Chrome; no Chrome for Testing."
+role: tool-workflow
 ---
 
 # Browser Use
@@ -9,15 +10,16 @@ Use for browser tasks that need a logged-in, profile-bearing Chrome session.
 
 ## Owner
 
-- Warm Chrome proof, repair, launch: `skills/browser-use/scripts/preflight-warm-chrome.sh`.
-- Browser Adapter Proof: `skills/browser-use/scripts/preflight-browser-adapter.sh`.
-- Browser Adapter Router: `skills/browser-use/scripts/browser-adapter-router.sh`.
-- Browser Use targets and operations: `skills/browser-use/scripts/browser-use.sh` (route-bound; run Router `prepare` then `route` first).
-- Browser Adapter Map validation: `skills/browser-use/scripts/browser-adapter-map.sh`.
+- Front doors: `skills/browser-use/scripts/package.json#bin`.
+- Warm Chrome proof, repair, launch: `preflight-warm-chrome`.
+- Browser Adapter Proof: `preflight-browser-adapter`.
+- Browser Adapter Router: `browser-adapter-router`.
+- Browser Use targets and operations: `browser-use` (route-bound; run Router `prepare` then `route` first).
+- Browser Adapter Map validation: `browser-adapter-map`.
 - CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/scripts/command-contract.ts`.
 - Router model, validation, recovery: `skills/browser-use/scripts/browser-adapter-router*.ts`.
 - Warm Chrome invariant and auth boundary: `skills/browser-use/references/warm-chrome.md`.
-- Browser Adapter Maps: `skills/browser-use/references/browser-adapter-*.md`.
+- Chrome DevTools adapter map: `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
 
 ## Workflow
 
@@ -30,7 +32,8 @@ Name the browser outcome before choosing tools:
 Prove Warm Chrome as the browser-entry precondition:
 
 ```bash
-skills/browser-use/scripts/preflight-warm-chrome.sh check --json
+cd skills/browser-use/scripts
+bun run preflight-warm-chrome check --json
 ```
 
 - Parse stdout envelope.
@@ -41,8 +44,9 @@ skills/browser-use/scripts/preflight-warm-chrome.sh check --json
 Ask the Router for capability evidence, then route:
 
 ```bash
-skills/browser-use/scripts/browser-adapter-router.sh report --adapter <id> --json
-skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$ENVELOPE" --json
+cd skills/browser-use/scripts
+bun run browser-adapter-router report --adapter <id> --json
+bun run browser-adapter-router route --envelope "$ENVELOPE" --json
 ```
 
 - Build the route envelope from the user request, Warm Chrome proof, task preconditions, and capability reports.
@@ -53,8 +57,9 @@ skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$ENVELOPE
 If Router asks for attachment proof:
 
 ```bash
-skills/browser-use/scripts/preflight-browser-adapter.sh check --adapter <selected-or-requested-adapter> --json
-skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$UPDATED_ENVELOPE" --json
+cd skills/browser-use/scripts
+bun run preflight-browser-adapter check --adapter <selected-or-requested-adapter> --json
+bun run browser-adapter-router route --envelope "$UPDATED_ENVELOPE" --json
 ```
 
 - Let the selected adapter proof own dependency checks, config checks, port binding, and repair hints.
@@ -66,20 +71,26 @@ skills/browser-use/scripts/browser-adapter-router.sh route --envelope "$UPDATED_
 Use `status` for human route projection:
 
 ```bash
-skills/browser-use/scripts/browser-adapter-router.sh status --envelope "$ENVELOPE" --plain
+cd skills/browser-use/scripts
+bun run browser-adapter-router status --envelope "$ENVELOPE" --plain
 ```
 
 After route success, list Browser Target Candidates through the proven adapter:
 
 ```bash
-skills/browser-use/scripts/browser-use.sh targets list --mode route-bound --route "$ROUTE" --adapter-proof "$PROOF" --json
+cd skills/browser-use/scripts
+bun run browser-use targets list --mode route-bound --route "$ROUTE" --adapter-proof "$PROOF" --json
 ```
 
-- Route-bound listing yields operation-ready candidates; recovery listing (`--mode recovery` with a requested adapter instead of a route) yields evidence-gathering candidates for `prepare --target-discovery`.
-- Reference targets by candidate ordinal; ordinals are scoped to one target envelope.
-- Use `--show-url` for origin plus redacted path shape only; never expect query strings, fragments, or adapter handles in output.
-- Follow `continuation.next_action_id`: route-bound points at `targets select`, recovery at `prepare`.
-- Modes, flags, result vocab, and recovery actions: `skills/browser-use/scripts/command-contract.ts`.
+- Route-bound listing yields operation-ready candidates; recovery listing yields evidence-gathering candidates for target discovery.
+- Follow `continuation.next_action_id` to the next command.
+- Modes, flags, candidate referencing, URL redaction, result vocab, and recovery actions: `skills/browser-use/scripts/command-contract.ts`.
+
+## Verification
+
+- Run `cd skills/browser-use/scripts && bun test` after router, adapter-map, preflight, or browser-use script changes.
+- Run `cd skills/browser-use/scripts && bun run typecheck` after TypeScript edits.
+- Run `cd skills/browser-use/scripts`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.
 
 ## Page Actions
 

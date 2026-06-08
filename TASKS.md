@@ -2,26 +2,30 @@
 
 ## Now
 
-- [ ] ...
+- None.
 
 ## Next
 
-- [ ] **Add 16 headless smoke tests to multi-agent-smoke-lib.ts** — boundary, propagation, and operator skill tests run via `claude -p` and `codex exec`
-  - Tests 1-10: boundary/propagation (rules Claude-only, context files Claude-only, context-index reaches both, tool map Codex-only, heal-skill Claude-only, co-author Claude-only, Memory OS shared, AGENTS.md not editable, code quality shared, newsroom Claude-only)
-  - Tests 11-16: operator skills (workflow trigger, router classification, workflow rule Claude-only, contract auditor has router skill, smoke runner executes, heal-skill reachable)
-- [ ] **Fix audit findings H1/H2/M1** — add missing symlinks to spec, register dark context files, add missing rules to spec
-- [ ] **Reclassify prompt-system-workflow trigger as shared** — when Codex skill invocation is wired up, mirror the trigger rule from `rules/` into `prompt-fragments/shared/` or `prompt-fragments/codex/` so Codex also knows when to invoke the workflow
+- None.
 
 ## Blocked
 
-- [ ] ...
+- None.
 
 ## Later
 
-- [ ] ...
+- None.
 
 ## Done
 
+- [x] ~~**Refactor CLI command facade internals without public Interface drift**~~ (2026-06-08) - Preserved root/testing public imports, explicit root inventory, and package-boundary scans
+- [x] ~~**Split command-facade.ts by Interface slice**~~ (2026-06-08) - Extracted command contract, discovery, metadata, runtime envelope, runtime text safety, CLI writer, usage, diagnostics, and baseline-exit owners
+- [x] ~~**Split command facade tests by Interface slice**~~ (2026-06-08) - Split focused suites for package boundary, discovery, metadata, runtime envelope, diagnostics, writer, usage, and testing subpath
+- [x] ~~**Clean stale facade context references**~~ (2026-06-08) - Replaced missing package-map and ADR links; updated source owner paths in `runtime/cli-command-facade/CONTEXT.md`
+- [x] ~~**Prove facade refactor safety**~~ (2026-06-08) - Passed `bun --filter @side-quest/cli-command-facade test` and `bun --filter @side-quest/cli-command-facade typecheck`
+- [x] ~~**Reclassify prompt-system-workflow trigger as shared**~~ (2026-06-08) - Added the shared prompt-system workflow route to `AGENTS.md`; focused smoke passed for `boundary`, `propagation`, and `workflow-trigger` across Claude and Codex
+- [x] ~~**Fix audit findings H1/H2/M1**~~ (2026-06-08) - ADR 0011 now records delivery symlink topology, registered on-demand context owners, and registered Claude rules
+- [x] ~~**Add 16 headless smoke tests to multi-agent-smoke-lib.ts**~~ (2026-06-08) - Added prompt boundary and operator skill matrix IDs; dry-run builds 48 commands across 24 smoke tests and 2 harnesses
 - [x] ~~**Fix git-safety hook cross-repo cwd bug**~~ (2026-03-30) - `resolveEffectiveGitCwd()` extracts target repo from `git -C` and `cd` prefixes instead of using session cwd
 - [x] ~~**Create code-quality rule for runner plugins**~~ (2026-03-23) - `rules/code-quality.md` with alwaysApply for bun-runner, biome-runner, tsc-runner MCP tool routing
 - [x] ~~**Add runner details to shared fragment for Codex**~~ (2026-03-23) - Updated `prompt-fragments/shared/tool-routing.md` with full tool table, re-rendered

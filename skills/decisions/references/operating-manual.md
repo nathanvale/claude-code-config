@@ -144,6 +144,50 @@ V2 Ideas:
 - Promote a note to a decision entry only after acceptance.
 - Do not create a separate decision queue in v1.
 
+## Brainstorm To Agent-Native I/O
+
+Use this pattern when a skill turns a fuzzy idea into a runtime-backed command.
+
+```mermaid
+flowchart TD
+  A["Fuzzy idea or brainstorm"] --> B["Grill intent and boundaries"]
+  B --> C["Record accepted decisions"]
+  C --> D["Define prose input envelope"]
+  D --> E["Define package-owned output data"]
+  E --> F["Bind output to facade envelopes"]
+  F --> G["Point skill prose at owners"]
+```
+
+Rules:
+
+- Start from the brainstorm, not a command shape.
+- Grill one decision at a time.
+- Record accepted decisions before implementation planning depends on them.
+- Put unresolved branches in `Notes`, not runtime contracts.
+- Use a prose input envelope when humans or agents supply intent.
+- Require explicit fields for side effects, ownership, durability, privacy, or acceptance.
+- Reject hidden inference for `owner`, `source`, execute mode, and personal/private scope.
+- Define package-owned output data by driver need:
+  - success data proves plan or mutation result
+  - repair data tells the caller what to change
+  - safety data tells the caller what changed and whether retry is safe
+- Use facade runtime envelopes for output transport and validation.
+- Keep exact flags, schemas, field names, statuses, action names, diagnostics, retry categories, and envelope details in code, help, and tests.
+- Keep `SKILL.md` as routing:
+  - when to call the command
+  - which owner path defines the contract
+  - what safety gate applies
+  - what next safe action follows
+- Name owners before implementation:
+  - contract
+  - model
+  - engine
+  - discovery
+  - CLI
+  - tests
+- Use `create-cli` before adding or changing the command surface.
+- Prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift.
+
 ## Helper Gate
 
 - Helper intent: `decisions check <file> --json`.
@@ -153,6 +197,60 @@ V2 Ideas:
 - V1 helper checks one explicitly provided file.
 - V1 helper requires JSON output.
 - Exact parser rules, result shape, diagnostics, and exit codes belong in code.
+
+## V2 Record Direction
+
+- Use `decisions record` as the v2 write surface.
+- Default record runs to dry-run.
+- Require explicit execute mode for writes.
+- Accept a prose envelope for intent input.
+- Require explicit `decision`, `owner`, `source`, and `accepted: true`.
+- Do not infer missing `owner` or `source`.
+- Use facade runtime envelopes for CLI output.
+- Put package-specific payloads inside facade-owned `data`.
+- Keep exact input, output, action, diagnostic, and exit contracts in code, help, and tests.
+
+## Record Success Data
+
+- Describe success as a mutation plan or completed mutation result.
+- Dry-run data names the target log, proposed decision identity, planned mutations, and validation summary.
+- Execute data names the target log, created decision identity, completed mutations, and validation summary.
+- Keep full rendered entries out of primary success data.
+- Use rendered Markdown only as preview detail when useful.
+
+## Record Error Data
+
+- Describe missing-input and out-of-scope errors as repair packets.
+- Name the failed gate, missing or blocked input, no-mutation evidence, and next repair action.
+- Do not echo full input as primary error data.
+- Route private or personal decisions away from repo logs.
+- Describe duplicate conflict and legacy log shape errors as case-specific repair packets.
+- For duplicate conflicts, name the conflict basis, affected target, no-mutation evidence, and next repair action.
+- For legacy log shape, name the incompatible target, blocked shape, no-mutation evidence, and next repair action.
+- Do not auto-repair, migrate, or rewrite legacy logs while recording a decision.
+- Describe filesystem and post-write validation failures as mutation safety packets.
+- Name the failed phase, mutation evidence, rollback or partial-write status, retry safety, and next repair action.
+- Do not create persisted diagnostic artifacts by default.
+- Keep exact privacy codes, field names, action names, and envelope placement in code, help, and tests.
+
+## Supersession Writes
+
+- Treat `supersedes` as a two-sided lifecycle change.
+- Dry-run previews the new entry plus old-entry updates.
+- Execute appends the replacement and marks safely resolved old entries `superseded`.
+- Add `superseded_by` to each updated old entry.
+- Block before writing when a superseded target cannot be resolved safely.
+- Keep v2 execute supersession same-log only.
+- Block cross-log supersession before writing and return repair guidance.
+
+## Execute Writes
+
+- Render full replacement content before writing.
+- Validate replacement content before replacing the target.
+- Write to a temp file in the target directory.
+- Replace the target with an atomic rename.
+- Keep dry-run free of temp-file writes.
+- Leave temp naming, cleanup, fsync, permission preservation, and platform behavior to code and tests.
 
 ## Checker Loop
 

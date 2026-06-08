@@ -1,6 +1,7 @@
 ---
 name: agent-reliability-guardrails
 description: "Add and review agent-friendly CLI contracts with three-prong observability: deterministic stdout envelopes, LogTape stderr diagnostics (including fingers-crossed buffering), and non-blocking events. Use when implementing structured errors, agent hints, retries, and logging hardening."
+role: quality-gate
 disable-model-invocation: true
 ---
 
@@ -32,8 +33,7 @@ By the end, the target CLI should have:
 - Ensure `schemaVersion` is present and increment policy is documented.
 
 ### 2. Verify Structured Error Envelope
-- Check required fields: `code`, `action`, `retryable`, `errorFamily`, `severity`, `recoverability`, `hintVersion`.
-- Ensure `nextCommand`, `suggestedFallbacks`, `recommendedDelayMs`, `canResume` are populated when relevant.
+- Check the envelope carries every required field and populates the conditional ones; `references/error-envelope-schema.md` owns the exact field catalogue.
 - Ensure fallback mapping exists for unknown/internal errors.
 
 ### 3. Verify Hint Mapping Quality

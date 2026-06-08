@@ -132,6 +132,8 @@ Startup instructions become a router and behavior shaper. Depth remains availabl
 
 ## Durable Landing Map
 
+**Scaffolding — delete this landing map after migration.** Live sources (skills, context docs, generated docs, runtime checks) become the system of record; the owner map is generated from live sources by the selected runtime-check owner, not hand-maintained.
+
 Every removed startup detail must land in one durable owner or be deleted with justification. This plan drafts the map as migration scaffolding; after migration, live sources own truth and runtime status reports the current owner map/status.
 
 - `AGENTS.md`: hot rules, safety rails, owner routes, Nathan collaboration cues.
@@ -168,7 +170,7 @@ Target shared shape:
 - Generated outputs: name source; edit source, not rendered file.
 - Deterministic contracts: code/generated docs own exact shapes.
 - Tool routing: use `rg`, `apply_patch`, `multi_tool_use.parallel`, Context7, `productivity-connectors`.
-- Memory work: read `~/.config/memory/AGENTS.md` first.
+- Memory work: read `~/.config/context/AGENTS.md` first.
 - Repos own operational truth; memory owns durable recall/synthesis.
 - Startup instructions are hot memory only, not durable storage.
 
@@ -464,7 +466,7 @@ Surface decisions:
   - `docs/git/conventions.md`
   - `docs/git/workflows.md`
   - `docs/git/worktree.md`
-  - `memory/AGENTS.md`
+  - `context/AGENTS.md`
   - `context/personal.md`
   - `.agents/skills/`
 - **Approach:** Ensure each removed startup detail lands in the Durable Landing Map with one reachable system of record. Keep startup pointers terse: prefer MCP runners, use productivity connector config for external data, load memory contract for memory work, read git docs for procedure. Fix connector-skill reachability by projecting canonical `skills/` entries into harness-supported discovery roots. Do not add custom-agent projection in this unit; record any needed Claude/Codex agent conversion as follow-up work. Use the map during migration; do not promote it into the replacement ADR.

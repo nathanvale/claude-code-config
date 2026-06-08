@@ -1,48 +1,6 @@
 # Provenance: create-cli
 
-Source: [steipete/agent-scripts](https://github.com/steipete/agent-scripts) — `skills/create-cli/`
-License: MIT © 2026 Peter Steinberger (see `LICENSE.upstream`)
-Pulled: 2026-05-29 (sparse checkout of `main`)
-
-## Status: verbatim core + bounded local extension
-
-`SKILL.md` body + `references/cli-guidelines.md` (a condensed clig.dev rubric)
-remain upstream-derived core: human-first CLI design, language/runtime-agnostic,
-with local path and design-layer pointers in "Do This First".
-
-Local extension, not upstream:
-
-- `references/agent-native-cli-design.md`: Agent-native CLI design layer.
-- `references/cli-command-facade.md`: contract-runtime implementation path.
-- `scripts/`: local package-link helpers.
-
-The extension is bounded by ADR 0009 and ADR 0010. It can teach judgment and
-name local implementation paths. It must not duplicate deterministic contract
-members owned by `@side-quest/cli-command-facade`.
-
-Research provenance for recent community signals lives at
-`docs/research/2026-06-02-agent-native-cli-best-practices-research.md`.
-
-## Why it's here — pairs with @side-quest/cli-command-facade
-
-create-cli is the **design/spec front-end**; `packages/cli-command-facade` (in
-side-quest-engineering, status: graduated) is the **runtime that implements the
-contract**. They compose:
-
-- **create-cli** authors the CLI contract: command tree, args/flags table, `--json`/`--plain`
-  output rules, exit-code map (0/1/2), `--dry-run`/confirm/`--no-input` safety, config precedence
-  (flags > env > project > user > system), 5–10 example invocations.
-- **cli-command-facade** enforces it at runtime: command grammar, JSON writer mechanics, discovery
-  projection, result/runtime contract, CLI diagnostic plumbing.
-
-Conventions overlap by design (`--json`, exit codes 0/1/2, subcommand trees, stdout/stderr
-discipline) — create-cli is the "design the contract before building the command" step the facade
-was missing a named front-end for. Use create-cli when adding/redesigning a command surface in any
-side-quest plugin (browser-automation, bun-runner, biome-runner, tsc-runner, etc.), then implement
-against the facade.
-
-**Integration design** (the create-cli spec → `CommandFacadeContract` field mapping, and the
-"make create-cli emit the contract skeleton directly" next step) is captured in
-side-quest-engineering: `docs/brainstorms/2026-05-29-002-facade-aware-create-cli-integration.md`.
-
-Upstream rubric: https://clig.dev/
+- Source: `steipete/agent-scripts`, `skills/create-cli/`.
+- URL: `https://github.com/steipete/agent-scripts`.
+- License: MIT, Peter Steinberger, 2026.
+- Pulled: 2026-05-29 by sparse checkout from `main`.

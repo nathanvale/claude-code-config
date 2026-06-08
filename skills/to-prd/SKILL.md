@@ -1,11 +1,18 @@
 ---
 name: to-prd
-description: Turn the current conversation context into a PRD and publish it to the project issue tracker. Use when user wants to create a PRD from the current context.
+description: "Synthesize the current conversation into a product requirements document. Not for ticket breakdown."
+role: tool-workflow
 ---
 
 This skill takes the current conversation context and codebase understanding and produces a PRD. Do NOT interview the user — just synthesize what you already know.
 
-The issue tracker and triage label vocabulary should have been provided to you — run `/setup-matt-pocock-skills` if not.
+## Dependencies
+
+- Issue tracker map: `docs/agents/issue-tracker.md`.
+- Triage label map: `docs/agents/triage-labels.md`.
+- Domain map: `docs/agents/domain.md`.
+- Missing state: blocked for publishing; continue for draft-only PRD.
+- Next repair: add the missing `docs/agents/` owner file or ask for the tracker target.
 
 ## Process
 
@@ -19,8 +26,9 @@ Check with the user that these modules match their expectations. Check with the 
 
 3. Write the PRD using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
 
-<prd-template>
+### PRD template
 
+```markdown
 ## Problem Statement
 
 The problem that the user is facing, from the user's perspective.
@@ -35,9 +43,7 @@ A LONG, numbered list of user stories. Each user story should be in the format o
 
 1. As an <actor>, I want a <feature>, so that <benefit>
 
-<user-story-example>
-1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending
-</user-story-example>
+Example: "As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending."
 
 This list of user stories should be extremely extensive and cover all aspects of the feature.
 
@@ -72,5 +78,4 @@ A description of the things that are out of scope for this PRD.
 ## Further Notes
 
 Any further notes about the feature.
-
-</prd-template>
+```

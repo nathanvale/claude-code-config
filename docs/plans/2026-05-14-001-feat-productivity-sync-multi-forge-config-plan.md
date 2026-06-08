@@ -179,19 +179,7 @@ legacy github: ─────┘   (shim merges       │  (forge name allowlis
                                                    retained one extra cycle)
 ```
 
-**Drift bucket mapping for GitHub** (unchanged from today, surfaces only the buckets the existing spec already documents at L450-470):
-
-| Bucket | GitHub field |
-|---|---|
-| Open PR | `state=OPEN` |
-| REVIEW_REQUIRED | `reviewDecision=REVIEW_REQUIRED` |
-| DIRTY merge | `mergeStateStatus=DIRTY` |
-| Failed CI | `statusCheckRollup[].conclusion=FAILURE` |
-| Stale review threads | `latestReviews[].state=CHANGES_REQUESTED AND updatedAt > yours` |
-| Merged-still-tracked | `state=MERGED` joined against TASKS.md |
-| Awaiting your review | `--review-requested @me` |
-
-Bitbucket mapping defers to the follow-up adapter plan where field names can be verified against real API responses.
+**Drift bucket mapping for GitHub** is unchanged and owned by `skills/productivity-sync/SKILL.md` (the GitHub drift-bucket section); this plan does not restate the field-to-bucket semantics. The Bitbucket mapping defers to the follow-up adapter plan where field names can be verified against real API responses.
 
 ---
 
@@ -465,7 +453,7 @@ Bitbucket mapping defers to the follow-up adapter plan where field names can be 
 - `git log --oneline -1` in bunnings-pos-yellow shows the POS Yellow config commit.
 - `git show --stat HEAD` in bunnings-pos-yellow lists exactly one file (`.productivity.yml`).
 - Branches are correct: `feat/new-sprint-skill-heal` in claude-code-config, `fix/meeting-orchestrator-skill-healing` in POS Yellow.
-- **Memory entry for sentinel enforcement** has been written to `~/.claude/projects/-Users-s1010081-code-bunnings-pos-yellow/memory/feedback_stub_adapter_v0_sentinel.md` (or claude-code-config memory if more appropriate) documenting: "When implementing the follow-up Bitbucket adapter, never re-use `stub adapter v0` warning text. Run `grep -c 'stub adapter v0' skills/productivity-sync/SKILL.md` before and after; the count must remain exactly 1." This ensures the constraint surfaces during the follow-up plan's `ce-learnings-researcher` grounding pass.
+- **Memory entry for sentinel enforcement** has been written to `~/.claude/projects/-Users-s1010081-code-bunnings-pos-yellow/context/feedback_stub_adapter_v0_sentinel.md` (or claude-code-config memory if more appropriate) documenting: "When implementing the follow-up Bitbucket adapter, never re-use `stub adapter v0` warning text. Run `grep -c 'stub adapter v0' skills/productivity-sync/SKILL.md` before and after; the count must remain exactly 1." This ensures the constraint surfaces during the follow-up plan's `ce-learnings-researcher` grounding pass.
 
 ---
 
@@ -514,6 +502,6 @@ Bitbucket mapping defers to the follow-up adapter plan where field names can be 
 - `~/.claude/skills/productivity-sync/SKILL.md` (current GitHub block at L415-490)
 - `~/code/bunnings-pos-yellow/.productivity.yml` (real-world consumer; gains `git:` block in U4)
 - `~/code/bunnings-pos-yellow/.productivity-sync-cursor.json` (real-world cursor with today's schema; migration target)
-- Memory: `~/.claude/projects/-Users-s1010081-code-bunnings-pos-yellow/memory/feedback_verify_pr_state_against_github.md`
+- Memory: `~/.claude/projects/-Users-s1010081-code-bunnings-pos-yellow/context/feedback_verify_pr_state_against_github.md`
 - **Deepening pass round 1** (6 reviewers — coherence, feasibility, product-lens, security, scope-guardian, adversarial): 4 safe-auto fixes applied silently; 14 manual findings walked through interactively; 2 FYI skipped. Trim outcomes: dropped U3 (script extraction) + U6-original (productivity-setup wizard); removed R6-original (implicit-mode codification); demoted four-query adapter contract from unit to KTD prose; added R8 (allowlist) + R9 (token scrubbing); added U4 (POS Yellow migration).
 - **Deepening pass round 2** (5 reviewers — coherence, feasibility, security, scope-guardian, adversarial): 4 safe-auto fixes applied silently; 8 manual findings walked through interactively; 3 lower-confidence findings skipped per user decision. Round 2 outcomes: dropped legacy-key retention rule (atomic write alone is sufficient); POS Yellow commit branch corrected from "main (likely)" to empirically-verified `fix/meeting-orchestrator-skill-healing`; added R10 (`base_url` validation at schema-load); added token-scrubbing negative test (canary value) to U5; added sentinel-uniqueness grep contract + memory entry for future-plan grounding; U5 abort handler now explicitly reverts both files.

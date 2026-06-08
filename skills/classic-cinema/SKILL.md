@@ -1,6 +1,7 @@
 ---
 name: classic-cinema
 description: "Browse movies and generate ticket-style confirmation emails for Classic Cinemas Elsternwick. Use when Nathan asks what's on at the cinema, wants movie details, or wants to 'book tickets'. Generates a personal reminder email — does NOT purchase tickets."
+role: tool-workflow
 argument-hint: "[movie] [time] [tickets] [zone]"
 allowed-tools: Bash, Read, AskUserQuestion, Write
 ---
@@ -8,6 +9,16 @@ allowed-tools: Bash, Read, AskUserQuestion, Write
 # Classic Cinema
 
 Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a conversational booking flow, generates a ticket-style HTML email, and sends it via `gog`. Does NOT purchase tickets or reserve seats — Nathan buys at the box office.
+
+## Owner
+
+- Script interfaces, flags, stdout/stderr behavior, temp files, and parse rules: `skills/classic-cinema/scripts/*.py`.
+- Booking choreography and API details: `skills/classic-cinema/references/booking-flow.md`.
+- Argument parsing: `skills/classic-cinema/references/arg-parsing.md`.
+- Email template fill: `skills/classic-cinema/references/template-fill.md`.
+- Email sending: `skills/classic-cinema/references/email-send.md`.
+- Booking log shape: `skills/classic-cinema/references/booking-log.md`.
+- Legacy plugin retirement criteria: `skills/classic-cinema/references/retirement-criteria.md`.
 
 ## Intent Classification
 
@@ -57,13 +68,15 @@ Always show raw numbers: `🟢 94% available (141/150 seats)`
 
 ## Scripts
 
-| Script | Purpose | Interface |
-|--------|---------|-----------|
-| `scripts/list-movies.py` | Fetch APIs, join movies+sessions, print today's listing | `[--movie QUERY]` → one JSON object per line to stdout; writes `/tmp/cc-sessions.json` + `/tmp/cc-movies.json` |
-| `scripts/check-availability.py` | Calculate seat availability; auto-fetches seatmap from API if not cached | `--session-ids ID,ID,...` → one JSON object per line to stdout |
-| `scripts/parse-tickets.py` | Parse ticket spec and build selection file for fill-ticket.py | `--session-id ID --spec "1+1"` → JSON summary to stdout; writes `/tmp/cc-tickets-selected.json` |
-| `scripts/pick-seats.py` | Auto-select best adjacent seats in a zone | `--seatmap-file FILE --zone ZONE --count N` → prints seat codes |
-| `scripts/fill-ticket.py` | Fill ticket email template | `--movie-title --session-datetime --screen --seats --tickets-file FILE --booking-fee CENTS --total CENTS --poster-url URL` → prints HTML path. **`--poster-url` MUST be the API's `headerImage` value verbatim** (e.g. `movies/headers/foo.jpg`) — NOT a guessed `classiccinemas.com.au` URL. The script auto-prepends `https://movingstory-prod.imgix.net/`. Use `headerImage`, never `posterImage`. |
+- Scripts in `scripts/` handle listing, availability, ticket parsing, seat selection, and email-template fill. Inspect each script's `--help` and test contract for exact flags and behavior — the script interfaces are the source of truth, not this file.
+- Pass the API `headerImage` value to `scripts/fill-ticket.py`; do not guess a Classic Cinemas URL or use `posterImage`.
+- Do not copy script flags, temp-file names, JSON shapes, or stdout/stderr contracts into this file.
+
+## Verification
+
+- Run `python3 skills/classic-cinema/scripts/test_fill_ticket.py` after email-template or ticket-fill changes.
+- Run `python3 skills/classic-cinema/scripts/<script>.py --help` after script interface edits.
+- Use live API checks only when listing, availability, or booking choreography changed.
 
 ## Safety Invariants
 
@@ -81,4 +94,5 @@ Always show raw numbers: `🟢 94% available (141/150 seats)`
 | [template-fill.md](references/template-fill.md) | 13 template placeholders, HTML escape rules, ticket/invoice line format |
 | [email-send.md](references/email-send.md) | `gog gmail send` invocation, temp file handling |
 | [booking-log.md](references/booking-log.md) | JSONL schema at `~/.local/state/classic-cinema/bookings.jsonl` |
+| [retirement-criteria.md](references/retirement-criteria.md) | Legacy plugin retirement checklist |
 | [assets/ticket-template.html](references/assets/ticket-template.html) | HTML email template (frozen, never modify) |

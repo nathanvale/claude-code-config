@@ -29,9 +29,9 @@ from datetime import datetime, timedelta
 
 CDN_BASE = "https://movingstory-prod.imgix.net/"
 
-# Matches "10 Apr 2026, 11:00am-1:37pm" — old plugin format with end time
+# Matches "Fri 10 Apr, 11:00AM" with optional end time.
 SESSION_DT_PATTERN = re.compile(
-    r"^\d{1,2} [A-Z][a-z]{2} \d{4}, \d{1,2}:\d{2}[ap]m-\d{1,2}:\d{2}[ap]m$"
+    r"^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2}[AP]M(-\d{1,2}:\d{2}[AP]M)?$"
 )
 
 BARCODE_URL = (
@@ -57,34 +57,30 @@ def resolve_poster_url(raw_url):
 
 
 def format_session_datetime(raw_dt, runtime_minutes=0):
-    """Format session datetime to '10 Apr 2026, 11:00am-1:37pm'.
+    """Format session datetime to 'Fri 10 Apr, 11:00AM'.
 
-    Matches the old Cinema Bandit plugin format: day month year, start-end time.
     Accepts ISO format (2026-04-10T11:00:00) or pre-formatted strings.
     If runtime_minutes is provided, calculates end time.
     """
     # Try ISO parse first
     try:
         dt = datetime.fromisoformat(raw_dt)
-        start_str = dt.strftime("%-d %b %Y, %-I:%M%p").lower().replace("am", "am").replace("pm", "pm")
-        # Fix: strftime %p gives AM/PM uppercase, we need lowercase
-        start_time = dt.strftime("%-I:%M%p").replace("AM", "am").replace("PM", "pm")
-        date_part = dt.strftime("%-d %b %Y")
+        start_time = dt.strftime("%-I:%M%p")
+        date_part = dt.strftime("%a %-d %b")
 
         if runtime_minutes > 0:
             end_dt = dt + timedelta(minutes=runtime_minutes)
-            end_time = end_dt.strftime("%-I:%M%p").replace("AM", "am").replace("PM", "pm")
+            end_time = end_dt.strftime("%-I:%M%p")
             formatted = f"{date_part}, {start_time}-{end_time}"
         else:
             formatted = f"{date_part}, {start_time}"
     except ValueError:
-        # Assume already human-formatted
         formatted = raw_dt
 
-    if runtime_minutes > 0 and not SESSION_DT_PATTERN.match(formatted):
+    if not SESSION_DT_PATTERN.match(formatted):
         raise ValueError(
             f"Session datetime '{formatted}' (from input '{raw_dt}') "
-            f"doesn't match expected pattern '10 Apr 2026, 11:00am-1:37pm'"
+            f"doesn't match expected pattern 'Fri 10 Apr, 11:00AM'"
         )
     return formatted
 

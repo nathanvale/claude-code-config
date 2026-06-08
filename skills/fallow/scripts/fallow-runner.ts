@@ -2279,8 +2279,12 @@ if (import.meta.main) {
 		exitCode = await runFallowRunnerCli(Bun.argv.slice(2), { stdout, stderr });
 	} catch (error) {
 		if (error instanceof CliUsageError) {
-			stderr.write(`${error.message}\n`);
-			exitCode = error.options.exitCode ?? 2;
+			exitCode = emitUsageError(
+				Bun.argv.slice(2),
+				createDefaultFallowRuntime(),
+				stderr,
+				error,
+			);
 		} else {
 			throw error;
 		}

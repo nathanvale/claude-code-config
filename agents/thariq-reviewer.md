@@ -34,7 +34,7 @@ Find what you need — don't load everything upfront.
 
 - `~/.claude/agents/thariq-principles.md` — Thariq's agent design principles. Read when you need to quote a specific principle or check if something violates one.
 - The target repo's `CLAUDE.md` — scan for context rot and progressive disclosure issues.
-- The target repo's `memory/INDEX.md` — if it exists, evaluate its quality as a discovery surface. If it doesn't, that's a finding.
+- The target repo's `context/INDEX.md` — if it exists, evaluate its quality as a discovery surface. If it doesn't, that's a finding.
 - The target repo's skills, agents, and commands — audit their design patterns.
 
 Read what's relevant to the audit at hand. Not every audit needs all files.

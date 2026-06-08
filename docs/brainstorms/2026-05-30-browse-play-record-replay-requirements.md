@@ -300,7 +300,7 @@ are a future spike, not v1.
 ## Open for planning (handed to /ce-plan)
 
 - `browser-domain-memory` on-disk layout; **memory-root location** (prototypes used temp dirs —
-  repo-local vs `~/.config/memory/` per the Memory OS contract is a plan decision).
+  repo-local vs `~/.config/context/` per the Memory OS contract is a plan decision).
 - The rich-step capture data shape (the internal model both outputs project from).
 - Where `build-scratch` / capture-verify / staleness / provenance logic lives (CLI subcommand vs
   module) and its unit-test surface.

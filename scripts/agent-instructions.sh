@@ -6,6 +6,31 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." >/dev/null && pwd)"
 COMMAND="check"
 FORMAT="plain"
+CONFIG_FILE="$SCRIPT_DIR/agent-instructions.config"
+STARTUP_OWNER="$SCRIPT_DIR"
+
+load_config() {
+	if [[ ! -f "$CONFIG_FILE" ]]; then
+		return
+	fi
+
+	while IFS='=' read -r key value; do
+		case "$key" in
+		startup_owner)
+			if [[ "$value" == /* ]]; then
+				STARTUP_OWNER="$value"
+			else
+				STARTUP_OWNER="$SCRIPT_DIR/$value"
+			fi
+			;;
+		'' | \#*)
+			;;
+		*)
+			add_warn "unknown agent instruction config key: $key"
+			;;
+		esac
+	done < "$CONFIG_FILE"
+}
 
 if [[ $# -gt 0 ]]; then
 	case "$1" in
@@ -127,9 +152,11 @@ check_no_leakage() {
 
 check_owner_paths() {
 	local required=(
-		"skills/productivity-connectors/SKILL.md"
-		"context/bun-runner.md"
-		"context/skill-design-philosophy.md"
+			"skills/productivity-connectors/SKILL.md"
+			"context/bun-runner.md"
+			"skills/create-skill/SKILL.md"
+			"skills/create-skill/CONTEXT.md"
+			"skills/create-skill/references/skill-design-philosophy.md"
 		"context/personal.md"
 		"context/comms-style.md"
 		"docs/git/conventions.md"
@@ -138,7 +165,8 @@ check_owner_paths() {
 		"docs/agents/issue-tracker.md"
 		"docs/agents/triage-labels.md"
 		"docs/agents/domain.md"
-		"memory/AGENTS.md"
+		"skills/context-advisor/SKILL.md"
+		"skills/context-advisor/references/storage-routing.md"
 	)
 
 	for path in "${required[@]}"; do
@@ -176,7 +204,7 @@ check_appendices() {
 
 check_projection_drift() {
 	local codex_user="$HOME/.codex/AGENTS.md"
-	local source="$SCRIPT_DIR/AGENTS.md"
+	local source="$STARTUP_OWNER/AGENTS.md"
 	local expected_source
 	expected_source="$(canonical_path "$source")"
 
@@ -184,13 +212,13 @@ check_projection_drift() {
 		local target
 		target="$(resolve_link_target "$codex_user")"
 		if [[ "$target" == "$expected_source" ]]; then
-			add_pass "Codex user startup symlinked to AGENTS.md"
+			add_pass "Codex user startup symlinked to configured startup owner"
 		else
 			add_fail "Codex user startup symlink points elsewhere: $target"
 		fi
 	elif [[ -f "$codex_user" ]]; then
 		if diff -q "$source" "$codex_user" >/dev/null 2>&1; then
-			add_pass "Codex user startup managed copy matches AGENTS.md"
+			add_pass "Codex user startup managed copy matches configured startup owner"
 		else
 			add_fail "Codex user startup drift: ~/.codex/AGENTS.md"
 		fi
@@ -201,12 +229,12 @@ check_projection_drift() {
 	local claude_file="$HOME/.claude/CLAUDE.md"
 	local claude_agents="$HOME/.claude/AGENTS.md"
 	local expected_claude
-	expected_claude="$(canonical_path "$SCRIPT_DIR/CLAUDE.md")"
+	expected_claude="$(canonical_path "$STARTUP_OWNER/CLAUDE.md")"
 	if [[ -L "$claude_file" ]]; then
 		local target
 		target="$(resolve_link_target "$claude_file")"
 		if [[ "$target" == "$expected_claude" ]]; then
-			add_pass "Claude CLAUDE.md symlinked to repo wrapper"
+			add_pass "Claude CLAUDE.md symlinked to configured startup owner"
 		else
 			add_fail "Claude CLAUDE.md symlink points elsewhere: $target"
 		fi
@@ -220,7 +248,7 @@ check_projection_drift() {
 		local target
 		target="$(resolve_link_target "$claude_agents")"
 		if [[ "$target" == "$expected_source" ]]; then
-			add_pass "Claude AGENTS.md symlinked to repo startup"
+			add_pass "Claude AGENTS.md symlinked to configured startup owner"
 		else
 			add_fail "Claude AGENTS.md symlink points elsewhere: $target"
 		fi
@@ -232,6 +260,7 @@ check_projection_drift() {
 }
 
 run_checks() {
+	load_config
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
 	check_line_budget "CLAUDE.md" "$SCRIPT_DIR/CLAUDE.md" 50
 	if [[ -f "$HOME/.codex/AGENTS.md" ]]; then
@@ -299,6 +328,7 @@ print_status() {
 	fi
 
 echo "Instruction owner map"
+echo "startup owner: $(canonical_path "$STARTUP_OWNER")"
 echo "startup: AGENTS.md"
 echo "claude: CLAUDE.md"
 echo "codex: AGENTS.md -> ~/.codex/AGENTS.md"
@@ -306,7 +336,7 @@ echo "codex: AGENTS.md -> ~/.codex/AGENTS.md"
 	echo "skills: skills/* plus discovery projections"
 	echo "repo truth: docs/agents/"
 	echo "git docs: docs/git/"
-	echo "vocabulary: CONTEXT.md"
+	echo "vocabulary: CONTEXT.md plus scoped CONTEXT.md files"
 	echo ""
 	print_report
 }

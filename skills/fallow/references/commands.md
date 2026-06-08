@@ -4,6 +4,7 @@ Use this as a recipe map. Use runner help for exact current syntax.
 
 Owner paths:
 
+- Front door: `skills/fallow/scripts/package.json#bin` (`fallow-runner`).
 - Public command surface: `skills/fallow/scripts/command-contract.ts`.
 - Parser and execution mapping: `skills/fallow/scripts/fallow-runner.ts`.
 - Command surface proof: `skills/fallow/scripts/fallow-runner.test.ts`.
@@ -13,8 +14,9 @@ Owner paths:
 ## Help
 
 ```bash
-bun run skills/fallow/scripts/fallow-runner.ts --help
-bun run skills/fallow/scripts/fallow-runner.ts <subcommand> --help
+cd skills/fallow/scripts
+bun run fallow-runner --help
+bun run fallow-runner <subcommand> --help
 ```
 
 ## Mode Map

@@ -1,6 +1,7 @@
 ---
 name: test-runner
 description: "Prove or benchmark the skill-local Agent Runner."
+role: quality-gate
 ---
 
 # Test Runner
@@ -23,17 +24,24 @@ Agent Runner for Bun test context.
 - Command contract and discovery: `skills/test-runner/scripts/command-contract.ts`.
 - CLI, parser, result model, and runtime behavior: `skills/test-runner/scripts/test-runner.ts`.
 - Detail artifact read/write behavior: `skills/test-runner/scripts/test-runner.ts`.
-- Shell entrypoint and missing-runtime preflight: `skills/test-runner/scripts/test-runner.sh`.
+- Front doors: `skills/test-runner/scripts/package.json#bin`.
+- Missing-runtime shell preflight: `skills/test-runner/scripts/test-runner.sh`.
 - Tests: `skills/test-runner/scripts/test-runner.test.ts`.
 - Runner Benchmark Harness: `skills/test-runner/scripts/test-runner.benchmark.ts`.
 - Evidence output: `skills/test-runner/scripts/.benchmark-output/`.
 
 ## Commands
 
-- Inspect exact runner usage: `skills/test-runner/scripts/test-runner.sh --help`.
-- Inspect benchmark usage: `cd skills/test-runner/scripts && bun run test-runner.benchmark.ts --help`.
-- Prove no-MCP Bun adoption: `cd skills/test-runner/scripts && bun run test-runner.benchmark.ts --no-mcp-baseline --local-runner ./test-runner.sh --mode fixed-gate --gate-preset bun-no-mcp`.
+- Inspect exact runner usage: `cd skills/test-runner/scripts`, then `bun run test-runner --help`.
+- Inspect benchmark usage: `cd skills/test-runner/scripts`, then `bun run test-runner-benchmark --help`.
+- Prove no-MCP Bun adoption: `cd skills/test-runner/scripts`, then `bun run test-runner-benchmark --no-mcp-baseline --local-runner ./test-runner.sh --mode fixed-gate --gate-preset bun-no-mcp`.
 - For runner routing, read `context/bun-runner.md`.
+
+## Verification
+
+- Run `cd skills/test-runner/scripts`, then `bun test test-runner.test.ts` after runner, command-contract, detail-artifact, or benchmark changes.
+- Run `cd skills/test-runner/scripts`, then `bun run typecheck` after TypeScript edits.
+- Run the fixed-gate benchmark before changing normal runner guidance.
 
 ## Workflow
 

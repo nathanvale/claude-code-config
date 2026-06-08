@@ -1,6 +1,7 @@
 ---
 name: prompt-system-workflow
 description: "Change startup instructions safely. Triggers on prompt-system, AGENTS.md, CLAUDE.md, or instruction topology changes."
+role: control-plane
 argument-hint: "[describe the instruction change]"
 ---
 
@@ -15,6 +16,14 @@ Route startup-instruction changes to the right owner and prove health after edit
 1. `docs/adr/0011-lean-startup-instructions.md`
 2. `skills/prompt-system-router/SKILL.md`
 3. `CONTEXT.md` for vocabulary
+
+## Dependencies
+
+- `skills/prompt-system-router/SKILL.md`: hard dependency for classification.
+- `scripts/agent-instructions.sh`: hard dependency for delivery checks.
+- `docs/adr/0011-lean-startup-instructions.md`: owner-reference dependency.
+- Missing router or health contract: blocked.
+- Missing ADR: degraded; use `CONTEXT.md` and startup checks, then report the missing ADR.
 
 ## Workflow
 

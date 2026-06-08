@@ -12,7 +12,7 @@ related:
   - skills/productivity-connectors/SKILL.md
   - skills/productivity-setup/SKILL.md
   - skills/productivity-sync/SKILL.md
-  - memory/federation/roster.yml
+  - context/archive/legacy-memory-framework/federation/roster.yml
 ---
 
 # iMessage Productivity Integration
@@ -100,29 +100,24 @@ Rules:
 
 ### Default Mode
 
-Add after Email sync, before Meeting notes in `productivity-sync/SKILL.md`:
+Integration point: `skills/productivity-sync/SKILL.md` § Sync Workflow, default mode, alongside the existing email/calendar connector steps. The owning SKILL.md owns exact wording; this spec owns intent only.
 
-```markdown
-**Messages** (if configured):
-- Incremental sync via cursor: `bun run <skill-path>/scripts/query-imessage.ts sync --cursor-file ~/code/personal-messages/runtime/imessage/cursors/default-sync.json --save-dir ~/code/personal-messages/docs/messages/imessage`
-- Messages auto-persist as markdown with frontmatter via read-through cache
-- Cross-reference senders against `my-second-brain/memory/people/` or the owning repo's people memory
-- AI commitment extraction: read message text and identify outbound/inbound commitments
-- Present extracted commitments as "Possible Missing Tasks (from Messages)" for user triage
-- Write tasks and memory updates to the owning repo, not back into the raw corpus repo
-```
+Default-mode iMessage step intent:
+- Incremental cursor sync calling `query-imessage.ts sync` with the default-sync cursor and corpus save dir (cursor contract above; CLI owns flag names).
+- Auto-persist messages as markdown with frontmatter via read-through cache.
+- Cross-reference senders against the owning repo's people memory.
+- Extract outbound/inbound commitments and present them for user triage as "Possible Missing Tasks (from Messages)".
+- Write tasks and memory to the owning repo, never the raw corpus repo.
 
 ### Deep Mode
 
-Expand scope in the Extra Step sections:
+Integration point: same SKILL.md § Sync Workflow, deep-mode extra steps. SKILL.md owns exact wording.
 
-```markdown
-**Messages (deep):**
-- Expand to 7-day window
-- Include separate `--from-me` pass to find outbound commitments
-- Surface new contacts not in memory/people/
-- Full AI analysis of message threads for missed action items
-```
+Deep-mode iMessage step intent:
+- Expand to the 7-day window.
+- Add a separate `--from-me` pass for outbound commitments.
+- Surface new contacts absent from `context/people/`.
+- Full thread analysis for missed action items.
 
 ### Message Query Completeness
 
@@ -152,23 +147,7 @@ After querying messages, Claude reads the message text and identifies:
 
 Commitment extraction should produce a structured intermediate shape before anything is shown in the sync report or matched against `TASKS.md`.
 
-```typescript
-type CommitmentCandidate = {
-  schema_version: 1;
-  source_system: "imessage";
-  source_id: string;
-  source_thread_id: string;
-  sent_at: string;
-  direction: "inbound" | "outbound";
-  conversation_with: string;
-  candidate_type: "promise" | "request" | "offer" | "follow_up";
-  quote: string;
-  summary: string;
-  confidence: number;
-  owner_hint?: string;
-  owner_status: "resolved" | "ambiguous" | "unknown";
-};
-```
+Commitment extraction emits `CommitmentCandidate[]` -- the type and `extractCommitmentCandidates()` are owned by `skills/imessage-reader/scripts/lib.ts`.
 
 Rules:
 - the sync report renders from `CommitmentCandidate[]`, not from free-form prose alone
@@ -217,7 +196,7 @@ Before writing a task candidate, resolve where it belongs:
 
 ### roster.yml Entry
 
-Add to `memory/federation/roster.yml`:
+Add to `context/archive/legacy-memory-framework/federation/roster.yml`:
 
 ```yaml
 - name: personal-messages
@@ -255,7 +234,7 @@ The enriched frontmatter enables these QMD queries:
 | `skills/productivity-connectors/SKILL.md` | Add Messages section |
 | `skills/productivity-setup/SKILL.md` | Add messages connector to wizard |
 | `skills/productivity-sync/SKILL.md` | Add iMessage to default + deep sync steps |
-| `memory/federation/roster.yml` | Add `personal-messages` entry |
+| `context/archive/legacy-memory-framework/federation/roster.yml` | Add `personal-messages` entry |
 | `skills/imessage-reader/scripts/query-imessage.ts` | Add `sync`, `enrich`, `migrate-notes`, cursor handling, and decoded-body search coverage |
 
 ## Verification

@@ -1,6 +1,7 @@
 ---
 name: peekaboo
 description: "macOS screenshots, UI inspect, clicks, typing, app/window automation."
+role: tool-workflow
 ---
 
 # Peekaboo
@@ -23,23 +24,19 @@ Use for macOS screen capture, UI inspection, and GUI automation.
 - Prefer `--json` for machine parsing and `--no-remote` when testing local TCC.
 - Do not click/type/destructively automate unless user asked or target is a controlled test.
 
-## Common Commands
+## Command reference (owner)
+
+The binary owns the command contract. Resolve `PB`, then discover commands and flags from the binary itself — do not rely on a copied list:
 
 ```bash
 PB="${PEEKABOO_BIN:-$HOME/bin/peekaboo}"
 [ -x "$PB" ] || PB="$(command -v peekaboo)"
-
-"$PB" permissions status --json
-"$PB" list screens --json
-"$PB" list apps --json
-"$PB" list windows --app Safari --json
-"$PB" image --mode screen --screen-index 0 --path /tmp/screen.png --json --no-remote
-"$PB" see --app frontmost --path /tmp/frontmost.png --json --annotate
-"$PB" tools --json
-"$PB" learn
-"$PB" click --coords 100,100 --json
-"$PB" type "text" --json
 ```
+
+- `"$PB" tools --json` — command and tool discovery.
+- `"$PB" learn` — full agent guide.
+- `"$PB" <command> --help` — per-command flags.
+- Docs: `~/Projects/Peekaboo/docs/commands/`.
 
 ## Workflow
 
@@ -50,5 +47,3 @@ PB="${PEEKABOO_BIN:-$HOME/bin/peekaboo}"
 5. For long-running/change-aware screen capture, use `capture live`; for video frame sampling, use `capture video`.
 6. Use `tools --json` for command/tool discovery and `learn` when the full agent guide is useful.
 7. Verify output files with `sips -g pixelWidth -g pixelHeight <path>` or view the image.
-
-Docs: `~/Projects/Peekaboo/docs/commands/`.

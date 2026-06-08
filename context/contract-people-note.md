@@ -3,11 +3,11 @@
 Phase 1 scope: **rewrite mode only** -- transform the narrative quality of an existing EnrichmentReport.
 
 For other modes:
-- review mode -> `~/code/claude-code-config/context/contract-people-note-review.md`
-- create mode -> `~/code/claude-code-config/context/contract-people-note-create.md`
+- review mode -> `context/contract-people-note-review.md`
+- create mode -> `context/contract-people-note-create.md`
 
-Canonical spec: `~/code/my-second-brain/docs/specs/people-note-contract.md`
-Runtime type: `~/code/claude-code-config/skills/people-enrich/scripts/apply-enrichment.ts`
+Canonical spec: nearest owning `context/people/` contract or repo-local people-note spec.
+Runtime owner: none in this repo. `productivity-sync` emits structured people-note proposals and routes write authority through `skills/context-advisor/SKILL.md`.
 
 ## EnrichmentReport JSON Schema
 

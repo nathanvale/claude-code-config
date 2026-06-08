@@ -3,10 +3,10 @@
 Use this when Perel-Baldwin is authoring a fresh `EnrichmentReport` from an explicitly supplied `ContextBundle` plus evidence.
 
 Canonical specs:
-- `~/code/my-second-brain/docs/specs/people-note-contract.md`
-- `~/code/my-second-brain/docs/specs/perel-baldwin-create-mode.md`
+- nearest owning `context/people/` contract or repo-local people-note spec
+- nearest owning Perel-Baldwin create-mode spec, when present
 Runtime type:
-- `~/code/claude-code-config/skills/people-enrich/scripts/apply-enrichment.ts`
+- none in this repo; emit structured people-note proposals and route write authority through `skills/context-advisor/SKILL.md`
 
 ## EnrichmentReport JSON Schema
 
@@ -45,7 +45,7 @@ Create mode needs explicit upstream evidence beyond the target note alone whenev
 
 Preferred evidence kinds:
 - `analyst-report`
-- `qmd-findings`
+- `search-findings`
 - `psychometrics`
 - `thread-summary`
 - `argument-summary`

@@ -281,7 +281,7 @@ glossary (`CONTEXT.md`) still encodes the reversed worldview and is reconciled b
 
 - **Memory root = `~/.local/share/browser-domain-memory/`, env-overridable.** XDG durable-data dir
   (community-verified: `~/.local/share` is for irreplaceable portable user data;
-  `~/.config` is for settings). NOT `~/.config/memory/` — the Memory OS contract reserves that for
+  `~/.config` is for settings). NOT `~/.config/context/` — the Memory OS contract reserves that for
   the shared markdown contract surface, not a skill's runtime data. Override via
   `BROWSER_MEMORY_ROOT` so tests point at a temp dir. The root is created `chmod 700` (owner-only) —
   it holds Auth Pointers + a map of which portals are automated (System-Wide Impact).

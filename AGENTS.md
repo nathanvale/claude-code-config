@@ -34,7 +34,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Test meaningful changes.
 - Preserve unrelated user/agent changes.
 - Generated outputs: edit source, not rendered file.
-- Startup source: `AGENTS.md`; check delivery with `scripts/agent-instructions.sh`.
+- Startup source: `AGENTS.md`; prompt-system changes use `skills/prompt-system-workflow/SKILL.md`; check delivery with `scripts/agent-instructions.sh`.
 - No secrets, tokens, or API keys in source.
 
 ## Agent-Native Work
@@ -57,7 +57,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 
 ## Skill Authoring
 
-- Never author, review, heal, or repair a `SKILL.md` before reading `context/skill-design-philosophy.md`; skipping it leaks copied contracts and multi-workflow drift.
+- Never author, review, heal, or repair a `SKILL.md` before reading `skills/create-skill/references/skill-design-philosophy.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
 - Skill bodies: terse prose + commands; no copied contracts.
@@ -77,13 +77,13 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Search: `rg`; fallback only when unavailable.
 - Manual edits: `apply_patch`.
 - Parallel independent reads/checks: `multi_tool_use.parallel`.
-- Library/API docs: fetch current official docs via Context7.
+- Library/API docs: use Context7; if MCP is absent, run `npx -y ctx7 library <name> "<query>"` then `npx -y ctx7 docs <id> "<query>"`.
 - Tests/lint/types: prefer MCP runners; see `context/bun-runner.md`.
 - Exact project commands live in repo docs, package scripts, or owner skills.
 
 ## External Data
 
-- Calendar/email/contact work: use `productivity-connectors`.
+- Calendar/email/contact sync work: use `productivity-sync`.
 - Read `.productivity.yml` before dispatch.
 
 ## Email Safety
@@ -91,10 +91,12 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Never ask Nathan what accessible email says; read full body first.
 - Decode/parse bodies and extract products, amounts, actions, and dates.
 
-## Memory And Git
+## Context And Git
 
-- Memory work: read `~/.config/memory/AGENTS.md` first.
-- Repos own operational truth; memory owns durable recall and synthesis.
+- Context placement: use `skills/context-advisor/SKILL.md`.
+- New durable recall/synthesis belongs under `context/`.
+- Legacy storage framework lives under `context/archive/legacy-memory-framework/`.
+- Repos own operational truth; context folders own durable recall and synthesis.
 - Git procedure: `docs/git/`.
 - Never force push, hard reset, `clean -f`, or `checkout/restore .`.
 - Never use `git add .` or `git add -A`.
@@ -110,7 +112,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 ## Personal Context
 
 - Keep relationship labels only when contextually relevant.
-- Lookup facts live in `context/personal.md` or memory docs.
+- Lookup facts live in `context/personal.md` or the nearest owning `context/` file.
 
 ## Project Truth
 
