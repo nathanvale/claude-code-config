@@ -4,9 +4,9 @@ Use when Browser Adapter Proof emits a `chrome-devtools` dependency, config, bin
 
 ## Owners
 
-- Proof runtime: `skills/browser-use/scripts/preflight-browser-adapter.ts`.
-- Proof front door: `skills/browser-use/scripts/package.json#bin` (`preflight-browser-adapter`).
-- Command contract: `skills/browser-use/scripts/command-contract.ts`.
+- Proof runtime: `skills/browser-use/src/preflight-browser-adapter.ts`.
+- Proof front door: `skills/browser-use/package.json#bin` (`preflight-browser-adapter`).
+- Command contract: `skills/browser-use/src/command-contract.ts`.
 - Warm Chrome map: `skills/browser-use/references/warm-chrome.md`.
 
 ## Rules
@@ -116,7 +116,7 @@ mcporter call chrome-devtools.list_pages --args '{}' --output json
 ## Verify
 
 ```bash
-cd skills/browser-use/scripts
+cd skills/browser-use
 bun run preflight-browser-adapter check --adapter chrome-devtools --port "$PORT" --json
 ```
 

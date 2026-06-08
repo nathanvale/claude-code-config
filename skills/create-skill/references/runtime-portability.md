@@ -22,7 +22,7 @@ CLI adapters, generated locks, or local development dependencies.
 Runtime-backed skills are portable when they carry or name:
 
 - runtime: Bun, Node, Python, shell, or another required tool
-- owner scripts inside the skill bundle
+- owner source or helper files inside the skill bundle
 - package metadata when packages are required
 - lockfile when reproducible install matters
 - focused verification command on the first screen
@@ -33,14 +33,25 @@ Generated dependency folders are not owner paths.
 
 ## Bun-Backed Skills
 
-For Bun-backed skill scripts:
+For Bun-backed skill packages:
 
 - Name Bun as the runtime.
-- Keep `package.json` inside the script owner folder.
-- Include `bun.lock` when script-local install or typecheck reproducibility matters.
+- Keep `package.json` at the skill root.
+- Keep Bun-owned source under `src/`.
+- Do not put Bun package source under `scripts/`.
+- Collocate focused tests beside the owner file as `*.test.ts`.
+- Use `fixtures/` only for test fixture programs, sample inputs, or intentionally failing cases.
+- Use a separate test folder only when the suite spans multiple owners and collocation would hide the tested boundary.
+- Treat existing `scripts/package.json` packages as migration exceptions only when a tracker names the package and target shape.
+- Include `bun.lock` when standalone install or typecheck reproducibility matters.
 - Use portable package dependencies when the skill should travel by itself.
 - Label `file:` dependencies that point outside the skill bundle as local development portability only.
 - Treat private facade packages as non-universal unless the facade owner travels with the export payload.
+- Package `bin` targets need an executable bit and a shebang.
+- Use `#!/usr/bin/env bun` when a TypeScript file is the direct package `bin` target.
+- Use `#!/usr/bin/env bash` for wrapper scripts that use Bash features such as arrays, `BASH_SOURCE`, or `set -euo pipefail`.
+- Do not use zsh for portable package bins unless the script needs zsh-only behavior and the missing-runtime state is documented.
+- Prefer a direct Bun entrypoint over a shell wrapper when the wrapper only delegates to one TypeScript file and adds no path, environment, or compatibility behavior.
 - Put exact command behavior, parser rules, flags, and output shapes in code, help, tests, or generated docs.
 - Put only verification entry points in `SKILL.md`.
 
@@ -50,6 +61,7 @@ For Node, Python, shell, or other runtime-backed skills:
 
 - Name the runtime.
 - Bundle the script owner files.
+- Use `scripts/` for non-Bun helper scripts when the skill has no `package.json`.
 - Name required system commands or packages.
 - Include reproducibility files when the ecosystem has them.
 - Keep generated caches and dependency installs out of the portable payload.
@@ -112,6 +124,41 @@ Rules:
 - Use `bun ci` or `bun install --frozen-lockfile` for reproducible CI or export verification.
 - Keep root `bun.lock` with the portable export payload when workspace dependencies are part of the payload.
 - Prove workspace export with `bun run prove:workspace-portability`.
+
+## Test Layout
+
+- Collocate package tests with the source owner they verify.
+- Name focused tests `<owner>.test.ts`.
+- Name live environment tests `<owner>.live.test.ts`.
+- Name benchmarks `<owner>.benchmark.ts`; keep them out of the default test script unless the package budget names them.
+- Keep fixture code under `fixtures/` when tests need intentionally broken, sample, or generated inputs.
+- Keep generated evidence under ignored `var/`, `.runner-output/`, or another declared output path.
+- Do not put generated evidence under `src/` unless the package intentionally treats it as source.
+
+## Distribution Governance
+
+- Keep runtime-backed skill packages `private: true` until a distribution decision names package, version, access, payload, dependency status, and verification command.
+- Do not set `private` false while a package still depends on hidden local state, `file:` specs, or unresolved workspace-only dependencies.
+- Require a stable package `name` before public distribution.
+- Require an explicit semver `version`; do not publish placeholder `0.0.0`.
+- Require a short `description` for discovery and package audit readability.
+- Require a license stance; do not use `UNLICENSED` with public npm access.
+- Require `publishConfig.access` so the first publish cannot default to the wrong visibility.
+- Require `publishConfig.tag` so pre-release or private-channel publishes do not land as implicit latest.
+- Require a narrow `files` allowlist.
+- Do not use `*`, `.`, or `**/*` as the distribution payload.
+- Keep generated evidence, test output, dependency folders, local temp state, and hidden machine state out of the packed payload.
+- Keep collocated tests, live tests, benchmarks, and fixtures out of public package payloads unless a distribution decision accepts them.
+- Do not rely on `.npmignore` or `.gitignore` to prune a broad `files` allowlist.
+- Cover every package `bin` target from the `files` allowlist.
+- Do not use `bundleDependencies` or `bundledDependencies` until the bundled dependency payload is explicitly accepted.
+- Declare `engines.bun` when a distributed package exposes direct TypeScript Bun entrypoints.
+- Choose source distribution only when Bun is the named consumer runtime and collocated tests or fixtures are excluded from the payload.
+- Choose built distribution when consumers should not receive source tests, fixtures, or TypeScript runtime assumptions.
+- Prove publish readiness with `bun publish --dry-run --frozen-lockfile` before flipping `private` off.
+- Use `bun pm pack --dry-run` when validating tarball contents without registry semantics.
+- Use `npm pack --dry-run` as a compatibility cross-check when npm install or npm publish behavior is a target.
+- Keep standalone skill zip governance separate from npm package distribution governance.
 
 ## Export Rule
 

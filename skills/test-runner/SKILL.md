@@ -21,26 +21,26 @@ Agent Runner for Bun test context.
 ## Owner
 
 - Skill prose: `skills/test-runner/SKILL.md`.
-- Command contract and discovery: `skills/test-runner/scripts/command-contract.ts`.
-- CLI, parser, result model, and runtime behavior: `skills/test-runner/scripts/test-runner.ts`.
-- Detail artifact read/write behavior: `skills/test-runner/scripts/test-runner.ts`.
-- Front doors: `skills/test-runner/scripts/package.json#bin`.
-- Missing-runtime shell preflight: `skills/test-runner/scripts/test-runner.sh`.
-- Tests: `skills/test-runner/scripts/test-runner.test.ts`.
-- Runner Benchmark Harness: `skills/test-runner/scripts/test-runner.benchmark.ts`.
-- Evidence output: `skills/test-runner/scripts/.benchmark-output/`.
+- Command contract and discovery: `skills/test-runner/src/command-contract.ts`.
+- CLI, parser, result model, and runtime behavior: `skills/test-runner/src/test-runner.ts`.
+- Detail artifact read/write behavior: `skills/test-runner/src/test-runner.ts`.
+- Front doors: `skills/test-runner/package.json#bin`.
+- Missing-runtime shell preflight: `skills/test-runner/src/test-runner.sh`.
+- Tests: `skills/test-runner/src/test-runner.test.ts`.
+- Runner Benchmark Harness: `skills/test-runner/src/test-runner.benchmark.ts`.
+- Evidence output: `skills/test-runner/var/benchmark-output/`.
 
 ## Commands
 
-- Inspect exact runner usage: `cd skills/test-runner/scripts`, then `bun run test-runner --help`.
-- Inspect benchmark usage: `cd skills/test-runner/scripts`, then `bun run test-runner-benchmark --help`.
-- Prove no-MCP Bun adoption: `cd skills/test-runner/scripts`, then `bun run test-runner-benchmark --no-mcp-baseline --local-runner ./test-runner.sh --mode fixed-gate --gate-preset bun-no-mcp`.
+- Inspect exact runner usage: `cd skills/test-runner`, then `bun run test-runner --help`.
+- Inspect benchmark usage: `cd skills/test-runner`, then `bun run test-runner-benchmark --help`.
+- Prove no-MCP Bun adoption: `cd skills/test-runner`, then `bun run test-runner-benchmark --no-mcp-baseline --local-runner ./src/test-runner.sh --mode fixed-gate --gate-preset bun-no-mcp`.
 - For runner routing, read `context/bun-runner.md`.
 
 ## Verification
 
-- Run `cd skills/test-runner/scripts`, then `bun test test-runner.test.ts` after runner, command-contract, detail-artifact, or benchmark changes.
-- Run `cd skills/test-runner/scripts`, then `bun run typecheck` after TypeScript edits.
+- Run `bun --filter test-runner-scripts test` after runner, command-contract, detail-artifact, or benchmark changes.
+- Run `bun --filter test-runner-scripts typecheck` after TypeScript edits.
 - Run the fixed-gate benchmark before changing normal runner guidance.
 
 ## Workflow
@@ -58,7 +58,7 @@ Agent Runner for Bun test context.
 
 - Pass test-target args only after the runner separator.
 - Keep generated evidence under the skill-local output path unless deliberately promoted.
-- Keep generated detail under `skills/test-runner/scripts/.runner-output/` unless deliberately promoted.
+- Keep generated detail under `skills/test-runner/var/runner-output/` unless deliberately promoted.
 - Do not copy flags, output schemas, parser states, or exit tables into this file.
 - Use script help and tests for deterministic behavior.
 

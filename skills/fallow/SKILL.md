@@ -27,11 +27,11 @@ Fallow analyzer evidence.
 
 ## Owner
 
-- Front door: `skills/fallow/scripts/package.json#bin` (`fallow-runner`).
-- Runner implementation: `skills/fallow/scripts/fallow-runner.ts`.
-- Public command contract, result vocab, and repair action ids: `skills/fallow/scripts/command-contract.ts`.
-- Runner tests: `skills/fallow/scripts/fallow-runner.test.ts`.
-- Live compatibility smoke: `skills/fallow/scripts/fallow-runner.live.test.ts`.
+- Front door: `skills/fallow/package.json#bin` (`fallow-runner`).
+- Runner implementation: `skills/fallow/src/fallow-runner.ts`.
+- Public command contract, result vocab, and repair action ids: `skills/fallow/src/command-contract.ts`.
+- Runner tests: `skills/fallow/src/fallow-runner.test.ts`.
+- Live compatibility smoke: `skills/fallow/src/fallow-runner.live.test.ts`.
 - Command recipes: `skills/fallow/references/commands.md`.
 - Workflow recipes: `skills/fallow/references/workflows.md`.
 - Safety policy: `skills/fallow/references/safety.md`.
@@ -52,8 +52,8 @@ Fallow analyzer evidence.
 
 ## Verification
 
-- Run `cd skills/fallow/scripts`, then `bun test fallow-runner.test.ts` after runner, command-contract, or workflow behavior changes.
-- Run `cd skills/fallow/scripts`, then `bun run typecheck` after TypeScript edits.
+- Run `bun --filter fallow-scripts test` after runner, command-contract, or workflow behavior changes.
+- Run `bun --filter fallow-scripts typecheck` after TypeScript edits.
 - Run live smoke only when checking installed Fallow compatibility.
 
 ## Safety

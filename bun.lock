@@ -24,8 +24,15 @@
         "typescript": "^5.9.3",
       },
     },
-    "skills/browser-use/scripts": {
+    "skills/browser-use": {
       "name": "browser-use-scripts",
+      "bin": {
+        "browser-adapter-map": "./src/browser-adapter-map.ts",
+        "browser-adapter-router": "./src/browser-adapter-router.ts",
+        "browser-use": "./src/browser-use.ts",
+        "preflight-browser-adapter": "./src/preflight-browser-adapter.ts",
+        "preflight-warm-chrome": "./src/preflight-warm-chrome.ts",
+      },
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
@@ -34,9 +41,12 @@
         "typescript": "^5.9.3",
       },
     },
-    "skills/create-cli/scripts": {
+    "skills/create-cli": {
       "name": "create-cli-scripts",
       "version": "0.0.0",
+      "bin": {
+        "create-cli-facade-smoke": "./src/facade-resolution-smoke.ts",
+      },
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
@@ -45,8 +55,11 @@
         "typescript": "^5.9.3",
       },
     },
-    "skills/fallow/scripts": {
+    "skills/fallow": {
       "name": "fallow-scripts",
+      "bin": {
+        "fallow-runner": "./src/fallow-runner.ts",
+      },
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
@@ -55,8 +68,12 @@
         "typescript": "^5.9.3",
       },
     },
-    "skills/test-runner/scripts": {
+    "skills/test-runner": {
       "name": "test-runner-scripts",
+      "bin": {
+        "test-runner": "./src/test-runner.sh",
+        "test-runner-benchmark": "./src/test-runner.benchmark.ts",
+      },
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
@@ -101,7 +118,7 @@
 
     "ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
 
-    "browser-use-scripts": ["browser-use-scripts@workspace:skills/browser-use/scripts"],
+    "browser-use-scripts": ["browser-use-scripts@workspace:skills/browser-use"],
 
     "bun-types": ["bun-types@1.3.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-tcpfCCl6XWo6nCVnpcVrxQ+9AYN1iqMIzgrSKYMB/fjLtV2eyAVEg7AxQJuCq/26R6HpKWykQXuSOq/21RYcbg=="],
 
@@ -113,7 +130,7 @@
 
     "color-name": ["color-name@1.1.4", "", {}, "sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA=="],
 
-    "create-cli-scripts": ["create-cli-scripts@workspace:skills/create-cli/scripts"],
+    "create-cli-scripts": ["create-cli-scripts@workspace:skills/create-cli"],
 
     "devtools-protocol": ["devtools-protocol@0.0.1624250", "", {}, "sha512-YFAat/lOiIk0ARmBweG+ygrEcbZrq5B9urRyUoeQKp53MlidHXE2TmTbxKcaXoQj7u/aX+jebDO4BW55rs0WwA=="],
 
@@ -121,7 +138,7 @@
 
     "escalade": ["escalade@3.2.0", "", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 
-    "fallow-scripts": ["fallow-scripts@workspace:skills/fallow/scripts"],
+    "fallow-scripts": ["fallow-scripts@workspace:skills/fallow"],
 
     "get-caller-file": ["get-caller-file@2.0.5", "", {}, "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg=="],
 
@@ -139,7 +156,7 @@
 
     "strip-ansi": ["strip-ansi@6.0.1", "", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A=="],
 
-    "test-runner-scripts": ["test-runner-scripts@workspace:skills/test-runner/scripts"],
+    "test-runner-scripts": ["test-runner-scripts@workspace:skills/test-runner"],
 
     "typed-query-selector": ["typed-query-selector@2.12.2", "", {}, "sha512-EOPFbyIub4ngnEdqi2yOcNeDLaX/0jcE1JoAXQDDMIthap7FoN795lc/SHfIq2d416VufXpM8z/lD+WRm2gfOQ=="],
 

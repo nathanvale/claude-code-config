@@ -12,6 +12,7 @@ Do not use for ordinary prose-only skills.
 - Agent-native CLI guidance: `skills/create-cli/references/agent-native-cli-design.md`.
 - Facade-backed CLI path: `skills/create-cli/references/cli-command-facade.md`.
 - Example skill shapes: `skill-io-shape-examples.md`.
+- Runtime portability: `runtime-portability.md`.
 - Worked example: `skills/decisions/references/operating-manual.md`.
 - Decision memory: `docs/decisions/`.
 
@@ -53,6 +54,7 @@ Do not use for ordinary prose-only skills.
 - Route by trigger, boundary, owner paths, safety gate, command, and next safe action.
 - Add `references/` only after repeated use exposes reusable detail that would bloat `SKILL.md`.
 - Add `scripts/` only for repeated deterministic work.
+- Put package-backed runtime source where `runtime-portability.md` says.
 - Do not copy flags, schemas, state machines, facade fields, or generated output shapes into skill prose.
 
 ## Next Safe Action

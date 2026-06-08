@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"types": ["bun-types"],
+		"strict": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"incremental": false,
+		"tsBuildInfoFile": "../node_modules/.cache/tsconfig.tsbuildinfo",
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true
+	},
+	"include": ["*.ts"]
+}

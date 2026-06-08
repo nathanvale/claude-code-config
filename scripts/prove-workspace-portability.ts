@@ -28,7 +28,7 @@ const exportPaths = [
 	"scripts/prove-workspace-portability.ts",
 	"runtime/cli-command-facade",
 	"skills/browser-use",
-	"skills/create-cli/scripts",
+	"skills/create-cli",
 	"skills/fallow",
 	"skills/test-runner",
 ];
@@ -39,9 +39,7 @@ const excludedNames = new Set([
 	"tsconfig.tsbuildinfo",
 ]);
 const excludedRelativePaths = new Set([
-	"skills/test-runner/scripts/.runner-output",
-	"skills/test-runner/scripts/.benchmark-output",
-	"skills/test-runner/scripts/var",
+	"skills/test-runner/var",
 ]);
 const commands: CommandStep[] = [
 	{

@@ -4,17 +4,17 @@ Use this as a recipe map. Use runner help for exact current syntax.
 
 Owner paths:
 
-- Front door: `skills/fallow/scripts/package.json#bin` (`fallow-runner`).
-- Public command surface: `skills/fallow/scripts/command-contract.ts`.
-- Parser and execution mapping: `skills/fallow/scripts/fallow-runner.ts`.
-- Command surface proof: `skills/fallow/scripts/fallow-runner.test.ts`.
-- Live compatibility proof: `skills/fallow/scripts/fallow-runner.live.test.ts`.
+- Front door: `skills/fallow/package.json#bin` (`fallow-runner`).
+- Public command surface: `skills/fallow/src/command-contract.ts`.
+- Parser and execution mapping: `skills/fallow/src/fallow-runner.ts`.
+- Command surface proof: `skills/fallow/src/fallow-runner.test.ts`.
+- Live compatibility proof: `skills/fallow/src/fallow-runner.live.test.ts`.
 - Official Fallow commands: `https://docs.fallow.tools/llms.txt`.
 
 ## Help
 
 ```bash
-cd skills/fallow/scripts
+cd skills/fallow
 bun run fallow-runner --help
 bun run fallow-runner <subcommand> --help
 ```

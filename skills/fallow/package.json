@@ -1,0 +1,20 @@
+{
+	"name": "fallow-scripts",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"fallow-runner": "./src/fallow-runner.ts"
+	},
+	"scripts": {
+		"fallow-runner": "./src/fallow-runner.ts",
+		"test": "bun test src",
+		"typecheck": "tsc --noEmit -p src/tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"bun-types": "1.3.10",
+		"typescript": "^5.9.3"
+	}
+}

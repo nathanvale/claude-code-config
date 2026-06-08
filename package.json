@@ -4,10 +4,10 @@
   "type": "module",
   "workspaces": [
     "runtime/*",
-    "skills/browser-use/scripts",
-    "skills/create-cli/scripts",
-    "skills/fallow/scripts",
-    "skills/test-runner/scripts"
+    "skills/browser-use",
+    "skills/create-cli",
+    "skills/fallow",
+    "skills/test-runner"
   ],
   "scripts": {
     "biome:check": "biome check --diagnostic-level=error .",

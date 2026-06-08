@@ -10,14 +10,14 @@ Use for browser tasks that need a logged-in, profile-bearing Chrome session.
 
 ## Owner
 
-- Front doors: `skills/browser-use/scripts/package.json#bin`.
+- Front doors: `skills/browser-use/package.json#bin`.
 - Warm Chrome proof, repair, launch: `preflight-warm-chrome`.
 - Browser Adapter Proof: `preflight-browser-adapter`.
 - Browser Adapter Router: `browser-adapter-router`.
 - Browser Use targets and operations: `browser-use` (route-bound; run Router `prepare` then `route` first).
 - Browser Adapter Map validation: `browser-adapter-map`.
-- CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/scripts/command-contract.ts`.
-- Router model, validation, recovery: `skills/browser-use/scripts/browser-adapter-router*.ts`.
+- CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/src/command-contract.ts`.
+- Router model, validation, recovery: `skills/browser-use/src/browser-adapter-router*.ts`.
 - Warm Chrome invariant and auth boundary: `skills/browser-use/references/warm-chrome.md`.
 - Chrome DevTools adapter map: `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
 
@@ -32,7 +32,7 @@ Name the browser outcome before choosing tools:
 Prove Warm Chrome as the browser-entry precondition:
 
 ```bash
-cd skills/browser-use/scripts
+cd skills/browser-use
 bun run preflight-warm-chrome check --json
 ```
 
@@ -44,7 +44,7 @@ bun run preflight-warm-chrome check --json
 Ask the Router for capability evidence, then route:
 
 ```bash
-cd skills/browser-use/scripts
+cd skills/browser-use
 bun run browser-adapter-router report --adapter <id> --json
 bun run browser-adapter-router route --envelope "$ENVELOPE" --json
 ```
@@ -57,7 +57,7 @@ bun run browser-adapter-router route --envelope "$ENVELOPE" --json
 If Router asks for attachment proof:
 
 ```bash
-cd skills/browser-use/scripts
+cd skills/browser-use
 bun run preflight-browser-adapter check --adapter <selected-or-requested-adapter> --json
 bun run browser-adapter-router route --envelope "$UPDATED_ENVELOPE" --json
 ```
@@ -71,26 +71,26 @@ bun run browser-adapter-router route --envelope "$UPDATED_ENVELOPE" --json
 Use `status` for human route projection:
 
 ```bash
-cd skills/browser-use/scripts
+cd skills/browser-use
 bun run browser-adapter-router status --envelope "$ENVELOPE" --plain
 ```
 
 After route success, list Browser Target Candidates through the proven adapter:
 
 ```bash
-cd skills/browser-use/scripts
+cd skills/browser-use
 bun run browser-use targets list --mode route-bound --route "$ROUTE" --adapter-proof "$PROOF" --json
 ```
 
 - Route-bound listing yields operation-ready candidates; recovery listing yields evidence-gathering candidates for target discovery.
 - Follow `continuation.next_action_id` to the next command.
-- Modes, flags, candidate referencing, URL redaction, result vocab, and recovery actions: `skills/browser-use/scripts/command-contract.ts`.
+- Modes, flags, candidate referencing, URL redaction, result vocab, and recovery actions: `skills/browser-use/src/command-contract.ts`.
 
 ## Verification
 
-- Run `cd skills/browser-use/scripts && bun test` after router, adapter-map, preflight, or browser-use script changes.
-- Run `cd skills/browser-use/scripts && bun run typecheck` after TypeScript edits.
-- Run `cd skills/browser-use/scripts`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.
+- Run `bun --filter browser-use-scripts test` after router, adapter-map, preflight, or browser-use script changes.
+- Run `bun --filter browser-use-scripts typecheck` after TypeScript edits.
+- Run `cd skills/browser-use`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.
 
 ## Page Actions
 
