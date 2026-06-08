@@ -1,0 +1,26 @@
+# Agent-Native CLI Toolkit
+
+> Toolkit for building CLI commands that are easy for humans and coding agents to run, inspect, recover from, and extend.
+
+This package is currently named `@side-quest/cli-command-facade`. Its accepted
+long-term product identity is `@side-quest/agent-native-cli-toolkit`.
+
+Use this file as a lightweight navigation map. It is not the source of truth.
+Root ADRs, package docs, `AGENTS.md`, and `CONTEXT.md` retain their normal repo
+ownership.
+
+## Start Here
+
+- [Decision Log](../../docs/plans/2026-05-23-002-agent-native-cli-toolkit-decision-log.md): Temporary planning capture for package identity, ADR links, plans, research, and pending grill questions.
+- [Rough PRD](../../docs/plans/2026-05-23-001-feat-agent-native-cli-toolkit-rough-prd.md): Rough product draft for the Agent-Native CLI Toolkit.
+
+## Governance
+
+- [Package AGENTS](./AGENTS.md): Local package routing and operating rules.
+- [Package CONTEXT](./CONTEXT.md): Durable package vocabulary and ownership language.
+
+## Optional
+
+- [ADR index](../../docs/adr/): Repo-wide architecture decisions.
+- [Original CLI Command Facade plan](../../docs/plans/2026-05-11-001-feat-monorepo-cli-command-facade-plan.md): Original shared package plan.
+- [Runtime Contract deepening plan](../../docs/plans/2026-05-18-001-refactor-cli-command-facade-prior-art-deepening-plan.md): Runtime-contract prior art and accepted package boundary deepening.
