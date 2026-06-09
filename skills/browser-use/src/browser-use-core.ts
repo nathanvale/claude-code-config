@@ -20,6 +20,7 @@ import type {
 	BrowserTargetCandidate,
 	TargetDiscoveryMode,
 } from "./browser-adapter-router-model";
+import { BROWSER_ADAPTER_ROUTER_ADAPTERS } from "./command-contract";
 
 // --- Exit codes ------------------------------------------------------------
 
@@ -47,6 +48,13 @@ export type Failure<A extends string> = {
 };
 
 // --- JSON guards -----------------------------------------------------------
+
+export function isBrowserAdapterId(value: unknown): value is BrowserAdapterId {
+	return (
+		typeof value === "string" &&
+		(BROWSER_ADAPTER_ROUTER_ADAPTERS as readonly string[]).includes(value)
+	);
+}
 
 export function stringField(value: unknown): string | undefined {
 	return typeof value === "string" && value !== "" ? value : undefined;
