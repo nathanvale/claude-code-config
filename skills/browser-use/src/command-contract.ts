@@ -1469,6 +1469,10 @@ const browserUseEnvVars = [
 		description:
 			"Optional mcporter command vector as a JSON array of non-empty strings (e.g. [\"bunx\",\"mcporter\"]). Shared with Browser Adapter Proof; no shell strings, no package-runner fallback.",
 	},
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+const browserUseScreenshotEnvVars = [
+	...browserUseEnvVars,
 	{
 		name: "BROWSER_USE_ARTIFACT_ROOT",
 		description:
@@ -1641,7 +1645,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseEnvVars,
+			envVars: browserUseScreenshotEnvVars,
 			resultContract: browserUseOperationResultContract,
 			actionAffordances: {
 				success: browserUseOperationSuccessActions,

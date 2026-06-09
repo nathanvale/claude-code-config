@@ -47,44 +47,16 @@ Name the browser outcome before choosing tools:
 - Treat auth/session and target-origin checks as route preconditions when the task needs them.
 - Use current command help for exact flags, file inputs, output modes, and recovery meanings.
 
-Prove Warm Chrome as the browser-entry precondition:
+Prove Warm Chrome, then route through the Router continuation chain:
 
-- Run `preflight-warm-chrome check`.
-- Save stdout as the Warm Chrome proof artifact.
-- Parse stdout envelope.
-- Follow `continuation.next_action_id`.
-- Obey `continuation.constraints`; skip adapter fallback and cold-browser fallback when forbidden.
-- Use `repair` or `launch` only when browser entry is approved or requested.
+1. `preflight-warm-chrome check` → Warm Chrome proof artifact.
+2. `browser-adapter-router report` → Adapter capability report artifact.
+3. `browser-adapter-router prepare` (supply proof + report + task preconditions) → route-evidence envelope.
+4. `browser-adapter-router route` (supply envelope) → route artifact. Follow `use_selected_browser_adapter`.
+5. If Router asks for attachment proof: `preflight-browser-adapter check --adapter <id>` → Adapter Proof artifact, then rerun `prepare` + `route` with fresh proof.
+6. `browser-adapter-router status` against a prepared envelope for human route projection.
 
-Ask the Router for capability evidence, prepare route evidence, then route:
-
-- Run `browser-adapter-router report`; save stdout as the Adapter capability report artifact.
-- Run `browser-adapter-router prepare`; supply the Warm Chrome proof, Adapter capability report, and task preconditions.
-- Save `prepare` stdout as the prepared route-evidence artifact.
-- Run `browser-adapter-router route`; supply the prepared route-evidence artifact.
-- Save route success stdout as the route artifact.
-- Build `prepare` inputs from the user request, Warm Chrome proof, task preconditions, and capability reports.
-- Let `prepare` assemble the route envelope.
-- Pass the prepared envelope to `route`.
-- Let `route` select the adapter or fail closed.
-- Follow the Router continuation.
-- Treat Router alternatives as informational unless the Router selects them.
-
-If Router asks for attachment proof:
-
-- Run `preflight-browser-adapter check` with the selected adapter, verified Warm Chrome endpoint or port, and the same run id.
-- Save stdout as the Adapter Proof artifact.
-- Rerun `browser-adapter-router prepare` with Warm Chrome proof, Adapter Proof, Adapter capability report, and task preconditions.
-- Rerun `browser-adapter-router route` with the new prepared route-evidence artifact.
-- Let the selected adapter proof own dependency checks, config checks, port binding, and repair hints.
-- Read the selected Browser Adapter Map for adapter-local inspection or repair commands.
-- Add fresh proof evidence to the route envelope, then reroute.
-- Continue only after Router emits `use_selected_browser_adapter`.
-- A login/MFA wall hit after preflight passes is an app step in the warm profile.
-
-Use `status` on prepared evidence for human route projection:
-
-- Run `browser-adapter-router status` against the prepared route-evidence artifact.
+Exact flags and env vars: run `<command> --help` or read `skills/browser-use/src/command-contract.ts`. Follow each command's `continuation.next_action_id`; obey `continuation.constraints`.
 
 After route success, list and select Browser Target Candidates through the proven adapter:
 
@@ -119,3 +91,10 @@ After route success, list and select Browser Target Candidates through the prove
 - Do not use Chrome for Testing, throwaway profiles, everyday default profiles, isolated Playwright launch, Puppeteer launch, AppleScript, `osascript`, macOS `open`, or cold-browser fallback as substitutes.
 - Do not print tokens, passwords, cookies, auth-bearing URLs, raw network secrets, or sensitive input values.
 - Report secret checks by shape only: present/absent, length, status code, account/org name.
+
+## Next Safe Action
+
+- Blocked on Warm Chrome: run `preflight-warm-chrome check --json`; follow `continuation.next_action_id` (`repair` or `launch` only when approved).
+- Blocked on routing: run `browser-adapter-router report --adapter <id> --json`; if capability gaps, research then re-prove; if binding mismatch, rerun `preflight-browser-adapter check`.
+- Blocked on targets: run `browser-use targets list --mode recovery --adapter <id> --adapter-proof <path> --json`; follow `continuation.next_action_id`.
+- Unknown failure: read the JSON envelope `error.code` against the diagnostic codes in `skills/browser-use/src/command-contract.ts`; each code names its own recovery action.
