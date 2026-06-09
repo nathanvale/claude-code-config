@@ -1059,9 +1059,9 @@ describe("check", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.data.web_socket_debugger_url).toBe(
-			"ws://localhost:9222/devtools/browser/test-browser",
-		);
+		expect(envelope.data).not.toHaveProperty("web_socket_debugger_url");
+		expect(result.stdout).not.toContain("webSocketDebuggerUrl");
+		expect(result.stdout).not.toContain("/devtools/browser/test-browser");
 	});
 
 	test("rejects malformed websocket discovery URLs", async () => {
@@ -1154,9 +1154,9 @@ describe("check", () => {
 		const envelope = JSON.parse(result.stdout);
 
 		expect(result.exitCode).toBe(0);
-		expect(envelope.data.web_socket_debugger_url).toBe(
-			"ws://127.0.0.1:9222/devtools/browser/real-browser-guid",
-		);
+		expect(envelope.data).not.toHaveProperty("web_socket_debugger_url");
+		expect(result.stdout).not.toContain("webSocketDebuggerUrl");
+		expect(result.stdout).not.toContain("real-browser-guid");
 	});
 
 	test("fails when Chrome was launched without a dedicated user data dir", async () => {

@@ -1,14 +1,19 @@
 {
 	"compilerOptions": {
-		"target": "ES2022",
-		"lib": ["ES2022"],
-		"module": "ESNext",
-		"moduleResolution": "Bundler",
+		"target": "ESNext",
+		"lib": ["ESNext"],
+		"module": "Preserve",
+		"moduleDetection": "force",
+		"moduleResolution": "bundler",
 		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true,
 		"noEmit": true,
 		"strict": true,
 		"types": ["node"],
 		"skipLibCheck": true,
+		"noFallthroughCasesInSwitch": true,
+		"noImplicitOverride": true,
+		"resolveJsonModule": true,
 		"ignoreDeprecations": "5.0"
 	},
 	"include": ["src/**/*.ts"]

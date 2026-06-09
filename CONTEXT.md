@@ -93,6 +93,22 @@ _Avoid_: lookup flow, doc link list, table of contents only, prompt memory
 The durable owner for a class of instruction or knowledge. Startup may route to it, but must not duplicate its content.
 _Avoid_: backup copy, duplicated policy, rendered summary, startup restatement
 
+**Tracker owner binding**:
+The owner-path-scoped association between a durable work owner and the external task tracker that runtime-backed task commands may read or mutate. Owners may be repo roots, workspace packages, skills, or other durable owner paths.
+_Avoid_: global task tracker, shared tracker, Nathan tracker, default database, repo-only tracker
+
+**Tracker binding config**:
+The split owner config that records a work owner's task-tracker identity and provider binding. Committed config owns non-sensitive owner identity; ignored local config owns account-specific Notion identifiers.
+_Avoid_: tracker doc, task database default, global registry, skill setting
+
+**Tracker owner path**:
+A directory that owns task tracking because it contains a Tracker binding config. Task tracker commands resolve the nearest Tracker owner path upward from the current working directory.
+_Avoid_: workspace package only, repo root only, inferred owner, global owner
+
+**Tracker fingerprint**:
+A runtime-verifiable marker on an external task tracker that proves the tracker belongs to the owner named by the Tracker binding config before CRUD commands mutate it. It uses owner identity, not local checkout paths.
+_Avoid_: path check, config trust, database name match, weak warning
+
 **Decision surface**:
 The smallest stable future lookup surface a decision log belongs to. Use it for product areas, workflows, skills, implementation slices, operational areas, or long-running systems; source sessions, tags, dates, agents, and people are metadata, not owners.
 _Avoid_: chat owner, tag owner, date owner, agent owner, mini ADR

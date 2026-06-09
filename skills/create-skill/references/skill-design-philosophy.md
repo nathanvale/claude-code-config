@@ -5,6 +5,17 @@ Default model for authoring, reviewing, healing, and repairing portable `SKILL.m
 Vocabulary owner: `../CONTEXT.md`.
 Agent-native CLI vocabulary owner: `../CONTEXT.md`.
 
+## Preview Index
+
+- Read `Core Rule` and `Shape` for the default skill model.
+- Read `Frontmatter`, `Naming And Descriptions`, and `Invocation Reliability` for routing evidence.
+- Read `Progressive Disclosure` and `Body` before adding depth.
+- Read `Owner Paths` before moving deterministic contracts.
+- Read `Skill I/O Examples`, `Simple Operation I/O`, and `Runtime-Backed Capability Design` when deciding whether prose, script, or runtime owns input/output behavior.
+- Read `references/skill-io-shape-examples.md#heading-selection-matrix` when choosing `SKILL.md` body headings.
+- Read `Evidence Loop` and `Skill Evolution` before adding rules.
+- Read `Quality Checks`, `Safety Prose`, and `Composition` before handoff.
+
 ## Core Rule
 
 - Contracts where a machine parses.
@@ -66,7 +77,7 @@ skills/<name>/
 - Keep descriptions budget-aware; routing context is finite.
 - Audit and patch descriptions when skill routing misses, over-matches, or creates skill collisions.
 - Audit descriptions after observed routing failure, nearby skill collision, skill rename, or review/healing of the touched skill.
-- Run `skills/create-skill/scripts/skill-description-audit.ts` after adding a skill, renaming a skill, or changing skill descriptions.
+- Run `bun run skills/create-skill/scripts/skill-description-audit.ts --json` after adding a skill, renaming a skill, or changing skill descriptions.
 - Treat skill collision warnings as routing evidence review prompts, not automatic rewrite orders.
 - Do not add periodic description audits until repeated observed failures show event-triggered review is insufficient.
 
@@ -93,6 +104,8 @@ skills/<name>/
 - Use references for depth, one level down.
 - Delete prose that does not change behavior.
 - Use Markdown headings for `SKILL.md` sections unless a host runtime requires another format.
+- Use the Heading Selection Matrix when heading choice is unclear.
+- Start heading choice from input/output shape, not `role`.
 - Reject pure XML skill-body structure; current Codex and Claude Code skills use YAML frontmatter plus Markdown instructions.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
 - Keep helper-validated YAML, JSON envelopes, Markdown references, CLI help, and generated docs outside XML wrappers; those surfaces already have owners.
@@ -195,6 +208,7 @@ skills/<name>/
 
 - Read `references/skill-io-shape-examples.md` when choosing between artifact, simple operation, and runtime-backed capability `SKILL.md` shapes.
 - Treat examples as shape guidance, not contracts.
+- Treat the Heading Selection Matrix as heading guidance, not a required section schema.
 - Keep exact field lists, command flags, output envelopes, and validation rules in the named owner paths.
 
 ## Evidence Loop

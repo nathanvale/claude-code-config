@@ -337,65 +337,6 @@ describe("CLI front door", () => {
 		expect(stderr).toBe("");
 	});
 
-	test("legacy launch wrapper forwards leading flags as preflight options", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "launch-agent-chrome-"));
-		cleanupPaths.push(dir);
-		const wrapper = join(dir, "launch-agent-chrome.sh");
-		const stub = join(dir, "preflight-warm-chrome.ts");
-		await writeFile(
-			wrapper,
-			await readFile(join(import.meta.dir, "launch-agent-chrome.sh"), "utf8"),
-		);
-		await writeFile(stub, '#!/usr/bin/env bash\nprintf "<%s>\\n" "$@"\n');
-		await Promise.all([chmod(wrapper, 0o755), chmod(stub, 0o755)]);
-
-		const proc = Bun.spawn(["bash", wrapper, "--json", "--debug"], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-
-		expect(exitCode).toBe(0);
-		expect(stdout).toBe("<launch>\n<--plain>\n<--json>\n<--debug>\n");
-		expect(stderr).toBe("");
-	});
-
-	test("legacy launch wrapper still maps positional port and profile", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "launch-agent-chrome-"));
-		cleanupPaths.push(dir);
-		const wrapper = join(dir, "launch-agent-chrome.sh");
-		const stub = join(dir, "preflight-warm-chrome.ts");
-		await writeFile(
-			wrapper,
-			await readFile(join(import.meta.dir, "launch-agent-chrome.sh"), "utf8"),
-		);
-		await writeFile(stub, '#!/usr/bin/env bash\nprintf "<%s>\\n" "$@"\n');
-		await Promise.all([chmod(wrapper, 0o755), chmod(stub, 0o755)]);
-
-		const proc = Bun.spawn(
-			["bash", wrapper, "9333", "/tmp/agent-profile", "--json"],
-			{
-				stdout: "pipe",
-				stderr: "pipe",
-			},
-		);
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-
-		expect(exitCode).toBe(0);
-		expect(stdout).toBe(
-			"<launch>\n<--plain>\n<--port>\n<9333>\n<--profile>\n</tmp/agent-profile>\n<--json>\n",
-		);
-		expect(stderr).toBe("");
-	});
-
 	test("missing adapter is input failure before adapter subprocesses", async () => {
 		let commandCount = 0;
 		const result = await runForTest(
@@ -511,8 +452,8 @@ describe("chrome-devtools proof", () => {
 								pages: [
 									{
 										id: "page-1",
-										title: "Example",
-										url: "https://example.com/?token=secret",
+										title: "Reset token abc123",
+										url: "https://example.com/reset/secret-token?token=secret",
 									},
 								],
 							}),
@@ -534,7 +475,11 @@ describe("chrome-devtools proof", () => {
 		expect(typeof envelope.data.adapter_proof_id).toBe("string");
 		expect(envelope.data.adapter_proof_id).toHaveLength(32);
 		expect(envelope.data.page_count).toBe(1);
-		expect(envelope.data.pages[0].url).toBe("https://example.com/");
+		expect(envelope.data).not.toHaveProperty("pages");
+		expect(result.stdout).not.toContain("page-1");
+		expect(result.stdout).not.toContain("Reset token");
+		expect(result.stdout).not.toContain("secret-token");
+		expect(result.stdout).not.toContain("token=secret");
 		expect(envelope.data.diagnostics.selected_config_source).toBe("mcporter");
 		expect(envelope.data.diagnostics.selected_binding.observed_port).toBe("9222");
 		expect(actionIds(envelope)).toEqual(["use_verified_browser_adapter"]);
@@ -686,10 +631,8 @@ describe("chrome-devtools proof", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(envelope.data.page_count).toBe(1);
-		expect(envelope.data.pages[0]).toEqual({
-			id: "1",
-			url: "https://example.com/",
-		});
+		expect(envelope.data).not.toHaveProperty("pages");
+		expect(result.stdout).not.toContain("https://example.com/");
 		expect(envelope.data.diagnostics.warnings).toEqual([]);
 	});
 

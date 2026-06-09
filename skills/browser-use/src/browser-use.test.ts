@@ -669,7 +669,6 @@ function adapterProofEnvelope(overrides: Record<string, unknown> = {}): string {
 			adapter_proof_id: "proof-abc",
 			verified_endpoint_identity: "127.0.0.1:9222",
 			page_count: 0,
-			pages: [],
 			...overrides,
 		},
 	});

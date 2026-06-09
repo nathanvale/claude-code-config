@@ -2,6 +2,15 @@
 
 Use before moving skills into `skills/archive/`.
 
+## Preview Index
+
+- Read `Goal` and `Order` for the portable archive workflow.
+- Read `Local Cleanup Receipt` only when working in this repo.
+- Read `Local Findings` only when comparing current archive state.
+- Read `Linked External Skills` before moving symlinked skills.
+- Read `Accepted Keep-Active List` before proposing archive moves.
+- Read `Move Rules` and `Validation` before editing files.
+
 ## Goal
 
 - Reduce active skill noise.
@@ -52,7 +61,7 @@ skill-authoring policy unless exporting local project state on purpose.
 - `context-advisor`
 - `create-cli`
 - `decision-mode`
-- `decisions`
+- `record-decision`
 - `grill-with-docs`
 - `handoff`
 - `improve-codebase-architecture`
@@ -77,7 +86,8 @@ skill-authoring policy unless exporting local project state on purpose.
 - `browse-use` -> `browser-use`.
 - `draft-mesagge` -> `draft-message`.
 - `summaris` -> `summarize`.
-- `dicisions` -> `decisions`.
+- `dicisions` -> `record-decision`.
+- `decisions` -> `record-decision`.
 - `decison-mode` -> `decision-mode`.
 - `create-skill-memory store` -> `choose-skill-memory-store`, superseded by `context-advisor`.
 - Duplicate entries collapse to one keep-active entry.

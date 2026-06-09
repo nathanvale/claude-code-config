@@ -24,7 +24,7 @@ Agent Runner for Bun test context.
 - Command contract and discovery: `skills/test-runner/src/command-contract.ts`.
 - CLI, parser, result model, and runtime behavior: `skills/test-runner/src/test-runner.ts`.
 - Detail artifact read/write behavior: `skills/test-runner/src/test-runner.ts`.
-- Front doors: `skills/test-runner/package.json#bin`.
+- Repo-local front doors: `skills/test-runner/package.json#scripts`.
 - Missing-runtime shell preflight: `skills/test-runner/src/test-runner.sh`.
 - Tests: `skills/test-runner/src/test-runner.test.ts`.
 - Runner Benchmark Harness: `skills/test-runner/src/test-runner.benchmark.ts`.

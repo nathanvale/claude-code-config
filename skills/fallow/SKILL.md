@@ -27,7 +27,7 @@ Fallow analyzer evidence.
 
 ## Owner
 
-- Front door: `skills/fallow/package.json#bin` (`fallow-runner`).
+- Repo-local front door: `skills/fallow/package.json#scripts` (`fallow-runner`).
 - Runner implementation: `skills/fallow/src/fallow-runner.ts`.
 - Public command contract, result vocab, and repair action ids: `skills/fallow/src/command-contract.ts`.
 - Runner tests: `skills/fallow/src/fallow-runner.test.ts`.

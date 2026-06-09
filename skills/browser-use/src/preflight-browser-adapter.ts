@@ -164,12 +164,6 @@ type AdapterWarning = {
 	observed_port?: string;
 };
 
-type PageSummary = {
-	id?: string;
-	title?: string;
-	url?: string;
-};
-
 type AdapterProof = {
 	ok: true;
 	action: "adapter_ready";
@@ -186,7 +180,6 @@ type AdapterProof = {
 	adapter_proof_id: string;
 	verified_endpoint_identity: string;
 	page_count: number;
-	pages: PageSummary[];
 	diagnostics: {
 		selected_config_source?: BrowserAdapterProofConfigSourceLabel;
 		selected_binding?: AdapterBinding;
@@ -804,9 +797,9 @@ async function proveChromeDevTools(input: {
 	mcporter.selected = true;
 	const warnings = warningsForNonSelectedConfig(config.sources);
 	const listStartedAt = input.runtime.now();
-	const pages = await listChromeDevToolsPages(input.runtime);
+	const pageCount = await countChromeDevToolsPages(input.runtime);
 	input.phaseTimings.adapter_list_pages_ms = input.runtime.now() - listStartedAt;
-	if (pages.length === 0) {
+	if (pageCount === 0) {
 		warnings.push({
 			code: "adapter_signal_weak",
 			severity: "warning",
@@ -836,8 +829,7 @@ async function proveChromeDevTools(input: {
 			verifiedEndpointIdentity: verified_endpoint_identity,
 		}),
 		verified_endpoint_identity,
-		page_count: pages.length,
-		pages,
+		page_count: pageCount,
 		diagnostics: {
 			selected_config_source: "mcporter",
 			selected_binding: mcporter.binding,
@@ -1368,9 +1360,9 @@ function mcporterDependencyHint(problem: string): string {
 	return mcporterDependencyHintText(problem);
 }
 
-async function listChromeDevToolsPages(
+async function countChromeDevToolsPages(
 	runtime: AdapterProofRuntime,
-): Promise<PageSummary[]> {
+): Promise<number> {
 	let result: AdapterCommandResult;
 	try {
 		result = await runMcporterCommand(runtime, [
@@ -1431,7 +1423,7 @@ async function listChromeDevToolsPages(
 			},
 		);
 	}
-	if (result.stdout.trim() === "") return [];
+	if (result.stdout.trim() === "") return 0;
 
 	let parsed: unknown;
 	try {
@@ -1450,7 +1442,7 @@ async function listChromeDevToolsPages(
 		);
 	}
 
-	return extractPageList(parsed).map(safePageSummary);
+	return extractPageList(parsed).length;
 }
 
 function extractPageList(value: unknown): unknown[] {
@@ -1472,41 +1464,15 @@ function extractPageList(value: unknown): unknown[] {
 	return [];
 }
 
-function parseChromeDevToolsPagesText(text: string): PageSummary[] {
+function parseChromeDevToolsPagesText(text: string): unknown[] {
 	return text
 		.split("\n")
 		.map((line) => line.trim())
-		.flatMap((line): PageSummary[] => {
+		.flatMap((line): unknown[] => {
 			const match = line.match(/^(\d+):\s+(\S+)(?:\s+\[[^\]]+\])?$/);
 			if (!match) return [];
-			const [, id, url] = match;
-			return [{ id, url }];
+			return [{}];
 		});
-}
-
-function safePageSummary(value: unknown): PageSummary {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const object = value as Record<string, unknown>;
-	return {
-		...(typeof object.id === "string" ? { id: truncate(object.id, 48) } : {}),
-		...(typeof object.title === "string"
-			? { title: truncate(object.title, 80) }
-			: {}),
-		...(typeof object.url === "string" ? { url: safeUrl(object.url) } : {}),
-	};
-}
-
-function safeUrl(value: string): string {
-	try {
-		const parsed = new URL(value);
-		return `${parsed.origin}${parsed.pathname}`;
-	} catch {
-		return truncate(value.split("?")[0] ?? value, 120);
-	}
-}
-
-function truncate(value: string, maxLength: number): string {
-	return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
 }
 
 function timeoutOptions(

@@ -1,21 +1,21 @@
 ---
-title: Decisions Record V2 Requirements
+title: Record Decision V2 Requirements
 date: 2026-06-07
-topic: decisions-record-v2
+topic: record-decision-v2
 type: requirements
 source:
   - docs/brainstorms/2026-06-06-decisions-skill-operating-manual.md
   - docs/decisions/2026-06-06-001-decisions-skill-decision-log.md
-  - skills/decisions/references/operating-manual.md
+  - skills/record-decision/references/operating-manual.md
   - context/skill-design-philosophy.md
   - skills/create-skill/references/agent-native-skill-design.md
 ---
 
-# Decisions Record V2 Requirements
+# Record Decision V2 Requirements
 
 ## Summary
 
-Build `decisions record` as the v2 write surface for accepted repo decisions.
+Build `record-decision` as the v2 write surface for accepted repo decisions.
 The command turns an agent-native prose input envelope into either a dry-run mutation plan, an executed mutation result, or structured repair guidance.
 Runtime code, help, generated docs, and tests own exact input fields, output fields, diagnostics, and facade envelope details.
 
@@ -23,7 +23,7 @@ Runtime code, help, generated docs, and tests own exact input fields, output fie
 
 ## Problem Frame
 
-The current decisions operating manual captures the shape of decision logging, but the write workflow is still prose-owned.
+The current record-decision operating manual captures the shape of decision logging, but the write workflow is still prose-owned.
 Agents can follow the manual, but durable mutation, duplicate prevention, privacy routing, supersession, and retry safety need runtime checks.
 
 V2 should not become a search product, dashboard, database, or general decision assistant.
@@ -33,7 +33,7 @@ It should make one operation reliable: record an accepted decision in a repo dec
 
 ## Key Decisions
 
-- **Record is the v2 write surface.** `decisions record` is the command that plans or writes accepted decisions.
+- **Record is the v2 write surface.** `record-decision` is the command that plans or writes accepted decisions.
 - **Dry-run is default.** Real file writes require explicit execute mode.
 - **Input is agent-native prose.** Agents provide intent in a prose envelope, and runtime parsing owns exact validation.
 - **Acceptance is gated.** The command requires explicit acceptance and does not infer accepted decisions from discussion.
@@ -47,7 +47,7 @@ It should make one operation reliable: record an accepted decision in a repo dec
 ## Actors
 
 - A1. **Calling agent or human** supplies the accepted decision and follows returned repair or mutation evidence.
-- A2. **`decisions record` runtime** parses input, resolves target log, validates safety gates, and emits facade-backed output.
+- A2. **`record-decision` runtime** parses input, resolves target log, validates safety gates, and emits facade-backed output.
 - A3. **Decision log Markdown file** stores fenced YAML plus prose entries under `docs/decisions/`.
 - A4. **Facade envelope consumer** reads success, repair, or safety data without scraping rendered Markdown.
 
@@ -57,7 +57,7 @@ It should make one operation reliable: record an accepted decision in a repo dec
 
 **Command Surface**
 
-- R1. `decisions record` supports dry-run planning by default and execute writes only through an explicit mode.
+- R1. `record-decision` supports dry-run planning by default and execute writes only through an explicit mode.
 - R2. The command accepts an agent-native prose input envelope that runtime code parses into a package-owned TypeScript input contract.
 - R3. The input contract requires an accepted decision, a scalar owner, a typed source object, and an explicit acceptance gate.
 - R4. The command rejects missing `owner`, missing `source`, missing source anchor, missing acceptance, and hidden execute inference.
@@ -154,25 +154,25 @@ flowchart TB
 - AE1. **Dry-run keeps filesystem unchanged**
   - **Covers:** R1, R11, R20
   - **Given:** A complete accepted decision envelope without execute mode.
-  - **When:** The caller runs `decisions record`.
+  - **When:** The caller runs `record-decision`.
   - **Then:** The command returns a mutation plan and creates no temp files or target edits.
 
 - AE2. **Execute writes one valid replacement**
   - **Covers:** R18, R19
   - **Given:** A complete accepted decision envelope with execute mode and a compatible target log.
-  - **When:** The caller runs `decisions record`.
+  - **When:** The caller runs `record-decision`.
   - **Then:** The command validates rendered replacement content before rename and returns completed mutation evidence.
 
 - AE3. **Missing owner is not inferred**
   - **Covers:** R3, R4, R12
   - **Given:** Input contains a decision and source but no owner.
-  - **When:** The caller runs `decisions record`.
+  - **When:** The caller runs `record-decision`.
   - **Then:** The command returns repair data naming the missing owner and no-mutation evidence.
 
 - AE4. **Private scope blocks repo write**
   - **Covers:** R5, R12
   - **Given:** Input describes a personal or private decision.
-  - **When:** The caller runs `decisions record`.
+  - **When:** The caller runs `record-decision`.
   - **Then:** The command returns a privacy-specific scope failure and does not write to `docs/decisions/`.
 
 - AE5. **Same-log supersession updates both sides**
@@ -190,7 +190,7 @@ flowchart TB
 - AE7. **Duplicate-looking decision blocks**
   - **Covers:** R15
   - **Given:** Input resembles an existing accepted decision for the target owner.
-  - **When:** The caller runs `decisions record`.
+  - **When:** The caller runs `record-decision`.
   - **Then:** The command returns conflict repair guidance instead of appending a duplicate.
 
 - AE8. **Write failure reports mutation safety**
@@ -203,8 +203,8 @@ flowchart TB
 
 ## Success Criteria
 
-- `decisions record` can dry-run a complete accepted decision without file mutation.
-- `decisions record` can execute a compatible write and leave the target log valid.
+- `record-decision` can dry-run a complete accepted decision without file mutation.
+- `record-decision` can execute a compatible write and leave the target log valid.
 - Missing input, private scope, duplicate conflict, legacy shape, cross-log supersession, filesystem failure, and validation failure all return facade-backed structured output.
 - Runtime tests cover parser acceptance, rendered help, discovery metadata, facade envelope validation, dry-run semantics, execute semantics, conflict handling, supersession, and write-failure safety.
 - Skill prose points to runtime owners and does not copy exact command contracts.
@@ -215,7 +215,7 @@ flowchart TB
 
 **In Scope**
 
-- `decisions record` input parser and validation.
+- `record-decision` input parser and validation.
 - Dry-run mutation planning.
 - Execute-mode write engine.
 - Same-log supersession mutation.
@@ -267,6 +267,6 @@ flowchart TB
 
 - `docs/brainstorms/2026-06-06-decisions-skill-operating-manual.md`
 - `docs/decisions/2026-06-06-001-decisions-skill-decision-log.md`
-- `skills/decisions/references/operating-manual.md`
+- `skills/record-decision/references/operating-manual.md`
 - `context/skill-design-philosophy.md`
 - `skills/create-skill/references/agent-native-skill-design.md`

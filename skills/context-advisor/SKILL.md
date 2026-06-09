@@ -17,14 +17,14 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 - Skill authoring owner: `skills/create-skill/SKILL.md`.
 - Runtime-backed skill design owner: `skills/create-skill/references/agent-native-skill-design.md`.
 - CLI contract owner: `skills/create-cli/SKILL.md`.
-- Decision owner: `skills/decisions/SKILL.md`.
+- Decision owner: `skills/record-decision/SKILL.md`.
 
 ## Dependencies
 
 - `references/storage-routing.md`: bundled reference, hard dependency.
 - `skills/create-skill/SKILL.md`: optional handoff for skill-authoring routes.
 - `skills/create-cli/SKILL.md`: optional handoff for CLI-contract routes.
-- `skills/decisions/SKILL.md`: optional handoff for accepted decision capture.
+- `skills/record-decision/SKILL.md`: optional handoff for accepted decision capture.
 - `decision-mode` or `grill-with-docs`: optional handoff for unresolved ownership choices.
 - Missing storage-routing map: blocked.
 - Missing optional handoff: continue by naming the owner path and next safe action.
@@ -44,7 +44,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 
 ## Output
 
-- Status: recommend, ask, escalate-decisions, escalate-create-skill, escalate-create-cli, or blocked.
+- Status: recommend, ask, escalate-record-decision, escalate-create-skill, escalate-create-cli, or blocked.
 - Recommendation: storage bucket and owner path.
 - Required facts: owner, kind, mutability, sensitivity, privacy, query, retention, deletion, recovery, write actor.
 - Assumptions: facts inferred from prompt.
@@ -67,7 +67,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 
 - If owner is unclear, ask one ownership question.
 - If privacy, durability, write authority, or side-effect stance is unclear, ask one question.
-- If context is an accepted repo decision, use `decisions`.
+- If context is an accepted repo decision, use `record-decision`.
 - If storage choice is unresolved and affects ownership, privacy, durability, or side effects, use `decision-mode` or `grill-with-docs`.
 - If accepted storage choice requires skill-authoring guidance, use `create-skill`.
 - If accepted storage choice requires a runtime-backed skill capability, use `create-skill`.

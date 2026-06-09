@@ -4,13 +4,21 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 
+type Workspaces =
+	| string[]
+	| {
+			packages?: string[];
+			catalog?: Record<string, string>;
+			catalogs?: Record<string, Record<string, string>>;
+	  };
+
 type PackageJson = {
 	name?: string;
 	version?: string;
 	description?: string;
 	license?: string;
 	private?: boolean;
-	workspaces?: string[];
+	workspaces?: Workspaces;
 	bin?: Record<string, string> | string;
 	scripts?: Record<string, string>;
 	files?: string[];
@@ -26,80 +34,43 @@ type PackageJson = {
 	bundledDependencies?: string[] | boolean;
 };
 
+type TsconfigJson = {
+	extends?: string;
+	compilerOptions?: Record<string, unknown>;
+	include?: string[];
+	exclude?: string[];
+};
+
+type WorkspacePackage = {
+	path: string;
+	packageJson: PackageJson | null;
+};
+
 type Finding = {
 	path: string;
 	message: string;
 };
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const facadePackage = "runtime/cli-command-facade";
-const facadeName = "@side-quest/cli-command-facade";
-const activeWorkspacePackages = [
-	facadePackage,
-	"skills/browser-use",
-	"skills/create-cli",
-	"skills/fallow",
-	"skills/test-runner",
-];
-const facadeConsumers = activeWorkspacePackages.filter(
-	(packagePath) => packagePath !== facadePackage,
-);
-const requiredWorkspaceGlobs = [
-	"runtime/*",
-	"skills/browser-use",
-	"skills/create-cli",
-	"skills/fallow",
-	"skills/test-runner",
-];
-const expectedBins = {
-	"skills/browser-use": {
-		"browser-adapter-map": "dist/browser-adapter-map.js",
-		"browser-adapter-router": "dist/browser-adapter-router.js",
-		"browser-use": "dist/browser-use.js",
-		"preflight-browser-adapter": "dist/preflight-browser-adapter.js",
-		"preflight-warm-chrome": "dist/preflight-warm-chrome.js",
-	},
-	"skills/create-cli": {
-		"create-cli-facade-smoke": "./src/facade-resolution-smoke.ts",
-	},
-	"skills/fallow": {
-		"fallow-runner": "./src/fallow-runner.ts",
-	},
-	"skills/test-runner": {
-		"test-runner": "./src/test-runner.sh",
-		"test-runner-benchmark": "./src/test-runner.benchmark.ts",
-	},
-} satisfies Record<string, Record<string, string>>;
-const expectedLocalScripts = {
-	"skills/browser-use": {
-		"browser-adapter-map": "./src/browser-adapter-map.ts",
-		"browser-adapter-router": "./src/browser-adapter-router.ts",
-		"browser-use": "./src/browser-use.ts",
-		"preflight-browser-adapter": "./src/preflight-browser-adapter.ts",
-		"preflight-warm-chrome": "./src/preflight-warm-chrome.ts",
-	},
-	"skills/create-cli": {
-		"create-cli-facade-smoke": "./src/facade-resolution-smoke.ts",
-	},
-	"skills/fallow": {
-		"fallow-runner": "./src/fallow-runner.ts",
-	},
-	"skills/test-runner": {
-		"test-runner": "./src/test-runner.sh",
-		"test-runner-benchmark": "./src/test-runner.benchmark.ts",
-	},
-} satisfies Record<string, Record<string, string>>;
-const allowedFacadeSpecs = {
-	"skills/browser-use": "0.1.0",
-	"skills/create-cli": "workspace:*",
-	"skills/fallow": "workspace:*",
-	"skills/test-runner": "workspace:*",
-} satisfies Record<string, string>;
-const commandContractPaths = [
-	"skills/browser-use/src/command-contract.ts",
-	"skills/fallow/src/command-contract.ts",
-	"skills/test-runner/src/command-contract.ts",
-];
+const expectedTsconfigOptions = {
+	target: "ESNext",
+	lib: ["ESNext"],
+	module: "Preserve",
+	moduleDetection: "force",
+	moduleResolution: "bundler",
+	allowImportingTsExtensions: true,
+	verbatimModuleSyntax: true,
+	noEmit: true,
+	strict: true,
+	skipLibCheck: true,
+	noFallthroughCasesInSwitch: true,
+	noImplicitOverride: true,
+	resolveJsonModule: true,
+} satisfies Record<string, unknown>;
+const expectedTypecheckScript = "tsc --noEmit -p tsconfig.json";
+const packageTsconfigPath = "tsconfig.json";
+const requiredCatalogDependencies = ["typescript", "@types/bun", "@types/node"];
+const toolchainDependencyNames = new Set(requiredCatalogDependencies);
 const localLockfileNames = new Set([
 	"bun.lock",
 	"bun.lockb",
@@ -129,7 +100,117 @@ function readPackageJson(path: string): PackageJson | null {
 		return null;
 	}
 
-	return JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+	try {
+		return JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+	} catch (error) {
+		findings.push({
+			path: displayPath(packagePath),
+			message: `Invalid JSON in package.json: ${(error as Error).message}.`,
+		});
+		return null;
+	}
+}
+
+function readTsconfigJson(path: string): TsconfigJson | null {
+	if (!existsSync(path)) {
+		findings.push({
+			path: displayPath(path),
+			message: "Missing tsconfig.json.",
+		});
+		return null;
+	}
+
+	try {
+		return JSON.parse(readFileSync(path, "utf8")) as TsconfigJson;
+	} catch (error) {
+		findings.push({
+			path: displayPath(path),
+			message: `Invalid JSON in tsconfig.json: ${(error as Error).message}.`,
+		});
+		return null;
+	}
+}
+
+function workspacePackages(workspaces: Workspaces | undefined): string[] {
+	if (Array.isArray(workspaces)) {
+		return workspaces;
+	}
+
+	return workspaces?.packages ?? [];
+}
+
+function workspaceCatalog(workspaces: Workspaces | undefined): Record<string, string> {
+	if (!workspaces || Array.isArray(workspaces)) {
+		return {};
+	}
+
+	return workspaces.catalog ?? {};
+}
+
+function expandWorkspaceEntry(workspaceEntry: string): string[] {
+	if (!workspaceEntry.endsWith("/*")) {
+		return existsSync(repoPath(join(workspaceEntry, "package.json")))
+			? [workspaceEntry]
+			: [];
+	}
+
+	const parentPath = workspaceEntry.slice(0, -2);
+	const absoluteParentPath = repoPath(parentPath);
+
+	if (!existsSync(absoluteParentPath)) {
+		return [];
+	}
+
+	return readdirSync(absoluteParentPath)
+		.map((entry) => join(parentPath, entry))
+		.filter((packagePath) =>
+			statSync(repoPath(packagePath)).isDirectory() &&
+			existsSync(repoPath(join(packagePath, "package.json"))),
+		)
+		.sort();
+}
+
+function discoverWorkspacePackagePaths(rootPackageJson: PackageJson | null): string[] {
+	const packagePaths = new Set<string>();
+
+	for (const workspaceEntry of workspacePackages(rootPackageJson?.workspaces)) {
+		for (const packagePath of expandWorkspaceEntry(workspaceEntry)) {
+			packagePaths.add(packagePath);
+		}
+	}
+
+	return [...packagePaths].sort();
+}
+
+function directLocalScriptTarget(scriptValue: string): string | null {
+	const directTargetMatch = scriptValue.match(
+		/^(?:\.\/)?src\/[^\s]+\.(?:ts|tsx|js|mjs|cjs|sh)$/,
+	);
+	const bunRunTargetMatch = scriptValue.match(
+		/^bun run ((?:\.\/)?src\/[^\s]+\.(?:ts|tsx|js|mjs|cjs|sh))$/,
+	);
+
+	return directTargetMatch?.[0] ?? bunRunTargetMatch?.[1] ?? null;
+}
+
+function discoverLocalScripts(packageJson: PackageJson | null): Record<string, string> {
+	const localScripts: Record<string, string> = {};
+
+	for (const [scriptName, scriptValue] of Object.entries(packageJson?.scripts ?? {})) {
+		const scriptTarget = directLocalScriptTarget(scriptValue);
+
+		if (scriptTarget) {
+			localScripts[scriptName] = scriptTarget;
+		}
+	}
+
+	return localScripts;
+}
+
+function discoverContractPaths(packagePath: string): string[] {
+	const contractPath = join(packagePath, "src/command-contract.ts");
+
+	return existsSync(repoPath(contractPath)) ? [contractPath] : [];
 }
 
 function expectedShebangForBinTarget(binTarget: string): string | null {
@@ -170,6 +251,19 @@ function normalizedBinTarget(binTarget: string): string {
 	return binTarget.replace(/^\.\//, "");
 }
 
+function isSourceModeBinTarget(binTarget: string): boolean {
+	const normalizedTarget = normalizedBinTarget(binTarget);
+
+	return (
+		normalizedTarget.startsWith("src/") ||
+		normalizedTarget.startsWith("scripts/") ||
+		/\.(ts|tsx|test\.js|test\.ts|live\.test\.ts|benchmark\.ts)$/.test(
+			normalizedTarget,
+		) ||
+		/(^|\/)fixtures\//.test(normalizedTarget)
+	);
+}
+
 function fileAllowlistCoversBin(files: string[], binTarget: string): boolean {
 	const normalizedTarget = normalizedBinTarget(binTarget);
 
@@ -190,6 +284,208 @@ function hasBundledDependencyPayload(
 		bundledDependencies === true ||
 		(Array.isArray(bundledDependencies) && bundledDependencies.length > 0)
 	);
+}
+
+function sameJsonValue(actual: unknown, expected: unknown): boolean {
+	return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function formatJsonValue(value: unknown): string {
+	return JSON.stringify(value);
+}
+
+function dependencySpec(
+	packageJson: PackageJson | null,
+	dependencyName: string,
+): string | undefined {
+	return (
+		packageJson?.dependencies?.[dependencyName] ??
+		packageJson?.devDependencies?.[dependencyName]
+	);
+}
+
+function directoryHasTypeScript(path: string): boolean {
+	if (!existsSync(path)) {
+		return false;
+	}
+
+	const entries = readdirSync(path);
+	for (const entry of entries) {
+		const entryPath = join(path, entry);
+		const stats = statSync(entryPath);
+
+		if (stats.isDirectory()) {
+			if (directoryHasTypeScript(entryPath)) {
+				return true;
+			}
+			continue;
+		}
+
+		if (/\.(ts|tsx)$/.test(entry)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function hasSourceTypeScript(packagePath: string): boolean {
+	return directoryHasTypeScript(repoPath(join(packagePath, "src")));
+}
+
+function checkExpectedDevDependency(
+	packagePath: string,
+	packageJson: PackageJson | null,
+	dependencyName: string,
+	expectedSpec: string,
+): void {
+	const actualSpec = packageJson?.devDependencies?.[dependencyName];
+
+	if (actualSpec !== expectedSpec) {
+		findings.push({
+			path: `${packagePath}/package.json`,
+			message: `devDependencies.${dependencyName} must be ${expectedSpec}; root workspaces.catalog owns active TypeScript tool versions.`,
+		});
+	}
+}
+
+function checkLintPortability(
+	packagePath: string,
+	packageJson: PackageJson | null,
+): void {
+	const biomeSpec = dependencySpec(packageJson, "@biomejs/biome");
+
+	if (biomeSpec !== undefined) {
+		findings.push({
+			path: `${packagePath}/package.json`,
+			message:
+				"Skill package declares @biomejs/biome; keep Biome a root-only dev gate so the bundle stays portable.",
+		});
+	}
+
+	const nestedBiomePath = repoPath(join(packagePath, "biome.json"));
+
+	if (!existsSync(nestedBiomePath)) {
+		return;
+	}
+
+	let nestedBiome: { root?: boolean; extends?: string | string[] };
+
+	try {
+		nestedBiome = JSON.parse(readFileSync(nestedBiomePath, "utf8"));
+	} catch (error) {
+		findings.push({
+			path: `${packagePath}/biome.json`,
+			message: `Invalid JSON in biome.json: ${(error as Error).message}.`,
+		});
+		return;
+	}
+
+	const extendsValue = nestedBiome.extends;
+	const extendsRoot = Array.isArray(extendsValue)
+		? extendsValue.includes("//")
+		: extendsValue === "//";
+
+	if (!extendsRoot) {
+		findings.push({
+			path: `${packagePath}/biome.json`,
+			message:
+				'Nested skill biome.json must set extends: "//" so it cannot become a competing root; treat it as workspace-local only.',
+		});
+	}
+}
+
+function checkTypeScriptGovernance(
+	packagePath: string,
+	packageJson: PackageJson | null,
+): void {
+	const hasTypeScript =
+		hasSourceTypeScript(packagePath) ||
+		Boolean(packageJson?.scripts?.typecheck) ||
+		Boolean(dependencySpec(packageJson, "typescript")) ||
+		existsSync(repoPath(join(packagePath, packageTsconfigPath)));
+
+	if (!hasTypeScript) {
+		return;
+	}
+
+	const tsconfigPath = repoPath(join(packagePath, packageTsconfigPath));
+	const tsconfig = readTsconfigJson(tsconfigPath);
+	const compilerOptions = tsconfig?.compilerOptions ?? {};
+	const typeEntries = Array.isArray(compilerOptions.types)
+		? compilerOptions.types
+		: [];
+	const runtimeType = typeEntries.length === 1 ? typeEntries[0] : undefined;
+
+	if (packageJson?.scripts?.typecheck !== expectedTypecheckScript) {
+		findings.push({
+			path: `${packagePath}/package.json`,
+			message: `TypeScript governance expects scripts.typecheck to be ${expectedTypecheckScript}.`,
+		});
+	}
+
+	checkExpectedDevDependency(packagePath, packageJson, "typescript", "catalog:");
+
+	if (dependencySpec(packageJson, "bun-types")) {
+		findings.push({
+			path: `${packagePath}/package.json`,
+			message: "Use @types/bun through root workspaces.catalog; do not declare direct bun-types in active packages.",
+		});
+	}
+
+	if (runtimeType === "bun") {
+		checkExpectedDevDependency(packagePath, packageJson, "@types/bun", "catalog:");
+
+		if (dependencySpec(packageJson, "@types/node")) {
+			findings.push({
+				path: `${packagePath}/package.json`,
+				message: "Bun CLI packages use @types/bun as the ambient runtime surface; do not add direct @types/node.",
+			});
+		}
+	}
+
+	if (runtimeType === "node") {
+		checkExpectedDevDependency(packagePath, packageJson, "@types/node", "catalog:");
+
+		if (dependencySpec(packageJson, "@types/bun")) {
+			findings.push({
+				path: `${packagePath}/package.json`,
+				message: "Node library packages use @types/node for source typechecking; keep Bun test typing separate.",
+			});
+		}
+	}
+
+	if (runtimeType !== "bun" && runtimeType !== "node") {
+		findings.push({
+			path: displayPath(tsconfigPath),
+			message: "compilerOptions.types must be exactly [\"bun\"] or [\"node\"] for active TypeScript packages.",
+		});
+	}
+
+	if (tsconfig?.extends) {
+		findings.push({
+			path: displayPath(tsconfigPath),
+			message: "Portable active package tsconfigs must be self-contained; do not extend repo-root config unless the export payload carries it.",
+		});
+	}
+
+	for (const [optionName, expectedValue] of Object.entries(expectedTsconfigOptions)) {
+		const actualValue = compilerOptions[optionName];
+
+		if (!sameJsonValue(actualValue, expectedValue)) {
+			findings.push({
+				path: displayPath(tsconfigPath),
+				message: `compilerOptions.${optionName} must be ${formatJsonValue(expectedValue)} for active TypeScript packages.`,
+			});
+		}
+	}
+
+	if ((compilerOptions.types as string[] | undefined)?.includes("bun-types")) {
+		findings.push({
+			path: displayPath(tsconfigPath),
+			message: "Use compilerOptions.types [\"bun\"]; do not typecheck against direct bun-types.",
+		});
+	}
 }
 
 function walkFiles(path: string): string[] {
@@ -276,6 +572,25 @@ function findDistributedWorkspaceMarkers(packagePath: string, files: string[]): 
 	}
 
 	return matches;
+}
+
+function lockWorkspaceBlock(lockText: string, packagePath: string): string | null {
+	const packageMarker = `    "${packagePath}": {`;
+	const blockStart = lockText.indexOf(packageMarker);
+
+	if (blockStart === -1) {
+		return null;
+	}
+
+	const nextBlockMatch = lockText.slice(blockStart + packageMarker.length).match(
+		/\n {4}"[^"]+": \{/,
+	);
+
+	if (!nextBlockMatch?.index) {
+		return lockText.slice(blockStart);
+	}
+
+	return lockText.slice(blockStart, blockStart + packageMarker.length + nextBlockMatch.index);
 }
 
 function checkDistributionDependencySpecs(
@@ -417,6 +732,13 @@ function checkDistributionReadiness(
 	}
 
 	for (const [binName, binTarget] of Object.entries(bins)) {
+		if (isSourceModeBinTarget(binTarget)) {
+			findings.push({
+				path: packageJsonPath,
+				message: `Public package bin ${binName} -> ${binTarget} points at source, tests, fixtures, or dev wrappers; publish bins are install contracts and repo-local source mode belongs in package scripts.`,
+			});
+		}
+
 		if (files.length > 0 && !fileAllowlistCoversBin(files, binTarget)) {
 			findings.push({
 				path: packageJsonPath,
@@ -486,13 +808,67 @@ function walkForLocalLockfiles(path: string): string[] {
 }
 
 const rootPackage = readPackageJson(repoRoot);
-const rootWorkspaces = new Set(rootPackage?.workspaces ?? []);
+const workspacePackagePaths = discoverWorkspacePackagePaths(rootPackage);
+const workspacePackagesByPath = new Map<string, WorkspacePackage>(
+	workspacePackagePaths.map((packagePath) => [
+		packagePath,
+		{
+			path: packagePath,
+			packageJson: readPackageJson(repoPath(packagePath)),
+		},
+	]),
+);
+const workspacePackageNames = new Map<string, WorkspacePackage>();
 
-for (const workspaceGlob of requiredWorkspaceGlobs) {
-	if (!rootWorkspaces.has(workspaceGlob)) {
+for (const workspacePackage of workspacePackagesByPath.values()) {
+	if (workspacePackage.packageJson?.name) {
+		workspacePackageNames.set(workspacePackage.packageJson.name, workspacePackage);
+	}
+}
+
+const rootWorkspaces = new Set(workspacePackages(rootPackage?.workspaces));
+const rootCatalog = workspaceCatalog(rootPackage?.workspaces);
+
+for (const workspaceEntry of rootWorkspaces) {
+	const expandedPaths = expandWorkspaceEntry(workspaceEntry);
+
+	if (expandedPaths.length === 0) {
 		findings.push({
 			path: "package.json",
-			message: `Missing workspace entry ${workspaceGlob}.`,
+			message: `Workspace entry ${workspaceEntry} does not resolve to any package.json.`,
+		});
+	}
+}
+
+for (const dependencyName of requiredCatalogDependencies) {
+	const catalogSpec = rootCatalog[dependencyName];
+
+	if (!catalogSpec) {
+		findings.push({
+			path: "package.json",
+			message: `workspaces.catalog.${dependencyName} is required so root owns the active TypeScript toolchain.`,
+		});
+		continue;
+	}
+
+	if (/^[~^*]/.test(catalogSpec)) {
+		findings.push({
+			path: "package.json",
+			message: `workspaces.catalog.${dependencyName} must be an exact version, not ${catalogSpec}.`,
+		});
+	}
+}
+
+for (const [dependencyName, dependencySpec] of Object.entries(
+	rootPackage?.devDependencies ?? {},
+)) {
+	if (
+		toolchainDependencyNames.has(dependencyName) &&
+		dependencySpec !== rootCatalog[dependencyName]
+	) {
+		findings.push({
+			path: "package.json",
+			message: `Root devDependencies.${dependencyName} must match workspaces.catalog.${dependencyName}.`,
 		});
 	}
 }
@@ -505,39 +881,48 @@ if (!existsSync(rootLockPath)) {
 	});
 } else {
 	const rootLock = readFileSync(rootLockPath, "utf8");
-	const requiredLockMarkers = [
-		`"${facadePackage}"`,
-		`"name": "${facadeName}"`,
-		`"${facadeName}": ["${facadeName}@workspace:${facadePackage}"]`,
-	];
 
-	for (const marker of requiredLockMarkers) {
-		if (!rootLock.includes(marker)) {
-			findings.push({
-				path: "bun.lock",
-				message: `Missing lockfile marker ${marker}.`,
-			});
-		}
-	}
-
-	for (const [packagePath, bins] of Object.entries(expectedBins)) {
+	for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 		const packageMarker = `    "${packagePath}": {`;
+		const packageName = workspacePackage.packageJson?.name;
 
 		if (!rootLock.includes(packageMarker)) {
 			findings.push({
 				path: "bun.lock",
 				message: `Missing lockfile workspace package marker ${packagePath}.`,
 			});
-			continue;
 		}
+
+		if (packageName && !rootLock.includes(`"name": "${packageName}"`)) {
+			findings.push({
+				path: "bun.lock",
+				message: `Missing lockfile package name marker ${packageName}.`,
+			});
+		}
+
+		const packageLockBlock = lockWorkspaceBlock(rootLock, packagePath);
+
+		if (
+			workspacePackage.packageJson?.private !== false &&
+			packageLockBlock?.includes(`\n      "bin": {`)
+		) {
+			findings.push({
+				path: "bun.lock",
+				message: `Private repo-local package ${packagePath} has stale lockfile bin metadata; repo-local command entrypoints belong in package scripts.`,
+			});
+		}
+
+		const bins = packageBins(workspacePackage.packageJson);
 
 		for (const [binName, binTarget] of Object.entries(bins)) {
 			const lockBinTarget = binTarget.startsWith("./")
 				? binTarget
 				: `./${binTarget}`;
+			const normalizedLockBinTarget = normalizedBinTarget(binTarget);
 			const binMarker = `        "${binName}": "${lockBinTarget}",`;
+			const normalizedBinMarker = `        "${binName}": "${normalizedLockBinTarget}",`;
 
-			if (!rootLock.includes(binMarker)) {
+			if (!rootLock.includes(binMarker) && !rootLock.includes(normalizedBinMarker)) {
 				findings.push({
 					path: "bun.lock",
 					message: `Missing lockfile bin marker ${binName} -> ${lockBinTarget}.`,
@@ -547,19 +932,20 @@ if (!existsSync(rootLockPath)) {
 	}
 }
 
-const facadePackageJson = readPackageJson(repoPath(facadePackage));
-if (facadePackageJson?.name !== facadeName) {
-	findings.push({
-		path: `${facadePackage}/package.json`,
-		message: `Facade package name must be ${facadeName}.`,
-	});
-}
-
-for (const packagePath of activeWorkspacePackages) {
+for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 	const localLockfiles = walkForLocalLockfiles(repoPath(packagePath));
-	const packageJson = readPackageJson(repoPath(packagePath));
+	const packageJson = workspacePackage.packageJson;
 
 	checkDistributionReadiness(packagePath, packageJson);
+	checkTypeScriptGovernance(packagePath, packageJson);
+	checkLintPortability(packagePath, packageJson);
+
+	if (packageJson?.private !== false && packageJson?.bin) {
+		findings.push({
+			path: `${packagePath}/package.json`,
+			message: "Private repo-local package declares package bin entries; use package scripts for source-mode commands and reserve bin for published or externally consumed tools.",
+		});
+	}
 
 	for (const lockfile of localLockfiles) {
 		findings.push({
@@ -569,39 +955,90 @@ for (const packagePath of activeWorkspacePackages) {
 	}
 }
 
-for (const packagePath of facadeConsumers) {
-	const packageJson = readPackageJson(repoPath(packagePath));
-	const facadeSpec =
-		packageJson?.dependencies?.[facadeName] ??
-		packageJson?.devDependencies?.[facadeName];
-	const expectedFacadeSpec = allowedFacadeSpecs[packagePath];
+for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
+	const packageJson = workspacePackage.packageJson;
+	const declaredDependencies = {
+		...packageJson?.dependencies,
+		...packageJson?.devDependencies,
+	};
 
-	if (facadeSpec !== expectedFacadeSpec) {
-		findings.push({
-			path: `${packagePath}/package.json`,
-			message: `${facadeName} must use ${expectedFacadeSpec} in this active consumer.`,
-		});
+	for (const [dependencyName, dependencySpec] of Object.entries(declaredDependencies)) {
+		const dependencyWorkspacePackage = workspacePackageNames.get(dependencyName);
+
+		if (!dependencyWorkspacePackage) {
+			continue;
+		}
+
+		if (packageJson?.private !== false && dependencySpec !== "workspace:*") {
+			findings.push({
+				path: `${packagePath}/package.json`,
+				message: `Private workspace package dependency ${dependencyName} must use workspace:*.`,
+			});
+		}
+
+		if (
+			packageJson?.private === false &&
+			dependencyWorkspacePackage.packageJson?.private !== false
+		) {
+			findings.push({
+				path: `${packagePath}/package.json`,
+				message: `Public package dependency ${dependencyName} resolves to private workspace package ${dependencyWorkspacePackage.path}; publish, privately install, or bundle that dependency before private is false.`,
+			});
+		}
 	}
 }
 
-for (const [packagePath, bins] of Object.entries(expectedBins)) {
-	const packageJson = readPackageJson(repoPath(packagePath));
+for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
+	const packageJson = workspacePackage.packageJson;
+	const localScripts = discoverLocalScripts(packageJson);
+
+	if (Object.keys(localScripts).length === 0) {
+		continue;
+	}
+
+	const skillPath = repoPath(join(packagePath, "SKILL.md"));
+	const skillText = existsSync(skillPath) ? readFileSync(skillPath, "utf8") : "";
+
+	for (const [scriptName, scriptTarget] of Object.entries(localScripts)) {
+		const scriptTargetPath = repoPath(join(packagePath, scriptTarget));
+		if (!existsSync(scriptTargetPath)) {
+			findings.push({
+				path: displayPath(scriptTargetPath),
+				message: `Missing local script target for ${scriptName}.`,
+			});
+		}
+	}
+
+	for (const scriptName of Object.keys(localScripts)) {
+		const bareInvocationPattern = new RegExp(
+			`^${scriptName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`,
+			"m",
+		);
+
+		if (bareInvocationPattern.test(skillText)) {
+			findings.push({
+				path: `${packagePath}/SKILL.md`,
+				message: `Repo-local skill prose invokes bare command ${scriptName}; use package scripts with bun run in source-mode examples.`,
+			});
+		}
+	}
+}
+
+for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
+	const packageJson = workspacePackage.packageJson;
+	const bins = packageBins(packageJson);
+
+	if (Object.keys(bins).length === 0) {
+		continue;
+	}
+
 	const binsByName = packageBins(packageJson);
-	const packageScripts = packageJson?.scripts ?? {};
-	const localScripts = expectedLocalScripts[packagePath];
 
 	for (const [binName, binTarget] of Object.entries(bins)) {
 		if (binsByName[binName] !== binTarget) {
 			findings.push({
 				path: `${packagePath}/package.json`,
 				message: `Missing bin ${binName} -> ${binTarget}.`,
-			});
-		}
-
-		if (packageScripts[binName] !== localScripts[binName]) {
-			findings.push({
-				path: `${packagePath}/package.json`,
-				message: `Missing local script ${binName} -> ${localScripts[binName]}.`,
 			});
 		}
 
@@ -633,15 +1070,29 @@ for (const [packagePath, bins] of Object.entries(expectedBins)) {
 	}
 }
 
-for (const contractPath of commandContractPaths) {
-	const contractText = readFileSync(repoPath(contractPath), "utf8");
-	const rawScriptPathMatches = contractText.match(/script:\s*"scripts\//g) ?? [];
+for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
+	const localScripts = discoverLocalScripts(workspacePackage.packageJson);
+	const allowedScriptNames = new Set(Object.keys(localScripts));
 
-	if (rawScriptPathMatches.length > 0) {
-		findings.push({
-			path: contractPath,
-			message: "Command metadata must advertise package bin names, not raw scripts/ paths.",
-		});
+	if (allowedScriptNames.size === 0) {
+		continue;
+	}
+
+	for (const contractPath of discoverContractPaths(packagePath)) {
+		const contractText = readFileSync(repoPath(contractPath), "utf8");
+
+		const scriptValueMatches = contractText.matchAll(/script:\s*"([^"]+)"/g);
+
+		for (const scriptValueMatch of scriptValueMatches) {
+			const scriptValue = scriptValueMatch[1];
+
+			if (!allowedScriptNames.has(scriptValue)) {
+				findings.push({
+					path: contractPath,
+					message: `Command metadata script ${scriptValue} must be a declared local command name for ${packagePath}; contracts name command identity, not bun run, dist, src, or local paths.`,
+				});
+			}
+		}
 	}
 }
 

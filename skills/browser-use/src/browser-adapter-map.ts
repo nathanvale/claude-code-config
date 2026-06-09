@@ -20,14 +20,9 @@ import {
 	BROWSER_ADAPTER_MAP_ADAPTERS,
 	BROWSER_ADAPTER_MAP_CONTRACT_ID,
 	BROWSER_ADAPTER_MAP_SCHEMA_VERSION,
-	BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES,
-	BROWSER_ADAPTER_PROOF_LOCAL_RECOVERY_KEYS,
 	type BrowserAdapterMapAdapter,
 	type BrowserAdapterMapCommand,
 	browserAdapterMapContracts,
-	browserAdapterProofFailureActions,
-	browserAdapterProofSuccessActions,
-	warmChromeFailureActions,
 } from "./command-contract";
 
 const VERSION = "0.1.0";
@@ -259,10 +254,9 @@ export function checkRequiredSections(markdown: string): CoverageResult {
 
 export function checkRecoveryMapCoverage(markdown: string): CoverageResult {
 	const actual = new Set(parseRecoveryMapKeys(markdown));
-	const expected = new Set(expectedAdapterProofRecoveryKeys());
 	return {
-		missing: [...expected].filter((key) => !actual.has(key)).sort(),
-		extra: [...actual].filter((key) => !expected.has(key)).sort(),
+		missing: [],
+		extra: [...actual].sort(),
 	};
 }
 
@@ -383,7 +377,7 @@ function writeResult(
 				failure_domain: "browser_adapter_map",
 				hint: {
 					summary:
-						"Update the Browser Adapter Map sections or Recovery Map entries.",
+						"Update Browser Adapter Map sections or remove copied Recovery Map keys.",
 					action: "change_input",
 				},
 			},
@@ -391,7 +385,7 @@ function writeResult(
 				{
 					id: "update_browser_adapter_map",
 					summary:
-						"Update the Browser Adapter Map sections or Recovery Map entries.",
+						"Update Browser Adapter Map sections or remove copied Recovery Map keys.",
 					side_effects: ["write"],
 				},
 			],
@@ -523,24 +517,6 @@ function parseSectionNames(markdown: string): string[] {
 		.filter((section): section is string => typeof section === "string");
 }
 
-function expectedAdapterProofRecoveryKeys(): string[] {
-	const warmChromeActionIds = new Set<string>(
-		warmChromeFailureActions.map((action) => action.id),
-	);
-	const adapterActionIds = browserAdapterProofFailureActions
-		.map((action) => action.id)
-		.filter((id) => !warmChromeActionIds.has(id));
-	return uniqueSorted([
-		...adapterActionIds,
-		...browserAdapterProofSuccessActions.map((action) => action.id),
-		...BROWSER_ADAPTER_PROOF_DIAGNOSTIC_CODES,
-		...BROWSER_ADAPTER_PROOF_LOCAL_RECOVERY_KEYS,
-	]);
-}
-
-function uniqueSorted(values: readonly string[]): string[] {
-	return [...new Set(values)].sort();
-}
 
 function requireNext(args: readonly string[], index: number, flag: string): string {
 	const value = args[index + 1];

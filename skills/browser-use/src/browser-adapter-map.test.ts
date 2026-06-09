@@ -152,7 +152,7 @@ describe("Browser Adapter Map runtime", () => {
 		expect(result.missing).toEqual(["Rules", "Verify"]);
 	});
 
-	test("chrome-devtools Recovery Map covers Browser Adapter Proof vocabulary", async () => {
+	test("chrome-devtools Recovery Map avoids copied Browser Adapter Proof vocabulary", async () => {
 		const markdown = await readFile(CHROME_DEVTOOLS_ADAPTER_MAP_PATH, "utf-8");
 		const result = checkRecoveryMapCoverage(markdown);
 
@@ -160,7 +160,7 @@ describe("Browser Adapter Map runtime", () => {
 		expect(result.extra).toEqual([]);
 	});
 
-	test("coverage check reports missing emitted recovery keys", () => {
+	test("coverage check reports copied recovery keys as extras", () => {
 		const markdown = `
 ## Recovery Map
 
@@ -168,8 +168,8 @@ describe("Browser Adapter Map runtime", () => {
 `;
 		const result = checkRecoveryMapCoverage(markdown);
 
-		expect(result.missing).toContain("adapter_config_stale");
-		expect(result.missing).toContain("use_verified_browser_adapter");
+		expect(result.missing).toEqual([]);
+		expect(result.extra).toEqual(["configure_adapter_dependency"]);
 	});
 
 	test("CLI exits 20 for an invalid map", async () => {
@@ -192,9 +192,9 @@ describe("Browser Adapter Map runtime", () => {
 		const envelope = JSON.parse(result.stdout);
 		expect(envelope.error.code).toBe("browser_adapter_map_invalid");
 		expect(envelope.data.sections.missing).toEqual(["Rules", "Verify"]);
-		expect(envelope.data.recovery_map.missing).toContain(
-			"use_verified_browser_adapter",
-		);
+		expect(envelope.data.recovery_map.extra).toEqual([
+			"configure_adapter_dependency",
+		]);
 	});
 });
 

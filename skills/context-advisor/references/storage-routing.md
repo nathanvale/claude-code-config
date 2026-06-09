@@ -32,7 +32,7 @@ This map advises context placement. It does not own content, mutate stores, or m
 
 - Owner and privacy beat context kind.
 - Canonical truth beats convenient query layers.
-- Accepted repo decisions are terminal; route to `decisions`.
+- Accepted repo decisions are terminal; route to `record-decision`.
 - Deterministic contracts stay in code, help, generated docs, checks, or tests.
 - Future durable recall and synthesis use `context/` owners, not `memory/` folders.
 - Format choices happen after owner, privacy, canonicity, and write authority are fixed.
@@ -99,7 +99,7 @@ This map advises context placement. It does not own content, mutate stores, or m
 
 - If context is an accepted decision:
   - Store in `docs/decisions/`.
-  - Use `skills/decisions/references/operating-manual.md`.
+  - Use `skills/record-decision/references/operating-manual.md`.
   - Use ADR shape only when the ADR threshold is met.
 
 - If context is project tracker state, work queue, open question, progress state, audit queue, or next action:
@@ -238,7 +238,7 @@ This map advises context placement. It does not own content, mutate stores, or m
 - If owner is unclear, ask one ownership question.
 - If privacy, durability, write authority, or side-effect stance is unclear, ask one question.
 - If the storage choice is unresolved and affects ownership, privacy, durability, or side effects, use `decision-mode` or `grill-with-docs`.
-- If the context is an accepted repo decision, use `decisions`.
+- If the context is an accepted repo decision, use `record-decision`.
 - If the context is project tracker state or unresolved work state, patch the scoped `TASKS.md` or project tracker.
 - If accepted storage choice requires a runtime-backed skill capability, use `create-skill`.
 - If storage requires a new or changed agent-facing CLI surface, use `create-cli` inside the `create-skill` runtime-backed path.

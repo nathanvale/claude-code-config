@@ -2,6 +2,14 @@
 
 Use when creating, auditing, archiving, or consolidating skills.
 
+## Preview Index
+
+- Read `Rule`, `Role Label`, and `Ability Labels` before changing frontmatter.
+- Read `Role Card Shape` before adding a new role card.
+- Read only the role card that matches the skill's first-screen job.
+- Read `Checks` before handoff.
+- Read `Provenance Rule` only when tracing why this role system exists.
+
 ## Rule
 
 - Give every active skill one primary role.

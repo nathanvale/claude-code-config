@@ -4,6 +4,7 @@ import {
 	cpSync,
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -13,6 +14,18 @@ import { basename, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+type Workspaces =
+	| string[]
+	| {
+			packages?: string[];
+	  };
+
+type PackageJson = {
+	name?: string;
+	workspaces?: Workspaces;
+	scripts?: Record<string, string>;
+};
+
 type CommandStep = {
 	label: string;
 	command: string[];
@@ -21,16 +34,11 @@ type CommandStep = {
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const tempRoot = mkTempRoot();
 const keepExport = Bun.argv.includes("--keep");
-const exportPaths = [
+const rootExportPaths = [
 	"package.json",
 	"bun.lock",
 	"scripts/check-workspace-facade-invariants.ts",
 	"scripts/prove-workspace-portability.ts",
-	"runtime/cli-command-facade",
-	"skills/browser-use",
-	"skills/create-cli",
-	"skills/fallow",
-	"skills/test-runner",
 ];
 const excludedNames = new Set([
 	".git",
@@ -42,60 +50,104 @@ const excludedRelativePaths = new Set([
 	"skills/browser-use/dist",
 	"skills/test-runner/var",
 ]);
-const commands: CommandStep[] = [
-	{
-		label: "Install frozen workspace dependencies",
-		command: ["bun", "install", "--frozen-lockfile"],
-	},
-	{
-		label: "Check workspace facade invariants",
-		command: ["bun", "run", "check:workspace-facade"],
-	},
-	{
-		label: "Facade runtime typecheck",
-		command: ["bun", "--filter", "@side-quest/cli-command-facade", "typecheck"],
-	},
-	{
-		label: "Facade runtime tests",
-		command: ["bun", "--filter", "@side-quest/cli-command-facade", "test"],
-	},
-	{
-		label: "browser-use typecheck",
-		command: ["bun", "--filter", "browser-use-scripts", "typecheck"],
-	},
-	{
-		label: "browser-use tests",
-		command: ["bun", "--filter", "browser-use-scripts", "test"],
-	},
-	{
-		label: "browser-use pack dry run",
-		command: ["bun", "--filter", "browser-use-scripts", "pack:dry-run"],
-	},
-	{
-		label: "create-cli typecheck",
-		command: ["bun", "--filter", "create-cli-scripts", "typecheck"],
-	},
-	{
-		label: "create-cli smoke",
-		command: ["bun", "--filter", "create-cli-scripts", "smoke"],
-	},
-	{
-		label: "fallow typecheck",
-		command: ["bun", "--filter", "fallow-scripts", "typecheck"],
-	},
-	{
-		label: "fallow tests",
-		command: ["bun", "--filter", "fallow-scripts", "test"],
-	},
-	{
-		label: "test-runner typecheck",
-		command: ["bun", "--filter", "test-runner-scripts", "typecheck"],
-	},
-	{
-		label: "test-runner tests",
-		command: ["bun", "--filter", "test-runner-scripts", "test"],
-	},
-];
+const portableVerificationScripts = ["typecheck", "test", "smoke", "pack:dry-run"];
+const rootPackageJson = readPackageJson("package.json");
+const workspacePackagePaths = discoverWorkspacePackagePaths(rootPackageJson);
+const exportPaths = [...rootExportPaths, ...workspacePackagePaths];
+const commands = buildCommandSteps(workspacePackagePaths);
+
+function readPackageJson(relativePath: string): PackageJson {
+	const absolutePath = join(repoRoot, relativePath);
+
+	if (!existsSync(absolutePath)) {
+		throw new Error(`Missing package metadata: ${relativePath}`);
+	}
+
+	try {
+		return JSON.parse(readFileSync(absolutePath, "utf8")) as PackageJson;
+	} catch (error) {
+		throw new Error(
+			`Invalid JSON in ${relativePath}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+function workspaceEntries(workspaces: Workspaces | undefined): string[] {
+	if (Array.isArray(workspaces)) {
+		return workspaces;
+	}
+
+	return workspaces?.packages ?? [];
+}
+
+function expandWorkspaceEntry(workspaceEntry: string): string[] {
+	if (!workspaceEntry.endsWith("/*")) {
+		return existsSync(join(repoRoot, workspaceEntry, "package.json"))
+			? [workspaceEntry]
+			: [];
+	}
+
+	const parentPath = workspaceEntry.slice(0, -2);
+	const absoluteParentPath = join(repoRoot, parentPath);
+
+	if (!existsSync(absoluteParentPath)) {
+		return [];
+	}
+
+	return readdirSync(absoluteParentPath)
+		.map((entry) => join(parentPath, entry))
+		.filter((packagePath) =>
+			existsSync(join(repoRoot, packagePath, "package.json")),
+		)
+		.sort();
+}
+
+function discoverWorkspacePackagePaths(rootPackage: PackageJson): string[] {
+	const packagePaths = new Set<string>();
+
+	for (const workspaceEntry of workspaceEntries(rootPackage.workspaces)) {
+		for (const packagePath of expandWorkspaceEntry(workspaceEntry)) {
+			packagePaths.add(packagePath);
+		}
+	}
+
+	return [...packagePaths].sort();
+}
+
+function buildCommandSteps(packagePaths: string[]): CommandStep[] {
+	const steps: CommandStep[] = [
+		{
+			label: "Install frozen workspace dependencies",
+			command: ["bun", "install", "--frozen-lockfile"],
+		},
+		{
+			label: "Check workspace facade invariants",
+			command: ["bun", "run", "check:workspace-facade"],
+		},
+	];
+
+	for (const packagePath of packagePaths) {
+		const packageJson = readPackageJson(join(packagePath, "package.json"));
+		const packageName = packageJson.name;
+
+		if (!packageName) {
+			throw new Error(`Missing package name in ${packagePath}/package.json`);
+		}
+
+		for (const scriptName of portableVerificationScripts) {
+			if (!packageJson.scripts?.[scriptName]) {
+				continue;
+			}
+
+			steps.push({
+				label: `${packageName} ${scriptName}`,
+				command: ["bun", "--filter", packageName, scriptName],
+			});
+		}
+	}
+
+	return steps;
+}
 
 function mkTempRoot(): string {
 	const root = join(

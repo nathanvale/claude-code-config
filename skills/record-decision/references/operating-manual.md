@@ -1,4 +1,4 @@
-# Decisions Operating Manual
+# Record Decision Operating Manual
 
 Source:
 
@@ -190,7 +190,7 @@ Rules:
 
 ## Helper Gate
 
-- Helper intent: `decisions check <file> --json`.
+- Helper intent: `record-decision check <file> --json`.
 - Treat that command as provisional until `create-cli` finalizes it.
 - Run `create-cli` before implementation.
 - V1 helper is read-only.
@@ -200,7 +200,7 @@ Rules:
 
 ## V2 Record Direction
 
-- Use `decisions record` as the v2 write surface.
+- Use `record-decision` as the v2 write surface.
 - Default record runs to dry-run.
 - Require explicit execute mode for writes.
 - Accept a prose envelope for intent input.

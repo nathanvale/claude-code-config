@@ -613,7 +613,6 @@ function adapterProofEnvelope(
 			endpoint: "http://127.0.0.1:9333",
 			port: "9333",
 			page_count: 1,
-			pages: [],
 		},
 	});
 }

@@ -1,10 +1,10 @@
 ---
-name: decisions
-description: "Store accepted decisions in docs/decisions as Markdown decision logs with fenced YAML."
+name: record-decision
+description: "Record accepted decisions in docs/decisions as Markdown decision logs with fenced YAML."
 role: tool-workflow
 ---
 
-# Decisions
+# Record Decision
 
 Use when the user asks to log, record, preserve, or store an accepted decision.
 Use when a session needs durable handoff memory for accepted implementation decisions.
@@ -71,7 +71,7 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 
 ## Helper
 
-- V1 helper intent: `decisions check <file> --json`.
+- V1 helper intent: `record-decision check <file> --json`.
 - Treat that command as provisional until `create-cli` finalizes it.
 - V1 helper is read-only.
 - V1 helper checks one file only.

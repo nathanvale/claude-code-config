@@ -13,7 +13,7 @@ Do not use for ordinary prose-only skills.
 - Facade-backed CLI path: `skills/create-cli/references/cli-command-facade.md`.
 - Example skill shapes: `skill-io-shape-examples.md`.
 - Runtime portability: `runtime-portability.md`.
-- Worked example: `skills/decisions/references/operating-manual.md`.
+- Worked example: `skills/record-decision/references/operating-manual.md`.
 - Decision memory: `docs/decisions/`.
 
 ## Workflow

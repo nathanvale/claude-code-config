@@ -13,12 +13,16 @@ skills/create-skill/
     archive-cleanup.md
     consolidation-map.md
     research-portability.md
+    runtime-portability.md
     agent-native-skill-design.md
+    skill-dependency-rules.md
     skill-design-philosophy.md
     skill-io-shape-examples.md
+    skill-roles.md
     community-skill-research-sources.md
   scripts/
     skill-description-audit.ts
+    skill-role-audit.ts
 ```
 
 ## Portable Export Payload
@@ -36,9 +40,9 @@ skills/create-skill/
 - `context/skill-design-philosophy.md` -> `references/skill-design-philosophy.md`.
 - `context/references/skill-io-shape-examples.md` -> `references/skill-io-shape-examples.md`.
 - `context/references/skill-memory-storage-routing.md` -> `skills/context-advisor/references/storage-routing.md`.
-- `skills/create-skill/references/skill-memory-storage-routing.md` -> legacy pointer to `skills/context-advisor/references/storage-routing.md`.
 - `context/references/community-skill-research-sources.md` -> `references/community-skill-research-sources.md`.
 - `scripts/skill-description-audit.ts` -> `skills/create-skill/scripts/skill-description-audit.ts`.
+- `scripts/skill-role-audit.ts` -> `skills/create-skill/scripts/skill-role-audit.ts`.
 - `context/agent-native-cli/CONTEXT.md` -> `CONTEXT.md`.
 - `context/capability-registry/CONTEXT.md` -> `CONTEXT.md`.
 - `context/skill-design/CONTEXT.md` -> `CONTEXT.md`.

@@ -6,57 +6,80 @@ role: main-entry
 
 # Create Skill
 
-Use as the single skill runbook for creating, updating, auditing, repairing,
-archiving, or consolidating any type of agent skill.
+## Quick Start
 
-## Owner Paths
+- Create or repair: read `CONTEXT.md`; `references/skill-design-philosophy.md`.
+- Audit: check routing evidence, owner paths, verification, and next safe action.
+- Archive or consolidate: read the matching route card before inventory work.
+- Escalate for input/output shape: read `references/skill-io-shape-examples.md`.
+- Escalate for runtime-backed behavior: read `references/agent-native-skill-design.md`; use `create-cli` before CLI/runtime edits.
+- Escalate for durable context placement: use `skills/context-advisor/SKILL.md`.
 
-- Portable skill bundle: `skills/create-skill/`.
-- Vocabulary owner path: `CONTEXT.md`.
+## Global Owner Paths
+
+- Bundle: `skills/create-skill/`.
+- Vocabulary: `CONTEXT.md`.
 - Philosophy: `references/skill-design-philosophy.md`.
-- Cleanup plan: `references/archive-cleanup.md`.
-- Consolidation map: `references/consolidation-map.md`.
-- Research portability: `references/research-portability.md`.
-- Runtime portability: `references/runtime-portability.md`.
-- Skill dependency rules: `references/skill-dependency-rules.md`.
-- Skill role runbooks: `references/skill-roles.md`.
-- I/O shape examples: `references/skill-io-shape-examples.md`.
-- Agent-native skill design: `references/agent-native-skill-design.md`.
-- Context advisor: `skills/context-advisor/SKILL.md`.
-- Storage routing fallback: `skills/context-advisor/references/storage-routing.md`.
-- Legacy storage routing pointer: `references/skill-memory-storage-routing.md`.
-- Community-skill source note: `references/community-skill-research-sources.md`.
-- Skill collision and routing evidence audit: `skills/create-skill/scripts/skill-description-audit.ts`.
-- Skill role audit: `skills/create-skill/scripts/skill-role-audit.ts`.
-- Compatibility wrapper: `scripts/skill-description-audit.ts`.
-- Role audit compatibility wrapper: `scripts/skill-role-audit.ts`.
-- CLI design owner path: `skills/create-cli/SKILL.md`.
+- Input/output shape: `references/skill-io-shape-examples.md`.
+- Audits: `skills/create-skill/scripts/`.
 
-## Entry-Screen Route
+## Route Map
 
-1. Read `CONTEXT.md` and `references/skill-design-philosophy.md` before editing any `SKILL.md`.
-2. Route the request shape: create, audit, repair, archive, or consolidate.
-3. If runtime-backed skill behavior is in scope, read `references/agent-native-skill-design.md`; run `create-cli` before changing any CLI/runtime surface.
-4. If changing skill descriptions as routing evidence, run `bun run skills/create-skill/scripts/skill-description-audit.ts`.
-5. If archiving, read `references/archive-cleanup.md` first.
-6. If consolidating scattered guidance, read `references/consolidation-map.md`.
-7. If importing research or a handover, read `references/research-portability.md`.
-8. If adding or auditing Bun, Node, Python, shell, package, lockfile, or helper-script portability, read `references/runtime-portability.md`.
-9. If adding or auditing skill dependencies, read `references/skill-dependency-rules.md`.
-10. If assigning or auditing skill roles, read `references/skill-roles.md`; run `bun run skills/create-skill/scripts/skill-role-audit.ts`.
-11. If durable context placement is unclear, use `skills/context-advisor/SKILL.md`; if unavailable, read `skills/context-advisor/references/storage-routing.md`.
+### Create Or Repair
+
+- When: new skill, broken skill, stale owner path, routing miss, or skill cleanup.
+- Read: `CONTEXT.md`; `references/skill-design-philosophy.md`.
+- Add: `references/skill-io-shape-examples.md` when input/output shape or headings are unclear.
+- Next: patch the smallest owner path, sentence, command, or example that would have prevented the miss.
+
+### Audit
+
+- When: reviewing an existing skill for routing, owner paths, commands, role, or portability.
+- Read: `CONTEXT.md`; `references/skill-design-philosophy.md`.
+- Next: report findings by owner path; patch only when the request asks for edits.
+
+### Archive Or Consolidate
+
+- When: moving inactive, duplicate, or superseded skills out of active routing.
+- Read: `references/archive-cleanup.md`; `references/consolidation-map.md`.
+- Next: name keep-active skills, protected skills, archive candidates, and blocked questions.
+
+### Runtime-Backed Skill
+
+- When: helper commands, parsed input, machine-readable output, durable writes, repair, retry, or safety evidence enter the workflow.
+- Read: `references/agent-native-skill-design.md`; `references/runtime-portability.md`.
+- Use: `skills/create-cli/SKILL.md` before changing any CLI/runtime surface.
+- Next: keep exact flags, schemas, states, and output envelopes in code/help/tests.
+
+### Role Or Dependency Audit
+
+- When: active roles, ability labels, optional handoffs, hard dependencies, or missing states change.
+- Read: `references/skill-roles.md`; `references/skill-dependency-rules.md`.
+- Next: give every active skill one primary role and label every dependency.
+
+### Research Or Handover Import
+
+- When: importing research, community-skill evidence, or handover notes into reusable skill guidance.
+- Read: `references/research-portability.md`; `references/community-skill-research-sources.md`.
+- Next: extract accepted rules and open questions; keep research sources as source notes.
+
+### Durable Context Placement
+
+- When: storage owner, privacy boundary, write authority, or durable recall placement is unclear.
+- Use: `skills/context-advisor/SKILL.md`.
+- Fallback: read `skills/context-advisor/references/storage-routing.md` if the advisor skill is unavailable.
+- Next: name owner path, safety gate, rejected nearby stores, and next safe action.
 
 ## Rules
 
 - Keep active skills few and obvious.
-- Move unused skills only after an archive plan names keep-active skills.
-- Preserve published skill names unless a skill bridge and removal condition exist.
+- Read `CONTEXT.md` and `references/skill-design-philosophy.md` before editing any `SKILL.md`.
+- Load only selected route references; stop once owner path, invariant, and next safe action are clear.
 - Keep deterministic contracts in code, help, generated docs, tests, or scripts.
-- Keep `SKILL.md` as entry-screen route clarity: request shapes, owner paths, references, scripts, templates, and next safe actions.
-- Keep references one level deep from this skill.
 - Treat skill collision warnings as routing evidence review prompts, not automatic edits.
-- Label every dependency and name its missing state.
-- Give every active skill one primary role.
+- Preserve published skill names unless a skill bridge and removal condition exist.
+- Label every dependency and name its missing state; give every active skill one primary role.
+- Keep compatibility wrappers only while they preserve a live entrypoint.
 
 ## Verification
 
@@ -64,12 +87,4 @@ archiving, or consolidating any type of agent skill.
 - Run `bun run skills/create-skill/scripts/skill-role-audit.ts --json` after adding, archiving, or changing active skill roles.
 - Run wrapper checks only after wrapper edits: `bun run scripts/skill-description-audit.ts --json` and `bun run scripts/skill-role-audit.ts --json`.
 - YAML-parse edited `SKILL.md` frontmatter before handoff.
-
-## Next Safe Action
-
-- For create: read `CONTEXT.md` and `references/skill-design-philosophy.md`, choose the smallest skill shape, then draft the bundle.
-- For audit: compare the entry screen against owner paths, command discoverability, routing evidence, and next safe actions.
-- For repair: start from the observed failure, patch the smallest owner path, description, command, or reference that would have prevented it.
-- For archive: read `references/archive-cleanup.md`, inventory skills, ask for must-keep-active names, then draft the archive move list.
-- For consolidation: read `references/consolidation-map.md`, move one owner path at a time, then leave temporary owner-path redirect stubs.
-- For handover: read `references/research-portability.md`, add the handover path to `TASKS.md`, then extract accepted rules and open questions.
+- Remove root audit wrappers after `rg "scripts/skill-description-audit|scripts/skill-role-audit"` finds no live references outside historical docs.

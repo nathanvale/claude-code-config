@@ -5,7 +5,7 @@ type: decision-log
 status: in-progress
 date: "2026-06-06"
 timezone: Australia/Melbourne
-owner: skills/decisions
+owner: skills/record-decision
 source:
   - docs/brainstorms/2026-06-06-decisions-skill-operating-manual.md
 codex_session_id: "019e9b07-c5f8-7c42-a373-ec68d5e827bc"
@@ -5268,3 +5268,433 @@ Next:
 V2 Ideas:
 
 - Revisit standalone zip packaging after workspace bundle migration stays green.
+
+## Decision 122: Use Skill Root Bun Package Shape
+
+```yaml
+id: decisions-skill-122
+status: accepted
+decided_at: "2026-06-09"
+decision: Use skill root Bun package shape
+owner: skills/create-skill/references/runtime-portability.md
+scope: Bun-backed skill package layout
+source:
+  - "chat: 2026-06-09 Bun skill package governance"
+  - skills/create-skill/TASKS.md
+```
+
+Decision:
+
+- Put Bun-backed skill package `package.json` files at the skill root.
+- Put package `tsconfig.json` files at the skill root beside `package.json`.
+- Put Bun-owned source, tests, contracts, fixtures, and build helpers under `src/`.
+- Reserve `scripts/` for non-Bun helper skills that have no `package.json`.
+- Treat old `scripts/package.json` shapes as migration exceptions or archive history.
+
+Rationale:
+
+- Package-root manifests make the package boundary obvious.
+- Root `tsconfig.json` avoids hiding package configuration inside source.
+- `src/` keeps implementation files together without turning `scripts/` into a second package root.
+- Non-Bun helper skills still need a lightweight `scripts/` home when no package exists.
+
+Consequences:
+
+- New Bun-backed skill packages should not start in `scripts/`.
+- Existing active Bun packages should migrate to skill-root package shape.
+- Package checks can assume `package.json` and `tsconfig.json` live at the package root.
+
+Next:
+
+- Keep `runtime-portability.md` and the workspace invariant checker aligned with this shape.
+
+V2 Ideas:
+
+- Add archive-only checks if stale active `scripts/package.json` paths reappear.
+
+## Decision 123: Use Scripts For Source Mode And Bins For Published Tools
+
+```yaml
+id: decisions-skill-123
+status: accepted
+decided_at: "2026-06-09"
+decision: Use scripts for source mode and bins for published tools
+owner: skills/create-skill/references/runtime-portability.md
+scope: Bun package command surfaces
+source:
+  - "chat: 2026-06-09 bin and script governance"
+  - scripts/check-workspace-facade-invariants.ts
+```
+
+Decision:
+
+- Use `package.json#scripts` for repo-local source-mode commands.
+- Use `package.json#bin` only for published or externally consumed tools.
+- Keep private repo-local skill packages free of `bin` entries.
+- Keep public package bins pointed at built distribution files unless an explicit source-distribution exception is accepted.
+- Keep CLI command contracts naming command identity, not `bun run`, source paths, or dist paths.
+
+Rationale:
+
+- Repo prose can call `bun run <script>` consistently.
+- Published bins are install contracts and should not expose dev-only source paths.
+- Private skill packages do not need global command installation surfaces.
+- Command contracts stay package-agnostic when they name command identity only.
+
+Consequences:
+
+- Private packages with `bin` entries fail governance checks.
+- Public package bins must be covered by the package `files` allowlist.
+- Source-mode examples in skill prose should use `bun run`.
+
+Next:
+
+- Keep checking package manifests and lockfile metadata for stale private bins.
+
+V2 Ideas:
+
+- Add clean tarball install-and-execute proof for public package bins.
+
+## Decision 124: Lock TypeScript Through Workspace Catalogs
+
+```yaml
+id: decisions-skill-124
+status: accepted
+decided_at: "2026-06-09"
+decision: Lock TypeScript through workspace catalogs
+owner: skills/create-skill/references/runtime-portability.md
+scope: active Bun workspace TypeScript governance
+source:
+  - "chat: 2026-06-09 TypeScript governance audit"
+  - package.json
+  - scripts/check-workspace-facade-invariants.ts
+```
+
+Decision:
+
+- Let root `package.json#workspaces.catalog` own shared TypeScript tool versions.
+- Lock `typescript`, `@types/bun`, and `@types/node` together.
+- Use `catalog:` for active workspace package TypeScript and runtime type dependencies.
+- Use `@types/bun` with `compilerOptions.types: ["bun"]` for Bun CLI packages.
+- Use `@types/node` with `compilerOptions.types: ["node"]` for Node-library packages.
+- Do not declare direct `bun-types` in active workspace packages.
+- Keep portable package `tsconfig.json` files self-contained.
+
+Rationale:
+
+- Workspace catalogs remove version drift without adding a published shared tsconfig package.
+- Package-local configs keep package roots portable.
+- Direct `bun-types` created two Bun ambient type versions in the lockfile.
+- Self-contained configs are easier to export than root-relative `extends`.
+
+Consequences:
+
+- Active packages cannot use `*`, `^`, or `~` for TypeScript toolchain deps.
+- Package typecheck scripts should use `tsc --noEmit -p tsconfig.json`.
+- `noUncheckedIndexedAccess` remains a separate hardening pass because it exposed broad indexed-access work.
+
+Next:
+
+- Keep `bun run check:workspace-facade` enforcing catalog and tsconfig drift.
+
+V2 Ideas:
+
+- Re-enable `noUncheckedIndexedAccess` after parser and fixture indexing paths have explicit guards.
+
+## Decision 125: Derive Checker Facts From Package Truth
+
+```yaml
+id: decisions-skill-125
+status: accepted
+decided_at: "2026-06-09"
+decision: Derive checker facts from package truth
+owner: scripts/check-workspace-facade-invariants.ts
+scope: workspace runtime package governance
+source:
+  - "chat: 2026-06-09 checker registry review"
+  - skills/create-skill/references/runtime-portability.md
+```
+
+Decision:
+
+- Keep policy in `scripts/check-workspace-facade-invariants.ts`.
+- Derive package facts from root workspaces, package manifests, package `tsconfig.json`, package `bin`, package `scripts`, and conventional `src/command-contract.ts`.
+- Do not maintain a separate package registry while derivation is enough.
+- Keep workflow guidance in `runtime-portability.md`.
+
+Rationale:
+
+- A separate registry removed package facts from checker code but created a second source of truth.
+- Package manifests already own command surfaces, dependency facts, and publication shape.
+- Conventional owner paths give enough structure without extra config ceremony.
+
+Consequences:
+
+- Adding a package means updating its manifest and root workspace entry, not a second registry file.
+- Checker logic should stay generic and discover package facts.
+- Add a registry only if a recurring package fact cannot be derived cleanly.
+
+Next:
+
+- Preserve this derivation-first shape while extending workspace checks.
+
+V2 Ideas:
+
+- Add machine-readable exceptions only for rare, named exceptions that cannot live in package manifests.
+
+## Decision 126: Remove Browser Use Legacy Shell Wrapper
+
+```yaml
+id: decisions-skill-126
+status: accepted
+decided_at: "2026-06-09"
+decision: Remove browser-use legacy shell wrapper
+owner: skills/browser-use/package.json
+scope: browser-use source command surface
+source:
+  - "chat: 2026-06-09 browser-use shell wrapper audit"
+  - skills/browser-use/src/preflight-browser-adapter.test.ts
+```
+
+Decision:
+
+- Remove `skills/browser-use/src/launch-agent-chrome.sh`.
+- Do not keep shell wrappers in `browser-use` unless they are declared package command surfaces or own a missing-runtime boundary that TypeScript cannot handle.
+- Route Warm Chrome launch through `preflight-warm-chrome` package scripts and built bins.
+
+Rationale:
+
+- The wrapper only translated legacy positional args into `preflight-warm-chrome.ts launch`.
+- It was not declared in `package.json#scripts` or `package.json#bin`.
+- It was not part of the published `dist/` payload.
+- Tests were preserving an undocumented legacy surface.
+
+Consequences:
+
+- `browser-use` now has no shell files under `src/`.
+- Legacy `launch-agent-chrome.sh` invocations are no longer supported.
+- Future shell wrappers need an explicit package-surface or missing-runtime reason.
+
+Next:
+
+- Keep `browser-use` shell-free unless a new accepted boundary names why shell is required.
+
+V2 Ideas:
+
+- Add a checker rule if undeclared `.sh` files reappear in Bun package source.
+
+## Decision 127: Rename Decisions Skill To Record Decision
+
+```yaml
+id: decisions-skill-127
+status: accepted
+decided_at: "2026-06-09"
+decision: Rename decisions skill to record-decision
+owner: skills/record-decision
+scope: accepted decision capture skill routing
+source:
+  - "chat: 2026-06-09 skill rename"
+  - skills/record-decision/SKILL.md
+```
+
+Decision:
+
+- Rename `skills/decisions/` to `skills/record-decision/`.
+- Set frontmatter `name` to `record-decision`.
+- Keep the skill singular and action-shaped.
+- Use `record-decision` for future helper command naming.
+- Leave historical decision IDs and source brainstorm filenames unchanged as provenance.
+
+Rationale:
+
+- `record-decision` describes the workflow as a verb-object action.
+- `decisions` read like a topic folder, not an invocation target.
+- Singular naming fits ordinary use while still supporting multiple entries in one session.
+- Historical log IDs remain stable because changing them would break decision references.
+
+Consequences:
+
+- Active owner paths and handoff routes point to `skills/record-decision/`.
+- `context-advisor` routes accepted repo decisions to `record-decision`.
+- Future runtime work should prefer `record-decision` over `decisions record`.
+- Historical entries may still mention `decisions` when describing prior accepted state.
+
+Next:
+
+- Run skill description and role audits after the rename.
+
+V2 Ideas:
+
+- Add a temporary bridge only if old-name invocation failures appear after active-reference audit.
+
+## Decision 128: Use Owner-Scoped Tracker Bindings
+
+```yaml
+id: decisions-skill-128
+status: accepted
+decided_at: "2026-06-09"
+decision: Use owner-scoped tracker bindings
+owner: skills/coding-task-tracker
+scope: coding task tracker setup and CRUD safety
+source:
+  - "chat: 2026-06-09 coding-task-tracker owner binding grill"
+  - skills/coding-task-tracker/SKILL.md
+  - skills/coding-task-tracker/src/coding-task-tracker.ts
+```
+
+Decision:
+
+- Scope Coding Task Tracker bindings to owner paths, not entire repositories.
+- Let any directory with `.coding-task-tracker/` config become a Tracker owner path.
+- Resolve the nearest Tracker owner path upward from the command working directory.
+- Split tracker config between committed owner identity and ignored local Notion identifiers.
+- Allow only setup commands to write tracker binding config.
+- Require external trackers to expose a Tracker fingerprint before CRUD writes.
+- Use two-stage create for v1: emit the required tracker shape, then bind and validate the created or duplicated tracker.
+
+Rationale:
+
+- Bun workspace repos can have separate durable work owners, including individual skills.
+- Owner-path scoping follows the context-advisor rule that storage follows the owner.
+- Split config preserves repo-visible ownership without committing account-specific Notion routing facts.
+- Fingerprint verification prevents wrong-owner CRUD when local config points at the wrong Notion tracker.
+- Two-stage create avoids turning v1 into a general Notion database creator.
+
+Consequences:
+
+- `coding-task-tracker` CRUD resolves owner binding before task lookup or mutation.
+- Missing owner config returns a no-mutation setup path.
+- Runtime code, help, and tests own exact config filenames, fields, diagnostics, and command contracts.
+- `SKILL.md` stays thin and points to the runtime owner.
+
+Next:
+
+- Design the setup and CRUD CLI changes with `create-cli`.
+
+V2 Ideas:
+
+- Add direct Notion tracker creation after two-stage setup proves too costly.
+
+## Decision 129: Ship Bind-Only Tracker MVP
+
+```yaml
+id: decisions-skill-129
+status: accepted
+decided_at: "2026-06-09"
+decision: Ship bind-only tracker MVP
+owner: skills/coding-task-tracker
+scope: coding task tracker setup MVP
+source:
+  - "chat: 2026-06-09 coding-task-tracker feasibility review"
+  - skills/coding-task-tracker/src/coding-task-tracker.ts
+```
+
+Decision:
+
+- Ship the first owner-scoped tracker version as a bind-only MVP.
+- Support nearest-owner resolution, split config, `bind`, `doctor`, and CRUD safety.
+- Validate the configured Notion data source before writes.
+- Defer direct Notion database creation.
+- Defer external tracker fingerprint marker enforcement beyond data-source validation.
+- Keep CRUD commands from writing tracker binding config.
+
+Rationale:
+
+- The safe core needs to work before adding Notion database creation or richer setup flows.
+- Bind-only setup preserves owner-scoped routing without making the MVP a Notion schema manager.
+- Data-source validation catches stale or malformed local binding while keeping existing trackers usable.
+
+Consequences:
+
+- `bind` is the only MVP setup command.
+- `doctor` proves the resolved owner binding and Notion access.
+- Full Tracker fingerprint marker enforcement remains a follow-up.
+- `setup plan-create` remains a follow-up, not MVP scope.
+
+Next:
+
+- Use the MVP and add richer setup only when repeated friction appears.
+
+## Decision 130: Block Inherited Tracker Writes
+
+```yaml
+id: decisions-skill-130
+status: accepted
+decided_at: "2026-06-09"
+decision: Block inherited tracker writes
+owner: skills/coding-task-tracker
+scope: coding task tracker owner-resolution DX
+source:
+  - "chat: 2026-06-09 coding-task-tracker adversarial reviewer pass"
+  - skills/coding-task-tracker/src/coding-task-tracker.ts
+  - skills/coding-task-tracker/SKILL.md
+```
+
+Decision:
+
+- Allow reads to use an inherited tracker owner.
+- Label inherited reads in the runtime envelope.
+- Block writes when owner resolution is inherited.
+- Allow writes from the exact owner path.
+- Allow writes with explicit `--owner <path>`.
+- Treat a child `.coding-task-tracker/` directory as authoritative even when its config is broken.
+- Validate target task parent data source before writes.
+
+Rationale:
+
+- Inherited reads support discovery without forcing setup.
+- Inherited writes can mutate a parent tracker when the user intended a child tracker.
+- Explicit owner targeting makes cross-directory writes inspectable.
+- Broken child config should fail closed instead of falling through to a parent tracker.
+- Target-page validation catches stale views before mutation.
+
+Consequences:
+
+- Agents can read `owner_resolution` before deciding whether to write.
+- Browser-use repo-root tracker commands pass `--owner ../..` from `skills/coding-task-tracker`.
+- Child skills can bind their own tracker when they need isolated task state.
+
+Next:
+
+- Add direct tracker creation only after bind-only setup creates repeated friction.
+
+## Decision 131: Govern Agent-Native CLI Implementation Shape
+
+```yaml
+id: decisions-skill-131
+status: accepted
+decided_at: "2026-06-09"
+decision: Govern agent-native CLI implementation shape
+owner: skills/create-cli/references/agent-native-cli-design.md
+scope: runtime-backed CLI implementation guidance
+source:
+  - "chat: 2026-06-09 coding-task-tracker Fallow refactor review"
+  - skills/coding-task-tracker/src/coding-task-tracker.ts
+  - skills/create-cli/references/agent-native-cli-design.md
+```
+
+Decision:
+
+- Add implementation-shape guidance to agent-native CLI design.
+- Keep multi-command CLI dispatchers thin.
+- Move command bodies into named handlers once lookup, validation, network, file, or mutation behavior appears.
+- Extract repeated target parsing, validation, envelope builders, and tool-call error builders before the third copy appears.
+- Run Fallow after meaningful CLI implementation.
+- Treat introduced duplication and oversized dispatchers as refactor work.
+- Treat private-handler `add-tests` findings as coverage prompts, not automatic direct-test requirements.
+
+Rationale:
+
+- `coding-task-tracker` grew an oversized dispatcher and duplicated helper logic during fast CLI iteration.
+- Existing guidance named contract owners but did not give an implementation-shape checkpoint.
+- A prose design checkpoint plus Fallow evidence is enough; a workspace invariant would be brittle here.
+
+Consequences:
+
+- `create-cli` owns the implementation-shape guidance.
+- `create-skill` points runtime-backed skill work to `create-cli` and keeps skill prose thin.
+- Runtime code and tests still own exact handler names, helper signatures, and output contracts.
+
+Next:
+
+- Use the developer tooling governance audit to check root-owned lint, test, and TypeScript portability.

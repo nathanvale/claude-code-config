@@ -127,7 +127,6 @@ type WarmChromeProof = {
 	port: string;
 	browser: string;
 	user_agent: string;
-	web_socket_debugger_url: string;
 	browser_pid: number;
 	profile_dir: string;
 	profile_owner: string;
@@ -870,7 +869,6 @@ async function verifyWarmChrome(
 		port,
 		browser,
 		user_agent: userAgent,
-		web_socket_debugger_url: webSocketDebuggerUrl,
 		browser_pid: listener.pid,
 		profile_dir: finalProfile.realPath,
 		profile_owner: finalProfile.owner,

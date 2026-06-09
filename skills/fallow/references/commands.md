@@ -4,7 +4,7 @@ Use this as a recipe map. Use runner help for exact current syntax.
 
 Owner paths:
 
-- Front door: `skills/fallow/package.json#bin` (`fallow-runner`).
+- Repo-local front door: `skills/fallow/package.json#scripts` (`fallow-runner`).
 - Public command surface: `skills/fallow/src/command-contract.ts`.
 - Parser and execution mapping: `skills/fallow/src/fallow-runner.ts`.
 - Command surface proof: `skills/fallow/src/fallow-runner.test.ts`.

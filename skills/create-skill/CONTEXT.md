@@ -4,6 +4,12 @@ Scoped vocabulary for portable skill authoring, skill cleanup, capability owners
 
 This context owns reusable skill-creation language. Repo-specific domains keep their own nearest `CONTEXT.md`.
 
+## Preview Index
+
+- Read `Skill Design` for routing, invocation, roles, portability, and context-storage terms.
+- Read `Capability Ownership` before deciding which artifact owns a contract.
+- Read `Agent-Native Helpers` before naming runtime-backed helper surfaces.
+
 ## Skill Design
 
 **Skill routing**:
@@ -41,6 +47,10 @@ _Avoid_: permanent duplicate, hidden alias, second owner
 **Entry-screen route clarity**:
 The first-screen skill shape that maps request shapes to owner paths, references, scripts, templates, and next safe actions.
 _Avoid_: self-contained handbook, hidden reference tree, exhaustive catalog, workflow router
+
+**Heading Selection Matrix**:
+Advisory matrix that helps choose `SKILL.md` body headings from use case and selection strength; not a body-heading contract.
+_Avoid_: required heading schema, role heading template, body-heading contract
 
 **Skill runbook**:
 The single skill front door that routes every skill-creation request type to the right reference, owner path, script, or next safe action.
