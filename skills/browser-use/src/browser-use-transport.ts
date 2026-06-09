@@ -13,7 +13,7 @@
 // is passed positionally to runtime.runCommand and never shell-evaluated.
 // ---------------------------------------------------------------------------
 
-import type { BrowserUseRuntime } from "./browser-use";
+import type { BrowserUseRuntime } from "./browser-use-runtime";
 import {
 	type McporterCommandResult,
 	isMissingCommandResult,
