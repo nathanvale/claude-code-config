@@ -23,55 +23,105 @@ Use this for Notion-backed Coding Task Tracker work.
 - Run from skill root: `cd skills/coding-task-tracker`.
 - Choose owner domain: `bun run coding-task-tracker --json`.
 - Inspect help: `bun run coding-task-tracker --help`.
-- Use JSON for agents: `bun run coding-task-tracker ready --json`.
-- Check Notion access: `bun run coding-task-tracker doctor --json`.
-- Target a known owner: `bun run coding-task-tracker --owner <path> ready --json`.
-- Bind an existing tracker: `bun run coding-task-tracker bind --owner . --data-source <collection-url> --ready-view <view-url> --all-tasks-view <view-url> --json`.
-- Target existing tasks with `--task-id <TASK-N>`, `--page-id <uuid>`, or `--url <notion-page-url>`.
-- Use category values `bug` or `enhancement`.
+- Use JSON for agents.
+- Target a known owner: `bun run coding-task-tracker --owner <path> <command> --json`.
+- Check Notion access: `bun run coding-task-tracker --owner <path> doctor --json`.
+- List pickable work: `bun run coding-task-tracker --owner <path> ready --json`.
+- Read CLI help for exact flags, target syntax, enums, and output fields.
+
+## Fast Task Capture
+
+- Use when the user asks to add several tasks from known findings.
+- Resolve the owner once.
+- Run `bun run coding-task-tracker --owner <path> doctor --json` once before writes when access is uncertain.
+- Skip ready/list scans unless the user asks or a likely duplicate is already known.
+- Create all obvious tasks before enrichment.
+- Use `bun run coding-task-tracker --owner <path> create --name <text> --priority <P0|P1|P2|P3> --category <bug|enhancement> --repo <repo> --reference-url <url> --json`.
+- Add notes only when title, priority, category, and reference URL cannot carry the needed context.
+- Do not fetch every created task after a confirmed create.
+- Do not run read-back loops after every note.
+- Return confirmed creates from `data.created`, plus skipped duplicates.
+- Do not invent task IDs; report `task_id`, `page_url`, or `page_id` only when the create output includes them.
 
 ## Safety
 
 - Resolve the nearest owner binding before Notion reads or writes.
 - Allow inherited owner reads.
 - Block inherited owner writes before Notion access.
-- Pass `--owner <path>` or run from the owner path for writes.
+- Use `--owner <path>` or the owner cwd for writes.
 - Bind a child path when the child needs its own tracker.
 - Mutate only the resolved owner binding's configured Coding Task Tracker data source.
 - Use `bind` as the setup path when owner config is missing.
 - Do not let CRUD commands create or change tracker binding config.
-- Treat pickable tasks as `Status = Ready` plus `Triage State = ready-for-agent`.
 - Fetch targets before writes.
-- Stop on zero or multiple task matches.
-- Use `--force` only when the user explicitly overrides the pickable-task gate.
+- Fail closed on zero or multiple task matches.
+- Use `--force` only for an explicit user override.
 - Do not move, delete, or archive tasks through this skill.
 
 ## Workflow
 
-- List pickable work with `ready --json`.
-- Fetch task detail with `get --task-id <id> --json`.
-- After `create --name <text> --json`, use the returned Notion page URL or list/get read-back to find the generated `TASK-*` ID.
-- If a command returns `tracker_not_configured`, run `bind` from the intended owner path.
-- If a read reports an inherited owner, confirm the owner before writing.
-- If a write reports inherited owner blocking, rerun with `--owner <path>` or bind the current path.
-- Claim only pickable tasks with `claim --task-id <id> --agent <name> --branch <branch> --json`.
-- Record progress with `note --task-id <id> --message <text> --json`.
-- Use `block`, `review`, `done`, `priority`, or `triage` for state changes.
-- Make backlog work pickable with `triage --task-id <id> --status Ready --triage-state ready-for-agent --json`.
+- Discover the owner with `bun run coding-task-tracker --json`.
+- Check access with `bun run coding-task-tracker --owner <path> doctor --json`.
+- List pickable work with `bun run coding-task-tracker --owner <path> ready --json`.
+- Fetch task detail with `bun run coding-task-tracker --owner <path> get --task-id <id> --json`.
+- Create backlog tasks with `bun run coding-task-tracker --owner <path> create --name <text> --json`.
+- Claim pickable tasks with `bun run coding-task-tracker --owner <path> claim --task-id <id> --agent <name> --branch <branch> --json`.
+- Record progress with `bun run coding-task-tracker --owner <path> note --task-id <id> --message <text> --json`.
+- Use owner-qualified `block`, `review`, `done`, `priority`, or `triage` commands for state changes.
 - Read the JSON `next_action` before continuing.
+
+## Report Shape
+
+- Summarize tracker owner, read status, and counts first.
+- Group tasks by useful action, such as ready, needs triage, blocked, or inspect.
+- Include task ID, priority, name, and current `next_safe_action`.
+- End read or triage summaries with `Suggested options:`.
+- Format `Suggested options:` as a numbered action router only.
+- Each numbered item must be a selectable next action.
+- Do not use numbered lists or bullets for generic content inventories.
+- Do not write `It includes:` followed by a list.
+- Put the best next action first.
+- Include `Needs triage` as a read option every time.
+- Include triage as a suggested option every time.
+- Include every relevant safe action for the current state.
+- Use short option labels, not code blocks.
+- Omit commands by default; show exact commands only when the user asks.
+- Mark write options clearly; do not mutate until the user chooses one.
+- Keep extra task lists short; offer a command to inspect more.
+
+## Suggested Options
+
+- Ready tasks: claim, Needs triage, inspect detail, show exact commands.
+- Untriaged tasks: Needs triage, triage one task, inspect detail, create task, show exact commands.
+- Blocked tasks: inspect detail, add note, move to review, mark done, Needs triage, triage, show exact commands.
+- Active task: add note, block, move to review, mark done, change priority, Needs triage, triage, show exact commands.
+- Empty ready list: Needs triage, create task, check tracker access, show exact commands.
+- Missing owner: choose owner, bind owner, check configured owner, show exact commands.
+- Mark write options with `Write:` before the label.
+- Do not mark `Needs triage` with `Write:`; it reads the needs-triage queue.
+- Use numbered router labels only when asking the user to choose.
+- Keep summaries as short prose or compact grouped task rows, not general bullet lists.
+
+## Gotchas
+
+- `tracker_not_configured`: choose the intended owner path before binding.
+- Inherited reads are advisory; writes need `--owner <path>` or the owner cwd.
+- From `skills/coding-task-tracker`, pass `--owner <path>` for owner-specific reads.
+- `bind` writes owner config; run it only for the path that should own the tracker.
+- Slow task capture: avoid create-note-readback loops; capture tasks first, enrich only when needed.
 
 ## Verification
 
 - YAML-parse this file after edits.
 - Run `cd skills/coding-task-tracker && bun test`.
 - Run `cd skills/coding-task-tracker && bun run typecheck`.
-- Smoke read: `cd skills/coding-task-tracker && bun run coding-task-tracker ready --json`.
+- Smoke read with an intended owner: `cd skills/coding-task-tracker && bun run coding-task-tracker --owner <path> ready --json`.
 
 ## Next Safe Action
 
 - Run `bun run coding-task-tracker --json` when the tracker owner domain is unclear.
-- Run `doctor --json` when Notion access is uncertain.
-- Run `bind --json` when owner config is missing.
-- Run `ready --json` to find pickable work.
-- Run `get --task-id <id> --json` before mutating a task.
+- Run `bun run coding-task-tracker --owner <path> doctor --json` when Notion access is uncertain.
+- Run `bun run coding-task-tracker bind --owner <path> --owner-key <key> --data-source <url> --ready-view <url> --all-tasks-view <url> --json` when owner config is missing.
+- Run `bun run coding-task-tracker --owner <path> ready --json` to find pickable work.
+- Run `bun run coding-task-tracker --owner <path> get --task-id <id> --json` before mutating a task.
 - Read `next_action` from the helper output before continuing.
