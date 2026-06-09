@@ -19,7 +19,6 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import {
 	type CliWriter,
-	type CommandFacadeSideEffect,
 	type ParsedCliDiagnosticArgv,
 	type RuntimeActionGuidance,
 	CliUsageError,
@@ -84,12 +83,34 @@ import {
 	type BrowserOperationTransportResult,
 	runBrowserUseMcporter,
 } from "./browser-use-transport";
+import {
+	type Failure,
+	type OutputMode,
+	type RawPage,
+	type ResultKind,
+	type TargetHints,
+	BINDING_FAIL_CLOSED_EXIT_CODE,
+	NOT_IMPLEMENTED_EXIT_CODE,
+	RUNTIME_FAILURE_EXIT_CODE,
+	TARGET_DISCOVERY_EXIT_CODE,
+	TARGET_SELECTION_EXIT_CODE,
+	USAGE_EXIT_CODE,
+	actionFor,
+	candidateMatchesHints,
+	isJsonObject,
+	parseUrlSafe,
+	redactPathShape,
+	redactTitle,
+	redactUnsafeText,
+	safeJsonObject,
+	sanitizeUsageValue,
+	stringField,
+	targetEnvelopeIdOf,
+	toCandidate,
+	truncateText,
+} from "./browser-use-core";
 
 const VERSION = "0.1.0";
-const BINDING_FAIL_CLOSED_EXIT_CODE = 20;
-const RUNTIME_FAILURE_EXIT_CODE = 1;
-const USAGE_EXIT_CODE = 2;
-const NOT_IMPLEMENTED_EXIT_CODE = 1;
 // One-line pointer the help surface uses to send agents back to the
 // route-bound prerequisites without copying route evidence schemas (R17, U3
 // scenario 8). browser-use never re-declares the route envelope shape.
@@ -189,8 +210,6 @@ async function writeStateFileAtomically(
 // ---------------------------------------------------------------------------
 // CLI driver. Mirrors browser-adapter-router.ts structure.
 // ---------------------------------------------------------------------------
-
-type OutputMode = "json" | "plain";
 
 type ParsedBrowserUseCommand =
 	| { kind: "help"; family?: BrowserUseFamily; command?: BrowserUseCommand }
@@ -433,7 +452,6 @@ async function executeCommand(input: {
 // Output writers.
 // ---------------------------------------------------------------------------
 
-type ResultKind = "browser_targets" | "browser_operation";
 
 function emitMockSuccess(input: {
 	command: BrowserUseCommand;
@@ -572,7 +590,6 @@ function emitNotImplemented(input: {
 // continuation action — never silently to success or the wrong recovery.
 // ---------------------------------------------------------------------------
 
-const TARGET_DISCOVERY_EXIT_CODE = 20;
 const TARGET_DISCOVERY_DEPENDENCY_EXIT_CODE = 1;
 
 type TargetDiscoveryActionId =
@@ -589,14 +606,6 @@ const targetDiscoveryActionById = new Map(
 
 // Shared failure record. actionId is the only axis that varies per surface;
 // the recoverability literal is owned here once.
-type Failure<A extends string> = {
-	code: string;
-	message: string;
-	actionId: A;
-	exitCode: number;
-	recoverability: "change_input" | "retry" | "repair_state" | "none";
-};
-
 type TargetDiscoveryFailure = Failure<TargetDiscoveryActionId>;
 
 // Raw adapter proof facts parsed from --adapter-proof. Consumed for binding and
@@ -1041,8 +1050,6 @@ async function readRouteFacts(
 
 // --- Live target listing through the proven adapter ------------------------
 
-type RawPage = { id?: string; title?: string; url?: string };
-
 type DiscoverResult =
 	| { ok: true; pages: RawPage[] }
 	| { ok: false; failure: TargetDiscoveryFailure };
@@ -1154,156 +1161,6 @@ function parsePagesText(text: string): RawPage[] {
 			const [, id, url] = match;
 			return [{ id, url }];
 		});
-}
-
-// --- Candidate projection + redaction (privacy release gate, R32) ----------
-
-// Project one raw adapter page into a display-safe Browser Target Candidate. The
-	// raw id is used only to derive a per-envelope candidate id (hashed, never
-	// surfaced); origin/path_shape/title are redaction-gated. No query string,
-	// fragment, raw page id, or CDP target id survives into the candidate.
-function toCandidate(
-	page: RawPage,
-	index: number,
-	targetEnvelopeId: string,
-	showUrl: boolean,
-): BrowserTargetCandidate {
-	const ordinal = index + 1;
-	const parsed = parseUrlSafe(page.url);
-	const title = redactTitle(page.title);
-	return {
-		candidate_ordinal: ordinal,
-		candidate_id: candidateIdOf(targetEnvelopeId, candidateIdentityOf(page, ordinal)),
-		origin: parsed?.origin ?? "",
-		...(showUrl && parsed ? { path_shape: redactPathShape(parsed) } : {}),
-		...(title ? { title } : {}),
-	};
-}
-
-function candidateIdentityOf(page: RawPage, ordinal: number): unknown[] {
-	const pageId = stringField(page.id);
-	if (pageId) return ["adapter_page_id", pageId];
-	const parsed = parseUrlSafe(page.url);
-	return [
-		"display_fallback",
-		parsed?.origin ?? "",
-		parsed?.pathname ?? "",
-		redactTitle(page.title) ?? "",
-		ordinal,
-	];
-}
-
-// Titles are author-controlled semantic hints (R22), but document.title can
-// mirror a URL with a query string or fragment (OAuth callbacks, SPA routers,
-// error pages). Defensively drop any query/fragment tail before length-bounding,
-// so a title carrying ?token=… or #frag cannot leak through the privacy gate
-// (R32) the way url path_shape is already protected.
-function redactTitle(title: string | undefined): string | undefined {
-	if (!title) return undefined;
-	const stripped = title.replace(/[?#]\S*/g, "").trim();
-	return stripped === "" ? undefined : truncateText(stripped, 80);
-}
-
-// Only http(s) Browser Targets are navigable pages. Other schemes — ws:// (the
-// WebSocket debugger), devtools://, chrome://, file:// — are adapter transport
-// plumbing or non-navigable surfaces, never a public Browser Target. Treating
-// them as unparsable keeps WebSocket debugger URLs and devtools handles out of
-// the candidate origin/path entirely (R32 privacy gate).
-function parseUrlSafe(value: string | undefined): URL | undefined {
-	if (!value) return undefined;
-	try {
-		const parsed = new URL(value);
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-			return undefined;
-}
-		return parsed;
-	} catch {
-		return undefined;
-	}
-}
-
-// Redacted path shape (R32, AE11): a structural projection of the pathname, not
-// the literal segments. Query strings and fragments are dropped entirely (an
-// opaque marker records that one existed); each path segment is replaced with a
-// type token when it looks like an identifier or secret (numeric id, UUID,
-// opaque hex/long token), so reset links, invite codes, and opaque ids never
-// leak. Short readable words are kept as semantic hints. Depth is capped.
-const PATH_SHAPE_MAX_SEGMENTS = 6;
-
-function redactPathShape(parsed: URL): string {
-	const segments = parsed.pathname.split("/").filter((s) => s !== "");
-	const shaped = segments
-		.slice(0, PATH_SHAPE_MAX_SEGMENTS)
-		.map(shapePathSegment);
-	if (segments.length > PATH_SHAPE_MAX_SEGMENTS) shaped.push("…");
-	const path = shaped.length === 0 ? "/" : `/${shaped.join("/")}`;
-	const marker = parsed.search !== "" || parsed.hash !== "" ? " […]" : "";
-	return `${truncateText(path, 120)}${marker}`;
-}
-
-// Map one path segment to a type token when it carries identifier/secret shape,
-// otherwise keep a short readable literal. Errs toward redaction: a segment that
-// mixes letters and digits, or is long, reads as an opaque handle and is shaped
-// rather than echoed. Only pure readable words survive as semantic hints.
-function shapePathSegment(segment: string): string {
-	const decoded = safeDecode(segment);
-	if (/^\d+$/.test(decoded)) return ":num";
-	if (
-		/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded)
-	) {
-		return ":uuid";
-	}
-	// Anything with a non-word character (encoded bytes, separators beyond . _ -)
-	// is opaque.
-	if (/[^a-zA-Z0-9._-]/.test(decoded)) return ":str";
-	// A segment mixing letters and digits is an identifier/handle (invite codes,
-	// short ids, hex blobs), not a readable noun; shape it.
-	if (/\d/.test(decoded) && /[a-zA-Z]/.test(decoded)) return ":id";
-	// Long pure-letter segment is more likely an opaque token than a word.
-	if (decoded.length > 24) return ":id";
-	return decoded;
-}
-
-function safeDecode(value: string): string {
-	try {
-		return decodeURIComponent(value);
-	} catch {
-		return value;
-	}
-}
-
-function truncateText(value: string, maxLength: number): string {
-	return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
-}
-
-// --- Deterministic ids -----------------------------------------------------
-
-// Target envelope id scopes candidate ordinals (R21). Content hash over the
-// run-scoped binding facts; no clock or randomness. adapter_proof_id already
-// folds in warm_chrome_run_id and verified_endpoint_identity (it is itself a
-// hash of them), so they are covered transitively. In route-bound mode runId is
-// the route's run id, so the same route reproduces the same envelope id; in
-// recovery mode runId is per-invocation, scoping ordinals within one listing.
-function targetEnvelopeIdOf(input: {
-	runId: string;
-	mode: TargetDiscoveryMode;
-	adapter: BrowserAdapterId;
-	adapterProofId: string;
-	routeEvidenceHash: string | undefined;
-}): string {
-	const canonical = JSON.stringify([
-		input.runId,
-		input.mode,
-		input.adapter,
-		input.adapterProofId,
-		input.routeEvidenceHash ?? null,
-	]);
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
-}
-
-function candidateIdOf(targetEnvelopeId: string, identity: unknown[]): string {
-	const canonical = JSON.stringify([targetEnvelopeId, identity]);
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 24);
 }
 
 // --- Failure builders ------------------------------------------------------
@@ -1464,29 +1321,6 @@ function emitTargetDiscoveryFailure(input: {
 
 // Project a registry action into runtime guidance. The id-param type is pinned
 // by each per-surface wrapper below; this helper stays untyped on id.
-function actionFor(
-	map: Map<
-		string,
-		{
-			id: string;
-			summary: string;
-			sideEffects: readonly CommandFacadeSideEffect[];
-		}
-	>,
-	id: string,
-	label: string,
-): RuntimeActionGuidance {
-	const action = map.get(id);
-	if (!action) {
-		throw new Error(`Unknown ${label} action id: ${id}`);
-	}
-	return {
-		id: action.id,
-		summary: action.summary,
-		side_effects: [...action.sideEffects],
-	};
-}
-
 function targetDiscoveryAction(id: TargetDiscoveryActionId): RuntimeActionGuidance {
 	return actionFor(targetDiscoveryActionById, id, "target discovery");
 }
@@ -1520,7 +1354,6 @@ function targetDiscoveryAction(id: TargetDiscoveryActionId): RuntimeActionGuidan
 // ids, or WebSocket debugger URLs are ever written to state, JSON, or logs.
 // ---------------------------------------------------------------------------
 
-const TARGET_SELECTION_EXIT_CODE = 20;
 // Selected-target state shares the Browser Targets result-contract identity, so
 // a foreign or hand-written file cannot pass as selected state.
 const SELECTED_TARGET_STATE_CONTRACT_ID = BROWSER_USE_TARGETS_CONTRACT_ID;
@@ -2060,12 +1893,6 @@ async function crossCheckSelectionEvidence(
 // Browser Target Hints (R22). Origin / URL substring / title substring. The
 // candidate ordinal is a precise handle, NOT a hint (plan: "Candidate ordinal
 // does not count as a Browser Target Hint").
-type TargetHints = {
-	origin?: string;
-	urlContains?: string;
-	titleContains?: string;
-};
-
 type Selector =
 	| { kind: "ordinal"; ordinal: number }
 	| { kind: "hints"; hints: TargetHints };
@@ -2230,27 +2057,6 @@ function resolveSelectionCandidate(
 // exact (case-insensitive) match; URL/title substrings match against the
 // redacted display facts only — there is no raw url to match against, by design
 // (R32). URL-substring matches against origin + path_shape.
-function candidateMatchesHints(
-	candidate: BrowserTargetCandidate,
-	hints: TargetHints,
-): boolean {
-	if (
-		hints.origin !== undefined &&
-		candidate.origin.toLowerCase() !== hints.origin.toLowerCase()
-	) {
-		return false;
-	}
-	if (hints.urlContains !== undefined) {
-		const haystack = `${candidate.origin}${candidate.path_shape ?? ""}`.toLowerCase();
-		if (!haystack.includes(hints.urlContains.toLowerCase())) return false;
-	}
-	if (hints.titleContains !== undefined) {
-		const title = (candidate.title ?? "").toLowerCase();
-		if (!title.includes(hints.titleContains.toLowerCase())) return false;
-	}
-	return true;
-}
-
 // --- State path resolution -------------------------------------------------
 
 type StatePathResult =
@@ -3912,23 +3718,6 @@ function parseAdapterCapabilities(
 	return capabilities;
 }
 
-function stringField(value: unknown): string | undefined {
-	return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-function safeJsonObject(raw: string): Record<string, unknown> | undefined {
-	try {
-		const value = JSON.parse(raw);
-		return isJsonObject(value) ? value : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function writeVersion(
 	stdout: CliWriter,
 	outputMode: OutputMode,
@@ -4194,33 +3983,6 @@ function parsedRunIdFlag(argv: readonly string[]): string | undefined {
 // ---------------------------------------------------------------------------
 // Redaction + help.
 // ---------------------------------------------------------------------------
-
-function sanitizeUsageValue(value: string): string {
-	if (
-		value.startsWith("/") ||
-		value.startsWith("~/") ||
-		value.startsWith("op://") ||
-		hasSensitiveOptionName(value)
-	) {
-		return "[redacted]";
-	}
-	return redactUnsafeText(value);
-}
-
-function redactUnsafeText(value: string): string {
-	return value
-		.replace(/\bop:\/\/\S+/gi, "[redacted]")
-		.replace(/--[A-Za-z0-9][\w-]*(?:=\S*)?/g, (match) =>
-			hasSensitiveOptionName(match) ? "[redacted]" : match,
-		)
-		.replace(/(^|[\s:(])(?:~\/|\/)\S+/g, "$1[redacted]");
-}
-
-function hasSensitiveOptionName(value: string): boolean {
-	return /(?:password|passwd|passphrase|secret|token|api[-_]?key|credential|auth|cookie|session)/i.test(
-		value,
-	);
-}
 
 function renderHelp(
 	family?: BrowserUseFamily,
