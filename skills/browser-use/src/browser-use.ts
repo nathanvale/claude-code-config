@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import {
 	type CliWriter,
+	type CommandFacadeSideEffect,
 	type ParsedCliDiagnosticArgv,
 	type RuntimeActionGuidance,
 	CliUsageError,
@@ -597,13 +598,17 @@ const targetDiscoveryActionById = new Map(
 	targetDiscoveryActions.map((action) => [action.id, action]),
 );
 
-type TargetDiscoveryFailure = {
+// Shared failure record. actionId is the only axis that varies per surface;
+// the recoverability literal is owned here once.
+type Failure<A extends string> = {
 	code: string;
 	message: string;
-	actionId: TargetDiscoveryActionId;
+	actionId: A;
 	exitCode: number;
 	recoverability: "change_input" | "retry" | "repair_state" | "none";
 };
+
+type TargetDiscoveryFailure = Failure<TargetDiscoveryActionId>;
 
 // Raw adapter proof facts parsed from --adapter-proof. Consumed for binding and
 // adapter-match checks; never re-emitted verbatim.
@@ -1468,16 +1473,33 @@ function emitTargetDiscoveryFailure(input: {
 	return failure.exitCode;
 }
 
-function targetDiscoveryAction(id: TargetDiscoveryActionId): RuntimeActionGuidance {
-	const action = targetDiscoveryActionById.get(id);
+// Project a registry action into runtime guidance. The id-param type is pinned
+// by each per-surface wrapper below; this helper stays untyped on id.
+function actionFor(
+	map: Map<
+		string,
+		{
+			id: string;
+			summary: string;
+			sideEffects: readonly CommandFacadeSideEffect[];
+		}
+	>,
+	id: string,
+	label: string,
+): RuntimeActionGuidance {
+	const action = map.get(id);
 	if (!action) {
-		throw new Error(`Unknown target discovery action id: ${id}`);
+		throw new Error(`Unknown ${label} action id: ${id}`);
 	}
 	return {
 		id: action.id,
 		summary: action.summary,
 		side_effects: [...action.sideEffects],
 	};
+}
+
+function targetDiscoveryAction(id: TargetDiscoveryActionId): RuntimeActionGuidance {
+	return actionFor(targetDiscoveryActionById, id, "target discovery");
 }
 
 // ---------------------------------------------------------------------------
@@ -1532,13 +1554,7 @@ const selectionActionById = new Map(
 	selectionActions.map((action) => [action.id, action]),
 );
 
-type SelectionFailure = {
-	code: string;
-	message: string;
-	actionId: SelectionFailureActionId;
-	exitCode: number;
-	recoverability: "change_input" | "retry" | "repair_state" | "none";
-};
+type SelectionFailure = Failure<SelectionFailureActionId>;
 
 // Run-scoped selected-target state. Written by `targets select`, read by
 // `targets status` and (U7) `operate`. Display facts are already redacted; the
@@ -2598,13 +2614,7 @@ const operationActionById = new Map(
 	operationActions.map((action) => [action.id, action]),
 );
 
-type OperationFailure = {
-	code: string;
-	message: string;
-	actionId: OperationActionId;
-	exitCode: number;
-	recoverability: "change_input" | "retry" | "repair_state" | "none";
-};
+type OperationFailure = Failure<OperationActionId>;
 
 type OperationSideEffects = {
 	focus?: boolean;
@@ -3494,15 +3504,7 @@ function operationFailureFromResolution(
 }
 
 function operationAction(id: OperationActionId): RuntimeActionGuidance {
-	const action = operationActionById.get(id);
-	if (action) {
-		return {
-			id: action.id,
-			summary: action.summary,
-			side_effects: [...action.sideEffects],
-		};
-	}
-	throw new Error(`Unknown operation action id: ${id}`);
+	return actionFor(operationActionById, id, "operation");
 }
 
 function emitOperationFailure(input: {
@@ -3741,15 +3743,7 @@ function selectionUsageFailure(message: string): SelectionFailure {
 }
 
 function selectionAction(id: SelectionActionId): RuntimeActionGuidance {
-	const action = selectionActionById.get(id);
-	if (!action) {
-		throw new Error(`Unknown target selection action id: ${id}`);
-	}
-	return {
-		id: action.id,
-		summary: action.summary,
-		side_effects: [...action.sideEffects],
-	};
+	return actionFor(selectionActionById, id, "target selection");
 }
 
 function emitSelectionSuccess(input: {
