@@ -1,6 +1,6 @@
 # Community Skill Research Sources
 
-Use this source note before changing community-skill rules in `references/skill-design-philosophy.md`.
+Use this source note before changing community-skill rules in `references/skill-design-decision-runbook.md`.
 
 Keep the philosophy guide as the rulebook. Keep source freshness here.
 
@@ -40,6 +40,15 @@ Keep the philosophy guide as the rulebook. Keep source freshness here.
   - Use for harness-agnostic skill distribution trade-offs.
 - Local research: `docs/research/2026-05-30-skill-composability-handoff-observability.md`
   - Use for composition, handoff, and observability context.
+- Local QMD recall hit: `qmd://vault/docs/research/2026-03-22-thariq-applied-analysis.md`
+  - Checked: 2026-06-09 with QMD.
+  - Discovery only; read the full source before using for gotchas sections, refinement evidence loops, progressive disclosure, skill telemetry, or model-aware gotcha notes.
+- Local QMD recall hit: `qmd://vault/docs/research/2026-03-18-claude-code-skills-best-practices.md`
+  - Checked: 2026-06-09 with QMD.
+  - Discovery only; read the full source before using for skill folder shape, gotchas, description triggers, stored skill memory, helper scripts, config pattern, or on-demand hooks.
+- Local ADR: `docs/adr/0010-skill-examples-teach-judgment-not-contracts.md`
+  - Checked: 2026-06-09.
+  - Use for examples-as-judgment guidance and contract-owner boundaries.
 
 ## Example Sources Reviewed
 
@@ -58,9 +67,6 @@ Keep the philosophy guide as the rulebook. Keep source freshness here.
 
 ## Source Rules
 
-- Treat official docs and papers as rule inputs.
-- Treat marketplaces, awesome lists, Reddit, blog posts, and public repos as examples only.
-- Do not copy external contracts into `SKILL.md`.
-- Do not import pure XML skill-body rules from legacy `create-agent-skills` references.
+- Owner: `references/research-portability.md#source-rules`.
+- Keep this file to source notes and checked dates.
 - Refresh source notes before changing community-skill rules that depend on current vendor behavior.
-- Record source date, source URL or path, and the rule surface affected.

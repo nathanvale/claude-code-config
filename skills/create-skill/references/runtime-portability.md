@@ -6,14 +6,17 @@ CLI adapters, generated locks, or local development dependencies.
 ## Preview Index
 
 - Read `Goal` before choosing runtime shape.
+- Read `Runtime Choice` before adding a helper.
 - Read `Portable Runtime Surface` for export criteria.
 - Read `Bun-Backed Skills` or `Non-Bun Skills` for runtime-specific rules.
+- Read `Standalone Bun Helper Scripts` for small Bun scripts without package metadata.
 - Read `Multi-Command Bun Packages` when one skill owns multiple commands.
 - Read `Local Development Portability` when dependencies point outside the skill.
 - Read `Facade Migration Tracking` before adding local facade exceptions.
 - Read `Bun Workspace Migration` when moving shared packages into skills.
-- Read `TypeScript Governance`, `Lint Portability`, and `Test Layout` when changing checks.
-- Read `Distribution Governance` and `Export Rule` before publishing or handing off.
+- Read `Test Layout` when adding runtime package tests.
+- Read `Toolchain And Distribution Owners` when repo-wide checks or publishing policy appears.
+- Read `Export Rule` before publishing or handing off.
 
 ## Source Notes
 
@@ -28,6 +31,15 @@ CLI adapters, generated locks, or local development dependencies.
 - Make runtime-backed skills portable without hiding machine assumptions.
 - Keep Bun rules explicit without making Bun the only supported runtime.
 - Treat every runtime the same way: name it, bundle owners, expose verification, and label missing dependencies.
+
+## Runtime Choice
+
+- Prefer Bun for helper logic.
+- Use Bun for parsing, validation, JSON, file scans, audits, state machines, and reusable decisions.
+- Use Bun when focused tests would make the helper safer.
+- Use shell only for tiny command wrappers, environment setup, path setup, or pipelines where shell is the domain.
+- Promote shell to Bun when branching, parsing, JSON, error handling, or tests matter.
+- Name the runtime and missing-runtime state either way.
 
 ## Portable Runtime Surface
 
@@ -55,7 +67,7 @@ For Bun-backed skill packages:
 - Collocate focused tests beside the owner file as `*.test.ts`.
 - Use `fixtures/` only for test fixture programs, sample inputs, or intentionally failing cases.
 - Use a separate test folder only when the suite spans multiple owners and collocation would hide the tested boundary.
-- Treat existing `scripts/package.json` packages as migration exceptions only when a tracker names the package and target shape.
+- Treat existing script-local package manifests as migration exceptions only when a tracker names the package and target shape.
 - Include `bun.lock` when standalone install or typecheck reproducibility matters.
 - Use portable package dependencies when the skill should travel by itself.
 - Label `file:` dependencies that point outside the skill bundle as local development portability only.
@@ -68,6 +80,17 @@ For Bun-backed skill packages:
 - Prefer a direct Bun entrypoint over a shell wrapper when the wrapper only delegates to one TypeScript file and adds no path, environment, or compatibility behavior.
 - Put exact command behavior, parser rules, flags, and output shapes in code, help, tests, or generated docs.
 - Put only verification entry points in `SKILL.md`.
+
+## Standalone Bun Helper Scripts
+
+Use when the skill has no `package.json` and the helper is small, skill-local, repeated, and deterministic.
+
+- Name Bun as the runtime in the owning skill or reference.
+- Keep the script under `scripts/`.
+- Use `#!/usr/bin/env bun` when the script is executed directly.
+- Keep dependencies limited to Bun built-ins, repo-local files, or explicitly named owner paths.
+- Name the verification command that runs the script.
+- Escalate to a Bun-backed package when the helper needs package metadata, external dependencies, shared contracts, multiple commands, generated output, or published consumption.
 
 ## Multi-Command Bun Packages
 
@@ -157,56 +180,6 @@ Rules:
 - Keep root `bun.lock` with the portable export payload when workspace dependencies are part of the payload.
 - Prove workspace export with `bun run prove:workspace-portability`.
 
-## TypeScript Governance
-
-Use for active Bun workspace packages that typecheck runtime owners.
-
-Source:
-
-- Bun TypeScript docs: `https://bun.sh/docs/runtime/typescript`
-- Bun workspaces catalog docs: `https://bun.sh/docs/pm/workspaces`
-- TypeScript TSConfig docs: `https://www.typescriptlang.org/tsconfig`
-
-Rules:
-
-- Let root `package.json` own shared TypeScript tool versions through `workspaces.catalog`.
-- Lock `typescript`, `@types/bun`, and `@types/node` together.
-- Use `catalog:` in active workspace package `devDependencies`.
-- Do not use `*`, `^`, `~`, or package-local exact versions for compiler or ambient runtime type packages in active workspace packages.
-- Use `@types/bun` for Bun CLI packages.
-- Use `compilerOptions.types: ["bun"]` for Bun CLI packages.
-- Do not declare direct `bun-types`; it is an implementation dependency of `@types/bun`.
-- Use `@types/node` and `compilerOptions.types: ["node"]` only for Node-library source packages.
-- Classify each active workspace package before adding TypeScript rules.
-- Keep portable package `tsconfig.json` files self-contained.
-- Do not extend repo-root `tsconfig` from a portable package unless the export payload carries that root config.
-- Keep shared TypeScript policy in `scripts/check-workspace-facade-invariants.ts`.
-- Keep active package facts in package manifests, root workspaces, and conventional owner paths.
-- Do not add a separate package registry while the checker can derive the fact from `package.json`, `tsconfig.json`, `bin`, `scripts`, or `src/command-contract.ts`.
-- Keep prose short; enforce exact compiler options in checks.
-- Treat `noUncheckedIndexedAccess` as an intentional non-enforced hardening pass until source and tests have explicit indexed-access guards.
-
-## Lint Portability
-
-Use for Biome or another lint/format gate over Bun workspace skill packages.
-
-Source:
-
-- Biome config and VCS ignore: `https://biomejs.dev/reference/configuration/`
-- Biome monorepo guide (root vs nested, v2): `https://biomejs.dev/guides/big-projects/`
-
-Rules:
-
-- Treat the linter as a repo-wide dev gate, not a per-skill runtime owner.
-- Keep one root Biome config; do not add per-skill `biome.json` or per-skill Biome dependencies.
-- Install Biome once at the repo root through root `devDependencies`.
-- Lint config does not travel inside a standalone skill zip; the importing repo runs its own lint gate.
-- Exclude generated payloads path-portably with `!**/dist` and `!**/coverage`, not skill-specific globs.
-- Do not rely on `vcs.useIgnoreFile` alone when `files.includes` re-includes everything with `**`; an explicit `**` glob overrides the git-ignore.
-- Edit lint findings in `src/`; never edit generated `dist/` output to satisfy the linter.
-- Add a nested per-skill `biome.json` only when one skill needs genuinely different rules; mark it `extends: "//"` (v2 microsyntax, implies `root: false`).
-- Treat a nested `extends: "//"` config as workspace-local only; the `//` root does not travel in a standalone skill zip, so it is the same hidden-local-state trap as extending repo-root `tsconfig`.
-
 ## Test Layout
 
 - Collocate package tests with the source owner they verify.
@@ -217,44 +190,18 @@ Rules:
 - Keep generated evidence under ignored `var/`, `.runner-output/`, or another declared output path.
 - Do not put generated evidence under `src/` unless the package intentionally treats it as source.
 
-## Distribution Governance
+## Toolchain And Distribution Owners
 
-- Treat skills as instruction bundles, not npm package products.
-- Publish only runtime tools, libraries, adapters, or shims that a skill consumes outside the skill system.
-- Keep `SKILL.md`, references, provenance, tests, fixtures, and workflow docs out of npm payloads unless a distribution decision names the skill bundle itself as the product.
-- Use repo-local scripts for source-mode work.
-- For Bun-backed skill packages, run repo-local commands with `bun run <script>` from the package root.
-- For Bun workspace verification, run package scripts with `bun --filter <package-name> <script>` from the repo root.
-- Use installed command names only for published package docs, packed-tarball smoke tests, or installed-tool usage.
-- Let CLI contracts name command identity only; do not encode `bun run`, `dist/`, or local paths as the command identity.
-- Keep runtime-backed skill packages repo-local and `private: true` by default.
-- Start publish governance only when a runtime tool is consumed outside the repo or `private: false` is proposed.
-- Keep runtime-backed skill packages `private: true` until a distribution decision names package, consumer, version, access, payload, dependency status, and verification command.
-- Do not set `private` false while a package still depends on hidden local state, `file:` specs, or unresolved workspace-only dependencies.
-- Require a stable package `name` before public distribution.
-- Require an explicit semver `version`; do not publish placeholder `0.0.0`.
-- Require a short `description` for discovery and package audit readability.
-- Require a license stance; do not use `UNLICENSED` with public npm access.
-- Require `publishConfig.access` so the first publish cannot default to the wrong visibility.
-- Require `publishConfig.tag` so pre-release or private-channel publishes do not land as implicit latest.
-- Require a narrow `files` allowlist.
-- Do not use `*`, `.`, or `**/*` as the distribution payload.
-- Keep generated evidence, test output, dependency folders, local temp state, and hidden machine state out of the packed payload.
-- Keep collocated tests, live tests, benchmarks, and fixtures out of public package payloads unless a distribution decision accepts them.
-- Do not rely on `.npmignore` or `.gitignore` to prune a broad `files` allowlist.
-- Cover every package `bin` target from the `files` allowlist.
-- Treat public package `bin` entries as install contracts.
-- Do not point public package `bin` entries at `src/`, tests, fixtures, or dev wrappers unless a distribution decision records a source-distribution exception and the checker allowlists it.
-- Do not use `bundleDependencies` or `bundledDependencies` until the bundled dependency payload is explicitly accepted.
-- Declare `engines.bun` when a distributed package exposes direct TypeScript Bun entrypoints.
-- Choose source distribution only when Bun is the named consumer runtime and collocated tests or fixtures are excluded from the payload.
-- Choose built distribution when consumers should not receive source tests, fixtures, or TypeScript runtime assumptions.
-- Treat built `dist/` folders as generated package payloads; rebuild them from source during proof instead of relying on checked-in output.
-- For built distribution, verify the packed payload has no tests, fixtures, workspace-only dependency markers, generated evidence, or local temp state.
-- Prove publish readiness with `bun publish --dry-run --frozen-lockfile` before flipping `private` off.
-- Use `bun pm pack --dry-run` when validating tarball contents without registry semantics.
-- Use `npm pack --dry-run` as a compatibility cross-check when npm install or npm publish behavior is a target.
-- Keep standalone skill zip governance separate from npm package distribution governance.
+- Root workspace metadata owner: `package.json`.
+- Runtime package metadata owner: nearest runtime `package.json`.
+- TypeScript config owner: nearest runtime `tsconfig.json`.
+- Lint config owner: `biome.jsonc`.
+- Workspace invariant owner: `scripts/check-workspace-facade-invariants.ts`.
+- Workspace portability proof owner: `scripts/prove-workspace-portability.ts`.
+- Runtime package context owner: `runtime/cli-command-facade/CONTEXT.md`.
+- CLI surface owner: `skills/create-cli/SKILL.md`.
+- Use this file only to classify portability, export shape, bundled owners, and missing-runtime state.
+- Do not copy repo-wide TypeScript, Biome, workspace, or npm publish policy into this file.
 
 ## Export Rule
 

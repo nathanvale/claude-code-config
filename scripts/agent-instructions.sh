@@ -156,7 +156,7 @@ check_owner_paths() {
 			"context/bun-runner.md"
 			"skills/create-skill/SKILL.md"
 			"skills/create-skill/CONTEXT.md"
-			"skills/create-skill/references/skill-design-philosophy.md"
+			"skills/create-skill/references/skill-design-decision-runbook.md"
 		"context/personal.md"
 		"context/comms-style.md"
 		"docs/git/conventions.md"

@@ -41,20 +41,24 @@ Two or more skills competing for the same request shape.
 _Avoid_: normal overlap, driver gap, routing contract failure
 
 **Skill bridge**:
-A temporary compatibility route from an old published skill name to the new owner.
-_Avoid_: permanent duplicate, hidden alias, second owner
+A temporary route used only when active route evidence proves a rename would break startup, an active skill, script, exported bundle, known external doc, or current user invocation.
+_Avoid_: legacy wrapper, permanent duplicate, hidden alias, second owner
 
 **Entry-screen route clarity**:
 The first-screen skill shape that maps request shapes to owner paths, references, scripts, templates, and next safe actions.
-_Avoid_: self-contained handbook, hidden reference tree, exhaustive catalog, workflow router
+_Avoid_: skill runbook, self-contained handbook, hidden reference tree, exhaustive catalog, workflow router
+
+**Task family**:
+A repeated request shape or workflow a skill is meant to handle.
+_Avoid_: one-off prompt, implementation unit, user story, broad domain
+
+**Skill design decision runbook**:
+Reference owner that helps choose the smallest skill shape, invocation mode, owner path, safety gate, and next safe action.
+_Avoid_: second workflow owner, vague philosophy doc, required heading schema
 
 **Heading Selection Matrix**:
 Advisory matrix that helps choose `SKILL.md` body headings from use case and selection strength; not a body-heading contract.
 _Avoid_: required heading schema, role heading template, body-heading contract
-
-**Skill runbook**:
-The single skill front door that routes every skill-creation request type to the right reference, owner path, script, or next safe action.
-_Avoid_: separate specialist skill, scattered context folder, duplicate skill authoring owner
 
 **Skill role**:
 The primary job label for a skill: main-entry, advisor, tool-workflow, support-reference, control-plane, quality-gate, or bridge.
@@ -101,12 +105,53 @@ The non-mutating output of a context advisor: recommendation, assumptions, safet
 _Avoid_: storage write, migration, capture workflow, content management
 
 **Project tracker**:
-Scoped durable work-state file for progress, open questions, queues, audits, and next actions.
-_Avoid_: decision log, rulebook, domain glossary, source of accepted truth
+Scoped durable work-state owner for progress, open questions, queues, audits, blockers, and next actions.
+In this repo, the owner path is `skills/coding-task-tracker/SKILL.md`.
+_Avoid_: decision log, rulebook, domain glossary, source of accepted truth, default `TASKS.md`
+
+**Accepted reusable rule**:
+A user-approved skill-authoring rule that has landed in its owner path.
+_Avoid_: chat-only agreement, tracker note, open question, proposed rule
+
+**Validated reusable rule**:
+An accepted reusable rule whose owner path changed, whose relevant checks passed, and whose change improves the task family against the skill quality bar.
+_Avoid_: plausible improvement, untested proposal, chat-approved idea, snippet-derived rule
+
+**Skill refinement**:
+The evidence-driven process of improving a skill by routing refinement evidence into proposed owner-path changes, then accepting only validated reusable rules.
+_Avoid_: self-improving AI, auto-update, autonomous mutation, prompt tweaking
+
+**Skill quality bar**:
+The task-family-specific standard used to decide whether a skill refinement improves the skill without adding avoidable carrying cost.
+_Avoid_: generic quality, vibes, preference, universal rubric, prose polish
+
+**Run Card**:
+A compact workflow scaffold for complex skills that names scope, defaults, first safe action, visible state, verification, fallback, and expected final shape.
+_Avoid_: mandatory checklist, body-heading schema, exhaustive runbook, hidden process
+
+**Refinement evidence**:
+A source signal used to decide whether skill refinement is warranted: observed failure, review finding, adversarial probe, or research.
+_Avoid_: hunch, theoretical risk, preference, context-free best practice
 
 **Observed failure**:
-A real skill miss seen in use, review, or an adversarial probe.
-_Avoid_: hypothetical hole, theoretical risk, preventive bloat
+A real skill miss seen during actual use.
+_Avoid_: review finding, adversarial probe, hypothetical hole, theoretical risk
+
+**Skill gotcha**:
+A compact skill-local correction for a repeatable, non-obvious agent failure.
+_Avoid_: generic tip, theoretical risk, broad best practice, copied research summary, full workflow prose
+
+**Gotcha decision**:
+The required create, review, or heal outcome that records whether refinement evidence produced no gotcha, an inline gotcha, reused existing guidance, or a safety gate.
+_Avoid_: optional note, hidden consideration, mandatory empty Gotchas section
+
+**Skill Doctor**:
+A targeted quality-gate helper that produces a Skill Health Report for one selected skill target or review artifact.
+_Avoid_: auto-healer, portfolio dashboard, periodic audit, broad repo sweep
+
+**Skill Health Report**:
+A structured quality-gate result that separates target status, findings, repair hints, rerun evidence, and blocked or degraded handoff.
+_Avoid_: scorecard, generic review notes, auto-fix plan, reusable-rule approval
 
 ## Capability Ownership
 

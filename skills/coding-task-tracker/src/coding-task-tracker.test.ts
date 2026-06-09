@@ -59,6 +59,7 @@ type RunnerOptions = {
 	queryRows?: Array<Record<string, unknown>>;
 	dataSourceText?: string;
 	taskPageText?: string;
+	createPagesResult?: Record<string, unknown>;
 };
 
 function makeRunner(calls: Array<{ tool: string; payload: Record<string, unknown> }>, options: RunnerOptions = {}) {
@@ -91,6 +92,22 @@ function makeRunner(calls: Array<{ tool: string; payload: Record<string, unknown
 			return {
 				exitCode: 0,
 				stdout: JSON.stringify({ ok: true }),
+				stderr: "",
+			};
+		}
+		if (tool === "notion-create-pages") {
+			return {
+				exitCode: 0,
+				stdout: JSON.stringify(
+					options.createPagesResult ?? {
+						results: [
+							{
+								id: "18ba3712387880d8b075f0b165f1d627",
+								url: "https://app.notion.com/p/18ba3712387880d8b075f0b165f1d627",
+							},
+						],
+					},
+				),
 				stderr: "",
 			};
 		}
@@ -281,6 +298,98 @@ describe("commands", () => {
 		} finally {
 			rmSync(ownerPath, { recursive: true, force: true });
 		}
+	});
+
+	test("create writes backlog task defaults and returns owned create evidence", () => {
+		withTempOwner((ownerPath) => {
+			const calls: Array<{ tool: string; payload: Record<string, unknown> }> = [];
+			const result = runCommand(
+				parseCli([
+					"create",
+					"--name",
+					"Capture browser-use finding",
+					"--reference-url",
+					"https://example.test/finding",
+					"--json",
+				]),
+				makeRunner(calls, {
+					createPagesResult: {
+						results: [
+							{
+								id: "18ba3712387880d8b075f0b165f1d627",
+								url: "https://app.notion.com/p/18ba3712387880d8b075f0b165f1d627",
+								properties: {
+									"Task ID": { number: 31 },
+									Name: { title: [{ plain_text: "Capture browser-use finding" }] },
+									Status: { select: { name: "Backlog" } },
+									"Triage State": { select: { name: "needs-triage" } },
+									Category: { select: { name: "enhancement" } },
+									Priority: { select: { name: "P2" } },
+									Repo: { plain_text: "claude-code-config" },
+									"Reference URL": { url: "https://example.test/finding" },
+								},
+							},
+						],
+					},
+				}),
+				ownerPath,
+			);
+
+			expect(result.status).toBe("ok");
+			expect(result.owner_resolution?.status).toBe("exact");
+			expect(result.mutation.confirmed).toBe(true);
+			expect(result.next_action).toBe("triage-task");
+			const create = calls.find((call) => call.tool === "notion-create-pages");
+			expect(create?.payload.parent).toEqual({ data_source_id: "22ca3712-3878-8195-ad9e-000be535aa4b" });
+			expect(create?.payload.pages).toEqual([
+				{
+					properties: {
+						Name: "Capture browser-use finding",
+						Status: "Backlog",
+						"Triage State": "needs-triage",
+						Category: "enhancement",
+						Priority: "P2",
+						Repo: "claude-code-config",
+						"Reference URL": "https://example.test/finding",
+					},
+				},
+			]);
+
+			const data = result.data as {
+				properties: Record<string, string>;
+				created: Array<{
+					name: string;
+					task_id: string;
+					status: string;
+					triage_state: string;
+					category: string;
+					priority: string;
+					repo: string;
+					reference_url: string;
+					page_url: string;
+					page_id: string;
+				}>;
+			};
+			expect(data.properties).toMatchObject({
+				Status: "Backlog",
+				"Triage State": "needs-triage",
+				Category: "enhancement",
+				Priority: "P2",
+				Repo: "claude-code-config",
+			});
+			expect(data.created[0]).toEqual({
+				name: "Capture browser-use finding",
+				task_id: "TASK-31",
+				status: "Backlog",
+				triage_state: "needs-triage",
+				category: "enhancement",
+				priority: "P2",
+				repo: "claude-code-config",
+				reference_url: "https://example.test/finding",
+				page_url: "https://app.notion.com/p/18ba3712387880d8b075f0b165f1d627",
+				page_id: "18ba3712-3878-80d8-b075-f0b165f1d627",
+			});
+		});
 	});
 
 	test("claim refuses non-pickable tasks before mutation", () => {

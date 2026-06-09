@@ -11,6 +11,23 @@ into the portable skill-authoring bundle.
 - Preserve open questions in the project tracker until accepted.
 - Separate portable skill payload from local project state.
 
+## Project Tracker Owner
+
+- Owner path: `skills/coding-task-tracker/SKILL.md`.
+- Use for progress, open questions, queues, cleanup state, blockers, and next actions.
+- Missing state: degraded.
+- Next repair: install or export `skills/coding-task-tracker/SKILL.md`, or record unresolved work in the final response or handoff until the receiving repo names its tracker owner.
+- Treat `TASKS.md` as historical or local residue unless a repo explicitly names it as tracker owner.
+- Do not store accepted reusable rules in the tracker.
+- Promote accepted reusable rules into `SKILL.md`, `CONTEXT.md`, or `references/`.
+
+## Acceptance Contract
+
+- Accepted means the user approved the rule and it landed in the owner path.
+- Treat chat-only agreement as pending until the owner path changes.
+- Treat tracker notes as work state, not accepted rule state.
+- Put follow-up work in the project tracker.
+
 ## Export Surface
 
 Portable by default:
@@ -23,7 +40,8 @@ Portable by default:
 
 Local project state by default:
 
-- `TASKS.md`
+- project tracker state
+- `TASKS.md` when present as historical or local tracker residue
 - `docs/decisions/`
 - historical archive receipts
 - local handover paths
@@ -31,18 +49,19 @@ Local project state by default:
 
 Rules:
 
-- Do not treat `TASKS.md` as portable rule surface.
+- Do not treat project tracker state or `TASKS.md` as portable rule surface.
 - Do not treat decision logs as portable rule surface.
 - Promote accepted reusable rules into `SKILL.md`, `CONTEXT.md`, or `references/`.
-- Keep unresolved work, local file paths, and cleanup status in `TASKS.md`.
+- Keep unresolved work, local file paths, and cleanup status in the project tracker.
 - Source notes may cite local evidence paths; missing local evidence does not block skill operation.
 - Use `runtime-portability.md` for Bun, Node, Python, shell, package, lockfile, and helper-script portability.
+- Export `skills/create-cli/SKILL.md` or name it as a hard dependency when runtime-backed skill guidance changes CLI/runtime surfaces.
 
 ## Handover Intake
 
-1. Record the handover path in `TASKS.md`.
+1. Record the handover path in the project tracker.
 2. Extract:
-   - accepted rules
+   - accepted reusable rules
    - open questions
    - source links
    - candidate cleanup items
@@ -55,8 +74,21 @@ Rules:
 
 - Treat official docs and papers as rule inputs.
 - Treat marketplaces, awesome lists, repos, Reddit, blog posts, and videos as examples.
+- Treat QMD results, search snippets, and handover summaries as discovery only; use them to find full sources, not to justify rules.
+- Read the full source before promoting a rule.
 - Record source URL or path, checked date, and affected rule surface.
 - Refresh current vendor docs before changing rules that depend on vendor behavior.
+
+## Research Intake
+
+- Search before broad edits.
+- Read the highest-signal source files, not only snippets.
+- Extract accepted reusable rules, open questions, source links, and owner paths.
+- When changing skill rules, treat research as refinement evidence until the owner-path change is accepted and validated.
+- Add gotchas only when refinement evidence demonstrates a repeatable, non-obvious agent failure.
+- Prefer description, owner-path, safety-gate, command, or example patches before new workflow prose.
+- Keep local recall facts as source evidence unless the user accepts them as reusable rules.
+- Name the affected owner path before editing.
 
 ## Portability Audit
 
@@ -82,10 +114,10 @@ Classify each hit:
 Patch order:
 
 1. Move reusable rules into the portable owner path.
-2. Move unresolved or local-only details into `TASKS.md`.
+2. Move unresolved or local-only details into the project tracker.
 3. Rewrite absolute paths as owner paths when possible.
 4. Leave historical receipts only when they explain an irreversible cleanup.
-5. Record blockers in `TASKS.md`.
+5. Record blockers in the project tracker.
 
 ## Portability Rules
 

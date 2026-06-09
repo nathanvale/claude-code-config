@@ -275,6 +275,8 @@ Runbook:
 
 - Name the new owner.
 - Name the removal condition.
+- Check active-reference surfaces: startup docs, active skills, scripts, plugin manifests, exported bundles, known external docs, and current user invocations.
+- If a relevant surface is inaccessible, keep a dated temporary bridge with a removal condition.
 - Avoid new workflow detail.
 - Run active-reference audit before removal.
 - Delete the bridge after the old name is no longer live.

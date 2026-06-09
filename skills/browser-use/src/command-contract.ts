@@ -1066,6 +1066,18 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_command_override_invalid",
 	"browser_operation_transport_timeout",
 	"browser_operation_transport_failed",
+	"browser_operation_route_invalid",
+	"browser_operation_adapter_proof_invalid",
+	"browser_operation_adapter_proof_mismatch",
+	"browser_operation_capability_unauthorized",
+	"browser_operation_artifact_path_required",
+	"browser_operation_artifact_path_unsafe",
+	"browser_operation_artifact_root_unwritable",
+	"browser_operation_viewport_invalid",
+	"browser_operation_target_ambiguous",
+	"browser_operation_target_no_match",
+	"browser_operation_target_missing",
+	"browser_operation_target_moved",
 	// Browser Target Discovery (U5). Distinct codes so empty / mismatched-proof /
 	// missing-evidence outcomes each map to their own recovery, never to a wrong
 	// or silent success (handoff envelope-mapping class).
@@ -1229,6 +1241,82 @@ export const browserUseTargetSelectionSuccessActions = [
 	},
 ] as const;
 
+export const browserUseOperationFailureActions = [
+	{
+		id: "supply_adapter_proof",
+		summary:
+			"Run Browser Adapter Proof for the selected adapter and pass it to browser-use operate --adapter-proof.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_adapter_proof",
+		summary:
+			"Re-run Browser Adapter Proof for the selected adapter; the supplied proof does not match the route's adapter.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "rerun_route_bound_target_discovery",
+		summary:
+			"Supply a fresh Router route success envelope, then re-run route-bound targets list.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refine_target_hint",
+		summary:
+			"Add or narrow a Browser Target Hint (origin, URL substring, title substring) so it matches exactly one candidate, then re-run browser-use operate.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "choose_target_candidate",
+		summary:
+			"Select one candidate from route-bound targets list output, then re-run browser-use operate.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "refresh_target_selection",
+		summary:
+			"Re-run targets select to refresh the run-scoped selected-target state; the current state is stale or no longer valid.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "repair_target_state",
+		summary:
+			"Repair or remove the run-scoped selected-target state file, then re-run browser-use operate.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "change_selection_input",
+		summary:
+			"Correct selected-target state input, then re-run browser-use operate.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "configure_operation_dependency",
+		summary:
+			"Expose mcporter on PATH or configure an explicit mcporter command vector, then re-run browser-use operate.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "inspect_operation_diagnostics",
+		summary: "Stop and inspect Browser Operation diagnostics before retrying.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change_operation_input",
+		summary:
+			"Correct browser-use operate route, proof, target, artifact, or viewport arguments.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseOperationSuccessActions = [
+	{
+		id: "inspect_operation_result",
+		summary: "Read the Browser Operation result and continue the task.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 type BrowserUseAudience = "agent" | "operator";
 type BrowserUseMutation = "check" | "browser";
 type BrowserUseCommandContract = CommandFacadeContract<
@@ -1381,6 +1469,11 @@ const browserUseEnvVars = [
 		description:
 			"Optional mcporter command vector as a JSON array of non-empty strings (e.g. [\"bunx\",\"mcporter\"]). Shared with Browser Adapter Proof; no shell strings, no package-runner fallback.",
 	},
+	{
+		name: "BROWSER_USE_ARTIFACT_ROOT",
+		description:
+			"Optional absolute run-scoped root for browser-use screenshot artifacts. When unset, operate screenshot uses a temp run-scoped root derived from the run id.",
+	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
 // Run-scoped selected-target state path env vars (plan U6). `--state` wins; when
@@ -1524,6 +1617,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUseEnvVars,
 			resultContract: browserUseOperationResultContract,
+			actionAffordances: {
+				success: browserUseOperationSuccessActions,
+				failure: browserUseOperationFailureActions,
+			},
 			flags: browserUseSnapshotFlags,
 			exitCodes: browserUseExitCodes,
 		},
@@ -1546,6 +1643,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUseEnvVars,
 			resultContract: browserUseOperationResultContract,
+			actionAffordances: {
+				success: browserUseOperationSuccessActions,
+				failure: browserUseOperationFailureActions,
+			},
 			flags: browserUseScreenshotFlags,
 			exitCodes: browserUseExitCodes,
 		},
@@ -1569,6 +1670,10 @@ export const browserUseContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			envVars: browserUseEnvVars,
 			resultContract: browserUseOperationResultContract,
+			actionAffordances: {
+				success: browserUseOperationSuccessActions,
+				failure: browserUseOperationFailureActions,
+			},
 			flags: browserUseEmulateFlags,
 			exitCodes: browserUseExitCodes,
 		},

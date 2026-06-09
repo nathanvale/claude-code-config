@@ -47,6 +47,19 @@ export type Task = {
 	next_safe_action: string;
 };
 
+export type CreatedTask = {
+	name: string;
+	task_id: string;
+	status: string;
+	triage_state: string;
+	category: string;
+	priority: string;
+	repo: string;
+	reference_url: string;
+	page_url: string;
+	page_id: string;
+};
+
 function isTask(value: Task | Envelope): value is Task {
 	return "task_id" in value;
 }
@@ -271,12 +284,15 @@ function asString(value: unknown): string {
 	return typeof value === "string" ? value : "";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
 function parseJsonFile(filePath: string): { state: ConfigState; value: Record<string, unknown> | null } {
 	try {
 		const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-			? { state: "ok", value: parsed as Record<string, unknown> }
-			: { state: "malformed", value: null };
+		const value = asRecord(parsed);
+		return value ? { state: "ok", value } : { state: "malformed", value: null };
 	} catch {
 		return { state: existsSync(filePath) ? "malformed" : "missing", value: null };
 	}
@@ -677,12 +693,87 @@ export function normalizeTask(raw: RawTask): Task {
 function parseJsonObject(text: string): Record<string, unknown> | null {
 	try {
 		const parsed = JSON.parse(text);
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-			? (parsed as Record<string, unknown>)
-			: null;
+		return asRecord(parsed);
 	} catch {
 		return null;
 	}
+}
+
+function nestedText(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (typeof value === "number") return String(value);
+	const record = asRecord(value);
+	if (!record) return "";
+
+	for (const key of ["plain_text", "name", "url", "id", "number"]) {
+		const text = nestedText(record[key]);
+		if (text) return text;
+	}
+
+	for (const key of ["select", "unique_id"]) {
+		const text = nestedText(record[key]);
+		if (text) return text;
+	}
+
+	for (const key of ["title", "rich_text"]) {
+		const values = Array.isArray(record[key]) ? record[key] : [];
+		const text = values.map(nestedText).filter(Boolean).join("");
+		if (text) return text;
+	}
+
+	return "";
+}
+
+function propertyText(properties: Record<string, unknown> | null, key: string): string {
+	return nestedText(properties?.[key]);
+}
+
+function firstText(record: Record<string, unknown>, keys: string[]): string {
+	for (const key of keys) {
+		const text = nestedText(record[key]);
+		if (text) return text;
+	}
+	return "";
+}
+
+function createdPageRecords(value: unknown): Record<string, unknown>[] {
+	const record = asRecord(value);
+	if (!record) {
+		return Array.isArray(value) ? value.flatMap(createdPageRecords) : [];
+	}
+
+	const nested = ["results", "pages", "created_pages", "data"]
+		.flatMap((key) => createdPageRecords(record[key]));
+	const page = createdPageRecords(record.page);
+	if (nested.length || page.length) return [...nested, ...page];
+
+	return record.id || record.page_id || record.url || record.page_url || record.properties ? [record] : [];
+}
+
+function createdTaskEvidence(requested: Record<string, string>, result: Record<string, unknown> | null): CreatedTask[] {
+	const pages = createdPageRecords(result);
+	const records = pages.length ? pages : [{}];
+
+	return records.map((page) => {
+		const properties = asRecord(page.properties);
+		const pageUrl = firstText(page, ["url", "page_url", "public_url"]);
+		const pageId = firstText(page, ["id", "page_id"]) || (pageUrl ? extractPageId(pageUrl) : "");
+		const taskId = propertyText(properties, "Task ID") || firstText(page, ["task_id", "taskId", "task_id_number"]);
+		const normalizedTaskId = normalizeTaskId(taskId);
+
+		return {
+			name: propertyText(properties, "Name") || requested.Name || "",
+			task_id: normalizedTaskId ? `TASK-${normalizedTaskId}` : "",
+			status: propertyText(properties, "Status") || requested.Status || "",
+			triage_state: propertyText(properties, "Triage State") || requested["Triage State"] || "",
+			category: propertyText(properties, "Category") || requested.Category || "",
+			priority: propertyText(properties, "Priority") || requested.Priority || "",
+			repo: propertyText(properties, "Repo") || requested.Repo || "",
+			reference_url: propertyText(properties, "Reference URL") || requested["Reference URL"] || "",
+			page_url: pageUrl,
+			page_id: pageId ? extractPageId(pageId) : "",
+		};
+	});
 }
 
 function parseTaskFromFetch(config: TrackerConfig, result: Record<string, unknown>): Task | null {
@@ -1231,6 +1322,7 @@ function createTask(config: TrackerConfig, runner: Runner, flags: Record<string,
 		data: {
 			tracker: trackerEvidence(config),
 			properties,
+			created: createdTaskEvidence(properties, parsed),
 			notion: parsed,
 		},
 		nextAction: "triage-task",

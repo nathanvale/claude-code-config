@@ -1,6 +1,7 @@
 ---
 name: newsroom-investigate
 description: "Research community signal across Reddit, X, YouTube, and the web with @side-quest/word-on-the-street, then fact-check claims against official sources. Use for community sentiment, recommendations, buzz, X vs Y, has anyone tried X, or what people are saying. Not for codebase exploration, generic web lookup, summarization, code review, or implementation research."
+role: tool-workflow
 argument-hint: '"[topic(s)] [--topic "..."] [--quick|--deep] [--days N] [--sources reddit|x|both] [--no-fact-check]"'
 allowed-tools: Read, Agent, Bash, WebSearch, WebFetch
 ---
@@ -19,7 +20,8 @@ Before dispatching any agents, verify the toolchain. Run these checks and stop w
 2. **yt-dlp**: `which yt-dlp`
    - Fail: "yt-dlp is not installed (required for YouTube results). Install with: `brew install yt-dlp`"
 
-3. **API keys**: Check environment variables first (`echo $OPENAI_API_KEY` and `echo $XAI_API_KEY`), then fall back to `~/.config/wots/.env`. At least one key must be available from either source.
+3. **API keys**: Check key presence without printing values. Check environment variables first (`test -n "${OPENAI_API_KEY:-}"` and `test -n "${XAI_API_KEY:-}"`), then fall back to key names in `~/.config/wots/.env`. At least one key must be available from either source.
+   - Never echo, print, log, or paste API key values.
    - Fail: "No API keys found in environment or `~/.config/wots/.env`. Set `OPENAI_API_KEY` and/or `XAI_API_KEY` in your shell exports or create `~/.config/wots/.env`"
 
 4. **Context7 MCP** (for fact-checking): Verify `resolve-library-id` tool is available by checking your available MCP tools
@@ -90,7 +92,7 @@ Build a structured JSON assignment for each reporter:
 Agent({
   description: "Beat Reporter: [topic]",
   model: "sonnet",
-  prompt: `Read ~/.claude/skills/newsroom-investigate/references/beat-reporter.md and follow its instructions to execute this assignment.
+  prompt: `Read skills/newsroom-investigate/references/beat-reporter.md and follow its instructions to execute this assignment.
 
 {
   "topic": "[normalized topic]",
@@ -145,7 +147,7 @@ Dispatch a single fact-checker Agent:
 Agent({
   description: "Fact Checker",
   model: "sonnet",
-  prompt: `Read ~/.claude/skills/newsroom-investigate/references/fact-checker.md and follow its instructions.
+  prompt: `Read skills/newsroom-investigate/references/fact-checker.md and follow its instructions.
 
 {
   "claims": [
