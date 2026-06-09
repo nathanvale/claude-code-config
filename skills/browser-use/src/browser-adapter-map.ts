@@ -6,13 +6,11 @@ import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
 	CliUsageError,
-	configureCliDiagnostics,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	parseCliDiagnosticArgv,
 	parseCliDiagnosticFallbackArgv,
 	renderCommandUsage,
-	resetCliDiagnostics,
 	usageError,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
@@ -24,12 +22,12 @@ import {
 	type BrowserAdapterMapCommand,
 	browserAdapterMapContracts,
 } from "./command-contract";
+import { emitWithDiagnostics } from "./cli-diagnostics-bootstrap";
 
 const VERSION = "0.1.0";
 const MAP_INVALID_EXIT_CODE = 20;
 const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
-const quietDiagnosticWriter: CliWriter = { write: () => true };
 
 export const REQUIRED_BROWSER_ADAPTER_MAP_SECTIONS = [
 	"Owners",
@@ -121,28 +119,23 @@ export async function runBrowserAdapterMapCli(
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(argv);
 		const outputMode = inferOutputMode(argv);
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-map",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error:
+						error instanceof Error
+							? usageError(error.message)
+							: usageError("invalid diagnostic flags"),
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error:
-					error instanceof Error
-						? usageError(error.message)
-						: usageError("invalid diagnostic flags"),
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	const outputMode = inferOutputMode(diagnosticArgv.argv);
@@ -150,25 +143,20 @@ export async function runBrowserAdapterMapCli(
 	try {
 		parsed = parseBrowserAdapterMapArgv(diagnosticArgv.argv);
 	} catch (error) {
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-map",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error,
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error,
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	if (parsed.kind === "help") {
@@ -192,25 +180,20 @@ export async function runBrowserAdapterMapCli(
 		});
 		return result.ok ? 0 : MAP_INVALID_EXIT_CODE;
 	} catch (error) {
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-map",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error,
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error,
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 }
 

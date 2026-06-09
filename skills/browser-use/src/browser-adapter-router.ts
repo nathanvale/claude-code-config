@@ -86,13 +86,15 @@ import {
 	validateRouterContinuationEnvelope,
 	validateRouterErrorEnvelope,
 } from "./browser-adapter-router-recovery";
+import {
+	emitWithDiagnostics,
+	quietDiagnosticWriter,
+} from "./cli-diagnostics-bootstrap";
 
 const VERSION = "0.1.0";
 const ROUTE_FAIL_CLOSED_EXIT_CODE = 20;
 const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
-
-const quietDiagnosticWriter: CliWriter = { write: () => true };
 
 export {
 	continuationForCode,
@@ -212,28 +214,23 @@ export async function runBrowserAdapterRouterCli(
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(diagnosticInput);
 		const outputMode = inferCommandOutputMode(argv, findCommand(argv));
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-router",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error:
+						error instanceof Error
+							? usageError(error.message)
+							: usageError("invalid diagnostic flags"),
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error:
-					error instanceof Error
-						? usageError(error.message)
-						: usageError("invalid diagnostic flags"),
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	const outputMode = inferCommandOutputMode(
@@ -244,25 +241,20 @@ export async function runBrowserAdapterRouterCli(
 	try {
 		parsed = parseRouterArgv(diagnosticArgv.argv);
 	} catch (error) {
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-router",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error,
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error,
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	if (parsed.kind === "help") {

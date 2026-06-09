@@ -71,6 +71,10 @@ import type {
 } from "./browser-adapter-router-model";
 import { authorizesOperationClass } from "./browser-adapter-router-engine";
 import {
+	emitWithDiagnostics,
+	quietDiagnosticWriter,
+} from "./cli-diagnostics-bootstrap";
+import {
 	type McporterCommandInput,
 	type McporterCommandResult,
 	isMissingCommandResult,
@@ -88,8 +92,6 @@ const NOT_IMPLEMENTED_EXIT_CODE = 1;
 // Browser Operation transport timeout. Independent of Adapter Proof's adapter
 // timing; the shared transport is timeout-agnostic and takes this per call.
 const OPERATION_TRANSPORT_TIMEOUT_MS = 8000;
-
-const quietDiagnosticWriter: CliWriter = { write: () => true };
 
 // One-line pointer the help surface uses to send agents back to the
 // route-bound prerequisites without copying route evidence schemas (R17, U3
@@ -227,28 +229,23 @@ export async function runBrowserUseCli(
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(diagnosticInput);
 		const outputMode = errorOutputMode(argv);
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.cli",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error:
+						error instanceof Error
+							? usageError(error.message)
+							: usageError("invalid diagnostic flags"),
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error:
-					error instanceof Error
-						? usageError(error.message)
-						: usageError("invalid diagnostic flags"),
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	const outputMode = errorOutputMode(diagnosticArgv.argv);
@@ -256,25 +253,20 @@ export async function runBrowserUseCli(
 	try {
 		parsed = parseBrowserUseArgv(diagnosticArgv.argv);
 	} catch (error) {
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.cli",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error,
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error,
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	if (parsed.kind === "help") {

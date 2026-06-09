@@ -53,6 +53,10 @@ import {
 	runMcporter,
 	spawnMcporterCommand,
 } from "./mcporter-transport";
+import {
+	emitWithDiagnostics,
+	quietDiagnosticWriter,
+} from "./cli-diagnostics-bootstrap";
 
 const VERSION = "0.1.0";
 const DEFAULT_PORT = "9222";
@@ -64,9 +68,6 @@ const CHROME_DEVTOOLS_DOCS_URL =
 const ADAPTER_TIMEOUT_MS = {
 	"chrome-devtools": 8000,
 } as const satisfies Record<BrowserAdapterProofAdapter, number>;
-const quietDiagnosticWriter: CliWriter = {
-	write: () => true,
-};
 
 type OutputMode = "json" | "plain";
 type CommandToExecute = Exclude<BrowserAdapterProofCommand, "status">;
@@ -286,28 +287,23 @@ export async function runPreflightBrowserAdapterCli(
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(diagnosticInput);
 		const outputMode = inferOutputMode(argv);
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-proof",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error:
+						error instanceof Error
+							? usageError(error.message)
+							: usageError("invalid diagnostic flags"),
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error:
-					error instanceof Error
-						? usageError(error.message)
-						: usageError("invalid diagnostic flags"),
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	const outputMode = inferOutputMode(diagnosticArgv.argv);
@@ -315,25 +311,20 @@ export async function runPreflightBrowserAdapterCli(
 	try {
 		parsed = parseAdapterProofArgv(diagnosticArgv.argv, runtime);
 	} catch (error) {
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.adapter-proof",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error,
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error,
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	if (parsed.kind === "help") {

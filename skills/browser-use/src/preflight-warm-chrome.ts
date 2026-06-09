@@ -33,6 +33,10 @@ import {
 	warmChromePreflightContracts,
 	warmChromeSuccessActions,
 } from "./command-contract";
+import {
+	emitWithDiagnostics,
+	quietDiagnosticWriter,
+} from "./cli-diagnostics-bootstrap";
 
 const VERSION = "0.2.0";
 const DEFAULT_PORT = "9222";
@@ -45,9 +49,6 @@ const CHROME_REMOTE_DEBUGGING_DOCS_URL =
 const BROWSER_ENTRY_EXIT_CODE = 20;
 const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
-const quietDiagnosticWriter: CliWriter = {
-	write: () => true,
-};
 
 type OutputMode = "json" | "plain";
 type CommandToExecute = Exclude<WarmChromePreflightCommand, "status">;
@@ -276,28 +277,23 @@ export async function runPreflightWarmChromeCli(
 	} catch (error) {
 		diagnosticArgv = parseCliDiagnosticFallbackArgv(diagnosticInput);
 		const outputMode = inferOutputMode(argv);
-		configureCliDiagnostics({
+		return emitWithDiagnostics({
 			categoryRoot: "browser-use.warm-chrome",
 			options: diagnosticArgv.options,
-			diagnosticWriter: diagnosticArgv.options.quiet
-				? quietDiagnosticWriter
-				: stderr,
+			stderr,
+			run: () =>
+				emitCliError({
+					error:
+						error instanceof Error
+							? usageError(error.message)
+							: usageError("invalid diagnostic flags"),
+					outputMode,
+					stdout,
+					stderr,
+					runId: diagnosticArgv.options.runId,
+					durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
+				}),
 		});
-		try {
-			return emitCliError({
-				error:
-					error instanceof Error
-						? usageError(error.message)
-						: usageError("invalid diagnostic flags"),
-				outputMode,
-				stdout,
-				stderr,
-				runId: diagnosticArgv.options.runId,
-				durationMs: runtime.now() - diagnosticArgv.options.startedAtMs,
-			});
-		} finally {
-			resetCliDiagnostics();
-		}
 	}
 
 	configureCliDiagnostics({
