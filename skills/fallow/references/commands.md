@@ -43,7 +43,9 @@ bun run fallow-runner <subcommand> --help
 - Use `--root <repo>` when the target repo differs from the invocation directory.
 - Do not pass positional targets.
 - Challenge or retarget suspect non-JS/TS roots before readiness checks.
-- Let `audit` use Fallow defaults unless the current task needs an explicit base.
+- Let `audit` use Fallow defaults for whole-branch or PR review.
+- Use `audit --base-ref HEAD` for an uncommitted current-task slice on a dirty branch.
+- Use explicit `--root <repo>` before `--base-ref` when the task owns a package or skill subfolder.
 - Use subcommand help for accepted inputs.
 - Treat unsupported control errors as input failures.
 
