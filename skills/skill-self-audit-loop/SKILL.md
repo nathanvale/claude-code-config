@@ -28,7 +28,7 @@ Do not use for ordinary one-shot skill review. Do not audit every skill. Do not 
 5. Read claim-relevant owner paths named by the target skill.
 6. Record skipped owner paths and why.
 7. Create or update `docs/skill-audits/<skill-directory-name>/self-audit-loop.md`.
-8. Preserve Open Findings, Finding History, Unresolved Questions, Dedupe Warnings, and Repair Candidates when updating an existing loop file.
+8. Preserve Open Findings, Finding History, Unresolved Questions, Dedupe Warnings, Candidate Shapes, and Repair Candidates when updating an existing loop file.
 9. Do not run `/goal` or `/loop`.
 10. Report the loop file path and next safe action.
 
@@ -50,6 +50,8 @@ Do not use for ordinary one-shot skill review. Do not audit every skill. Do not 
 
 A skill contradiction is a supported hard conflict between two instruction sources where both cannot be followed.
 
+This list is the single source of truth for the accepted shape set. Elsewhere say "the accepted shapes," not a count; promotion edits this list only.
+
 Accept only these conflict shapes:
 
 - `authority`: a lower-authority file acts like it owns another owner path's contract.
@@ -59,10 +61,26 @@ Accept only these conflict shapes:
 
 Reject style, taste, missing examples, and vague wording unless they create one of those conflicts.
 
+### Out-Of-Shape Capture
+
+- A real hard conflict (both sources cannot be followed) that fits no accepted shape is `out-of-shape`, not rejected.
+- Record it under `Candidate Shapes`, not as a rejected style nit.
+- Name a candidate shape label, the two sources, the impossible behavior, and a blast-radius note.
+- Out-of-shape findings do not block convergence; they feed shape discovery.
+- Known candidate shapes seeded from a mutation test: `cross-source` (skill vs a global rule or another skill, outside the one-target + owner-path scope) and `temporal-ordering` (a later step undoes what a still-later step needs).
+- `cross-source` may stay out of scope by design; promotion can resolve to "keep out of scope."
+
+### Shape Promotion
+
+- Promote a candidate shape into the accepted set only when it recurs and earns it.
+- Rank candidates by recurrence x blast-radius, not frequency alone.
+- A promotion is a loop change: gate it with a fresh mutation test per `references/loop-proof-methods.md` (step-function fixture pair or mutation kill-rate) before adding the shape.
+
 ## Finding State
 
 - `Open Findings` contains only active findings with `status: open`.
 - `Finding History` contains non-active findings with `status: resolved`, `rejected`, `duplicate`, or `superseded`.
+- `Candidate Shapes` contains `status: out-of-shape` findings: real conflicts that fit no accepted shape yet.
 - Do not delete findings unless unsafe, private, or written in error.
 - Duplicates link to an existing `signature`.
 - Resolved findings include repair evidence or a resolution reason.
@@ -158,6 +176,10 @@ One-pass fallback:
 - None yet.
 
 ## Dedupe Warnings
+
+- None yet.
+
+## Candidate Shapes
 
 - None yet.
 

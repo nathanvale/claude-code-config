@@ -87,6 +87,17 @@ One-pass fallback:
 
 - None.
 
+## Candidate Shapes
+
+- CS-1 (`cross-source`), status: out-of-shape, count: 1, blast-radius: high.
+  - Case (mutation test 2026-06-10): a skill workflow says "run `git add -A`" while the global `AGENTS.md` says "never use `git add -A`." Real hard conflict; both cannot be followed.
+  - Why out-of-shape: the conflict is between the skill and a global rule (or another skill), outside the one-target + owner-path audit scope. The blind auditor correctly returned clean and declined to force a shape.
+  - Promotion note: may resolve to "keep out of scope" — auditing one skill against all global rules is a deliberate v0 scope bound. High blast-radius (could stage secrets / clobber unrelated work) argues for revisiting.
+- CS-2 (`temporal-ordering`), status: out-of-shape, count: 1, blast-radius: medium.
+  - Case (mutation test 2026-06-10): workflow step 2 deletes the directory that step 3 then needs. Each step alone is followable; the order makes step 3 impossible.
+  - Why out-of-shape: a single-source step-ordering defect, not a conflict between two sources; `lifecycle` covers loop/finding state, not workflow step order. The blind auditor declined to force it into `lifecycle`.
+  - Promotion note: a genuine conflict class the accepted shapes do not cover; promote if it recurs, gated by a fresh mutation test.
+
 ## Repair Candidates
 
 - None.
