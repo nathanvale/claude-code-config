@@ -273,7 +273,10 @@ async function checkVacuousMatch(layout: TargetLayout): Promise<EngineFinding[]>
 	// grep, and its limit (a single dummy member defeats it) is recorded in the
 	// clause's maskingNote (R11); U7 exercises the hard case.
 	for (const file of layout.sourceFiles) {
-		const text = await Bun.file(file).text();
+		// Strip comments first: a guard or anti-pattern mentioned in prose must not
+		// satisfy or trip the heuristic (a comment saying "size > 0" is not a real
+		// guard). This inspects real code only.
+		const text = stripComments(await Bun.file(file).text());
 		// Look for a resolved-set variable that, when empty, still yields ok.
 		// Signal: an ok/healthy return whose only set-size reference is in the
 		// summary, with no `=== 0` / `.length` guard preceding it in the function.
@@ -648,6 +651,18 @@ function sortedEntries(
 	contracts: Record<string, AcquiredCommandContract>,
 ): Array<[string, AcquiredCommandContract]> {
 	return Object.entries(contracts).sort(([a], [b]) => a.localeCompare(b));
+}
+
+/**
+ * Strip line and block comments from TS source so source-grep clauses inspect
+ * real code, not prose. A guard or anti-pattern named only in a comment must not
+ * satisfy or trip a heuristic. Not a full parser — string literals containing
+ * `//` are rare in the patterns these clauses match and tolerated as a v1 limit.
+ */
+function stripComments(text: string): string {
+	return text
+		.replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+		.replace(/(^|[^:])\/\/.*$/gm, "$1"); // line comments (avoid :// in urls)
 }
 
 /** Repo-relative-ish path for a finding, excluding the volatile absolute prefix (R3). */

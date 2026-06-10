@@ -169,7 +169,7 @@ export const LANE_CLAUSES: readonly LaneClause[] = [
 			"A check whose ok branch is reachable with an empty resolved set yields a finding.",
 		maskingNote: {
 			resistant: false,
-			limit: "The hard masking case (R11): injecting one dummy member so the set is non-empty literally satisfies a naive non-empty assertion without restoring real coverage. v1's assertion is 'ok unreachable on empty set'; a single dummy entry defeats that. U7 tests this case explicitly and records the limit here rather than claiming a guarantee.",
+			limit: "Partially resistant (R11). v1's assertion targets the ANTI-PATTERN — an ok return with no empty-set guard — not merely 'set is non-empty'. So the obvious masking fix (inject one dummy member) does NOT close the finding: U7 proves the clause still fires because the unguarded-ok pattern survives. The residual limit: a fix that adds a MEANINGLESS guard (e.g. `if (set.size > 0) return ok` where the guard does not reflect real resolution) literally satisfies the heuristic without restoring intent. The heuristic is text-pattern, not semantic, so this cheaper-satisfying form remains. U7 records the resistant case and this residual limit rather than claiming a guarantee.",
 		},
 	},
 	{
