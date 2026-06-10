@@ -6,6 +6,7 @@
     "packages": [
       "runtime/*",
       "skills/browser-use",
+      "skills/classic-cinema",
       "skills/coding-task-tracker",
       "skills/create-cli",
       "skills/fallow",
