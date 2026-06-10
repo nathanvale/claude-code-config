@@ -484,10 +484,6 @@ export {
 	type BrowserUseOperateSubcommand,
 	type BrowserUseTargetsSubcommand,
 } from "./command-contract";
-// Barrel re-export so the region modules (discovery/selection/operations) keep
-// their `import type { ParsedBrowserUseCommand } from "./browser-use"` resolving
-// after the type relocated to the parser at U7 (KTD2). Type-only: no cycle.
-export type { ParsedBrowserUseCommand } from "./browser-use-parser";
 export {
 	type BrowserOperationTransportFailure,
 	type BrowserOperationTransportResult,
@@ -499,7 +495,9 @@ export {
 	decodeStdinChunks,
 } from "./browser-use-runtime";
 export {
+	type OperationResolution,
 	type OperationResolutionInput,
+	type OperationTargetHints,
 	resolveOperationTarget,
 } from "./browser-use-selection";
 

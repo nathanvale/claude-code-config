@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+	redactUnsafeText,
+	stringField,
+	truncateText,
+} from "./browser-use-core";
+import {
 	browserUseTargetDiscoveryFailureActions,
 	browserUseTargetSelectionFailureActions,
 } from "./command-contract";
@@ -8,10 +13,37 @@ import {
 // Shared substrate (core leaf)
 // =========================================================================
 //
-// Direct coverage for assertions the U-block suites only made incidentally.
-// The action-id drift guard tests the command-contract action arrays — pure
-// substrate, no CLI driver — so it lives here rather than in the driver test
-// (plan U14).
+// Direct coverage for assertions the U-block suites only made incidentally:
+// the pure substrate functions below, plus the action-id drift guard over the
+// command-contract action arrays (no CLI driver), which lives here because it
+// is substrate-level rather than driver-level (plan U14).
+
+describe("core substrate — pure functions", () => {
+	test("stringField returns strings and rejects non-strings", () => {
+		expect(stringField("hello")).toBe("hello");
+		expect(stringField(42)).toBeUndefined();
+		expect(stringField(null)).toBeUndefined();
+		expect(stringField(undefined)).toBeUndefined();
+	});
+
+	test("truncateText caps length with an ellipsis and leaves short input intact", () => {
+		expect(truncateText("short", 120)).toBe("short");
+		const long = "x".repeat(200);
+		const capped = truncateText(long, 120);
+		expect(capped.length).toBeLessThanOrEqual(120);
+		expect(capped.endsWith("…")).toBe(true);
+	});
+
+	test("redactUnsafeText redacts op:// refs, sensitive flags, and filesystem paths (R32)", () => {
+		expect(redactUnsafeText("token op://vault/item here")).toBe(
+			"token [redacted] here",
+		);
+		expect(redactUnsafeText("read /Users/me/secret.txt")).toBe(
+			"read [redacted]",
+		);
+		expect(redactUnsafeText("run --headed --json")).toBe("run --headed --json");
+	});
+});
 
 describe("core substrate", () => {
 	test("a runtime action id shared across discovery and selection has one summary", () => {

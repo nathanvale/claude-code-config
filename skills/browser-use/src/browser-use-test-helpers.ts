@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { type BrowserUseCommand, browserUseContracts } from "./command-contract";
 import {
 	type BrowserUseRuntime,
@@ -82,10 +81,6 @@ export function parseJson(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
 }
 
-export function stateRunKey(runId: string): string {
-	return createHash("sha256").update(runId).digest("hex").slice(0, 32);
-}
-
 export function contractFlags(command: BrowserUseCommand): string[] {
 	return Object.keys(browserUseContracts[command].flags ?? {}).sort();
 }
@@ -166,6 +161,11 @@ export function enoent(path: string): Error & { code: string } {
 	return error as Error & { code: string };
 }
 
+// Returns `any`-valued records by design: tests read arbitrary nested fields
+// (e.g. `.display.origin`) off a parsed state write and assert on the leaf. A
+// stricter JSON type forces per-assertion narrowing across every call site for
+// no safety gain in test code.
+// biome-ignore lint/suspicious/noExplicitAny: test-only ergonomic surface
 export function parsedWrite(write: { contents: string }): Record<string, any> {
 	return JSON.parse(write.contents);
 }

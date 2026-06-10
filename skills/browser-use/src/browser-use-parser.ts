@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Browser Use argv parser + help (plan U7).
+//
+// Owns argv -> ParsedBrowserUseCommand: family/subcommand resolution, flag
+// collection and unknown-flag rejection, run-id/output-mode derivation, and the
+// help/version renderers. A leaf below the driver: imports down into core only.
+// ParsedBrowserUseCommand is defined here and consumed directly by discovery,
+// selection, operations, and the driver. Public entry: parseBrowserUseArgv.
+// ---------------------------------------------------------------------------
+
 import {
 	type CliWriter,
 	createCliRuntimeSuccessEnvelope,

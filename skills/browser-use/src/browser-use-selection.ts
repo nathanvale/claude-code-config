@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// Browser Target Selection (plan U6 + resolveOperationTarget).
+//
+// Owns select -> persist -> load -> resolve: accept a selection envelope,
+// cross-check it against discovery evidence, write the selected-target state
+// file atomically, and project status. Also owns resolveOperationTarget — the
+// operation-time precedence resolver (hints vs selected-state vs single
+// candidate) — because it depends on this module's state loaders. Imports down
+// into core, runtime, and discovery. Public entries: runTargetsSelect,
+// runTargetsStatus, resolveOperationTarget.
+// ---------------------------------------------------------------------------
+
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -16,9 +28,7 @@ import type {
 	BrowserAdapterId,
 	BrowserTargetCandidate,
 } from "./browser-adapter-router-model";
-// Temporary: ParsedBrowserUseCommand relocates to the parser at U7 (KTD2).
-// Type-only import erases at runtime, so no runtime cycle (U1 precedent).
-import type { ParsedBrowserUseCommand } from "./browser-use";
+import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
 	type OutputMode,

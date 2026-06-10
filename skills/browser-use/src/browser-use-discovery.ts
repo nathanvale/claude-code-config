@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Browser Target Discovery (plan U5).
+//
+// Owns the targets-list workflow: read adapter-proof + route facts through the
+// runtime, project raw pages into display-safe candidates, and emit the
+// discovery success/failure envelopes. Imports down into core (substrate),
+// runtime (I/O port), and transport (mcporter). The driver calls runTargetsList
+// from here; selection and operations read discovery's evidence builders.
+// ---------------------------------------------------------------------------
+
 import {
 	type CliWriter,
 	type RuntimeActionGuidance,
@@ -21,11 +31,7 @@ import type {
 	TargetDiscoveryEnvelope,
 	TargetDiscoveryMode,
 } from "./browser-adapter-router-model";
-// Temporary: ParsedBrowserUseCommand is produced by the parser and relocates
-// there at U7 (KTD2). Until then it lives in the driver; this type-only import
-// erases at runtime, so no runtime cycle (matches the U1 temporary-import
-// precedent). Repoint to ./browser-use-parser at U7.
-import type { ParsedBrowserUseCommand } from "./browser-use";
+import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
 	type OutputMode,

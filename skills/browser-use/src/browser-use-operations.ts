@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Browser Operations (plan U7).
+//
+// Owns the operate workflow: the runOperate pipeline (read inputs -> load
+// binding -> resolve target context -> select page -> run transport) plus the
+// failure bridges that map discovery/selection/transport/resolution failures
+// onto the operation diagnostic taxonomy, and snapshot bounding. Orchestrates
+// every layer below it — imports down into core, runtime, transport, discovery,
+// and selection. Single public entry: runOperate.
+// ---------------------------------------------------------------------------
+
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import {
@@ -27,9 +38,7 @@ import {
 	type BrowserOperationTransportResult,
 	runBrowserUseMcporter,
 } from "./browser-use-transport";
-// Temporary: ParsedBrowserUseCommand relocates to the parser at U7 (KTD2).
-// Type-only import erases at runtime, so no runtime cycle (U1 precedent).
-import type { ParsedBrowserUseCommand } from "./browser-use";
+import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
 	type Failure,
 	type OutputMode,

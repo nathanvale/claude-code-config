@@ -178,6 +178,17 @@ V2 Ideas:
 - After U7, decide whether to keep the barrel re-export permanently or repoint
   all region imports directly to `./browser-use-parser`.
 
+Resolution (post-split review, 2026-06-10):
+
+- Realized the V2 idea. `discovery`/`selection`/`operations` now import
+  `ParsedBrowserUseCommand` directly from `./browser-use-parser` (the leaf that
+  owns it), the `// Temporary` comments are removed, and the driver's barrel
+  re-export of the type is dropped (it was added only to service the transitional
+  up-imports, and the type was not part of the pre-split public surface).
+- The type-level graph now matches the value-level graph: every region-module
+  arrow points down, so the "every arrow points down, acyclic" claim holds
+  literally, not just at runtime.
+
 ## Decision 4: resolveOperationTarget ships inside selection, not operations
 
 ```yaml
@@ -239,9 +250,15 @@ Decision:
 - The real per-step guard is **test-count delta at every carve unit**: after each
   carve, the moved-out block's test count must appear in the new file (count
   original-before vs new-file-after; they must match).
-- Carved files import **directly from their module**
-  (`./browser-use-transport`, etc.), not the barrel, so coverage attributes to
-  the module under test.
+- Carved files import **directly from their module** *where the module exposes a
+  pure seam* — `browser-use-transport.test.ts` (`runBrowserUseMcporter`) and
+  `browser-use-selection.test.ts` (`resolveOperationTarget`, `runScopedKey`) do
+  this, so their coverage attributes to the module under test. Handler modules
+  whose only interface is the CLI envelope (`parser`, `discovery`, `operations`)
+  are driven through `runForTest` from the barrel instead — there is no
+  pure-function surface to import — so their line coverage attributes to the
+  driver, not the module file. This is intentional, not a gap: the behavioral
+  assertions are preserved either way; only the attribution differs.
 
 Rationale:
 

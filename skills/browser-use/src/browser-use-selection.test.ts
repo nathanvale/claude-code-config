@@ -7,6 +7,7 @@ import {
 import {
 	type OperationResolutionInput,
 	resolveOperationTarget,
+	runScopedKey,
 } from "./browser-use-selection";
 import {
 	adapterProofEnvelope,
@@ -15,7 +16,6 @@ import {
 	parseJson,
 	parsedWrite,
 	routeSuccessEnvelope,
-	stateRunKey,
 	TARGETS_CONTRACT,
 } from "./browser-use-test-helpers";
 
@@ -517,7 +517,7 @@ describe("U6 target selection — state write", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(writes[0].path).toBe(
-			`/tmp/states/browser-use-target-state-${stateRunKey("route-run")}.json`,
+			`/tmp/states/browser-use-target-state-${runScopedKey("route-run")}.json`,
 		);
 	});
 
@@ -538,7 +538,7 @@ describe("U6 target selection — state write", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(writes[0].path).toBe(
-			`/tmp/states/browser-use-target-state-${stateRunKey(runId)}.json`,
+			`/tmp/states/browser-use-target-state-${runScopedKey(runId)}.json`,
 		);
 		expect(writes[0].path).not.toContain(runId);
 	});
