@@ -94,6 +94,9 @@ const ADAPTER_PROOF_CONTRACT = "browser-use.browser-adapter-proof";
 // Exported: U5 discovery blocks reference it directly to build inline route
 // envelopes, not only through routeSuccessEnvelope.
 export const ROUTER_CONTRACT = "browser-use.browser-adapter-router";
+// Cross-region: U6 selection envelopes/state and the U7 operation state fixture
+// both stamp this contract id, so it lives here rather than in either file.
+export const TARGETS_CONTRACT = "browser-use.browser-targets";
 
 // A valid Browser Adapter Proof success envelope (schema v2), as written to a
 // --adapter-proof file. Mirrors preflight-browser-adapter's emitted shape.
