@@ -1,0 +1,10 @@
+{
+	"name": "fixture-good-baseline-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-good facade CLI fixture (R9 oracle). A clean minimal facade skill that the auditor MUST pass with zero findings. All bad-* fixtures fork from this with a single injected defect.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

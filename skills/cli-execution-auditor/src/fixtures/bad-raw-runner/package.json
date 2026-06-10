@@ -1,0 +1,10 @@
+{
+	"name": "fixture-bad-raw-runner-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture (bad-raw-runner): forks good-baseline with one injected defect the auditor MUST flag.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

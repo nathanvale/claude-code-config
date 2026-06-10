@@ -1,0 +1,10 @@
+{
+	"name": "fixture-bad-exit-floor-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture (bad-exit-floor): forks good-baseline with one injected defect the auditor MUST flag.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}
