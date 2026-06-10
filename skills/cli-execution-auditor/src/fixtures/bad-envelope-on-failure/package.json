@@ -1,0 +1,13 @@
+{
+	"name": "fixture-bad-envelope-on-failure-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture (bad-envelope-on-failure): a runnable CLI whose --json output on a failure path is NOT a valid structured error envelope. The json-valid-under-failure surface clause MUST flag it.",
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

@@ -6,5 +6,8 @@
 	"description": "Known-bad facade CLI fixture (bad-vacuous-match): forks good-baseline with one injected defect the auditor MUST flag.",
 	"dependencies": {
 		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
 	}
 }

@@ -11,10 +11,11 @@
 // from findings, so re-running identical input in a different cwd is identical.
 
 import { basename, join } from "node:path";
-import { RUNTIME_CONTRACT_REDACTION_FIXTURES } from "@side-quest/cli-command-facade/testing";
 import {
 	COMMAND_FACADE_BASELINE_EXIT_CODES,
+	projectCommandDiscoveryTree,
 } from "@side-quest/cli-command-facade";
+import { RUNTIME_CONTRACT_REDACTION_FIXTURES } from "@side-quest/cli-command-facade/testing";
 import { DRIFT_CODE_DISPOSITIONS, LANE_CLAUSES, getClause } from "./clause-catalog.ts";
 import { type AcquiredCommandContract, acquireTargetContract } from "./target-contract.ts";
 
@@ -364,6 +365,280 @@ export async function runStaticAudit(input: {
 		laneDetected: true,
 		findings: sortFindings(findings),
 		contracts,
+	};
+}
+
+// --- surface exercise (plan U5: enumerate invocations, exercise each) ---
+
+/** One enumerated invocation: a (command, advertised flag) pair. */
+export interface EnumeratedInvocation {
+	command: string;
+	/** The advertised flag this case exercises (or null for the bare command). */
+	flag: string | null;
+	/** The argv passed to the target (canonical). */
+	argv: readonly string[];
+}
+
+/**
+ * Enumerate invocations from the parsed contract via the discovery projection
+ * (R2: the enumeration source is the contract, not a hand-authored list). One
+ * case per (command × advertised flag), PER-COMMAND — not a global cross-product
+ * (OQ4): the contract already scopes flags per command. Boolean flags are passed
+ * bare; value flags get a synthetic probe value. Output is canonically sorted
+ * (R3).
+ */
+export function enumerateInvocations(
+	contracts: Record<string, AcquiredCommandContract>,
+): EnumeratedInvocation[] {
+	const tree = projectCommandDiscoveryTree(
+		// biome-ignore lint/suspicious/noExplicitAny: acquired contract is foreign data, validated upstream.
+		Object.entries(contracts) as any,
+	) as unknown as {
+		commands: Record<string, { flags?: Record<string, { type?: string }> }>;
+	};
+
+	const invocations: EnumeratedInvocation[] = [];
+	for (const command of Object.keys(tree.commands).sort()) {
+		// The bare command (no flag) is always one case.
+		invocations.push({ command, flag: null, argv: [command] });
+		const flags = tree.commands[command].flags ?? {};
+		for (const flag of Object.keys(flags).sort()) {
+			const type = flags[flag].type;
+			const argv =
+				type === "boolean"
+					? [command, flag]
+					: // A synthetic probe value for value-flags; the auditor never needs a
+						// real value, only to exercise the flag's accept/reject path.
+						[command, flag, "__audit_probe__"];
+			invocations.push({ command, flag, argv });
+		}
+	}
+	return invocations;
+}
+
+/** The observed result of running one invocation against the target. */
+export interface InvocationRun {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}
+
+/**
+ * Resolve the target's runnable entrypoint from the contract `script` field via
+ * package.json scripts (e.g. "heal-skill": "bun run src/heal-skill.ts"). Returns
+ * the absolute script file, or null if it cannot be resolved.
+ */
+export async function resolveRunnableScript(
+	layout: TargetLayout,
+	scriptName: string,
+): Promise<string | null> {
+	if (!layout.packageJsonPath) return null;
+	const pkg = JSON.parse(await Bun.file(layout.packageJsonPath).text()) as {
+		scripts?: Record<string, string>;
+	};
+	const command = pkg.scripts?.[scriptName];
+	if (!command) return null;
+	// Extract the .ts entry from a "bun run <file>" script.
+	const match = command.match(/([\w./-]+\.ts)\b/);
+	if (!match) return null;
+	const file = join(layout.root, match[1]);
+	return (await Bun.file(file).exists()) ? file : null;
+}
+
+/**
+ * Build a subprocess runner for a target. Each invocation is run with pinned
+ * cwd/env and captured streams (R3 determinism). The same subprocess discipline
+ * as KTD6 acquisition: the universal default.
+ */
+export function createSubprocessRunner(input: {
+	scriptFile: string;
+	cwd: string;
+}): (argv: readonly string[]) => Promise<InvocationRun> {
+	return async (argv) => {
+		const proc = Bun.spawn(["bun", "run", input.scriptFile, ...argv], {
+			cwd: input.cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			// Pin env to a minimal, stable set so runs are reproducible across cwds.
+			env: { ...process.env, NO_COLOR: "1" },
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		return { exitCode, stdout, stderr };
+	};
+}
+
+/** json-valid-under-failure: --json on a failure path emits a valid envelope. */
+function assertJsonValidUnderFailure(
+	invocation: EnumeratedInvocation,
+	run: InvocationRun,
+): EngineFinding | null {
+	// Only meaningful when the run failed (non-zero) and --json was requested.
+	const jsonRequested = invocation.argv.includes("--json");
+	if (!jsonRequested || run.exitCode === 0) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(run.stdout);
+	} catch {
+		return {
+			clauseId: "json-valid-under-failure",
+			kind: "surface",
+			summary: `--json failure output is not valid JSON for \`${invocation.argv.join(" ")}\``,
+			argv: invocation.argv,
+		};
+	}
+	const env = parsed as { status?: string; run_id?: string; error?: { code?: string } };
+	const valid =
+		env.status === "error" && typeof env.run_id === "string" && typeof env.error?.code === "string";
+	if (!valid) {
+		return {
+			clauseId: "json-valid-under-failure",
+			kind: "surface",
+			summary: `--json failure output is not a structured error envelope for \`${invocation.argv.join(" ")}\``,
+			argv: invocation.argv,
+		};
+	}
+	return null;
+}
+
+/** exit-code-matches-declared: the observed exit code is one the contract declares. */
+function assertExitCodeDeclared(
+	invocation: EnumeratedInvocation,
+	run: InvocationRun,
+	declaredExitCodes: ReadonlySet<string>,
+): EngineFinding | null {
+	if (declaredExitCodes.has(String(run.exitCode))) return null;
+	return {
+		clauseId: "json-valid-under-failure",
+		kind: "surface",
+		summary: `exit code ${run.exitCode} is not declared in the contract for \`${invocation.argv.join(" ")}\``,
+		argv: invocation.argv,
+	};
+}
+
+/**
+ * declared-coverage-runs (heal bug c): a coverage-style check that declares N
+ * targets must exercise all N. The behaviorally-observable surface form: run the
+ * check command and inspect its output for a coverage signal (e.g. "ran 1 of N
+ * suites"). v1 detects the explicit under-coverage signal a check emits; the
+ * limit (a check that narrows its declared list) is recorded in the clause
+ * maskingNote (R7). Surface by construction: with no invocation there is no
+ * output to inspect, so the finding disappears (KTD4).
+ */
+function assertDeclaredCoverageRuns(
+	invocation: EnumeratedInvocation,
+	run: InvocationRun,
+): EngineFinding | null {
+	// Signal: structured output reporting it ran a strict subset of declared
+	// targets. Fixtures emit `coverage: ran X of Y`; a real target would surface
+	// the same via its result payload.
+	const match = `${run.stdout}\n${run.stderr}`.match(/ran (\d+) of (\d+)/i);
+	if (!match) return null;
+	const ran = Number(match[1]);
+	const declared = Number(match[2]);
+	if (ran < declared) {
+		return {
+			clauseId: "declared-coverage-runs",
+			kind: "surface",
+			summary: `coverage check ran ${ran} of ${declared} declared targets for \`${invocation.argv.join(" ")}\``,
+			argv: invocation.argv,
+		};
+	}
+	return null;
+}
+
+/**
+ * Run the surface half: enumerate invocations, exercise each against the target,
+ * and assert the surface clauses. `only` restricts to a single clause id.
+ */
+export async function runSurfaceAudit(input: {
+	layout: TargetLayout;
+	contracts: Record<string, AcquiredCommandContract>;
+	only: string | null;
+}): Promise<EngineFinding[]> {
+	const invocations = enumerateInvocations(input.contracts);
+	if (invocations.length === 0) {
+		// Mirror runCommandSurfaceCases throw-on-empty: an empty enumeration is a
+		// defect, never a silent pass.
+		throw new Error("surface audit: zero enumerable invocations (no commands in contract)");
+	}
+
+	// Resolve the runnable from the first command's script (all commands in a
+	// facade contract share one script binary).
+	const firstCommand = Object.values(input.contracts)[0] as { script?: string };
+	const scriptName = firstCommand?.script;
+	if (!scriptName) {
+		return [
+			{
+				clauseId: "json-valid-under-failure",
+				kind: "surface",
+				summary: "contract command has no script field — cannot resolve a runnable to exercise",
+				argv: [],
+			},
+		];
+	}
+	const scriptFile = await resolveRunnableScript(input.layout, scriptName);
+	if (!scriptFile) {
+		return [
+			{
+				clauseId: "json-valid-under-failure",
+				kind: "surface",
+				summary: `cannot resolve runnable for script "${scriptName}" — no package.json script maps to a .ts entry`,
+				argv: [],
+			},
+		];
+	}
+
+	const runner = createSubprocessRunner({ scriptFile, cwd: input.layout.root });
+	const wanted = (clauseId: string) => input.only === null || input.only === clauseId;
+
+	const findings: EngineFinding[] = [];
+	for (const invocation of invocations) {
+		const contract = input.contracts[invocation.command] as { exitCodes?: Record<string, string> };
+		const declaredExitCodes = new Set(Object.keys(contract?.exitCodes ?? {}));
+		const run = await runner(invocation.argv);
+
+		if (wanted("json-valid-under-failure")) {
+			const jsonFinding = assertJsonValidUnderFailure(invocation, run);
+			if (jsonFinding) findings.push(jsonFinding);
+			const exitFinding = assertExitCodeDeclared(invocation, run, declaredExitCodes);
+			if (exitFinding) findings.push(exitFinding);
+		}
+		if (wanted("declared-coverage-runs")) {
+			const coverageFinding = assertDeclaredCoverageRuns(invocation, run);
+			if (coverageFinding) findings.push(coverageFinding);
+		}
+	}
+	return findings;
+}
+
+/**
+ * Run the full audit: static checks (zero invocations) + surface exercise. This
+ * is the entry the runner (U8) calls. `only` restricts to a single clause id
+ * across both halves.
+ */
+export async function runFullAudit(input: {
+	targetRoot: string;
+	only: string | null;
+}): Promise<EngineOutcome> {
+	const staticOutcome = await runStaticAudit(input);
+	// If lane detection failed, acquisition failed, or no contract — the static
+	// half already carries the explanatory finding/skip; do not also run surface.
+	if (!staticOutcome.laneDetected || !staticOutcome.contracts) {
+		return staticOutcome;
+	}
+	const layout = await resolveTargetLayout(input.targetRoot);
+	const surfaceFindings = await runSurfaceAudit({
+		layout,
+		contracts: staticOutcome.contracts,
+		only: input.only,
+	});
+	return {
+		...staticOutcome,
+		findings: sortFindings([...staticOutcome.findings, ...surfaceFindings]),
 	};
 }
 

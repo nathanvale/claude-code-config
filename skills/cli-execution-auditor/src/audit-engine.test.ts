@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	detectFacadeLane,
+	enumerateInvocations,
 	resolveTargetLayout,
+	runFullAudit,
 	runStaticAudit,
+	runSurfaceAudit,
 	sortFindings,
 } from "./audit-engine";
 import { acquireTargetContract, findContractByShape } from "./target-contract";
@@ -167,5 +170,128 @@ describe("determinism (R3)", () => {
 			"exit-floor:b",
 			"vacuous-match:z",
 		]);
+	});
+});
+
+// --- surface exercise: enumeration (U5, R2) ---
+
+describe("surface enumeration", () => {
+	test("Covers R2. enumeration source is the contract, in canonical sort order", async () => {
+		const acquisition = await acquireTargetContract(
+			join(HEAL_SKILL_ROOT, "src", "command-contract.ts"),
+		);
+		expect(acquisition.ok).toBe(true);
+		if (!acquisition.ok) return;
+		const invocations = enumerateInvocations(acquisition.contracts);
+		// One bare-command case per command + one per advertised flag, per-command.
+		const labels = invocations.map((i) => i.argv.join(" "));
+		// Canonical: commands sorted, flags sorted within command.
+		expect(labels).toEqual([...labels].sort());
+		// Bare commands present.
+		expect(labels).toContain("check");
+		expect(labels).toContain("repair");
+		expect(labels).toContain("explain");
+		// A boolean flag is passed bare; a value flag gets a probe value.
+		expect(labels).toContain("check --json");
+		expect(labels).toContain("check --only __audit_probe__");
+	});
+
+	test("enumeration is per-command, not a global cross-product (OQ4)", async () => {
+		const acquisition = await acquireTargetContract(
+			join(HEAL_SKILL_ROOT, "src", "command-contract.ts"),
+		);
+		if (!acquisition.ok) return;
+		const invocations = enumerateInvocations(acquisition.contracts);
+		// explain has no --execute flag, so no `explain --execute` case exists.
+		const labels = invocations.map((i) => i.argv.join(" "));
+		expect(labels).not.toContain("explain --execute");
+	});
+
+	test("empty enumeration throws, never a silent pass (mirrors runCommandSurfaceCases)", async () => {
+		await expect(
+			runSurfaceAudit({
+				layout: await resolveTargetLayout(HEAL_SKILL_ROOT),
+				contracts: {},
+				only: null,
+			}),
+		).rejects.toThrow("zero enumerable invocations");
+	});
+});
+
+// --- surface exercise: each clause fires (U5, KTD4) ---
+
+describe("surface audit — each clause fires", () => {
+	test("live heal-skill is clean across every enumerated invocation", async () => {
+		const outcome = await runFullAudit({ targetRoot: HEAL_SKILL_ROOT, only: null });
+		expect(outcome.findings).toEqual([]);
+	});
+
+	test("good-baseline is clean under the full audit", async () => {
+		const outcome = await runFullAudit({ targetRoot: fixture("good-baseline"), only: null });
+		expect(outcome.findings).toEqual([]);
+	});
+
+	test("a broken --json failure envelope fires json-valid-under-failure", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: "json-valid-under-failure",
+		});
+		const finding = outcome.findings.find((f) => f.clauseId === "json-valid-under-failure");
+		expect(finding).toBeDefined();
+		expect(finding?.kind).toBe("surface");
+		expect(finding?.argv.length).toBeGreaterThan(0);
+	});
+
+	test("a partial-coverage check fires declared-coverage-runs (heal bug c shape)", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-partial-coverage"),
+			only: "declared-coverage-runs",
+		});
+		const finding = outcome.findings.find((f) => f.clauseId === "declared-coverage-runs");
+		expect(finding).toBeDefined();
+		expect(finding?.kind).toBe("surface");
+		expect(finding?.summary).toContain("ran 1 of 4");
+	});
+});
+
+// --- surface exercise: KTD4 behavioral invariant ---
+
+describe("surface findings are invocation-required (KTD4)", () => {
+	test("a surface finding carries the invocation argv that surfaced it", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: "json-valid-under-failure",
+		});
+		const finding = outcome.findings.find((f) => f.clauseId === "json-valid-under-failure");
+		// Behavioral: the finding names a concrete invocation (e.g. `check --json`),
+		// which is what distinguishes surface from static (static argv is []).
+		expect(finding?.argv).toContain("--json");
+	});
+
+	test("the surface finding disappears when surface checks are not run (static-only)", async () => {
+		// runStaticAudit never exercises invocations; the bad-envelope defect is
+		// behavioral, so the static half alone produces no json-valid finding.
+		const staticOnly = await runStaticAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: null,
+		});
+		expect(staticOnly.findings.map((f) => f.clauseId)).not.toContain("json-valid-under-failure");
+	});
+});
+
+// --- surface determinism (R3) ---
+
+describe("surface determinism (R3)", () => {
+	test("Covers R3. Surface path run twice in different cwds produces identical findings", async () => {
+		const target = fixture("bad-partial-coverage");
+		const originalCwd = process.cwd();
+		const first = await runFullAudit({ targetRoot: target, only: null });
+		process.chdir(tmpdir());
+		try {
+			const second = await runFullAudit({ targetRoot: target, only: null });
+			expect(second.findings).toEqual(first.findings);
+		} finally {
+			process.chdir(originalCwd);
+		}
 	});
 });
