@@ -30,6 +30,24 @@ cheaper-to-satisfy form than the real fix) or names the known cheaper-satisfying
 form (a recorded v1 limit). `no-raw-runner`, `vacuous-match`, and
 `declared-coverage-runs` carry documented limits; the rest are resistant.
 
+## Clause dependencies (co-fire map)
+
+Clauses are not fully independent: a single defect can trip more than one clause
+when they read the same input surface. The fixture corpus asserts each bad
+fixture fires AT LEAST its target clause plus a documented co-fire set — never
+"exactly one" — so a legitimate cascade is an expected co-fire, not a noisy
+regression.
+
+- **redaction-discipline** and **help-flag-alignment** both read projected
+  contract text (summaries, flag descriptions, usage). A defect in that text can
+  trip both.
+- **json-valid-under-failure** and **exit-code-matches-declared** both read a
+  failing invocation's output; a broken failure path can trip both.
+
+In v1 every fixture is a complete runnable forked from `good-baseline` with one
+injected defect, so the observed co-fire sets are empty. The corpus structure
+keeps the co-fire column so a future cascading defect stays documented.
+
 ## Floor-clause provenance
 
 Agent-native floor clauses (stderr discipline, run correlation, structured
