@@ -178,13 +178,13 @@ Then:
 
 ## Implementation Note
 
-The skill does template fill via a Python script written to disk, then executed. **Do NOT use heredoc/here-string input** (`python3 << 'EOF'`, `python3 -c`, etc.) — Nathan's `PreToolUse:Bash` git-safety hook blocks interpreter commands receiving stdin/heredoc with the error: *"Interpreter commands receiving heredoc/here-string input cannot be safety-analyzed reliably."*
+The skill does template fill via the committed `src/fill-ticket.ts` command. **Do NOT use heredoc/here-string input** (`bun -e`, `python3 -c`, `node -e`, `<< 'EOF'`, etc.) — Nathan's `PreToolUse:Bash` git-safety hook blocks interpreter commands receiving stdin/heredoc with the error: *"Interpreter commands receiving heredoc/here-string input cannot be safety-analyzed reliably."*
 
 Required pattern:
 
-1. Run `python3 scripts/parse-tickets.py --session-id $SID --spec "1+1"` to build `/tmp/cc-tickets-selected.json`
-2. Run `python3 scripts/fill-ticket.py --tickets-file /tmp/cc-tickets-selected.json ...` — the script prints the output HTML path
+1. Run `bun run src/parse-tickets.ts --session-id $SID --spec "1+1"` to build `/tmp/cc-tickets-selected.json`
+2. Run `bun run src/fill-ticket.ts --tickets-file /tmp/cc-tickets-selected.json ...` — the script prints the output HTML path
 3. The output file is `/tmp/classic-cinema-ticket-<ts>.html`
 4. After the email sends successfully, clean up temp files
 
-**NEVER use inline Python** (`python3 -c`, heredocs, etc.) — the git-safety hook blocks it. All logic lives in the committed scripts.
+**NEVER use an inline interpreter** (`bun -e`, `python3 -c`, heredocs, etc.) — the git-safety hook blocks it. All logic lives in the committed `src/*.ts` commands.

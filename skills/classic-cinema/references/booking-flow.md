@@ -25,10 +25,10 @@ All data comes from public Classic Cinemas APIs via `curl`. No browser dispatch 
 
 ```bash
 # Browse mode — full listing:
-python3 scripts/list-movies.py
+bun run src/list-movies.ts
 
 # Express mode — fuzzy match a movie:
-python3 scripts/list-movies.py --movie "faraway"
+bun run src/list-movies.ts --movie "faraway"
 ```
 
 The script fetches both APIs, filters to today (AEST), joins on `session.movieId === movie.vistaId`, and prints one JSON object per line. It also writes `/tmp/cc-sessions.json` and `/tmp/cc-movies.json` for downstream scripts.
@@ -38,7 +38,7 @@ The script fetches both APIs, filters to today (AEST), joins on `session.movieId
 {"index": 1, "name": "...", "vistaId": "...", "rating": "PG", "runtime": "...", "sessions": [{"id": "...", "time": "10:00am", "screen": "Screen 3", "screenNumber": 3, "date": "..."}]}
 ```
 
-**IMPORTANT:** Always run this script via `python3 scripts/list-movies.py` — never use inline Python or curl+inline-processing. The git-safety hook blocks inline interpreter execution.
+**IMPORTANT:** Always run this script via `bun run src/list-movies.ts` — never use inline Python or curl+inline-processing. The git-safety hook blocks inline interpreter execution.
 
 Then classify intent per SKILL.md and route to Express or Browse.
 
@@ -52,10 +52,10 @@ If movie was parsed from args, fuzzy-match (case-insensitive substring) against 
 
 For the matched movie, calculate availability using the dedicated script (it auto-fetches seatmaps from the API if not already cached):
 ```bash
-python3 scripts/check-availability.py --session-ids 122897,122870,122871
+bun run src/check-availability.ts --session-ids 122897,122870,122871
 ```
 
-**IMPORTANT:** Always use `check-availability.py` — never use inline Python or shell processing. The git-safety hook blocks inline interpreter execution. No separate `curl` step is needed — the script fetches missing seatmaps automatically.
+**IMPORTANT:** Always use `check-availability.ts` — never use inline Python or shell processing. The git-safety hook blocks inline interpreter execution. No separate `curl` step is needed — the script fetches missing seatmaps automatically.
 
 Output is one JSON line per session: `{"sid": 122897, "screen": "Screen 3", "available": 141, "total": 150, "pct": 94}`
 
@@ -78,7 +78,7 @@ If time was in args, auto-select the nearest non-SOLD-OUT session. Otherwise ask
 
 ```bash
 # Probe writes /tmp/cc-tickets.json
-python3 scripts/parse-tickets.py --session-id $SESSION_ID --spec "1"
+bun run src/parse-tickets.ts --session-id $SESSION_ID --spec "1"
 jq -r '.ticketTypes[] | select(.categoryId == 2) | .name' /tmp/cc-tickets.json
 ```
 
@@ -90,7 +90,7 @@ PG-rated sessions are still kid-friendly; Levi just gets billed as an adult. Nev
 
 Then parse the spec:
 ```bash
-python3 scripts/parse-tickets.py --session-id $SESSION_ID --spec "1+1"
+bun run src/parse-tickets.ts --session-id $SESSION_ID --spec "1+1"
 ```
 
 The script auto-fetches `/tmp/cc-tickets.json` from the API if not already cached, filters to `categoryId == 2` (public ticket types), and outputs a JSON summary:
@@ -98,9 +98,9 @@ The script auto-fetches `/tmp/cc-tickets.json` from the API if not already cache
 {"tickets": [...], "bookingFeeCents": 390, "totalCents": 4790, "summary": "1x Adult ($27.00) + 1x Child ($17.00) + fees ($3.90) = $47.90", "selectedFile": "/tmp/cc-tickets-selected.json"}
 ```
 
-It also writes `/tmp/cc-tickets-selected.json` — the file that `fill-ticket.py --tickets-file` expects.
+It also writes `/tmp/cc-tickets-selected.json` — the file that `fill-ticket.ts --tickets-file` expects.
 
-**IMPORTANT:** Always use `parse-tickets.py` — never use inline Python to parse ticket data. The git-safety hook blocks inline interpreter execution.
+**IMPORTANT:** Always use `parse-tickets.ts` — never use inline Python to parse ticket data. The git-safety hook blocks inline interpreter execution.
 
 **Spec format:** positional slots map to Adult, Child, Concession, Senior, Student, Pension. E.g. `"1+1"` = 1 Adult + 1 Child, `"2"` = 2 Adult.
 
@@ -125,9 +125,9 @@ Screen 3 — 🟢 94% available (141/150 seats)
   5. 🗺️  Pick exact seats (show full map)
 ```
 
-If zone was in args AND availability >20%, auto-select via `pick-seats.py`:
+If zone was in args AND availability >20%, auto-select via `pick-seats.ts`:
 ```bash
-python3 scripts/pick-seats.py --seatmap-file /tmp/cc-seatmap-$SESSION_ID.json --zone middle --count 2
+bun run src/pick-seats.ts --seatmap-file /tmp/cc-seatmap-$SESSION_ID.json --zone middle --count 2
 ```
 
 Present result:
@@ -136,7 +136,7 @@ Present result:
 Happy with these, or pick different? (yes / show map / re-pick)
 ```
 
-If "pick exact seats" or `pick-seats.py` exits non-zero, render the full ASCII seat map (see Seat Map Rendering below).
+If "pick exact seats" or `pick-seats.ts` exits non-zero, render the full ASCII seat map (see Seat Map Rendering below).
 
 ### Confirm + Send
 
@@ -156,7 +156,7 @@ AskUserQuestion: **Yes send** / **No cancel**
 
 If yes:
 1. Write tickets JSON to `/tmp/cc-tickets-selected.json`
-2. Run `fill-ticket.py` (see [template-fill.md](template-fill.md) for substitution spec)
+2. Run `fill-ticket.ts` (see [template-fill.md](template-fill.md) for substitution spec)
 3. Run `gog gmail send` (see [email-send.md](email-send.md) for invocation)
 4. On success: append to booking log (see [booking-log.md](booking-log.md)), clean up temp files
 5. Confirm: "Sent! Enjoy The Magic Faraway Tree at 10:00 AM. 🍿"
@@ -197,9 +197,9 @@ If yes:
 
 **Always show raw numbers:** `🟢 94% available (141/150 seats)`
 
-**Calculation** is handled by `check-availability.py` (never inline):
+**Calculation** is handled by `check-availability.ts` (never inline):
 ```bash
-python3 scripts/check-availability.py --session-ids 122897,122870,122871
+bun run src/check-availability.ts --session-ids 122897,122870,122871
 ```
 Logic: `total` = seats where `typeId != "gap"`, `unavail` = seats where `sold == true` OR `unavailable == true`, `available = total - unavail`, `pct = (available / total) * 100`.
 
@@ -242,9 +242,9 @@ Row letters come from `rows[].name`. Skip gap rows. Use the API data, not hardco
 | `curl` non-200 on any API | Retry once. If still failing: "Classic Cinemas API is down — try again later" |
 | Sessions API returns no sessions for today | "No sessions showing today at Elsternwick" |
 | Seating-map returns empty `rows[]` | Show warning, ask Nathan to type seat codes manually |
-| `pick-seats.py` exits non-zero | Render full ASCII map, ask Nathan to pick manually |
-| `parse-tickets.py` errors `Ticket type 'X' not available` | The session offers a restricted set (e.g. throwback screenings are often Adult-only). The script's stderr now lists available types — surface them to Nathan with prices, then ask which spec to use. Don't auto-substitute. |
-| `fill-ticket.py` exits non-zero | Show stderr + temp data paths. Do NOT send email |
+| `pick-seats.ts` exits non-zero | Render full ASCII map, ask Nathan to pick manually |
+| `parse-tickets.ts` errors `Ticket type 'X' not available` | The session offers a restricted set (e.g. throwback screenings are often Adult-only). The script's stderr now lists available types — surface them to Nathan with prices, then ask which spec to use. Don't auto-substitute. |
+| `fill-ticket.ts` exits non-zero | Show stderr + temp data paths. Do NOT send email |
 | `gog gmail send` non-zero | Keep temp HTML, show error + path, offer retry command |
 | Fuzzy match returns 0 movies | "No movies matching '{query}' today. Here's what's on:" → Browse mode |
 | Fuzzy match returns 3+ movies | Show disambiguation list, ask Nathan to pick |
