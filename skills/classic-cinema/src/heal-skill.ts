@@ -44,8 +44,8 @@ interface Finding {
 const CHECK_EXPLAIN: Record<string, string> = {
 	"scripts-help":
 		"Each src/*.ts command must run `--help` and exit 0. A failure means a command is broken or has a parse error. Not auto-repairable — fix the source, then rerun. (human handoff)",
-	"fill-ticket-test":
-		"The fill-ticket + helpers test suite must pass. A failure means the email template fill drifted. Not auto-repairable — fix the code/test. (human handoff)",
+	tests:
+		"All test suites (cinema-api, pick-seats, fill-ticket, booking-log) must pass via the test-runner skill. A failure means a command's behaviour drifted. Not auto-repairable — fix the code/test. (human handoff)",
 	"template-frozen":
 		"references/assets/ticket-template.html must match the committed hash in ticket-template.sha256. A mismatch means the frozen template changed. Not auto-repairable — confirm intentional and update the hash. (human handoff)",
 	"booking-log-valid":
@@ -161,28 +161,49 @@ async function checkScriptsHelp(): Promise<Finding> {
 	};
 }
 
-async function checkFillTicketTest(): Promise<Finding> {
-	const proc = Bun.spawn(["bun", "test", join(SKILL_ROOT, "src", "fill-ticket.test.ts")], {
-		cwd: SKILL_ROOT,
-		stdout: "ignore",
-		stderr: "ignore",
-	});
+const TEST_FILES = [
+	"src/cinema-api.test.ts",
+	"src/pick-seats.test.ts",
+	"src/fill-ticket.test.ts",
+	"src/booking-log.test.ts",
+] as const;
+
+async function checkTests(): Promise<Finding> {
+	// Route through the test-runner skill, never raw `bun test` (code-quality rule).
+	// Run the full suite — verifying only one file would let a broken sibling read
+	// as healthy.
+	const runner = join(SKILL_ROOT, "..", "test-runner", "src", "test-runner.sh");
+	if (!(await Bun.file(runner).exists())) {
+		return {
+			checkId: "tests",
+			status: "finding",
+			summary: "test-runner skill not found; skipping test verification",
+			detail: `expected ${runner}`,
+			autoRepairable: false,
+			nextAction: "report: test coverage unverified (degraded) — install/locate the test-runner skill",
+		};
+	}
+	const proc = Bun.spawn(
+		[runner, "run", "--cwd", SKILL_ROOT, "--quiet", "--", ...TEST_FILES],
+		{ stdout: "ignore", stderr: "ignore" },
+	);
 	const code = await proc.exited;
 	return code === 0
 		? {
-				checkId: "fill-ticket-test",
+				checkId: "tests",
 				status: "ok",
-				summary: "fill-ticket test suite passes",
+				summary: `all ${TEST_FILES.length} test suites pass`,
 				autoRepairable: false,
 				nextAction: "none",
 			}
 		: {
-				checkId: "fill-ticket-test",
+				checkId: "tests",
 				status: "handoff",
-				summary: "fill-ticket test suite failed",
-				detail: `bun test exit ${code}`,
+				summary: "test suite failed",
+				detail: `test-runner exit ${code}`,
 				autoRepairable: false,
-				nextAction: "human: run bun test src/fill-ticket.test.ts and fix",
+				nextAction:
+					"human: run skills/test-runner/src/test-runner.sh run --cwd skills/classic-cinema -- src/*.test.ts and fix",
 			};
 }
 
@@ -340,7 +361,7 @@ async function checkOwnerPaths(): Promise<Finding> {
 
 const CHECKS: Record<string, () => Promise<Finding>> = {
 	"scripts-help": checkScriptsHelp,
-	"fill-ticket-test": checkFillTicketTest,
+	tests: checkTests,
 	"template-frozen": checkTemplateFrozen,
 	"booking-log-valid": checkBookingLogValid,
 	"productivity-yml": checkProductivityYml,
