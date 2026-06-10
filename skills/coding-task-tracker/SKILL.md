@@ -42,6 +42,7 @@ Use this for Notion-backed Coding Task Tracker work.
 - Do not run read-back loops after every note.
 - Return confirmed creates from `data.created`, plus skipped duplicates.
 - Do not invent task IDs; report `task_id`, `page_url`, or `page_id` only when the create output includes them.
+- Enrich created tasks by `--page-id <page_id>` from create output; `--task-id` accepts only the short numeric id (`29` / `TASK-29`), not the page UUID.
 
 ## Safety
 
@@ -109,6 +110,7 @@ Use this for Notion-backed Coding Task Tracker work.
 - From `skills/coding-task-tracker`, pass `--owner <path>` for owner-specific reads.
 - `bind` writes owner config; run it only for the path that should own the tracker.
 - Slow task capture: avoid create-note-readback loops; capture tasks first, enrich only when needed.
+- `No matching ... task found` after create: target writes with `--page-id <uuid>`; `--task-id` is short-numeric only. See `bun run coding-task-tracker note --help`.
 
 ## Verification
 
