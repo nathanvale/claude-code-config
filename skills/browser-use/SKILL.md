@@ -56,7 +56,9 @@ Prove Warm Chrome, then route through the Router continuation chain:
 5. If Router asks for attachment proof: `preflight-browser-adapter check --adapter <id>` → Adapter Proof artifact, then rerun `prepare` + `route` with fresh proof.
 6. `browser-adapter-router status` against a prepared envelope for human route projection.
 
-Exact flags and env vars: run `<command> --help` or read `skills/browser-use/src/command-contract.ts`. Follow each command's `continuation.next_action_id`; obey `continuation.constraints`.
+Exact flags and env vars: run `<command> --help` or read `skills/browser-use/src/command-contract.ts`. Follow each command's `continuation.next_action_id`; obey `continuation.constraints` — skip adapter fallback and cold-browser fallback when forbidden.
+
+Continuation precedence: a hard preflight failure governs; only then does a `continuation.next_action_id` apply. A login/MFA wall hit after preflight passes is an app step in the warm profile, not a preflight failure — keep driving the page.
 
 After route success, list and select Browser Target Candidates through the proven adapter:
 
