@@ -301,17 +301,24 @@ async function checkOwnerPaths(): Promise<Finding> {
 		};
 	}
 	const md = await skillMd.text();
-	// Backticked repo-local paths under references/ or src/ or scripts/.
-	// Skip glob/placeholder patterns (e.g. `src/*.ts`, `scripts/<name>.py`) — they
-	// are illustrative, not concrete owner paths.
+	// This skill's own owner files appear as skills/classic-cinema/<references|src>/<file>
+	// — sometimes bare, sometimes embedded in a command line. Pull the concrete
+	// file token (one with an extension) wherever it appears, and resolve from the
+	// repo root (two levels above SKILL_ROOT, i.e. skills/classic-cinema). Skip
+	// glob/placeholder forms (src/*.ts, src/<command>.ts) — they are illustrative.
+	const repoRoot = join(SKILL_ROOT, "..", "..");
 	const referenced = new Set(
-		[...md.matchAll(/`((?:references|src|scripts)\/[^`]+)`/g)]
-			.map((m) => m[1])
+		[
+			...md.matchAll(
+				/\bskills\/classic-cinema\/(?:references|src)\/[A-Za-z0-9._/-]+\.[A-Za-z0-9]+/g,
+			),
+		]
+			.map((m) => m[0])
 			.filter((rel) => !/[*<>]/.test(rel)),
 	);
 	const missing: string[] = [];
 	for (const rel of referenced) {
-		if (!(await Bun.file(join(SKILL_ROOT, rel)).exists())) missing.push(rel);
+		if (!(await Bun.file(join(repoRoot, rel)).exists())) missing.push(rel);
 	}
 	return missing.length === 0
 		? {
