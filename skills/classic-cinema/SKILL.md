@@ -87,7 +87,7 @@ Run from the repo root. Each `--help` owns its flags; inspect it rather than gue
 
 ## Gotchas
 
-- **Append to the booking log from a file, never inline `jq -n`/`python -c`.** The git-safety hook strips inline interpreter expansion mid-write, producing a multi-line pretty-printed fragment that corrupts the JSONL. `parse-tickets.ts` and the send flow write through `Bun.write`; if you ever hand-append, write the line to a temp file and `>>` it. Recover with `heal-skill repair --only booking-log-valid --execute`.
+- **Always emit booking-log entries with `jq -cn` (compact), never bare `jq -n`.** `jq -n` pretty-prints multi-line by default, so one entry becomes many lines and corrupts the one-line-per-entry JSONL. (Verified 2026-06-11: the cause is the `-n`-pretty default, not a git-safety hook — that hook is retired.) `parse-tickets.ts` and the send flow write through `Bun.write`; if you hand-append, build with `jq -cn` and `>>` it. Recover with `heal-skill repair --only booking-log-valid --execute`.
 - **`fill-ticket.ts` uses `replaceAll`, not `replace`.** `{{MOVIE_TITLE}}` appears 3× and `{{WEB_VIEW_URL}}` 2× in the frozen template; a single-occurrence replace would ship literal `{{…}}` tokens in the email.
 
 ## Verification

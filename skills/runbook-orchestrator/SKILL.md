@@ -4,7 +4,7 @@ description: "Orchestrate iterative code-review runbooks driven by /goal. Status
 role: control-plane
 argument-hint: "[status|launch|new|audit|report] [area-path] [seam-name|--all]"
 disable-model-invocation: true
-allowed-tools: [Read, Edit, Write, Glob, Grep, "Bash(find:*)", "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git cat-file:*)", "Bash(git log:*)"]
+allowed-tools: [Read, Edit, Write, Glob, Grep, "Bash(find:*)", "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git cat-file:*)", "Bash(git log:*)", "Bash(git show:*)"]
 ---
 
 # Runbook Orchestrator

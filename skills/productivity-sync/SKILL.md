@@ -1293,7 +1293,7 @@ Present grouped by confidence. High-confidence items offered to add directly; lo
   EOF
   python3 /tmp/decode-email.py /path/to/email.json
   ```
-- For most sync purposes, the email subject + sender is sufficient to triage action items — only decode the body when the subject is ambiguous
+- Always decode and read the full body before presenting an email — the `email-read-fully` rule and the `productivity-connectors` body-reading invariant require it on every surfaced email; subject + sender is never sufficient. Extract products, amounts, actions, and dates; never ask Nathan what an accessible email says.
 
 ### Email search — query is a positional argument, not a flag
 
