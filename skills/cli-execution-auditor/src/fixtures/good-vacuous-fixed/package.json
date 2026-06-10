@@ -1,0 +1,13 @@
+{
+	"name": "fixture-good-vacuous-fixed-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Genuinely-fixed variant of bad-vacuous-match: adds a real empty-set guard so an empty referenced set is reported as a finding, not ok. The vacuous-match clause MUST pass this (the finding closes correctly).",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
+	}
+}

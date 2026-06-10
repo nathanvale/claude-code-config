@@ -190,6 +190,7 @@ function listSkillFiles(root: string): { files: string[]; diagnostics: Diagnosti
 	const files: string[] = [];
 	const diagnostics: Diagnostic[] = [];
 	for (const entry of entries) {
+		if (entry === "archive") continue;
 		const skillPath = path.join(skillsDir, entry);
 		let skillStat: Stats;
 		try {
@@ -215,8 +216,8 @@ function listSkillFiles(root: string): { files: string[]; diagnostics: Diagnosti
 }
 
 function extractFrontmatter(text: string): string | undefined {
-	const match = text.match(/^---\n([\s\S]*?)\n---\n/);
-	return match?.[1];
+	const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+	return match?.[1]?.replace(/\r\n/g, "\n");
 }
 
 function unquoteYamlScalar(value: string): string {
@@ -431,17 +432,23 @@ function printPlain(result: AuditResult): void {
 }
 
 function main(): void {
-	const options = parseArgs(Bun.argv.slice(2));
-	const result = audit(options);
-	if (options.json) {
-		console.log(JSON.stringify(result, null, 2));
-	} else {
-		printPlain(result);
-	}
-	const hasErrors = result.status === "error";
-	const hasStrictWarnings = options.strict && result.status === "warning";
-	if (hasErrors || hasStrictWarnings) {
-		process.exitCode = 1;
+	try {
+		const options = parseArgs(Bun.argv.slice(2));
+		const result = audit(options);
+		if (options.json) {
+			console.log(JSON.stringify(result, null, 2));
+		} else {
+			printPlain(result);
+		}
+		const hasErrors = result.status === "error";
+		const hasStrictWarnings = options.strict && result.status === "warning";
+		if (hasErrors || hasStrictWarnings) {
+			process.exitCode = 1;
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`skill-description-audit: ${message}`);
+		process.exitCode = 2;
 	}
 }
 

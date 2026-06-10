@@ -1,0 +1,13 @@
+{
+	"name": "fixture-bad-redaction-leak-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture (bad-redaction-leak): forks good-baseline with one injected defect the auditor MUST flag.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
+	}
+}

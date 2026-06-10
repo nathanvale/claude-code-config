@@ -55,8 +55,8 @@ and progress visible (global tone/accessibility defaults already apply).
 - **Deep**: 15 minutes, only when ownership, scope, architecture, or product
   direction is at stake.
 
-Normal Decision Mode should fit roughly 180-300 words. Use 3-5 sections, not
-every section every time.
+Fit normal Decision Mode responses into roughly 180-300 words. Use 3-5
+sections, not every section every time.
 
 ## Output Contract
 
@@ -89,5 +89,5 @@ control details.
   useful sub-decision, and ask only for that answer.
 - If the conversation drifts, restate what is actually being decided.
 - After the user chooses, briefly restate the accepted decision and next step.
-- If the decision should become durable, name the likely owner: plan, ADR,
-  `CONTEXT.md`, `AGENTS.md`, package map, or runbook. Ask before editing.
+- For durable decisions, name the likely owner: plan, ADR, `CONTEXT.md`,
+  `AGENTS.md`, package map, or runbook. Ask before editing.

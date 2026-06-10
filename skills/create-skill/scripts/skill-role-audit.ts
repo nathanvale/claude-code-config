@@ -118,12 +118,20 @@ function listSkillFiles(root: string): { files: string[]; diagnostics: Diagnosti
 }
 
 function extractFrontmatter(text: string): string | undefined {
-	const match = text.match(/^---\n([\s\S]*?)\n---\n/);
-	return match?.[1];
+	const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+	return match?.[1]?.replace(/\r\n/g, "\n");
+}
+
+function stripUnquotedInlineComment(value: string): string {
+	const trimmed = value.trim();
+	if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
+		return value;
+	}
+	return value.replace(/\s+#.*$/, "");
 }
 
 function unquoteYamlScalar(value: string): string {
-	const trimmed = value.trim();
+	const trimmed = stripUnquotedInlineComment(value).trim();
 	if (
 		(trimmed.startsWith('"') && trimmed.endsWith('"')) ||
 		(trimmed.startsWith("'") && trimmed.endsWith("'"))

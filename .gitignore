@@ -1,6 +1,7 @@
 .DS_Store
 .claude/
 .context/
+**/.coding-task-tracker/local.json
 
 # Fallow analyzer cache (generated)
 skills/fallow/scripts/.fallow/

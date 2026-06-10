@@ -27,7 +27,9 @@
 ## Changed-Code Audit
 
 - Use `audit` after implementation or before review.
-- Audit auto-detects the base branch; provide an explicit base only when the task or branch context needs it.
+- Audit auto-detects the base branch for whole-branch review.
+- For current-task review on a dirty branch, run against `--base-ref HEAD` to isolate uncommitted work.
+- If `changed_files_count` is much larger than the task scope, stop triage and rerun with a narrower `--root`, `--base-ref`, or both.
 - Read the attribution split before triaging individual findings.
 - Treat pre-existing findings as separate cleanup unless the current task owns them.
 

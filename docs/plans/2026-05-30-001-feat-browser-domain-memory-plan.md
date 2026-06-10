@@ -3,7 +3,7 @@ title: "feat: browser-domain-memory skill + browser-use consult-gate"
 type: feat
 status: superseded
 date: 2026-05-30
-origin: docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
+origin: skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
 superseded_by: docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md
 ---
 
@@ -22,7 +22,7 @@ Add a net-new prose-only `browser-domain-memory` skill that owns durable per-dom
 
 `browser-use` drives Chrome live and has been proven end-to-end against a real portal (Oncore). But every run throws away what it learned: the next run re-discovers where auth lives, which fork to take, which field order works, which submit guard to respect. For a single user driving login-heavy enterprise portals (timesheets, payroll, admin, invoicing) where the same flow and the same friction recur, that is repeated wasted effort and repeated exposure to the same traps.
 
-This plan closes the memory loop at the leanest possible weight. The value is as much in the conscious refusals — no deterministic walker, no tape schema, no self-healing, no record→skill compiler — as in what gets built. Durable knowledge is prose the agent reads and re-drives from; it is never an executable artifact. (See origin: `docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`.)
+This plan closes the memory loop at the leanest possible weight. The value is as much in the conscious refusals — no deterministic walker, no tape schema, no self-healing, no record→skill compiler — as in what gets built. Durable knowledge is prose the agent reads and re-drives from; it is never an executable artifact. (See origin: `skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`.)
 
 ---
 
@@ -292,7 +292,7 @@ The tree is a scope declaration, not a constraint — the implementer may adjust
 
 ## Sources & Research
 
-- Origin requirements: `docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md` (Outcome, two-skill design, D1-D4, scope boundaries, success criteria).
+- Origin requirements: `skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md` (Outcome, two-skill design, D1-D4, scope boundaries, success criteria).
 - Resolved design / spec: `docs/ideation/2026-05-30-browse-play-record-replay-ideation.md` (consult-gate wording, capture pattern, refusal list).
 - Glossary: `CONTEXT.md` (every knowledge type with `_Avoid_` banned-alias lists; SKILL.md prose must align).
 - Weight bar: `context/skill-design-philosophy.md` (prose-trust, refuse-in-prose over machinery).

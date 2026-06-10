@@ -2,6 +2,14 @@
 
 Use when creating, auditing, archiving, or consolidating skills.
 
+## Preview Index
+
+- Read `Rule`, `Role Label`, and `Ability Labels` before changing frontmatter.
+- Read `Role Card Shape` before adding a new role card.
+- Read only the role card that matches the skill's first-screen job.
+- Read `Checks` before handoff.
+- Read `Provenance Rule` only when tracing why this role system exists.
+
 ## Rule
 
 - Give every active skill one primary role.
@@ -267,6 +275,8 @@ Runbook:
 
 - Name the new owner.
 - Name the removal condition.
+- Check active-reference surfaces: startup docs, active skills, scripts, plugin manifests, exported bundles, known external docs, and current user invocations.
+- If a relevant surface is inaccessible, keep a dated temporary bridge with a removal condition.
 - Avoid new workflow detail.
 - Run active-reference audit before removal.
 - Delete the bridge after the old name is no longer live.

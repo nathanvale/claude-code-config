@@ -57,7 +57,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 
 ## Skill Authoring
 
-- Never author, review, heal, or repair a `SKILL.md` before reading `skills/create-skill/references/skill-design-philosophy.md`; skipping it leaks copied contracts and multi-workflow drift.
+- Never author, review, heal, or repair a `SKILL.md` before reading `skills/create-skill/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
 - Skill bodies: terse prose + commands; no copied contracts.

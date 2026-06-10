@@ -32,7 +32,7 @@ This map advises context placement. It does not own content, mutate stores, or m
 
 - Owner and privacy beat context kind.
 - Canonical truth beats convenient query layers.
-- Accepted repo decisions are terminal; route to `decisions`.
+- Accepted repo decisions are terminal; route to `record-decision`.
 - Deterministic contracts stay in code, help, generated docs, checks, or tests.
 - Future durable recall and synthesis use `context/` owners, not `memory/` folders.
 - Format choices happen after owner, privacy, canonicity, and write authority are fixed.
@@ -53,6 +53,32 @@ This map advises context placement. It does not own content, mutate stores, or m
 - Vendor-owned context belongs in the vendor surface.
 - Runtime-owned state belongs in runtime state/data stores.
 - Cross-repo synthesis belongs in the external context owner.
+
+## `docs/` Placement
+
+- `docs/` means any `**/docs/`, not only repo-root `docs/`.
+- A nested `docs/` co-located with its owner is valid: `skills/<name>/docs/`, `packages/<pkg>/docs/`, `apps/<app>/docs/`, `services/<svc>/docs/`.
+- Subfolder taxonomy is the same at every level: `docs/plans/`, `docs/research/`, `docs/brainstorms/`, `docs/decisions/`, `docs/adr/`.
+- Choose the level by the **scope of the document's subject**, not by where the session started.
+
+### Root docs vs domain docs
+
+- Place at the **nearest owning** `docs/` when the subject belongs to one module, package, app, service, or skill.
+- Place at **repo-root** `docs/` when the subject spans the whole repo, crosses domains, or has no single owner.
+- Default to repo-root only when ownership is genuinely unclear; do not default to it out of habit.
+- Domain placement test: if the document would move with the code in a split or extraction, co-locate it.
+- Single owner, single-domain subject, lives or dies with that domain -> domain `docs/`.
+- Multiple owners, cross-cutting subject, or repo-wide policy -> root `docs/`.
+
+### Monorepo / workspace context
+
+- In a monorepo, prefer the workspace package's own `docs/` for package-scoped plans, research, and decisions.
+- Keep cross-package architecture, shared conventions, and org-wide ADRs at repo-root `docs/`.
+- A decision that binds multiple packages is root-level even when one package triggered it.
+- A decision local to one package is package-level even when discussed repo-wide.
+- When a domain `docs/` and root `docs/` both seem to fit, pick the one whose owner can correct stale content (Tie Breakers).
+- When co-locating, leave the inbound links intact: move references with the doc, or the move breaks discovery.
+- Numbered, cross-referenced records (ADRs indexed by sequence) resist relocation; keep them at the level their index lives unless the whole index moves.
 
 ## `CONTEXT.md` Definition
 
@@ -98,8 +124,8 @@ This map advises context placement. It does not own content, mutate stores, or m
   - Record a decision only when the term came from an accepted choice.
 
 - If context is an accepted decision:
-  - Store in `docs/decisions/`.
-  - Use `skills/decisions/references/operating-manual.md`.
+  - Store in `docs/decisions/` at the level the decision's scope owns (see `docs/` Placement).
+  - Use `skills/record-decision/references/operating-manual.md`.
   - Use ADR shape only when the ADR threshold is met.
 
 - If context is project tracker state, work queue, open question, progress state, audit queue, or next action:
@@ -111,7 +137,7 @@ This map advises context placement. It does not own content, mutate stores, or m
   - Update after task state changes.
 
 - If context is research, option mapping, or community signal:
-  - Store in `docs/research/` or `docs/brainstorms/`.
+  - Store in `docs/research/` or `docs/brainstorms/` at the level the subject owns (see `docs/` Placement).
   - Promote only stable terms, accepted decisions, or reusable operating guidance.
   - Promote only with source evidence, owner review, and destination owner path.
 
@@ -238,7 +264,7 @@ This map advises context placement. It does not own content, mutate stores, or m
 - If owner is unclear, ask one ownership question.
 - If privacy, durability, write authority, or side-effect stance is unclear, ask one question.
 - If the storage choice is unresolved and affects ownership, privacy, durability, or side effects, use `decision-mode` or `grill-with-docs`.
-- If the context is an accepted repo decision, use `decisions`.
+- If the context is an accepted repo decision, use `record-decision`.
 - If the context is project tracker state or unresolved work state, patch the scoped `TASKS.md` or project tracker.
 - If accepted storage choice requires a runtime-backed skill capability, use `create-skill`.
 - If storage requires a new or changed agent-facing CLI surface, use `create-cli` inside the `create-skill` runtime-backed path.

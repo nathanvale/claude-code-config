@@ -3,7 +3,7 @@
 - Origin: first-party skill in this repo.
 - Active plan: `docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md`.
 - Superseded plan: `docs/plans/2026-05-30-001-feat-browser-domain-memory-plan.md`.
-- Requirements source: `docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`.
+- Requirements source: `skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`.
 - Glossary owner: `CONTEXT.md`.
 
 ## Status

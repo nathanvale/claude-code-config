@@ -24,7 +24,7 @@ Work from whatever is already in the conversation context. If the user passes an
 
 ### 2. Explore the codebase (optional)
 
-If you have not already explored the codebase, do so to understand the current state of the code. Issue titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
+If you have not already explored the codebase, do so to understand the current state of the code. Use the project's domain glossary vocabulary in issue titles and descriptions. Respect ADRs in the area you're touching.
 
 ### 3. Draft vertical slices
 
@@ -49,10 +49,11 @@ Present the proposed breakdown as a numbered list. For each slice, show:
 
 Ask the user:
 
-- Does the granularity feel right? (too coarse / too fine)
-- Are the dependency relationships correct?
-- Should any slices be merged or split further?
-- Are the correct slices marked as HITL and AFK?
+- Reply `approve` if the breakdown is ready.
+- Reply `split <number>` when a slice is too broad.
+- Reply `merge <numbers>` when slices belong together.
+- Reply `move <number> after <number>` when dependencies are wrong.
+- Reply `mode <number> HITL|AFK` when an interaction mode is wrong.
 
 Iterate until the user approves the breakdown.
 
@@ -61,6 +62,19 @@ Iterate until the user approves the breakdown.
 For each approved slice, publish a new issue to the issue tracker. Use the issue body template below. These issues are considered ready for AFK agents, so publish them with the correct triage label unless instructed otherwise.
 
 Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
+
+### 6. Verify published issues
+
+After publishing, read back each created issue from the tracker.
+
+Verify:
+
+- title matches the approved slice
+- body includes `What to build`, `Acceptance criteria`, and `Blocked by`
+- triage label matches the approved HITL / AFK intent
+- dependency links point to real created issue identifiers
+
+Report the created issue IDs or URLs.
 
 ### Issue body template
 

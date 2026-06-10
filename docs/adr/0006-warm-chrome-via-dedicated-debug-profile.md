@@ -9,7 +9,7 @@ date: 2026-05-31
 chrome-devtools-mcp) can drive over CDP. We connect by launching the **real Google Chrome binary**
 with classic `--remote-debugging-port` against a **dedicated persistent `--user-data-dir`** (e.g.
 `~/.agent-warm-profile`) — log into portals once, they survive. This was proven cold-start; see
-`docs/research/2026-05-30-browser-use-warm-chrome-findings.md` and
+`skills/browser-use/docs/research/2026-05-30-browser-use-warm-chrome-findings.md` and
 `skills/browser-use/references/warm-chrome.md`.
 
 ## Considered options

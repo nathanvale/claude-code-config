@@ -13,10 +13,10 @@ Operational map for browser entry.
 
 ## Owners
 
-- Warm Chrome front door: `skills/browser-use/scripts/package.json#bin` (`preflight-warm-chrome`).
-- Warm Chrome runtime: `skills/browser-use/scripts/preflight-warm-chrome.ts`.
-- CLI contracts: `skills/browser-use/scripts/command-contract.ts`.
-- Focused tests: `skills/browser-use/scripts/preflight-warm-chrome.test.ts`.
+- Warm Chrome front door: `skills/browser-use/package.json#bin` (`preflight-warm-chrome`).
+- Warm Chrome runtime: `skills/browser-use/src/preflight-warm-chrome.ts`.
+- CLI contracts: `skills/browser-use/src/command-contract.ts`.
+- Focused tests: `skills/browser-use/src/preflight-warm-chrome.test.ts`.
 
 ## Operation
 

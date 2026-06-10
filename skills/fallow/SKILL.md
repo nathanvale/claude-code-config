@@ -11,7 +11,8 @@ Fallow analyzer evidence.
 
 ## Skill Route Index
 
-- Implemented work / PR prep: start with changed-code `audit --plain` when the target fit is plausible.
+- Implemented work / PR prep: start with changed-code `audit --plain` when target fit and scope are plausible.
+- Current uncommitted task slice on a dirty branch: prefer scoped `--root` plus `--base-ref HEAD`; use default base for whole-branch PR review.
 - Blocked PR evidence: run `doctor`, follow the first safe repair hint, then retry the same evidence command.
 - Current-task reporting: list current-task findings first; keep pre-existing findings as count or status context.
 - Changed-code review: use `audit`; escalate to JSON only for issue references, repair planning, structured evidence, or before/after comparison.
@@ -27,11 +28,11 @@ Fallow analyzer evidence.
 
 ## Owner
 
-- Front door: `skills/fallow/scripts/package.json#bin` (`fallow-runner`).
-- Runner implementation: `skills/fallow/scripts/fallow-runner.ts`.
-- Public command contract, result vocab, and repair action ids: `skills/fallow/scripts/command-contract.ts`.
-- Runner tests: `skills/fallow/scripts/fallow-runner.test.ts`.
-- Live compatibility smoke: `skills/fallow/scripts/fallow-runner.live.test.ts`.
+- Repo-local front door: `skills/fallow/package.json#scripts` (`fallow-runner`).
+- Runner implementation: `skills/fallow/src/fallow-runner.ts`.
+- Public command contract, result vocab, and repair action ids: `skills/fallow/src/command-contract.ts`.
+- Runner tests: `skills/fallow/src/fallow-runner.test.ts`.
+- Live compatibility smoke: `skills/fallow/src/fallow-runner.live.test.ts`.
 - Command recipes: `skills/fallow/references/commands.md`.
 - Workflow recipes: `skills/fallow/references/workflows.md`.
 - Safety policy: `skills/fallow/references/safety.md`.
@@ -52,8 +53,8 @@ Fallow analyzer evidence.
 
 ## Verification
 
-- Run `cd skills/fallow/scripts`, then `bun test fallow-runner.test.ts` after runner, command-contract, or workflow behavior changes.
-- Run `cd skills/fallow/scripts`, then `bun run typecheck` after TypeScript edits.
+- Run `bun --filter fallow-scripts test` after runner, command-contract, or workflow behavior changes.
+- Run `bun --filter fallow-scripts typecheck` after TypeScript edits.
 - Run live smoke only when checking installed Fallow compatibility.
 
 ## Safety

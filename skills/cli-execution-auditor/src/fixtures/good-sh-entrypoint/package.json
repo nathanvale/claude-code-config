@@ -1,0 +1,13 @@
+{
+	"name": "fixture-good-sh-entrypoint-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-good facade CLI fixture with a SHELL entrypoint (script maps to ./src/fixture.sh, not a .ts). Proves the auditor exercises a .sh-fronted facade CLI rather than false-flagging it (R-risk2).",
+	"scripts": {
+		"fixture": "./src/fixture.sh"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

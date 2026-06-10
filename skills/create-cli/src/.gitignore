@@ -1,0 +1,4 @@
+# Throwaway prototype files written by stress-test agents. Never committed.
+# The plan's Sources records findings; the src dir stays clean.
+_proto_*.ts
+_smoke*.ts

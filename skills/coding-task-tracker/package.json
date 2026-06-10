@@ -1,0 +1,14 @@
+{
+	"name": "coding-task-tracker-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"coding-task-tracker": "bun run src/coding-task-tracker.ts",
+		"test": "bun test src/coding-task-tracker.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -6,97 +6,83 @@ role: tool-workflow
 
 # Browser Use
 
-Use for browser tasks that need a logged-in, profile-bearing Chrome session.
+Use for browser entry, inspection, navigation, target discovery, and page actions through Warm Chrome.
 
 ## Owner
 
-- Front doors: `skills/browser-use/scripts/package.json#bin`.
+- Repo-local front doors: `skills/browser-use/package.json#scripts`.
+- Installed front doors: `skills/browser-use/package.json#bin`.
 - Warm Chrome proof, repair, launch: `preflight-warm-chrome`.
 - Browser Adapter Proof: `preflight-browser-adapter`.
-- Browser Adapter Router: `browser-adapter-router`.
+- Browser Adapter Router CLI: `skills/browser-use/src/browser-adapter-router.ts`.
+- Browser Adapter Router model: `skills/browser-use/src/browser-adapter-router-model.ts`.
+- Browser Adapter Router engine: `skills/browser-use/src/browser-adapter-router-engine.ts`.
+- Browser Adapter Router discovery: `skills/browser-use/src/browser-adapter-router-discovery.ts`.
+- Browser Adapter Router validation and recovery: `skills/browser-use/src/browser-adapter-router-validation.ts`, `skills/browser-use/src/browser-adapter-router-recovery.ts`.
+- Browser Adapter Router tests: `skills/browser-use/src/browser-adapter-router.test.ts`.
 - Browser Use targets and operations: `browser-use` (route-bound; run Router `prepare` then `route` first).
 - Browser Adapter Map validation: `browser-adapter-map`.
-- CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/scripts/command-contract.ts`.
-- Router model, validation, recovery: `skills/browser-use/scripts/browser-adapter-router*.ts`.
+- CLI contracts, flags, env vars, result vocab, actions: `skills/browser-use/src/command-contract.ts`.
 - Warm Chrome invariant and auth boundary: `skills/browser-use/references/warm-chrome.md`.
 - Chrome DevTools adapter map: `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
+- Coding Task Tracker workflow: `skills/browser-use/references/coding-task-tracker.md`.
+
+## Invocation Forms
+
+- Repo-local workflow: run `bun run <command>` from `skills/browser-use`; this executes `src`.
+- Repo-root verification: run `bun run check:workspace-facade`; this rebuilds `dist` before invariant checks.
+- Package verification: run `bun --filter browser-use-scripts <script>` from the repo root.
+- Installed usage: call bare command names from `package.json#bin`.
+- Command contracts name command identity only; omit `bun run`, `src`, `dist`, and repo paths.
 
 ## Workflow
 
 Name the browser outcome before choosing tools:
 
+- For browser-use project work, read `skills/browser-use/references/coding-task-tracker.md` before choosing or updating a tracker task.
+- Use repo-local commands while working from this repo.
+- Choose one run id before proof work; reuse it for Warm Chrome, Adapter Proof, Router, target state, and page actions.
 - Map the user request to a Router bundle or required capabilities.
 - Set route policy from the request: auto, prefer, or force.
 - Treat auth/session and target-origin checks as route preconditions when the task needs them.
+- Use current command help for exact flags, file inputs, output modes, and recovery meanings.
 
-Prove Warm Chrome as the browser-entry precondition:
+Prove Warm Chrome, then route through the Router continuation chain:
 
-```bash
-cd skills/browser-use/scripts
-bun run preflight-warm-chrome check --json
-```
+1. `preflight-warm-chrome check` → Warm Chrome proof artifact.
+2. `browser-adapter-router report` → Adapter capability report artifact.
+3. `browser-adapter-router prepare` (supply proof + report + task preconditions) → route-evidence envelope.
+4. `browser-adapter-router route` (supply envelope) → route artifact. Follow `use_selected_browser_adapter`.
+5. If Router asks for attachment proof: `preflight-browser-adapter check --adapter <id>` → Adapter Proof artifact, then rerun `prepare` + `route` with fresh proof.
+6. `browser-adapter-router status` against a prepared envelope for human route projection.
 
-- Parse stdout envelope.
-- Follow `continuation.next_action_id`.
-- Obey `continuation.constraints`; skip adapter fallback and cold-browser fallback when forbidden.
-- Use `repair` or `launch` only when browser entry is approved or requested.
+Exact flags and env vars: run `<command> --help` or read `skills/browser-use/src/command-contract.ts`. Follow each command's `continuation.next_action_id`; obey `continuation.constraints` — skip adapter fallback and cold-browser fallback when forbidden.
 
-Ask the Router for capability evidence, then route:
+Continuation precedence: a hard preflight failure governs; only then does a `continuation.next_action_id` apply. A login/MFA wall hit after preflight passes is an app step in the warm profile, not a preflight failure — keep driving the page.
 
-```bash
-cd skills/browser-use/scripts
-bun run browser-adapter-router report --adapter <id> --json
-bun run browser-adapter-router route --envelope "$ENVELOPE" --json
-```
+After route success, list and select Browser Target Candidates through the proven adapter:
 
-- Build the route envelope from the user request, Warm Chrome proof, task preconditions, and capability reports.
-- Let `route` select the adapter or fail closed.
-- Follow the Router continuation.
-- Treat Router alternatives as informational unless the Router selects them.
-
-If Router asks for attachment proof:
-
-```bash
-cd skills/browser-use/scripts
-bun run preflight-browser-adapter check --adapter <selected-or-requested-adapter> --json
-bun run browser-adapter-router route --envelope "$UPDATED_ENVELOPE" --json
-```
-
-- Let the selected adapter proof own dependency checks, config checks, port binding, and repair hints.
-- Read the selected Browser Adapter Map for adapter-local inspection or repair commands.
-- Add fresh proof evidence to the route envelope, then reroute.
-- Continue only after Router emits `use_selected_browser_adapter`.
-- A login/MFA wall hit after preflight passes is an app step in the warm profile.
-
-Use `status` for human route projection:
-
-```bash
-cd skills/browser-use/scripts
-bun run browser-adapter-router status --envelope "$ENVELOPE" --plain
-```
-
-After route success, list Browser Target Candidates through the proven adapter:
-
-```bash
-cd skills/browser-use/scripts
-bun run browser-use targets list --mode route-bound --route "$ROUTE" --adapter-proof "$PROOF" --json
-```
-
+- Run `browser-use targets list` in route-bound mode with the route artifact and Adapter Proof artifact.
+- Save stdout as the route-bound target-list artifact.
+- Run `browser-use targets select`; pipe or pass the target-list artifact, choose a candidate or hint, and write run-scoped target state.
 - Route-bound listing yields operation-ready candidates; recovery listing yields evidence-gathering candidates for target discovery.
 - Follow `continuation.next_action_id` to the next command.
-- Modes, flags, candidate referencing, URL redaction, result vocab, and recovery actions: `skills/browser-use/scripts/command-contract.ts`.
+- Modes, flags, candidate referencing, URL redaction, result vocab, and recovery actions: `skills/browser-use/src/command-contract.ts`.
 
 ## Verification
 
-- Run `cd skills/browser-use/scripts && bun test` after router, adapter-map, preflight, or browser-use script changes.
-- Run `cd skills/browser-use/scripts && bun run typecheck` after TypeScript edits.
-- Run `cd skills/browser-use/scripts`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.
+- Run `bun --filter browser-use-scripts build` after package bin or distribution edits.
+- Run `bun --filter browser-use-scripts pack:dry-run` before publishing or reviewing package payload changes.
+- Run `bun --filter browser-use-scripts test` after router, adapter-map, preflight, or browser-use script changes.
+- Run `bun --filter browser-use-scripts typecheck` after TypeScript edits.
+- Run `cd skills/browser-use`, then `bun run preflight-warm-chrome check --json` only when verifying local Warm Chrome behavior.
 
 ## Page Actions
 
-- Use the selected adapter after proof.
-- Let the selected adapter own its action surface and dependencies.
-- Use the adapter's current help and snapshot output for action syntax.
+- Use `browser-use operate` after route success and adapter proof.
+- Let `browser-use operate` enforce route binding, target state, and operation capability checks.
+- Use `browser-use operate --help` and current snapshot output for action syntax.
+- Let the selected adapter own its dependencies and transport.
 - Re-snapshot before element-ref actions.
 - Treat refs as stale after navigation or DOM-changing actions.
 - Take screenshots only when visual layout, media proof, or user request needs them.
@@ -107,3 +93,10 @@ bun run browser-use targets list --mode route-bound --route "$ROUTE" --adapter-p
 - Do not use Chrome for Testing, throwaway profiles, everyday default profiles, isolated Playwright launch, Puppeteer launch, AppleScript, `osascript`, macOS `open`, or cold-browser fallback as substitutes.
 - Do not print tokens, passwords, cookies, auth-bearing URLs, raw network secrets, or sensitive input values.
 - Report secret checks by shape only: present/absent, length, status code, account/org name.
+
+## Next Safe Action
+
+- Blocked on Warm Chrome: run `preflight-warm-chrome check --json`; follow `continuation.next_action_id` (`repair` or `launch` only when approved).
+- Blocked on routing: run `browser-adapter-router report --adapter <id> --json`; if capability gaps, research then re-prove; if binding mismatch, rerun `preflight-browser-adapter check`.
+- Blocked on targets: run `browser-use targets list --mode recovery --adapter <id> --adapter-proof <path> --json`; follow `continuation.next_action_id`.
+- Unknown failure: read the JSON envelope `error.code` against the diagnostic codes in `skills/browser-use/src/command-contract.ts`; each code names its own recovery action.

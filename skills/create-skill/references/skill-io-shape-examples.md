@@ -1,8 +1,51 @@
 # Skill I/O Shape Examples
 
-Use these as shape examples, not contracts.
+Use these as input/output shape examples and heading examples, not contracts.
 
 Keep exact field lists, command flags, output envelopes, and validation rules in the named owner paths.
+
+## Preview Index
+
+- Read `Skill I/O Example` for model-readable prose workflows.
+- Read `Simple Operation I/O Example` for command wrapper skills.
+- Read `Runtime-Backed Capability Example` for script or CLI-backed skills.
+- Read `Heading Selection Matrix` when choosing `SKILL.md` body headings from input/output shape.
+- Stop once the skill's input/output owner, heading shape, and next safe action are clear.
+
+## Heading Selection Matrix
+
+Use this matrix when choosing `SKILL.md` body headings.
+
+- Start from the skill's input/output shape, not its `role`.
+- Treat stars as selection strength, not a required schema.
+- Add headings only when they improve entry-screen route clarity.
+- Keep exact contracts in owner paths.
+- Prefer deleting vague headings before adding new ones.
+
+Selection strength:
+
+- `★★★`: strong default when the Use When applies.
+- `★★`: useful when it reduces ambiguity.
+- `★`: optional scanning aid.
+- `avoid`: usually duplicates an owner path or bloats the skill.
+
+| Heading | Use When | Selection Strength | Notes |
+|---|---|---|---|
+| `Owner Map` / `Owner Paths` / `Owner` | The skill names owner paths for commands, runtimes, trackers, references, docs, or contracts. | `★★★` | Use `Owner Map` for a small first-screen map. Use `Owner Paths` when several owners need detail. Use `Owner` for one. |
+| `Pick One` / `Workflow` | The skill maps request shapes or tells the agent how to act. | `★★★` | Use `Pick One` for main-entry routing. Use `Workflow` for operator flow. |
+| `Next Safe Action` | The agent may stop, hand off, repair input, or need a clear continuation. | `★★★` | Strong default for agent-native skills. |
+| `Verification` | The skill has scripts, runtime behavior, generated output, audits, or repo edits. | `★★★` | Script-backed skills name a focused verification path. |
+| `Safety` | The skill mutates state, touches private data, performs external actions, or has failure risk. | `★★★` | Include only when safety changes behavior. |
+| `Commands` | The skill wraps CLI, tool, service, or script invocations. | `★★` | Keep exact flags in help, code, or generated docs when possible. |
+| `Output Handling` | stdout, stderr, JSON, envelope, artifact, or error behavior changes the workflow. | `★★` | Common for simple operation and runtime-backed skills. |
+| `Example` / `Examples` | The skill shapes model-written artifacts or output style. | `★★` | Keep examples illustrative and non-authoritative. |
+| `Gotchas` / `Known Pitfalls` | Refinement evidence shows agents repeatedly miss a non-obvious fact. | `★★` | Add from refinement evidence, not theoretical risk. |
+| `Dependencies` / `Prerequisites` | Missing setup blocks or degrades the workflow. | `★★` | Name missing state, fallback, and next repair. |
+| `Request Shape` | User input needs classification, normalization, or routing before work starts. | `★★` | Use when request shape affects owner, safety, or workflow. |
+| `Output Shape` | The skill returns a specific prose report, packet, or artifact shape. | `★★` | Use `Output Contract` only when pointing at a machine-owned contract. |
+| `References` / `Reference Files` | The skill has one-level detail files. | `★` | Say when to load each reference. |
+| `Notes` | Miscellaneous leftover guidance. | `avoid` | Rename, prune, or move into a precise heading. |
+| `Contract` | Exact flags, schemas, states, or output semantics appear in prose. | `avoid` | Use only to point at the authoritative owner path. |
 
 ## Skill I/O Example
 
@@ -18,7 +61,7 @@ Use when the user asks for release notes, changelog copy, or a shipped-change su
 
 ## Owner Paths
 
-- Pattern: `references/skill-design-philosophy.md#skill-io-examples`.
+- Pattern: `references/skill-design-decision-runbook.md#write-something-skill-io-example`.
 - Style guide: `context/comms-style.md`.
 - Fact input: current diff, PR notes, issue notes, or user-supplied summary.
 
@@ -58,7 +101,7 @@ Use when the user asks to run the repo check, lint, format check, or type check.
 
 ## Owner Paths
 
-- Pattern: `references/skill-design-philosophy.md#simple-operation-io`.
+- Pattern: `references/skill-design-decision-runbook.md#run-a-command-simple-operation-io`.
 - Command owner path: `package.json`.
 - Test owner path: repo check tests or CI workflow.
 
@@ -84,7 +127,7 @@ Use when the user asks to run the repo check, lint, format check, or type check.
 ```markdown
 ---
 name: record-decision
-description: "Record accepted repo decisions through the decisions runtime."
+description: "Record accepted repo decisions through the record-decision runtime."
 ---
 
 # Record Decision
@@ -93,12 +136,12 @@ Use when a decision is accepted and belongs in the repo decision log.
 
 ## Owner Paths
 
-- Pattern: `references/skill-design-philosophy.md#runtime-backed-capability-design`.
+- Pattern: `references/skill-design-decision-runbook.md#use-a-reliable-tool-runtime-backed-capability`.
 - CLI design: `skills/create-cli/SKILL.md`.
-- Input contract owner path: `packages/decisions/src/record-input.ts`.
+- Input contract owner path: `packages/record-decision/src/record-input.ts`.
 - Output transport: `@side-quest/cli-command-facade`.
-- Output data owner path: `packages/decisions/src/record-output.ts`.
-- Test owner path: `packages/decisions/tests/record.test.ts`.
+- Output data owner path: `packages/record-decision/src/record-output.ts`.
+- Test owner path: `packages/record-decision/tests/record.test.ts`.
 
 ## Workflow
 

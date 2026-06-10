@@ -17,6 +17,16 @@
 - Keep registry entries as lookup metadata; keep variant behavior in local handlers.
 - Avoid turning a registry into a plugin system without a real external extension boundary.
 
+### Vertical Slice First
+
+- Scope: ports, migrations, or any fan-out of similar units (multiple scripts, files, tables, sections). Not one-off fixes.
+- Build one slice end-to-end first: scaffold, code, test, and prove against the real thing (live API, real data, rendered output).
+- Verify that slice before replicating it across the remaining units.
+- Why: in repetitive work, bugs are correlated. A flaw in the shared mental model replicates into every unit; the first proven slice finds it while it is still 1x, not Nx.
+- Pick the slice that retires the most uncertainty (newest toolchain, riskiest assumption), not the easiest one.
+- Surface the working slice for review before fanning out; course-correction is cheapest there.
+- Planning-time counterpart: `to-issues` "tracer-bullet vertical slices" splits a plan into slices; this applies the same shape at implementation time.
+
 ## Style
 
 - TypeScript strict mode always

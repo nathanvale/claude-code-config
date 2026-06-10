@@ -7,7 +7,7 @@ summary: "Provenance for the skill-composability principle. The principle now li
 research: docs/research/2026-05-30-skill-composability-handoff-observability.md
 related:
   - context/skill-design-philosophy.md
-  - docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
+  - skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
 ---
 
 # Skill composability — handoff principle (provenance)
@@ -22,7 +22,7 @@ auto-handoff; explicit driver call + lifecycle hook is the buildable version).
 
 ## Concrete instance: browse + domain-checker + capture-run
 
-(Full design in `docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md`.)
+(Full design in `skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md`.)
 
 ```
 You: "go to <site> and fill my timesheet"

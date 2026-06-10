@@ -65,6 +65,29 @@ Use before and after meaningful edits to `create-cli`.
 - **Notes:**
   Static route check from `SKILL.md` and `agent-native-cli-design.md`.
 
+### Agent-Native Multi-Command CLI
+
+- **Prompt:** `Design an agent-native CLI with ready, claim, note, and done commands.`
+- **Expected route:** Agent-native CLI.
+- **Expected markers:**
+  - Names behavior owners before implementation.
+  - Keeps the CLI dispatcher thin.
+  - Puts command bodies in named handlers after lookup, validation, network,
+    file, or mutation behavior appears.
+  - Extracts repeated target parsing, validation, envelope builders, and
+    tool-call error builders before the third copy appears.
+  - Runs Fallow after meaningful CLI implementation.
+  - Treats private-handler `add-tests` findings as coverage prompts, not
+    automatic direct-test requirements.
+- **Observed route:**
+  Agent-native CLI.
+- **Observed markers:**
+  Owner naming, thin dispatcher, handler split, shared helper extraction,
+  Fallow after implementation, private-handler coverage prompt.
+- **Notes:**
+  Static route check from `agent-native-cli-design.md`; added after
+  `coding-task-tracker` Fallow review exposed dispatcher and duplication drift.
+
 ### Facade-Backed Bun TypeScript CLI
 
 - **Prompt:** `Create a facade-backed Bun TypeScript CLI using @side-quest/cli-command-facade.`
@@ -88,6 +111,7 @@ Use before and after meaningful edits to `create-cli`.
 - Basic prompt still produces a compact human-first design.
 - Ambiguous Bun TypeScript prompt asks or offers before choosing depth.
 - Agent-native non-TypeScript prompt stays language-agnostic.
+- Multi-command agent-native prompt preserves implementation-shape guidance.
 - Facade-backed prompt follows facade path only when explicitly requested.
 - References point to owner paths for deterministic contract shape.
 - `SKILL.md` stays route-oriented.

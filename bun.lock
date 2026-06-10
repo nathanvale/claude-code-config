@@ -10,7 +10,7 @@
       },
       "devDependencies": {
         "@biomejs/biome": "2.4.15",
-        "@types/bun": "^1.3.14",
+        "@types/bun": "1.3.14",
       },
     },
     "runtime/cli-command-facade": {
@@ -20,51 +20,91 @@
         "@logtape/logtape": "^2.0.2",
       },
       "devDependencies": {
-        "@types/node": "^25.6.2",
-        "typescript": "^5.9.3",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
       },
     },
-    "skills/browser-use/scripts": {
+    "skills/browser-use": {
       "name": "browser-use-scripts",
+      "version": "0.1.0",
+      "bin": {
+        "browser-adapter-map": "dist/browser-adapter-map.js",
+        "browser-adapter-router": "dist/browser-adapter-router.js",
+        "browser-use": "dist/browser-use.js",
+        "preflight-browser-adapter": "dist/preflight-browser-adapter.js",
+        "preflight-warm-chrome": "dist/preflight-warm-chrome.js",
+      },
+      "devDependencies": {
+        "@side-quest/cli-command-facade": "0.1.0",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "skills/classic-cinema": {
+      "name": "classic-cinema-scripts",
+      "version": "0.0.0",
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
       "devDependencies": {
-        "bun-types": "1.3.10",
-        "typescript": "^5.9.3",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
       },
     },
-    "skills/create-cli/scripts": {
+    "skills/cli-execution-auditor": {
+      "name": "cli-execution-auditor-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "skills/coding-task-tracker": {
+      "name": "coding-task-tracker-scripts",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "skills/create-cli": {
       "name": "create-cli-scripts",
       "version": "0.0.0",
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
       "devDependencies": {
-        "@types/node": "*",
-        "typescript": "^5.9.3",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
       },
     },
-    "skills/fallow/scripts": {
+    "skills/fallow": {
       "name": "fallow-scripts",
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
       "devDependencies": {
-        "bun-types": "1.3.10",
-        "typescript": "^5.9.3",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
       },
     },
-    "skills/test-runner/scripts": {
+    "skills/test-runner": {
       "name": "test-runner-scripts",
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
       "devDependencies": {
-        "bun-types": "1.3.10",
-        "typescript": "^5.9.3",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
       },
     },
+  },
+  "catalog": {
+    "@types/bun": "1.3.14",
+    "@types/node": "25.9.1",
+    "typescript": "5.9.3",
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@2.4.15", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "2.4.15", "@biomejs/cli-darwin-x64": "2.4.15", "@biomejs/cli-linux-arm64": "2.4.15", "@biomejs/cli-linux-arm64-musl": "2.4.15", "@biomejs/cli-linux-x64": "2.4.15", "@biomejs/cli-linux-x64-musl": "2.4.15", "@biomejs/cli-win32-arm64": "2.4.15", "@biomejs/cli-win32-x64": "2.4.15" }, "bin": { "biome": "bin/biome" } }, "sha512-j5VH3a/h/HXTKBM50MDMxRCzkeLv9S2XJcW2WgnZT1+xyisi+0bISrXR82gCX+8S9lvK0skEvHJRN+3Ktr2hlw=="],
@@ -101,19 +141,25 @@
 
     "ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
 
-    "browser-use-scripts": ["browser-use-scripts@workspace:skills/browser-use/scripts"],
+    "browser-use-scripts": ["browser-use-scripts@workspace:skills/browser-use"],
 
-    "bun-types": ["bun-types@1.3.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-tcpfCCl6XWo6nCVnpcVrxQ+9AYN1iqMIzgrSKYMB/fjLtV2eyAVEg7AxQJuCq/26R6HpKWykQXuSOq/21RYcbg=="],
+    "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 
     "chromium-bidi": ["chromium-bidi@16.0.1", "", { "dependencies": { "mitt": "^3.0.1", "zod": "^3.24.1" }, "peerDependencies": { "devtools-protocol": "*" } }, "sha512-J63PGu/9PpeCwLIcKYyzWP6yaVL5pxuBc0shlYCYM8BaAkmlwiQboXO1iNbOgSDbVklEyYFfNEcHD8oOAWacUA=="],
 
+    "classic-cinema-scripts": ["classic-cinema-scripts@workspace:skills/classic-cinema"],
+
+    "cli-execution-auditor-scripts": ["cli-execution-auditor-scripts@workspace:skills/cli-execution-auditor"],
+
     "cliui": ["cliui@8.0.1", "", { "dependencies": { "string-width": "^4.2.0", "strip-ansi": "^6.0.1", "wrap-ansi": "^7.0.0" } }, "sha512-BSeNnyus75C4//NQ9gQt1/csTXyo/8Sb+afLAkzAptFuMsod9HFokGNudZpi/oQV73hnVK+sR+5PVRMd+Dr7YQ=="],
+
+    "coding-task-tracker-scripts": ["coding-task-tracker-scripts@workspace:skills/coding-task-tracker"],
 
     "color-convert": ["color-convert@2.0.1", "", { "dependencies": { "color-name": "~1.1.4" } }, "sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ=="],
 
     "color-name": ["color-name@1.1.4", "", {}, "sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA=="],
 
-    "create-cli-scripts": ["create-cli-scripts@workspace:skills/create-cli/scripts"],
+    "create-cli-scripts": ["create-cli-scripts@workspace:skills/create-cli"],
 
     "devtools-protocol": ["devtools-protocol@0.0.1624250", "", {}, "sha512-YFAat/lOiIk0ARmBweG+ygrEcbZrq5B9urRyUoeQKp53MlidHXE2TmTbxKcaXoQj7u/aX+jebDO4BW55rs0WwA=="],
 
@@ -121,7 +167,7 @@
 
     "escalade": ["escalade@3.2.0", "", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 
-    "fallow-scripts": ["fallow-scripts@workspace:skills/fallow/scripts"],
+    "fallow-scripts": ["fallow-scripts@workspace:skills/fallow"],
 
     "get-caller-file": ["get-caller-file@2.0.5", "", {}, "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg=="],
 
@@ -139,7 +185,7 @@
 
     "strip-ansi": ["strip-ansi@6.0.1", "", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A=="],
 
-    "test-runner-scripts": ["test-runner-scripts@workspace:skills/test-runner/scripts"],
+    "test-runner-scripts": ["test-runner-scripts@workspace:skills/test-runner"],
 
     "typed-query-selector": ["typed-query-selector@2.12.2", "", {}, "sha512-EOPFbyIub4ngnEdqi2yOcNeDLaX/0jcE1JoAXQDDMIthap7FoN795lc/SHfIq2d416VufXpM8z/lD+WRm2gfOQ=="],
 
@@ -160,7 +206,5 @@
     "yargs-parser": ["yargs-parser@21.1.1", "", {}, "sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw=="],
 
     "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
-
-    "@types/bun/bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
   }
 }

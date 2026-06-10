@@ -8,7 +8,7 @@ source: newsroom-investigate (@side-quest/word-on-the-street CLI)
 source_system: repo
 related:
   - docs/brainstorms/2026-05-30-skill-composability-handoff-principle.md
-  - docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
+  - skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
   - context/skill-design-philosophy.md
 ---
 

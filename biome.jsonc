@@ -10,7 +10,18 @@
 		// pre-existing formatter drift and a mustache-style HTML template that
 		// Biome's HTML parser treats as syntax errors.
 		"ignoreUnknown": true,
-		"includes": ["**", "!skills/classic-cinema/references/assets/ticket-template.html"]
+		"includes": [
+			"**",
+			"!skills/classic-cinema/references/assets/ticket-template.html",
+			// Authored/generated HTML under any docs/ is a research, ideation,
+			// or report artifact, not source. Biome's HTML parser treats
+			// hand-written and mustache-style markup as syntax errors.
+			"!**/docs/**/*.html",
+			// Generated payloads, never source. Excluded path-portably so any
+			// skill bundle's build output is skipped wherever it lands.
+			"!**/dist",
+			"!**/coverage"
+		]
 	},
 	"formatter": {
 		"enabled": false,

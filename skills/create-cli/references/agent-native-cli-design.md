@@ -59,6 +59,29 @@ Add recipes when they change driver behavior or reduce real risk.
   `../../../CONTEXT.md`.
 - Private implementation detail stays out of create-cli prose.
 
+## Implementation Shape
+
+Use when planning or building an agent-native CLI with multiple commands,
+shared validation, or structured envelopes.
+
+- Keep the CLI dispatcher thin.
+- Let the dispatcher own help, top-level parse routing, command dispatch,
+  unknown-command handling, and unexpected-runtime failure wrapping.
+- Put command bodies in named handlers once a command has lookup, validation,
+  network, file, or mutation behavior.
+- Extract repeated target parsing, owner resolution, validation checks, envelope
+  builders, and tool-call error builders before the third copy appears.
+- Keep exact handler names, helper signatures, and envelope fields in runtime
+  code and tests.
+- Test through the public command surface when private handlers are
+  implementation detail.
+- Add direct helper tests only when a branch cannot be observed through command
+  tests without brittle setup.
+- Run Fallow after meaningful CLI implementation.
+- Treat introduced duplication and oversized dispatchers as refactor work.
+- Treat `add-tests` findings on private handlers as coverage prompts, not
+  automatic direct-test requirements.
+
 ## Safety
 
 - Require human handoff for destructive, auth, billing, externally visible, or

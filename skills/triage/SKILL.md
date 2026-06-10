@@ -34,7 +34,7 @@ Five **state** roles:
 - `ready-for-human` — needs human implementation
 - `wontfix` — will not be actioned
 
-Every triaged issue should carry exactly one category role and one state role. If state roles conflict, flag it and ask the maintainer before doing anything else.
+Give every triaged issue exactly one category role and one state role. If state roles conflict, flag it and ask the maintainer before doing anything else.
 
 These are canonical role names. Actual tracker labels may differ.
 
@@ -70,6 +70,21 @@ Query the issue tracker and present three buckets, oldest first:
 3. **`needs-info` with reporter activity since the last triage notes** — needs re-evaluation.
 
 Show counts and a one-line summary per issue. Let the maintainer pick.
+
+## Durable Triage State
+
+- Treat issue labels, issue comments, agent briefs, and out-of-scope notes as durable state.
+- Re-read issue body, comments, labels, and prior triage notes before resuming after compaction or a new session.
+- Before stopping after gather, recommend, reproduce, or grill work, capture established facts, open questions, recommendation, and next action in triage notes.
+- If tracker writes are blocked or not yet approved, return a copy-paste triage note draft instead of relying on conversation memory.
+
+## Question Shape
+
+- Ask one maintainer decision at a time.
+- Lead with the recommended category and state.
+- Offer concrete choices: `needs-info`, `ready-for-agent`, `ready-for-human`, or `wontfix`.
+- For reporter questions, ask for one missing fact per bullet.
+- Avoid broad prompts such as "provide more info"; name the exact evidence needed.
 
 ## Triage a specific issue
 

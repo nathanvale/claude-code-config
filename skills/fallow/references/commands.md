@@ -4,17 +4,17 @@ Use this as a recipe map. Use runner help for exact current syntax.
 
 Owner paths:
 
-- Front door: `skills/fallow/scripts/package.json#bin` (`fallow-runner`).
-- Public command surface: `skills/fallow/scripts/command-contract.ts`.
-- Parser and execution mapping: `skills/fallow/scripts/fallow-runner.ts`.
-- Command surface proof: `skills/fallow/scripts/fallow-runner.test.ts`.
-- Live compatibility proof: `skills/fallow/scripts/fallow-runner.live.test.ts`.
+- Repo-local front door: `skills/fallow/package.json#scripts` (`fallow-runner`).
+- Public command surface: `skills/fallow/src/command-contract.ts`.
+- Parser and execution mapping: `skills/fallow/src/fallow-runner.ts`.
+- Command surface proof: `skills/fallow/src/fallow-runner.test.ts`.
+- Live compatibility proof: `skills/fallow/src/fallow-runner.live.test.ts`.
 - Official Fallow commands: `https://docs.fallow.tools/llms.txt`.
 
 ## Help
 
 ```bash
-cd skills/fallow/scripts
+cd skills/fallow
 bun run fallow-runner --help
 bun run fallow-runner <subcommand> --help
 ```
@@ -43,7 +43,9 @@ bun run fallow-runner <subcommand> --help
 - Use `--root <repo>` when the target repo differs from the invocation directory.
 - Do not pass positional targets.
 - Challenge or retarget suspect non-JS/TS roots before readiness checks.
-- Let `audit` use Fallow defaults unless the current task needs an explicit base.
+- Let `audit` use Fallow defaults for whole-branch or PR review.
+- Use `audit --base-ref HEAD` for an uncommitted current-task slice on a dirty branch.
+- Use explicit `--root <repo>` before `--base-ref` when the task owns a package or skill subfolder.
 - Use subcommand help for accepted inputs.
 - Treat unsupported control errors as input failures.
 

@@ -4,7 +4,7 @@ description: "Orchestrate iterative code-review runbooks driven by /goal. Status
 role: control-plane
 argument-hint: "[status|launch|new|audit|report] [area-path] [seam-name|--all]"
 disable-model-invocation: true
-allowed-tools: [Read, Edit, Write, Glob, Grep, "Bash(find:*)", "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git cat-file:*)", "Bash(git log:*)"]
+allowed-tools: [Read, Edit, Write, Glob, Grep, "Bash(find:*)", "Bash(git rev-parse:*)", "Bash(git status:*)", "Bash(git cat-file:*)", "Bash(git log:*)", "Bash(git show:*)"]
 ---
 
 # Runbook Orchestrator
@@ -49,6 +49,14 @@ string as the `area-path`.
 
 See `## Subcommand dispatch` below for what each one does, and the
 linked reference files for full protocols.
+
+## Resume State
+
+- Treat README, seam files, seam ledgers, and reports as durable state.
+- Re-run `status` or re-read the target ledger before resuming after compaction or a new session.
+- Do not rely on transcript memory for selected area, seam, warnings, or launch command.
+- For `launch`, print the fully resolved invocation again on resume.
+- Before stopping mid-`new` or mid-`report`, persist the draft file or leave a named next-action note in the target README or ledger.
 
 ## Pre-flight checks (shared)
 

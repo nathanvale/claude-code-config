@@ -7,17 +7,26 @@ Do not use for ordinary prose-only skills.
 
 ## Owner Paths
 
-- Skill philosophy: `skill-design-philosophy.md`.
+- Skill design decision runbook: `references/skill-design-decision-runbook.md`.
 - Agent-native CLI design layer owner path: `skills/create-cli/SKILL.md`.
 - Agent-native CLI guidance: `skills/create-cli/references/agent-native-cli-design.md`.
 - Facade-backed CLI path: `skills/create-cli/references/cli-command-facade.md`.
-- Example skill shapes: `skill-io-shape-examples.md`.
-- Worked example: `skills/decisions/references/operating-manual.md`.
-- Decision memory: `docs/decisions/`.
+- Example skill shapes: `references/skill-io-shape-examples.md`.
+- Runtime portability: `references/runtime-portability.md`.
+- Worked example: `skills/record-decision/references/operating-manual.md`.
+- Decision memory: `docs/decisions/` in this repo.
+- Portable exports name their own decision-memory owner or omit decision-memory guidance.
+
+## Dependencies
+
+- `skills/create-cli/SKILL.md`: hard dependency for new or changed CLI/runtime surfaces.
+- Missing state: blocked.
+- Next repair: add `skills/create-cli/SKILL.md` to the export payload or install the owning skill before designing the command surface.
+- Do not copy create-cli command rules, flags, schemas, or workflow into this file.
 
 ## Workflow
 
-1. Start from the idea, brainstorm, or observed failure.
+1. Start from the idea, brainstorm, or refinement evidence.
 2. Grill one decision at a time until the skill boundary is clear.
 3. Record accepted decisions when durable memory is useful.
 4. Decide whether a runtime-backed capability is earned.
@@ -53,6 +62,7 @@ Do not use for ordinary prose-only skills.
 - Route by trigger, boundary, owner paths, safety gate, command, and next safe action.
 - Add `references/` only after repeated use exposes reusable detail that would bloat `SKILL.md`.
 - Add `scripts/` only for repeated deterministic work.
+- Put package-backed runtime source where `runtime-portability.md` says.
 - Do not copy flags, schemas, state machines, facade fields, or generated output shapes into skill prose.
 
 ## Next Safe Action

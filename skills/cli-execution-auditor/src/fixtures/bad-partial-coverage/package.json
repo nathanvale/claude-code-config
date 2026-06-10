@@ -1,0 +1,13 @@
+{
+	"name": "fixture-bad-partial-coverage-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture (bad-partial-coverage): a runnable coverage check that declares N suites but exercises only one and still reports healthy (heal bug c). The declared-coverage-runs surface clause MUST flag it.",
+	"scripts": {
+		"fixture": "bun run src/fixture.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

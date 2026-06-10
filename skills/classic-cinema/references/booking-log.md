@@ -41,8 +41,9 @@ LOG_DIR="$HOME/.local/state/classic-cinema"
 LOG_FILE="$LOG_DIR/bookings.jsonl"
 mkdir -p "$LOG_DIR"
 
-# Build the JSON object (use jq or a heredoc with careful escaping)
-ENTRY=$(jq -n \
+# Build the JSON object — jq -cn (compact) is mandatory; bare jq -n pretty-prints
+# multi-line and corrupts the one-line-per-entry JSONL.
+ENTRY=$(jq -cn \
   --arg ts "$(date -Iseconds)" \
   --arg movie "$MOVIE_TITLE" \
   --arg dt "$SESSION_DATE_TIME" \
@@ -58,7 +59,7 @@ echo "$ENTRY" >> "$LOG_FILE"
 ```
 
 **Rules:**
-- Use `jq -c` or `jq -n` to emit compact JSON (one line per entry)
+- Use `jq -cn` to emit compact JSON (one line per entry) — the `-c` is mandatory; bare `jq -n` pretty-prints multi-line and corrupts the JSONL
 - ALWAYS append (`>>`), never overwrite (`>`)
 - Append AFTER a successful email send (not before, not on failure)
 - Don't rewrite or truncate the log — it's append-only

@@ -12,13 +12,16 @@ Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a conve
 
 ## Owner
 
-- Script interfaces, flags, stdout/stderr behavior, temp files, and parse rules: `skills/classic-cinema/scripts/*.py`.
+- Runtime: **Bun**. Commands live at `skills/classic-cinema/src/*.ts`; run with `bun run skills/classic-cinema/src/<command>.ts`. Each command's `--help` is the source of truth for flags, stdout/stderr, temp files, and exit codes — do not copy them here.
+- Shared API client + types (base URL, fetch+cache, AEST time, seatmap shapes): `skills/classic-cinema/src/cinema-api.ts`.
+- Booking-log model + validation: `skills/classic-cinema/src/booking-log.ts`.
 - Booking choreography and API details: `skills/classic-cinema/references/booking-flow.md`.
 - Argument parsing: `skills/classic-cinema/references/arg-parsing.md`.
 - Email template fill: `skills/classic-cinema/references/template-fill.md`.
 - Email sending: `skills/classic-cinema/references/email-send.md`.
 - Booking log shape: `skills/classic-cinema/references/booking-log.md`.
-- Legacy plugin retirement criteria: `skills/classic-cinema/references/retirement-criteria.md`.
+- Skill health doctor: `skills/classic-cinema/src/heal-skill.ts` (run `heal-skill check` when a booking fails or output looks wrong).
+- Legacy Python scripts under `scripts/*.py` are superseded by `src/*.ts`; retirement criteria: `skills/classic-cinema/references/retirement-criteria.md`.
 
 ## Intent Classification
 
@@ -66,16 +69,32 @@ Always show raw numbers: `🟢 94% available (141/150 seats)`
 
 **≤20% available rule:** skip zone picker, render full seat map. If Express provided a zone arg, override it — tell Nathan why: "Only N seats left — showing the full map."
 
-## Scripts
+## Commands
 
-- Scripts in `scripts/` handle listing, availability, ticket parsing, seat selection, and email-template fill. Inspect each script's `--help` and test contract for exact flags and behavior — the script interfaces are the source of truth, not this file.
-- Pass the API `headerImage` value to `scripts/fill-ticket.py`; do not guess a Classic Cinemas URL or use `posterImage`.
-- Do not copy script flags, temp-file names, JSON shapes, or stdout/stderr contracts into this file.
+Run from the repo root. Each `--help` owns its flags; inspect it rather than guessing.
+
+| Step | Command |
+|------|---------|
+| Listing / details | `bun run skills/classic-cinema/src/list-movies.ts [--movie QUERY]` |
+| Availability | `bun run skills/classic-cinema/src/check-availability.ts --session-ids ID[,ID]` |
+| Tickets + pricing | `bun run skills/classic-cinema/src/parse-tickets.ts --session-id ID --spec "1+1"` |
+| Seat pick | `bun run skills/classic-cinema/src/pick-seats.ts --seatmap-file PATH --zone ZONE --count N` |
+| Fill email | `bun run skills/classic-cinema/src/fill-ticket.ts …` (then send via `gog`, see [email-send.md](references/email-send.md)) |
+| Health doctor | `bun run skills/classic-cinema/src/heal-skill.ts check` |
+
+- Pass the API `headerImage` value to `fill-ticket.ts`; do not guess a Classic Cinemas URL or use `posterImage`.
+- Do not copy command flags, temp-file names, JSON shapes, or stdout/stderr contracts into this file.
+
+## Gotchas
+
+- **Always emit booking-log entries with `jq -cn` (compact), never bare `jq -n`.** `jq -n` pretty-prints multi-line by default, so one entry becomes many lines and corrupts the one-line-per-entry JSONL. (Verified 2026-06-11: the cause is the `-n`-pretty default, not a git-safety hook — that hook is retired.) `parse-tickets.ts` and the send flow write through `Bun.write`; if you hand-append, build with `jq -cn` and `>>` it. Recover with `heal-skill repair --only booking-log-valid --execute`.
+- **`fill-ticket.ts` uses `replaceAll`, not `replace`.** `{{MOVIE_TITLE}}` appears 3× and `{{WEB_VIEW_URL}}` 2× in the frozen template; a single-occurrence replace would ship literal `{{…}}` tokens in the email.
 
 ## Verification
 
-- Run `python3 skills/classic-cinema/scripts/test_fill_ticket.py` after email-template or ticket-fill changes.
-- Run `python3 skills/classic-cinema/scripts/<script>.py --help` after script interface edits.
+- After any `src/` change: `skills/test-runner/src/test-runner.sh run --cwd skills/classic-cinema -- src/cinema-api.test.ts src/pick-seats.test.ts src/fill-ticket.test.ts src/booking-log.test.ts` and `cd skills/classic-cinema && bunx tsc --noEmit -p tsconfig.json`.
+- After any change: `bunx biome check --diagnostic-level=error skills/classic-cinema/src/`.
+- Whole-skill health (scripts, frozen template, booking log, owner paths): `bun run skills/classic-cinema/src/heal-skill.ts check`.
 - Use live API checks only when listing, availability, or booking choreography changed.
 
 ## Safety Invariants

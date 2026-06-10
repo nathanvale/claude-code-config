@@ -3,7 +3,7 @@ title: Facade-owned operator recovery choices
 type: feat
 status: active
 date: 2026-06-03
-origin: docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md
+origin: skills/browser-use/docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md
 ---
 
 # Facade-owned operator recovery choices
@@ -333,7 +333,7 @@ Representative target envelope:
 
 ## Sources
 
-- Prior command-resolution plan: `docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md`
+- Prior command-resolution plan: `skills/browser-use/docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md`
 - `claude-code-config` Browser Adapter Proof runtime: `skills/browser-use/scripts/preflight-browser-adapter.ts`
 - `claude-code-config` Browser Adapter Proof contract: `skills/browser-use/scripts/command-contract.ts`
 - `claude-code-config` Browser Adapter Proof tests: `skills/browser-use/scripts/preflight-browser-adapter.test.ts`

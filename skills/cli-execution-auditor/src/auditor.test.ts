@@ -1,0 +1,239 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	CLI_DIAGNOSTIC_FLAGS,
+	parseCommandFacadeContract,
+} from "@side-quest/cli-command-facade";
+import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
+import {
+	AUDITOR_CONTRACT_ID,
+	AUDITOR_SCHEMA_VERSION,
+	auditorContracts,
+} from "./command-contract";
+import { type AuditorRuntime, createDefaultAuditorRuntime, runForTest } from "./auditor";
+
+// biome-ignore lint/suspicious/noExplicitAny: JSON envelope tests assert package-owned fields.
+function parseEnvelope(result: { stdout: string }): any {
+	return JSON.parse(result.stdout);
+}
+
+// A no-op runtime for argv-surface tests: the default runtime now runs the real
+// engine on disk, so tests that only exercise argv parsing inject a stub `audit`
+// to avoid touching the filesystem. Engine-behavior tests pass their own `audit`.
+function stubRuntime(overrides: Partial<AuditorRuntime>): AuditorRuntime {
+	return createDefaultAuditorRuntime({
+		audit: async ({ target }) => ({ target, laneDetected: true, findings: [] }),
+		...overrides,
+	});
+}
+
+// --- drift surface 1: contract parse (no drift) ---
+
+describe("auditor command contract", () => {
+	test("declares a valid facade contract for the audit command", () => {
+		const parsed = parseCommandFacadeContract(auditorContracts, {
+			path: "skills/cli-execution-auditor/src/command-contract.ts",
+			writeImplyingMutations: new Set(["write", "destructive"]),
+		});
+
+		expect(parsed.ok).toBe(true);
+		expect(auditorContracts.audit.resultContract?.id).toBe(AUDITOR_CONTRACT_ID);
+		expect(auditorContracts.audit.resultContract?.schema_version).toBe(AUDITOR_SCHEMA_VERSION);
+		expect(auditorContracts.audit.flags).toHaveProperty("--only");
+		expect(auditorContracts.audit.flags).toHaveProperty("--ledger");
+		for (const flag of CLI_DIAGNOSTIC_FLAGS) {
+			expect(auditorContracts.audit.flags).not.toHaveProperty(flag);
+		}
+	});
+
+	// --- drift surface 2: help renders the contract's advertised flags ---
+
+	test("help renders advertised flags from the contract", async () => {
+		const help = await runForTest(["help"]);
+		expect(help.exitCode).toBe(0);
+		assertCommandHelpFlagSurface({
+			command: "audit",
+			contract: auditorContracts.audit,
+			help: help.stdout,
+		});
+	});
+});
+
+// --- drift surface 3: argv accept/reject ---
+
+describe("auditor argv surface", () => {
+	test("rejects a missing target with a usage exit code", async () => {
+		const result = await runForTest(["--json"], stubRuntime({}));
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result);
+		expect(envelope.error.code).toBe("usage_error");
+		expect(envelope.error.message).toContain("requires a target");
+	});
+
+	test("rejects an unknown option with a usage exit code", async () => {
+		const result = await runForTest(["some-target", "--bogus"], stubRuntime({}));
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("unknown option");
+	});
+
+	test("rejects an invalid --only clause id", async () => {
+		const result = await runForTest(["some-target", "--only", "nonsense"], stubRuntime({}));
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("--only must be one of");
+	});
+
+	test("accepts a bare target (audit is the default command)", async () => {
+		const result = await runForTest(["some-target"], stubRuntime({}));
+		expect(result.exitCode).toBe(0);
+	});
+
+	test("accepts the explicit audit command form", async () => {
+		const result = await runForTest(["audit", "some-target"], stubRuntime({}));
+		expect(result.exitCode).toBe(0);
+	});
+});
+
+// --- drift surface 4: envelope shape + injected-runtime behavior ---
+
+describe("auditor runtime (injected)", () => {
+	test("a clean target exits 0 with a success envelope", async () => {
+		const result = await runForTest(
+			["some-target", "--json", "--run-id", "audit-clean"],
+			stubRuntime({
+				audit: async ({ target }) => ({ target, laneDetected: true, findings: [] }),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.run_id).toBe("audit-clean");
+		expect(envelope.data.action).toBe("target_clean");
+	});
+
+	test("findings exit 1 with an error envelope", async () => {
+		const result = await runForTest(
+			["some-target", "--json"],
+			stubRuntime({
+				audit: async ({ target }) => ({
+					target,
+					laneDetected: true,
+					findings: [
+						{
+							clauseId: "exit-floor",
+							kind: "static",
+							summary: "contract omits exit code 2",
+							argv: [],
+						},
+					],
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error.code).toBe("findings_present");
+		expect(envelope.data.findings).toHaveLength(1);
+	});
+
+	test("a non-facade target is skipped (plain), exit 0", async () => {
+		const result = await runForTest(
+			["some-target"],
+			stubRuntime({
+				audit: async ({ target }) => ({
+					target,
+					laneDetected: false,
+					skipReason: "package.json does not depend on @side-quest/cli-command-facade",
+					findings: [],
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("does not depend on");
+	});
+
+	test("plain clean output prints the clean banner", async () => {
+		const result = await runForTest(
+			["some-target"],
+			stubRuntime({
+				audit: async ({ target }) => ({ target, laneDetected: true, findings: [] }),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("lane contract clean");
+	});
+});
+
+// --- U8: end-to-end with the real engine + ledger ---
+
+describe("auditor end-to-end (real engine + ledger)", () => {
+	const FIXTURES = join(import.meta.dir, "fixtures");
+	const tempLedgers: string[] = [];
+	function tempLedger(): string {
+		const path = join(mkdtempSync(join(tmpdir(), "auditor-ledger-")), "audit.md");
+		tempLedgers.push(path);
+		return path;
+	}
+	afterAll(() => {
+		for (const path of tempLedgers) rmSync(join(path, ".."), { recursive: true, force: true });
+	});
+
+	test("audit good-baseline → exit 0, quiet success, no findings", async () => {
+		const ledger = tempLedger();
+		const result = await runForTest([join(FIXTURES, "good-baseline"), "--ledger", ledger]);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("lane contract clean");
+	});
+
+	test("audit a bad fixture → exit 1, findings in --json, ledger written with an open finding", async () => {
+		const ledger = tempLedger();
+		const result = await runForTest([
+			join(FIXTURES, "bad-exit-floor"),
+			"--ledger",
+			ledger,
+			"--json",
+		]);
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error.code).toBe("findings_present");
+		expect(envelope.data.findings.length).toBeGreaterThan(0);
+		// The ledger artifact exists and records the open finding.
+		const ledgerText = await Bun.file(ledger).text();
+		expect(ledgerText).toContain("## Open Findings");
+		expect(ledgerText).toContain("exit-floor");
+		expect(ledgerText).toContain("status: open");
+	});
+
+	test("re-running audit on the same target dedupes (no duplicate ledger rows)", async () => {
+		const ledger = tempLedger();
+		await runForTest([join(FIXTURES, "bad-exit-floor"), "--ledger", ledger, "--json"]);
+		await runForTest([join(FIXTURES, "bad-exit-floor"), "--ledger", ledger, "--json"]);
+		const ledgerText = await Bun.file(ledger).text();
+		// The exit-floor finding header appears exactly once (deduped by signature).
+		const matches = ledgerText.match(/\*\*exit-floor\*\*/g) ?? [];
+		expect(matches).toHaveLength(1);
+	});
+
+	test("the engine resolves the target path the same whether bare or via audit", async () => {
+		const ledger = tempLedger();
+		const bare = await runForTest([join(FIXTURES, "good-baseline"), "--ledger", ledger]);
+		const explicit = await runForTest(["audit", join(FIXTURES, "good-baseline"), "--ledger", ledger]);
+		expect(bare.exitCode).toBe(explicit.exitCode);
+	});
+});
+
+// --- U8: SKILL.md frontmatter contract ---
+
+describe("SKILL.md", () => {
+	test("frontmatter YAML-parses and description is quoted", async () => {
+		const skillMd = await Bun.file(join(import.meta.dir, "..", "SKILL.md")).text();
+		const frontmatter = skillMd.match(/^---\n([\s\S]*?)\n---/);
+		expect(frontmatter).not.toBeNull();
+		const body = frontmatter?.[1] ?? "";
+		expect(body).toContain("name: cli-execution-auditor");
+		// description value is double-quoted (AGENTS.md skill-authoring rule).
+		expect(body).toMatch(/description:\s*"/);
+	});
+});

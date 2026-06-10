@@ -60,7 +60,7 @@ Example:
 
 Example:
 
-- `skills/create-skill/references/skill-design-philosophy.md`.
+- `skills/create-skill/references/skill-design-decision-runbook.md`.
 
 **Blocked state**
 
@@ -81,7 +81,7 @@ Example:
 ```text
 Dependency: <name or path>
 Type: hard dependency | optional handoff | owner-reference fallback | bundled reference
-Missing state: blocked | degraded | continue
+Missing state: blocked | degraded
 Next repair: <one safe action>
 ```
 
