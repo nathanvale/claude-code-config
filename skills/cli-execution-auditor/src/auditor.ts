@@ -26,8 +26,11 @@ import {
 	usageError,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
+import { resolve } from "node:path";
+import { runFullAudit } from "./audit-engine.ts";
 import { AUDIT_CLAUSE_IDS, getClause } from "./clause-catalog.ts";
 import { auditorContracts } from "./command-contract.ts";
+import { readLedgerFile, upsertFinding, writeLedgerFile } from "./ledger/index.ts";
 
 const VERSION = "0.1.0";
 
@@ -144,21 +147,60 @@ export type AuditorRuntime = {
 	audit: (input: { target: string; only: string | null; ledger: string | null }) => Promise<AuditOutcome>;
 };
 
+/** Default ledger path for a target: docs/cli-audits/<cli-name>/audit.md. */
+function defaultLedgerPath(targetRoot: string, cliName: string): string {
+	return resolve(targetRoot, "docs", "cli-audits", cliName, "audit.md");
+}
+
 /**
- * U3 stub runtime: no checks yet. U4/U5 replace `audit` with the real engine.
- * Kept injectable so the scaffold's drift tests run without the engine.
+ * Default runtime: runs the real engine (static + surface), writes the findings
+ * to the auditor-local ledger, and returns the outcome with the ledger path.
+ * Injectable so tests can stub the engine.
  */
 export function createDefaultAuditorRuntime(
 	overrides: Partial<AuditorRuntime> = {},
 ): AuditorRuntime {
 	return {
 		now: () => Date.now(),
-		audit: async ({ target }) => ({
-			target,
-			laneDetected: false,
-			skipReason: "no checks yet — engine lands in U4/U5",
-			findings: [],
-		}),
+		audit: async ({ target, only, ledger }) => {
+			const targetRoot = resolve(target);
+			const outcome = await runFullAudit({ targetRoot, only });
+
+			// A non-facade skip or an acquisition failure writes no ledger — there is
+			// nothing auditable to record a findings table for.
+			if (!outcome.laneDetected) {
+				return {
+					target: outcome.target,
+					laneDetected: false,
+					skipReason: outcome.skipReason,
+					findings: outcome.findings,
+				};
+			}
+
+			// Read the existing ledger (if any) so re-runs dedupe by signature and
+			// preserve finding history across runs (never-delete, R6) — then upsert
+			// this run's findings and persist. Writing fresh would lose prior
+			// history and make cross-run dedupe a no-op.
+			const ledgerPath = ledger ?? defaultLedgerPath(targetRoot, outcome.target);
+			const ledgerState = await readLedgerFile(ledgerPath, outcome.target);
+			for (const finding of outcome.findings) {
+				upsertFinding(ledgerState, {
+					clauseId: finding.clauseId,
+					kind: finding.kind,
+					summary: finding.summary,
+					argv: finding.argv,
+				});
+			}
+			await writeLedgerFile(ledgerPath, ledgerState);
+
+			return {
+				target: outcome.target,
+				laneDetected: true,
+				skipReason: outcome.skipReason,
+				findings: outcome.findings,
+				ledgerPath,
+			};
+		},
 		...overrides,
 	};
 }

@@ -16,7 +16,7 @@ import {
 	projectCommandDiscoveryTree,
 } from "@side-quest/cli-command-facade";
 import { RUNTIME_CONTRACT_REDACTION_FIXTURES } from "@side-quest/cli-command-facade/testing";
-import { DRIFT_CODE_DISPOSITIONS, LANE_CLAUSES, getClause } from "./clause-catalog.ts";
+import { DRIFT_CODE_DISPOSITIONS } from "./clause-catalog.ts";
 import { type AcquiredCommandContract, acquireTargetContract } from "./target-contract.ts";
 
 // --- finding shape (matches the runner's AuditFinding) ---
@@ -431,7 +431,7 @@ export interface InvocationRun {
  * package.json scripts (e.g. "heal-skill": "bun run src/heal-skill.ts"). Returns
  * the absolute script file, or null if it cannot be resolved.
  */
-export async function resolveRunnableScript(
+async function resolveRunnableScript(
 	layout: TargetLayout,
 	scriptName: string,
 ): Promise<string | null> {
@@ -453,7 +453,7 @@ export async function resolveRunnableScript(
  * cwd/env and captured streams (R3 determinism). The same subprocess discipline
  * as KTD6 acquisition: the universal default.
  */
-export function createSubprocessRunner(input: {
+function createSubprocessRunner(input: {
 	scriptFile: string;
 	cwd: string;
 }): (argv: readonly string[]) => Promise<InvocationRun> {
@@ -679,9 +679,3 @@ export function sortFindings(findings: EngineFinding[]): EngineFinding[] {
 	);
 }
 
-/** Confirm a clause id is known (used by the runner's --only validation path). */
-export function isKnownClause(clauseId: string): boolean {
-	return getClause(clauseId) !== undefined;
-}
-
-export { LANE_CLAUSES };

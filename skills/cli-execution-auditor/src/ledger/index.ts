@@ -248,5 +248,3 @@ export async function readLedgerFile(path: string, skillName: string): Promise<L
 	if (!(await file.exists())) return createLedger(skillName);
 	return parseLedger(skillName, await file.text());
 }
-
-export { signature } from "./signature.ts";
