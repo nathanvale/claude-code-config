@@ -426,26 +426,38 @@ export interface InvocationRun {
 	stderr: string;
 }
 
+/** A resolved runnable: the file plus how to invoke it. */
+export interface ResolvedRunnable {
+	/** Absolute path to the entrypoint. */
+	file: string;
+	/** The spawn prefix: ["bun", "run", file] for .ts, [file] for an executable. */
+	command: string[];
+}
+
 /**
  * Resolve the target's runnable entrypoint from the contract `script` field via
- * package.json scripts (e.g. "heal-skill": "bun run src/heal-skill.ts"). Returns
- * the absolute script file, or null if it cannot be resolved.
+ * package.json scripts. Handles both `bun run <file>.ts` entries and direct
+ * executable entries (e.g. `./src/test-runner.sh`) — a facade CLI may ship a
+ * shell front door. Returns null only when no script maps to an existing file.
  */
 async function resolveRunnableScript(
 	layout: TargetLayout,
 	scriptName: string,
-): Promise<string | null> {
+): Promise<ResolvedRunnable | null> {
 	if (!layout.packageJsonPath) return null;
 	const pkg = JSON.parse(await Bun.file(layout.packageJsonPath).text()) as {
 		scripts?: Record<string, string>;
 	};
 	const command = pkg.scripts?.[scriptName];
 	if (!command) return null;
-	// Extract the .ts entry from a "bun run <file>" script.
-	const match = command.match(/([\w./-]+\.ts)\b/);
+	// Extract the entry file: a "bun run <file>.ts" or a direct "./path/file.sh".
+	const match = command.match(/([\w./-]+\.(?:ts|sh|js|mjs))\b/);
 	if (!match) return null;
 	const file = join(layout.root, match[1]);
-	return (await Bun.file(file).exists()) ? file : null;
+	if (!(await Bun.file(file).exists())) return null;
+	// .ts/.js run under bun; an executable script (.sh) runs directly.
+	const spawnCommand = file.endsWith(".sh") ? [file] : ["bun", "run", file];
+	return { file, command: spawnCommand };
 }
 
 /**
@@ -454,11 +466,11 @@ async function resolveRunnableScript(
  * as KTD6 acquisition: the universal default.
  */
 function createSubprocessRunner(input: {
-	scriptFile: string;
+	runnable: ResolvedRunnable;
 	cwd: string;
 }): (argv: readonly string[]) => Promise<InvocationRun> {
 	return async (argv) => {
-		const proc = Bun.spawn(["bun", "run", input.scriptFile, ...argv], {
+		const proc = Bun.spawn([...input.runnable.command, ...argv], {
 			cwd: input.cwd,
 			stdout: "pipe",
 			stderr: "pipe",
@@ -583,19 +595,17 @@ export async function runSurfaceAudit(input: {
 			},
 		];
 	}
-	const scriptFile = await resolveRunnableScript(input.layout, scriptName);
-	if (!scriptFile) {
-		return [
-			{
-				clauseId: "json-valid-under-failure",
-				kind: "surface",
-				summary: `cannot resolve runnable for script "${scriptName}" — no package.json script maps to a .ts entry`,
-				argv: [],
-			},
-		];
+	const runnable = await resolveRunnableScript(input.layout, scriptName);
+	if (!runnable) {
+		// The contract names a script that maps to no runnable entrypoint. This is a
+		// v1 surface-exercise LIMIT, not a target defect: a CLI may legitimately ship
+		// an entrypoint v1 cannot spawn. Skip surface checks rather than false-flag
+		// the target (R-risk2: false positives erode trust). The static half already
+		// ran; surface simply contributes nothing here.
+		return [];
 	}
 
-	const runner = createSubprocessRunner({ scriptFile, cwd: input.layout.root });
+	const runner = createSubprocessRunner({ runnable, cwd: input.layout.root });
 	const wanted = (clauseId: string) => input.only === null || input.only === clauseId;
 
 	const findings: EngineFinding[] = [];

@@ -231,6 +231,16 @@ describe("surface audit — each clause fires", () => {
 		expect(outcome.findings).toEqual([]);
 	});
 
+	test("a facade CLI with a .sh entrypoint is exercised, not false-flagged", async () => {
+		// good-sh-entrypoint fronts its facade CLI with a shell script (like the real
+		// test-runner: "test-runner": "./src/test-runner.sh"). A .ts-only resolver
+		// would report a spurious json-valid finding; the runnable resolver must run
+		// the .sh directly and find nothing (R-risk2: no false positives on real CLIs).
+		const outcome = await runFullAudit({ targetRoot: fixture("good-sh-entrypoint"), only: null });
+		expect(outcome.laneDetected).toBe(true);
+		expect(outcome.findings).toEqual([]);
+	});
+
 	test("a broken --json failure envelope fires json-valid-under-failure", async () => {
 		const outcome = await runFullAudit({
 			targetRoot: fixture("bad-envelope-on-failure"),
