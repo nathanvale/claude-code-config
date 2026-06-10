@@ -2,7 +2,7 @@
 title: Browser-Use Module Split
 slug: browser-use-module-split
 type: decision-log
-status: in-progress
+status: complete
 date: "2026-06-10"
 timezone: Australia/Melbourne
 owner: browser-use-module-split
@@ -349,6 +349,17 @@ V2 Ideas:
 
 ## Notes
 
+- **Outcome (2026-06-10): complete.** U1-U15 landed; all 7 decisions held with no
+  reversal. Source is 8 modules (driver `browser-use.ts` 509 lines, down from
+  4,449); tests are 6 per-module suites + slimmed driver + shared helpers. Final
+  count reconciliation: core 1 + parser 19 + transport 15 + discovery 24 +
+  selection 62 + operations 19 + driver 5 = 145, equal to the deleted oracle —
+  zero assertions lost or duplicated. Coverage byte-identical with/without the
+  oracle. Build emits the unchanged 5-file dist / 7-file pack payload. Two
+  cross-region test helpers the plan did not enumerate were promoted to
+  `browser-use-test-helpers.ts` under Decision 6 (`listPagesStdout` at U11,
+  `TARGETS_CONTRACT` at U12) — the by-consumer rule of Decision 7 applied to
+  fixtures.
 - **Per-unit gate (in force every unit):** `489 tests, exactly 1 failure, and
   that failure is `preflight-warm-chrome.test.ts > "docs teach continuation
   precedence"`` (pre-existing red from SKILL.md edit `e401f43`, unrelated to the
@@ -372,5 +383,5 @@ V2 Ideas:
 - **Unresolved follow-ups (not decisions):** reconcile the pre-existing
   `preflight-warm-chrome.test.ts` red with the tightened SKILL.md; promote memory
   `feedback-adversarial-before-heal` into `AGENTS.md` via
-  `/prompt-system-workflow`; `skills/browser-use/CLEANUP_PLAN.md` is stale scratch
-  (safe to delete).
+  `/prompt-system-workflow`. (`skills/browser-use/CLEANUP_PLAN.md` deleted
+  2026-06-10.)
