@@ -33,7 +33,7 @@ export const FALLOW_MCPORTER_COMMAND_ENV_VAR =
 /**
  * Default mcporter command vector when no override is set.
  */
-export const FALLOW_MCPORTER_DEFAULT_COMMAND = ["mcporter"] as const;
+const FALLOW_MCPORTER_DEFAULT_COMMAND = ["mcporter"] as const;
 
 /**
  * Reachability evidence returned by `trace_export`.
@@ -97,7 +97,7 @@ export type TraceCommandRunner = (
  * bounded wait turns a hung server into a transport failure instead of an
  * indefinite hang.
  */
-export const FALLOW_TRACE_TIMEOUT_MS = 90_000;
+const FALLOW_TRACE_TIMEOUT_MS = 90_000;
 
 export type ResolveMcporterCommandResult =
 	| { ok: true; vector: readonly [string, ...string[]] }
