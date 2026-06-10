@@ -57,6 +57,15 @@ export function okCommand(stdout: string): McporterCommandResult {
 	return { exitCode: 0, stdout, stderr: "" };
 }
 
+// list_pages stdout for an array of {id,url,title} pages. Cross-region: U5
+// discovery builds list responses, U7 operations stubs list_pages on the
+// operation runtime, so it lives here rather than in either carved file.
+export function listPagesStdout(
+	pages: Array<{ id?: string; url?: string; title?: string }>,
+): string {
+	return JSON.stringify({ pages });
+}
+
 export function commandVector(input: McporterCommandInput): string[] {
 	return [input.command, ...input.args];
 }
