@@ -149,6 +149,18 @@ _Avoid_: optional note, hidden consideration, mandatory empty Gotchas section
 A targeted quality-gate helper that produces a Skill Health Report for one selected skill target or review artifact.
 _Avoid_: auto-healer, portfolio dashboard, periodic audit, broad repo sweep
 
+**Skill self-audit loop**:
+A stateful audit loop for one target `SKILL.md` where fresh passes add only new accepted contradictions to an audit loop file and stop when a pass adds none. It records evidence and repair candidates; it is not source repair or generic reviewer convergence.
+_Avoid_: mvp-loop-maker, generic reviewer loop, auto repair, Skill Doctor
+
+**Audit loop file**:
+A committed repo-relative markdown state file at `docs/skill-audits/<skill-directory-name>/self-audit-loop.md` that carries the target skill, loaded owner paths, findings ledger, stop rule, repair handoff, and next safe action for a later `/goal` or `/loop` run. It is evidence and driver state, not canonical skill instruction or skill-local runbook material.
+_Avoid_: canonical instruction, source patch, transcript archive, reviewer ledger, skill-local docs
+
+**Skill contradiction**:
+A supported conflict between two skill instruction sources where both cannot be followed at the same time. Common forms are authority conflict, scope conflict, lifecycle conflict, and safety conflict.
+_Avoid_: style issue, vague wording, missing example, preference, general improvement
+
 **Skill Health Report**:
 A structured quality-gate result that separates target status, findings, repair hints, rerun evidence, and blocked or degraded handoff.
 _Avoid_: scorecard, generic review notes, auto-fix plan, reusable-rule approval
