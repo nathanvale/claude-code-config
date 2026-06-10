@@ -3,7 +3,7 @@ title: Implement browser-use prepare and operation front door
 type: feat
 status: active
 date: 2026-06-04
-origin: docs/decisions/2026-06-03-browser-use-prepare-operation-decision-log.md
+origin: skills/browser-use/docs/decisions/2026-06-03-browser-use-prepare-operation-decision-log.md
 ---
 
 # Implement browser-use prepare and operation front door
@@ -340,16 +340,16 @@ Operation capability mapping:
 - Route success shape changes may require careful migration in existing Router tests.
 - Sharing `mcporter` command-vector handling can touch Browser Adapter Proof; parity tests are acceptable if extraction increases risk.
 - Browser content privacy is a release gate for target listing, snapshots, screenshots, diagnostics, and target state.
-- Existing dirty changes in `AGENTS.md`, `CONTEXT.md`, `scripts/agent-instructions.sh`, and `docs/decisions/2026-06-03-browser-use-prepare-operation-decision-log.md` need preservation during implementation.
+- Existing dirty changes in `AGENTS.md`, `CONTEXT.md`, `scripts/agent-instructions.sh`, and `skills/browser-use/docs/decisions/2026-06-03-browser-use-prepare-operation-decision-log.md` need preservation during implementation.
 
 ---
 
 ## Sources
 
-- Decision log: `docs/decisions/2026-06-03-browser-use-prepare-operation-decision-log.md`
-- Prior Router plan: `docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`
-- Clean Router plan: `docs/plans/2026-06-03-004-rewrite-browser-adapter-router-clean-plan.md`
-- Mcporter command-resolution plan: `docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md`
+- Decision log: `skills/browser-use/docs/decisions/2026-06-03-browser-use-prepare-operation-decision-log.md`
+- Prior Router plan: `skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`
+- Clean Router plan: `skills/browser-use/docs/plans/2026-06-03-004-rewrite-browser-adapter-router-clean-plan.md`
+- Mcporter command-resolution plan: `skills/browser-use/docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md`
 - Glossary: `CONTEXT.md`
 - Browser use skill: `skills/browser-use/SKILL.md`
 - Command contract: `skills/browser-use/scripts/command-contract.ts`

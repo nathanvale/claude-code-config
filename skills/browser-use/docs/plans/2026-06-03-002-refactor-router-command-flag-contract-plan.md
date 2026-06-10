@@ -4,7 +4,7 @@ type: refactor
 status: completed
 date: 2026-06-03
 deepened: 2026-06-03
-origin: docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
+origin: skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
 ---
 
 # refactor: Router command discovery flags
@@ -15,7 +15,7 @@ Narrow Browser Adapter Router command flags per command. Keep `route` and `statu
 from advertising report-only flags. Add a contract/parser alignment test so the
 facade contract and CLI parser cannot drift silently.
 
-Use `docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md` as the
+Use `skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md` as the
 retrospective anchor: this slice must narrow discovery metadata without changing
 evidence-first routing, report discovery, or envelope input semantics.
 

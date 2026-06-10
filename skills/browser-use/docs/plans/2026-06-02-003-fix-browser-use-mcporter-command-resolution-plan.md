@@ -110,7 +110,7 @@ The live Manpower run showed a mismatch: `SKILL.md` examples said `mcporter`, bu
 - The exact env var name must be stable once shipped; prefer one clear name over multiple aliases.
 - `Bun.spawn` already supports command arrays, so the implementation should stay small.
 - Tests currently fixture exact `bunx mcporter` command strings; most churn will be in test fixtures, not runtime behavior.
-- Broader Browser Adapter Router work is tracked separately in `docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`.
+- Broader Browser Adapter Router work is tracked separately in `skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`.
 
 ## Sources
 

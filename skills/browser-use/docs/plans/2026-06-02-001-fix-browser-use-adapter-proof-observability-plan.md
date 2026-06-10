@@ -3,7 +3,7 @@ title: "fix: Add browser-use adapter proof observability"
 type: fix
 status: active
 date: 2026-06-02
-origin: docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
+origin: skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
 issue: 149
 ---
 
@@ -200,7 +200,7 @@ Future slices add `agent-browser` and `playwright-cdp` branches after their proo
   - `CONTEXT.md`
   - `docs/adr/0008-browser-use-owns-warm-chrome-binding-lifecycle.md`
   - `docs/adr/0009-browser-use-fixed-cdp-convention-and-runtime-proof.md`
-  - `docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md`
+  - `skills/browser-use/docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md`
 - **Approach:** Delete the `Warm Chrome Binding` glossary entry. Add `Browser Adapter Proof` as a glossary term: a read-only `browser-use` proof that a Browser Adapter is attached to verified Warm Chrome. Mark ADR `0008` superseded/rejected and add a short replacement ADR for fixed CDP convention plus runtime proof. Update the active port-lifecycle plan so future readers do not treat binding/allocation as active scope.
 - **Test Scenarios:**
   - Search finds no active glossary definition for `Warm Chrome Binding`.
@@ -406,11 +406,11 @@ Future slices add `agent-browser` and `playwright-cdp` branches after their proo
 
 ## Sources
 
-- `docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`
-- `docs/research/2026-05-30-browser-use-warm-chrome-findings.md`
-- `docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md`
-- `docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md`
-- `docs/plans/2026-06-01-004-fix-warm-chrome-runtime-continuation-plan.md`
+- `skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`
+- `skills/browser-use/docs/research/2026-05-30-browser-use-warm-chrome-findings.md`
+- `skills/browser-use/docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md`
+- `skills/browser-use/docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md`
+- `skills/browser-use/docs/plans/2026-06-01-004-fix-warm-chrome-runtime-continuation-plan.md`
 - `CONTEXT.md`
 - `docs/adr/0006-warm-chrome-via-dedicated-debug-profile.md`
 - `docs/adr/0008-browser-use-owns-warm-chrome-binding-lifecycle.md`

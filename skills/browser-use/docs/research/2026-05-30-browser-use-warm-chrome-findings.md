@@ -8,7 +8,7 @@ related:
   - prototypes/browser-use-uplift/
   - prototypes/build-scratch-handoff/
   - skills/browser-use/SKILL.md
-  - docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
+  - skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
   - docs/plans/2026-05-30-001-feat-browser-domain-memory-plan.md
 ---
 

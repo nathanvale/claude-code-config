@@ -3,7 +3,7 @@ title: "feat: browser-domain-memory — durable per-domain browser memory with t
 type: feat
 status: active
 date: 2026-05-31
-origin: docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
+origin: skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md
 ---
 
 # feat: browser-domain-memory — durable per-domain browser memory with three playback modes
@@ -20,7 +20,7 @@ the next run uses one of **three modes the user configures per domain**:
 heal/recapture instead of trusted blindly).
 Five memory-quality gates keep the store from rotting; live `op` auth keeps the warm profile
 hands-free; v1 runs serialise through one global warm-Chrome lock. (see origin:
-`docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`)
+`skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`)
 
 ---
 
@@ -1299,12 +1299,12 @@ crosses a few cross-cutting concerns the units must honor:
 
 ## Sources & Research
 
-- Origin requirements: `docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`
+- Origin requirements: `skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-requirements.md`
   (D1–D10, scope, success criteria).
 - Engine decision: `docs/adr/0006-warm-chrome-via-dedicated-debug-profile.md`.
-- Warm-Chrome findings: `docs/research/2026-05-30-browser-use-warm-chrome-findings.md`.
+- Warm-Chrome findings: `skills/browser-use/docs/research/2026-05-30-browser-use-warm-chrome-findings.md`.
 - Tape-format prior art (Recorder JSON limits — no variable syntax; selector fallback array; silent-
-  substitution warning): `docs/research/2026-05-30-tape-format-record-replay-browser-automation.md`.
+  substitution warning): `skills/browser-use/docs/research/2026-05-30-tape-format-record-replay-browser-automation.md`.
 - Validated prototype logic (lift, don't re-derive), all under `prototypes/browser-use-uplift/`:
   `recorder-json/`, `booking-furdo/`, `runbook-dual/`, `self-healing/`, `consult-gate/`,
   `capture-verify/`, `staleness/`, `provenance/`, `reliable-submit/`, `live-auth/`,

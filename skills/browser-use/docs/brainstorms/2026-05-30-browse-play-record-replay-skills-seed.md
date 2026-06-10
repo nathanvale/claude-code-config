@@ -5,7 +5,7 @@ status: seed
 updated: 2026-05-30
 summary: "Seed for a fresh /ce-brainstorm: two lean skills in claude-code-config — browse (freestyle + record a session) and play (replay it). Built on the steipete browser-use skill, NOT the side-quest BA plugin. Tape format RESOLVED by research: deterministic JSON tape + variable slots + tiered self-heal with human-review gate."
 related:
-  - docs/research/2026-05-30-tape-format-record-replay-browser-automation.md
+  - skills/browser-use/docs/research/2026-05-30-tape-format-record-replay-browser-automation.md
   - docs/research/2026-05-30-skill-composability-handoff-observability.md
   - docs/brainstorms/2026-05-30-skill-composability-handoff-principle.md
   - skills/browser-use/SKILL.md
@@ -45,7 +45,7 @@ managed-domain contracts, preflight, migration forks, BSS). The whole point is t
 ## Tape format — RESOLVED by research (2026-05-30)
 
 Was the big open question; the newsroom sweep is decision-grade. Full evidence:
-`docs/research/2026-05-30-tape-format-record-replay-browser-automation.md`.
+`skills/browser-use/docs/research/2026-05-30-tape-format-record-replay-browser-automation.md`.
 
 **Answer: hybrid, deterministic JSON tape as the spine.** Not pure-deterministic (too brittle), not
 LLM-replay (peer-reviewed: temp=0 LLMs vary ~15%/run → true LLM-loop replay is impossible + costly).

@@ -3,7 +3,7 @@ title: Design browser-use Browser Adapter Router
 type: architecture
 status: completed
 date: 2026-06-02
-origin: docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md
+origin: skills/browser-use/docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md
 ---
 
 # Design browser-use Browser Adapter Router
@@ -49,8 +49,8 @@ Branch collateral:
 - Added `.agents/skills/router-cli-smoke` discovery entry.
 - Added `skills/browser-use/TEST_MATRIX.md` as the Router and Browser Adapter Proof verification matrix.
 - Added `docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md`.
-- Added `docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`.
-- Added `docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`.
+- Added `skills/browser-use/docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`.
+- Added `skills/browser-use/docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`.
 - Added `docs/plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md`.
 - Updated `AGENTS.md`, `CONTEXT.md`, `skills/browser-use/SKILL.md`, and create-cli references for Router ownership and CLI surface guardrails.
 - Expanded Warm Chrome and Browser Adapter Proof tests where Router command-surface and run-id behavior intersected existing preflight contracts.
@@ -511,8 +511,8 @@ Intent only. The exact report-source-order state machine, the report-discovery e
 ## Sources
 
 - Prototype: `prototypes/browser-adapter-router/research.html`
-- Research stock: `docs/research/2026-06-02-browser-adapter-router-research-stock.md`
-- Command-resolution plan: `docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md`
+- Research stock: `skills/browser-use/docs/research/2026-06-02-browser-adapter-router-research-stock.md`
+- Command-resolution plan: `skills/browser-use/docs/plans/2026-06-02-003-fix-browser-use-mcporter-command-resolution-plan.md`
 - ADR 0012: `docs/adr/0012-browser-adapter-router-uses-evidence-first-routing.md`
 - ADR 0011: `docs/adr/0011-skill-prose-names-tools-clis-resolve-invocation.md`
 - Domain glossary: `CONTEXT.md`

@@ -3,8 +3,8 @@ title: Rewrite Browser Adapter Router clean plan
 type: architecture
 status: active
 date: 2026-06-03
-origin: docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
-supersedes: docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
+origin: skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
+supersedes: skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
 ---
 
 # Rewrite Browser Adapter Router clean plan
@@ -394,13 +394,13 @@ Code-check rubric:
 
 ## Source Map
 
-- Old plan: `docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`
+- Old plan: `skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md`
 - ADR 0012: `docs/adr/0012-browser-adapter-router-uses-evidence-first-routing.md`
 - ADR 0013: `docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md`
-- Recovery metadata follow-up: `docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`
-- Command flag follow-up: `docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`
+- Recovery metadata follow-up: `skills/browser-use/docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`
+- Command flag follow-up: `skills/browser-use/docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`
 - Facade recovery choices follow-up: `docs/plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md`
-- Research stock: `docs/research/2026-06-02-browser-adapter-router-research-stock.md`
+- Research stock: `skills/browser-use/docs/research/2026-06-02-browser-adapter-router-research-stock.md`
 - Prototype: `prototypes/browser-adapter-router/research.html`
 - Test matrix: `skills/browser-use/TEST_MATRIX.md`
 - Cross-repo facade prerequisite: `side-quest-engineering` commit `00e4db4d`

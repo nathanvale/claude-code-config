@@ -321,4 +321,4 @@ Read paths discover and return a verified candidate without writing the hint. On
 - `skills/browser-use/references/warm-chrome.md`
 - `docs/adr/0006-warm-chrome-via-dedicated-debug-profile.md`
 - `docs/adr/0008-browser-use-owns-warm-chrome-binding-lifecycle.md` (deferred durable-binding design)
-- `docs/research/2026-05-30-browser-use-warm-chrome-findings.md`
+- `skills/browser-use/docs/research/2026-05-30-browser-use-warm-chrome-findings.md`

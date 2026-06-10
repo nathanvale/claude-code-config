@@ -4,7 +4,7 @@ topic: browser-use Browser Adapter Router
 type: research-stock
 status: source-evidence
 related:
-  - docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
+  - skills/browser-use/docs/plans/2026-06-02-004-design-browser-use-adapter-router-plan.md
   - docs/adr/0012-browser-adapter-router-uses-evidence-first-routing.md
   - prototypes/browser-adapter-router/research.html
 ---

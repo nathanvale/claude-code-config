@@ -11,7 +11,7 @@ date: 2026-06-01
 
 Finish the Warm Chrome preflight migration to the shared ADR-0016 runtime continuation contract. The earlier safety fixes are already present; this plan updates the remaining JSON envelopes, tests, static action vocabulary, and docs so agents read `continuation` as the current-run authority instead of inferring recovery from `runtime_actions` order.
 
-This supersedes the stale continuation parts of `docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md` without editing that completed plan.
+This supersedes the stale continuation parts of `skills/browser-use/docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md` without editing that completed plan.
 
 ---
 
@@ -68,7 +68,7 @@ The current Warm Chrome code already validates launch binary inputs before endpo
 ### Deferred to Follow-Up Work
 
 - Generic facade package changes.
-- Warm Chrome port lifecycle / binding work in `docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md`.
+- Warm Chrome port lifecycle / binding work in `skills/browser-use/docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md`.
 - Browser-domain-memory implementation.
 - Adapter routing beyond the existing no-fallback constraint.
 
@@ -268,14 +268,14 @@ flowchart TB
 - **Compatibility expectations:** Existing tests and docs mention `needs_browser_entry` and `do_not_fallback` as runtime actions. The implementation must move those state/guard ids to `failure_domain` and `continuation.constraints` instead of preserving, aliasing, or documenting them as actions.
 - **Constraint overreach:** A forbidden side-effect constraint can accidentally reject the primary action if it forbids `browser` or `write` while `launch_warm_chrome` or `repair_profile` is the next action. Use forbidden action ids for adapter/cold-browser fallback.
 - **Facade link drift:** The package dependency is `"*"`, so local linked facade behavior may be stricter than the last committed tests assumed. Validate with the live package before declaring green.
-- **Parallel active plan:** `docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md` is active and broader. Keep this patch focused on continuation, not endpoint binding lifecycle.
+- **Parallel active plan:** `skills/browser-use/docs/plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md` is active and broader. Keep this patch focused on continuation, not endpoint binding lifecycle.
 - **ADR churn:** No new ADR is planned. ADR-0016 plus ADR-0006/0008 already own the durable decisions; this plan applies them to Warm Chrome preflight.
 
 ---
 
 ## Sources
 
-- `docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md`
+- `skills/browser-use/docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md`
 - `skills/create-cli/references/cli-command-facade.md`
 - `skills/browser-use/SKILL.md`
 - `skills/browser-use/references/warm-chrome.md`

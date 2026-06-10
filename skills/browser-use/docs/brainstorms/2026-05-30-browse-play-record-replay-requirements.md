@@ -5,7 +5,7 @@ status: requirements
 scope: deep-feature
 related:
   - docs/ideation/2026-05-30-browse-play-record-replay-ideation.md
-  - docs/research/2026-05-30-browser-use-warm-chrome-findings.md
+  - skills/browser-use/docs/research/2026-05-30-browser-use-warm-chrome-findings.md
   - skills/browser-use/SKILL.md
   - skills/browser-use/references/warm-chrome.md
   - CONTEXT.md
@@ -211,7 +211,7 @@ binary** with classic `--remote-debugging-port` on a **dedicated persistent `--u
 (real cookies, logins survive; cold-start proven). Consciously refused, with evidence: Chrome 136+
 blocks debug on the default profile, and the M144 `chrome://inspect` toggle exposes no endpoint
 either agent-browser or chrome-devtools-mcp can consume. (Full recipe: `references/warm-chrome.md`;
-findings: `docs/research/2026-05-30-browser-use-warm-chrome-findings.md`.) An ADR is warranted to
+findings: `skills/browser-use/docs/research/2026-05-30-browser-use-warm-chrome-findings.md`.) An ADR is warranted to
 record this durably.
 
 ### D10 — Concurrency: serialise per domain (true parallelism deferred)

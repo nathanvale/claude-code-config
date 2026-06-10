@@ -4,7 +4,7 @@ topic: browse-play-record-replay-skills
 focus: wide-open re-examine of the two-skill record/replay browser thesis, landed lean
 mode: repo-grounded
 related:
-  - docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
+  - skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
   - skills/browser-use/SKILL.md
   - skills/one-password/SKILL.md
 ---

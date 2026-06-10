@@ -7,7 +7,7 @@ summary: "Newsroom sweep on the browse/play tape-format question: plain JSON ste
 source: newsroom-investigate (@side-quest/word-on-the-street CLI)
 source_system: repo
 related:
-  - docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
+  - skills/browser-use/docs/brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md
 ---
 
 # Tape format for record-replay browser automation — research

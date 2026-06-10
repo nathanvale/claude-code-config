@@ -7,7 +7,7 @@ date: "2026-06-10"
 timezone: Australia/Melbourne
 owner: browser-use-module-split
 source:
-  - docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
+  - skills/browser-use/docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
   - skills/browser-use/src/browser-use.ts
 decision_metadata_format: fenced-yaml-per-decision
 ---
@@ -39,7 +39,7 @@ decided_at: "2026-06-10"
 decision: keep browser-use.ts as the entry driver and re-export the public surface
 owner: browser-use-module-split
 source:
-  - docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
+  - skills/browser-use/docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
 ```
 
 Decision:
@@ -84,7 +84,7 @@ decided_at: "2026-06-10"
 decision: sink Failure<A>, OutputMode, ResultKind, TargetHints into the core leaf to make the layering acyclic
 owner: browser-use-module-split
 source:
-  - docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
+  - skills/browser-use/docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
 ```
 
 Decision:
@@ -198,7 +198,7 @@ decided_at: "2026-06-10"
 decision: place resolveOperationTarget in browser-use-selection.ts, with operations importing down into it
 owner: browser-use-module-split
 source:
-  - docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
+  - skills/browser-use/docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
 ```
 
 Decision:
@@ -237,7 +237,7 @@ decided_at: "2026-06-10"
 decision: gate the test carve on per-step test-count delta, not oracle greenness
 owner: browser-use-module-split
 source:
-  - docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
+  - skills/browser-use/docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
   - adversarial review of KTD4 (planning session)
 ```
 
@@ -293,7 +293,7 @@ decided_at: "2026-06-10"
 decision: extract cross-block test fixtures into browser-use-test-helpers.ts before any per-module carve
 owner: browser-use-module-split
 source:
-  - docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
+  - skills/browser-use/docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md
 ```
 
 Decision:

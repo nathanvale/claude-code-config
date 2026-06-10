@@ -8,7 +8,7 @@ When writing or routing information, follow these rules:
 
 - **CLAUDE.md** is session-start context only. Never dump durable facts here.
 - **context/** is for compact durable recall: people, glossary, project summaries, preferences, and reusable context.
-- **docs/** is for full authored documents: research, plans, specs, decisions, and logs.
+- **docs/** (any `**/docs/`, including nested folders like `skills/<name>/docs/`) is for full authored documents: research, plans, specs, decisions, and logs. Co-locate a `docs/` folder with the code or skill it serves when that ownership is clear; the repo-root `docs/` is the default when it is not.
 - **Repos own their own truth.** Write durable context and docs to the owning repo, not to `my-second-brain`.
 - **my-second-brain** is the life vault — only for cross-project synthesis, personal durable knowledge, and concerns not owned by a specific repo.
 - Promote to CLAUDE.md only when the information is needed in most sessions.
