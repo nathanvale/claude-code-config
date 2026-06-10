@@ -66,7 +66,7 @@ Use this for Notion-backed Coding Task Tracker work.
 - List pickable work with `bun run coding-task-tracker --owner <path> ready --json`.
 - Fetch task detail with `bun run coding-task-tracker --owner <path> get --task-id <id> --json`.
 - Create backlog tasks with `bun run coding-task-tracker --owner <path> create --name <text> --json`.
-- Claim pickable tasks with `bun run coding-task-tracker --owner <path> claim --task-id <id> --agent <name> --branch <branch> --json`.
+- Claim pickable tasks with `bun run coding-task-tracker --owner <path> claim --task-id <id> --agent <name> --branch <branch> --json`; `--branch` is the branch the work will land on, not the current branch — propose a new one (or ask once) when none exists yet.
 - Record progress with `bun run coding-task-tracker --owner <path> note --task-id <id> --message <text> --json`.
 - Use owner-qualified `block`, `review`, `done`, `priority`, or `triage` commands for state changes.
 - Read the JSON `next_action` before continuing.
@@ -111,6 +111,7 @@ Use this for Notion-backed Coding Task Tracker work.
 - `bind` writes owner config; run it only for the path that should own the tracker.
 - Slow task capture: avoid create-note-readback loops; capture tasks first, enrich only when needed.
 - `No matching ... task found` after create: target writes with `--page-id <uuid>`; `--task-id` is short-numeric only. See `bun run coding-task-tracker note --help`.
+- `claim --branch` has no default; don't reuse an unrelated current branch. Name the work branch, or propose/ask once when none exists.
 
 ## Verification
 
