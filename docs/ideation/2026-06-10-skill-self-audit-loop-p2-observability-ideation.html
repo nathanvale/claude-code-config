@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>P2 re-posing — observability axis ideation</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1d212a; --ink: #e7e9ee;
+    --muted: #9aa3b2; --line: #2a2f3a; --accent: #7cc4ff; --good: #6ee7a8;
+    --warn: #ffd479; --bad: #ff8a8a; --chip: #232834;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 40px 24px 96px; }
+  header h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); margin: 0 0 4px; }
+  header .meta { color: var(--muted); font-size: 13px; margin-top: 12px; }
+  .tldr { background: linear-gradient(180deg, var(--panel2), var(--panel));
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 12px; padding: 18px 20px; margin: 28px 0 8px; }
+  .tldr h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--accent); }
+  .tldr p { margin: 6px 0; }
+  h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin: 40px 0 14px; border-bottom: 1px solid var(--line);
+    padding-bottom: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px; margin: 14px 0; }
+  .card.top { border-left: 3px solid var(--good); }
+  .card h3 { margin: 0 0 4px; font-size: 18px; }
+  .rank { color: var(--good); font-variant-numeric: tabular-nums; font-weight: 700;
+    margin-right: 8px; }
+  .frames { color: var(--muted); font-size: 12px; margin: 2px 0 12px; }
+  .card p { margin: 8px 0; }
+  .label { color: var(--muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.06em; }
+  .chip { display: inline-block; background: var(--chip); border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted);
+    margin: 2px 4px 2px 0; }
+  .basis { background: var(--panel2); border-radius: 8px; padding: 10px 12px;
+    font-size: 14px; margin: 10px 0; }
+  .mt { color: var(--accent); font-style: italic; }
+  .conv { background: var(--panel2); border: 1px dashed var(--line); border-radius: 10px;
+    padding: 12px 16px; margin: 10px 0; font-size: 14px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.06em; }
+  td.why { color: var(--muted); }
+  .rej { color: var(--bad); font-weight: 600; }
+  .next { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px; margin-top: 14px; }
+  .next ol { margin: 8px 0 0; padding-left: 22px; }
+  .next li { margin: 6px 0; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 5px; font-size: 0.92em; }
+  .spine { border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px;
+    background: var(--panel); margin: 14px 0; }
+  .spine .diagram { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; color: var(--muted); white-space: pre; overflow-x: auto;
+    line-height: 1.5; margin: 6px 0; }
+  .verdict { color: var(--good); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>P2 re-posing — the observability axis</h1>
+  <p class="sub">Where does the "P2" decision actually live, once you stop asking "prose vs. mechanical check"?</p>
+  <p class="meta">2026-06-10 · ideation (not a plan) · subject: <code>skill-self-audit-loop</code> v3 / <code>create-skill</code> integration · 6 frames → 36 raw candidates → 4 survivors</p>
+</header>
+
+<div class="tldr">
+  <h2>The surprise</h2>
+  <p><strong>The re-posing was itself slightly off.</strong> P2 was framed as "do you want observability into the audit offer?" Five of six frames independently converged that the observability question is <em>already answered three times over</em> — so the live decision is much smaller than P2 implied.</p>
+  <p><strong>Net:</strong> ship the offer as prose, retract R-A's "mechanical trigger" thesis, and answer "is breadth happening?" with <code>ls</code> / <code>git log</code> over <code>docs/skill-audits/</code> when curious. <strong>Build nothing.</strong> One genuinely separate question survives (offer vs. periodic sweep) and belongs in v4/deferred, not P2.</p>
+</div>
+
+<h2 class="section">The convergence (the strongest signal)</h2>
+<div class="spine">
+  <p>Six frames, run blind to each other, kept landing on one idea: <strong>the persisted artifact is already the instrument — don't build a separate observer.</strong></p>
+  <div class="diagram">  offer fires ──accept──▶ docs/skill-audits/&lt;skill&gt;/self-audit-loop.md   (rich findings, last_pass, passes)
+              └─decline──▶ (no file)  ◀── this "invisibility" IS the readable state
+
+  breadth?   →  ls docs/skill-audits/            # how many skills ever audited
+  freshness? →  frontmatter last_pass per file   # how stale
+  timeline?  →  git log -- docs/skill-audits/     # free event stream, after the fact
+  the gap?   →  a skill with no file = never audited = the "invisible decline", visible</div>
+  <p style="margin-bottom:0">That's pull-not-push (ADHD-friendly), adds zero maintenance, and never fights the runbook's "no telemetry until manual review fails" rule — because file-state-at-rest is not behavioral telemetry.</p>
+</div>
+
+<h2 class="section">Survivors</h2>
+
+<div class="card top">
+  <h3><span class="rank">#1</span>The artifact is the instrument — measure state-at-rest, not events</h3>
+  <p class="frames">Converged from: Pain #1/#5 · Inversion #3 · Leverage #1/#6 · Analogy #5 (library returns) · Constraint #5 (git already wrote it)</p>
+  <p>Stop instrumenting the ephemeral offer; read the durable audit directory. <code>ls docs/skill-audits/</code> is the breadth metric. Each file's <code>last_pass</code> is freshness. <code>git log -- docs/skill-audits/</code> is a free, timestamped, per-skill event stream you query the day you're curious. The "invisible decline" stops being a gap because <em>absence of a file is itself a first-class readable state</em> ("never audited").</p>
+  <div class="basis"><span class="label">Basis</span> &nbsp;<code>direct:</code> Path Rule stores one stable file per skill at <code>docs/skill-audits/&lt;skill-directory-name&gt;/self-audit-loop.md</code> with <code>passes</code> / <code>last_pass</code> frontmatter. <code>reasoned:</code> observability is only valuable when there's variance to read; the variance already lives on disk and in git, so no new record is needed.</p>
+  <p><span class="chip">no telemetry</span><span class="chip">zero maintenance</span><span class="chip">pull-not-push</span><span class="chip">honours runbook</span></p>
+  <p class="mt">Meeting test: "Can you answer 'what's under-audited?' by reading a directory instead of a counter?"</p>
+</div>
+
+<div class="card top">
+  <h3><span class="rank">#2</span>The runbook already decided P2</h3>
+  <p class="frames">Converged from: Pain #2 · Inversion #4</p>
+  <p>P2 reads as an open design fork, but the create-skill runbook already closed it: "Add telemetry only when repeated evidence shows manual review / status / repair is failing." A decline log <em>is</em> telemetry; no failure evidence exists yet. So the honest resolution is "ship prose, revisit only if manual review demonstrably fails" — litigating P2 further is re-opening a question your own constitution settled.</p>
+  <div class="basis"><span class="label">Basis</span> &nbsp;<code>direct:</code> runbook "State, Memory, And Observability" section: telemetry is gated on demonstrated manual-review failure. <code>reasoned:</code> the burden of proof is on adding the record, and that burden is unmet.</p>
+  <p><span class="chip">collapses to one line</span><span class="chip">no new build</span></p>
+  <p class="mt">Meeting test: "Has manual review of skill audits actually failed yet — or are we pre-building for a failure we haven't seen?"</p>
+</div>
+
+<div class="card top">
+  <h3><span class="rank">#3</span>Demote breadth — it was always the vanity metric</h3>
+  <p class="frames">Converged from: Pain #3/#6 · Inversion #5 · Analogy #1 (herd-immunity threshold)</p>
+  <p>The product-lens reviewer already flagged "audited far more often" as activity, not outcome. The re-pose to "observability" was an escape hatch keeping a vanity metric alive under a respectable name. The honest cut: replace aggregate breadth with the per-skill outcome you already hold — the gating metric "≥1 unplanted contradiction caught," which <strong>P1 just satisfied</strong>. Observability of the <em>offer</em> dissolves because offer-breadth was never the real success criterion.</p>
+  <div class="basis"><span class="label">Basis</span> &nbsp;<code>direct:</code> v3 doc Success Criteria now leads with the binary gating outcome metric; the product reviewer named breadth as vanity. <code>reasoned:</code> an unmeasured criterion no one will query isn't a gap — it's an over-specified goal; loosen it.</p>
+  <p><span class="chip">cheapest exit</span><span class="chip">decision, not feature</span></p>
+  <p class="mt">Meeting test: "If you never know the aggregate firing rate, name the one decision you'd get wrong. If you can't, it's vanity — delete the question."</p>
+</div>
+
+<div class="card">
+  <h3><span class="rank">#4</span>Wildcard — the offer may be the wrong leverage point (offer vs. sweep)</h3>
+  <p class="frames">Converged from: Leverage #3 · Analogy #2 (health spot-check) / #3 (smoke-detector chirp)</p>
+  <p>P1 found 4 real bugs by a <em>manual library sweep</em> — with no offer mechanism at all. An offer compounds with create-skill invocations (rare); a periodic sweep compounds with <em>time × library size</em> and feeds the out-of-shape → recurrence → promotion pipeline in batches. This isn't a P2 answer — it questions whether v3's offer is the right design vs. the deferred hook/sweep.</p>
+  <div class="basis"><span class="label">Basis</span> &nbsp;<code>direct:</code> the P1 validation run (5 contradictions / 4 skills) used a manual sweep, not the offer. <code>reasoned:</code> recurrence detection needs volume; one-at-a-time offers starve it, a sweep feeds it.</p>
+  <p><span class="chip">separate question</span><span class="chip">v4 / deferred</span><span class="chip">do not decide in P2</span></p>
+  <p class="mt">Meeting test: "Did the 4 bugs come from an offer firing, or from sweeping manually? If manual, instrumenting the offer is polishing a path you don't use."</p>
+</div>
+
+<h2 class="section">Rejected (with reasons — this is the quality mechanism)</h2>
+<table>
+  <thead><tr><th>Rejected idea</th><th>Frame(s)</th><th class="why">Why it fails the bar</th></tr></thead>
+  <tbody>
+    <tr><td><span class="rej">Build a record</span> — offer-fire line, decline tombstone, born-at-offer log, ambient counter</td><td>Constraint #1/#6, Inversion #2/#5, Analogy #6</td><td class="why">Fights the runbook's explicit no-telemetry rule, and reintroduces the same prose-reliability problem as the offer (agent must remember to append). Building the banned thing to measure a free miss for a single dashboard-averse user.</td></tr>
+    <tr><td><span class="rej">Change the modality</span> — mandatory audit, or pure opt-in</td><td>Constraint #4</td><td class="why">Mandatory contradicts R3 + the v2 instruction-only stance; pure opt-in is the manual status quo v3 exists to kill. Both settled in earlier branches.</td></tr>
+    <tr><td><span class="rej">Sampled estimate</span> — tax-compliance / confidence-interval extrapolation</td><td>Analogy #4</td><td class="why">Confidence intervals on a one-skill-a-month single-user system. Right mechanism, absurd scale.</td></tr>
+    <tr><td><span class="rej">Forced-articulation decline</span> — type a reason to skip</td><td>Constraint #2</td><td class="why">Adds friction to the exact ADHD-hostile moment R-D warns about. Makes decline more expensive to reduce reflex-decline — backwards.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section">Grounding context</h2>
+<div class="conv">
+  <p><strong>Subject:</strong> the P2 decision in <code>docs/brainstorms/2026-06-10-skill-self-audit-loop-v3-requirements.md</code> — re-posed from "prose vs. mechanical check" onto an observability axis after the user noted the audit skill already has a findings log.</p>
+  <p><strong>Load-bearing facts:</strong> a declined offer is free per-pass but invisible in aggregate; the findings log exists only post-acceptance (decline → no file); the create-skill runbook resists telemetry until manual review demonstrably fails; the user (Nathan) has ADHD, wants low cognitive load, distrusts dashboards; P1 just validated the detector (5 contradictions / 4 skills) via a manual sweep, with no offer mechanism.</p>
+  <p><strong>Decomposition skipped</strong> — the subject is a single decision, not a decomposable surface.</p>
+</div>
+
+<h2 class="section">Next steps</h2>
+<div class="next">
+  <p>Ideation identifies directions; it does not decide. Candidate routes:</p>
+  <ol>
+    <li><strong>Decide P2 directly</strong> — survivors #1+#2+#3 collapse it to: ship prose, retract R-A's mechanical thesis, measure breadth by <code>ls</code>/<code>git log</code> when curious, build nothing. (Decision Mode.)</li>
+    <li><strong>Brainstorm survivor #4</strong> — the offer-vs-sweep question as a v4/deferred design, since P1 suggests the sweep may compound better than the offer.</li>
+    <li><strong>Fold the survivors into the v3 doc</strong> — rewrite the P2 section + retract R-A based on this convergence.</li>
+    <li><strong>Park P2</strong> and ship the queued <code>heal-skill</code> repair first.</li>
+  </ol>
+</div>
+
+</div>
+</body>
+</html>
