@@ -23,7 +23,6 @@ const FIXTURE_PATH = join(
 	'skill-feedback',
 	'fallow-close.jsonl',
 )
-
 async function fixtureText(): Promise<string> {
 	return Bun.file(FIXTURE_PATH).text()
 }
@@ -54,6 +53,15 @@ describe('skill-feedback hooks', () => {
 		})
 	})
 
+	test('verbatim close fixture reads the skill-launch model, no usage in v0', async () => {
+		// The real skill-launch entry carries message.model — model populates.
+		// usage is deliberately not read in v0 (the transcript holds no
+		// skill-scoped token total), so telemetry carries model only.
+		const detection = detectSkillFromClaudeTranscriptText(await fixtureText())
+
+		expect(detection?.telemetry).toEqual({ model: 'claude-opus-4-8' })
+	})
+
 	test('Claude Stop handler writes record request without transcript payload', async () => {
 		// Synthetic transcript: the sentinel proves transcript text never leaks
 		// into the record request. Kept inline so the real fixture stays verbatim.
@@ -61,6 +69,7 @@ describe('skill-feedback hooks', () => {
 			JSON.stringify({
 				type: 'assistant',
 				message: {
+					model: 'claude-opus-4-8',
 					role: 'assistant',
 					content: [
 						{ type: 'text', text: 'SECRET_TOKEN_SHOULD_NOT_APPEAR' },
@@ -118,6 +127,8 @@ describe('skill-feedback hooks', () => {
 				cwd: '/tmp/repo',
 				skill: 'fallow',
 				generatedTs: GENERATED_TS,
+				// Engine-read model rides along; usage is absent in v0.
+				telemetry: { model: 'claude-opus-4-8' },
 			})
 			expect(await readFile(recordPath, 'utf8')).not.toContain(
 				'SECRET_TOKEN_SHOULD_NOT_APPEAR',

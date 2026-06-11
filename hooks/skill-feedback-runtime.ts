@@ -4,10 +4,26 @@ import { fileURLToPath } from 'node:url'
 export type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
 export type SkillFeedbackSource = 'claude-stop' | 'codex-notify'
 
+/**
+ * Engine-read telemetry lifted from the transcript alongside the skill
+ * detection. v0 carries only `model` (the id from the skill-launch entry).
+ * `usage` is intentionally absent: the Stop hook fires after the skill runs
+ * inline, so the transcript holds no skill-scoped token total — only
+ * whole-session counts. v0 leaves usage an explicit record gap; v1 sources a
+ * real per-skill cost from OTel counters, not transcript summing.
+ *
+ * `model` is engine-read (KTD2a) — passed to the runner over stdin, never a CLI
+ * flag, so an agent cannot author it.
+ */
+export interface DetectionTelemetry {
+	model?: string
+}
+
 export interface SkillDetection {
 	source: SkillFeedbackSource
 	skill: string
 	outcome: SkillFeedbackOutcome
+	telemetry?: DetectionTelemetry
 }
 
 export interface RecordRequest {
@@ -18,6 +34,7 @@ export interface RecordRequest {
 	friction: string
 	generatedTs: string
 	explanation?: string
+	telemetry?: DetectionTelemetry
 }
 
 export interface HookRunResult {
@@ -51,6 +68,7 @@ export function buildRecordRequest(
 		friction: 'Hook captured no transcript payload.',
 		generatedTs,
 		explanation: `Captured by ${detection.source}.`,
+		telemetry: detection.telemetry,
 	}
 }
 
@@ -88,7 +106,14 @@ export async function runSkillFeedbackRecord(
 	if (request.explanation) {
 		args.push('--explanation', request.explanation)
 	}
-	return runBufferedProcess(args, { cwd: request.cwd })
+	// Engine-read telemetry (model/usage) flows over stdin, never as a flag
+	// (KTD2a): there is deliberately no --model/--usage flag for an agent to
+	// smuggle a secret through the redactor's trusted side. An empty stdin is a
+	// valid "no telemetry" signal that degrades the record rather than blocking.
+	const stdin = request.telemetry
+		? JSON.stringify(request.telemetry)
+		: ''
+	return runBufferedProcess(args, { cwd: request.cwd, stdin })
 }
 
 export async function runBufferedProcess(

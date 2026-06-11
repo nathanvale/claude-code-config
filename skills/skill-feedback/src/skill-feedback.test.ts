@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Receipt } from "./command-contract";
 import {
 	createDefaultSkillFeedbackRuntime,
+	parseStdinTelemetry,
 	recordSkillFeedbackReceipt,
 	type SkillFeedbackRuntime,
 } from "./skill-feedback-runner";
@@ -55,6 +56,7 @@ function stubRuntime(
 		checkIgnored: async () => 0,
 		readGitSha: async () => BASE_RECEIPT.git_sha,
 		readSkillVersion: async (skill) => `${skill}@0.1.0`,
+		readStdinTelemetry: async () => ({}),
 		...overrides,
 	});
 }
@@ -374,5 +376,81 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const envelope = parseEnvelope(result.stdout);
 		expect(envelope.status).toBe("error");
 		expect((envelope.error as { code: string }).code).toBe("usage_error");
+	});
+});
+
+describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
+	const NARRATED_ONLY: Partial<Receipt> = {
+		skill: "fallow",
+		goal: "Close the fallow run.",
+		outcome: "confirmed",
+		friction: "Clean run.",
+		explanation: "Captured by claude-stop.",
+		generated_ts: GENERATED_TS,
+	};
+
+	test("stdin model merges in; usage stays an explicit gap (v0)", async () => {
+		const { result, disk } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({ model: "claude-opus-4-8" }),
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			model: string;
+			degraded: boolean;
+			gaps: string[];
+		};
+		expect(data.model).toBe("claude-opus-4-8");
+		// model is no longer a gap; usage remains one (not sourced in v0).
+		expect(data.gaps).not.toContain("model");
+		expect(data.gaps).toContain("usage");
+		expect(data.degraded).toBe(true);
+		expect(disk).toContain("claude-opus-4-8");
+	});
+
+	test("absent stdin telemetry degrades model and usage, never crashes", async () => {
+		const { result } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({}),
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			degraded: boolean;
+			gaps: string[];
+		};
+		expect(data.degraded).toBe(true);
+		expect(data.gaps).toContain("model");
+		expect(data.gaps).toContain("usage");
+	});
+
+	for (const [label, raw] of [
+		["not json", "}{ broken"],
+		["json array", "[1,2,3]"],
+		["json null", "null"],
+		["no model key", '{"other":"x"}'],
+	] as const) {
+		test(`garbled stdin (${label}) degrades to no model`, () => {
+			const telemetry = parseStdinTelemetry(raw);
+			expect(telemetry.model).toBeUndefined();
+		});
+	}
+
+	test("stdin telemetry extracts model only, ignoring stray keys", () => {
+		const telemetry = parseStdinTelemetry(
+			'{"model":"claude-opus-4-8","usage":{"input_tokens":1},"goal":"x"}',
+		);
+		expect(telemetry).toEqual({ model: "claude-opus-4-8" });
+	});
+
+	test("telemetry is trusted: a secret-shaped model is NOT redacted", async () => {
+		// model is engine-read, on the trusted side of the boundary — the
+		// redactor must not scrub it. (An agent can never author it: no flag.)
+		const secretShapedModel = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+		const { disk } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({ model: secretShapedModel }),
+		});
+
+		expect(disk).toContain(secretShapedModel);
+		expect(disk).toContain('"redactions": 0');
 	});
 });

@@ -33,10 +33,28 @@ export type SkillFeedbackProcessResult = {
 	reportPath?: string;
 };
 
+/**
+ * Engine-read telemetry merged into the receipt from stdin (KTD2a).
+ *
+ * `model` is NEVER a CLI flag — it arrives only here, lifted from the harness
+ * transcript by the Stop hook and piped to the runner over stdin. Reading it as
+ * a trusted side input (parallel to {@link SkillFeedbackRuntime.readGitSha}) is
+ * what keeps "telemetry trusted, narration redacted" a real invariant: there is
+ * no flag an agent could use to author it and dodge the redactor.
+ *
+ * `usage` is intentionally NOT carried here in v0 — the transcript holds no
+ * skill-scoped token total (the skill runs inline after the Stop hook's view),
+ * so usage stays an explicit record gap until v1 sources it from OTel.
+ */
+export type StdinTelemetry = {
+	model?: string;
+};
+
 export type SkillFeedbackRuntime = {
 	repoRoot: () => string;
 	readGitSha: () => Promise<string>;
 	readSkillVersion: (skill: string) => Promise<string>;
+	readStdinTelemetry: () => Promise<StdinTelemetry>;
 	checkIgnored: (repoRoot: string, relativePath: string) => Promise<number>;
 	mkdirPrivate: (path: string, mode: number) => Promise<void>;
 	writePrivateFile: (path: string, content: string, mode: number) => Promise<void>;
@@ -53,6 +71,7 @@ export function createDefaultSkillFeedbackRuntime(
 			return result.exitCode === 0 ? result.stdout.trim() : "";
 		},
 		readSkillVersion: async (skill) => skillVersionFromPackage(skill),
+		readStdinTelemetry: async () => parseStdinTelemetry(await readStdin()),
 		checkIgnored: async (repoRoot, relativePath) => {
 			const result = await runProcess(
 				["git", "-C", repoRoot, "check-ignore", "--quiet", relativePath],
@@ -207,6 +226,15 @@ async function prepareReceipt(
 	if (fields.skill && !fields.skill_version) {
 		fields.skill_version = await runtime.readSkillVersion(fields.skill);
 	}
+	// Engine-read telemetry (KTD2a): model arrives only from stdin, never from a
+	// flag. It is merged here, alongside git_sha/skill_version, so it lives on
+	// the redactor's trusted side without an agent-authorable flag bypass. A
+	// receipt can never already carry it (no flag exists), so the stdin value is
+	// authoritative. usage is not sourced in v0 — it stays a record gap.
+	const telemetry = await runtime.readStdinTelemetry();
+	if (telemetry.model) {
+		fields.model = telemetry.model;
+	}
 	return { ok: true, fields };
 }
 
@@ -276,6 +304,44 @@ async function skillVersionFromPackage(skill: string): Promise<string> {
 	} catch {
 		return "unknown";
 	}
+}
+
+async function readStdin(): Promise<string> {
+	if (process.stdin.isTTY) return "";
+	try {
+		return await Bun.stdin.text();
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * Parse engine-read stdin into validated telemetry.
+ *
+ * Garbled, empty, or partially-typed input degrades to `{}` (R21) rather than
+ * throwing — a missing or malformed telemetry channel must never break the
+ * capture turn (KTD6). Only `model` (a non-empty string) is accepted; every
+ * other field is ignored, so no transcript prose smuggled onto the channel can
+ * reach the record. v0 carries no usage on this channel.
+ */
+export function parseStdinTelemetry(raw: string): StdinTelemetry {
+	const trimmed = raw.trim();
+	if (!trimmed) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch {
+		return {};
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		return {};
+	}
+	const object = parsed as Record<string, unknown>;
+	const telemetry: StdinTelemetry = {};
+	if (typeof object.model === "string" && object.model !== "") {
+		telemetry.model = object.model;
+	}
+	return telemetry;
 }
 
 async function runProcess(

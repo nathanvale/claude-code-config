@@ -54,6 +54,7 @@ export function detectSkillFromClaudeTranscriptText(
 	text: string,
 ): ClaudeSkillDetection | null {
 	let latest: ClaudeSkillDetection | null = null
+	let latestSkillModel: string | undefined
 	for (const line of text.split('\n')) {
 		const trimmed = line.trim()
 		if (!trimmed) continue
@@ -63,10 +64,21 @@ export function detectSkillFromClaudeTranscriptText(
 		} catch {
 			continue
 		}
+		// Engine-read telemetry (KTD2a): only the model id from the assistant
+		// entry that launched the detected skill. Usage is deliberately NOT read
+		// here — the Stop hook fires after the skill runs inline, so the
+		// transcript carries no skill-scoped token total, only whole-session
+		// counts. v0 leaves usage an explicit gap; v1 sources it from OTel.
+		// Reading only the model id keeps transcript prose out of the record.
+		const model = readSkillLaunchModel(parsed)
+		if (model) latestSkillModel = model
 		const detection = detectSkillFromClaudeTranscriptEntry(parsed)
 		if (detection) latest = detection
 	}
-	return latest
+	if (!latest) return null
+	return latestSkillModel
+		? { ...latest, telemetry: { model: latestSkillModel } }
+		: latest
 }
 
 function detectSkillFromClaudeTranscriptEntry(
@@ -94,6 +106,29 @@ function hasSkillToolResult(entry: Record<string, unknown>): boolean {
 		if (!object || object.type !== 'tool_result') return false
 		const text = stringFrom(object.content)
 		return text?.startsWith('Launching skill: ') ?? false
+	})
+}
+
+/**
+ * Read the model id from an assistant entry that launched a Skill tool call.
+ *
+ * Returns the model only when the entry both is an assistant message and
+ * carries a `Skill` tool_use, so the captured model is the one that ran the
+ * detected skill — never a model id from an unrelated turn. Reads only the
+ * model id; no message content is touched.
+ */
+function readSkillLaunchModel(entry: unknown): string | undefined {
+	const message = objectFrom(objectFrom(entry)?.message)
+	if (!message || message.role !== 'assistant') return undefined
+	if (!hasSkillToolUse(message)) return undefined
+	return stringFrom(message.model) ?? undefined
+}
+
+function hasSkillToolUse(message: Record<string, unknown>): boolean {
+	const content = Array.isArray(message.content) ? message.content : []
+	return content.some((item) => {
+		const object = objectFrom(item)
+		return object?.type === 'tool_use' && object.name === 'Skill'
 	})
 }
 
