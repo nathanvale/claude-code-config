@@ -13,7 +13,7 @@ const HARNESS_IDS = ["claude-otel", "codex-json"] as const;
 
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
-export type SkillFeedbackRuntime = {
+export type CaptureAdapterRuntime = {
 	readGitSha: () => Promise<string>;
 	readSkillVersion: (skill: string) => Promise<string>;
 };
@@ -75,7 +75,7 @@ const GENERATED_TS_KEYS = [
 export class ClaudeOtelAdapter implements CaptureAdapter {
 	readonly harness = "claude-otel" as const;
 
-	constructor(private readonly runtime: SkillFeedbackRuntime) {}
+	constructor(private readonly runtime: CaptureAdapterRuntime) {}
 
 	async capture(raw: unknown): Promise<CaptureResult> {
 		const spans = flattenClaudeSpans(readClaudeSpans(raw));
@@ -137,7 +137,7 @@ export class ClaudeOtelAdapter implements CaptureAdapter {
 export class CodexJsonAdapter implements CaptureAdapter {
 	readonly harness = "codex-json" as const;
 
-	constructor(private readonly runtime: SkillFeedbackRuntime) {}
+	constructor(private readonly runtime: CaptureAdapterRuntime) {}
 
 	async capture(raw: unknown): Promise<CaptureResult> {
 		const events = readCodexEvents(raw);
@@ -209,7 +209,7 @@ export class CodexJsonAdapter implements CaptureAdapter {
 
 export function selectAdapter(
 	harness: HarnessId,
-	runtime: SkillFeedbackRuntime,
+	runtime: CaptureAdapterRuntime,
 ): CaptureAdapter {
 	switch (harness) {
 		case "claude-otel":
@@ -371,7 +371,7 @@ function assignString<K extends keyof Receipt>(
 }
 
 async function attachEngineFields(
-	runtime: SkillFeedbackRuntime,
+	runtime: CaptureAdapterRuntime,
 	harness: HarnessId,
 	receipt: Partial<Receipt>,
 	reasons: DegradedReason[],

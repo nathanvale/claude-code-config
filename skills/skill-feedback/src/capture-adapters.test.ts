@@ -4,14 +4,14 @@ import {
 	ClaudeOtelAdapter,
 	CodexJsonAdapter,
 	type CaptureResult,
-	type SkillFeedbackRuntime,
+	type CaptureAdapterRuntime,
 	assertHarnessId,
 	selectAdapter,
 } from "./capture-adapters";
 
 const GENERATED_TS = "2026-06-11T08:30:00.000Z";
 
-const runtime: SkillFeedbackRuntime = {
+const runtime: CaptureAdapterRuntime = {
 	readGitSha: async () => "b5f95be",
 	readSkillVersion: async (skill) => `${skill}@0.1.0`,
 };
