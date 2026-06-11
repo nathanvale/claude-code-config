@@ -11,8 +11,10 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	SKILL_FEEDBACK_CONTRACT_ID,
+	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
 	type Receipt,
+	type SkillFeedbackOutcome,
 	type SoftwareLearningReport,
 	buildSoftwareLearningReport,
 	parseReceipt,
@@ -88,9 +90,14 @@ export async function recordSkillFeedbackReceipt(
 
 	const prepared = await prepareReceipt(rawReceipt, runtime);
 	if (!prepared.ok) {
+		const namesField =
+			prepared.code === "unknown_receipt_field" ||
+			prepared.code === "invalid_receipt_field";
 		return errorResult(runId, USAGE_EXIT_CODE, prepared.code, prepared.message, {
 			recoverability: "change_input",
-			hint: "Fix the receipt shape and rerun skill-feedback record.",
+			hint: namesField
+				? prepared.message
+				: "Fix the receipt shape and rerun skill-feedback record.",
 		});
 	}
 
@@ -343,11 +350,9 @@ function parseRecordFlags(
 				break;
 			case "--outcome":
 				if (
-					value === "confirmed" ||
-					value === "failed" ||
-					value === "ambiguous"
+					SKILL_FEEDBACK_OUTCOMES.includes(value as SkillFeedbackOutcome)
 				) {
-					receipt.outcome = value;
+					receipt.outcome = value as SkillFeedbackOutcome;
 					break;
 				}
 				return { ok: false, message: "--outcome is invalid." };

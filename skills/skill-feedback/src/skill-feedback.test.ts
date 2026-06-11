@@ -215,6 +215,34 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stderr).not.toContain(secret);
 	});
 
+	test("unknown-field error hint names the offending field", async () => {
+		const { result } = await writeRecord({
+			...BASE_RECEIPT,
+			surprise: "value",
+		} as Partial<Receipt>);
+
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result.stdout);
+		const error = envelope.error as Record<string, unknown>;
+		expect(error.code).toBe("unknown_receipt_field");
+		const hint = error.hint as Record<string, unknown>;
+		expect(hint.summary).toContain("surprise");
+	});
+
+	test("invalid-field error hint names the offending field", async () => {
+		const { result } = await writeRecord({
+			...BASE_RECEIPT,
+			goal: 42 as unknown as string,
+		});
+
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result.stdout);
+		const error = envelope.error as Record<string, unknown>;
+		expect(error.code).toBe("invalid_receipt_field");
+		const hint = error.hint as Record<string, unknown>;
+		expect(hint.summary).toContain("goal");
+	});
+
 	test("clean free text passes through unchanged with zero redactions", async () => {
 		const { disk } = await writeRecord({
 			...BASE_RECEIPT,
