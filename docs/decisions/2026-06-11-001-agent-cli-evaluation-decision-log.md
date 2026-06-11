@@ -857,3 +857,111 @@ V2 Ideas:
 
 - Add same-log supersession after the simple append path is proven.
 - Add duplicate-decision detection after the checker exists.
+
+## Decision 20: Govern Write-Preview-Plus-Execute CLI Adoption
+
+```yaml
+id: agent-cli-evaluation-020
+status: accepted
+decided_at: "2026-06-11"
+decision: "Govern write-preview-plus-execute CLI adoption"
+owner: "agent-cli-evaluation"
+source:
+  - "docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md"
+  - "skills/create-cli/SKILL.md"
+  - "skills/create-cli/references/agent-native-cli-design.md"
+  - "runtime/cli-command-facade/CONTEXT.md"
+  - "2026-06-11 Codex session: record-decision governance follow-up"
+```
+
+Decision:
+
+- Govern the write-preview-plus-execute pattern through `create-cli` planning guidance.
+- Treat `create-cli` as the adoption owner for deciding when a CLI needs dry-run preview, explicit execute intent, discovery metadata, structured failures, and drift proof.
+- Treat `runtime/cli-command-facade` as the shared owner for generic contract projection, discovery output, error envelopes, and reusable alignment checks.
+- Treat each CLI package as the owner for domain-specific runtime semantics, mutation safety, fixtures, and end-to-end dry-run/execute parity tests.
+- Do not make every CLI support `--execute`; require explicit execute intent for local mutation surfaces where a dry-run preview exists.
+
+Rationale:
+
+- Governance belongs at decision and planning seams before implementation starts.
+- Facade-level law should cover reusable mechanics, not domain-specific write semantics.
+- Package-level tests are the only place that can prove the command writes the exact operation it previewed.
+- Over-standardizing field names or taxonomies now would freeze early vocabulary before multiple CLIs prove it.
+
+Consequences:
+
+- New or changed agent-facing CLIs use `create-cli` to route the contract path.
+- Create-cli guidance needs to name this pattern explicitly for mutation-capable CLIs.
+- Facade improvements should focus on generic drift proof surfaces that many CLIs can reuse.
+- Record-decision remains the first proving implementation, not the template for every CLI.
+
+Next:
+
+- Update `skills/create-cli` guidance so future CLI work routes mutation-capable surfaces through this pattern.
+- Consider facade-level alignment helpers only after another CLI needs the same proof.
+
+V2 Ideas:
+
+- Promote a reusable write-preview contract after two or more CLIs converge on stable semantics.
+- Add template fixtures for dry-run/execute parity once the pattern recurs.
+- Standardize execution intent flag names only if multiple CLIs need cross-command consistency.
+
+## Decision 21: Adopt conditional CLI Front Door topology
+
+```yaml
+id: agent-cli-evaluation-021
+status: accepted
+decided_at: "2026-06-11"
+decision: "Adopt conditional CLI Front Door topology"
+owner: "agent-cli-evaluation"
+source:
+  - "docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md"
+  - "docs/research/2026-06-11-agent-cli-seam-contract.md"
+  - "docs/research/2026-06-11-agent-cli-evaluation-rubric.md"
+  - "skills/create-skill/references/runtime-portability.md"
+  - "skills/cli-execution-auditor/src/audit-engine.ts"
+  - "scripts/check-workspace-facade-invariants.ts"
+  - "2026-06-11 Codex session: ICA seam swarm on CLI Front Door topology"
+```
+
+Decision:
+
+- Adopt `CLI Front Door` as the qualified term for a package-owned public CLI Interface seam.
+- Use `src/front-doors/<cli-name>/` only when a package has multiple CLI front doors or one CLI front door grows enough adapter files to need an owner folder.
+- Keep simple single-CLI packages flat unless the deletion test shows the flat shape hides ownership.
+- Keep one package-root `package.json` by default.
+- Add nested `package.json` files only for independent distribution, dependency, or runtime ownership.
+- Keep package-level `src/command-contract.ts` valid when command vocabulary, result literals, actions, or facade contract fragments are shared across CLI front doors.
+- Allow front-door-local `command-contract.ts` only when that front door owns distinct public Interface vocabulary.
+- Treat one-level CLI shape as a strong default, not an invariant.
+- Require a Command Contract Locator seam before mechanically enforcing front-door-local contract discovery.
+- Keep consumer folder topology outside the `runtime/cli-command-facade` ownership surface.
+
+Rationale:
+
+- The ICA seam swarm found the topology conditionally tight for multi-CLI or complex packages.
+- Existing portability guidance and checks still assume `src/<command-name>.ts` and package-level `src/command-contract.ts`.
+- `cli-execution-auditor` and workspace facade checks currently resolve only the package-level contract path.
+- Per-front-door contracts can reduce Locality when a package has shared command vocabulary.
+- The qualified term avoids reopening the historical skill-role `front-door` confusion.
+
+Consequences:
+
+- `create-cli` remains the design owner for deciding when a CLI front-door folder is warranted.
+- `create-skill` runtime portability guidance needs to stop treating flat `src/<command-name>.ts` as the only multi-command package shape.
+- Tooling must learn package-level and front-door-local contract locations before front-door contract placement becomes enforceable.
+- `record-decision` stays flat until it grows another CLI front door or a complex public Interface seam.
+- Existing multi-CLI packages should not migrate wholesale before shared package vocabulary and contract location are separated.
+
+Next:
+
+- Design the smallest Command Contract Locator that lets auditors and workspace checks find package-level and front-door-local command contracts.
+- Update `create-cli` and runtime portability guidance after the locator decision.
+- Resolve the durable vocabulary owner for `CLI Front Door`.
+
+V2 Ideas:
+
+- Add an import-direction check after the first front-door migration proves the shape.
+- Add a topology check for package scripts, bins, front doors, contracts, and tests after locator support exists.
+- Prove the folder shape on a low-noise package before migrating a large package such as `browser-use`.
