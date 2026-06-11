@@ -82,6 +82,7 @@ export interface LaneClause {
 //   vacuous-match           static  bad-vacuous-match       heal bug b
 //   json-valid-under-failure surface bad-envelope-on-failure — (new lane clause, R4)
 //   declared-coverage-runs  surface  bad-partial-coverage   heal bug c
+//   runnable-resolves       surface  bad-front-door-uncovered — (front-door coverage, R4)
 
 export const LANE_CLAUSES: readonly LaneClause[] = [
 	{
@@ -205,6 +206,23 @@ export const LANE_CLAUSES: readonly LaneClause[] = [
 		maskingNote: {
 			resistant: false,
 			limit: "v1 compares the declared target list against observed invocations; a check that narrows its DECLARED list to match what it actually runs would pass while still under-covering. The assertion binds declaration↔execution, not execution↔intent. Recorded as a limit; tightening requires an intent oracle (deferred branch-coverage instrumentation).",
+		},
+	},
+	{
+		id: "runnable-resolves",
+		kind: "surface",
+		source: {
+			kind: "source-grep",
+			rule: "front-door-contract-has-runnable",
+			note: "Every discovered command resolves a runnable entrypoint, and every front-door directory with a package.json script is covered by a discoverable command-contract.ts. An uncovered front door (missing/nested contract, or a script mapping to no file) means a real CLI surface goes unaudited while the auditor reports clean.",
+		},
+		assertion:
+			"Every command's script resolves to a runnable entrypoint, and no front-door directory ships a package.json script without a discoverable command-contract.ts.",
+		expectedOutcome:
+			"A command whose script maps to no file, or a front-door directory with a script but no discovered contract, yields a surface finding naming the gap.",
+		maskingNote: {
+			resistant: false,
+			limit: "v1 reconciles front-door directories under src/front-doors against discovered contracts and resolves each command's script via package.json. A front door that ships a CLI WITHOUT a package.json script (invoked some other way) is not reconciled, and resolveRunnableScript only parses simple script values; compound/indirected scripts are a known limit (the workspace-facade invariant gate constrains script shape separately).",
 		},
 	},
 ] as const;

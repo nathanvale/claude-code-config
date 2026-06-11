@@ -965,3 +965,57 @@ V2 Ideas:
 - Add an import-direction check after the first front-door migration proves the shape.
 - Add a topology check for package scripts, bins, front doors, contracts, and tests after locator support exists.
 - Prove the folder shape on a low-noise package before migrating a large package such as `browser-use`.
+
+## Decision 22: Use Conventional Command Contract Locator Discovery
+
+```yaml
+id: agent-cli-evaluation-022
+status: accepted
+decided_at: "2026-06-11"
+decision: "Use conventional Command Contract Locator discovery"
+owner: "agent-cli-evaluation"
+source:
+  - "docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md"
+  - "skills/cli-execution-auditor/src/audit-engine.ts"
+  - "scripts/check-workspace-facade-invariants.ts"
+  - "2026-06-11 Codex session: Command Contract Locator implementation"
+```
+
+Decision:
+
+- Use a tooling-owned conventional Command Contract Locator.
+- Discover package-level contracts at `src/command-contract.ts`.
+- Discover CLI Front Door contracts at `src/front-doors/*/command-contract.ts`.
+- Keep package-level contracts first, then sort CLI Front Door contracts.
+- Merge discovered contract maps for audit.
+- Fail acquisition when two discovered contracts define the same command name.
+- Resolve surface audit runnables from each command's own `script` value.
+- Do not add package manifest metadata for this slice.
+- Do not make `runtime/cli-command-facade` own consuming package folder topology.
+
+Rationale:
+
+- Existing packages already use the package-level contract convention.
+- CLI Front Door contracts need mechanical discovery before placement can be enforced.
+- Conventional discovery is enough for the two accepted locations.
+- Manifest metadata would add package churn before a real package needs non-conventional layout.
+- The facade runtime owns reusable grammar, not consumer topology.
+
+Consequences:
+
+- `cli-execution-auditor` can audit package-level and CLI Front Door contracts.
+- `scripts/check-workspace-facade-invariants.ts` can validate script references in both contract locations.
+- Packages may stay flat when command vocabulary is shared.
+- Packages may put front-door-local contracts under `src/front-doors/<cli-name>/` when vocabulary is distinct.
+- Duplicate command names across discovered contract files are treated as acquisition failure.
+
+Next:
+
+- Update `create-cli` and runtime portability guidance to name both contract locations.
+- Keep `CLI Front Door` and `Command Contract Locator` vocabulary in root `CONTEXT.md`.
+- Add import-direction checks only after a real front-door migration proves the shape.
+
+Future Ideas:
+
+- Add explicit manifest metadata only if a package needs non-conventional contract locations.
+- Add a topology check for bins, package scripts, front-door folders, and contract owners.

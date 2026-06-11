@@ -208,9 +208,31 @@ function discoverLocalScripts(packageJson: PackageJson | null): Record<string, s
 }
 
 function discoverContractPaths(packagePath: string): string[] {
-	const contractPath = join(packagePath, "src/command-contract.ts");
+	const contractPaths: string[] = [];
+	const packageContractPath = join(packagePath, "src/command-contract.ts");
 
-	return existsSync(repoPath(contractPath)) ? [contractPath] : [];
+	if (existsSync(repoPath(packageContractPath))) {
+		contractPaths.push(packageContractPath);
+	}
+
+	const frontDoorsPath = repoPath(join(packagePath, "src/front-doors"));
+	if (!existsSync(frontDoorsPath)) {
+		return contractPaths;
+	}
+
+	for (const entry of readdirSync(frontDoorsPath).sort()) {
+		const contractPath = join(
+			packagePath,
+			"src/front-doors",
+			entry,
+			"command-contract.ts",
+		);
+		if (existsSync(repoPath(contractPath))) {
+			contractPaths.push(contractPath);
+		}
+	}
+
+	return contractPaths;
 }
 
 function expectedShebangForBinTarget(binTarget: string): string | null {

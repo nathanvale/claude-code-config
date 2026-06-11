@@ -11,13 +11,18 @@
 // from findings, so re-running identical input in a different cwd is identical.
 
 import { basename, join } from "node:path";
+import { existsSync } from "node:fs";
 import {
 	COMMAND_FACADE_BASELINE_EXIT_CODES,
 	projectCommandDiscoveryTree,
 } from "@side-quest/cli-command-facade";
 import { RUNTIME_CONTRACT_REDACTION_FIXTURES } from "@side-quest/cli-command-facade/testing";
 import { DRIFT_CODE_DISPOSITIONS } from "./clause-catalog.ts";
-import { type AcquiredCommandContract, acquireTargetContract } from "./target-contract.ts";
+import {
+	type AcquiredCommandContract,
+	acquireTargetContract,
+	type ContractAcquisition,
+} from "./target-contract.ts";
 
 // --- finding shape (matches the runner's AuditFinding) ---
 
@@ -42,8 +47,10 @@ export interface EngineOutcome {
 export interface TargetLayout {
 	/** Absolute path to the skill/package root. */
 	root: string;
-	/** Absolute path to src/command-contract.ts, if present. */
+	/** Absolute path to the first discovered command-contract.ts, if present. */
 	contractPath: string | null;
+	/** Absolute paths to package-level and CLI Front Door command contracts. */
+	contractPaths: string[];
 	/** Absolute path to package.json, if present. */
 	packageJsonPath: string | null;
 	/** Absolute paths of source files (src/*.ts), for source-grep clauses. */
@@ -90,19 +97,61 @@ async function anySourceImportsFacade(sourceFiles: readonly string[]): Promise<b
 	return false;
 }
 
+async function acquireTargetContracts(
+	contractPaths: readonly string[],
+): Promise<ContractAcquisition> {
+	const contracts: Record<string, AcquiredCommandContract> = {};
+	const driftCodes: string[] = [];
+	for (const contractPath of contractPaths) {
+		const acquisition = await acquireTargetContract(contractPath);
+		if (!acquisition.ok) return acquisition;
+		for (const [command, contract] of Object.entries(acquisition.contracts)) {
+			if (contracts[command]) {
+				return {
+					ok: false,
+					reason: `duplicate command contract for ${command} across discovered command-contract.ts modules`,
+				};
+			}
+			contracts[command] = contract;
+		}
+		driftCodes.push(...acquisition.driftCodes);
+	}
+	return { ok: true, contracts, driftCodes };
+}
+
 // --- target layout resolution ---
 
-/**
- * Resolve a target's layout from a root directory. The contract lives at
- * src/command-contract.ts by facade convention (every facade skill follows it).
- */
+/** Discover package-level and CLI Front Door command contract modules. */
+export async function discoverCommandContractPaths(root: string): Promise<string[]> {
+	const srcDir = join(root, "src");
+	const contractPaths: string[] = [];
+	const packageContractPath = join(srcDir, "command-contract.ts");
+	if (await Bun.file(packageContractPath).exists()) {
+		contractPaths.push(packageContractPath);
+	}
+	const frontDoorContractPaths: string[] = [];
+	const frontDoorsDir = join(srcDir, "front-doors");
+	if (existsSync(frontDoorsDir)) {
+		// Depth-N: grouped front doors (front-doors/admin/users/command-contract.ts)
+		// must be discovered, not just depth-1 dirs. A single-segment glob silently
+		// skips nested contracts and reports their surface unaudited (R4 coverage).
+		const glob = new Bun.Glob("**/command-contract.ts");
+		for await (const rel of glob.scan({ cwd: frontDoorsDir, onlyFiles: true })) {
+			frontDoorContractPaths.push(join(frontDoorsDir, rel));
+		}
+	}
+	return [...contractPaths, ...frontDoorContractPaths.sort()];
+}
+
+/** Resolve a target's layout from a root directory. */
 export async function resolveTargetLayout(root: string): Promise<TargetLayout> {
-	const contractPath = join(root, "src", "command-contract.ts");
+	const contractPaths = await discoverCommandContractPaths(root);
 	const packageJsonPath = join(root, "package.json");
 	const sourceFiles = await listSourceFiles(join(root, "src"));
 	return {
 		root,
-		contractPath: (await Bun.file(contractPath).exists()) ? contractPath : null,
+		contractPath: contractPaths[0] ?? null,
+		contractPaths,
 		packageJsonPath: (await Bun.file(packageJsonPath).exists()) ? packageJsonPath : null,
 		sourceFiles,
 	};
@@ -318,7 +367,7 @@ export async function runStaticAudit(input: {
 		return { target, laneDetected: false, skipReason: lane.reason, findings: [] };
 	}
 
-	if (!layout.contractPath) {
+	if (layout.contractPaths.length === 0) {
 		// A facade skill should expose a command-contract; its absence is a finding
 		// (the discovery surface KTD6 needs is missing), not a crash.
 		return {
@@ -328,14 +377,15 @@ export async function runStaticAudit(input: {
 				{
 					clauseId: "exit-floor",
 					kind: "static",
-					summary: "facade lane detected but src/command-contract.ts is missing — no contract to audit",
+					summary:
+						"facade lane detected but no command contract found at src/command-contract.ts or src/front-doors/*/command-contract.ts",
 					argv: [],
 				},
 			],
 		};
 	}
 
-	const acquisition = await acquireTargetContract(layout.contractPath);
+	const acquisition = await acquireTargetContracts(layout.contractPaths);
 	if (!acquisition.ok) {
 		// A drifting target that throws at load surfaces here as a structured
 		// finding, not an import crash (KTD6).
@@ -450,14 +500,97 @@ async function resolveRunnableScript(
 	};
 	const command = pkg.scripts?.[scriptName];
 	if (!command) return null;
-	// Extract the entry file: a "bun run <file>.ts" or a direct "./path/file.sh".
-	const match = command.match(/([\w./-]+\.(?:ts|sh|js|mjs))\b/);
-	if (!match) return null;
-	const file = join(layout.root, match[1]);
+	const file = resolveScriptEntryFile(layout.root, command);
+	if (!file) return null;
 	if (!(await Bun.file(file).exists())) return null;
 	// .ts/.js run under bun; an executable script (.sh) runs directly.
 	const spawnCommand = file.endsWith(".sh") ? [file] : ["bun", "run", file];
 	return { file, command: spawnCommand };
+}
+
+/**
+ * Resolve a package.json script VALUE to its single entrypoint file, or null when
+ * the shape is unsupported. Only a simple shape is accepted:
+ *   - `bun run <file>` (optionally with trailing args/flags), or
+ *   - a direct executable `./path/file.sh` (optionally with trailing args).
+ *
+ * Compound or indirected scripts (`a && b`, `a; b`, `a | b`, `cd x && …`,
+ * `ENV=1 bun …`) are REJECTED rather than guessed: grabbing the first file-shaped
+ * token from such a value can resolve the WRONG binary (e.g. a decoy `build.sh`
+ * before the real `bun run app.ts`), making the auditor exercise a file the
+ * contract never named. Returning null yields an honest runnable-resolves finding;
+ * the workspace-facade invariant gate constrains script values to this shape.
+ */
+export function resolveScriptEntryFile(root: string, scriptValue: string): string | null {
+	const value = scriptValue.trim();
+	// Reject compound / chained / piped / subshell scripts outright.
+	if (/[;|]|&&|\|\||\$\(|`/.test(value)) return null;
+	// `bun run <file> [args…]` — the entry is the token immediately after `run`.
+	const bunRun = value.match(/^bun\s+(?:run\s+)?([\w./-]+\.(?:ts|js|mjs))\b/);
+	if (bunRun) return join(root, bunRun[1]);
+	// Direct executable: `./path/file.sh [args…]` or `path/file.sh`.
+	const direct = value.match(/^\.?\/?([\w./-]+\.sh)\b/);
+	if (direct) return join(root, direct[1]);
+	return null;
+}
+
+/**
+ * Front-door coverage reconciliation (runnable-resolves): the audit universe is
+ * contract-derived (enumerateInvocations iterates only acquired contracts), so a
+ * front-door directory that ships a real CLI but has NO discoverable
+ * command-contract.ts is silently excluded — the auditor would report clean while
+ * a surface goes unaudited. Reconcile each src/front-doors/<dir> against the
+ * discovered contracts: a dir backed by a package.json script (a shippable CLI)
+ * but with no contract under it is an uncovered surface.
+ */
+async function checkFrontDoorCoverage(
+	layout: TargetLayout,
+	_contracts: Record<string, AcquiredCommandContract>,
+): Promise<EngineFinding[]> {
+	const frontDoorsDir = join(layout.root, "src", "front-doors");
+	if (!existsSync(frontDoorsDir)) return [];
+
+	// Map each front-door dir to whether a discovered contract lives under it.
+	const coveredDirs = new Set<string>();
+	for (const contractPath of layout.contractPaths) {
+		const rel = contractPath.startsWith(frontDoorsDir)
+			? contractPath.slice(frontDoorsDir.length + 1)
+			: null;
+		if (rel) coveredDirs.add(rel.split("/")[0]);
+	}
+
+	// A front-door dir is a "shippable surface" when a package.json script resolves
+	// into it. Only those are reconciled — a dir without a script is not yet wired
+	// as a CLI and is out of scope (the maskingNote records this limit).
+	const scripts = layout.packageJsonPath
+		? ((
+				JSON.parse(await Bun.file(layout.packageJsonPath).text()) as {
+					scripts?: Record<string, string>;
+				}
+			).scripts ?? {})
+		: {};
+	const scriptedDirs = new Set<string>();
+	for (const value of Object.values(scripts)) {
+		const file = resolveScriptEntryFile(layout.root, value);
+		if (!file) continue;
+		const frontDoorPrefix = `${frontDoorsDir}/`;
+		if (file.startsWith(frontDoorPrefix)) {
+			scriptedDirs.add(file.slice(frontDoorPrefix.length).split("/")[0]);
+		}
+	}
+
+	const findings: EngineFinding[] = [];
+	for (const dir of [...scriptedDirs].sort()) {
+		if (!coveredDirs.has(dir)) {
+			findings.push({
+				clauseId: "runnable-resolves",
+				kind: "surface",
+				summary: `front-door directory src/front-doors/${dir} ships a package.json script but has no discoverable command-contract.ts — its CLI surface goes unaudited`,
+				argv: [],
+			});
+		}
+	}
+	return findings;
 }
 
 /**
@@ -581,36 +714,53 @@ export async function runSurfaceAudit(input: {
 		throw new Error("surface audit: zero enumerable invocations (no commands in contract)");
 	}
 
-	// Resolve the runnable from the first command's script (all commands in a
-	// facade contract share one script binary).
-	const firstCommand = Object.values(input.contracts)[0] as { script?: string };
-	const scriptName = firstCommand?.script;
-	if (!scriptName) {
-		return [
-			{
-				clauseId: "json-valid-under-failure",
-				kind: "surface",
-				summary: "contract command has no script field — cannot resolve a runnable to exercise",
-				argv: [],
-			},
-		];
-	}
-	const runnable = await resolveRunnableScript(input.layout, scriptName);
-	if (!runnable) {
-		// The contract names a script that maps to no runnable entrypoint. This is a
-		// v1 surface-exercise LIMIT, not a target defect: a CLI may legitimately ship
-		// an entrypoint v1 cannot spawn. Skip surface checks rather than false-flag
-		// the target (R-risk2: false positives erode trust). The static half already
-		// ran; surface simply contributes nothing here.
-		return [];
-	}
-
-	const runner = createSubprocessRunner({ runnable, cwd: input.layout.root });
 	const wanted = (clauseId: string) => input.only === null || input.only === clauseId;
 
 	const findings: EngineFinding[] = [];
+	const runners = new Map<string, (argv: readonly string[]) => Promise<InvocationRun>>();
+
+	// Front-door coverage reconciliation (runnable-resolves): a front-door dir with
+	// a package.json script but no discovered contract is an unaudited surface. Run
+	// once, not per-invocation, and gate on the owning clause.
+	if (wanted("runnable-resolves")) {
+		findings.push(...(await checkFrontDoorCoverage(input.layout, input.contracts)));
+	}
+
 	for (const invocation of invocations) {
-		const contract = input.contracts[invocation.command] as { exitCodes?: Record<string, string> };
+		const contract = input.contracts[invocation.command] as {
+			exitCodes?: Record<string, string>;
+			script?: string;
+		};
+		if (!contract?.script) {
+			// Script-resolution failures are their own clause (runnable-resolves), not
+			// json-valid-under-failure (which is about the --json envelope). Respect --only.
+			if (wanted("runnable-resolves")) {
+				findings.push({
+					clauseId: "runnable-resolves",
+					kind: "surface",
+					summary: `contract command ${invocation.command} has no script field — cannot resolve a runnable to exercise`,
+					argv: invocation.argv,
+				});
+			}
+			continue;
+		}
+		let runner = runners.get(contract.script);
+		if (!runner) {
+			const runnable = await resolveRunnableScript(input.layout, contract.script);
+			if (!runnable) {
+				if (wanted("runnable-resolves")) {
+					findings.push({
+						clauseId: "runnable-resolves",
+						kind: "surface",
+						summary: `contract command ${invocation.command} script ${contract.script} maps to no runnable entrypoint`,
+						argv: invocation.argv,
+					});
+				}
+				continue;
+			}
+			runner = createSubprocessRunner({ runnable, cwd: input.layout.root });
+			runners.set(contract.script, runner);
+		}
 		const declaredExitCodes = new Set(Object.keys(contract?.exitCodes ?? {}));
 		const run = await runner(invocation.argv);
 
@@ -688,4 +838,3 @@ export function sortFindings(findings: EngineFinding[]): EngineFinding[] {
 		(a, b) => a.clauseId.localeCompare(b.clauseId) || a.summary.localeCompare(b.summary),
 	);
 }
-

@@ -68,8 +68,15 @@ _Avoid_: task, phase, horizontal slice, generic plan step
 A condition that moves CLI design into a separate MCP pass because clients need typed remote discovery, server-mediated auth, session transport, or MCP-native tool orchestration. It is not a reason to weaken the CLI contract.
 _Avoid_: MCP by default, CLI replacement, transport-first design, generic integration idea
 
+**CLI Front Door**:
+Package-owned public CLI Interface seam. Use `src/front-doors/<cli-name>/` only when a package has multiple public CLI interfaces or one interface grows enough adapter files to need an owner folder.
+_Avoid_: front-door skill role, universal CLI folder, facade-owned topology
+
+**Command Contract Locator**:
+Tooling-owned discovery seam that finds package command contracts without making the facade runtime own consumer folders. Current conventional locations are `src/command-contract.ts` and `src/front-doors/*/command-contract.ts`.
+_Avoid_: package manifest by default, nested package metadata, runtime-owned consumer topology
+
 ## Example Dialogue
 
 Dev: "Is `/ce-plan` producing implementation tasks or candidate batches?"
 Domain expert: "It produces implementation slices for human planning, represented as candidate batches once the runtime parses and validates them."
-

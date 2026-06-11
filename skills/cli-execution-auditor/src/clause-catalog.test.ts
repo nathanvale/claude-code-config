@@ -19,6 +19,7 @@ const EXPECTED_PARTITION: Record<string, "static" | "surface"> = {
 	"vacuous-match": "static",
 	"json-valid-under-failure": "surface",
 	"declared-coverage-runs": "surface",
+	"runnable-resolves": "surface",
 };
 
 // Source-grep rules the engine is expected to implement. A clause may cite a
@@ -27,6 +28,7 @@ const KNOWN_GREP_RULES = new Set([
 	"no-raw-test-runner",
 	"no-vacuous-pass-on-empty-set",
 	"coverage-exercises-all-declared",
+	"front-door-contract-has-runnable",
 ]);
 
 // The exact set of category codes parseCommandFacadeContract can emit, via
