@@ -7,7 +7,7 @@ import {
 	parseReceipt,
 } from "./command-contract";
 
-export const HARNESS_IDS = ["claude-otel", "codex-json"] as const;
+const HARNESS_IDS = ["claude-otel", "codex-json"] as const;
 
 export type HarnessId = (typeof HARNESS_IDS)[number];
 

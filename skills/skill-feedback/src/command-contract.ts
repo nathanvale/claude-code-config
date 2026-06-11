@@ -21,7 +21,7 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "1" as const;
  * Evaluation name carried on every record, aligning with the OpenTelemetry
  * GenAI `gen_ai.evaluation.result` event family (name/label/explanation).
  */
-export const SKILL_FEEDBACK_EVALUATION_NAME = "skill-feedback" as const;
+const SKILL_FEEDBACK_EVALUATION_NAME = "skill-feedback" as const;
 
 /**
  * Domain outcome enum carried inside the envelope `data` (mirrors fallow's
@@ -122,7 +122,7 @@ export type ReceiptField = (typeof RECEIPT_FIELDS)[number];
  * `explanation` is intentionally absent. Engine-read telemetry tags remain
  * required for a complete record; missing tags degrade instead of blocking.
  */
-export const REQUIRED_RECEIPT_FIELDS = [
+const REQUIRED_RECEIPT_FIELDS = [
 	"skill",
 	"goal",
 	"outcome",
@@ -382,7 +382,7 @@ export function buildSoftwareLearningReport(
 /**
  * Public subcommands accepted by skill-feedback. v0 ships one: `record`.
  */
-export const SKILL_FEEDBACK_COMMANDS = ["record"] as const;
+const SKILL_FEEDBACK_COMMANDS = ["record"] as const;
 
 /**
  * Public command union for the facade-backed skill-feedback CLI.
@@ -488,22 +488,3 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 		writeImplyingMutations: new Set(["capture"]),
 	},
 );
-
-/**
- * Assert that a string is one of the package-owned outcome values.
- *
- * @param outcome - Candidate outcome string from parsed input
- * @throws {Error} When the outcome is not in the skill-feedback outcome set
- *
- * @example
- * ```typescript
- * assertSkillFeedbackOutcome("confirmed")
- * ```
- */
-export function assertSkillFeedbackOutcome(
-	outcome: string,
-): asserts outcome is SkillFeedbackOutcome {
-	if (!SKILL_FEEDBACK_OUTCOMES.includes(outcome as SkillFeedbackOutcome)) {
-		throw new Error(`Unknown skill-feedback outcome: ${outcome}`);
-	}
-}

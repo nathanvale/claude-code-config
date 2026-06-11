@@ -87,6 +87,22 @@ async function run(command: readonly string[], cwd: string) {
 	return child.exited;
 }
 
+async function runCli(args: readonly string[]) {
+	const child = Bun.spawn(
+		[process.execPath, new URL("./skill-feedback-runner.ts", import.meta.url).pathname, ...args],
+		{
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	return { stdout, stderr, exitCode };
+}
+
 describe("skill-feedback U6 redaction and write gate", () => {
 	for (const [label, secret] of [
 		["bearer", "Bearer live-secret-token"],
@@ -247,5 +263,24 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 		expect(missing.result.exitCode).toBe(2);
 		expect(missing.result.reportPath).toBeUndefined();
+	});
+
+	test("CLI help renders the record command usage", async () => {
+		const result = await runCli(["--help"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("--skill");
+		expect(result.stdout).toContain("--generated-ts");
+	});
+
+	test("CLI usage errors return JSON without writing", async () => {
+		const result = await runCli(["record", "--unknown", "value"]);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.status).toBe("error");
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
 	});
 });

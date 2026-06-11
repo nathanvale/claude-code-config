@@ -94,22 +94,7 @@ function assignNarratedReportField(
 	}
 }
 
-export function redactReceiptNarration(
-	receipt: Partial<Receipt>,
-): RedactionResult<Partial<Receipt>> {
-	let redactions = 0;
-	const redacted: Partial<Receipt> = { ...receipt };
-	for (const field of NARRATED_FIELDS) {
-		const value = redacted[field];
-		if (typeof value !== "string") continue;
-		const result = redactText(value);
-		redacted[field] = result.value;
-		redactions += result.redactions;
-	}
-	return { value: redacted, redactions };
-}
-
-export function redactText(input: string): RedactionResult<string> {
+function redactText(input: string): RedactionResult<string> {
 	let value = input;
 	let redactions = 0;
 
