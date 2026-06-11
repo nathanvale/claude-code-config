@@ -71,7 +71,7 @@ export interface LaneClause {
 	maskingNote: MaskingNote;
 }
 
-// --- the v1 clause set (7), reconciled with the fixture map ---
+// --- the v1 clause set (9), reconciled with the fixture map ---
 //
 // Clause ↔ fixture ↔ heal-bug map (authoritative source; the Output Structure
 // table in the plan mirrors this):
@@ -81,6 +81,7 @@ export interface LaneClause {
 //   no-raw-runner           static  bad-raw-runner          heal bug a
 //   vacuous-match           static  bad-vacuous-match       heal bug b
 //   json-valid-under-failure surface bad-envelope-on-failure — (new lane clause, R4)
+//   exit-code-matches-declared surface bad-envelope-on-failure — (co-fires w/ envelope, R4)
 //   declared-coverage-runs  surface  bad-partial-coverage   heal bug c
 //   runnable-resolves       surface  bad-front-door-uncovered — (front-door coverage, R4)
 
@@ -189,6 +190,24 @@ export const LANE_CLAUSES: readonly LaneClause[] = [
 		maskingNote: {
 			resistant: true,
 			why: "Validity is checked against the envelope schema, not a substring. The only way to pass is to emit a conforming envelope, which is the real fix.",
+		},
+	},
+	{
+		id: "exit-code-matches-declared",
+		kind: "surface",
+		source: {
+			kind: "symbol",
+			name: "COMMAND_FACADE_BASELINE_EXIT_CODES",
+			module: "runtime/cli-command-facade/src/command-contract.ts",
+			note: "An invocation's observed exit code must be one the contract's exitCodes map declares; an undeclared code means the runtime contract and behavior have drifted.",
+		},
+		assertion:
+			"Running each invocation produces an exit code the contract's exitCodes map declares.",
+		expectedOutcome:
+			"An invocation whose observed exit code is not declared in the contract yields a surface finding.",
+		maskingNote: {
+			resistant: true,
+			why: "The declared exitCodes map is the oracle; the only way to pass is for behavior to emit a declared code (fix behavior) or for the contract to declare the code (a real contract change). Neither is a cheaper non-fix.",
 		},
 	},
 	{

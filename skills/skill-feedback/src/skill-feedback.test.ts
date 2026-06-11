@@ -140,9 +140,12 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		],
 		["dsn", "postgresql://user:secret-password@localhost/db"],
 		["ghp", "ghp_1234567890abcdefghijklmnopqrstuvwxyz"],
+		["github_pat", "github_pat_1234567890abcdefghijklmnopqrstuvwxyz"],
 		["xoxb", "xoxb-123456789012-abcdefghijklmnop"],
+		["xoxp", "xoxp-123456789012-abcdefghijklmnop"],
 		["akia", "AKIA1234567890ABCDEF"],
 		["sk", "sk-1234567890abcdefghijklmnopqrstuvwxyz"],
+		["sk-proj", "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz"],
 		["glpat", "glpat-1234567890abcdefghijklmnop"],
 	] as const) {
 		test(`redacts ${label} secret from written friction bytes`, async () => {
@@ -159,6 +162,21 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			).toBeGreaterThanOrEqual(1);
 		});
 	}
+
+	test("http credential URL keeps scheme but strips query token on disk", async () => {
+		const scheme = "https://";
+		const queryToken = "SECRET-query-token-value";
+		const url = `https://user:pw@api.example.com/path?token=${queryToken}`;
+		const { result, disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Observed ${url} while closing.`,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(disk).toContain(scheme);
+		expect(disk).not.toContain(queryToken);
+		expect(disk).not.toContain("pw@");
+	});
 
 	test("redacts narrated goal and explanation fields before writing", async () => {
 		const goalSecret = "ghp_goal1234567890abcdefghijklmnop";

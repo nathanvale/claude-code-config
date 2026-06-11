@@ -423,6 +423,34 @@ describe("surface audit — each clause fires", () => {
 		expect(finding?.kind).toBe("surface");
 		expect(finding?.summary).toContain("ran 1 of 4");
 	});
+
+	// Exit-code findings are owned by exit-code-matches-declared, NOT
+	// json-valid-under-failure: the two clauses read the same failing invocation
+	// but are gated independently, so `--only` on one never suppresses the other.
+	test("exit-code findings carry the exit-code-matches-declared clauseId, not json-valid-under-failure", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: "json-valid-under-failure",
+		});
+		// The envelope is broken (json-valid fires); the exit code 1 IS declared, so
+		// no exit-code finding is expected. Crucially, no exit-code drift is ever
+		// misattributed to the json-valid clause.
+		expect(outcome.findings.map((f) => f.clauseId)).toContain("json-valid-under-failure");
+		const exitMisattributed = outcome.findings.find(
+			(f) =>
+				f.clauseId === "json-valid-under-failure" &&
+				f.summary.includes("is not declared in the contract"),
+		);
+		expect(exitMisattributed).toBeUndefined();
+	});
+
+	test("--only on exit-code-matches-declared does not surface json-valid-under-failure findings", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: "exit-code-matches-declared",
+		});
+		expect(outcome.findings.map((f) => f.clauseId)).not.toContain("json-valid-under-failure");
+	});
 });
 
 // --- script entry resolution (adversarial finding D) ---

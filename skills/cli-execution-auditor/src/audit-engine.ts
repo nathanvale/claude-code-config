@@ -691,7 +691,7 @@ function assertExitCodeDeclared(
 ): EngineFinding | null {
 	if (declaredExitCodes.has(String(run.exitCode))) return null;
 	return {
-		clauseId: "json-valid-under-failure",
+		clauseId: "exit-code-matches-declared",
 		kind: "surface",
 		summary: `exit code ${run.exitCode} is not declared in the contract for \`${invocation.argv.join(" ")}\``,
 		argv: invocation.argv,
@@ -798,6 +798,8 @@ export async function runSurfaceAudit(input: {
 		if (wanted("json-valid-under-failure")) {
 			const jsonFinding = assertJsonValidUnderFailure(invocation, run);
 			if (jsonFinding) findings.push(jsonFinding);
+		}
+		if (wanted("exit-code-matches-declared")) {
 			const exitFinding = assertExitCodeDeclared(invocation, run, declaredExitCodes);
 			if (exitFinding) findings.push(exitFinding);
 		}

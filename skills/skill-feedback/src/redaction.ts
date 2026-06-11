@@ -14,7 +14,7 @@ const URL_REDACTION = "[redacted-url]";
 
 type RedactionPattern = {
 	pattern: RegExp;
-	replacement: string | ((match: string) => string);
+	replacement: string | ((match: string, ...groups: string[]) => string);
 };
 
 const SECRET_PATTERNS: readonly RedactionPattern[] = [
@@ -33,14 +33,18 @@ const SECRET_PATTERNS: readonly RedactionPattern[] = [
 	},
 	{
 		pattern: /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi,
-		replacement: "$1[redacted-credentials]@",
+		replacement: (_match, scheme: string) => `${scheme}[redacted-credentials]@`,
+	},
+	{
+		pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+		replacement: REDACTION,
 	},
 	{
 		pattern: /\bghp_[A-Za-z0-9_]{20,}\b/g,
 		replacement: REDACTION,
 	},
 	{
-		pattern: /\bxoxb-[A-Za-z0-9-]{16,}\b/g,
+		pattern: /\bxox[bapr]-[A-Za-z0-9-]{16,}\b/g,
 		replacement: REDACTION,
 	},
 	{
@@ -48,7 +52,7 @@ const SECRET_PATTERNS: readonly RedactionPattern[] = [
 		replacement: REDACTION,
 	},
 	{
-		pattern: /\bsk-[A-Za-z0-9]{20,}\b/g,
+		pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
 		replacement: REDACTION,
 	},
 	{
@@ -99,11 +103,15 @@ function redactText(input: string): RedactionResult<string> {
 	let redactions = 0;
 
 	for (const { pattern, replacement } of SECRET_PATTERNS) {
-		value = value.replace(pattern, (match) => {
+		value = value.replace(pattern, (match: string, ...args: unknown[]) => {
 			redactions += 1;
-			return typeof replacement === "function"
-				? replacement(match)
-				: replacement;
+			if (typeof replacement !== "function") {
+				return replacement;
+			}
+			const groups = args.filter(
+				(arg): arg is string => typeof arg === "string",
+			);
+			return replacement(match, ...groups);
 		});
 	}
 

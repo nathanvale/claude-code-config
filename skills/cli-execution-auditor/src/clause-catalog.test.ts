@@ -18,6 +18,7 @@ const EXPECTED_PARTITION: Record<string, "static" | "surface"> = {
 	"no-raw-runner": "static",
 	"vacuous-match": "static",
 	"json-valid-under-failure": "surface",
+	"exit-code-matches-declared": "surface",
 	"declared-coverage-runs": "surface",
 	"runnable-resolves": "surface",
 };
