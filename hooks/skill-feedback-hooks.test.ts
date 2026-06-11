@@ -136,6 +136,28 @@ describe('skill-feedback hooks', () => {
 		expect(calls).toHaveLength(1)
 	})
 
+	test('Claude Stop handler reports uncaptured when record subprocess fails', async () => {
+		const calls: RecordRequest[] = []
+		const dedupe = createMemoryDedupe()
+		const result = await handleSkillFeedbackStop(
+			{ cwd: '/tmp/repo', transcript_path: FIXTURE_PATH },
+			{
+				readText: fixtureText,
+				...dedupe,
+				resolveGitRoot: async (cwd) => cwd,
+				nowIso: () => GENERATED_TS,
+				runRecord: async (request) => {
+					calls.push(request)
+					return { exitCode: 1, stdout: '', stderr: 'nope' }
+				},
+			},
+		)
+
+		expect(result.captured).toBe(false)
+		expect(calls).toHaveLength(1)
+		expect(await dedupe.readLastDetectionId(FIXTURE_PATH)).toBeNull()
+	})
+
 	test('Codex notify parser skips payloads without skill identity', () => {
 		const detection = detectSkillFromCodexNotify(
 			JSON.stringify({
@@ -184,6 +206,28 @@ describe('skill-feedback hooks', () => {
 			{ command: ['existing-handler', 'turn-ended'], payload },
 		])
 		expect(records).toEqual([])
+	})
+
+	test('Codex dispatcher reports failed forwarding and failed capture by exit code', async () => {
+		const payload = JSON.stringify({
+			type: 'agent-turn-complete',
+			cwd: '/tmp/repo',
+			skill: 'cli-execution-auditor',
+		})
+
+		const result = await dispatchCodexNotify(
+			payload,
+			['existing-handler', 'turn-ended'],
+			{
+				cwd: () => '/fallback',
+				nowIso: () => GENERATED_TS,
+				resolveGitRoot: async (cwd) => cwd,
+				runNext: async () => ({ exitCode: 1, stdout: '', stderr: 'forward failed' }),
+				runRecord: async () => ({ exitCode: 1, stdout: '', stderr: 'record failed' }),
+			},
+		)
+
+		expect(result).toEqual({ forwarded: false, captured: false })
 	})
 
 	test('Codex dispatcher parses --next command boundaries', () => {

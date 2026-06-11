@@ -110,10 +110,13 @@ export async function dispatchCodexNotify(
 					),
 				)
 		: Promise.resolve({ exitCode: 0, stdout: '', stderr: '' })
-	await Promise.allSettled([forward, capture])
+	const [forwardResult, captureResult] = await Promise.allSettled([
+		forward,
+		capture,
+	])
 	return {
-		forwarded: nextCommand.length > 0,
-		captured: Boolean(detection),
+		forwarded: nextCommand.length > 0 && runSucceeded(forwardResult),
+		captured: Boolean(detection) && runSucceeded(captureResult),
 	}
 }
 
@@ -143,6 +146,12 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 	} catch {
 		return null
 	}
+}
+
+function runSucceeded(
+	result: PromiseSettledResult<HookRunResult>,
+): boolean {
+	return result.status === 'fulfilled' && result.value.exitCode === 0
 }
 
 function findLastJsonObjectArg(argv: readonly string[]): number {

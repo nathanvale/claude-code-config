@@ -117,9 +117,12 @@ export async function handleSkillFeedbackStop(
 		return { captured: false, detection }
 	}
 	const cwd = await runtime.resolveGitRoot(input.cwd)
-	await runtime.runRecord(
+	const result = await runtime.runRecord(
 		buildRecordRequest(cwd, detection, runtime.nowIso()),
 	)
+	if (result.exitCode !== 0) {
+		return { captured: false, detection }
+	}
 	await runtime.writeLastDetectionId(
 		input.transcript_path,
 		detection.detectionId,
