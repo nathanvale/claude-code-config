@@ -1,0 +1,751 @@
+<!doctype html>
+<!-- Source: docs/ideation/2026-06-10-loop-design-guide-mvp-ideation.html -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loop Design Guide MVP: Visual Explainer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f8f8f6;
+      --ink: #151515;
+      --muted: #5e625f;
+      --line: #cdd5d0;
+      --panel: #ffffff;
+      --teal: #147d7f;
+      --teal-soft: #d9f1ef;
+      --coral: #d94f3d;
+      --coral-soft: #ffe1d9;
+      --yellow: #f2c94c;
+      --yellow-soft: #fff3c1;
+      --green: #2c7a4b;
+      --green-soft: #dff2e4;
+      --blue: #3657b7;
+      --blue-soft: #e2e8ff;
+      --shadow: 0 18px 48px rgba(16, 24, 32, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(20, 125, 127, 0.08) 1px, transparent 1px),
+        linear-gradient(rgba(20, 125, 127, 0.08) 1px, transparent 1px),
+        var(--paper);
+      background-size: 34px 34px;
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--teal);
+      text-underline-offset: 3px;
+    }
+
+    code {
+      border: 1px solid rgba(20, 125, 127, 0.18);
+      border-radius: 6px;
+      background: rgba(20, 125, 127, 0.08);
+      padding: 0.08rem 0.28rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .page {
+      width: min(1060px, calc(100vw - 28px));
+      margin: 0 auto;
+      padding: 34px 0 54px;
+    }
+
+    header {
+      min-height: 72vh;
+      display: grid;
+      align-items: center;
+      gap: 26px;
+      padding: 28px 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
+      gap: 34px;
+      align-items: center;
+    }
+
+    .eyebrow {
+      width: max-content;
+      border: 2px solid var(--ink);
+      background: var(--yellow);
+      color: var(--ink);
+      padding: 0.24rem 0.58rem;
+      font-size: 0.8rem;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      transform: rotate(-1deg);
+    }
+
+    h1 {
+      max-width: 11ch;
+      margin: 0.55rem 0 0.75rem;
+      font-size: clamp(3.2rem, 9vw, 7.6rem);
+      line-height: 0.88;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0;
+      color: #303331;
+      font-size: clamp(1.05rem, 2vw, 1.35rem);
+      font-weight: 560;
+    }
+
+    .plain-answer {
+      border-left: 8px solid var(--teal);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 18px 20px;
+      margin-top: 24px;
+      font-size: 1.04rem;
+    }
+
+    .plain-answer strong {
+      display: block;
+      margin-bottom: 0.3rem;
+      font-size: 1.2rem;
+    }
+
+    .robot-board {
+      position: relative;
+      min-height: 470px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border: 2px solid var(--ink);
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(242, 201, 76, 0.52), transparent 28%),
+        radial-gradient(circle at 80% 72%, rgba(217, 79, 61, 0.22), transparent 30%),
+        #ffffff;
+      box-shadow: var(--shadow);
+    }
+
+    .loop-ring {
+      position: absolute;
+      width: min(360px, 78%);
+      aspect-ratio: 1;
+      border: 18px solid var(--teal);
+      border-right-color: var(--coral);
+      border-bottom-color: var(--yellow);
+      border-radius: 50%;
+      opacity: 0.9;
+      animation: spin-slow 18s linear infinite;
+    }
+
+    .loop-ring::after {
+      content: "";
+      position: absolute;
+      right: 14px;
+      top: 14px;
+      width: 0;
+      height: 0;
+      border-left: 22px solid var(--coral);
+      border-top: 15px solid transparent;
+      border-bottom: 15px solid transparent;
+      transform: rotate(32deg);
+    }
+
+    .center-note {
+      position: relative;
+      width: min(280px, 72%);
+      border: 2px solid var(--ink);
+      border-radius: 14px;
+      background: var(--yellow-soft);
+      padding: 22px;
+      transform: rotate(-2deg);
+      box-shadow: 10px 12px 0 rgba(21, 21, 21, 0.12);
+    }
+
+    .center-note .label {
+      display: inline-block;
+      margin-bottom: 9px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fff;
+      padding: 0.16rem 0.5rem;
+      font-size: 0.78rem;
+      font-weight: 850;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .center-note p {
+      margin: 0;
+      color: #252525;
+      font-size: 1.2rem;
+      font-weight: 760;
+      line-height: 1.25;
+    }
+
+    section {
+      margin-top: 42px;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: clamp(1.9rem, 4vw, 3.2rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .section-lede {
+      max-width: 72ch;
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 1.04rem;
+    }
+
+    .analogy {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .scenario {
+      border: 2px solid var(--ink);
+      border-radius: 16px;
+      background: var(--panel);
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .scenario.bad {
+      background: var(--coral-soft);
+    }
+
+    .scenario.good {
+      background: var(--green-soft);
+    }
+
+    .scenario h3,
+    .signal h3,
+    .stage h3,
+    .field h3,
+    .mini h3 {
+      margin: 0 0 8px;
+      font-size: 1.2rem;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .scenario p,
+    .signal p,
+    .stage p,
+    .field p,
+    .mini p {
+      margin: 0;
+      color: #262a28;
+    }
+
+    .quote {
+      display: block;
+      margin-top: 14px;
+      border: 2px solid rgba(21, 21, 21, 0.18);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.62);
+      padding: 12px;
+      font-weight: 720;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .stage {
+      position: relative;
+      min-height: 170px;
+      border: 2px solid var(--ink);
+      border-radius: 16px;
+      background: var(--panel);
+      padding: 16px;
+      overflow: hidden;
+      box-shadow: 8px 10px 0 rgba(21, 21, 21, 0.08);
+    }
+
+    .stage::after {
+      content: "->";
+      position: absolute;
+      right: -7px;
+      bottom: 8px;
+      color: var(--ink);
+      font-size: 2.5rem;
+      font-weight: 900;
+      opacity: 0.18;
+    }
+
+    .stage:last-child::after {
+      content: "";
+    }
+
+    .stage .num {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 12px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .stage:nth-child(1) {
+      background: var(--coral-soft);
+    }
+
+    .stage:nth-child(2) {
+      background: var(--yellow-soft);
+    }
+
+    .stage:nth-child(3) {
+      background: var(--teal-soft);
+    }
+
+    .stage:nth-child(4) {
+      background: var(--green-soft);
+    }
+
+    .stage:nth-child(5) {
+      background: var(--blue-soft);
+    }
+
+    .signals {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .signal {
+      border: 2px solid var(--ink);
+      border-radius: 16px;
+      background: var(--panel);
+      padding: 18px;
+      box-shadow: 7px 9px 0 rgba(21, 21, 21, 0.07);
+    }
+
+    .signal .tag {
+      display: inline-block;
+      margin-bottom: 14px;
+      border-radius: 999px;
+      padding: 0.2rem 0.56rem;
+      color: #fff;
+      font-size: 0.82rem;
+      font-weight: 900;
+      letter-spacing: 0.05em;
+    }
+
+    .signal:nth-child(1) .tag {
+      background: var(--teal);
+    }
+
+    .signal:nth-child(2) .tag {
+      background: var(--coral);
+    }
+
+    .signal:nth-child(3) .tag {
+      background: var(--blue);
+    }
+
+    .signal:nth-child(4) .tag {
+      background: var(--green);
+    }
+
+    .card-demo {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.08fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .loop-card {
+      border: 3px solid var(--ink);
+      border-radius: 18px;
+      background: #fffdf0;
+      padding: 22px;
+      box-shadow: 12px 14px 0 rgba(21, 21, 21, 0.14);
+    }
+
+    .loop-card h3 {
+      margin: 0 0 14px;
+      font-size: 1.7rem;
+      line-height: 1;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .field {
+      border: 2px solid rgba(21, 21, 21, 0.14);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.78);
+      padding: 12px;
+    }
+
+    .field h3 {
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .example {
+      display: grid;
+      gap: 12px;
+    }
+
+    .mini {
+      border: 2px solid var(--line);
+      border-left: 8px solid var(--teal);
+      border-radius: 14px;
+      background: var(--panel);
+      padding: 16px;
+    }
+
+    .later {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .later .stage {
+      min-height: 150px;
+    }
+
+    .warning {
+      border: 2px dashed var(--coral);
+      border-radius: 16px;
+      background: #fff;
+      padding: 18px 20px;
+      font-weight: 720;
+    }
+
+    .memory-line {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .memory-line span {
+      display: block;
+      border: 2px solid var(--ink);
+      border-radius: 999px;
+      background: #fff;
+      padding: 0.62rem 0.8rem;
+      text-align: center;
+      font-weight: 850;
+    }
+
+    .bottom-line {
+      margin-top: 42px;
+      border: 3px solid var(--ink);
+      border-radius: 18px;
+      background: var(--ink);
+      color: #fff;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .bottom-line h2 {
+      margin-bottom: 10px;
+      color: #fff;
+    }
+
+    .bottom-line p {
+      max-width: 75ch;
+      margin: 0;
+      color: #f4f4f4;
+      font-size: 1.16rem;
+      font-weight: 650;
+    }
+
+    @keyframes spin-slow {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 900px) {
+      header {
+        min-height: auto;
+      }
+
+      .hero,
+      .analogy,
+      .card-demo {
+        grid-template-columns: 1fr;
+      }
+
+      .flow,
+      .signals,
+      .later,
+      .memory-line {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .robot-board {
+        min-height: 360px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .page {
+        width: min(100% - 18px, 1060px);
+        padding-top: 14px;
+      }
+
+      h1 {
+        font-size: clamp(2.7rem, 18vw, 4rem);
+      }
+
+      .flow,
+      .signals,
+      .later,
+      .memory-line,
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stage {
+        min-height: auto;
+      }
+
+      .stage::after {
+        content: "";
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      .loop-ring {
+        animation: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div class="hero">
+        <div>
+          <div class="eyebrow">15-minute brain version</div>
+          <h1>Loop card first.</h1>
+          <p class="lede">The idea is simple: before an AI agent starts repeating work, make it write one clear card that says what it is doing, how it checks itself, when it stops, and what proof it will show.</p>
+          <div class="plain-answer">
+            <strong>Like you are 15:</strong>
+            A normal prompt is like saying, "Make my room better." A loop card is like saying, "Pick up clothes, put books away, stop when the floor is clear, and send a photo so I know it worked."
+          </div>
+        </div>
+        <div class="robot-board" aria-label="Loop card visual">
+          <div class="loop-ring"></div>
+          <div class="center-note">
+            <span class="label">Loop card</span>
+            <p>Give the agent a job, a repeat button, a finish line, and proof.</p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section aria-labelledby="analogy-title">
+      <h2 id="analogy-title">Why this exists</h2>
+      <p class="section-lede">AI agents are good at doing steps. They are bad when the steps are fuzzy, the finish line is missing, or nobody checks the result.</p>
+      <div class="analogy">
+        <article class="scenario bad">
+          <h3>Vague instruction</h3>
+          <p>"Keep improving this until it is good."</p>
+          <span class="quote">Problem: the agent can spin forever, change random stuff, or say it is done without proof.</span>
+        </article>
+        <article class="scenario good">
+          <h3>Loop-card instruction</h3>
+          <p>"Repeat these steps, check this evidence, stop at this point, and ask before risky changes."</p>
+          <span class="quote">Result: the agent has rails, a finish line, and a receipt.</span>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="flow-title">
+      <h2 id="flow-title">The whole idea in five boxes</h2>
+      <div class="flow">
+        <article class="stage">
+          <span class="num">1</span>
+          <h3>You have a goal</h3>
+          <p>"Fix this bug" or "research this topic" is not enough yet.</p>
+        </article>
+        <article class="stage">
+          <span class="num">2</span>
+          <h3>Make a loop card</h3>
+          <p>The card turns the goal into a controlled repeatable loop.</p>
+        </article>
+        <article class="stage">
+          <span class="num">3</span>
+          <h3>Agent runs the loop</h3>
+          <p>It repeats only inside the allowed boundaries.</p>
+        </article>
+        <article class="stage">
+          <span class="num">4</span>
+          <h3>Evidence proves it</h3>
+          <p>Tests, screenshots, traces, or inspected outputs show what happened.</p>
+        </article>
+        <article class="stage">
+          <span class="num">5</span>
+          <h3>Maybe reuse later</h3>
+          <p>If the loop worked, it can become a future example after a human says yes.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="signals-title">
+      <h2 id="signals-title">The four questions</h2>
+      <p class="section-lede">These are the diagnostic keys. If one is missing, the loop is probably weak.</p>
+      <div class="signals">
+        <article class="signal">
+          <span class="tag">CYCLE</span>
+          <h3>What repeats?</h3>
+          <p>Name the steps the agent will do again and again.</p>
+        </article>
+        <article class="signal">
+          <span class="tag">STOP</span>
+          <h3>When does it stop?</h3>
+          <p>Name the finish line, max attempts, budget, or handoff point.</p>
+        </article>
+        <article class="signal">
+          <span class="tag">MECHANISM</span>
+          <h3>How does it work?</h3>
+          <p>Name the tools, checks, context, and decision rules.</p>
+        </article>
+        <article class="signal">
+          <span class="tag">EVIDENCE</span>
+          <h3>How do we know?</h3>
+          <p>Name the proof: test output, screenshot, trace, diff, or human review.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="card-title">
+      <h2 id="card-title">What the card holds</h2>
+      <p class="section-lede">The card is not a giant plan. It is the small control sheet the agent reads before it starts looping.</p>
+      <div class="card-demo">
+        <article class="loop-card">
+          <h3>Loop Card</h3>
+          <div class="field-grid">
+            <div class="field">
+              <h3>Goal</h3>
+              <p>What result are we trying to get?</p>
+            </div>
+            <div class="field">
+              <h3>Cycle</h3>
+              <p>What steps repeat?</p>
+            </div>
+            <div class="field">
+              <h3>Stop</h3>
+              <p>What ends the loop?</p>
+            </div>
+            <div class="field">
+              <h3>Verifier</h3>
+              <p>What checks the work?</p>
+            </div>
+            <div class="field">
+              <h3>Evidence</h3>
+              <p>What proof gets saved?</p>
+            </div>
+            <div class="field">
+              <h3>Authority</h3>
+              <p>What may change, and what needs a yes?</p>
+            </div>
+          </div>
+        </article>
+
+        <div class="example">
+          <article class="mini">
+            <h3>Example: broken test</h3>
+            <p><strong>Goal:</strong> Make the failing test pass.</p>
+          </article>
+          <article class="mini">
+            <h3>Loop</h3>
+            <p>Run test, inspect error, edit the smallest relevant code, rerun test.</p>
+          </article>
+          <article class="mini">
+            <h3>Stop</h3>
+            <p>Stop when the test passes, or after 3 failed attempts, or when the fix needs product approval.</p>
+          </article>
+          <article class="mini">
+            <h3>Proof</h3>
+            <p>Show the final test output, changed files, and what was learned.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="curation-title">
+      <h2 id="curation-title">The future bit: reuse without chaos</h2>
+      <p class="section-lede">A successful card can become a useful example later. But the MVP does not let the agent silently rewrite the prompt pack.</p>
+      <div class="later">
+        <article class="stage">
+          <span class="num">1</span>
+          <h3>Run worked</h3>
+          <p>The goal completed and the evidence was inspected.</p>
+        </article>
+        <article class="stage">
+          <span class="num">2</span>
+          <h3>Human retro</h3>
+          <p>A person answers: did this actually help?</p>
+        </article>
+        <article class="stage">
+          <span class="num">3</span>
+          <h3>Candidate</h3>
+          <p>The card can be saved as a possible future example.</p>
+        </article>
+        <article class="stage">
+          <span class="num">4</span>
+          <h3>Human gate</h3>
+          <p>Only a clear human yes can promote it into the active pack.</p>
+        </article>
+      </div>
+      <p class="warning">Translation: the agent can suggest learning from success. It cannot quietly change the rules it will use next time.</p>
+    </section>
+
+    <section aria-labelledby="memory-title">
+      <h2 id="memory-title">Remember it like this</h2>
+      <div class="memory-line" aria-label="Memory line">
+        <span>Goal</span>
+        <span>Repeat</span>
+        <span>Stop</span>
+        <span>Proof</span>
+      </div>
+    </section>
+
+    <section class="bottom-line" aria-labelledby="bottom-title">
+      <h2 id="bottom-title">One sentence</h2>
+      <p>The Loop Design Guide turns "make an AI keep trying" into "give the AI a controlled loop with a finish line, a safety gate, and proof that it worked."</p>
+    </section>
+  </main>
+</body>
+</html>

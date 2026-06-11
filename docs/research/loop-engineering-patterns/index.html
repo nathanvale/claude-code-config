@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loop Engineering Patterns — 11 Design Patterns</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --accent: #6366f1;
+      --accent2: #818cf8;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #2d3148;
+      --quote-bg: #1e2235;
+      --tag-bg: #1e2235;
+      --link: #818cf8;
+      --green: #34d399;
+      --yellow: #fbbf24;
+      --red: #f87171;
+      font-size: 16px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.7;
+      padding: 0;
+    }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .nav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .nav a { color: var(--accent2); }
+    .nav .sep { color: var(--border); }
+    .hero {
+      background: linear-gradient(135deg, #1a1d27 0%, #0f1117 60%);
+      border-bottom: 1px solid var(--border);
+      padding: 4rem 2rem 3rem;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    .pattern-num {
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+    }
+    h1 {
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 1rem;
+      background: linear-gradient(135deg, #e2e8f0 0%, #818cf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .tagline {
+      font-size: 1.125rem;
+      color: var(--muted);
+      max-width: 600px;
+    }
+    .content {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 3rem 2rem 5rem;
+    }
+    h2 {
+      font-size: 1.375rem;
+      font-weight: 700;
+      margin: 2.5rem 0 1rem;
+      color: var(--text);
+    }
+    h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin: 1.75rem 0 0.75rem;
+      color: var(--accent2);
+    }
+    p { margin-bottom: 1rem; color: var(--text); }
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      margin: 2rem 0;
+      text-align: center;
+    }
+    .diagram svg { max-width: 100%; }
+    .loop-steps {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      flex-wrap: wrap;
+      margin: 1.5rem 0;
+    }
+    .step {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .arrow {
+      color: var(--accent);
+      font-size: 1.25rem;
+      padding: 0 0.5rem;
+      font-weight: 700;
+    }
+    .cycle-arrow {
+      display: block;
+      text-align: center;
+      color: var(--accent);
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+      letter-spacing: 0.05em;
+    }
+    .evidence-card {
+      background: var(--quote-bg);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin: 1.5rem 0;
+    }
+    .evidence-card .meta {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .author-link {
+      font-weight: 700;
+      color: var(--accent2);
+      font-size: 0.9rem;
+    }
+    .followers {
+      font-size: 0.75rem;
+      color: var(--muted);
+      background: var(--surface2);
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+    }
+    .source-tag {
+      font-size: 0.7rem;
+      color: var(--muted);
+      background: var(--tag-bg);
+      border: 1px solid var(--border);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    blockquote {
+      font-size: 1rem;
+      line-height: 1.65;
+      color: var(--text);
+      font-style: italic;
+      margin-bottom: 0.75rem;
+    }
+    blockquote::before { content: '"'; color: var(--accent); font-size: 1.5rem; line-height: 0; vertical-align: -0.4rem; margin-right: 0.25rem; font-style: normal; }
+    .view-link {
+      font-size: 0.8rem;
+      color: var(--link);
+      margin-top: 0.5rem;
+      display: inline-block;
+    }
+    .signals {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin: 1rem 0;
+    }
+    .signal {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .signal.cycle { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
+    .signal.stop { background: rgba(248,113,113,0.12); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+    .signal.mechanism { background: rgba(52,211,153,0.1); color: #34d399; border: 1px solid rgba(52,211,153,0.25); }
+    .signal.evidence { background: rgba(251,191,36,0.1); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
+    .tldr {
+      background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(129,140,248,0.04));
+      border: 1px solid rgba(99,102,241,0.25);
+      border-radius: 12px;
+      padding: 1.5rem 2rem;
+      margin: 2rem 0;
+    }
+    .tldr h3 { margin-top: 0; color: var(--accent2); }
+    code {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.15rem 0.4rem;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.85em;
+      color: var(--accent2);
+    }
+    pre {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      overflow-x: auto;
+      margin: 1rem 0 1.5rem;
+    }
+    pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 0.875rem;
+      color: var(--text);
+    }
+    .nav-posts {
+      display: flex;
+      gap: 1rem;
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .nav-posts a {
+      flex: 1;
+      min-width: 200px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+      transition: border-color 0.15s;
+    }
+    .nav-posts a:hover { border-color: var(--accent); text-decoration: none; }
+    .nav-posts a strong { display: block; color: var(--text); margin-bottom: 0.25rem; }
+    .nav-posts .dir { font-size: 0.75rem; color: var(--accent2); margin-bottom: 0.25rem; }
+
+    /* Index-specific styles */
+    .hero-meta {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      margin-top: 1.75rem;
+      flex-wrap: wrap;
+    }
+    .hero-stat {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .hero-stat .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .series-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+    }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.25rem;
+      margin-top: 2rem;
+    }
+    @media (max-width: 640px) {
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+      .hero {
+        padding: 2.5rem 1.25rem 2rem;
+      }
+      .content {
+        padding: 2rem 1.25rem 4rem;
+      }
+    }
+    .pattern-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .pattern-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .card-num {
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: rgba(99,102,241,0.12);
+      border: 1px solid rgba(99,102,241,0.25);
+      border-radius: 6px;
+      padding: 0.2rem 0.55rem;
+      flex-shrink: 0;
+      line-height: 1.6;
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.35;
+    }
+    .card-title a {
+      color: var(--text);
+    }
+    .card-title a:hover {
+      color: var(--accent2);
+      text-decoration: none;
+    }
+    .card-tagline {
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.55;
+      flex: 1;
+    }
+    .card-signals {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-top: 0.25rem;
+    }
+    .card-signal {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .card-signal.cycle { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
+    .card-signal.stop { background: rgba(248,113,113,0.12); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+    .card-signal.mechanism { background: rgba(52,211,153,0.1); color: #34d399; border: 1px solid rgba(52,211,153,0.25); }
+    .card-signal.evidence { background: rgba(251,191,36,0.1); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
+    .section-intro {
+      color: var(--muted);
+      font-size: 0.9375rem;
+      margin-bottom: 0.25rem;
+    }
+    .footer {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      padding: 2rem;
+      text-align: center;
+      font-size: 0.8125rem;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .footer strong {
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <span>Loop Engineering Patterns</span>
+    <span class="sep">/</span>
+    <span>Index</span>
+  </nav>
+
+  <div class="hero">
+    <div class="series-label">Blog Series</div>
+    <h1>Loop Engineering Patterns</h1>
+    <p class="tagline">11 design patterns mined from 184 verified examples across X.com and Reddit, June 2026, plus one earned from a worked implementation.</p>
+    <div class="hero-meta">
+      <span class="hero-stat"><span class="dot"></span>184 examples</span>
+      <span class="hero-stat"><span class="dot"></span>3 workflow runs</span>
+      <span class="hero-stat"><span class="dot"></span>7-day window</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <p class="section-intro">Each pattern below is extracted from real engineering discussions. Click a title to read the full post, including diagrams, evidence cards, and implementation notes.</p>
+
+    <div class="card-grid">
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 01</span>
+        </div>
+        <div class="card-title"><a href="01-multi-agent-kanban.html">The Multi-Agent Kanban Loop</a></div>
+        <p class="card-tagline">A PM agent breaks goals into tasks, specialised agents execute, a tester closes the arc.</p>
+        <div class="card-signals">
+          <span class="card-signal cycle">Cycle</span>
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 02</span>
+        </div>
+        <div class="card-title"><a href="02-bounded-unbounded.html">Bounded vs Unbounded Loops</a></div>
+        <p class="card-tagline">Every loop needs a taxonomy. Does it stop when a goal is reached, or does it run forever?</p>
+        <div class="card-signals">
+          <span class="card-signal cycle">Cycle</span>
+          <span class="card-signal stop">Stop</span>
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 03</span>
+        </div>
+        <div class="card-title"><a href="03-message-append-harness.html">The Message-Append Harness</a></div>
+        <p class="card-tagline">The atomic unit of every agentic loop: send, respond, run tool, append, repeat.</p>
+        <div class="card-signals">
+          <span class="card-signal cycle">Cycle</span>
+          <span class="card-signal stop">Stop</span>
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 04</span>
+        </div>
+        <div class="card-title"><a href="04-pipeline-audit-chain.html">The Pipeline Audit Chain</a></div>
+        <p class="card-tagline">Chain specialist agents where each stage checks against the prior stage's output.</p>
+        <div class="card-signals">
+          <span class="card-signal cycle">Cycle</span>
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 05</span>
+        </div>
+        <div class="card-title"><a href="05-nested-loop-hierarchy.html">Nested Loop Hierarchies</a></div>
+        <p class="card-tagline">Mission loops spawn goal loops, which spawn agent loops, which spawn workflow loops, which run tool loops.</p>
+        <div class="card-signals">
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 06</span>
+        </div>
+        <div class="card-title"><a href="06-loop-memory-tiers.html">Loop Memory Tiers</a></div>
+        <p class="card-tagline">A loop without memory resets every run. A loop that learns turns mistakes into rules.</p>
+        <div class="card-signals">
+          <span class="card-signal mechanism">Mechanism</span>
+          <span class="card-signal cycle">Cycle</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 07</span>
+        </div>
+        <div class="card-title"><a href="07-harness-setup-recipe.html">The Harness Setup Recipe</a></div>
+        <p class="card-tagline">Configure the agent's operating environment once. Then the loop does the prompting for you.</p>
+        <div class="card-signals">
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 08</span>
+        </div>
+        <div class="card-title"><a href="08-classify-route-pattern.html">Classify-and-Route</a></div>
+        <p class="card-tagline">One agent reads the input, decides the category, the script routes it to the right specialist.</p>
+        <div class="card-signals">
+          <span class="card-signal cycle">Cycle</span>
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 09</span>
+        </div>
+        <div class="card-title"><a href="09-self-auditing-loop.html">The Self-Auditing Loop</a></div>
+        <p class="card-tagline">An agent reads its own instruction set and surfaces contradictions. The loop corrects itself.</p>
+        <div class="card-signals">
+          <span class="card-signal cycle">Cycle</span>
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 10</span>
+        </div>
+        <div class="card-title"><a href="010-harness-vs-prompt.html">Harness &gt; Prompt</a></div>
+        <p class="card-tagline">You no longer prompt the agent. You design the system that prompts it for you.</p>
+        <div class="card-signals">
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+      <div class="pattern-card">
+        <div class="card-header">
+          <span class="card-num">Pattern 11</span>
+        </div>
+        <div class="card-title"><a href="11-proving-a-loop-works.html">Proving a Loop Works</a></div>
+        <p class="card-tagline">A loop that only ever returns green is unfalsified, not validated. Prove the detector fires before you trust it.</p>
+        <div class="card-signals">
+          <span class="card-signal mechanism">Mechanism</span>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <footer class="footer">
+    <p>Mined June 2026 using a multi-pass X API + WOTS workflow. <strong>184 verified examples</strong> across 3 runs.</p>
+  </footer>
+
+</body>
+</html>

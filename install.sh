@@ -28,6 +28,7 @@ symlinks=(
 	"${CLAUDE_HOME}/settings.json|${SCRIPT_DIR}/settings.json"
 	"${CLAUDE_HOME}/.mcp.json|${SCRIPT_DIR}/.mcp.json"
 	"${CODEX_HOME}/AGENTS.md|${SCRIPT_DIR}/AGENTS.md"
+	"${CODEX_HOME}/skills/record-decision|${SCRIPT_DIR}/skills/record-decision"
 	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
 
