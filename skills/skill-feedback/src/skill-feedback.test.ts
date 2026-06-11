@@ -11,6 +11,9 @@ import {
 
 const cleanupPaths: string[] = [];
 const GENERATED_TS = "2026-06-11T09:00:00.000Z";
+const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
+	.pathname;
+const REPO_ROOT = new URL("../../..", import.meta.url).pathname;
 
 const BASE_RECEIPT: Receipt = {
 	skill: "create-skill",
@@ -89,8 +92,32 @@ async function run(command: readonly string[], cwd: string) {
 
 async function runCli(args: readonly string[]) {
 	const child = Bun.spawn(
-		[process.execPath, new URL("./skill-feedback-runner.ts", import.meta.url).pathname, ...args],
+		[process.execPath, RUNNER_PATH, ...args],
 		{
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	return { stdout, stderr, exitCode };
+}
+
+async function runPackageCli(args: readonly string[]) {
+	const child = Bun.spawn(
+		[
+			"bun",
+			"--filter",
+			"skill-feedback-scripts",
+			"skill-feedback-runner",
+			"--",
+			...args,
+		],
+		{
+			cwd: REPO_ROOT,
 			stdout: "pipe",
 			stderr: "pipe",
 		},
@@ -270,8 +297,27 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
-		expect(result.stdout).toContain("--skill");
-		expect(result.stdout).toContain("--generated-ts");
+		for (const flag of [
+			"--skill",
+			"--goal",
+			"--outcome",
+			"--friction",
+			"--explanation",
+			"--generated-ts",
+		]) {
+			expect(result.stdout).toContain(flag);
+		}
+		for (const engineReadFlag of ["--model", "--git-sha", "--skill-version"]) {
+			expect(result.stdout).not.toContain(engineReadFlag);
+		}
+	});
+
+	test("package script front door renders help", async () => {
+		const result = await runPackageCli(["--help"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("record --skill");
 	});
 
 	test("CLI usage errors return JSON without writing", async () => {

@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"skill-feedback-runner": "./src/skill-feedback-runner.ts",
+		"skill-feedback-runner": "bun run src/skill-feedback-runner.ts",
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
