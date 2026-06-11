@@ -12,6 +12,7 @@
       "skills/create-cli",
       "skills/fallow",
       "skills/record-decision",
+      "skills/skill-feedback",
       "skills/test-runner"
     ],
     "catalog": {
