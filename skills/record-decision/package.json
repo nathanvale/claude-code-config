@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Bun package for the record-decision skill. Plans accepted decision-log mutations through a facade-backed agent-native CLI.",
+	"description": "Bun package for the record-decision skill. Plans and executes accepted decision-log appends through a facade-backed agent-native CLI.",
 	"scripts": {
 		"record-decision": "bun run src/record-decision.ts",
 		"test": "bun test src",

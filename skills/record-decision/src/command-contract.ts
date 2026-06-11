@@ -12,7 +12,7 @@ import {
  */
 export type RecordDecisionCommand = "plan" | "commands";
 type RecordDecisionAudience = "agent" | "operator";
-type RecordDecisionMutation = "check";
+type RecordDecisionMutation = "check" | "write";
 type RecordDecisionCommandContract = CommandFacadeContract<
 	RecordDecisionCommand,
 	RecordDecisionAudience,
@@ -20,14 +20,17 @@ type RecordDecisionCommandContract = CommandFacadeContract<
 >;
 
 /**
- * Package-owned diagnostic codes returned by the proof-slice runner.
+ * Package-owned diagnostic codes returned by the runner.
  */
 const RECORD_DECISION_DIAGNOSTIC_CODES = [
 	"usage_error",
 	"acceptance_required",
 	"input_unreadable",
 	"invalid_input",
-	"execute_deferred",
+	"target_log_unavailable",
+	"log_create_deferred",
+	"target_log_invalid",
+	"write_failed",
 ] as const;
 
 /**
@@ -42,8 +45,13 @@ export type RecordDecisionDiagnosticCode =
 const RECORD_DECISION_SUCCESS_ACTIONS = [
 	{
 		id: "review_plan",
-		summary: "Review the mutation plan before enabling execute writes.",
+		summary: "Review the mutation plan before rerunning with --execute --json.",
 		sideEffects: ["read"],
+	},
+	{
+		id: "execute_plan",
+		summary: "Rerun with explicit execute mode to append the decision.",
+		sideEffects: ["write"],
 	},
 ] as const;
 
@@ -60,33 +68,33 @@ const RECORD_DECISION_FAILURE_ACTIONS = [
 
 const resultContract = {
 	id: RECORD_DECISION_CONTRACT_ID,
-	kind: "Record-decision dry-run mutation plan.",
+	kind: "Record-decision mutation plan or append result.",
 	schema_version: RECORD_DECISION_SCHEMA_VERSION,
 } as const satisfies NonNullable<RecordDecisionCommandContract["resultContract"]>;
 
 const exitCodes = {
-	"0": "Dry-run plan succeeded.",
+	"0": "Dry-run plan or execute write succeeded.",
 	"1": "Runtime failure.",
 	"2": "Usage or input error.",
 } as const satisfies RecordDecisionCommandContract["exitCodes"];
 
 /**
- * Facade-backed command catalog for the record-decision proof slice.
+ * Facade-backed command catalog for the record-decision write surface.
  */
 export const recordDecisionContracts = defineCommandFacadeContract(
 	{
 		plan: {
 			script: "record-decision",
-			summary: "Plan an accepted decision-log append without writing files.",
+			summary: "Plan or execute an accepted decision-log append.",
 			usage: [
 				"record-decision --input <decision.md> --json",
 				"record-decision --input <decision.md> --execute --json",
 			],
 			json: true,
 			audience: "agent",
-			mutation: "check",
-			sideEffects: ["read", "check"],
-			executionModes: ["dry_run"],
+			mutation: "write",
+			sideEffects: ["read", "check", "write"],
+			executionModes: ["dry_run", "normal"],
 			outputModes: ["json"],
 			interactivity: "none",
 			resultContract,
@@ -103,7 +111,7 @@ export const recordDecisionContracts = defineCommandFacadeContract(
 				"--json": { type: "boolean", description: "Emit JSON envelope." },
 				"--execute": {
 					type: "boolean",
-					description: "Reserved for the future write path; deferred in this proof slice.",
+					description: "Append the decision after validation using an atomic replacement.",
 				},
 			},
 			exitCodes,

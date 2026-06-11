@@ -6,7 +6,7 @@ import {
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { recordDecisionContracts } from "./command-contract.ts";
 import { runForTest, type RecordDecisionRuntime } from "./record-decision.ts";
-import { parseDecisionInput } from "./record-engine.ts";
+import { parseDecisionInput, prepareDecisionRecord } from "./record-engine.ts";
 
 const VALID_INPUT = `---
 accepted: true
@@ -41,16 +41,137 @@ Review the dry-run plan.
 `;
 
 const UNACCEPTED_INPUT = VALID_INPUT.replace("accepted: true", "accepted: false");
+const REPO_ROOT = "/repo";
+const TARGET_LOG_RELATIVE =
+	"docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md";
+const TARGET_LOG_PATH = `${REPO_ROOT}/${TARGET_LOG_RELATIVE}`;
+const VALID_TARGET_LOG = `---
+title: Agent CLI Evaluation Decision Log
+slug: agent-cli-evaluation
+type: decision-log
+status: in-progress
+date: "2026-06-11"
+timezone: Australia/Melbourne
+owner: agent-cli-evaluation
+source:
+  - "2026-06-11 Codex session: agent CLI evaluation"
+decision_metadata_format: fenced-yaml-per-decision
+---
 
-function runtimeFor(text: string): RecordDecisionRuntime {
+# Agent CLI Evaluation Decision Log
+
+## Frame
+
+- Evaluate CLI contracts.
+
+## Notes
+
+- Preserve accepted choices.
+
+## Decision 1: Existing Decision
+
+\`\`\`yaml
+id: agent-cli-evaluation-001
+status: accepted
+decided_at: "2026-06-11"
+decision: Existing decision
+owner: agent-cli-evaluation
+source:
+  - existing source
+\`\`\`
+
+Decision:
+
+- Existing decision.
+
+Rationale:
+
+- Existing rationale.
+
+Consequences:
+
+- Existing consequence.
+
+Next:
+
+- Existing next.
+
+V2 Ideas:
+
+- Existing v2.
+`;
+
+type TestRuntime = RecordDecisionRuntime & {
+	files: Map<string, string>;
+	writes: string[];
+	renames: Array<{ from: string; to: string }>;
+	removes: string[];
+};
+
+function runtimeFor(
+	text: string,
+	options: {
+		targetLog?: string | undefined;
+		cwd?: string;
+		inputPath?: string;
+		failRename?: boolean;
+	} = {},
+): TestRuntime {
+	const files = new Map<string, string>([
+		[`${REPO_ROOT}/${options.inputPath ?? "decision.md"}`, text],
+	]);
+	if (Object.hasOwn(options, "targetLog")) {
+		if (options.targetLog !== undefined) {
+			files.set(TARGET_LOG_PATH, options.targetLog);
+		}
+	} else {
+		files.set(TARGET_LOG_PATH, VALID_TARGET_LOG);
+	}
+	const writes: string[] = [];
+	const renames: Array<{ from: string; to: string }> = [];
+	const removes: string[] = [];
 	return {
-		now: () => 1_000,
-		readTextFile: async () => text,
+		now: () => Date.parse("2026-06-11T00:00:00.000Z"),
+		cwd: () => options.cwd ?? REPO_ROOT,
+		repoRoot: () => REPO_ROOT,
+		readTextFile: async (path) => {
+			const file = files.get(path);
+			if (file === undefined) throw new Error(`missing ${path}`);
+			return file;
+		},
+		writeTextFile: async (path, content) => {
+			writes.push(path);
+			files.set(path, content);
+		},
+		renameFile: async (from, to) => {
+			renames.push({ from, to });
+			if (options.failRename) throw new Error("rename failed");
+			const file = files.get(from);
+			if (file === undefined) throw new Error(`missing ${from}`);
+			files.set(to, file);
+			files.delete(from);
+		},
+		removeFile: async (path) => {
+			removes.push(path);
+			files.delete(path);
+		},
+		files,
+		writes,
+		renames,
+		removes,
 	};
 }
 
 function parseEnvelope(result: { stdout: string }) {
 	return JSON.parse(result.stdout);
+}
+
+function expectTargetLogUnavailable(result: { exitCode: number; stdout: string }) {
+	expect(result.exitCode).toBe(2);
+	const envelope = parseEnvelope(result);
+	expect(envelope.error.code).toBe("target_log_unavailable");
+	expect(envelope.data.changed_state).toBe("none");
+	return envelope;
 }
 
 describe("record-decision command contract", () => {
@@ -145,21 +266,76 @@ describe("record-decision dry-run planning", () => {
 		).toThrow("allow_create");
 	});
 
+	test("rejects incompatible or unavailable target logs before rendering", () => {
+		const parsed = parseDecisionInput(VALID_INPUT);
+		const createAllowed = parseDecisionInput(
+			VALID_INPUT.replace("allow_create: false", "allow_create: true"),
+		);
+		expect(() =>
+			prepareDecisionRecord(createAllowed, { decidedAt: "2026-06-11" }),
+		).toThrow("Creating new decision logs");
+		expect(() =>
+			prepareDecisionRecord(parsed, {
+				decidedAt: "2026-06-11",
+				existingLogText: "# Missing frontmatter\n",
+			}),
+		).toThrow("missing frontmatter");
+		expect(() =>
+			prepareDecisionRecord(parsed, {
+				decidedAt: "2026-06-11",
+				existingLogText: VALID_TARGET_LOG.replace("slug: agent-cli-evaluation\n", ""),
+			}),
+		).toThrow("missing slug");
+		expect(() =>
+			prepareDecisionRecord(
+				parseDecisionInput(
+					VALID_INPUT.replace(`log_path: ${TARGET_LOG_RELATIVE}`, "log_path: ../nope.md"),
+				),
+				{ decidedAt: "2026-06-11", existingLogText: VALID_TARGET_LOG },
+			),
+		).toThrow("repo-relative path");
+	});
+
+	test("prepares rendered replacement from the target log metadata", () => {
+		const prepared = prepareDecisionRecord(parseDecisionInput(VALID_INPUT), {
+			decidedAt: "2026-06-11",
+			existingLogText: VALID_TARGET_LOG,
+		});
+		expect(prepared.target).toEqual({
+			target_log: TARGET_LOG_RELATIVE,
+			target_exists: true,
+			log_slug: "agent-cli-evaluation",
+			decision_number: 2,
+			decision_id: "agent-cli-evaluation-002",
+		});
+		expect(prepared.rendered_entry).toContain(
+			"## Decision 2: Require crispy edges",
+		);
+		expect(prepared.replacement_text).toContain("id: agent-cli-evaluation-002");
+		expect(prepared.validation.checked).toContain("replacement_content");
+	});
+
 	test("plans a mutation without writing files", async () => {
 		const result = await runForTest(
 			["--input", "decision.md", "--json", "--run-id", "record-plan-test"],
 			runtimeFor(VALID_INPUT),
 		);
 		expect(result.exitCode).toBe(0);
-		const envelope = parseEnvelope(result);
-		expect(envelope.status).toBe("ok");
-		expect(envelope.run_id).toBe("record-plan-test");
-		expect(envelope.data.target_log).toBe(
-			"docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md",
-		);
-		expect(envelope.data.planned_mutations).toHaveLength(1);
-		expect(envelope.data.changed_state).toBe("none");
-	});
+			const envelope = parseEnvelope(result);
+			expect(envelope.status).toBe("ok");
+			expect(envelope.run_id).toBe("record-plan-test");
+			expect(envelope.data.target_log).toBe(TARGET_LOG_RELATIVE);
+			expect(envelope.data.proposed_decision_id).toBe("agent-cli-evaluation-002");
+			expect(envelope.data.proposed_decision_number).toBe(2);
+			expect(envelope.data.planned_mutations).toHaveLength(1);
+			expect(envelope.data.planned_mutations[0]).toEqual({
+				kind: "append_decision",
+				target_log: TARGET_LOG_RELATIVE,
+				decision_id: "agent-cli-evaluation-002",
+				decision_number: 2,
+			});
+			expect(envelope.data.changed_state).toBe("none");
+		});
 
 	test("accepts inline input flag syntax", async () => {
 		const result = await runForTest(
@@ -169,6 +345,19 @@ describe("record-decision dry-run planning", () => {
 		expect(result.exitCode).toBe(0);
 		const envelope = parseEnvelope(result);
 		expect(envelope.data.changed_state).toBe("none");
+	});
+
+	test("resolves repo-relative input paths when package scripts change cwd", async () => {
+		const result = await runForTest(
+			["--input", "skills/record-decision/examples/decision.md", "--json"],
+			runtimeFor(VALID_INPUT, {
+				cwd: `${REPO_ROOT}/skills/record-decision`,
+				inputPath: "skills/record-decision/examples/decision.md",
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.proposed_decision_id).toBe("agent-cli-evaluation-002");
 	});
 
 	test("accepted false returns structured repair data", async () => {
@@ -202,10 +391,15 @@ describe("record-decision dry-run planning", () => {
 		const result = await runForTest(
 			["--input", "missing.md", "--json", "--run-id", "record-read-test"],
 			{
-				now: () => 1_000,
+				now: () => Date.parse("2026-06-11T00:00:00.000Z"),
+				cwd: () => REPO_ROOT,
+				repoRoot: () => REPO_ROOT,
 				readTextFile: async () => {
 					throw new Error("missing");
 				},
+				writeTextFile: async () => undefined,
+				renameFile: async () => undefined,
+				removeFile: async () => undefined,
 			},
 		);
 		expect(result.exitCode).toBe(2);
@@ -215,17 +409,83 @@ describe("record-decision dry-run planning", () => {
 		expect(envelope.data.changed_state).toBe("none");
 	});
 
-	test("execute mode is explicitly deferred", async () => {
-		const result = await runForTest([
-			"--input",
-			"decision.md",
-			"--execute",
-			"--json",
-		]);
+	test("default allow_create false blocks missing generated target log", async () => {
+		const runtime = runtimeFor(
+			VALID_INPUT.replace(`log_path: ${TARGET_LOG_RELATIVE}\nallow_create: false\n`, ""),
+			{ targetLog: undefined },
+		);
+		const result = await runForTest(
+			["--input", "decision.md", "--json"],
+			runtime,
+		);
+		expectTargetLogUnavailable(result);
+		expect(runtime.writes).toHaveLength(0);
+	});
+
+	test("missing target log returns structured repair data", async () => {
+		const runtime = runtimeFor(VALID_INPUT, { targetLog: "" });
+		runtime.files.delete(TARGET_LOG_PATH);
+		const result = await runForTest(
+			["--input", "decision.md", "--json"],
+			runtime,
+		);
+		expectTargetLogUnavailable(result);
+	});
+
+	test("execute appends the same decision id returned by dry-run", async () => {
+		const runtime = runtimeFor(VALID_INPUT);
+		const dryRun = await runForTest(
+			["--input", "decision.md", "--json", "--run-id", "record-plan-test"],
+			runtime,
+		);
+		const dryRunEnvelope = parseEnvelope(dryRun);
+		expect(runtime.writes).toHaveLength(0);
+
+		const execute = await runForTest(
+			[
+				"--input",
+				"decision.md",
+				"--execute",
+				"--json",
+				"--run-id",
+				"record-execute-test",
+			],
+			runtime,
+		);
+		expect(execute.exitCode).toBe(0);
+		const executeEnvelope = parseEnvelope(execute);
+		expect(executeEnvelope.status).toBe("ok");
+		expect(executeEnvelope.data.created_decision_id).toBe(
+			dryRunEnvelope.data.proposed_decision_id,
+		);
+		expect(executeEnvelope.data.completed_mutations[0]).toEqual(
+			dryRunEnvelope.data.planned_mutations[0],
+		);
+		expect(executeEnvelope.data.changed_state).toBe("written");
+		expect(executeEnvelope.data.retry_safe).toBe(false);
+		expect(runtime.renames).toHaveLength(1);
+		expect(runtime.files.get(TARGET_LOG_PATH)).toContain(
+			"## Decision 2: Require crispy edges",
+		);
+		expect(runtime.files.get(TARGET_LOG_PATH)).toContain(
+			"id: agent-cli-evaluation-002",
+		);
+	});
+
+	test("write failure leaves target log unchanged and removes temp file", async () => {
+		const runtime = runtimeFor(VALID_INPUT, { failRename: true });
+		const originalTarget = runtime.files.get(TARGET_LOG_PATH);
+		const result = await runForTest(
+			["--input", "decision.md", "--execute", "--json"],
+			runtime,
+		);
 		expect(result.exitCode).toBe(2);
 		const envelope = parseEnvelope(result);
-		expect(envelope.error.code).toBe("execute_deferred");
+		expect(envelope.error.code).toBe("write_failed");
+		expect(envelope.error.recoverability).toBe("repair_state");
 		expect(envelope.data.changed_state).toBe("none");
+		expect(runtime.files.get(TARGET_LOG_PATH)).toBe(originalTarget);
+		expect(runtime.removes).toHaveLength(1);
 	});
 
 	test("planning requires json mode", async () => {

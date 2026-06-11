@@ -190,11 +190,12 @@ Rules:
 
 ## Helper Gate
 
-- Proof-slice command: `record-decision --input <decision.md> --json`.
+- Dry-run command: `record-decision --input <decision.md> --json`.
+- Execute command: `record-decision --input <decision.md> --execute --json`.
 - Discovery command: `record-decision commands --json`.
 - Run `create-cli` before changing helper CLI behavior.
-- Proof-slice command is dry-run only.
-- Execute writes are deferred.
+- Dry-run is default and performs no writes.
+- Execute writes require explicit `--execute`.
 - Exact parser rules, result shape, diagnostics, and exit codes belong in `skills/record-decision/src/`.
 
 ## V2 Record Direction

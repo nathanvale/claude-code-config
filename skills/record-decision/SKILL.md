@@ -17,7 +17,7 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 - Operating manual: `references/operating-manual.md`.
 - Source brainstorm: `docs/brainstorms/2026-06-06-decisions-skill-operating-manual.md`.
 - Decision trail: `docs/decisions/2026-06-06-001-decisions-skill-decision-log.md`.
-- Proof-slice runtime: `skills/record-decision/src/record-decision.ts`.
+- Helper runtime: `skills/record-decision/src/record-decision.ts`.
 - Command contract: `skills/record-decision/src/command-contract.ts`.
 - Runtime tests: `skills/record-decision/src/record-decision.test.ts`.
 
@@ -73,10 +73,11 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 
 ## Helper
 
-- Proof-slice command: `record-decision --input <decision.md> --json`.
+- Dry-run command: `record-decision --input <decision.md> --json`.
+- Execute command: `record-decision --input <decision.md> --execute --json`.
 - Discovery command: `record-decision commands --json`.
-- Proof-slice command is dry-run only.
-- Execute writes are deferred.
+- Dry-run is default and performs no writes.
+- Execute writes require explicit `--execute`.
 - Exact parser rules, result shape, diagnostics, and exit codes belong in `skills/record-decision/src/`.
 
 ## Compatibility

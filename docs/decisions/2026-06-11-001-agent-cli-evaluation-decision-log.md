@@ -817,3 +817,43 @@ V2 Ideas:
 
 - Standardize correlation field names after multiple implementations prove stable usage.
 - Add redaction checks for correlation-linked diagnostics once support artifacts stabilize.
+
+## Decision 19: Implement record-decision execute mode only after the dry-run seam is proven
+
+```yaml
+id: agent-cli-evaluation-019
+status: accepted
+decided_at: "2026-06-11"
+decision: "Implement record-decision execute mode only after the dry-run seam is proven"
+owner: "agent-cli-evaluation"
+source:
+  - "docs/brainstorms/2026-06-07-record-decision-v2-requirements.md"
+  - "2026-06-11 Codex session: record-decision execute-mode follow-up"
+```
+
+Decision:
+
+- Implement `record-decision --execute` as the guarded write path after dry-run planning works.
+- Keep dry-run planning as the default command behavior.
+- Require `--execute --json` before mutating a decision log.
+
+Rationale:
+
+The dry-run proof slice already demonstrates discovery metadata, facade envelopes, parser repair, and no-write mutation plans.
+Execute mode should reuse the same plan data so the write path cannot invent a different target, decision identity, or validation story.
+The research-backed CLI seam decisions require explicit execute intent before local file mutation.
+
+Consequences:
+
+Agents can preview a decision append before writing it.
+Execute writes become possible without weakening the dry-run default.
+Future write failures need structured mutation safety data.
+
+Next:
+
+Implement guarded execute mode with atomic target replacement and tests proving dry-run and execute stay aligned.
+
+V2 Ideas:
+
+- Add same-log supersession after the simple append path is proven.
+- Add duplicate-decision detection after the checker exists.

@@ -1,8 +1,10 @@
 import { basename } from "node:path";
 import {
 	type DecisionSource,
+	type PreparedDecisionRecord,
 	type ParsedDecisionInput,
 	RECORD_DECISION_REQUIRED_SECTIONS,
+	type RecordDecisionExecuteResult,
 	type RecordDecisionPlan,
 	type RecordDecisionRequiredSection,
 	RecordDecisionInputError,
@@ -10,11 +12,16 @@ import {
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const DEFAULT_NEXT_SAFE_ACTION =
-	"Review the dry-run plan; execute writes are deferred in this proof slice.";
+	"Review the dry-run plan, or rerun with --execute --json to append the decision.";
+const EXECUTE_NEXT_SAFE_ACTION = "Review the updated decision log.";
 
 type FrontmatterValue = string | boolean | string[];
 
 type RawFrontmatter = Record<string, FrontmatterValue>;
+type DecisionLogMetadata = {
+	slug: string;
+	nextDecisionNumber: number;
+};
 
 /**
  * Parse the proof-slice hybrid Markdown envelope into validated input.
@@ -76,47 +83,158 @@ export function parseDecisionInput(markdown: string): ParsedDecisionInput {
 }
 
 /**
- * Build a no-write mutation plan from validated decision input.
+ * Resolve the target log path for a parsed input.
  *
  * @param input - Parsed and validated decision input
+ * @param decidedAt - Date used when deriving a new log path
+ * @returns Repo-relative target decision-log path
+ * @throws {RecordDecisionInputError} When the target path is outside repo scope
+ *
+ * @example
+ * ```typescript
+ * const targetLog = resolveDecisionTargetLog(input, "2026-06-11")
+ * ```
+ */
+export function resolveDecisionTargetLog(
+	input: ParsedDecisionInput,
+	decidedAt = new Date().toISOString().slice(0, 10),
+): string {
+	const targetLog =
+		input.logPath ??
+		`docs/decisions/${decidedAt}-001-${slugify(input.owner)}-decision-log.md`;
+	if (!isSafeRepoRelativePath(targetLog)) {
+		throw new RecordDecisionInputError(
+			"invalid_input",
+			"Target decision log must be a repo-relative path.",
+			"Set log_path to a repo-relative docs/decisions path.",
+		);
+	}
+	return targetLog;
+}
+
+/**
+ * Resolve rendered append data shared by dry-run and execute mode.
+ *
+ * @param input - Parsed and validated decision input
+ * @param options - Existing target log and decision date used for deterministic output
+ * @returns Rendered append operation for planning or execution
+ * @throws {RecordDecisionInputError} When the target log is missing or incompatible
+ *
+ * @example
+ * ```typescript
+ * const prepared = prepareDecisionRecord(input, { existingLogText })
+ * ```
+ */
+export function prepareDecisionRecord(
+	input: ParsedDecisionInput,
+	options: { existingLogText?: string; decidedAt?: string } = {},
+): PreparedDecisionRecord {
+	const decidedAt = options.decidedAt ?? new Date().toISOString().slice(0, 10);
+	const targetLog = resolveDecisionTargetLog(input, decidedAt);
+	if (options.existingLogText === undefined) {
+		throw new RecordDecisionInputError(
+			input.allowCreate ? "log_create_deferred" : "target_log_unavailable",
+			input.allowCreate
+				? "Creating new decision logs is not implemented yet."
+				: "Target decision log does not exist and allow_create is false.",
+			input.allowCreate
+				? "Create the decision log manually, then rerun execute mode."
+				: "Set log_path to an existing decision log or make an explicit create-log decision.",
+		);
+	}
+
+	const metadata = parseDecisionLogMetadata(options.existingLogText, targetLog);
+	const decisionNumber = metadata.nextDecisionNumber;
+	const decisionId = `${metadata.slug}-${String(decisionNumber).padStart(3, "0")}`;
+	const renderedEntry = renderDecisionEntry(input, {
+		decidedAt,
+		decisionId,
+		decisionNumber,
+	});
+	const replacementText = appendDecisionEntry(options.existingLogText, renderedEntry);
+	validateReplacement(replacementText, {
+		targetLog,
+		decisionId,
+		decisionNumber,
+	});
+	return {
+		target: {
+			target_log: targetLog,
+			target_exists: true,
+			log_slug: metadata.slug,
+			decision_number: decisionNumber,
+			decision_id: decisionId,
+		},
+		rendered_entry: renderedEntry,
+		replacement_text: replacementText,
+		validation: validationSummary(),
+	};
+}
+
+/**
+ * Build a no-write mutation plan from a prepared append operation.
+ *
+ * @param prepared - Shared append operation produced before dry-run or execute
  * @returns Dry-run mutation plan for the target decision log
  *
  * @example
  * ```typescript
- * const plan = planDecisionRecord(input)
+ * const plan = planDecisionRecord(prepared)
  * ```
  */
-export function planDecisionRecord(input: ParsedDecisionInput): RecordDecisionPlan {
-	const targetLog =
-		input.logPath ??
-		`docs/decisions/${new Date().toISOString().slice(0, 10)}-001-${slugify(
-			input.owner,
-		)}-decision-log.md`;
-	const proposedDecisionId = `${slugify(input.owner)}-next`;
+export function planDecisionRecord(
+	prepared: PreparedDecisionRecord,
+): RecordDecisionPlan {
 	return {
 		action: "plan_record_decision",
-		target_log: targetLog,
-		proposed_decision_id: proposedDecisionId,
+		target_log: prepared.target.target_log,
+		proposed_decision_id: prepared.target.decision_id,
+		proposed_decision_number: prepared.target.decision_number,
 		planned_mutations: [
 			{
 				kind: "append_decision",
-				target_log: targetLog,
-				proposed_decision_id: proposedDecisionId,
+				target_log: prepared.target.target_log,
+				decision_id: prepared.target.decision_id,
+				decision_number: prepared.target.decision_number,
 			},
 		],
-		validation: {
-			status: "passed",
-			checked: [
-				"accepted",
-				"owner",
-				"source",
-				"decision",
-				"required_sections",
-				"allow_create",
-			],
-		},
+		validation: prepared.validation,
 		changed_state: "none",
 		next_safe_action: DEFAULT_NEXT_SAFE_ACTION,
+	};
+}
+
+/**
+ * Build execute success data from the same prepared append operation as dry-run.
+ *
+ * @param prepared - Shared append operation that was written to disk
+ * @returns Completed mutation result for the facade success envelope
+ *
+ * @example
+ * ```typescript
+ * const result = executeDecisionRecord(prepared)
+ * ```
+ */
+export function executeDecisionRecord(
+	prepared: PreparedDecisionRecord,
+): RecordDecisionExecuteResult {
+	return {
+		action: "execute_record_decision",
+		target_log: prepared.target.target_log,
+		created_decision_id: prepared.target.decision_id,
+		created_decision_number: prepared.target.decision_number,
+		completed_mutations: [
+			{
+				kind: "append_decision",
+				target_log: prepared.target.target_log,
+				decision_id: prepared.target.decision_id,
+				decision_number: prepared.target.decision_number,
+			},
+		],
+		validation: prepared.validation,
+		changed_state: "written",
+		retry_safe: false,
+		next_safe_action: EXECUTE_NEXT_SAFE_ACTION,
 	};
 }
 
@@ -201,6 +319,14 @@ function isRepoRelativePath(value: string): boolean {
 	);
 }
 
+function isSafeRepoRelativePath(value: string): boolean {
+	return (
+		!value.startsWith("/") &&
+		!value.includes("://") &&
+		!value.split(/[\\/]+/).includes("..")
+	);
+}
+
 function parseSections(
 	body: string,
 ): Record<RecordDecisionRequiredSection, string> {
@@ -239,6 +365,145 @@ function slugify(value: string): string {
 	);
 }
 
+function parseDecisionLogMetadata(
+	text: string,
+	targetLog: string,
+): DecisionLogMetadata {
+	const match = text.match(FRONTMATTER_PATTERN);
+	if (!match) {
+		throw new RecordDecisionInputError(
+			"target_log_invalid",
+			`Target decision log is missing frontmatter: ${targetLog}.`,
+			"Repair the decision log shape before recording a new decision.",
+		);
+	}
+	const frontmatter = parseFrontmatter(match[1] ?? "");
+	const slug = frontmatter.slug;
+	if (typeof slug !== "string" || slug.trim() === "") {
+		throw new RecordDecisionInputError(
+			"target_log_invalid",
+			`Target decision log is missing slug: ${targetLog}.`,
+			"Repair the decision log frontmatter before recording a new decision.",
+		);
+	}
+	const decisionNumbers = [...text.matchAll(/^## Decision\s+(\d+):/gm)]
+		.map((candidate) => Number(candidate[1]))
+		.filter(Number.isFinite);
+	const highestDecisionNumber =
+		decisionNumbers.length === 0 ? 0 : Math.max(...decisionNumbers);
+	return {
+		slug,
+		nextDecisionNumber: highestDecisionNumber + 1,
+	};
+}
+
+function renderDecisionEntry(
+	input: ParsedDecisionInput,
+	options: {
+		decidedAt: string;
+		decisionId: string;
+		decisionNumber: number;
+	},
+): string {
+	return [
+		`## Decision ${options.decisionNumber}: ${renderDecisionTitle(input.decision)}`,
+		"",
+		"```yaml",
+		`id: ${options.decisionId}`,
+		"status: accepted",
+		`decided_at: ${yamlString(options.decidedAt)}`,
+		`decision: ${yamlString(input.decision)}`,
+		`owner: ${yamlString(input.owner)}`,
+		"source:",
+		...input.source.map((source) => `  - ${yamlString(source.value)}`),
+		"```",
+		"",
+		"Decision:",
+		"",
+		normalizeSection(input.decisionBody ?? `- ${input.decision}`),
+		"",
+		"Rationale:",
+		"",
+		normalizeSection(input.sections.Rationale),
+		"",
+		"Consequences:",
+		"",
+		normalizeSection(input.sections.Consequences),
+		"",
+		"Next:",
+		"",
+		normalizeSection(input.sections.Next),
+		"",
+		"V2 Ideas:",
+		"",
+		normalizeSection(input.sections["V2 Ideas"]),
+	].join("\n");
+}
+
+function appendDecisionEntry(existingText: string, renderedEntry: string): string {
+	return `${existingText.trimEnd()}\n\n${renderedEntry.trimEnd()}\n`;
+}
+
+function validateReplacement(
+	replacementText: string,
+	input: {
+		targetLog: string;
+		decisionId: string;
+		decisionNumber: number;
+	},
+): void {
+	if (!replacementText.includes(`id: ${input.decisionId}`)) {
+		throw new RecordDecisionInputError(
+			"target_log_invalid",
+			`Rendered decision entry is missing id ${input.decisionId}.`,
+			"Repair the input renderer before retrying execute mode.",
+		);
+	}
+	if (!replacementText.includes(`## Decision ${input.decisionNumber}:`)) {
+		throw new RecordDecisionInputError(
+			"target_log_invalid",
+			`Rendered decision entry is missing heading for ${input.targetLog}.`,
+			"Repair the input renderer before retrying execute mode.",
+		);
+	}
+	parseDecisionLogMetadata(replacementText, input.targetLog);
+}
+
+function validationSummary() {
+	return {
+		status: "passed",
+		checked: [
+			"accepted",
+			"owner",
+			"source",
+			"decision",
+			"required_sections",
+			"allow_create",
+			"target_log",
+			"decision_id",
+			"replacement_content",
+		],
+	} as const;
+}
+
+function renderDecisionTitle(decision: string): string {
+	const title = decision.replace(/[`*_#]/g, "").replace(/\s+/g, " ").trim();
+	if (title.length <= 80) return title;
+	return `${title.slice(0, 77).trimEnd()}...`;
+}
+
+function yamlString(value: string): string {
+	return JSON.stringify(value);
+}
+
+function normalizeSection(value: string): string {
+	return value.trim();
+}
+
 function invalidInput(message: string): RecordDecisionInputError {
-	return new RecordDecisionInputError("invalid_input", message, "Fix the decision input and rerun dry-run planning.");
+	return new RecordDecisionInputError(
+		"invalid_input",
+		message,
+		"Fix the decision input and rerun dry-run planning.",
+	);
 }

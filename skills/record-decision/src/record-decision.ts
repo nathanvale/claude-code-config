@@ -12,16 +12,24 @@ import {
 	usageError,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import { recordDecisionContracts } from "./command-contract.ts";
 import {
 	RECORD_DECISION_CONTRACT_ID,
 	RECORD_DECISION_SCHEMA_VERSION,
+	type PreparedDecisionRecord,
+	type RecordDecisionExecuteResult,
 	type RecordDecisionPlan,
 	RecordDecisionInputError,
 } from "./model.ts";
-import { parseDecisionInput, planDecisionRecord } from "./record-engine.ts";
+import {
+	executeDecisionRecord,
+	parseDecisionInput,
+	planDecisionRecord,
+	prepareDecisionRecord,
+	resolveDecisionTargetLog,
+} from "./record-engine.ts";
 
 const VERSION = "0.1.0";
 
@@ -29,7 +37,7 @@ type ParsedCommand =
 	| { kind: "help"; command?: "plan" | "commands" }
 	| { kind: "version" }
 	| { kind: "commands" }
-	| { kind: "execute_deferred" }
+	| { kind: "execute"; inputPath: string }
 	| { kind: "plan"; inputPath: string };
 
 /**
@@ -37,7 +45,12 @@ type ParsedCommand =
  */
 export type RecordDecisionRuntime = {
 	now: () => number;
+	cwd: () => string;
+	repoRoot: () => string;
 	readTextFile: (path: string) => Promise<string>;
+	writeTextFile: (path: string, content: string) => Promise<void>;
+	renameFile: (from: string, to: string) => Promise<void>;
+	removeFile: (path: string) => Promise<void>;
 };
 
 /**
@@ -56,7 +69,12 @@ export function createDefaultRecordDecisionRuntime(
 ): RecordDecisionRuntime {
 	return {
 		now: () => Date.now(),
+		cwd: () => process.env.INIT_CWD ?? process.cwd(),
+		repoRoot: () => resolve(import.meta.dir, "../../.."),
 		readTextFile: async (path) => readFile(path, "utf8"),
+		writeTextFile: async (path, content) => writeFile(path, content, "utf8"),
+		renameFile: async (from, to) => rename(from, to),
+		removeFile: async (path) => rm(path, { force: true }),
 		...overrides,
 	};
 }
@@ -121,10 +139,10 @@ function parsePlanCommand(argv: readonly string[]): ParsedCommand {
 	if (!json) {
 		throw usageError("record-decision requires --json.");
 	}
-	if (execute) return { kind: "execute_deferred" };
 	if (!inputPath) {
 		throw usageError("record-decision requires --input <decision.md>.");
 	}
+	if (execute) return { kind: "execute", inputPath };
 	return { kind: "plan", inputPath };
 }
 
@@ -158,22 +176,97 @@ function discoveryPayload() {
 	);
 }
 
+async function prepareRecord(input: {
+	parsed: Extract<ParsedCommand, { kind: "plan" | "execute" }>;
+	runtime: RecordDecisionRuntime;
+}): Promise<PreparedDecisionRecord> {
+	const decidedAt = dateFromMs(input.runtime.now());
+	const text = await readInputText(input.parsed.inputPath, input.runtime);
+	const parsedInput = parseDecisionInput(text);
+	const targetLog = resolveDecisionTargetLog(parsedInput, decidedAt);
+	let existingLogText: string | undefined;
+	try {
+		existingLogText = await input.runtime.readTextFile(
+			resolveRepoPath(input.runtime, targetLog),
+		);
+	} catch {
+		existingLogText = undefined;
+	}
+	return prepareDecisionRecord(parsedInput, { existingLogText, decidedAt });
+}
+
+async function readInputText(
+	inputPath: string,
+	runtime: RecordDecisionRuntime,
+): Promise<string> {
+	for (const candidate of resolveInputCandidates(inputPath, runtime)) {
+		try {
+			return await runtime.readTextFile(candidate);
+		} catch {
+			// Try the next deterministic base before reporting an unreadable input.
+		}
+	}
+	throw new RecordDecisionInputError(
+		"input_unreadable",
+		`Unable to read input file: ${inputPath}.`,
+		"Check --input path and rerun dry-run planning.",
+	);
+}
+
+function resolveInputCandidates(
+	inputPath: string,
+	runtime: RecordDecisionRuntime,
+): string[] {
+	if (isAbsolute(inputPath)) return [inputPath];
+	return uniquePaths([
+		resolve(runtime.cwd(), inputPath),
+		resolve(runtime.repoRoot(), inputPath),
+	]);
+}
+
+function resolveRepoPath(runtime: RecordDecisionRuntime, repoRelativePath: string): string {
+	return resolve(runtime.repoRoot(), repoRelativePath);
+}
+
+function uniquePaths(paths: readonly string[]): string[] {
+	return [...new Set(paths)];
+}
+
 async function runPlan(input: {
 	parsed: Extract<ParsedCommand, { kind: "plan" }>;
 	runtime: RecordDecisionRuntime;
 }): Promise<RecordDecisionPlan> {
-	let text: string;
+	return planDecisionRecord(await prepareRecord(input));
+}
+
+async function runExecute(input: {
+	parsed: Extract<ParsedCommand, { kind: "execute" }>;
+	runtime: RecordDecisionRuntime;
+	runId: string;
+}): Promise<RecordDecisionExecuteResult> {
+	const prepared = await prepareRecord(input);
+	await writePreparedRecord(prepared, input.runtime, input.runId);
+	return executeDecisionRecord(prepared);
+}
+
+async function writePreparedRecord(
+	prepared: PreparedDecisionRecord,
+	runtime: RecordDecisionRuntime,
+	runId: string,
+): Promise<void> {
+	const targetPath = resolveRepoPath(runtime, prepared.target.target_log);
+	const tempPath = `${targetPath}.tmp-${sanitizeRunId(runId)}`;
 	try {
-		text = await input.runtime.readTextFile(resolve(input.parsed.inputPath));
+		await runtime.writeTextFile(tempPath, prepared.replacement_text);
+		await runtime.renameFile(tempPath, targetPath);
 	} catch {
+		await runtime.removeFile(tempPath).catch(() => undefined);
 		throw new RecordDecisionInputError(
-			"input_unreadable",
-			`Unable to read input file: ${input.parsed.inputPath}.`,
-			"Check --input path and rerun dry-run planning.",
+			"write_failed",
+			`Failed to replace target decision log: ${prepared.target.target_log}.`,
+			"Repair filesystem permissions or target state, then rerun after reviewing the dry-run plan.",
 		);
 	}
-	const parsedInput = parseDecisionInput(text);
-	return planDecisionRecord(parsedInput);
 }
 
 function writePlan(
@@ -190,6 +283,26 @@ function writePlan(
 				contract_id: RECORD_DECISION_CONTRACT_ID,
 				schema_version: RECORD_DECISION_SCHEMA_VERSION,
 				...plan,
+			},
+		}),
+		{ runId, durationMs },
+	);
+}
+
+function writeExecuteResult(
+	stdout: CliWriter,
+	result: RecordDecisionExecuteResult,
+	runId: string,
+	durationMs: number,
+): void {
+	writeJsonEnvelope(
+		stdout,
+		createCliRuntimeSuccessEnvelope({
+			run_id: runId,
+			data: {
+				contract_id: RECORD_DECISION_CONTRACT_ID,
+				schema_version: RECORD_DECISION_SCHEMA_VERSION,
+				...result,
 			},
 		}),
 		{ runId, durationMs },
@@ -235,17 +348,17 @@ function emitError(input: {
 				message: error.message,
 				exit_code: error.exitCode,
 				severity: "error",
-				recoverability: "change_input",
-				retryable: false,
-				failure_domain: "usage",
+				recoverability: error.recoverability,
+				retryable: error.retryable,
+				failure_domain: error.failureDomain,
 				hint: {
-					action: "change_input",
+					action: error.hintAction,
 					summary: error.nextSafeAction,
 				},
 			},
 			data: {
-				changed_state: "none",
-				retry_safe: false,
+				changed_state: error.changedState,
+				retry_safe: error.retrySafe,
 				next_safe_action: error.nextSafeAction,
 			},
 		}),
@@ -259,13 +372,21 @@ function normalizeError(error: unknown): {
 	message: string;
 	exitCode: number;
 	nextSafeAction: string;
+	recoverability: "change_input" | "repair_state";
+	retryable: false;
+	hintAction: "change_input" | "repair_state";
+	failureDomain: string;
+	changedState: "none";
+	retrySafe: false;
 } {
 	if (error instanceof RecordDecisionInputError) {
+		const recovery = recoveryForCode(error.code);
 		return {
 			code: error.code,
 			message: error.message,
 			exitCode: 2,
 			nextSafeAction: error.nextSafeAction,
+			...recovery,
 		};
 	}
 	if (error instanceof Error) {
@@ -274,6 +395,7 @@ function normalizeError(error: unknown): {
 			message: error.message,
 			exitCode: 2,
 			nextSafeAction: "Fix command input and rerun dry-run planning.",
+			...recoveryForCode("usage_error"),
 		};
 	}
 	return {
@@ -281,6 +403,35 @@ function normalizeError(error: unknown): {
 		message: String(error),
 		exitCode: 2,
 		nextSafeAction: "Fix command input and rerun dry-run planning.",
+		...recoveryForCode("usage_error"),
+	};
+}
+
+function recoveryForCode(code: string): {
+	recoverability: "change_input" | "repair_state";
+	retryable: false;
+	hintAction: "change_input" | "repair_state";
+	failureDomain: string;
+	changedState: "none";
+	retrySafe: false;
+} {
+	if (code === "write_failed" || code === "target_log_invalid") {
+		return {
+			recoverability: "repair_state",
+			retryable: false,
+			hintAction: "repair_state",
+			failureDomain: "record_decision_write",
+			changedState: "none",
+			retrySafe: false,
+		};
+	}
+	return {
+		recoverability: "change_input",
+		retryable: false,
+		hintAction: "change_input",
+		failureDomain: "usage",
+		changedState: "none",
+		retrySafe: false,
 	};
 }
 
@@ -351,22 +502,12 @@ export async function runRecordDecisionCli(
 		writeDiscovery(stdout, runId, runtime.now() - startedAt);
 		return 0;
 	}
-	if (parsed.kind === "execute_deferred") {
-		return emitError({
-			error: new RecordDecisionInputError(
-				"execute_deferred",
-				"Execute writes are deferred in this proof slice.",
-				"Run without --execute to get a dry-run mutation plan.",
-			),
-			stdout,
-			stderr,
-			json: inferJsonMode(parsedDiagnostics.argv),
-			runId,
-			durationMs: runtime.now() - startedAt,
-		});
-	}
-
 	try {
+		if (parsed.kind === "execute") {
+			const result = await runExecute({ parsed, runtime, runId });
+			writeExecuteResult(stdout, result, runId, runtime.now() - startedAt);
+			return 0;
+		}
 		const plan = await runPlan({ parsed, runtime });
 		writePlan(stdout, plan, runId, runtime.now() - startedAt);
 		return 0;
@@ -380,6 +521,14 @@ export async function runRecordDecisionCli(
 			durationMs: runtime.now() - startedAt,
 		});
 	}
+}
+
+function dateFromMs(ms: number): string {
+	return new Date(ms).toISOString().slice(0, 10);
+}
+
+function sanitizeRunId(runId: string): string {
+	return runId.replace(/[^A-Za-z0-9_.-]/g, "_");
 }
 
 class BufferWriter implements CliWriter {
