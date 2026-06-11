@@ -55,14 +55,52 @@ describe('skill-feedback hooks', () => {
 	})
 
 	test('Claude Stop handler writes record request without transcript payload', async () => {
+		// Synthetic transcript: the sentinel proves transcript text never leaks
+		// into the record request. Kept inline so the real fixture stays verbatim.
+		const transcriptWithSecret = [
+			JSON.stringify({
+				type: 'assistant',
+				message: {
+					role: 'assistant',
+					content: [
+						{ type: 'text', text: 'SECRET_TOKEN_SHOULD_NOT_APPEAR' },
+						{
+							type: 'tool_use',
+							id: 'toolu_inline_fallow',
+							name: 'Skill',
+							input: { skill: 'fallow' },
+						},
+					],
+				},
+				uuid: 'assistant-inline',
+			}),
+			JSON.stringify({
+				type: 'user',
+				message: {
+					role: 'user',
+					content: [
+						{
+							type: 'tool_result',
+							tool_use_id: 'toolu_inline_fallow',
+							content: 'Launching skill: fallow',
+						},
+					],
+				},
+				toolUseResult: { success: true, commandName: 'fallow' },
+				sourceToolUseID: 'toolu_inline_fallow',
+				sessionId: 'inline-session',
+				uuid: 'tool-result-inline',
+			}),
+		].join('\n')
+
 		const calls: RecordRequest[] = []
 		const tempDir = await mkdtemp(join(tmpdir(), 'skill-feedback-hook-'))
 		const recordPath = join(tempDir, 'record-request.json')
 		try {
 			const result = await handleSkillFeedbackStop(
-				{ cwd: '/tmp/repo', transcript_path: FIXTURE_PATH },
+				{ cwd: '/tmp/repo', transcript_path: 'inline.jsonl' },
 				{
-					readText: fixtureText,
+					readText: async () => transcriptWithSecret,
 					...createMemoryDedupe(),
 					resolveGitRoot: async (cwd) => cwd,
 					nowIso: () => GENERATED_TS,
