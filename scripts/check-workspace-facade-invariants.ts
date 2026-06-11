@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
+import { discoverCommandContractPaths } from "../skills/cli-execution-auditor/src/command-contract-discovery.ts";
 
 type Workspaces =
 	| string[]
@@ -207,32 +208,8 @@ function discoverLocalScripts(packageJson: PackageJson | null): Record<string, s
 	return localScripts;
 }
 
-function discoverContractPaths(packagePath: string): string[] {
-	const contractPaths: string[] = [];
-	const packageContractPath = join(packagePath, "src/command-contract.ts");
-
-	if (existsSync(repoPath(packageContractPath))) {
-		contractPaths.push(packageContractPath);
-	}
-
-	const frontDoorsPath = repoPath(join(packagePath, "src/front-doors"));
-	if (!existsSync(frontDoorsPath)) {
-		return contractPaths;
-	}
-
-	for (const entry of readdirSync(frontDoorsPath).sort()) {
-		const contractPath = join(
-			packagePath,
-			"src/front-doors",
-			entry,
-			"command-contract.ts",
-		);
-		if (existsSync(repoPath(contractPath))) {
-			contractPaths.push(contractPath);
-		}
-	}
-
-	return contractPaths;
+async function discoverContractPaths(packagePath: string): Promise<string[]> {
+	return discoverCommandContractPaths(repoPath(packagePath));
 }
 
 function expectedShebangForBinTarget(binTarget: string): string | null {
@@ -1100,8 +1077,8 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 		continue;
 	}
 
-	for (const contractPath of discoverContractPaths(packagePath)) {
-		const contractText = readFileSync(repoPath(contractPath), "utf8");
+	for (const contractPath of await discoverContractPaths(packagePath)) {
+		const contractText = readFileSync(contractPath, "utf8");
 
 		const scriptValueMatches = contractText.matchAll(/script:\s*"([^"]+)"/g);
 
@@ -1110,7 +1087,7 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 
 			if (!allowedScriptNames.has(scriptValue)) {
 				findings.push({
-					path: contractPath,
+					path: displayPath(contractPath),
 					message: `Command metadata script ${scriptValue} must be a declared local command name for ${packagePath}; contracts name command identity, not bun run, dist, src, or local paths.`,
 				});
 			}
