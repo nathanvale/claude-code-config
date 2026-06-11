@@ -5,11 +5,11 @@ The skill-observability feedback loop (v0 pilot): a durable, structured record c
 ## Language
 
 **Capture point**:
-The end-of-turn at which a Software Learning Report is fired. Detected at the harness level — the Claude Stop hook or Codex `turn.completed` — not by a skill announcing itself.
+The end-of-turn at which a Software Learning Report is fired. Detected at the harness level, not by a skill announcing itself. Claude Stop is live in v0. Codex notify is an end-of-turn forwarder until a skill identity source is wired.
 _Avoid_: trigger, auto-trigger, the finished skill, `## Close` breadcrumb
 
 **Close detection**:
-How a harness hook decides a skill ran this turn. Codex reads documented `item.completed` / `turn.completed` events; Claude parses the Stop hook's `transcript_path` JSONL for a completed `Skill` tool call (undocumented format — guarded by a drift smoke-test).
+How a harness hook decides a skill ran this turn. Claude parses the Stop hook's `transcript_path` JSONL for a completed `Skill` tool call and dedupes by detection id. Codex notify payloads do not carry skill identity; Codex live detection is deferred until an item stream or equivalent identity source is reachable.
 _Avoid_: skill breadcrumb, `## Close` marker, agent recall
 
 **Driver**:
@@ -25,7 +25,7 @@ The agent-authored free-text Receipt fields named by the `NARRATED_FIELDS` const
 _Avoid_: notes, free text, user input, the whole Receipt
 
 **CaptureAdapter**:
-The seam that normalizes one harness's native telemetry into a Receipt. Two ship in v0 (`ClaudeOtelAdapter`, `CodexJsonAdapter`) so the second proves the seam.
+The seam that normalizes one harness's native telemetry into a Receipt. Two ship in v0 (`ClaudeOtelAdapter`, `CodexJsonAdapter`) so the second proves the seam; live hooks do not call the seam until their telemetry source is reachable.
 _Avoid_: harness shim, telemetry parser, factory, provider
 
 **CaptureResult**:

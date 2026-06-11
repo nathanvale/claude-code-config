@@ -26,6 +26,8 @@ export interface HookRunResult {
 	stderr: string
 }
 
+const DEFAULT_HOOK_PROCESS_TIMEOUT_MS = 6_000
+
 const HOOK_DIR = dirname(fileURLToPath(import.meta.url))
 const CONFIG_ROOT = dirname(HOOK_DIR)
 const SKILL_FEEDBACK_RUNNER = join(
@@ -91,7 +93,7 @@ export async function runSkillFeedbackRecord(
 
 export async function runBufferedProcess(
 	command: readonly string[],
-	options: { cwd?: string; stdin?: string } = {},
+	options: { cwd?: string; stdin?: string; timeoutMs?: number } = {},
 ): Promise<HookRunResult> {
 	const proc = Bun.spawn([...command], {
 		cwd: options.cwd,
@@ -99,14 +101,36 @@ export async function runBufferedProcess(
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})
+	const timeoutMs = options.timeoutMs ?? DEFAULT_HOOK_PROCESS_TIMEOUT_MS
+	let timedOut = false
+	const timeout =
+		timeoutMs > 0
+			? setTimeout(() => {
+					timedOut = true
+					proc.kill()
+				}, timeoutMs)
+			: null
 	if (options.stdin !== undefined && proc.stdin) {
 		proc.stdin.write(options.stdin)
 		proc.stdin.end()
 	}
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	])
-	return { exitCode, stdout, stderr }
+	try {
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		])
+		return {
+			exitCode: timedOut ? 124 : exitCode,
+			stdout,
+			stderr: timedOut ? appendTimeoutMessage(stderr, timeoutMs) : stderr,
+		}
+	} finally {
+		if (timeout) clearTimeout(timeout)
+	}
+}
+
+function appendTimeoutMessage(stderr: string, timeoutMs: number): string {
+	const separator = stderr === '' || stderr.endsWith('\n') ? '' : '\n'
+	return `${stderr}${separator}skill-feedback hook subprocess timed out after ${timeoutMs}ms.\n`
 }

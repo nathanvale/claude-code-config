@@ -7,6 +7,8 @@ import {
 	parseReceipt,
 } from "./command-contract";
 
+// v0 fixture-tests this seam. Live hooks call `record` directly until their
+// harness exposes enough telemetry to build a Receipt without agent recall.
 const HARNESS_IDS = ["claude-otel", "codex-json"] as const;
 
 export type HarnessId = (typeof HARNESS_IDS)[number];

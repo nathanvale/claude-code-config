@@ -15,7 +15,7 @@ supersedes: this file's prior revision (thin prose skill + inline redaction)
 
 Capture a durable, structured observability record each time a skill run reaches its close, and write it to a gitignored `.skill-feedback/` inbox the user reads by hand. The record is shaped like an OpenTelemetry `gen_ai.evaluation.result` event (`name`, `score`, `label`, `explanation`, run-id correlation) plus warehouse-style tags (skill version, git SHA, model, outcome, token usage) — aligning the pilot with how Claude Code already emits telemetry and how Anthropic stores eval rows internally.
 
-`skill-feedback` is a **runtime-backed Bun workspace package**, not a prose skill. It **reuses** the existing `@side-quest/cli-command-facade` infrastructure (the Facade) rather than inventing one. Per-harness telemetry differences (Claude Code OTel spans vs Codex `codex exec --json` events) are absorbed by a **CaptureAdapter** seam (the Adapter pattern), with **both** adapters shipping in v0 so the second implementation proves the seam holds. Redaction, the gitignore fail-closed gate, deterministic timestamps, and the untrusted-evidence marker are carried as first-class, code-enforced, test-backed units.
+`skill-feedback` is a **runtime-backed Bun workspace package**, not a prose skill. It **reuses** the existing `@side-quest/cli-command-facade` infrastructure (the Facade) rather than inventing one. Per-harness telemetry differences (Claude Code OTel spans vs Codex `codex exec --json` events) are absorbed by a **CaptureAdapter** seam (the Adapter pattern), with **both** adapters shipping in v0 so the second implementation proves the seam holds. Live hook capture is Claude-only in v0; Codex notify is a dispatch-only coexistence path until a skill identity source is wired. Redaction, the gitignore fail-closed gate, deterministic timestamps, and the untrusted-evidence marker are carried as first-class, code-enforced, test-backed units.
 
 This revision supersedes the prior thin-prose plan. It moves the safety contract from prose-plus-fixtures into a typed runtime package on rails the repo already runs (fallow, test-runner), routes the CLI through `create-cli`'s facade-backed lane, and gates shipping on the existing `cli-execution-auditor`.
 
@@ -27,7 +27,7 @@ Skill runs finish with useful but fleeting evidence — what confused the agent,
 
 Two findings reshaped the pilot since the prior revision:
 
-- **The field already has a schema.** OpenTelemetry GenAI semantic conventions define `gen_ai.evaluation.result` (name/score/label/explanation/run-id). Claude Code already emits per-run OTel telemetry; Codex emits a typed `codex exec --json` event stream with a native `notify=agent-turn-complete` end-of-run hook. The pilot should align to this, not invent a bespoke record.
+- **The field already has a schema.** OpenTelemetry GenAI semantic conventions define `gen_ai.evaluation.result` (name/score/label/explanation/run-id). Claude Code already emits per-run OTel telemetry; Codex emits a typed `codex exec --json` event stream and a native `notify=agent-turn-complete` end-of-turn hook. The notify payload does not carry skill identity, so live Codex capture needs a future item-stream reader. The pilot should align to this, not invent a bespoke record.
 - **Actionable-feedback density, not volume, is what compounds** (arXiv 2605.29682, *Scaling Laws for Agent Harnesses*: raw token/tool counts predict success at R²≈0.33-0.42; counting only feedback the agent can act on reaches R²≈0.99). This rewrites the success criterion: evaluate on the friction lane + measured outcomes, and drop the agent-narrated value lane that measures nothing.
 
 The architecturally correct shape is a deterministic CLI facade the agent fills out — a vending machine, not a sticky note. The agent supplies a normalized receipt; the command enforces redaction, the gitignore gate, and the write. That moves five of the prior plan's six verified safety defects from "trust the agent's prose" to "tested code."
@@ -40,7 +40,7 @@ Carried from origin (`see origin: docs/brainstorms/2026-06-10-skill-follow-up-fe
 
 **In scope (v0):**
 
-- R1 — A finished skill's close is the capture point. **Detection:** the **harness end-of-run hook** (Claude Stop hook / Codex `notify`) fires `skill-feedback record` automatically; the finished skill does not invoke the command itself. Skills do not invoke skills (`see` KTD6).
+- R1 — A finished skill's close is the capture point. **Detection:** the **harness end-of-run hook** fires `skill-feedback record` automatically when it can identify the skill. Claude Stop is live in v0. Codex notify forwards the event and does not record until a skill identity source is wired. The finished skill does not invoke the command itself. Skills do not invoke skills (`see` KTD6).
 - R2 — No description-matching, ambient auto-triggering, or peer-to-peer discovery.
 - R3 — The command runs from a weak receipt and writes a **degraded** record rather than blocking. (Distinct from the gitignore gate, which *does* block — `see` KTD4 and Risks.)
 - R4 — Receipt carries skill identity, goal, outcome, and a free-text friction note (minimal v0 field set; full R4 field list deferred to v1).
@@ -71,7 +71,7 @@ Carried from origin (`see origin: docs/brainstorms/2026-06-10-skill-follow-up-fe
 A `CaptureAdapter` normalizes a harness's native telemetry into one `Receipt`. Two adapters ship in v0:
 
 - **ClaudeOtelAdapter** — reads Claude Code OTel spans (`claude_code.interaction` → `claude_code.llm_request`/`claude_code.tool`; attrs `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `ttft_ms`, `stop_reason`, `success`).
-- **CodexJsonAdapter** — reads `codex exec --json` `ThreadEvent`s (`turn.completed` + `Usage{input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}`; `turn.failed` → `outcome: failed`). Codex's native `notify=agent-turn-complete` hook is the legal end-of-run trigger (`see` KTD6).
+- **CodexJsonAdapter** — reads `codex exec --json` `ThreadEvent`s (`turn.completed` + `Usage{input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}`; `turn.failed` → `outcome: failed`). The adapter is fixture-tested in v0; live Codex capture is deferred until notify can reach an item stream or equivalent skill identity source (`see` KTD6).
 
 Shipping the second adapter is deliberate: an Adapter interface earns its abstraction only when a second, genuinely different implementation proves the seam. Harness selection is a one-line `selectAdapter(harness)` switch in the core module — **never inside the facade handler**, which stays harness-agnostic.
 
@@ -97,10 +97,10 @@ Timestamps are inputs, never ambient-clock reads. Trends derive from record **or
 
 ### KTD6 — Harness hooks fire `record`; detection is harness-level, no per-skill breadcrumb (regrilled 2026-06-11, supersedes prior driver-recall design — see ADR-0014)
 
-Capture fires from the harness end-of-run hook on both harnesses, not from an agent remembering to call `record`. Agent recall is ~20-50% reliable (single-skill) / ~0% (multi-skill); the hook path is 84-100% (`docs/research/2026-05-30-skill-composability-handoff-observability.md`, bug #20986). A finished skill still must not call `Skill("skill-feedback", …)` itself (runbook + fallow safety + composition research all forbid skill-to-skill).
+Capture fires from the harness end-of-run hook when the hook can identify the skill, not from an agent remembering to call `record`. Agent recall is ~20-50% reliable (single-skill) / ~0% (multi-skill); the hook path is 84-100% (`docs/research/2026-05-30-skill-composability-handoff-observability.md`, bug #20986). A finished skill still must not call `Skill("skill-feedback", …)` itself (runbook + fallow safety + composition research all forbid skill-to-skill).
 
 **Detection is harness-level — no `## Close` breadcrumb, zero per-skill maintenance:**
-- **Codex** — `codex exec --json` emits documented typed events: `turn.completed` (+ `Usage` struct), `turn.failed` → `outcome: failed`, and `item.completed` with typed `ThreadItemDetails` (`McpToolCall`, `CommandExecution`, …). The `notify=agent-turn-complete` hook is the trigger. **Coexistence constraint:** Codex `notify` is a *single global program slot*, and it is already occupied (verified: `~/.codex/config.toml` points at an existing handler). v0 must not overwrite it — `notify` points at a small **dispatcher** that fans the event to both the existing handler and skill-feedback (U8 owns the dispatcher).
+- **Codex** — `codex exec --json` emits documented typed events: `turn.completed` (+ `Usage` struct), `turn.failed` → `outcome: failed`, and `item.completed` with typed `ThreadItemDetails` (`McpToolCall`, `CommandExecution`, …). The `notify=agent-turn-complete` payload only carries end-of-turn metadata (`type`, `turn-id`, `cwd`, `last-assistant-message`, `input-messages`) and does not identify the finished skill. **Coexistence constraint:** Codex `notify` is a *single global program slot*, and it is already occupied (verified: `~/.codex/config.toml` points at an existing handler). v0 must not overwrite it — `notify` points at a small **dispatcher** that forwards the event to the existing handler and skips skill-feedback capture unless a future skill-bearing payload arrives (U8 owns the dispatcher).
 - **Claude** — the Stop hook fires every turn and exposes only `transcript_path` (8 documented fields, no tool-call list). Detection parses that JSONL for a completed `Skill` tool call. The transcript JSONL shape is **undocumented** (verified against code.claude.com/docs 2026-06-11), so the Claude adapter carries a drift smoke-test that fails loud if the format changes.
 
 `## Close` is dropped entirely — detection no longer needs a skill to announce itself. Optional per-skill close enrichment (clean/failed/handoff signal) is a v1 fork, left open, not built.
@@ -194,7 +194,7 @@ package.json                  # + skills/skill-feedback in workspaces.packages (
 skills/fallow/SKILL.md        # (unchanged — detection is harness-level per KTD6; no ## Close)
 hooks/skill-feedback-stop.ts  # Claude Stop-hook handler + transcript-parse drift smoke-test (U8)
 settings.json                 # + Stop-hook entry routing to skill-feedback handler (U8)
-.codex/config.toml            # notify dispatcher coexistence (U8 — slot shared w/ existing handler)
+.codex/config.toml            # notify dispatcher coexistence (U8 — slot shared w/ existing handler; Codex capture deferred)
 prototypes/skill-feedback-architecture/redaction-strategy.stub.ts  # (exists — Strategy seam marker)
 ```
 
@@ -367,7 +367,7 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 
 ### U8. Harness-hook wiring: Claude Stop hook, Codex notify dispatcher, drift smoke-test
 
-**Goal:** A skill close auto-fires `skill-feedback record` on both harnesses, reliably, without any per-skill edit — the trigger ADR-0014 makes load-bearing.
+**Goal:** A Claude skill close auto-fires `skill-feedback record` reliably, without any per-skill edit. Codex notify preserves coexistence and skips capture until a skill identity source is wired.
 
 **Requirements:** R1, R2; KTD6.
 
@@ -376,11 +376,11 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 **Files:**
 - `hooks/skill-feedback-stop.ts` (create — Claude Stop-hook handler; reads `transcript_path`, detects a completed `Skill` tool call, shells out to `skill-feedback record`). Deploys via `hooks/` — `~/.claude/hooks` is a symlink to repo `hooks/`; a handler placed under `skills/` would never fire.
 - `settings.json` (modify — add a `Stop` entry routing to the handler, mirroring the existing `Stop` block)
-- `hooks/codex-notify-dispatcher.ts` (create — fans the Codex `notify` event to the existing occupant **and** skill-feedback; `notify` is a single slot already taken)
+- `hooks/codex-notify-dispatcher.ts` (create — forwards the Codex `notify` event to the existing occupant; records only skill-bearing payloads; `notify` is a single slot already taken)
 - `.codex/config.toml` (modify — point `notify` at the dispatcher, preserving the existing handler)
 - test fixtures: a real captured fallow-close transcript committed as the golden fixture
 
-**Approach:** Copy the Stop-hook precedent `hooks/git/auto-commit-on-stop.ts.disabled` (its `StopHookInput` guard + `transcript_path` consumption) and `hooks/git/session-summary.ts`. The handler does exactly two things — **detect** a completed `Skill` call and **fire** `record`; it must not extract any other transcript content (security — see test scenarios). **On parse failure (format drift) the live handler skips capture silently and emits nothing to the turn** — a drift degrades to "missed capture," never a broken turn. The drift smoke-test asserts against a **real captured** fallow-close transcript (not a hand-authored guess), so it actually detects format change. For Codex, build the dispatcher so the existing `notify` occupant keeps working.
+**Approach:** Copy the Stop-hook precedent `hooks/git/auto-commit-on-stop.ts.disabled` (its `StopHookInput` guard + `transcript_path` consumption) and `hooks/git/session-summary.ts`. The handler does exactly two things — **detect** a completed `Skill` call and **fire** `record`; it must not extract any other transcript content (security — see test scenarios). **On parse failure (format drift) the live handler skips capture silently and emits nothing to the turn** — a drift degrades to "missed capture," never a broken turn. The drift smoke-test asserts against a **real captured** fallow-close transcript (not a hand-authored guess), so it actually detects format change. For Codex, build the dispatcher so the existing `notify` occupant keeps working. The dispatcher must not claim capture from the bare `agent-turn-complete` payload; live Codex capture requires future item-stream correlation.
 
 **Patterns to follow:** `hooks/git/auto-commit-on-stop.ts.disabled` (`StopHookInput` guard), `hooks/git/session-summary.ts` (`transcript_path` consumption).
 
@@ -389,10 +389,12 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 - Drift smoke-test (`Covers KTD6 undocumented-format risk.`): if the transcript shape changes, the test fails loud.
 - Live-drift behavior: a malformed/unexpected transcript → handler skips capture, emits nothing, does not throw into the turn.
 - **Transcript isolation (security — Covers R5):** a fixture transcript carrying a secret in a non-`Skill`-tool-call field (tool-call arg or assistant text) produces a record with **no** transcript-sourced content — the handler extracts only the detection fact, never payload.
-- Codex dispatcher coexistence: a `notify` event reaches both the existing occupant and skill-feedback; neither is dropped.
+- Claude duplicate guard: the same transcript detection id records once, not every later Stop hook in the session.
+- Codex dispatcher coexistence: a `notify` event reaches the existing occupant and does not produce a false skill-feedback record when the payload lacks skill identity.
+- Hook subprocess timeout: record and forwarding subprocesses terminate before the harness hook timeout, so a lock or stalled process cannot pause the turn indefinitely.
 - No skill is instructed to invoke another skill (`Covers R2.`).
 
-**Verification:** ≥1 real hook-fired capture lands a readable, untrusted-marked, secret-free record from a real fallow close on each harness; the transcript-isolation test passes; the Codex dispatcher preserves the existing handler; test + `tsc_check` green.
+**Verification:** ≥1 real hook-fired capture lands a readable, untrusted-marked, secret-free record from a real fallow close on Claude; the transcript-isolation test passes; duplicate Stop detections are skipped; the Codex dispatcher preserves the existing handler without false capture; test + `tsc_check` green.
 
 ---
 
@@ -431,7 +433,8 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 ## Risks & Dependencies
 
 - **Wrong subject skill (confounds the go/no-go).** fallow is mature and fluently run → the least likely skill to generate friction. A null result may mean *wrong subject*, not *no value*. Mitigation: v0 ships **two** emitters — fallow (mature, proves the wiring on the happy path) and **`cli-execution-auditor`** (born 2026-06-11, runtime-backed, actively churning → proves the loop catches real friction). The rough emitter is in v0, not deferred.
-- **Claude detection parses an undocumented transcript format.** The Stop hook exposes only `transcript_path`; detecting a completed `Skill` call means parsing JSONL whose schema Anthropic does not document. Works today (84-100%) but can drift. Mitigation: the Claude adapter carries a drift smoke-test (known fallow-close transcript → expected `Skill` detection) that fails loud if the format changes. Codex detection rides documented typed events and carries no such risk — making Codex the firmer v0 proving ground.
+- **Claude detection parses an undocumented transcript format.** The Stop hook exposes only `transcript_path`; detecting a completed `Skill` call means parsing JSONL whose schema Anthropic does not document. Works today (84-100%) but can drift. Mitigation: the Claude adapter carries a drift smoke-test (known fallow-close transcript → expected `Skill` detection) that fails loud if the format changes.
+- **Codex notify lacks skill identity.** The end-of-turn notify hook fires, but its payload does not include the skill or the `codex exec --json` item stream. Mitigation: v0 keeps the dispatcher as a coexistence forwarder and defers live Codex capture until an item-stream reader or equivalent identity source exists.
 - **Friction is agent-narrated (residual confound).** Even after dropping the value lane, friction is authored by the agent post-hoc. Evaluate against the **friction lane + measured outcomes** (token usage, `turn.failed`, redaction events), not agent self-assessment — actionable-feedback density, not volume (arXiv 2605.29682).
 - **Redaction cannot catch every human-pasted secret.** Explicit patterns cover bearer/JWT/PEM/DSN + prefix-keyed tokens, but a novel secret shape can slip through. Residual risk is mitigated by `0600` files + the gitignore gate + the post-session purge note, not eliminated. Flagged for the user.
 - **Adapter scope is two harnesses, one emitter.** Both adapters prove the *seam*; one emitter (fallow) proves only per-skill value. Broad adoption is a v1 concern gated on the pilot's verdict.
@@ -454,7 +457,7 @@ EFC-grounded (arXiv 2605.29682): actionable-feedback **density** predicts value,
 - Origin: `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md` (reviewed 2026-06-11; v0 cut is the scope source of truth).
 - OpenTelemetry GenAI semantic conventions — `gen_ai.evaluation.result` (name/score/label/explanation/run-id), `execute_tool` / `invoke_agent` spans (status: Development as of 2026-06).
 - Claude Code Monitoring (OTel) — `claude_code.interaction` span hierarchy + per-request attrs; Anthropic self-service-analytics post — eval rows tagged skill-version + git-SHA + per-assertion pass/fail.
-- Codex `codex exec --json` `ThreadEvent` schema + `Usage` struct; `notify=agent-turn-complete` end-of-run hook.
+- Codex `codex exec --json` `ThreadEvent` schema + `Usage` struct; `notify=agent-turn-complete` end-of-turn hook without skill identity.
 - arXiv 2605.29682 — *Scaling Laws for Agent Harnesses*: Effective Feedback Compute; actionable-feedback density (R²≈0.99) over raw volume (R²≈0.33-0.42).
 - `runtime/cli-command-facade/src/` — Facade contract (`defineCommandFacadeContract`, `createCliRuntime*Envelope`, baseline exit codes, `CliDiagnosticRedactor` Strategy hook).
 - `skills/fallow/` — runtime-backed skill anatomy (`command-contract.ts`, `package.json`, `tsconfig.json`, runner).

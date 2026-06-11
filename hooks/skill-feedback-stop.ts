@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
 
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import {
 	type HookRunResult,
 	type RecordRequest,
@@ -17,9 +21,18 @@ export interface StopHookInput {
 
 export interface SkillFeedbackStopRuntime {
 	readText: (path: string) => Promise<string>
+	readLastDetectionId: (transcriptPath: string) => Promise<string | null>
+	writeLastDetectionId: (
+		transcriptPath: string,
+		detectionId: string,
+	) => Promise<void>
 	resolveGitRoot: (cwd: string) => Promise<string>
 	nowIso: () => string
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
+}
+
+export interface ClaudeSkillDetection extends SkillDetection {
+	detectionId: string
 }
 
 function isStopHookInput(value: unknown): value is StopHookInput {
@@ -39,7 +52,8 @@ function isStopHookInput(value: unknown): value is StopHookInput {
 
 export function detectSkillFromClaudeTranscriptText(
 	text: string,
-): SkillDetection | null {
+): ClaudeSkillDetection | null {
+	let latest: ClaudeSkillDetection | null = null
 	for (const line of text.split('\n')) {
 		const trimmed = line.trim()
 		if (!trimmed) continue
@@ -50,14 +64,14 @@ export function detectSkillFromClaudeTranscriptText(
 			continue
 		}
 		const detection = detectSkillFromClaudeTranscriptEntry(parsed)
-		if (detection) return detection
+		if (detection) latest = detection
 	}
-	return null
+	return latest
 }
 
 function detectSkillFromClaudeTranscriptEntry(
 	entry: unknown,
-): SkillDetection | null {
+): ClaudeSkillDetection | null {
 	if (!entry || typeof entry !== 'object') return null
 	const record = entry as Record<string, unknown>
 	const toolUseResult = objectFrom(record.toolUseResult)
@@ -68,6 +82,7 @@ function detectSkillFromClaudeTranscriptEntry(
 		source: 'claude-stop',
 		skill: commandName,
 		outcome: toolUseResult?.success === false ? 'failed' : 'ambiguous',
+		detectionId: buildDetectionId(record, commandName),
 	}
 }
 
@@ -95,9 +110,19 @@ export async function handleSkillFeedbackStop(
 	}
 	const detection = detectSkillFromClaudeTranscriptText(transcript)
 	if (!detection) return { captured: false }
+	if (
+		(await runtime.readLastDetectionId(input.transcript_path)) ===
+		detection.detectionId
+	) {
+		return { captured: false, detection }
+	}
 	const cwd = await runtime.resolveGitRoot(input.cwd)
 	await runtime.runRecord(
 		buildRecordRequest(cwd, detection, runtime.nowIso()),
+	)
+	await runtime.writeLastDetectionId(
+		input.transcript_path,
+		detection.detectionId,
 	)
 	return { captured: true, detection }
 }
@@ -105,10 +130,50 @@ export async function handleSkillFeedbackStop(
 function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
 	return {
 		readText: async (path) => Bun.file(path).text(),
+		readLastDetectionId,
+		writeLastDetectionId,
 		resolveGitRoot,
 		nowIso: () => new Date().toISOString(),
 		runRecord: runSkillFeedbackRecord,
 	}
+}
+
+async function readLastDetectionId(
+	transcriptPath: string,
+): Promise<string | null> {
+	try {
+		const marker = await readFile(stopDedupePath(transcriptPath), 'utf8')
+		return marker.trim() || null
+	} catch {
+		return null
+	}
+}
+
+async function writeLastDetectionId(
+	transcriptPath: string,
+	detectionId: string,
+): Promise<void> {
+	const markerPath = stopDedupePath(transcriptPath)
+	await mkdir(dirname(markerPath), { recursive: true, mode: 0o700 })
+	await writeFile(markerPath, `${detectionId}\n`, { mode: 0o600 })
+}
+
+function stopDedupePath(transcriptPath: string): string {
+	const key = createHash('sha256').update(transcriptPath).digest('hex')
+	return join(tmpdir(), 'skill-feedback-stop-dedupe', `${key}.txt`)
+}
+
+function buildDetectionId(
+	record: Record<string, unknown>,
+	commandName: string,
+): string {
+	const stableId =
+		stringFrom(record.sourceToolUseID) ??
+		stringFrom(record.uuid) ??
+		stringFrom(record.timestamp) ??
+		commandName
+	const sessionId = stringFrom(record.sessionId)
+	return sessionId ? `${sessionId}:${stableId}` : stableId
 }
 
 function objectFrom(value: unknown): Record<string, unknown> | null {

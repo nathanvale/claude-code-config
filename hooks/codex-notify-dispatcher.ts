@@ -21,13 +21,36 @@ export interface CodexNotifyRuntime {
 	cwd: () => string
 	nowIso: () => string
 	resolveGitRoot: (cwd: string) => Promise<string>
-	runNext: (command: readonly string[], stdin: string) => Promise<HookRunResult>
+	runNext: (command: readonly string[], payload: string) => Promise<HookRunResult>
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
+}
+
+export interface CodexNotifyInvocation {
+	payload: string
+	nextCommand: string[]
 }
 
 export function parseNextCommand(argv: readonly string[]): string[] {
 	const marker = argv.indexOf('--next')
 	return marker === -1 ? [] : argv.slice(marker + 1)
+}
+
+export function parseNotifyInvocation(
+	argv: readonly string[],
+	stdinFallback: string,
+): CodexNotifyInvocation {
+	const payloadIndex = findLastJsonObjectArg(argv)
+	if (payloadIndex === -1) {
+		return {
+			payload: stdinFallback,
+			nextCommand: parseNextCommand(argv),
+		}
+	}
+	const payload = argv[payloadIndex] ?? ''
+	return {
+		payload,
+		nextCommand: parseNextCommand(argv.filter((_, index) => index !== payloadIndex)),
+	}
 }
 
 export function detectSkillFromCodexNotify(
@@ -61,14 +84,14 @@ export function detectSkillFromCodexNotify(
 }
 
 export async function dispatchCodexNotify(
-	stdin: string,
+	payload: string,
 	nextCommand: readonly string[],
 	runtime: CodexNotifyRuntime = createDefaultCodexRuntime(),
 ): Promise<{ forwarded: boolean; captured: boolean }> {
-	const detection = detectSkillFromCodexNotify(stdin, runtime.cwd())
+	const detection = detectSkillFromCodexNotify(payload, runtime.cwd())
 	const forward =
 		nextCommand.length > 0
-			? runtime.runNext(nextCommand, stdin)
+			? runtime.runNext(nextCommand, payload)
 			: Promise.resolve({ exitCode: 0, stdout: '', stderr: '' })
 	const capture = detection
 		? runtime
@@ -106,9 +129,9 @@ export function createDefaultCodexRuntime(): CodexNotifyRuntime {
 
 async function runNext(
 	command: readonly string[],
-	stdin: string,
+	payload: string,
 ): Promise<HookRunResult> {
-	return runBufferedProcess(command, { stdin })
+	return runBufferedProcess([...command, payload])
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -120,6 +143,13 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 	} catch {
 		return null
 	}
+}
+
+function findLastJsonObjectArg(argv: readonly string[]): number {
+	for (let index = argv.length - 1; index >= 0; index -= 1) {
+		if (parseJsonObject(argv[index] ?? '')) return index
+	}
+	return -1
 }
 
 function stringAt(
@@ -140,7 +170,13 @@ function stringAt(
 
 function normalizeOutcome(value: string | null): SkillFeedbackOutcome {
 	if (value === 'failed' || value === 'turn.failed') return 'failed'
-	if (value === 'confirmed' || value === 'turn.completed') return 'confirmed'
+	if (
+		value === 'confirmed' ||
+		value === 'turn.completed' ||
+		value === 'agent-turn-complete'
+	) {
+		return 'confirmed'
+	}
 	return 'ambiguous'
 }
 
@@ -151,8 +187,12 @@ if (import.meta.main) {
 	selfDestruct.unref()
 
 	try {
-		const stdin = await Bun.stdin.text()
-		await dispatchCodexNotify(stdin, parseNextCommand(Bun.argv.slice(2)))
+		const argv = Bun.argv.slice(2)
+		let invocation = parseNotifyInvocation(argv, '')
+		if (invocation.payload === '') {
+			invocation = parseNotifyInvocation(argv, await Bun.stdin.text())
+		}
+		await dispatchCodexNotify(invocation.payload, invocation.nextCommand)
 	} catch {
 		// Notify dispatcher is best-effort; never break the Codex turn.
 	}
