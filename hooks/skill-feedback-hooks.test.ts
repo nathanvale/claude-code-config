@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import {
-	type RecordRequest,
 	detectSkillFromClaudeTranscriptText,
 	handleSkillFeedbackStop,
 } from './skill-feedback-stop'
@@ -11,6 +10,7 @@ import {
 	dispatchCodexNotify,
 	parseNextCommand,
 } from './codex-notify-dispatcher'
+import type { RecordRequest } from './skill-feedback-runtime'
 
 const GENERATED_TS = '2026-06-11T10:00:00.000Z'
 const FIXTURE_PATH = join(

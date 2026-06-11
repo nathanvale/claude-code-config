@@ -3,10 +3,12 @@
 import {
 	type HookRunResult,
 	type RecordRequest,
+	type SkillFeedbackOutcome,
 	buildRecordRequest,
-} from './skill-feedback-stop'
-
-type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
+	resolveGitRoot,
+	runBufferedProcess,
+	runSkillFeedbackRecord,
+} from './skill-feedback-runtime'
 
 export interface CodexSkillDetection {
 	source: 'codex-notify'
@@ -98,45 +100,15 @@ export function createDefaultCodexRuntime(): CodexNotifyRuntime {
 		nowIso: () => new Date().toISOString(),
 		resolveGitRoot,
 		runNext,
-		runRecord: async (request) => {
-			const { createDefaultStopRuntime } = await import('./skill-feedback-stop')
-			return createDefaultStopRuntime().runRecord(request)
-		},
+		runRecord: runSkillFeedbackRecord,
 	}
-}
-
-async function resolveGitRoot(cwd: string): Promise<string> {
-	const proc = Bun.spawn(['git', '-C', cwd, 'rev-parse', '--show-toplevel'], {
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
-	const [stdout, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		proc.exited,
-	])
-	if (exitCode !== 0) return cwd
-	return stdout.trim() || cwd
 }
 
 async function runNext(
 	command: readonly string[],
 	stdin: string,
 ): Promise<HookRunResult> {
-	const proc = Bun.spawn([...command], {
-		stdin: 'pipe',
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
-	if (proc.stdin) {
-		proc.stdin.write(stdin)
-		proc.stdin.end()
-	}
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	])
-	return { exitCode, stdout, stderr }
+	return runBufferedProcess(command, { stdin })
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {

@@ -1,36 +1,18 @@
 #!/usr/bin/env bun
 
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
+import {
+	type HookRunResult,
+	type RecordRequest,
+	type SkillDetection,
+	buildRecordRequest,
+	resolveGitRoot,
+	runSkillFeedbackRecord,
+} from './skill-feedback-runtime'
 
 export interface StopHookInput {
 	cwd: string
 	transcript_path: string
 	stop_hook_active?: boolean
-}
-
-export interface SkillDetection {
-	source: 'claude-stop' | 'codex-notify'
-	skill: string
-	outcome: SkillFeedbackOutcome
-}
-
-export interface RecordRequest {
-	cwd: string
-	skill: string
-	outcome: SkillFeedbackOutcome
-	goal: string
-	friction: string
-	generatedTs: string
-	explanation?: string
-}
-
-export interface HookRunResult {
-	exitCode: number
-	stdout: string
-	stderr: string
 }
 
 export interface SkillFeedbackStopRuntime {
@@ -40,17 +22,7 @@ export interface SkillFeedbackStopRuntime {
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
 }
 
-const HOOK_DIR = dirname(fileURLToPath(import.meta.url))
-const CONFIG_ROOT = dirname(HOOK_DIR)
-const SKILL_FEEDBACK_RUNNER = join(
-	CONFIG_ROOT,
-	'skills',
-	'skill-feedback',
-	'src',
-	'skill-feedback-runner.ts',
-)
-
-export function isStopHookInput(value: unknown): value is StopHookInput {
+function isStopHookInput(value: unknown): value is StopHookInput {
 	if (!value || typeof value !== 'object') return false
 	const input = value as Record<string, unknown>
 	if (typeof input.cwd !== 'string') return false
@@ -110,22 +82,6 @@ function hasSkillToolResult(entry: Record<string, unknown>): boolean {
 	})
 }
 
-export function buildRecordRequest(
-	cwd: string,
-	detection: SkillDetection,
-	generatedTs: string,
-): RecordRequest {
-	return {
-		cwd,
-		skill: detection.skill,
-		outcome: detection.outcome,
-		goal: 'Harness hook observed a completed skill run.',
-		friction: 'Hook captured no transcript payload.',
-		generatedTs,
-		explanation: `Captured by ${detection.source}.`,
-	}
-}
-
 export async function handleSkillFeedbackStop(
 	input: StopHookInput,
 	runtime: SkillFeedbackStopRuntime = createDefaultStopRuntime(),
@@ -146,61 +102,13 @@ export async function handleSkillFeedbackStop(
 	return { captured: true, detection }
 }
 
-export function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
+function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
 	return {
 		readText: async (path) => Bun.file(path).text(),
 		resolveGitRoot,
 		nowIso: () => new Date().toISOString(),
 		runRecord: runSkillFeedbackRecord,
 	}
-}
-
-async function resolveGitRoot(cwd: string): Promise<string> {
-	const proc = Bun.spawn(['git', '-C', cwd, 'rev-parse', '--show-toplevel'], {
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
-	const [stdout, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		proc.exited,
-	])
-	if (exitCode !== 0) return cwd
-	return stdout.trim() || cwd
-}
-
-async function runSkillFeedbackRecord(
-	request: RecordRequest,
-): Promise<HookRunResult> {
-	const args = [
-		'bun',
-		'run',
-		SKILL_FEEDBACK_RUNNER,
-		'record',
-		'--skill',
-		request.skill,
-		'--goal',
-		request.goal,
-		'--outcome',
-		request.outcome,
-		'--friction',
-		request.friction,
-		'--generated-ts',
-		request.generatedTs,
-	]
-	if (request.explanation) {
-		args.push('--explanation', request.explanation)
-	}
-	const proc = Bun.spawn(args, {
-		cwd: request.cwd,
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	])
-	return { exitCode, stdout, stderr }
 }
 
 function objectFrom(value: unknown): Record<string, unknown> | null {
