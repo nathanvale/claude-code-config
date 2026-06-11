@@ -40,7 +40,7 @@ Carried from origin (`see origin: docs/brainstorms/2026-06-10-skill-follow-up-fe
 
 **In scope (v0):**
 
-- R1 — A finished skill's close is the capture point. **Resolved actor:** the **driver** (the top-level agent) invokes `skill-feedback record`; the finished skill only *signals* its close. Skills do not invoke skills (`see` KTD6).
+- R1 — A finished skill's close is the capture point. **Detection:** the **harness end-of-run hook** (Claude Stop hook / Codex `notify`) fires `skill-feedback record` automatically; the finished skill does not invoke the command itself. Skills do not invoke skills (`see` KTD6).
 - R2 — No description-matching, ambient auto-triggering, or peer-to-peer discovery.
 - R3 — The command runs from a weak receipt and writes a **degraded** record rather than blocking. (Distinct from the gitignore gate, which *does* block — `see` KTD4 and Risks.)
 - R4 — Receipt carries skill identity, goal, outcome, and a free-text friction note (minimal v0 field set; full R4 field list deferred to v1).
@@ -79,6 +79,8 @@ Shipping the second adapter is deliberate: an Adapter interface earns its abstra
 
 The `Receipt` is one flat object (mirroring `RunOutcome` in `prototypes/browser-use-uplift/metrics-telemetry/telemetry.ts`), not a nested `{ telemetry, narrated }` shape — nesting would be the repo's first nested-trust record and cuts against KTD3's flat-union commitment. The trust boundary is a single exported constant `NARRATED_FIELDS = ['goal', 'friction', 'explanation']`. Adapter-derived telemetry (usage, outcome, model, git_sha, generated_ts) is trusted and never redacted; the narrated fields are the only ones the redactor scrubs. This makes "telemetry untouched, narration redacted" a unit-testable invariant and makes the git_sha false-positive guard structural, not pattern-luck.
 
+**"Trusted" requires engine-read, not flag-supplied (security).** A field is only safe to skip redaction if its value cannot be agent-authored. So `git_sha`, `skill_version`, and `model` are **read inside the engine** (git_sha/skill_version from the repo; model from the adapter's telemetry) — they are **never accepted as CLI flags**. Only `NARRATED_FIELDS` enter via flags. This closes the mis-routed-flag bypass: an agent cannot smuggle a secret into `--model` to dodge the redactor, because there is no `--model` flag. The only flag-supplied values are exactly the redaction-gated ones.
+
 **Merge seam:** the adapter emits a telemetry-only `CaptureResult`; the driver supplies narrated fields as CLI flags (`--goal`/`--friction`/`--explanation`, using the facade `flags` mechanism per `skills/fallow/src/command-contract.ts`); `record` merges them into the flat Receipt and redacts the narrated flags at the CLI boundary where the facade redactor already runs. The adapter never sees narration — it stays purely mechanical and fixture-testable.
 
 ### KTD3 — Degraded capture as a discriminated union (Null Object), not a class
@@ -98,7 +100,7 @@ Timestamps are inputs, never ambient-clock reads. Trends derive from record **or
 Capture fires from the harness end-of-run hook on both harnesses, not from an agent remembering to call `record`. Agent recall is ~20-50% reliable (single-skill) / ~0% (multi-skill); the hook path is 84-100% (`docs/research/2026-05-30-skill-composability-handoff-observability.md`, bug #20986). A finished skill still must not call `Skill("skill-feedback", …)` itself (runbook + fallow safety + composition research all forbid skill-to-skill).
 
 **Detection is harness-level — no `## Close` breadcrumb, zero per-skill maintenance:**
-- **Codex** — `codex exec --json` emits documented typed events: `turn.completed` (+ `Usage` struct), `turn.failed` → `outcome: failed`, and `item.completed` with typed `ThreadItemDetails` (`McpToolCall`, `CommandExecution`, …). The `notify=agent-turn-complete` hook is the legal trigger. First-class, documented (verified `/openai/codex` 2026-06-11).
+- **Codex** — `codex exec --json` emits documented typed events: `turn.completed` (+ `Usage` struct), `turn.failed` → `outcome: failed`, and `item.completed` with typed `ThreadItemDetails` (`McpToolCall`, `CommandExecution`, …). The `notify=agent-turn-complete` hook is the trigger. **Coexistence constraint:** Codex `notify` is a *single global program slot*, and it is already occupied (verified: `~/.codex/config.toml` points at an existing handler). v0 must not overwrite it — `notify` points at a small **dispatcher** that fans the event to both the existing handler and skill-feedback (U8 owns the dispatcher).
 - **Claude** — the Stop hook fires every turn and exposes only `transcript_path` (8 documented fields, no tool-call list). Detection parses that JSONL for a completed `Skill` tool call. The transcript JSONL shape is **undocumented** (verified against code.claude.com/docs 2026-06-11), so the Claude adapter carries a drift smoke-test that fails loud if the format changes.
 
 `## Close` is dropped entirely — detection no longer needs a skill to announce itself. Optional per-skill close enrichment (clean/failed/handoff signal) is a v1 fork, left open, not built.
@@ -134,7 +136,7 @@ flowchart TB
   SEL --> R["CaptureResult\n receipt | degraded"]
   R --> CMD["skill-feedback record\n(CommandFacadeContract on @side-quest/cli-command-facade)"]
   CMD --> V[validate against allow-list schema]
-  V --> RED["redact ALL free-text fields\n(goal, friction, explanation)"]
+  V --> RED["redact NARRATED_FIELDS only\n(goal, friction, explanation)\ntelemetry fields untouched"]
   RED --> G{"git check-ignore --quiet .skill-feedback/\nexit 0 ?"}
   G -->|exit 0| W[write record 0600 to .skill-feedback/ 0700]
   G -->|exit 1 OR 128| REF[refuse + StructuredRuntimeError repair hint] --> STOP[no file written]
@@ -189,7 +191,10 @@ skills/skill-feedback/
 
 package.json                  # + skills/skill-feedback in workspaces.packages (U1)
 .gitignore                    # + .skill-feedback/ block (U1)
-skills/fallow/SKILL.md        # + ## Close signal section (U7)
+skills/fallow/SKILL.md        # (unchanged — detection is harness-level per KTD6; no ## Close)
+hooks/skill-feedback-stop.ts  # Claude Stop-hook handler + transcript-parse drift smoke-test (U8)
+settings.json                 # + Stop-hook entry routing to skill-feedback handler (U8)
+.codex/config.toml            # notify dispatcher coexistence (U8 — slot shared w/ existing handler)
 prototypes/skill-feedback-architecture/redaction-strategy.stub.ts  # (exists — Strategy seam marker)
 ```
 
@@ -199,7 +204,7 @@ The per-unit `**Files:**` sections are authoritative; this tree is a scope decla
 
 ## Implementation Units
 
-Units run U1 → U7. Gaps in numbering are intentional (U-IDs are never renumbered).
+Units run U1 → U8. Gaps in numbering are intentional (U-IDs are never renumbered; U3 and U5 were folded into U2 and U6 respectively during planning — the `Runtime` injection seam once slated for U5 lives in U6).
 
 ### U1. Workspace scaffold, gitignore entry, and registration
 
@@ -269,7 +274,7 @@ Units run U1 → U7. Gaps in numbering are intentional (U-IDs are never renumber
 - `skills/skill-feedback/src/capture-adapters.ts` (create — `CaptureAdapter` interface, `ClaudeOtelAdapter`, `CodexJsonAdapter`, `selectAdapter`)
 - `skills/skill-feedback/src/capture-adapters.test.ts` (create)
 
-**Approach:** Define `CaptureAdapter = { harness: HarnessId; capture(raw): Promise<CaptureResult> }` and the `CaptureResult` discriminated union (KTD3). `ClaudeOtelAdapter` maps `claude_code.*` span attrs → Receipt fields; `CodexJsonAdapter` maps `turn.completed` + `Usage` → Receipt, `turn.failed` → `outcome: failed`. Missing/partial telemetry yields the `degraded` variant with explicit `DegradedReason[]`, never a silent default. `selectAdapter(harness)` is a one-arm-per-harness switch (not a Factory). Adapters take the injected `Runtime` (U5 seam) so tests drive them with fixture telemetry, no live harness needed.
+**Approach:** Define `CaptureAdapter = { harness: HarnessId; capture(raw): Promise<CaptureResult> }` and the `CaptureResult` discriminated union (KTD3). `ClaudeOtelAdapter` maps `claude_code.*` span attrs → Receipt fields; `CodexJsonAdapter` maps `turn.completed` + `Usage` → Receipt, `turn.failed` → `outcome: failed`. Missing/partial telemetry yields the `degraded` variant with explicit `DegradedReason[]`, never a silent default. `selectAdapter(harness)` is a one-arm-per-harness switch (not a Factory). Adapters take the injected `Runtime` (the U6 seam — `Runtime` + `createDefaultSkillFeedbackRuntime`) so tests drive them with fixture telemetry, no live harness needed.
 
 **Patterns to follow:** `skills/browser-use/src/browser-use-core.ts` (`Failure<A>` union shape for `CaptureResult`); `skills/browser-use/src/browser-use-transport.ts` (neutral-input → domain-result mapping).
 
@@ -333,9 +338,9 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 
 ---
 
-### U7. Author `SKILL.md`, wire fallow's close, and pass create-cli + cli-execution-auditor
+### U7. Author `SKILL.md` and pass create-cli + cli-execution-auditor
 
-**Goal:** The command is invocable and discoverable; fallow signals its close for the driver to act on; the facade CLI passes its contract and audit gates.
+**Goal:** The command is invocable and discoverable; skill closes are detectable by the harness hooks (wired in U8); the facade CLI passes its contract and audit gates.
 
 **Requirements:** R1, R2, R3, R18a, R21; KTD6.
 
@@ -345,9 +350,8 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 - `skills/skill-feedback/SKILL.md` (create)
 - `skills/skill-feedback/references/report-shape.md` (create — record template + Truth Stance / untrusted-evidence header)
 - `skills/skill-feedback/PROVENANCE.md` (create)
-- Claude Stop-hook handler + Codex `notify` handler wiring (create — each shells out to `skill-feedback record`; Claude handler carries the transcript-parse drift smoke-test)
 
-**Approach:** Author `SKILL.md` per the runbook and `create-cli`'s facade-backed lane: first screen carries trigger, boundary, owner paths (point at `references/report-shape.md` and `references/redaction.md` — the stable docs, not `src/` test artifacts; do not copy contracts), the fail-closed gate, and the next safe action. `description:` double-quoted, trigger-shaped, no personal names, `role: tool-workflow`. Name the **six owners** (Contract / Model / Engine / Discovery / CLI / Test) and produce the **Command Surface Alignment Proof** across the four drift surfaces (discovery metadata, rendered help, public argv accept/reject, runtime semantics). Embed the Truth Stance / untrusted-evidence header in `references/report-shape.md` (copy the stance text into the template, mirroring `skills/skill-self-audit-loop`'s `## Loop File Template`). **No `## Close` edit to fallow** — detection is harness-level (KTD6 / ADR-0014). Instead wire the end-of-run hooks: a Claude Stop-hook handler that parses `transcript_path` for a completed `Skill` call (carry a drift smoke-test that fails loud if the undocumented JSONL shape changes) and a Codex `notify=agent-turn-complete` handler reading documented `turn.completed`/`item.completed` events. Both shell out to `skill-feedback record`. Run `cli-execution-auditor` over the facade CLI as the ship gate.
+**Approach:** Author `SKILL.md` per the runbook and `create-cli`'s facade-backed lane: first screen carries trigger, boundary, owner paths (point at `references/report-shape.md` and `references/redaction.md` — the stable docs, not `src/` test artifacts; do not copy contracts), the fail-closed gate, and the next safe action. `description:` double-quoted, trigger-shaped, no personal names, `role: tool-workflow`. Name the **six owners** (Contract / Model / Engine / Discovery / CLI / Test) and produce the **Command Surface Alignment Proof** across the four drift surfaces (discovery metadata, rendered help, public argv accept/reject, runtime semantics). Embed the Truth Stance / untrusted-evidence header in `references/report-shape.md` (copy the stance text into the template, mirroring `skills/skill-self-audit-loop`'s `## Loop File Template`). Harness-hook wiring is **not** here — it is U8. Run `cli-execution-auditor` over the facade CLI as the ship gate.
 
 **Patterns to follow:** `skills/fallow/SKILL.md` and `skills/test-runner/SKILL.md` (`## Owner` section shape, facade CLI prose); `skills/skill-self-audit-loop/SKILL.md` (Truth Stance + Safety blocks); `skills/create-cli/references/cli-command-facade.md` (facade-lane requirements).
 
@@ -355,16 +359,46 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 - Frontmatter: after editing, `description` is double-quoted and the file YAML-parses (AGENTS.md rule).
 - Command Surface Alignment Proof: discovery metadata, rendered `--help`, public argv accept/reject, and runtime semantics agree (no drift across the four surfaces).
 - cli-execution-auditor: exit codes, help alignment, redaction, runner discipline, and `--json`-under-failure pass.
-- Manual end-to-end (`Covers R1, R3.`): a real fallow close fires the harness hook, which invokes `skill-feedback record` with a degraded receipt (skill+goal+outcome only); one degraded record lands in `.skill-feedback/` with missing fields marked and the untrusted marker present.
-- Claude detection smoke-test (`Covers KTD6 undocumented-format risk.`): a fixture fallow-close transcript JSONL parses to a `Skill` detection; the test fails loud if the transcript shape drifts. No skill is instructed to invoke another skill (`Covers R2.`).
+- Manual invocation (`Covers R3.`): `skill-feedback record` invoked directly with a degraded receipt (skill+goal+outcome only) lands one degraded record in `.skill-feedback/` with missing fields marked and the untrusted marker present. (End-to-end hook-fired capture is U8.)
 
-**Verification:** `cli-execution-auditor` green; Command Surface Alignment Proof passes; ≥1 real driver-invoked capture lands a readable, untrusted-marked, secret-free record from a real fallow close; test + `tsc_check` green.
+**Verification:** `cli-execution-auditor` green; Command Surface Alignment Proof passes; test + `tsc_check` green.
+
+---
+
+### U8. Harness-hook wiring: Claude Stop hook, Codex notify dispatcher, drift smoke-test
+
+**Goal:** A skill close auto-fires `skill-feedback record` on both harnesses, reliably, without any per-skill edit — the trigger ADR-0014 makes load-bearing.
+
+**Requirements:** R1, R2; KTD6.
+
+**Dependencies:** U6 (the `record` command must exist to shell into), U7 (SKILL.md/discovery). Independent of fallow.
+
+**Files:**
+- `hooks/skill-feedback-stop.ts` (create — Claude Stop-hook handler; reads `transcript_path`, detects a completed `Skill` tool call, shells out to `skill-feedback record`). Deploys via `hooks/` — `~/.claude/hooks` is a symlink to repo `hooks/`; a handler placed under `skills/` would never fire.
+- `settings.json` (modify — add a `Stop` entry routing to the handler, mirroring the existing `Stop` block)
+- `hooks/codex-notify-dispatcher.ts` (create — fans the Codex `notify` event to the existing occupant **and** skill-feedback; `notify` is a single slot already taken)
+- `.codex/config.toml` (modify — point `notify` at the dispatcher, preserving the existing handler)
+- test fixtures: a real captured fallow-close transcript committed as the golden fixture
+
+**Approach:** Copy the Stop-hook precedent `hooks/git/auto-commit-on-stop.ts.disabled` (its `StopHookInput` guard + `transcript_path` consumption) and `hooks/git/session-summary.ts`. The handler does exactly two things — **detect** a completed `Skill` call and **fire** `record`; it must not extract any other transcript content (security — see test scenarios). **On parse failure (format drift) the live handler skips capture silently and emits nothing to the turn** — a drift degrades to "missed capture," never a broken turn. The drift smoke-test asserts against a **real captured** fallow-close transcript (not a hand-authored guess), so it actually detects format change. For Codex, build the dispatcher so the existing `notify` occupant keeps working.
+
+**Patterns to follow:** `hooks/git/auto-commit-on-stop.ts.disabled` (`StopHookInput` guard), `hooks/git/session-summary.ts` (`transcript_path` consumption).
+
+**Test scenarios:**
+- Detection: a golden fallow-close transcript fixture parses to a `Skill` detection → `record` is invoked.
+- Drift smoke-test (`Covers KTD6 undocumented-format risk.`): if the transcript shape changes, the test fails loud.
+- Live-drift behavior: a malformed/unexpected transcript → handler skips capture, emits nothing, does not throw into the turn.
+- **Transcript isolation (security — Covers R5):** a fixture transcript carrying a secret in a non-`Skill`-tool-call field (tool-call arg or assistant text) produces a record with **no** transcript-sourced content — the handler extracts only the detection fact, never payload.
+- Codex dispatcher coexistence: a `notify` event reaches both the existing occupant and skill-feedback; neither is dropped.
+- No skill is instructed to invoke another skill (`Covers R2.`).
+
+**Verification:** ≥1 real hook-fired capture lands a readable, untrusted-marked, secret-free record from a real fallow close on each harness; the transcript-isolation test passes; the Codex dispatcher preserves the existing handler; test + `tsc_check` green.
 
 ---
 
 ## Scope Boundaries
 
-### Deferred for later (origin Scope Boundaries — carried verbatim intent)
+### Deferred for later (origin Scope Boundaries — all carried EXCEPT Stop hook, now superseded by ADR-0014/KTD6)
 
 - Full transcript / session-summary capture.
 - Automatic source repair.
