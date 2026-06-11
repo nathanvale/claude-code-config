@@ -5698,3 +5698,40 @@ Consequences:
 Next:
 
 - Use the developer tooling governance audit to check root-owned lint, test, and TypeScript portability.
+
+## Decision 132: Split Browser, 1Password, Prompt-System, and Issue-to-PR Vocabulary Into Scoped Contexts
+
+```yaml
+id: decisions-skill-132
+status: accepted
+decided_at: "2026-06-11"
+decision: Split browser, 1Password, prompt-system, and issue-to-pr vocabulary out of root CONTEXT.md
+owner: docs/agents/domain.md
+scope: CONTEXT-MAP.md
+supersedes: decisions-skill-061 (the "keep root CONTEXT.md for Issue-to-PR and Browser Adapter vocabulary" clause)
+source:
+  - "chat: 2026-06-11 root CONTEXT.md junk-drawer split"
+```
+
+Decision:
+
+- Root `CONTEXT.md` no longer owns browser, 1Password, prompt-system-workflow, or Issue-to-PR vocabulary. It keeps only cross-cutting agent-config, startup, governance, and CLI-design terms (15 terms).
+- Browser vocab moves to `skills/browser-use/CONTEXT.md`; 1Password to `skills/one-password/CONTEXT.md`; prompt-system to `skills/prompt-system-workflow/CONTEXT.md`; Issue-to-PR to `runbooks/issue-to-pr-v2/CONTEXT.md`.
+- `CONTEXT-MAP.md` is the canonical index of all scoped contexts.
+- Three retired Issue-to-PR terms archived to `docs/archive/2026-06-11-context-split-retired-terms.md`.
+
+Rationale:
+
+- Root `CONTEXT.md` had become a 78-term junk drawer spanning four unrelated bounded contexts.
+- Decision 61 explicitly placed Issue-to-PR and Browser Adapter vocab in root; that clause is now superseded.
+- Conservation verified: 78 terms = 60 moved + 15 kept + 3 archived, zero lost, zero duplicated.
+
+Consequences:
+
+- Decision 61's "keep root CONTEXT.md for Issue-to-PR, Browser Adapter" clause is superseded; the rest of Decision 61 (agent-native CLI split) stands.
+- Agents resolve a term in the nearest scoped context first, falling back to root only for cross-cutting vocabulary.
+- The runbook's "no central glossary" policy is now honored — Issue-to-PR vocab lives in the runbook it serves.
+
+Next:
+
+- Split further root vocabulary only when a stable scoped owner boundary is evident (carries Decision 61's V2 idea forward).

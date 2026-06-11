@@ -390,13 +390,13 @@ The gitignore gate uses `git check-ignore --quiet .skill-feedback/` and passes *
 - Optional per-skill **close enrichment** (a skill opts in to emit a clean/failed/handoff signal at its close) — detection works harness-level without it; enrichment adds richer signal. v1 fork.
 - **Mandatory fleet-wide close emission** as skill-authoring policy (a `create-cli`/`create-skill` gate) — a governance decision deferred to v1; v0 is built so either future is reachable.
 
-(Note: the Claude Stop hook is now **in v0 scope**, not deferred — see KTD6 / ADR-0014. The rough second emitter below is also in v0.)
+(Note: the Claude Stop hook is now **in v0 scope**, not deferred — see KTD6 / ADR-0014. The rough second emitter, `cli-execution-auditor`, is also in v0 — see Risks and Success Criterion.)
 
 ---
 
 ## Risks & Dependencies
 
-- **Wrong subject skill (confounds the go/no-go).** fallow is mature and fluently run → the least likely skill to generate friction. A null result may mean *wrong subject*, not *no value*. Mitigation: if the fallow-only corpus is thin, wire a rougher skill as a second emitter (Deferred to Follow-Up Work) before declaring no-go.
+- **Wrong subject skill (confounds the go/no-go).** fallow is mature and fluently run → the least likely skill to generate friction. A null result may mean *wrong subject*, not *no value*. Mitigation: v0 ships **two** emitters — fallow (mature, proves the wiring on the happy path) and **`cli-execution-auditor`** (born 2026-06-11, runtime-backed, actively churning → proves the loop catches real friction). The rough emitter is in v0, not deferred.
 - **Claude detection parses an undocumented transcript format.** The Stop hook exposes only `transcript_path`; detecting a completed `Skill` call means parsing JSONL whose schema Anthropic does not document. Works today (84-100%) but can drift. Mitigation: the Claude adapter carries a drift smoke-test (known fallow-close transcript → expected `Skill` detection) that fails loud if the format changes. Codex detection rides documented typed events and carries no such risk — making Codex the firmer v0 proving ground.
 - **Friction is agent-narrated (residual confound).** Even after dropping the value lane, friction is authored by the agent post-hoc. Evaluate against the **friction lane + measured outcomes** (token usage, `turn.failed`, redaction events), not agent self-assessment — actionable-feedback density, not volume (arXiv 2605.29682).
 - **Redaction cannot catch every human-pasted secret.** Explicit patterns cover bearer/JWT/PEM/DSN + prefix-keyed tokens, but a novel secret shape can slip through. Residual risk is mitigated by `0600` files + the gitignore gate + the post-session purge note, not eliminated. Flagged for the user.
@@ -411,7 +411,7 @@ EFC-grounded (arXiv 2605.29682): actionable-feedback **density** predicts value,
 
 **Go** = across the pilot run set, at least one record surfaces an **actionable friction signal** that drives a **concrete action** — an edit to a `SKILL.md` / `references/` / `context/` file, or a recorded repair candidate. Evaluate on the **friction lane + measured outcomes** only (token usage, `turn.failed`, redaction events), never the agent's self-assessment.
 
-**No-go** = no record clears that bar. If no-go, first rule out *wrong subject* (fallow too mature) by wiring a rougher second emitter before abandoning the loop. Do not build v1 on a null result from one fluent skill.
+**No-go** = no record clears that bar across **both** emitters (fallow + `cli-execution-auditor`). Because v0 already ships the rough emitter, a null result is not confounded by *wrong subject* — if neither a mature nor a young, churning skill surfaces an actionable signal, that is a real no-go. Do not build v1 on a null result.
 
 ---
 
