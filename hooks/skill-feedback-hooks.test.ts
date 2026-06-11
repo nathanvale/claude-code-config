@@ -49,7 +49,8 @@ describe('skill-feedback hooks', () => {
 			source: 'claude-stop',
 			skill: 'fallow',
 			outcome: 'ambiguous',
-			detectionId: 'fixture-session:toolu_fixture_fallow',
+			detectionId:
+				'44772d83-5da8-4091-908b-9d093059265b:784c9d1b-7773-4480-a5fd-f37b26a47589',
 		})
 	})
 
