@@ -5,8 +5,12 @@ The skill-observability feedback loop (v0 pilot): a durable, structured record c
 ## Language
 
 **Capture point**:
-The finished-skill close that a Software Learning Report is bound to. A *signal*, not an action — the finished skill signals; the Driver records.
-_Avoid_: trigger, auto-trigger, hook (reserve "hook" for the harness-enforced Codex `notify` / Claude Stop mechanism)
+The end-of-turn at which a Software Learning Report is fired. Detected at the harness level — the Claude Stop hook or Codex `turn.completed` — not by a skill announcing itself.
+_Avoid_: trigger, auto-trigger, the finished skill, `## Close` breadcrumb
+
+**Close detection**:
+How a harness hook decides a skill ran this turn. Codex reads documented `item.completed` / `turn.completed` events; Claude parses the Stop hook's `transcript_path` JSONL for a completed `Skill` tool call (undocumented format — guarded by a drift smoke-test).
+_Avoid_: skill breadcrumb, `## Close` marker, agent recall
 
 **Driver**:
 The top-level agent — the only legal caller of `record`. A finished skill never invokes `skill-feedback` itself.
