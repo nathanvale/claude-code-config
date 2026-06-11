@@ -40,6 +40,7 @@ describe("auditor command contract", () => {
 
 		expect(parsed.ok).toBe(true);
 		expect(auditorContracts.audit.resultContract?.id).toBe(AUDITOR_CONTRACT_ID);
+		expect(AUDITOR_SCHEMA_VERSION).toBe("2");
 		expect(auditorContracts.audit.resultContract?.schema_version).toBe(AUDITOR_SCHEMA_VERSION);
 		expect(auditorContracts.audit.flags).toHaveProperty("--only");
 		expect(auditorContracts.audit.flags).toHaveProperty("--ledger");
@@ -58,6 +59,12 @@ describe("auditor command contract", () => {
 			contract: auditorContracts.audit,
 			help: help.stdout,
 		});
+	});
+
+	test("version names the source API break release", async () => {
+		const version = await runForTest(["--version"]);
+		expect(version.exitCode).toBe(0);
+		expect(version.stdout).toBe("auditor 0.2.0\n");
 	});
 });
 

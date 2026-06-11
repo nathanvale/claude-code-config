@@ -5,7 +5,9 @@ import {
 import { AUDIT_CLAUSE_IDS } from "./clause-catalog.ts";
 
 export const AUDITOR_CONTRACT_ID = "cli-execution-auditor.audit" as const;
-export const AUDITOR_SCHEMA_VERSION = "1" as const;
+// v2 exposes multi-contract target layouts and shape discovery as
+// discriminated unions; source API callers must handle ambiguity explicitly.
+export const AUDITOR_SCHEMA_VERSION = "2" as const;
 
 export type AuditorCommand = "audit";
 type AuditorAudience = "agent" | "operator";
