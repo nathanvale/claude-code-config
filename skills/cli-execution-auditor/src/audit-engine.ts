@@ -99,20 +99,30 @@ async function anySourceImportsFacade(sourceFiles: readonly string[]): Promise<b
 
 async function acquireTargetContracts(
 	contractPaths: readonly string[],
+	root: string,
 ): Promise<ContractAcquisition> {
 	const contracts: Record<string, AcquiredCommandContract> = {};
 	const driftCodes: string[] = [];
+	// Track which contract file declared each command so a collision can name BOTH
+	// files, not just the command — the repair hint needs to point at the two files.
+	const commandSource: Record<string, string> = {};
+	const rel = (path: string) => (path.startsWith(root) ? path.slice(root.length + 1) : path);
 	for (const contractPath of contractPaths) {
 		const acquisition = await acquireTargetContract(contractPath);
-		if (!acquisition.ok) return acquisition;
+		if (!acquisition.ok) {
+			// Name the offending file: a hard load-throw otherwise loses which of N
+			// discovered contracts drifted, leaving no repair target.
+			return { ...acquisition, reason: `${rel(contractPath)}: ${acquisition.reason}` };
+		}
 		for (const [command, contract] of Object.entries(acquisition.contracts)) {
 			if (contracts[command]) {
 				return {
 					ok: false,
-					reason: `duplicate command contract for ${command} across discovered command-contract.ts modules`,
+					reason: `duplicate command contract for ${command}: declared in both ${commandSource[command]} and ${rel(contractPath)}`,
 				};
 			}
 			contracts[command] = contract;
+			commandSource[command] = rel(contractPath);
 		}
 		driftCodes.push(...acquisition.driftCodes);
 	}
@@ -385,7 +395,7 @@ export async function runStaticAudit(input: {
 		};
 	}
 
-	const acquisition = await acquireTargetContracts(layout.contractPaths);
+	const acquisition = await acquireTargetContracts(layout.contractPaths, layout.root);
 	if (!acquisition.ok) {
 		// A drifting target that throws at load surfaces here as a structured
 		// finding, not an import crash (KTD6).
@@ -484,28 +494,49 @@ export interface ResolvedRunnable {
 	command: string[];
 }
 
+/** Why a script did not resolve to a runnable — each maps to a distinct repair. */
+export type RunnableResolution =
+	| { ok: true; runnable: ResolvedRunnable }
+	| { ok: false; reason: "no-package-json" | "script-undeclared" | "unsupported-shape" | "file-missing" };
+
 /**
  * Resolve the target's runnable entrypoint from the contract `script` field via
  * package.json scripts. Handles both `bun run <file>.ts` entries and direct
  * executable entries (e.g. `./src/test-runner.sh`) — a facade CLI may ship a
- * shell front door. Returns null only when no script maps to an existing file.
+ * shell front door. On failure returns a DISTINCT reason per cause so the finding
+ * names the real repair (declare the script vs fix the entry file) instead of one
+ * conflated "maps to no runnable" message.
  */
 async function resolveRunnableScript(
 	layout: TargetLayout,
 	scriptName: string,
-): Promise<ResolvedRunnable | null> {
-	if (!layout.packageJsonPath) return null;
+): Promise<RunnableResolution> {
+	if (!layout.packageJsonPath) return { ok: false, reason: "no-package-json" };
 	const pkg = JSON.parse(await Bun.file(layout.packageJsonPath).text()) as {
 		scripts?: Record<string, string>;
 	};
 	const command = pkg.scripts?.[scriptName];
-	if (!command) return null;
+	if (!command) return { ok: false, reason: "script-undeclared" };
 	const file = resolveScriptEntryFile(layout.root, command);
-	if (!file) return null;
-	if (!(await Bun.file(file).exists())) return null;
+	if (!file) return { ok: false, reason: "unsupported-shape" };
+	if (!(await Bun.file(file).exists())) return { ok: false, reason: "file-missing" };
 	// .ts/.js run under bun; an executable script (.sh) runs directly.
 	const spawnCommand = file.endsWith(".sh") ? [file] : ["bun", "run", file];
-	return { file, command: spawnCommand };
+	return { ok: true, runnable: { file, command: spawnCommand } };
+}
+
+/** Human repair hint for each non-resolution cause. */
+function describeUnresolvedScript(scriptName: string, reason: string): string {
+	switch (reason) {
+		case "no-package-json":
+			return `script ${scriptName} cannot resolve: target has no package.json`;
+		case "script-undeclared":
+			return `script ${scriptName} is not declared in package.json scripts`;
+		case "unsupported-shape":
+			return `script ${scriptName} has an unsupported shape (compound/piped/prefixed) — declare a simple "bun run <file>" or "./<file>.sh"`;
+		default:
+			return `script ${scriptName} maps to no runnable entrypoint`;
+	}
 }
 
 /**
@@ -746,19 +777,19 @@ export async function runSurfaceAudit(input: {
 		}
 		let runner = runners.get(contract.script);
 		if (!runner) {
-			const runnable = await resolveRunnableScript(input.layout, contract.script);
-			if (!runnable) {
+			const resolution = await resolveRunnableScript(input.layout, contract.script);
+			if (!resolution.ok) {
 				if (wanted("runnable-resolves")) {
 					findings.push({
 						clauseId: "runnable-resolves",
 						kind: "surface",
-						summary: `contract command ${invocation.command} script ${contract.script} maps to no runnable entrypoint`,
+						summary: `contract command ${invocation.command} ${describeUnresolvedScript(contract.script, resolution.reason)}`,
 						argv: invocation.argv,
 					});
 				}
 				continue;
 			}
-			runner = createSubprocessRunner({ runnable, cwd: input.layout.root });
+			runner = createSubprocessRunner({ runnable: resolution.runnable, cwd: input.layout.root });
 			runners.set(contract.script, runner);
 		}
 		const declaredExitCodes = new Set(Object.keys(contract?.exitCodes ?? {}));

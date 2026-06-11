@@ -104,7 +104,11 @@ describe("contract acquisition (KTD6)", () => {
 			only: null,
 		});
 		expect(outcome.findings).toHaveLength(1);
-		expect(outcome.findings[0]?.summary).toContain("duplicate command contract for check");
+		const summary = outcome.findings[0]?.summary ?? "";
+		expect(summary).toContain("duplicate command contract for check");
+		// The repair hint names BOTH colliding files, not just the command.
+		expect(summary).toContain("src/front-doors/admin/command-contract.ts");
+		expect(summary).toContain("src/front-doors/app/command-contract.ts");
 	});
 
 	test("findContractByShape finds the contract export by shape, not by name", () => {
@@ -351,12 +355,13 @@ describe("surface audit — each clause fires", () => {
 		// The unresolved script fires once per enumerated invocation (bare + each flag),
 		// under runnable-resolves — NOT json-valid-under-failure (that clause is about
 		// the --json envelope; mis-attributing here corrupts per-clause reporting).
+		// The message names the precise cause: "missing" is undeclared in package.json.
 		expect(findings.length).toBeGreaterThan(0);
 		expect(
 			findings.every(
 				(f) =>
 					f.clauseId === "runnable-resolves" &&
-					f.summary.includes("script missing maps to no runnable entrypoint"),
+					f.summary.includes("script missing is not declared in package.json scripts"),
 			),
 		).toBe(true);
 	});
