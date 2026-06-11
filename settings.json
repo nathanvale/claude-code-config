@@ -129,6 +129,16 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bun run $HOME/.claude/hooks/skill-feedback-stop.ts",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash -lc 'repo=$(git rev-parse --show-toplevel 2>/dev/null || true); if [ -x \"$repo/scripts/check-prompt-drift-on-stop.sh\" ]; then \"$repo/scripts/check-prompt-drift-on-stop.sh\"; fi'",
             "timeout": 10
           }
