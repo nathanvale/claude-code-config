@@ -190,13 +190,12 @@ Rules:
 
 ## Helper Gate
 
-- Helper intent: `record-decision check <file> --json`.
-- Treat that command as provisional until `create-cli` finalizes it.
-- Run `create-cli` before implementation.
-- V1 helper is read-only.
-- V1 helper checks one explicitly provided file.
-- V1 helper requires JSON output.
-- Exact parser rules, result shape, diagnostics, and exit codes belong in code.
+- Proof-slice command: `record-decision --input <decision.md> --json`.
+- Discovery command: `record-decision commands --json`.
+- Run `create-cli` before changing helper CLI behavior.
+- Proof-slice command is dry-run only.
+- Execute writes are deferred.
+- Exact parser rules, result shape, diagnostics, and exit codes belong in `skills/record-decision/src/`.
 
 ## V2 Record Direction
 

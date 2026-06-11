@@ -17,7 +17,9 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 - Operating manual: `references/operating-manual.md`.
 - Source brainstorm: `docs/brainstorms/2026-06-06-decisions-skill-operating-manual.md`.
 - Decision trail: `docs/decisions/2026-06-06-001-decisions-skill-decision-log.md`.
-- Helper CLI design: run `create-cli` before implementation.
+- Proof-slice runtime: `skills/record-decision/src/record-decision.ts`.
+- Command contract: `skills/record-decision/src/command-contract.ts`.
+- Runtime tests: `skills/record-decision/src/record-decision.test.ts`.
 
 ## Dependencies
 
@@ -49,7 +51,7 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 - Keep unresolved ideas in top-level `Notes`.
 - Put future improvements in each entry's `V2 Ideas`.
 - Escalate to ADR only when the decision is hard to reverse, surprising without context, and a real trade-off.
-- Escalate to `CONTEXT.md` only when durable domain language is resolved.
+- Escalate to `../../CONTEXT.md` only when durable domain language is resolved.
 - Keep deterministic contracts out of decision prose.
 
 ## Log Shape
@@ -71,12 +73,11 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 
 ## Helper
 
-- V1 helper intent: `record-decision check <file> --json`.
-- Treat that command as provisional until `create-cli` finalizes it.
-- V1 helper is read-only.
-- V1 helper checks one file only.
-- V1 helper requires JSON output.
-- Exact parser rules, result shape, diagnostics, and exit codes belong in code.
+- Proof-slice command: `record-decision --input <decision.md> --json`.
+- Discovery command: `record-decision commands --json`.
+- Proof-slice command is dry-run only.
+- Execute writes are deferred.
+- Exact parser rules, result shape, diagnostics, and exit codes belong in `skills/record-decision/src/`.
 
 ## Compatibility
 
