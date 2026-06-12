@@ -1,12 +1,25 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	mkdir,
+	readFile,
+	readdir,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Receipt } from "./command-contract";
+import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
+import type { CloseoutReceipt, Receipt } from "./command-contract";
+import { skillFeedbackContracts } from "./command-contract";
 import {
+	closeoutSkillFeedbackReceipt,
 	createDefaultSkillFeedbackRuntime,
 	parseStdinTelemetry,
 	recordSkillFeedbackReceipt,
+	reviewSkillFeedbackInbox,
 	type SkillFeedbackRuntime,
 } from "./skill-feedback-runner";
 
@@ -33,13 +46,32 @@ const BASE_RECEIPT: Receipt = {
 	generated_ts: GENERATED_TS,
 };
 
-afterEach(async () => {
-	await Promise.all(
-		cleanupPaths.splice(0).map((path) =>
-			rm(path, { recursive: true, force: true }),
-		),
-	);
-});
+const BASE_CLOSEOUT: CloseoutReceipt = {
+	skill: "create-skill",
+	outcome: "confirmed",
+	goal: "Repair the skill route.",
+	friction: {
+		category: "none",
+		note: "Clean closeout.",
+	},
+	verification_burden: {
+		level: "light",
+		note: "Focused verification only.",
+	},
+	touched_surfaces: [{ type: "path", value: "skills/create-skill/SKILL.md" }],
+	observations: [],
+};
+
+afterEach(removeCreatedRoots);
+
+async function removeCreatedRoots(): Promise<void> {
+	const createdRoots = cleanupPaths.splice(0);
+	await Promise.all(createdRoots.map(removeRoot));
+}
+
+async function removeRoot(root: string): Promise<void> {
+	await rm(root, { recursive: true, force: true });
+}
 
 async function makeRoot(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "skill-feedback-test-"));
@@ -77,6 +109,31 @@ async function writeRecord(
 	return { root, result, disk };
 }
 
+async function writeCloseout(
+	closeout: Partial<CloseoutReceipt>,
+	runtimeOverrides: Partial<SkillFeedbackRuntime> = {},
+) {
+	const root = await makeRoot();
+	const runtime = stubRuntime(root, {
+		nowIso: () => GENERATED_TS,
+		...runtimeOverrides,
+	});
+	const result = await closeoutSkillFeedbackReceipt(closeout, {
+		runtime,
+		runId: "skill-feedback-closeout-test",
+	});
+	const disk = result.reportPath
+		? await readFile(result.reportPath, "utf-8")
+		: "";
+	return { root, result, disk };
+}
+
+async function writeInboxReport(root: string, name: string, value: unknown) {
+	const inbox = join(root, ".skill-feedback");
+	await mkdir(inbox, { recursive: true });
+	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
 function parseEnvelope(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
 }
@@ -92,20 +149,25 @@ async function run(command: readonly string[], cwd: string) {
 	return child.exited;
 }
 
-async function runCli(args: readonly string[]) {
+async function runCli(
+	args: readonly string[],
+	options: { stdin?: string; cwd?: string } = {},
+) {
+	const stdin = options.stdin ?? "";
 	const child = Bun.spawn(
 		[process.execPath, RUNNER_PATH, ...args],
 		{
+			cwd: options.cwd,
+			stdin: stdin === "" ? undefined : "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
 		},
 	);
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	return { stdout, stderr, exitCode };
+	if (stdin !== "" && child.stdin) {
+		child.stdin.write(stdin);
+		child.stdin.end();
+	}
+	return collectCliResult(child);
 }
 
 async function runPackageCli(args: readonly string[]) {
@@ -124,6 +186,14 @@ async function runPackageCli(args: readonly string[]) {
 			stderr: "pipe",
 		},
 	);
+	return collectCliResult(child);
+}
+
+async function collectCliResult(child: {
+	stdout: ReadableStream<Uint8Array>;
+	stderr: ReadableStream<Uint8Array>;
+	exited: Promise<number>;
+}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
@@ -358,6 +428,28 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		for (const engineReadFlag of ["--model", "--git-sha", "--skill-version"]) {
 			expect(result.stdout).not.toContain(engineReadFlag);
 		}
+
+		const closeoutHelp = await runCli(["closeout", "--help"]);
+		expect(closeoutHelp.exitCode).toBe(0);
+		expect(closeoutHelp.stderr).toBe("");
+		expect(closeoutHelp.stdout).toContain("closeout < receipt.json");
+		assertCommandHelpFlagSurface({
+			command: "closeout",
+			contract: skillFeedbackContracts.closeout,
+			help: closeoutHelp.stdout,
+			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
+		});
+
+		const reviewHelp = await runCli(["review", "--help"]);
+		expect(reviewHelp.exitCode).toBe(0);
+		expect(reviewHelp.stderr).toBe("");
+		expect(reviewHelp.stdout).toContain("review [--plain]");
+		assertCommandHelpFlagSurface({
+			command: "review",
+			contract: skillFeedbackContracts.review,
+			help: reviewHelp.stdout,
+			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
+		});
 	});
 
 	test("package script front door renders help", async () => {
@@ -376,6 +468,544 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const envelope = parseEnvelope(result.stdout);
 		expect(envelope.status).toBe("error");
 		expect((envelope.error as { code: string }).code).toBe("usage_error");
+	});
+
+	test("valid closeout stdin writes a v1 report and starts the pilot marker", async () => {
+		const root = await makeRoot();
+		await run(["git", "init"], root);
+		await writeFile(join(root, ".gitignore"), ".skill-feedback/\n", "utf-8");
+		const result = await runCli(
+			["closeout"],
+			{
+				cwd: root,
+				stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({
+			correlation_status: "unlinked",
+			closeout_coverage_contribution: "material_closeout",
+		});
+		const data = envelope.data as { written_path: string; report_id: string };
+		const reportPath = join(root, data.written_path);
+		const disk = await readFile(reportPath, "utf-8");
+		expect(disk).toContain(`"report_id": "${data.report_id}"`);
+		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
+		const markerBefore = await readFile(markerPath, "utf-8");
+		expect(markerBefore.trim()).not.toBe("");
+		expect((await stat(markerPath)).mode & 0o777).toBe(0o600);
+		expect((await stat(reportPath)).mode & 0o777).toBe(0o600);
+
+		const second = await runCli(["closeout"], {
+			cwd: root,
+			stdin: `${JSON.stringify({ ...BASE_CLOSEOUT, goal: "Second closeout." })}\n`,
+		});
+		expect(second.exitCode).toBe(0);
+		expect(await readFile(markerPath, "utf-8")).toBe(markerBefore);
+	});
+
+	test("closeout rejects argv receipt fields and malformed stdin without leaking raw input", async () => {
+		const secret = "ghp_closeout1234567890abcdefghijklmnop";
+		const argvResult = await runCli(["closeout", "--goal", secret], {
+			stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		});
+		expect(argvResult.exitCode).toBe(2);
+		expect(argvResult.stdout).not.toContain(secret);
+
+		for (const stdin of [
+			" ",
+			`{"goal":"${secret}"`,
+			"x".repeat(65_001),
+		] as const) {
+			const result = await runCli(["closeout"], { stdin });
+			expect(result.exitCode).toBe(2);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).not.toContain(secret);
+			expect(parseEnvelope(result.stdout).status).toBe("error");
+			expect(result.stdout).toContain("closeout");
+		}
+	});
+
+	test("closeout redacts v1 agent-authored report-card lanes", async () => {
+		const frictionSecret = "ghp_friction1234567890abcdefghijklmnop";
+		const surfaceSecret = "sk-surface1234567890abcdefghijklmnop";
+		const summarySecret = "Bearer closeout-summary-token";
+		const { result, disk } = await writeCloseout({
+			...BASE_CLOSEOUT,
+			friction: {
+				category: "tool_failure",
+				note: `Tool output exposed ${frictionSecret}.`,
+			},
+			touched_surfaces: [{ type: "label", value: `label ${surfaceSecret}` }],
+			observations: [
+				{
+					kind: "tool_failure",
+					summary: `Observed ${summarySecret}.`,
+					evidence_basis: "driver_observed",
+				},
+			],
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(disk).not.toContain(frictionSecret);
+		expect(disk).not.toContain(surfaceSecret);
+		expect(disk).not.toContain(summarySecret);
+		const data = parseEnvelope(result.stdout).data as { redactions: number };
+		expect(data.redactions).toBeGreaterThanOrEqual(3);
+	});
+
+	test("record and closeout refuse symlinked inbox directories before writing", async () => {
+		const recordRoot = await makeRoot();
+		const recordOutside = await makeRoot();
+		await symlink(recordOutside, join(recordRoot, ".skill-feedback"));
+		const record = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: stubRuntime(recordRoot),
+			runId: "record-symlink-inbox",
+		});
+		expect(record.exitCode).toBe(1);
+		expect(record.reportPath).toBeUndefined();
+		expect(record.stdout).toContain("skill_feedback_inbox_symlink_refused");
+		expect(await readdir(recordOutside)).toEqual([]);
+
+		const closeoutRoot = await makeRoot();
+		const closeoutOutside = await makeRoot();
+		await symlink(closeoutOutside, join(closeoutRoot, ".skill-feedback"));
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: stubRuntime(closeoutRoot),
+			runId: "closeout-symlink-inbox",
+		});
+		expect(closeout.exitCode).toBe(1);
+		expect(closeout.reportPath).toBeUndefined();
+		expect(closeout.stdout).toContain("skill_feedback_inbox_symlink_refused");
+		expect(await readdir(closeoutOutside)).toEqual([]);
+	});
+
+	test("closeout refuses pilot marker symlink paths before writing", async () => {
+		const root = await makeRoot();
+		const inbox = join(root, ".skill-feedback");
+		await mkdir(inbox, { recursive: true });
+		await symlink(join(root, "outside-marker"), join(inbox, "pilot_started_at"));
+		const result = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: stubRuntime(root),
+			runId: "symlink-marker",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.reportPath).toBeUndefined();
+		expect(result.stdout).toContain("pilot_marker_symlink_refused");
+	});
+
+	test("closeout rolls back the report when first pilot marker write fails", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		const result = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path.endsWith("pilot_started_at")) {
+						throw Object.assign(new Error("marker blocked"), { code: "EACCES" });
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			runId: "marker-write-fails",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.reportPath).toBeUndefined();
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.data).toMatchObject({ changed_state: "none" });
+		expect(result.stdout).toContain("pilot_marker_write_failed");
+		const inboxEntries = await readdir(join(root, ".skill-feedback"));
+		expect(inboxEntries.filter((entry) => entry.endsWith(".json"))).toEqual([]);
+	});
+
+	test("review returns no-action output for an empty inbox", async () => {
+		const root = await makeRoot();
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-empty",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({
+			open_items: [],
+			no_action: {
+				rationale: "No skill-feedback reports found.",
+			},
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-empty-plain",
+			plain: true,
+		});
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout).toContain("No action: No skill-feedback reports found.");
+	});
+
+	test("review treats low-signal mixed v0 and v1 reports as no-action", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "v1-low.json", {
+			schema_version: "1",
+			report_id: "report-low",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-low",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+			},
+			evidence_gaps: [],
+		});
+		await recordSkillFeedbackReceipt(
+			BASE_RECEIPT,
+			{ runtime: stubRuntime(root), runId: "review-v0" },
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-low-signal",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { low_coverage: boolean; capture_only_count: number };
+			open_items: unknown[];
+			no_action?: { rationale: string };
+		};
+		expect(data.coverage.capture_only_count).toBe(1);
+		expect(data.open_items).toEqual([]);
+		expect(data.no_action?.rationale).toContain("No high-signal");
+	});
+
+	test("review coalesces linked capture and closeout coverage by skill_run_id", async () => {
+		const root = await makeRoot();
+		const linkedReport = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			correlation_status: "linked",
+			skill_run_id: "run-linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+			},
+			evidence_gaps: [],
+		};
+		await writeInboxReport(root, "capture-linked.json", {
+			...linkedReport,
+			report_id: "report-capture-linked",
+			evidence_source: "hook_capture",
+		});
+		await writeInboxReport(root, "closeout-linked.json", {
+			...linkedReport,
+			report_id: "report-closeout-linked",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-linked-coverage",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: {
+				total_reports: number;
+				closeout_count: number;
+				capture_only_count: number;
+				closeout_rate: number;
+				low_coverage: boolean;
+			};
+		};
+		expect(data.coverage).toMatchObject({
+			total_reports: 2,
+			closeout_count: 1,
+			capture_only_count: 0,
+			closeout_rate: 1,
+			low_coverage: false,
+		});
+	});
+
+	test("review treats expected closeout telemetry gaps as no-action", async () => {
+		const { root } = await writeCloseout(BASE_CLOSEOUT);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-clean-closeout",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { evidence_gap_count: number; unlinked_count: number };
+			open_items: unknown[];
+			no_action?: { rationale: string };
+		};
+		expect(data.coverage.evidence_gap_count).toBeGreaterThan(0);
+		expect(data.coverage.unlinked_count).toBe(1);
+		expect(data.open_items).toEqual([]);
+		expect(data.no_action?.rationale).toContain("No high-signal");
+	});
+
+	test("review opens high verification burden, repeated friction, gaps, and owner-path observations", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			report_id: "report-heavy",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-1",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: "heavy",
+					note: "Needed full focused and hook suites.",
+				},
+				observations: [
+					{
+						kind: "tool_failure",
+						target: {
+							type: "path",
+							value: "skills/skill-feedback/SKILL.md",
+						},
+						summary: "The owner path needed inspection.",
+						evidence_basis: "driver_observed",
+					},
+				],
+			},
+			evidence_gaps: [
+				{
+					code: "missing_runtime_git_sha",
+					path: "runtime.git_sha",
+					message: "No git SHA source.",
+				},
+			],
+		};
+		await writeInboxReport(root, "one.json", report);
+		await writeInboxReport(root, "two.json", {
+			...report,
+			report_id: "report-repeat",
+			skill_run_id: "run-2",
+			report_card: {
+				...report.report_card,
+				verification_burden: { level: "light", note: "Focused check." },
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			open_items: Array<{ open_reason: string }>;
+		};
+		const reasons = data.open_items.map((item) => item.open_reason);
+		expect(reasons).toEqual(
+			expect.arrayContaining([
+				"high_verification_burden",
+				"repeated_friction",
+				"evidence_gap",
+				"owner_path_observation",
+			]),
+		);
+	});
+
+	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "plain-heavy.json", {
+			schema_version: "1",
+			report_id: "report-plain-heavy",
+			untrusted_evidence: true,
+			generated_ts: "2020-01-01T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-plain",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed." },
+				verification_burden: {
+					level: "heavy",
+					note: "Needed full verification.",
+				},
+			},
+			evidence_gaps: [
+				{
+					code: "missing_runtime_git_sha",
+					path: "runtime.git_sha",
+					message: "No git SHA source.",
+				},
+			],
+		});
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2020-01-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const direct = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-plain-direct",
+			plain: true,
+		});
+		expect(direct.exitCode).toBe(0);
+		expect(direct.stderr).toBe("");
+		expect(direct.stdout).toContain("Open items:");
+
+		const result = await runCli(["review", "--plain"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback Review");
+		expect(result.stdout).toContain("Reports: 1");
+		expect(result.stdout).toContain("Open items:");
+		expect(result.stdout).toContain("- high_verification_burden:");
+		expect(result.stdout).toContain("- evidence_gap:");
+		expect(result.stdout).toContain(
+			"Retention: Inbox is ready for a future gated purge workflow.",
+		);
+		expect(result.stdout).toContain("Pilot checkpoint:");
+	});
+
+	test("review pilot density counts closeouts with open signal when action exists", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: "2026-06-01T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			evidence_gaps: [],
+		};
+		await writeInboxReport(root, "heavy.json", {
+			...report,
+			report_id: "report-heavy-density",
+			skill_run_id: "run-heavy-density",
+			report_card: {
+				...BASE_CLOSEOUT,
+				verification_burden: {
+					level: "heavy",
+					note: "Needed broad verification.",
+				},
+			},
+		});
+		await writeInboxReport(root, "clean.json", {
+			...report,
+			report_id: "report-clean-density",
+			skill_run_id: "run-clean-density",
+			report_card: {
+				...BASE_CLOSEOUT,
+				goal: "Clean closeout.",
+				verification_burden: {
+					level: "light",
+					note: "Focused check.",
+				},
+			},
+		});
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2026-06-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot-density",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			pilot_checkpoint?: {
+				actionable_feedback_numerator: number;
+				material_closeout_denominator: number;
+				density: number;
+			};
+		};
+		expect(data.pilot_checkpoint).toMatchObject({
+			actionable_feedback_numerator: 1,
+			material_closeout_denominator: 2,
+			density: 0.5,
+		});
+	});
+
+	test("review emits a pilot checkpoint after seven days without mutating marker", async () => {
+		const { root } = await writeCloseout(BASE_CLOSEOUT, {
+			nowIso: () => "2026-06-01T00:00:00.000Z",
+		});
+		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
+		const markerBefore = await readFile(markerPath, "utf-8");
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			pilot_checkpoint?: { age_days: number; density: number };
+		};
+		expect(data.pilot_checkpoint).toMatchObject({
+			age_days: 7,
+			density: 1,
+		});
+		expect(await readFile(markerPath, "utf-8")).toBe(markerBefore);
+	});
+
+	test("review emits retention warning without deleting old reports", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "old.json", {
+			schema_version: "1",
+			report_id: "report-old",
+			untrusted_evidence: true,
+			generated_ts: "2026-05-25T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-old",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: BASE_CLOSEOUT,
+			evidence_gaps: [],
+		});
+		const reportPath = join(root, ".skill-feedback", "old.json");
+		const before = await readFile(reportPath, "utf-8");
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-retention",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			retention: { oldest_report_age_days?: number; warning?: string };
+		};
+		expect(data.retention.oldest_report_age_days).toBe(14);
+		expect(data.retention.warning).toContain("future gated purge");
+		expect(await readFile(reportPath, "utf-8")).toBe(before);
 	});
 });
 

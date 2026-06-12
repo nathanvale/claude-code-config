@@ -1,6 +1,6 @@
 import {
 	NARRATED_FIELDS,
-	type Receipt,
+	type ReportCardSoftwareLearningReport,
 	type SoftwareLearningReport,
 } from "./command-contract";
 
@@ -78,6 +78,62 @@ export function redactSoftwareLearningReport(
 	}
 	redacted.redactions = redactions;
 	return { value: redacted, redactions };
+}
+
+export function redactReportCardSoftwareLearningReport(
+	report: ReportCardSoftwareLearningReport,
+): RedactionResult<ReportCardSoftwareLearningReport> {
+	let redactions = 0;
+	const redacted = structuredClone(report) as ReportCardSoftwareLearningReport;
+	const reportCard = redacted.report_card;
+
+	for (const apply of [
+		() => redactOptionalString(reportCard.goal, (value) => {
+			reportCard.goal = value;
+		}),
+		() =>
+			redactOptionalString(reportCard.friction?.note, (value) => {
+				if (reportCard.friction) reportCard.friction.note = value;
+			}),
+		() =>
+			redactOptionalString(reportCard.verification_burden?.note, (value) => {
+				if (reportCard.verification_burden) {
+					reportCard.verification_burden.note = value;
+				}
+			}),
+	]) {
+		const result = apply();
+		redactions += result.redactions;
+	}
+
+	for (const target of reportCard.touched_surfaces ?? []) {
+		const result = redactText(target.value);
+		target.value = result.value;
+		redactions += result.redactions;
+	}
+
+	for (const observation of reportCard.observations ?? []) {
+		if (observation.target) {
+			const result = redactText(observation.target.value);
+			observation.target.value = result.value;
+			redactions += result.redactions;
+		}
+		const summary = redactText(observation.summary);
+		observation.summary = summary.value;
+		redactions += summary.redactions;
+	}
+
+	return { value: redacted, redactions };
+}
+
+function redactOptionalString(
+	value: string | undefined,
+	assign: (value: string) => void,
+): RedactionResult<string> {
+	if (value === undefined) return { value: "", redactions: 0 };
+	const result = redactText(value);
+	assign(result.value);
+	return result;
 }
 
 function assignNarratedReportField(

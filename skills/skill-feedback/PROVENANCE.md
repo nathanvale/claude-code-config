@@ -1,6 +1,7 @@
 # Provenance
 
 - Source plan: `docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`.
+- v1 source plan: `docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`.
 - Source brainstorm: `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`.
 - Hook decision: `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md`.
 - Package anatomy: `skills/fallow/`.
@@ -14,4 +15,7 @@
 - v0 writes evidence-only reports under `.skill-feedback/`.
 - v0 rejects unknown receipt fields.
 - v0 keeps engine-read telemetry out of public flags.
+- v1 keeps `record` capture-owned.
+- v1 lets the driver submit closeout evidence through stdin.
+- v1 keeps human review after closeout.
 - U8 owns harness hook wiring.
