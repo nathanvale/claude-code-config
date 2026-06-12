@@ -10,6 +10,11 @@ records. They are linked below but not moved.
 
 ---
 
+## Product
+
+- [PRODUCT.md](PRODUCT.md) — what the core product IS: one warm Chrome driven by N independent engines over CDP; the trust-signal moat ("no engine can be a second opinion on itself"); who it's for; what it is NOT; plus the product-trio ideation and top-5 directions. Start here.
+- [PRODUCT-BASELINE.md](PRODUCT-BASELINE.md) — current-state baseline of the skill's shape.
+
 ## Plans
 
 - [Harden browser-use preflight agent feedback](plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md) — safety + JSON continuation contract for Warm Chrome preflight.
