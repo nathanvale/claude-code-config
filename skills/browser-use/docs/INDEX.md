@@ -29,11 +29,22 @@ records. They are linked below but not moved.
 - [Connecting browser-use to a warm real Chrome](research/2026-05-30-browser-use-warm-chrome-findings.md) — CDP/9222, dedicated profile, dual-mode adapter, pre-flight state record.
 - [Tape format for record-replay browser automation](research/2026-05-30-tape-format-record-replay-browser-automation.md) — deterministic JSON spine, variable-slot layer, tiered self-healing.
 - [Browser Adapter Router research stock](research/2026-06-02-browser-adapter-router-research-stock.md) — capability matrix for Playwright MCP, Chrome DevTools MCP, agent-browser.
+- [Multi-engine facade — N=5 spike findings](research/2026-06-12-multi-engine-facade-n5-spike-findings.md) — live proof of one facade over 5 engines: vocabulary-bound transport, two-axis mapping, measured cost-routing, differential oracle, graceful degradation.
+- [Round-2 dividends + accessible-name divergence](research/2026-06-12-round2-dividends-and-naming-divergence-findings.md) — live proof of confidence-annotated perception + stakes dial and reproduce-everywhere; the Hacker News finding that engines disagree on element NAMES (same link = "119 comments" vs "3 hours ago"), making single-engine agents silently fragile. Also: round-2b quorum-gated action + signed receipt, and drive-observe.
+- [Moat audit — what only N engines can do](research/2026-06-12-moat-audit-what-only-n-engines-can-do.md) — the honest line between structural moats (consensus/quorum/failover/repro — impossible for one engine) and conveniences (drive-observe, payload tiering — a single capable engine could do them). Answers "why not just chrome-devtools?"
+
+## Ideation
+
+- [browser-use × Chrome DevTools for Agents 1.0](ideation/2026-06-12-browser-use-chrome-devtools-agents-ideation.html) — facade reframe; subtraction vs addition; what Chrome 1.0 buys; the swappability dividends.
+- [Floor-verb semantics × ADR 0012](ideation/2026-06-12-floor-verb-semantics-adr0012-ideation.html) — same-verb-different-behavior across engines; converged on postcondition-floor + verify-as-leveler + loud typed divergence.
+- [Facade dividends — round 2](ideation/2026-06-12-facade-dividends-round-2-ideation.html) — NEW dividends beyond the proven 4: confidence-annotated perception + stakes dial, quorum-gated actions + signed receipts, drive-observe split, reproduce-everywhere, self-healing cost ledger, cloaking detection.
 
 ## Brainstorms
 
 - [Requirements: browser-use + browser-domain-memory](brainstorms/2026-05-30-browse-play-record-replay-requirements.md) — warm Chrome recipe, operate/prepare workflow, capture/replay.
 - [browse + play record/replay skills (seed)](brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md) — lean record/replay seed: tape format, agent Chrome on :9223, auth injection.
+- [Playwright spike — validate/kill the facade dream](brainstorms/2026-06-12-browser-facade-playwright-spike-requirements.md) — the pre-spike hypothesis: two-part bar (codec cheap + diff works) with an explicit kill condition.
+- [browser-use multi-engine facade (requirements)](brainstorms/2026-06-12-browser-use-multi-engine-facade-requirements.md) — production facade after N=5 proof: two-axis mapping, 5-adapter roster, cost-routing, oracle, degradation, verify/redaction/probe/hygiene. Ready for ce-plan.
 
 ## Decisions
 
