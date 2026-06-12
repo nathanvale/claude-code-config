@@ -5,7 +5,7 @@ checks when available. Always pass `response_format: "json"` to MCP tools.
 
 ## Tests
 
-- `skills/test-runner/scripts/test-runner.sh`: Bun test pass/fail, repair, triage, and detail lookup.
+- `skills/test-runner/src/test-runner.sh`: Bun test pass/fail, repair, triage, and detail lookup.
 - Pass Bun coverage args after `--`, for example `-- --coverage`.
 - Use repair mode for hot-context failing files.
 - Use triage mode for cold-context suite failures.

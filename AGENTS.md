@@ -45,7 +45,6 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Build mechanical CLI surfaces that emit maps, continuations, and repair hints.
 - Keep skills thin: read maps, choose next safe actions, and call owners.
 - Design failures to expose cause, repair path, or human handoff.
-- For new or changed CLI/runtime surfaces, use `create-cli`.
 - Name contract, model, engine, discovery, and CLI owners before implementation.
 - For code-structure choices, use `context/code-style.md`.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `create-cli` for the contract path.
@@ -53,6 +52,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
 - For plans and terminology, use `grill-with-docs`.
+- After meaningful implementation or review-prep changes, use `fallow`; after a material skill run, file a `skill-feedback` closeout (driver closeout is richer than fallback hook capture).
 - Use domain terms precisely.
 
 ## Skill Authoring
