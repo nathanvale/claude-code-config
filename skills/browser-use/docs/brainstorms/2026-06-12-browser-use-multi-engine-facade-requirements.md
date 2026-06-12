@@ -142,11 +142,23 @@ The production facade lifts two prototype modules and the patterns around them:
 - Total pool exhaustion fails honestly (loud), never a false success or hang.
 - Proven shape in `run-degrade.ts`.
 
-### R7 — Verify layer (the remaining-work item, now required)
-- Post-action verification of the floor verbs; ref-staleness detection is part of it
-  (refs go stale after navigation, per-engine).
-- Hosts the oracle's divergence triage.
-- `verify_method` is typed per engine so "verified" means a comparable thing across engines.
+### R7 — Verify layer — CHARACTERIZED (spec settled by live spike)
+- **The verify layer must check POST-STATE, not return values.** Live staleness spike found
+  engines split across THREE incompatible stale-ref contracts: chrome-MCP hard-errors
+  ("uid no longer exists"); playwright-MCP/CLI + chrome-CLI auto-recover (re-resolve the
+  ref); **agent-browser SILENTLY NO-OPS** — its click returns success while the page does
+  not change. A return-value-trusting verify layer would be fooled by agent-browser.
+- "Did the page change as intended?" (URL/DOM/expected-element delta) is the only signal
+  that catches all three modes. This is the postcondition-floor answer, now FORCED by a
+  measured engine that lies about success — not merely argued.
+- Re-snapshot-before-action (SKILL.md) prevents staleness but does NOT catch a silent
+  no-op when staleness slips through; the verify layer is the safety net behind it.
+- Hosts the oracle's divergence triage. `verify_method` typed per engine so "verified"
+  means a comparable thing across engines.
+- **Load-bearing for R11/R13:** quorum must post-state-verify each witness (agent-browser
+  would false-confirm); perception must read fresh snapshots and post-state-verify actions.
+- Proof: `docs/research/2026-06-13-ref-staleness-verify-layer-findings.md` +
+  `src/prototype-playwright-vocab-map/STALENESS-NOTES.md`.
 
 ### R8 — Redaction boundary (non-optional)
 - Every engine's snapshot/observe output passes through one facade-level redactor before
