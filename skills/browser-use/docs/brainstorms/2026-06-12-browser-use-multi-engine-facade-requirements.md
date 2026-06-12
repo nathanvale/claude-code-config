@@ -266,15 +266,15 @@ The production facade lifts two prototype modules and the patterns around them:
 - Warm Chrome on loopback CDP (ADR 0006) — shared precondition across all CDP adapters.
 - mcporter for MCP-backed engines (self-heals on `daemon stop` — a resilience plus, but
   means fallback logic must be tested with genuine failures or a deterministic kill-switch).
-- N5 chrome-devtools CLI connection model is UNRESOLVED: its daemon started with
-  `--headless --isolated`, so whether it drives warm Chrome or its own isolated context
-  is unconfirmed. Resolve before treating N5 as warm-session-faithful. (Assumption flagged,
-  not blocker — clicks landed and refs were valid in the spike.)
+- N5 chrome-devtools CLI connection model — RESOLVED: despite contradictory daemon args
+  (`--browser-url http://127.0.0.1:9222` AND `--headless --isolated`), N5 drives WARM
+  Chrome. Proof: N5 `list_pages`, N1 MCP `list_pages`, and raw CDP `/json/list` return
+  byte-identical tab sets — `--browser-url` wins, `--isolated` is inert when an endpoint
+  exists. All N5 measurements (cost, matrix, staleness verdict) are valid.
+  (`src/prototype-playwright-vocab-map/N5-WARM-VS-ISOLATED-NOTES.md`.)
 
 ## Outstanding questions
 
-- **N5 warm-vs-isolated:** does the chrome-devtools CLI honor the warm-Chrome invariant or
-  spin its own context? Resolve in planning/early build.
 - **Oracle default posture:** opt-in per task vs always-on-for-unknown-pages — cost vs
   safety tradeoff to settle.
 - **Cost-table freshness:** how often is the per-adapter cost re-measured (static-at-attach
