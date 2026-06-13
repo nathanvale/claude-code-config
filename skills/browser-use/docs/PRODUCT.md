@@ -64,7 +64,9 @@ many tools a single engine has:
   tolerant; one stale/lying engine is outvoted.
 - **Reproduce-everywhere** — real-site-bug vs engine-artifact triage.
 - **Graceful degradation / failover** — an engine cannot fail over to itself.
-- **Cloaking detection** — different content served to different fingerprints.
+- ~~Cloaking detection~~ — *removed: ruled out by spike.* All engines share one warm Chrome
+  → one fingerprint → nothing to diff at the serving layer. Incompatible with this
+  architecture (see `docs/research/2026-06-13-cloak-catcher-fingerprint-spike.md`).
 
 Proof it bites: on Hacker News, the chrome lineage names a link `"119 comments"` while the
 chromium lineage names the *same* DOM link `"3 hours ago"`. A single-engine agent told
@@ -145,16 +147,17 @@ trust an autonomous agent did the right irreversible thing?"
   "agent-trust protocol" — that overclaims.** The defensible identity is below.
   (Experiment: `docs/research/2026-06-13-protocol-vs-cdp-experiment.md`.)
 
-#### 3. Cloak-Catcher — adversarial content-integrity monitoring
-*Detect when a site serves different content to different fingerprints* (cloaking, price/geo
-discrimination, ad fraud, bot-targeted misinformation) by diffing what N distinct lenses see
-on one shared session.
-- **Why chosen:** moat-pure (impossible at N=1) and a *different buyer* than TrustLayer
-  (trust-and-safety, ad verification, brand protection, fairness/regulatory testing) — so it
-  de-risks the product by not betting everything on one market. PM + Engineer converged.
-- **Key assumption to validate:** the 5 lenses present *meaningfully distinct, controllable*
-  fingerprints (not near-identical Chrome signatures) — else they witness the same cloak and
-  the diff is empty. This is the make-or-break technical unknown.
+#### 3. ~~Cloak-Catcher~~ — RULED OUT by spike (kept for the lesson)
+*Was: detect a site serving different content to different fingerprints by diffing what N
+lenses see.* **Spike verdict: not viable in this architecture.** All 5 engines attach to ONE
+warm Chrome → one fingerprint (identical `Chrome/149.0.0.0`, one CDP endpoint) → to a
+cloaking server they are the same client → nothing to diff at the serving layer.
+- **The lesson:** the architecture's strength is Cloak-Catcher's killer. The oracle works
+  *because* all engines share one world; cloaking detection needs the opposite (N *identities*
+  hitting the site, not N *lenses* on one browser). Browser-trust (one Chrome, N lenses) and
+  content-integrity (N identities, one site) are architecturally opposed. Content-integrity,
+  if ever pursued, is a *separate product*, not a dividend of this one.
+  (Spike: `docs/research/2026-06-13-cloak-catcher-fingerprint-spike.md`.)
 
 #### 4. Confidence-as-experience — tiers, interrupts, and agent proprioception
 *Make the unique signal usable, not noise.* Collapse `seen_by: 0–5` into three actionable
@@ -294,23 +297,34 @@ settled:
 What this rules in/out:
 - **In:** lean hard into the browser. Every dividend that exploits multi-layer browser
   legibility (DOM vs a11y vs pixels vs network) is moat-pure. TrustLayer, Flake Oracle,
-  Cloak-Catcher, confidence-as-experience all stay.
-- **Out:** do not chase non-browser substrates as a near-term moat. The one possible future
-  "substrate #2" is OS/process introspection (the only other place with genuinely
-  independent observers — fails on cost/diffability, not independence), and it would have to
-  be *engineered*, not inherited. Park it; don't market it.
+  confidence-as-experience all stay.
+- **Out:** do not chase non-browser substrates as a near-term moat (substrate #2 is at best
+  OS/process introspection, which must be *engineered*, not inherited). And **Cloak-Catcher
+  is ruled out** — it needs N identities, the opposite of this product's N-lenses-on-one-
+  Chrome; it is a separate product, not a dividend.
 
-## Next discovery step
+## Discovery converged
 
-One make-or-break assumption remains, cheap to probe:
+**No spike-worthy unknowns remain.** The last open assumption (Cloak-Catcher fingerprint
+distinctness) was probed and answered *no* — all engines share one warm Chrome, so one
+fingerprint, so nothing to diff at the serving layer
+(`docs/research/2026-06-13-cloak-catcher-fingerprint-spike.md`). Cloak-Catcher is ruled out.
 
-- **Are the 5 lenses' fingerprints meaningfully distinct?** (Part 2 #3 / Cloak-Catcher).
-  Point them at a known-cloaking / A-B site and check whether the diff is non-empty. If the
-  lenses share a near-identical Chrome signature, Cloak-Catcher is dead on arrival; if
-  distinct, it's a second moat-pure market. Note the experiment refined this: the 5 engines'
-  *observer independence* (different a11y pipelines) is proven, but *fingerprint* distinctness
-  (what the site sees) is a separate property still unverified.
+State of the discovery:
+- **Core product proven** — N=5 facade, two-axis Adapter mapping, the differential oracle
+  (N-version), cost-routing, quorum+receipt, graceful degradation, verify-layer spec.
+- **Identity settled** — browser-trust tool (protocol-vs-CDP verdict B).
+- **Pattern vocabulary pressure-earned** — Adapter / Facade(action-surface) / N-version
+  oracle / evidence-first selection (in CONTEXT.md + decision log).
+- **Expansion question answered** — Cloak-Catcher: no (incompatible architecture).
 
-Everything else in Part 2 (TrustLayer, Flake Oracle, confidence-as-experience) builds on
-already-proven mechanisms and is sequencing/packaging work, not an open question — that's
-`ce-plan` territory now that the identity is settled.
+Everything left is **build / sequencing / decision work, not discovery:**
+- *Build:* redaction boundary (R8), normalizer glyph hygiene (R10), the verify layer (R7,
+  spec settled), live capability-probe (R9).
+- *Decide (judgment, not spike):* oracle default posture (opt-in vs always-on), cost-table
+  freshness (static vs rolling).
+
+The next move is **`ce-plan`** — turn R1–R14 into a build sequence (mapping layer → 5-engine
+roster → verify layer → the proven dividends), now that identity, moat, and vocabulary are
+all settled. The three surviving top-5 directions (TrustLayer, Flake Oracle,
+confidence-as-experience) are packaging on proven mechanisms, sequenced there.

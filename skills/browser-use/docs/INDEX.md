@@ -39,6 +39,7 @@ records. They are linked below but not moved.
 - [Moat audit — what only N engines can do](research/2026-06-12-moat-audit-what-only-n-engines-can-do.md) — the honest line between structural moats (consensus/quorum/failover/repro — impossible for one engine) and conveniences (drive-observe, payload tiering — a single capable engine could do them). Answers "why not just chrome-devtools?"
 - [Ref-staleness → verify-layer spec](research/2026-06-13-ref-staleness-verify-layer-findings.md) — live staleness characterization settling R7: engines split three ways (hard-error / auto-recover / SILENT no-op), agent-browser lies about success, so the verify layer must check post-state, not return values.
 - [Protocol-vs-CDP experiment](research/2026-06-13-protocol-vs-cdp-experiment.md) — settles the product identity: 9 non-browser substrates tested, none gives N independent observers + cheap fan-out for free. Verdict B — the moat is CDP-specific (a browser is one world that honestly disagrees with itself); do NOT reposition as a general agent-trust protocol.
+- [Cloak-Catcher fingerprint spike](research/2026-06-13-cloak-catcher-fingerprint-spike.md) — the last open question, answered NO: all 5 engines share one warm Chrome → one fingerprint → nothing to diff at the serving layer. Cloaking detection is architecturally opposed to the product (N lenses vs N identities); ruled out. Discovery converged.
 
 ## Ideation
 
