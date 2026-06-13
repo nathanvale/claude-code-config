@@ -51,6 +51,17 @@ simultaneously, with no coordination. So:
 Proven byte-for-byte: chrome-devtools-CLI, chrome-devtools-MCP, and raw CDP return the
 identical tab list — they are looking at the same browser.
 
+### Why adding an engine is cheap (parser cost scales with DRIVERS, not engines)
+
+Normalizing a new engine costs ~one ref-parser + one dispatch shape. The cheapness comes
+from a measured fact: **ref-format clusters by DRIVER, not by rendering engine.** Playwright
+emits `[ref=]` whether it drives Blink, Gecko (Firefox), or WebKit; chrome-devtools emits
+`uid=`. So the parser axis scales with the number of *drivers* (2 today), not the number of
+*rendering engines*. Adding Firefox or WebKit = **0 new parsers, 0 new dispatch shapes** —
+the same playwright-cli path with a `--browser` flag (proven:
+`docs/research/2026-06-13-firefox-third-lineage-spike.md`). New engines are cheap; new
+*rendering engines under an existing driver* are free.
+
 ### The irreducible moat
 
 **No engine can be a second opinion on itself.** Everything defensible flows from N
@@ -72,6 +83,15 @@ Proof it bites: on Hacker News, the chrome lineage names a link `"119 comments"`
 chromium lineage names the *same* DOM link `"3 hours ago"`. A single-engine agent told
 "click 119 comments" succeeds on one lineage and fails on the other — silently, with no
 signal. The fleet surfaces it as a `2/5` contested element.
+
+**The moat is INTRA-WORLD** (boundary drawn by the Firefox spike,
+`docs/research/2026-06-13-firefox-third-lineage-spike.md`). "No second opinion on itself"
+holds for N engines on *one* warm Chrome. It does NOT extend across browsers: a separate
+browser (Firefox, WebKit) is a separate process rendering its own copy of the page — a new
+*world*, not a new *lens*. Measured: Chrome-world and Firefox-world agreed 152/152 on Hacker
+News (zero divergence), because they aren't observing the same world. Cross-browser parity
+is a real, compatible capability (same facade, same parser) — but it is a *different
+question* from the oracle, not a free extension of it.
 
 ### The mandatory counterpart
 
