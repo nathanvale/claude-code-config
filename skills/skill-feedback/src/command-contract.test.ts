@@ -458,6 +458,77 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		});
 	});
 
+	test("accepts an optional pilot_checkpoint and rejects malformed fields", () => {
+		const validCheckpoint = {
+			started_at: "2026-06-01T00:00:00.000Z",
+			age_days: 12,
+			actionable_feedback_numerator: 3,
+			material_closeout_denominator: 5,
+			density: 0.6,
+			next_action: "Keep filing material closeouts.",
+		};
+
+		const withCheckpoint = {
+			...reviewResultV2Fixture(),
+			pilot_checkpoint: validCheckpoint,
+		} satisfies ReviewResultData;
+		expect(parseReviewResultData(withCheckpoint)).toMatchObject({ kind: "ok" });
+
+		const cases: Array<{
+			name: string;
+			mutate: (checkpoint: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "unknown field",
+				mutate: (checkpoint) => {
+					checkpoint.unexpected = true;
+				},
+				path: "pilot_checkpoint.unexpected",
+				reason: "unknown_field",
+			},
+			{
+				name: "non-string started_at",
+				mutate: (checkpoint) => {
+					checkpoint.started_at = 20260601;
+				},
+				path: "pilot_checkpoint.started_at",
+				reason: "expected_string",
+			},
+			{
+				name: "non-finite density",
+				mutate: (checkpoint) => {
+					checkpoint.density = Number.POSITIVE_INFINITY;
+				},
+				path: "pilot_checkpoint.density",
+				reason: "expected_number",
+			},
+			{
+				name: "non-string next_action",
+				mutate: (checkpoint) => {
+					checkpoint.next_action = null;
+				},
+				path: "pilot_checkpoint.next_action",
+				reason: "expected_string",
+			},
+		];
+
+		for (const { name, mutate, path, reason } of cases) {
+			const checkpoint = structuredClone(validCheckpoint) as Record<string, any>;
+			mutate(checkpoint);
+			const data = {
+				...reviewResultV2Fixture(),
+				pilot_checkpoint: checkpoint,
+			} as Record<string, any>;
+			expect(parseReviewResultData(data), name).toMatchObject({
+				kind: "invalid",
+				path,
+				reason,
+			});
+		}
+	});
+
 	test("validates no-ledger v2 review output with coverage and no-action data", () => {
 		const data = {
 			...reviewResultV2Fixture(),

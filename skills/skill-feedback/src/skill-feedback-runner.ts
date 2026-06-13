@@ -1569,7 +1569,7 @@ function parseCloseoutStdin(
 	}
 }
 
-function parseRecordFlags(
+export function parseRecordFlags(
 	argv: readonly string[],
 ):
 	| { ok: true; receipt: Partial<Receipt> }

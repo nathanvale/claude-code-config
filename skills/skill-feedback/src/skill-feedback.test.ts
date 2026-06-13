@@ -17,6 +17,7 @@ import { skillFeedbackContracts } from "./command-contract";
 import {
 	closeoutSkillFeedbackReceipt,
 	createDefaultSkillFeedbackRuntime,
+	parseRecordFlags,
 	parseStdinTelemetry,
 	recordSkillFeedbackReceipt,
 	reviewSkillFeedbackInbox,
@@ -1300,5 +1301,71 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 
 		expect(disk).toContain(secretShapedModel);
 		expect(disk).toContain('"redactions": 0');
+	});
+});
+
+describe("skill-feedback parseRecordFlags", () => {
+	test("parses narrated record flags into a partial receipt", () => {
+		const result = parseRecordFlags([
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			"ship the contract",
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"none",
+			"--explanation",
+			"clean run",
+			"--generated-ts",
+			GENERATED_TS,
+		]);
+
+		expect(result).toEqual({
+			ok: true,
+			receipt: {
+				skill: "create-skill",
+				goal: "ship the contract",
+				outcome: "confirmed",
+				friction: "none",
+				explanation: "clean run",
+				generated_ts: GENERATED_TS,
+			},
+		});
+	});
+
+	test("treats a leading record subcommand as optional", () => {
+		const withSubcommand = parseRecordFlags(["record", "--skill", "fallow"]);
+		const withoutSubcommand = parseRecordFlags(["--skill", "fallow"]);
+
+		expect(withSubcommand).toEqual({ ok: true, receipt: { skill: "fallow" } });
+		expect(withoutSubcommand).toEqual({ ok: true, receipt: { skill: "fallow" } });
+	});
+
+	test("rejects non-flag tokens, missing values, and unknown flags", () => {
+		expect(parseRecordFlags(["create-skill"])).toEqual({
+			ok: false,
+			message: "Expected a record flag.",
+		});
+		expect(parseRecordFlags(["--skill"])).toEqual({
+			ok: false,
+			message: "--skill requires a value.",
+		});
+		expect(parseRecordFlags(["--skill", "--goal"])).toEqual({
+			ok: false,
+			message: "--skill requires a value.",
+		});
+		expect(parseRecordFlags(["--unknown", "value"])).toEqual({
+			ok: false,
+			message: "Unknown flag --unknown.",
+		});
+	});
+
+	test("rejects an invalid outcome enum", () => {
+		expect(parseRecordFlags(["--outcome", "maybe"])).toEqual({
+			ok: false,
+			message: "--outcome is invalid.",
+		});
 	});
 });
