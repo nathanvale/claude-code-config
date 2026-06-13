@@ -87,6 +87,14 @@ behind it, the **developer/platform** shipping that agent into work where a wron
 irreversible action is a real incident (payments, account changes, procurement, regulated
 ops). The end-user being protected is the silent third party the receipt exists for.
 
+It runs in **two daily-driver modes** (see `docs/USE-CASES.md`), sharing one trust spine:
+- **Engineering driver (human supervises):** autonomous design-parity / WCAG / React
+  memory-perf checks, each served by the engine strongest for it.
+- **No-touch life-admin driver (no human in the loop):** timesheets, appointments, bookings
+  via runbooks + a 1Password vault — where the trust layer goes from differentiator to
+  **requirement**, because no single-engine agent can be trusted to fire an irreversible
+  unattended click it cannot second-guess.
+
 ### What it is NOT
 
 - **NOT a single-engine wrapper** and **NOT "a better chrome-devtools."** chrome-devtools
