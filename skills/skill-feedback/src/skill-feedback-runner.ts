@@ -15,6 +15,7 @@ import {
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
 	type CliRuntimeSuccessEnvelope,
+	type AgentHint,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	renderCommandUsage,
@@ -25,6 +26,7 @@ import {
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
+	type CaptureMetadata,
 	type CloseoutReceipt,
 	type CloseoutResultData,
 	type CorrelationStatus,
@@ -35,10 +37,12 @@ import {
 	type Receipt,
 	type ReportCardSoftwareLearningReport,
 	type ReviewOpenItem,
-	type ReviewResultData,
+	type ReviewResultDataV1,
 	type SkillFeedbackOutcome,
 	type SoftwareLearningReport,
 	buildSoftwareLearningReport,
+	isCaptureRuntime,
+	isSkillIdentityProvenance,
 	normalizeReport,
 	parseCloseoutReceipt,
 	parseReceipt,
@@ -59,11 +63,20 @@ const USAGE_EXIT_CODE = 2;
 const INBOX_DIR = ".skill-feedback";
 const PILOT_MARKER_FILE = "pilot_started_at";
 const MAX_CLOSEOUT_STDIN_BYTES = 64_000;
+const CLOSEOUT_RECEIPT_DOCS_URL =
+	"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md";
 const NON_ACTIONABLE_EVIDENCE_GAP_CODES: ReadonlySet<EvidenceGapCode> = new Set([
 	"cost_unavailable",
 	"unlinked_correlation",
 	"missing_runtime_model",
 ]);
+type SkillFeedbackErrorHint =
+	| string
+	| {
+			summary: string;
+			action?: AgentHint["action"];
+			docs_url?: string;
+	  };
 
 export type SkillFeedbackProcessResult = {
 	exitCode: number;
@@ -87,7 +100,7 @@ export type SkillFeedbackProcessResult = {
  */
 export type StdinTelemetry = {
 	model?: string;
-};
+} & CaptureMetadata;
 
 export type SkillFeedbackRuntime = {
 	repoRoot: () => string;
@@ -198,7 +211,7 @@ export async function recordSkillFeedbackReceipt(
 		);
 	}
 
-	const report = buildSoftwareLearningReport(parsed);
+	const report = buildSoftwareLearningReport(parsed, prepared.captureMetadata);
 	const redacted = redactSoftwareLearningReport(report).value;
 	const ignoreStatus = await runtime.checkIgnored(repoRoot, `${INBOX_DIR}/`);
 	if (ignoreStatus !== 0) {
@@ -459,7 +472,7 @@ export async function reviewSkillFeedbackInbox(
 				},
 			],
 			continuation: { next_action_id: actionId },
-		}) satisfies CliRuntimeSuccessEnvelope<ReviewResultData>;
+		}) satisfies CliRuntimeSuccessEnvelope<ReviewResultDataV1>;
 		return {
 			exitCode: 0,
 			stdout: `${JSON.stringify(envelope)}\n`,
@@ -521,7 +534,7 @@ function buildReviewResultData(input: {
 	reports: readonly NormalizedSoftwareLearningReport[];
 	nowIso: string;
 	pilotStartedAt?: string;
-}): ReviewResultData {
+}): ReviewResultDataV1 {
 	const reports = input.reports;
 	const reviewUnits = coalesceReviewUnits(reports);
 	const closeoutUnits = reviewUnits.filter(hasCloseoutEvidence);
@@ -554,6 +567,7 @@ function buildReviewResultData(input: {
 				}
 			: {}),
 	};
+	const captureReadiness = codexCaptureReadiness(reports);
 	const retention = retentionSummary(reports, input.nowIso);
 	const pilotCheckpoint = pilotCheckpointSummary({
 		startedAt: input.pilotStartedAt,
@@ -568,6 +582,7 @@ function buildReviewResultData(input: {
 		contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 		schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
 		coverage,
+		capture_readiness: captureReadiness,
 		open_items: openItems,
 		...(openItems.length === 0
 			? {
@@ -585,6 +600,9 @@ function buildReviewResultData(input: {
 }
 
 type ReviewUnit = {
+	key: string;
+	trustedRun: boolean;
+	trustedSkillRunId?: string;
 	reports: NormalizedSoftwareLearningReport[];
 };
 
@@ -599,19 +617,42 @@ function coalesceReviewUnits(
 	const units: ReviewUnit[] = [];
 	const linkedUnits = new Map<string, ReviewUnit>();
 	for (const report of reports) {
-		if (!report.skill_run_id) {
-			units.push({ reports: [report] });
+		const trustedSkillRunId = trustedSkillRunIdForReport(report);
+		if (!trustedSkillRunId) {
+			units.push({
+				key: `report:${report.report_id}`,
+				trustedRun: false,
+				reports: [report],
+			});
 			continue;
 		}
-		let unit = linkedUnits.get(report.skill_run_id);
+		let unit = linkedUnits.get(trustedSkillRunId);
 		if (!unit) {
-			unit = { reports: [] };
-			linkedUnits.set(report.skill_run_id, unit);
+			unit = {
+				key: `run:${trustedSkillRunId}`,
+				trustedRun: true,
+				trustedSkillRunId,
+				reports: [],
+			};
+			linkedUnits.set(trustedSkillRunId, unit);
 			units.push(unit);
 		}
 		unit.reports.push(report);
 	}
 	return units;
+}
+
+function trustedSkillRunIdForReport(
+	report: NormalizedSoftwareLearningReport,
+): string | undefined {
+	if (!report.skill_run_id) return undefined;
+	switch (report.skill_run_id_provenance) {
+		case "runtime_owned":
+		case "correlation_owned":
+			return report.skill_run_id;
+		default:
+			return undefined;
+	}
 }
 
 function hasCloseoutEvidence(unit: ReviewUnit): boolean {
@@ -620,6 +661,68 @@ function hasCloseoutEvidence(unit: ReviewUnit): boolean {
 
 function hasCaptureEvidence(unit: ReviewUnit): boolean {
 	return unit.reports.some((report) => report.evidence_source === "hook_capture");
+}
+
+function codexCaptureReadiness(
+	reports: readonly NormalizedSoftwareLearningReport[],
+): ReviewResultDataV1["capture_readiness"] {
+	// V1 collapsed readiness. V2 U5 replaces this with claim_readiness facts.
+	const codexStopReports = reports.filter(
+		(report) =>
+			report.evidence_source === "hook_capture" &&
+			report.capture_runtime === "codex_stop",
+	);
+	const trustedCodexStopReports = codexStopReports.filter(isTrustedCodexStopReport);
+	const legacyNotifyCount = reports.filter(
+		(report) =>
+			report.evidence_source === "hook_capture" &&
+			report.capture_runtime === "codex_notify",
+	).length;
+	const reasons: string[] = [];
+	if (trustedCodexStopReports.length === 0) {
+		reasons.push("no_trusted_codex_stop_skill_identity");
+	}
+	if (legacyNotifyCount > 0) {
+		reasons.push("legacy_notify_evidence_not_ready");
+	}
+	const implementationReady = trustedCodexStopReports.length > 0;
+	if (implementationReady) {
+		reasons.push("hook_approval_state_not_machine_observable");
+	}
+	return {
+		implementation_status: implementationReady ? "ready" : "blocked",
+		daily_pilot_status: "blocked",
+		reasons,
+		trusted_codex_stop_count: trustedCodexStopReports.length,
+		evidence_only_codex_stop_count:
+			codexStopReports.length - trustedCodexStopReports.length,
+		legacy_notify_count: legacyNotifyCount,
+	};
+}
+
+function isTrustedCodexStopReport(
+	report: NormalizedSoftwareLearningReport,
+): boolean {
+	return (
+		report.evidence_source === "hook_capture" &&
+		report.capture_runtime === "codex_stop" &&
+		report.skill_identity_provenance?.trusted === true &&
+		report.skill_identity_provenance.source === "codex_stop_payload" &&
+		isNonPlaceholderSkill(report.skill) &&
+		isNonPlaceholderRuntimeValue(report.runtime.model) &&
+		isNonPlaceholderRuntimeValue(report.runtime.skill_version)
+	);
+}
+
+function isNonPlaceholderSkill(value: string): boolean {
+	const normalized = value.trim().toLowerCase();
+	return normalized !== "" && normalized !== "unknown" && normalized !== "unknown-skill";
+}
+
+function isNonPlaceholderRuntimeValue(value: string | undefined): boolean {
+	if (!value) return false;
+	const normalized = value.trim().toLowerCase();
+	return normalized !== "" && normalized !== "unknown";
 }
 
 function reviewSignalContext(
@@ -728,7 +831,7 @@ function repeatedFriction(
 function retentionSummary(
 	reports: readonly NormalizedSoftwareLearningReport[],
 	nowIso: string,
-): ReviewResultData["retention"] {
+): ReviewResultDataV1["retention"] {
 	const ages = reports
 		.map((report) => daysBetween(report.generated_ts, nowIso))
 		.filter((age): age is number => age !== undefined);
@@ -755,7 +858,7 @@ function pilotCheckpointSummary(input: {
 	closeoutCount: number;
 	actionableCloseoutCount: number;
 	noAction: boolean;
-}): ReviewResultData["pilot_checkpoint"] | undefined {
+}): ReviewResultDataV1["pilot_checkpoint"] | undefined {
 	if (!input.startedAt) return undefined;
 	const ageDays = daysBetween(input.startedAt, input.nowIso);
 	if (ageDays === undefined || ageDays < 7) return undefined;
@@ -777,7 +880,7 @@ function pilotCheckpointSummary(input: {
 	};
 }
 
-function renderPlainReview(data: ReviewResultData): string {
+function renderPlainReview(data: ReviewResultDataV1): string {
 	const lines = [
 		"Skill Feedback Review",
 		`Reports: ${data.coverage.total_reports}`,
@@ -785,7 +888,17 @@ function renderPlainReview(data: ReviewResultData): string {
 		`Capture-only: ${data.coverage.capture_only_count}`,
 		`Unlinked: ${data.coverage.unlinked_count}`,
 		`Evidence gaps: ${data.coverage.evidence_gap_count}`,
+		`Codex capture: ${data.capture_readiness.implementation_status}`,
+		`Codex daily pilot: ${data.capture_readiness.daily_pilot_status}`,
+		`Codex Stop trusted: ${data.capture_readiness.trusted_codex_stop_count}`,
+		`Codex Stop evidence-only: ${data.capture_readiness.evidence_only_codex_stop_count}`,
 	];
+	if (data.capture_readiness.legacy_notify_count > 0) {
+		lines.push(`Codex notify legacy: ${data.capture_readiness.legacy_notify_count}`);
+	}
+	if (data.capture_readiness.reasons.length > 0) {
+		lines.push(`Codex capture reasons: ${data.capture_readiness.reasons.join(", ")}`);
+	}
 	if (data.open_items.length === 0) {
 		lines.push(`No action: ${data.no_action?.rationale ?? "No open items."}`);
 	} else {
@@ -1085,7 +1198,7 @@ async function prepareReceipt(
 	rawReceipt: unknown,
 	runtime: SkillFeedbackRuntime,
 ): Promise<
-	| { ok: true; fields: Partial<Receipt> }
+	| { ok: true; fields: Partial<Receipt>; captureMetadata: CaptureMetadata }
 	| { ok: false; code: string; message: string }
 > {
 	if (
@@ -1132,7 +1245,15 @@ async function prepareReceipt(
 	if (telemetry.model) {
 		fields.model = telemetry.model;
 	}
-	return { ok: true, fields };
+	const captureMetadata: CaptureMetadata = {
+		...(telemetry.capture_runtime
+			? { capture_runtime: telemetry.capture_runtime }
+			: {}),
+		...(telemetry.skill_identity_provenance
+			? { skill_identity_provenance: telemetry.skill_identity_provenance }
+			: {}),
+	};
+	return { ok: true, fields, captureMetadata };
 }
 
 function errorResult(
@@ -1142,7 +1263,7 @@ function errorResult(
 	message: string,
 	options: {
 		recoverability: "change_input" | "repair_state";
-		hint: string;
+		hint: SkillFeedbackErrorHint;
 		contract?:
 			| typeof SKILL_FEEDBACK_CONTRACT_ID
 			| typeof SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID
@@ -1150,6 +1271,18 @@ function errorResult(
 		changedState?: "none" | "partial";
 	},
 ): SkillFeedbackProcessResult {
+	const hintAction: AgentHint["action"] =
+		options.recoverability === "repair_state" ? "repair_state" : "change_input";
+	const hint: AgentHint =
+		typeof options.hint === "string"
+			? { summary: options.hint, action: hintAction }
+			: {
+					summary: options.hint.summary,
+					action: options.hint.action ?? hintAction,
+					...(options.hint.docs_url
+						? { docs_url: options.hint.docs_url }
+						: {}),
+				};
 	const envelope = createCliRuntimeErrorEnvelope({
 		run_id: runId,
 		process_exit_code: exitCode,
@@ -1162,13 +1295,7 @@ function errorResult(
 			recoverability: options.recoverability,
 			retryable: false,
 			failure_domain: "skill_feedback",
-			hint: {
-				summary: options.hint,
-				action:
-					options.recoverability === "repair_state"
-						? "repair_state"
-						: "change_input",
-			},
+			hint,
 		},
 		data: {
 			changed_state: options.changedState ?? "none",
@@ -1246,6 +1373,12 @@ export function parseStdinTelemetry(raw: string): StdinTelemetry {
 	const telemetry: StdinTelemetry = {};
 	if (typeof object.model === "string" && object.model !== "") {
 		telemetry.model = object.model;
+	}
+	if (isCaptureRuntime(object.capture_runtime)) {
+		telemetry.capture_runtime = object.capture_runtime;
+	}
+	if (isSkillIdentityProvenance(object.skill_identity_provenance)) {
+		telemetry.skill_identity_provenance = object.skill_identity_provenance;
 	}
 	return telemetry;
 }
@@ -1399,7 +1532,7 @@ function parseCloseoutStdin(
 	raw: string,
 ):
 	| { ok: true; receipt: unknown }
-	| { ok: false; code: string; message: string; hint: string }
+	| { ok: false; code: string; message: string; hint: SkillFeedbackErrorHint }
 {
 	const bytes = new TextEncoder().encode(raw).byteLength;
 	if (bytes > MAX_CLOSEOUT_STDIN_BYTES) {
@@ -1416,7 +1549,12 @@ function parseCloseoutStdin(
 			ok: false,
 			code: "closeout_stdin_empty",
 			message: "Closeout requires one JSON receipt on stdin.",
-			hint: "Pipe one closeout receipt JSON object into skill-feedback closeout.",
+			hint: {
+				summary:
+					"Closeout received empty stdin; use the receipt guide for the stdin-capable invocation.",
+				action: "change_input",
+				docs_url: CLOSEOUT_RECEIPT_DOCS_URL,
+			},
 		};
 	}
 	try {

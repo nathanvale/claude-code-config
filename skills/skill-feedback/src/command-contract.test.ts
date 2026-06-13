@@ -13,13 +13,16 @@ import {
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_COST_STATUS,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
 	type Receipt,
+	type ReviewResultData,
 	type SkillFeedbackCommand,
 	buildSoftwareLearningReport,
 	normalizeReport,
 	parseCloseoutReceipt,
+	parseReviewResultData,
 	parseReceipt,
 	skillFeedbackContracts,
 } from "./command-contract";
@@ -60,6 +63,110 @@ function discoveryTree() {
 	);
 }
 
+const MINIMAL_REVIEW_RESULT_V2 = {
+	contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+	coverage: {
+		total_reports: 2,
+		closeout_count: 1,
+		capture_only_count: 1,
+		unlinked_count: 1,
+		evidence_gap_count: 0,
+		closeout_rate: 0.5,
+		low_coverage: false,
+	},
+	open_items: [],
+	open_actions: [
+		{
+			action_key: "open-report-1",
+			open_reason: "owner_path_observation",
+			target: { type: "path", value: "skills/create-skill/SKILL.md" },
+			next_safe_action: "Open the owner path and verify report evidence.",
+			evidence_refs: ["report_1"],
+		},
+	],
+	no_action: { rationale: "No higher-signal review action is available." },
+	retention: { report_count: 2 },
+	review_units: [
+		{
+			review_unit_key: "report:report_1",
+			report_ids: ["report_1"],
+			trusted_run: false,
+		},
+		{
+			review_unit_key: "report:report_2",
+			report_ids: ["report_2"],
+			trusted_run: true,
+			trusted_skill_run_id: "skill-run-2",
+		},
+	],
+	ledger_entries: [
+		{
+			ledger_entry_key: "ledger:path:skills/create-skill/SKILL.md",
+			review_unit_keys: ["report:report_1"],
+			ledger_anchor_key: "path:skills/create-skill/SKILL.md",
+			anchor_strength: "strong_path",
+			attempted_targets: [
+				{ type: "path", value: "skills/create-skill/SKILL.md" },
+			],
+			owner_paths: ["skills/create-skill/SKILL.md"],
+			evidence_tier: "driver_declared",
+			source_mix: ["driver_closeout"],
+			capture_runtime_mix: [],
+			allowed_claims: ["repeated_anchor"],
+			resolution_state: "open",
+			verification_burden: {
+				level: "moderate",
+				note: "Needs owner path check.",
+			},
+			next_safe_action: "Open the referenced owner path and verify evidence.",
+		},
+		{
+			ledger_entry_key: "ledger:weak:report_2",
+			review_unit_keys: ["report:report_2"],
+			anchor_strength: "weak",
+			weak_anchor_reason: "label_only",
+			attempted_targets: [{ type: "label", value: "skill authoring docs" }],
+			owner_paths: [],
+			evidence_tier: "runtime_observed",
+			source_mix: ["hook_capture"],
+			capture_runtime_mix: ["codex_stop"],
+			allowed_claims: [],
+			resolution_state: "no_action",
+			verification_burden: { level: "unknown" },
+			next_safe_action: "Wait for a repo-contained path before grouping.",
+		},
+	],
+	anchor_miss_telemetry: [
+		{
+			weak_anchor_reason: "label_only",
+			count: 1,
+			attempted_targets: [{ type: "label", value: "skill authoring docs" }],
+		},
+	],
+	claim_readiness: {
+		runtime_capture: {
+			status: "evidence_only",
+			reason_ids: ["codex_stop_turn_without_identity"],
+			evidence_refs: ["report_2"],
+		},
+		trusted_skill_identity: {
+			status: "blocked",
+			reason_ids: ["missing_engine_owned_identity"],
+			evidence_refs: [],
+		},
+		daily_pilot: {
+			status: "blocked",
+			reason_ids: ["pilot_gate_not_accepted"],
+			evidence_refs: [],
+		},
+	},
+} as const satisfies ReviewResultData;
+
+function reviewResultV2Fixture(): ReviewResultData {
+	return structuredClone(MINIMAL_REVIEW_RESULT_V2);
+}
+
 describe("skill-feedback U2 command contract", () => {
 	test("declares valid facade-backed record, closeout, and review commands", () => {
 		const result = parseCommandFacadeContract(skillFeedbackContracts, {
@@ -83,7 +190,7 @@ describe("skill-feedback U2 command contract", () => {
 		});
 		expect(discoveryTree().commands.review?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
 	});
 
@@ -239,6 +346,129 @@ describe("skill-feedback U2 command contract", () => {
 		expect(NARRATED_FIELDS.every((field) => RECEIPT_FIELDS.includes(field))).toBe(
 			true,
 		);
+	});
+});
+
+describe("skill-feedback U1 review result v2 contract", () => {
+	test("validates minimal v2 review output and keeps claims entry-local", () => {
+		const parsed = parseReviewResultData(reviewResultV2Fixture());
+
+		expect(parsed.kind).toBe("ok");
+		if (parsed.kind !== "ok") throw new Error("expected valid review result");
+		expect(parsed.data.schema_version).toBe(
+			SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+		);
+		expect(parsed.data.review_units).toHaveLength(2);
+		expect(parsed.data.ledger_entries).toHaveLength(2);
+		expect(parsed.data.anchor_miss_telemetry).toHaveLength(1);
+		expect(parsed.data.open_actions).toHaveLength(1);
+		expect(parsed.data.claim_readiness.runtime_capture.status).toBe(
+			"evidence_only",
+		);
+		expect("allowed_claims" in parsed.data).toBe(false);
+		expect("capture_readiness" in parsed.data).toBe(false);
+	});
+
+	test("rejects unknown v2 enum values", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+		}> = [
+			{
+				name: "evidence tier",
+				mutate: (data) => {
+					data.ledger_entries[0].evidence_tier = "maybe_runtime";
+				},
+				path: "ledger_entries[0].evidence_tier",
+			},
+			{
+				name: "allowed claim",
+				mutate: (data) => {
+					data.ledger_entries[0].allowed_claims[0] = "strong_claim";
+				},
+				path: "ledger_entries[0].allowed_claims[0]",
+			},
+			{
+				name: "readiness status",
+				mutate: (data) => {
+					data.claim_readiness.runtime_capture.status = "waiting";
+				},
+				path: "claim_readiness.runtime_capture.status",
+			},
+			{
+				name: "anchor strength",
+				mutate: (data) => {
+					data.ledger_entries[0].anchor_strength = "strong_label";
+				},
+				path: "ledger_entries[0].anchor_strength",
+			},
+			{
+				name: "weak-anchor reason",
+				mutate: (data) => {
+					data.ledger_entries[1].weak_anchor_reason = "fuzzy";
+				},
+				path: "ledger_entries[1].weak_anchor_reason",
+			},
+		];
+
+		for (const { name, mutate, path } of cases) {
+			const data = reviewResultV2Fixture() as Record<string, any>;
+			mutate(data);
+			expect(parseReviewResultData(data), name).toMatchObject({
+				kind: "invalid",
+				path,
+			});
+		}
+	});
+
+	test("enforces strong and weak ledger anchor boundaries", () => {
+		const missingStrongKey = reviewResultV2Fixture() as Record<string, any>;
+		delete missingStrongKey.ledger_entries[0].ledger_anchor_key;
+		expect(parseReviewResultData(missingStrongKey)).toMatchObject({
+			kind: "invalid",
+			path: "ledger_entries[0].ledger_anchor_key",
+			reason: "required_for_strong_path",
+		});
+
+		const mergeableWeakKey = reviewResultV2Fixture() as Record<string, any>;
+		mergeableWeakKey.ledger_entries[1].ledger_anchor_key = "path:unsafe";
+		expect(parseReviewResultData(mergeableWeakKey)).toMatchObject({
+			kind: "invalid",
+			path: "ledger_entries[1].ledger_anchor_key",
+			reason: "forbidden_for_weak_anchor",
+		});
+	});
+
+	test("rejects top-level global claims and v1 capture readiness", () => {
+		const globalClaims = reviewResultV2Fixture() as Record<string, any>;
+		globalClaims.allowed_claims = ["corroborated"];
+		expect(parseReviewResultData(globalClaims)).toMatchObject({
+			kind: "invalid",
+			path: "allowed_claims",
+			reason: "unknown_field",
+		});
+
+		const v1Readiness = reviewResultV2Fixture() as Record<string, any>;
+		v1Readiness.capture_readiness = { implementation_status: "ready" };
+		expect(parseReviewResultData(v1Readiness)).toMatchObject({
+			kind: "invalid",
+			path: "capture_readiness",
+			reason: "unknown_field",
+		});
+	});
+
+	test("validates no-ledger v2 review output with coverage and no-action data", () => {
+		const data = {
+			...reviewResultV2Fixture(),
+			open_actions: [],
+			review_units: [],
+			ledger_entries: [],
+			anchor_miss_telemetry: [],
+			no_action: { rationale: "No high-signal report exists." },
+		} satisfies ReviewResultData;
+
+		expect(parseReviewResultData(data)).toMatchObject({ kind: "ok" });
 	});
 });
 
@@ -466,6 +696,104 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		expect(normalized.report.touched_surfaces).toHaveLength(2);
 		expect(normalized.report.observations).toHaveLength(1);
 		expect(normalized.report.evidence_gaps).not.toContain("observations");
+	});
+
+	test("normalizes capture provenance fields and rejects invalid values", () => {
+		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
+		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
+		const baseReport = {
+			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			report_id: "report_v1_capture",
+			untrusted_evidence: true,
+			generated_ts: COMPLETE_RECEIPT.generated_ts,
+			evidence_source: "hook_capture",
+			correlation_status: "unlinked",
+			runtime: {
+				git_sha: COMPLETE_RECEIPT.git_sha,
+				skill_version: COMPLETE_RECEIPT.skill_version,
+				model: COMPLETE_RECEIPT.model,
+			},
+			report_card: parsed.receipt,
+			evidence_gaps: parsed.evidence_gaps,
+		};
+
+		const normalized = normalizeReport({
+			...baseReport,
+			capture_runtime: "codex_stop",
+			skill_identity_provenance: {
+				source: "none",
+				trusted: false,
+				reason: "codex_stop_payload_has_no_trusted_skill_identity",
+			},
+		});
+
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.capture_runtime).toBe("codex_stop");
+		expect(normalized.report.skill_identity_provenance).toMatchObject({
+			source: "none",
+			trusted: false,
+		});
+
+		expect(
+			normalizeReport({ ...baseReport, capture_runtime: "not-a-runtime" }),
+		).toMatchObject({
+			kind: "invalid",
+			path: "capture_runtime",
+			reason: "invalid",
+		});
+		expect(
+			normalizeReport({
+				...baseReport,
+				skill_identity_provenance: { source: "none", trusted: "yes" },
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "skill_identity_provenance",
+			reason: "invalid",
+		});
+	});
+
+	test("normalizes skill-run provenance and rejects invalid trust labels", () => {
+		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
+		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
+		const baseReport = {
+			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			report_id: "report_v1_run_provenance",
+			untrusted_evidence: true,
+			generated_ts: COMPLETE_RECEIPT.generated_ts,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-trusted-1",
+			runtime: {
+				git_sha: COMPLETE_RECEIPT.git_sha,
+				skill_version: COMPLETE_RECEIPT.skill_version,
+				model: COMPLETE_RECEIPT.model,
+			},
+			report_card: parsed.receipt,
+			evidence_gaps: parsed.evidence_gaps,
+		};
+
+		const trusted = normalizeReport({
+			...baseReport,
+			skill_run_id_provenance: "correlation_owned",
+		});
+
+		expect(trusted.kind).toBe("ok");
+		if (trusted.kind !== "ok") throw new Error("expected normalized report");
+		expect(trusted.report.skill_run_id).toBe("run-trusted-1");
+		expect(trusted.report.skill_run_id_provenance).toBe("correlation_owned");
+
+		expect(
+			normalizeReport({
+				...baseReport,
+				skill_run_id_provenance: "assistant_claimed",
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "skill_run_id_provenance",
+			reason: "invalid",
+		});
 	});
 
 	test("names every v1 agent-authored string path for redaction ownership", () => {

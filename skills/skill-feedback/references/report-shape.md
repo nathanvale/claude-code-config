@@ -2,6 +2,20 @@
 
 Source owner: `skills/skill-feedback/src/command-contract.ts`.
 
+## Source Layout
+
+- Keep `skills/skill-feedback/src/` flat.
+- Read `command-contract.ts` first for schema versions, contract ids, enums, exported result shapes, and parser rules.
+- Read current v1 review orchestration in `skill-feedback-runner.ts`.
+- Keep CLI orchestration, inbox reads, review dispatch, and rendering glue in `skill-feedback-runner.ts`.
+- Create `review-ledger-reducer.ts` during v2 implementation for reducer-owned review-unit, ledger-entry, evidence-tier, entry-local claim, and readiness logic.
+- Create `ledger-anchor-adapter.ts` during v2 implementation for repo-contained path canonicalization, anchor strength, weak-anchor reasons, and strong-only `ledger_anchor_key` facts.
+- Put agent-authored string safety in `redaction.ts`.
+- Put small shared report helpers in `report-helpers.ts`.
+- Put runtime capture adapter lanes in `capture-adapters.ts`.
+- Do not create `patterns/`, `gof/`, or pattern-name directories.
+- Use GoF labels in prose only when pressure evidence has named the seam.
+
 ## Truth Stance
 
 - This report is evidence.
@@ -20,17 +34,27 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - `evidence_source`: `hook_capture` or `driver_closeout`.
 - `correlation_status`: `linked` or `unlinked`.
 - `skill_run_id`: optional explicit runtime correlation id.
+- `skill_run_id_provenance`: optional run-link trust label; only `runtime_owned` and `correlation_owned` can coalesce review units.
 - `runtime`: allowlisted telemetry.
 - `report_card`: closeout evidence lanes.
 - `evidence_gaps`: typed missing-or-weak evidence codes.
 
 ## V2 Field Ownership
 
-- Keep v2 report and review field lists in this reference.
+- Keep exact v2 review fields, enum values, parser rules, and result version in `skills/skill-feedback/src/command-contract.ts`.
+- Treat `ReviewResultData` as the v2 review result contract.
+- Treat `ReviewResultDataV1` as the current runner compatibility shape until runner migration finishes.
+- Use `SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION` for review output; do not reuse the persisted report schema version for v2 review output.
+- Do not copy the v2 review schema into this reference.
 - Hook-capture reports may carry `capture_runtime`.
 - Hook-capture reports may carry `skill_identity_provenance`.
-- Review output carries claim-specific readiness facts under `claim_readiness`.
-- Keep exact enum values and parser rules in `skills/skill-feedback/src/command-contract.ts`.
+- Treat `skill_identity_provenance.trusted` as capture-source trust only.
+- Do not map `skill_identity_provenance.trusted` directly to Trusted skill identity, Trusted run proof, or `trusted_engine_identity`.
+- Review derives shared run units only from `runtime_owned` or `correlation_owned` `skill_run_id_provenance`.
+- Review output carries review units, ledger entries, anchor-miss telemetry, open actions, no-action rationale, and claim-specific readiness facts.
+- Keep `allowed_claims` entry-local on ledger entries.
+- Do not expose top-level `allowed_claims`.
+- Do not expose v1 `capture_readiness` in v2 review output.
 - Keep hook command trust rules in the implementation plan and hook tests.
 - Keep glossary terms in `skills/skill-feedback/CONTEXT.md`.
 

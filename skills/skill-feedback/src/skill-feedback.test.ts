@@ -138,6 +138,28 @@ function parseEnvelope(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
 }
 
+function expectReviewCoverage(
+	stdout: string,
+	expected: {
+		total_reports: number;
+		closeout_count: number;
+		capture_only_count: number;
+		closeout_rate: number;
+		low_coverage: boolean;
+	},
+): void {
+	const data = parseEnvelope(stdout).data as {
+		coverage: {
+			total_reports: number;
+			closeout_count: number;
+			capture_only_count: number;
+			closeout_rate: number;
+			low_coverage: boolean;
+		};
+	};
+	expect(data.coverage).toMatchObject(expected);
+}
+
 async function run(command: readonly string[], cwd: string) {
 	const child = Bun.spawn([...command], {
 		cwd,
@@ -167,25 +189,6 @@ async function runCli(
 		child.stdin.write(stdin);
 		child.stdin.end();
 	}
-	return collectCliResult(child);
-}
-
-async function runPackageCli(args: readonly string[]) {
-	const child = Bun.spawn(
-		[
-			"bun",
-			"--filter",
-			"skill-feedback-scripts",
-			"skill-feedback-runner",
-			"--",
-			...args,
-		],
-		{
-			cwd: REPO_ROOT,
-			stdout: "pipe",
-			stderr: "pipe",
-		},
-	);
 	return collectCliResult(child);
 }
 
@@ -452,8 +455,8 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 	});
 
-	test("package script front door renders help", async () => {
-		const result = await runPackageCli(["--help"]);
+	test("runner front door renders help", async () => {
+		const result = await runCli(["--help"], { cwd: REPO_ROOT });
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
@@ -516,8 +519,29 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(argvResult.exitCode).toBe(2);
 		expect(argvResult.stdout).not.toContain(secret);
 
+		const emptyResult = await runCli(["closeout"], { stdin: " " });
+		expect(emptyResult.exitCode).toBe(2);
+		expect(emptyResult.stderr).toBe("");
+		expect(emptyResult.stdout).not.toContain(secret);
+		const emptyEnvelope = parseEnvelope(emptyResult.stdout);
+		expect(emptyEnvelope.status).toBe("error");
+		expect(emptyEnvelope.error).toMatchObject({
+			code: "closeout_stdin_empty",
+			hint: {
+				action: "change_input",
+				docs_url:
+					"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md",
+			},
+		});
+		const emptyHint = emptyEnvelope.error as {
+			hint: { summary: string };
+		};
+		expect(emptyHint.hint.summary).toContain("empty stdin");
+		expect(emptyHint.hint.summary).not.toContain("bun ");
+		expect(emptyHint.hint.summary).not.toContain("skills/");
+		expect(emptyHint.hint.summary).not.toContain("/Users/");
+
 		for (const stdin of [
-			" ",
 			`{"goal":"${secret}"`,
 			"x".repeat(65_001),
 		] as const) {
@@ -689,7 +713,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.no_action?.rationale).toContain("No high-signal");
 	});
 
-	test("review coalesces linked capture and closeout coverage by skill_run_id", async () => {
+	test("review coalesces coverage only with trusted skill_run_id provenance", async () => {
 		const root = await makeRoot();
 		const linkedReport = {
 			schema_version: "1",
@@ -697,6 +721,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			generated_ts: GENERATED_TS,
 			correlation_status: "linked",
 			skill_run_id: "run-linked",
+			skill_run_id_provenance: "correlation_owned",
 			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
 			report_card: {
 				...BASE_CLOSEOUT,
@@ -722,20 +747,53 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		const data = parseEnvelope(result.stdout).data as {
-			coverage: {
-				total_reports: number;
-				closeout_count: number;
-				capture_only_count: number;
-				closeout_rate: number;
-				low_coverage: boolean;
-			};
-		};
-		expect(data.coverage).toMatchObject({
+		expectReviewCoverage(result.stdout, {
 			total_reports: 2,
 			closeout_count: 1,
 			capture_only_count: 0,
 			closeout_rate: 1,
+			low_coverage: false,
+		});
+	});
+
+	test("review keeps untrusted shared skill_run_id reports separate", async () => {
+		const root = await makeRoot();
+		const rawLinkedReport = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			correlation_status: "linked",
+			skill_run_id: "run-untrusted",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+			},
+			evidence_gaps: [],
+		};
+		await writeInboxReport(root, "capture-raw-linked.json", {
+			...rawLinkedReport,
+			report_id: "report-capture-raw-linked",
+			evidence_source: "hook_capture",
+		});
+		await writeInboxReport(root, "closeout-raw-linked.json", {
+			...rawLinkedReport,
+			report_id: "report-closeout-raw-linked",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-raw-linked-coverage",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expectReviewCoverage(result.stdout, {
+			total_reports: 2,
+			closeout_count: 1,
+			capture_only_count: 1,
+			closeout_rate: 0.5,
 			low_coverage: false,
 		});
 	});
@@ -1070,6 +1128,166 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 			'{"model":"claude-opus-4-8","usage":{"input_tokens":1},"goal":"x"}',
 		);
 		expect(telemetry).toEqual({ model: "claude-opus-4-8" });
+	});
+
+	test("stdin telemetry extracts capture provenance without new flags", () => {
+		const telemetry = parseStdinTelemetry(
+			JSON.stringify({
+				model: "gpt-5-codex",
+				capture_runtime: "codex_stop",
+				skill_identity_provenance: {
+					source: "none",
+					trusted: false,
+					reason: "codex_stop_payload_has_no_trusted_skill_identity",
+				},
+				transcript_path: "/tmp/should-not-persist",
+			}),
+		);
+
+		expect(telemetry).toEqual({
+			model: "gpt-5-codex",
+			capture_runtime: "codex_stop",
+			skill_identity_provenance: {
+				source: "none",
+				trusted: false,
+				reason: "codex_stop_payload_has_no_trusted_skill_identity",
+			},
+		});
+	});
+
+	test("Codex Stop evidence without trusted identity blocks readiness", async () => {
+		const { root, disk } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({
+				model: "gpt-5-codex",
+				capture_runtime: "codex_stop",
+				skill_identity_provenance: {
+					source: "none",
+					trusted: false,
+					reason: "codex_stop_payload_has_no_trusted_skill_identity",
+				},
+			}),
+		});
+		expect(disk).toContain('"capture_runtime": "codex_stop"');
+		expect(disk).not.toContain("transcript_path");
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-stop-blocked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			capture_readiness: {
+				implementation_status: string;
+				daily_pilot_status: string;
+				reasons: string[];
+				evidence_only_codex_stop_count: number;
+			};
+		};
+		expect(data.capture_readiness).toMatchObject({
+			implementation_status: "blocked",
+			daily_pilot_status: "blocked",
+			evidence_only_codex_stop_count: 1,
+		});
+		expect(data.capture_readiness.reasons).toContain(
+			"no_trusted_codex_stop_skill_identity",
+		);
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-stop-blocked-plain",
+			plain: true,
+		});
+		expect(plain.stdout).toContain("Codex capture: blocked");
+		expect(plain.stdout).toContain("Codex Stop evidence-only: 1");
+	});
+
+	test("trusted Codex Stop provenance with placeholder runtime stays evidence-only", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "placeholder-codex-stop.json", {
+			schema_version: "1",
+			report_id: "report-placeholder-codex-stop",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "hook_capture",
+			capture_runtime: "codex_stop",
+			skill_identity_provenance: {
+				source: "codex_stop_payload",
+				trusted: true,
+				field: "skill.name",
+				reason: "trusted_codex_stop_payload_identity",
+			},
+			correlation_status: "unlinked",
+			runtime: {
+				git_sha: BASE_RECEIPT.git_sha,
+				skill_version: "unknown",
+				model: "unknown",
+			},
+			report_card: {
+				...BASE_CLOSEOUT,
+				skill: "unknown-skill",
+			},
+			evidence_gaps: [],
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-placeholder-blocked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			capture_readiness: {
+				implementation_status: string;
+				trusted_codex_stop_count: number;
+				evidence_only_codex_stop_count: number;
+			};
+		};
+		expect(data.capture_readiness).toMatchObject({
+			implementation_status: "blocked",
+			trusted_codex_stop_count: 0,
+			evidence_only_codex_stop_count: 1,
+		});
+	});
+
+	test("trusted Codex Stop identity passes implementation readiness without usage", async () => {
+		const { root } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({
+				model: "gpt-5-codex",
+				capture_runtime: "codex_stop",
+				skill_identity_provenance: {
+					source: "codex_stop_payload",
+					trusted: true,
+					field: "skill.name",
+					reason: "trusted_codex_stop_payload_identity",
+				},
+			}),
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-stop-ready",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			capture_readiness: {
+				implementation_status: string;
+				daily_pilot_status: string;
+				reasons: string[];
+				trusted_codex_stop_count: number;
+			};
+			coverage: { evidence_gap_count: number };
+		};
+		expect(data.capture_readiness).toMatchObject({
+			implementation_status: "ready",
+			daily_pilot_status: "blocked",
+			trusted_codex_stop_count: 1,
+		});
+		expect(data.capture_readiness.reasons).toContain(
+			"hook_approval_state_not_machine_observable",
+		);
+		expect(data.coverage.evidence_gap_count).toBeGreaterThan(0);
 	});
 
 	test("telemetry is trusted: a secret-shaped model is NOT redacted", async () => {

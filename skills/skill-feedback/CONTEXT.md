@@ -89,40 +89,60 @@ A command-envelope-backed report-card read result that tells agents why a report
 _Avoid_: dashboard, raw dump, generic CLI output
 
 **Review unit**:
-The evidence bundle that review classifies as one thing. A linked unit represents one trusted `skill_run_id`; missing, untrusted, or placeholder ids produce one report-local unit.
+The evidence bundle that review classifies as one thing. A linked unit represents a Trusted run proof; missing, untrusted, or placeholder ids produce one report-local unit.
 _Avoid_: report, file, merged row, fuzzy group
+
+**Trusted run proof**:
+Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run` and `corroborated`; it does not prove Trusted skill identity or `trusted_engine_identity`.
+_Avoid_: raw `skill_run_id`, trusted skill identity, assistant claim
 
 **Pattern resolution ledger**:
 The primary review-value model for `skill-feedback review`: recurring evidence is grouped into patterns, and each pattern carries its resolution state, evidence quality, owner paths, verification burden, and next safe action. Pattern entries remain untrusted evidence until confirmed against owner source.
 _Avoid_: canonical instruction, repair proposal, chronological report list, evidence-quality dashboard
 
 **Pressure pattern**:
-A design-pattern name used only when a concrete review pressure has already named a seam. In v2, Facade, Adapter, Strategy, and fixed reducer flow are labels for pressure-tested ownership, not reasons to add abstraction.
+A design-pattern name used only when a concrete review pressure has already named a seam. In v2, Facade, Adapter, and fixed reducer flow are labels for pressure-tested ownership; Strategy stays deferred until claim-rule variation is proven.
 _Avoid_: pattern cosplay, GoF by default, framework, decorative abstraction
 
 **ReviewResultData Facade**:
-The claim-safe review result Interface that hides reducer internals from JSON, plain output, docs, and future agents. It exposes contract-owned facts: review units, ledger entries, allowed claims, split readiness, and anchor-miss telemetry.
+The claim-safe review result Interface that hides reducer internals from JSON, plain output, docs, and future agents. It exposes contract-owned facts: review units, ledger entries with entry-local allowed claims, split readiness, and anchor-miss telemetry.
 _Avoid_: dashboard, renderer copy, generic API, bag of fields
+
+**Allowed claim**:
+Entry-local claim language that downstream agents may repeat about one ledger entry. The reducer derives it from trusted review-unit state, anchor facts, evidence tier, source mix, and readiness facts.
+_Avoid_: global claim, badge, renderer copy, inferred language
+
+**Claim readiness**:
+The v2 review facts that split runtime capture, Trusted skill identity, and Daily pilot readiness. Each readiness fact carries status, reason ids, and evidence refs.
+_Avoid_: global readiness, capture readiness alias, daily pilot shortcut
+
+**Anchor miss telemetry**:
+Weak-anchor counts and attempted target context emitted for later review without grouping. Telemetry explains why labels, missing anchors, out-of-repo paths, or unverifiable targets stayed standalone.
+_Avoid_: weak-anchor merge, fuzzy group, taxonomy gap
+
+**Ledger entry**:
+The v2 review item that carries one anchor outcome, source mix, evidence tier, entry-local allowed claims, resolution state, verification burden, and next safe action.
+_Avoid_: canonical repair, renderer row, raw report
 
 **Anchor Adapter**:
 The internal Adapter that turns report target evidence into canonical anchor facts before ledger reduction. It owns repo-contained path canonicalization, anchor strength, and weak-anchor reasons; it does not own product claim language.
 _Avoid_: fuzzy matcher, classifier, taxonomy, grouping heuristic
 
-**Claim Strategy**:
-The contract-owned rule set that derives allowed claims from evidence tier, source mix, trusted review-unit state, and readiness facts. It makes renderer language repeatable without letting renderers invent claims.
-_Avoid_: badge enum, copy rule, renderer inference, claim prose
+**Claim derivation rules**:
+The reducer-owned rules that derive allowed claims from evidence tier, source mix, trusted review-unit state, and readiness facts. They make renderer language repeatable without requiring a standalone Strategy module.
+_Avoid_: badge enum, copy rule, renderer inference, claim prose, Strategy module
 
 **Reducer flow**:
 The fixed review pipeline that normalizes evidence, builds review units, adapts anchors, reduces ledger entries, derives claims, derives readiness, and renders. Steps can have internal helpers, but the flow owns locality for claim safety.
 _Avoid_: chain of responsibility, hidden gate order, dashboard pipeline
 
 **Failure class**:
-A named category for recurring review evidence that describes the kind of failure or friction. Two reports share a failure class when they describe the same problem shape, not just the same owner path or resolution path.
-_Avoid_: owner path, resolution status, fuzzy match, recommendation
+A historical or future taxonomy category for recurring review evidence that describes the kind of failure or friction. Active v2 grouping uses review units and anchor facts, not failure-class keys.
+_Avoid_: owner path, resolution status, fuzzy match, recommendation, active v2 grouping key
 
 **Taxonomy gap**:
-A failure class for review evidence that does not match the predefined product-native class set. It stays standalone until a known class is assigned or the taxonomy changes.
-_Avoid_: other, junk drawer, shadow taxonomy, heuristic merge
+A historical or future failure class for review evidence that does not match a product-native class set. It stays outside active v2 scope until product-native taxonomy returns.
+_Avoid_: other, junk drawer, shadow taxonomy, heuristic merge, weak-anchor reason
 
 **Open signal**:
 A review threshold that makes a report worth opening: high verification burden, repeated friction, evidence gaps, unlinked correlation spike, or owner-path observation. Low-signal reports return no-action output.
@@ -173,8 +193,12 @@ The harness provenance for hook-capture evidence, such as Claude Stop, Codex Sto
 _Avoid_: evidence source, runtime support, provider
 
 **Skill run id**:
-The optional correlation id shared by capture evidence and later closeout enrichment for the same skill run. v1 accepts explicit trusted ids when available and writes unlinked evidence when not available.
+The optional correlation id shared by capture evidence and later closeout enrichment for the same skill run. A raw report-authored id is evidence only; it becomes Trusted run proof only when runtime-owned or correlation-owned provenance establishes the link.
 _Avoid_: filename, Claude detection id, session id alone, report id
+
+**Skill run id provenance**:
+The report field that says who owns a `skill_run_id` link claim. `runtime_owned` and `correlation_owned` can coalesce review units; absent or `report_authored` values stay report-local.
+_Avoid_: raw id trust, assistant claim, timestamp proximity
 
 **Cost attribution**:
 The report's stance for assigning token and USD cost to a skill run. v1 records unavailable cost as a typed gap; native skill-attributed telemetry belongs to follow-up work unless a trusted source is already present.
