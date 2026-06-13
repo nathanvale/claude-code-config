@@ -10,6 +10,13 @@ feeds:
   - skills/browser-use/docs/USE-CASES.md
 ---
 
+> **UPDATE (corrected by measurement):** the 'capability equalizer / run cheaper
+> models safely' framing below was REFUTED by the two-model eval — Haiku and Opus
+> hallucinate selectors at the SAME rate (50%) ungrounded, 0% grounded. The catch
+> mechanism (6/6, model-independent) still stands; the cheaper-models economics do
+> not. Correct claim: grounding is non-negotiable at EVERY model tier. See
+> `2026-06-13-two-model-hallucination-eval.md` + PRODUCT.md.
+
 # Selector-hallucination spike — the capability equalizer, proven
 
 The sharpest, most provable form of "the trust layer helps weaker models": it

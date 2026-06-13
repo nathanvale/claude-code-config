@@ -80,21 +80,36 @@ CDP is **root over web identity**. The same power that makes the facade work mak
 The thing that makes the product possible is the thing that makes the security boundary
 mandatory; they are the same property.
 
-### The capability equalizer (cost-economics angle)
+### Grounding is non-negotiable at every model tier (measured)
 
-The trust layer moves model-independent failures **off the model and into code**, so a
-*cheaper* model gets much of an *expensive* model's safety for free. The sharpest, proven
-case is **selector/element hallucination** — the failure weaker models hit hardest: a weak
-model invents a plausible selector (`#submit-btn`, `.cta`) from training priors instead of
-reading the page. The fleet **structurally rejects it** — refs come from what the engines
-*saw*, so an invented selector has nowhere to land; the gate is a `Set.has(target)` test
-with no IQ, identical for Qwen 3.5 and Opus 4.8. Proven 6/6 catch, 0 false rejects
-(`docs/research/2026-06-13-selector-hallucination-equalizer-spike.md`).
+Selector hallucination — a model inventing a plausible selector (`#submit-btn`, `.cta`) from
+training priors instead of reading the page — is **universal across model tiers, and
+grounding-solvable.** Measured live via `claude -p` (two-model eval,
+`docs/research/2026-06-13-two-model-hallucination-eval.md`):
 
-The reframe: **run a cheaper model *safely* (architecture) instead of paying a frontier
-model to be *careful* (tokens).** The honest limit — this equalizes perception/targeting
-(hallucination, silent failure, bad commits), not *reasoning*; a weak model can still
-mis-plan. Sizing the full effect needs a two-model eval (scoped in the spike doc).
+- **Ungrounded** (no snapshot, working from memory): Haiku 4.5 and Opus 4.8 BOTH hallucinate
+  selectors **3/6 (50%)** — gap zero. A frontier model is *just as likely* to invent a
+  selector as a cheap one.
+- **Grounded** (handed the fleet's real ref list): both **0/6**.
+
+*"From memory" = answering from training priors without seeing the live page (a recalled,
+possibly-stale guess); "grounded" = picking from the fleet's ref list of what the engines
+actually saw this moment.*
+
+The variable that matters is **grounding, not model IQ.** The fleet structurally prevents
+hallucination by always handing the model a ref list of what the engines actually *saw* — an
+invented selector has nowhere to land (`Set.has(target)`, proven 6/6 catch). This holds
+identically for any model.
+
+> **The claim, corrected by measurement:** not "run a cheaper model safely" (refuted — Opus
+> hallucinates ungrounded too). Rather: **even a frontier model needs grounding to stop
+> selector hallucination, and the fleet provides it. The product is table-stakes grounding
+> every agentic browser lacks — frontier-model users included; they just feel safe.**
+
+Honest limit: this is about perception/targeting (acting on something real), not *reasoning*
+(what to do). Grounding stops the agent acting on its imagination; it does not raise its
+judgment. The earlier "capability equalizer / cheaper models" framing was **refuted** by the
+eval and is retired; "even Opus needs us" is the stronger, measured story.
 
 ### Who it is for
 
