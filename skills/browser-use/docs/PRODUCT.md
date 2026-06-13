@@ -274,6 +274,17 @@ The moat is not "we automate better." It is **N independent witnesses of one sha
 made near-free by CDP-as-a-multi-client-bus** — a property none of the above have, and one
 that is structurally additive (more engines = more confidence) rather than a feature race.
 
+**The white space (external grounding, `docs/research/2026-06-13-competitive-landscape.md`):**
+the whole field's answer to hallucination is **grounding the FACTS** the agent reasons about
+— live web search, RAG, verified caches (Firecrawl, AWS Bedrock, etc.). **Nobody grounds the
+ACTION** — which element the agent clicks, whether the click landed. That action/targeting
+layer is open, and it is exactly where this product sits. Validation: the perception-before-
+planning thesis is now peer-reviewed — "improving reliability requires controlling perception
+and uncertainty before planning, rather than scaling generation models alone" (OpenReview,
+Mar 2026), which is our measured two-model finding. And the market's #1 stated fear is
+**prompt injection** — untested against the fleet, a candidate spike (likely a limit, since
+injection hits reasoning not perception, though the quorum gate may give partial defense).
+
 ### Success metrics (what discovery should move)
 
 Outcome metrics (per the Opportunity Solution Tree — measure the outcome, not the output):
