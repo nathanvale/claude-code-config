@@ -60,6 +60,7 @@ records. They are linked below but not moved.
 - [browse + play record/replay skills (seed)](brainstorms/2026-05-30-browse-play-record-replay-skills-seed.md) — lean record/replay seed: tape format, agent Chrome on :9223, auth injection.
 - [Playwright spike — validate/kill the facade dream](brainstorms/2026-06-12-browser-facade-playwright-spike-requirements.md) — the pre-spike hypothesis: two-part bar (codec cheap + diff works) with an explicit kill condition.
 - [browser-use multi-engine facade (requirements)](brainstorms/2026-06-12-browser-use-multi-engine-facade-requirements.md) — production facade after N=5 proof: two-axis mapping, 5-adapter roster, cost-routing, oracle, degradation, verify/redaction/probe/hygiene. Ready for ce-plan.
+- [Architecture-legibility blueprint (requirements)](brainstorms/2026-06-13-architecture-legibility-blueprint-requirements.md) — the target file structure + naming so GoF/ICA seams are obvious to an LLM: seam-directories (CODE axis) orthogonal to one facade command-contract (CLI axis, one level deep), names follow proof (earned vs provisional markers), no banned-name drift. Extracts into 3 ce-plans: scaffold+convention → non-destructive migration → one-front-door CLI alignment.
 
 ## Decisions
 
