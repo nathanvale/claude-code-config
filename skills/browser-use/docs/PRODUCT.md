@@ -13,6 +13,14 @@ Status: living definition · 2026-06-13 · grounded in the session's live N=5 pr
 independent engines through CDP — and their agreement (or disagreement) is a machine-
 readable trust signal no single engine can produce.**
 
+> *Pattern vocabulary (pressure-tested — see
+> `docs/decisions/2026-06-13-001-gof-pattern-naming-decision-log.md`):* "facade" names the
+> action surface (`operate`/`observe`/`verify`) that hides the engines. The **moat** —
+> the differential oracle — is **N-version programming** (independent implementations voted
+> mechanically), which is the *opposite* of a facade: it SURFACES divergence rather than
+> hiding it. Each engine is an **Adapter** (fully earned — the two-axis mapping layer). The
+> Router is **evidence-first selection**, not Strategy.
+
 ### The shape, in plain terms
 
 There is exactly **one** real Google Chrome (dedicated persistent profile, logged-in
