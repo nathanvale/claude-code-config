@@ -36,10 +36,14 @@ import {
 	type NormalizedSoftwareLearningReport,
 	type Receipt,
 	type ReportCardSoftwareLearningReport,
+	type ReviewClaimReadiness,
+	type ReviewClaimReadinessFact,
 	type ReviewOpenItem,
+	type ReviewResultData,
 	type ReviewResultDataV1,
 	type SkillFeedbackOutcome,
 	type SoftwareLearningReport,
+	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	buildSoftwareLearningReport,
 	isCaptureRuntime,
 	isSkillIdentityProvenance,
@@ -52,6 +56,7 @@ import {
 	redactReportCardSoftwareLearningReport,
 	redactSoftwareLearningReport,
 } from "./redaction";
+import { reduceReviewLedger } from "./review-ledger-reducer";
 import {
 	evidenceGap,
 	stableReportId,
@@ -472,7 +477,7 @@ export async function reviewSkillFeedbackInbox(
 				},
 			],
 			continuation: { next_action_id: actionId },
-		}) satisfies CliRuntimeSuccessEnvelope<ReviewResultDataV1>;
+		}) satisfies CliRuntimeSuccessEnvelope<ReviewResultData>;
 		return {
 			exitCode: 0,
 			stdout: `${JSON.stringify(envelope)}\n`,
@@ -534,7 +539,7 @@ function buildReviewResultData(input: {
 	reports: readonly NormalizedSoftwareLearningReport[];
 	nowIso: string;
 	pilotStartedAt?: string;
-}): ReviewResultDataV1 {
+}): ReviewResultData {
 	const reports = input.reports;
 	const reviewUnits = coalesceReviewUnits(reports);
 	const closeoutUnits = reviewUnits.filter(hasCloseoutEvidence);
@@ -567,7 +572,8 @@ function buildReviewResultData(input: {
 				}
 			: {}),
 	};
-	const captureReadiness = codexCaptureReadiness(reports);
+	const ledger = reduceReviewLedger(reports);
+	const claimReadiness = deriveClaimReadiness(reports);
 	const retention = retentionSummary(reports, input.nowIso);
 	const pilotCheckpoint = pilotCheckpointSummary({
 		startedAt: input.pilotStartedAt,
@@ -580,10 +586,10 @@ function buildReviewResultData(input: {
 	});
 	return {
 		contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
-		schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+		schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		coverage,
-		capture_readiness: captureReadiness,
 		open_items: openItems,
+		open_actions: deriveOpenActions(openItems),
 		...(openItems.length === 0
 			? {
 					no_action: {
@@ -596,6 +602,99 @@ function buildReviewResultData(input: {
 			: {}),
 		retention,
 		...(pilotCheckpoint ? { pilot_checkpoint: pilotCheckpoint } : {}),
+		review_units: ledger.review_units,
+		ledger_entries: ledger.ledger_entries,
+		anchor_miss_telemetry: ledger.anchor_miss_telemetry,
+		claim_readiness: claimReadiness,
+	};
+}
+
+/**
+ * Project v1 open items into v2 open actions. Open actions carry a stable key,
+ * the open reason, optional target, next safe action, and evidence pointers so
+ * future agents act on the same facts the reducer exposed (R1).
+ */
+function deriveOpenActions(
+	openItems: readonly ReviewOpenItem[],
+): ReviewResultData["open_actions"] {
+	return openItems.map((item, index) => ({
+		action_key: `${item.open_reason}:${index}`,
+		open_reason: item.open_reason,
+		...(item.target ? { target: item.target } : {}),
+		next_safe_action: item.next_action,
+		evidence_refs: [item.evidence],
+	}));
+}
+
+/**
+ * Derive split readiness facts (R20, R21, KTD7). Runtime capture, Trusted skill
+ * identity, and Daily pilot are tracked as separate claims, not one global
+ * gate: runtime capture can become ready while Daily pilot stays blocked on its
+ * dependencies. Each fact carries a status, reason ids, and evidence pointers.
+ */
+function deriveClaimReadiness(
+	reports: readonly NormalizedSoftwareLearningReport[],
+): ReviewClaimReadiness {
+	const codexStopReports = reports.filter(
+		(report) =>
+			report.evidence_source === "hook_capture" &&
+			report.capture_runtime === "codex_stop",
+	);
+	const trustedCodexStop = codexStopReports.filter(isTrustedCodexStopReport);
+	const legacyNotify = reports.filter(
+		(report) =>
+			report.evidence_source === "hook_capture" &&
+			report.capture_runtime === "codex_notify",
+	);
+
+	const runtimeCapture: ReviewClaimReadinessFact = (() => {
+		const reasonIds: string[] = [];
+		if (codexStopReports.length === 0) {
+			reasonIds.push("no_codex_stop_runtime_evidence");
+		}
+		if (legacyNotify.length > 0) {
+			reasonIds.push("legacy_notify_evidence_not_ready");
+		}
+		// Runtime capture stays evidence-only: hook-approval state is not yet
+		// machine-observable, so it cannot reach `ready` (R21 dependency).
+		if (codexStopReports.length > 0) {
+			reasonIds.push("hook_approval_state_not_machine_observable");
+		}
+		const status =
+			codexStopReports.length > 0 && legacyNotify.length === 0
+				? "evidence_only"
+				: "blocked";
+		return {
+			status,
+			reason_ids: reasonIds,
+			evidence_refs: codexStopReports.map((report) => report.report_id),
+		};
+	})();
+
+	const trustedSkillIdentity: ReviewClaimReadinessFact = {
+		// No engine-owned identity source exists yet (R17, R18); identity is
+		// blocked regardless of how much runtime evidence accumulates.
+		status: "blocked",
+		reason_ids: ["missing_engine_owned_identity"],
+		evidence_refs: trustedCodexStop.map((report) => report.report_id),
+	};
+
+	const dailyPilot: ReviewClaimReadinessFact = {
+		// Daily pilot needs the accepted pilot gate, machine-observable approval,
+		// and Trusted skill identity evidence (R21, KTD7) — none are present.
+		status: "blocked",
+		reason_ids: [
+			"pilot_gate_not_accepted",
+			"daily_pilot_needs_machine_observable_approval",
+			"trusted_skill_identity_missing",
+		],
+		evidence_refs: [],
+	};
+
+	return {
+		runtime_capture: runtimeCapture,
+		trusted_skill_identity: trustedSkillIdentity,
+		daily_pilot: dailyPilot,
 	};
 }
 
@@ -661,43 +760,6 @@ function hasCloseoutEvidence(unit: ReviewUnit): boolean {
 
 function hasCaptureEvidence(unit: ReviewUnit): boolean {
 	return unit.reports.some((report) => report.evidence_source === "hook_capture");
-}
-
-function codexCaptureReadiness(
-	reports: readonly NormalizedSoftwareLearningReport[],
-): ReviewResultDataV1["capture_readiness"] {
-	// V1 collapsed readiness. V2 U5 replaces this with claim_readiness facts.
-	const codexStopReports = reports.filter(
-		(report) =>
-			report.evidence_source === "hook_capture" &&
-			report.capture_runtime === "codex_stop",
-	);
-	const trustedCodexStopReports = codexStopReports.filter(isTrustedCodexStopReport);
-	const legacyNotifyCount = reports.filter(
-		(report) =>
-			report.evidence_source === "hook_capture" &&
-			report.capture_runtime === "codex_notify",
-	).length;
-	const reasons: string[] = [];
-	if (trustedCodexStopReports.length === 0) {
-		reasons.push("no_trusted_codex_stop_skill_identity");
-	}
-	if (legacyNotifyCount > 0) {
-		reasons.push("legacy_notify_evidence_not_ready");
-	}
-	const implementationReady = trustedCodexStopReports.length > 0;
-	if (implementationReady) {
-		reasons.push("hook_approval_state_not_machine_observable");
-	}
-	return {
-		implementation_status: implementationReady ? "ready" : "blocked",
-		daily_pilot_status: "blocked",
-		reasons,
-		trusted_codex_stop_count: trustedCodexStopReports.length,
-		evidence_only_codex_stop_count:
-			codexStopReports.length - trustedCodexStopReports.length,
-		legacy_notify_count: legacyNotifyCount,
-	};
 }
 
 function isTrustedCodexStopReport(
@@ -880,7 +942,14 @@ function pilotCheckpointSummary(input: {
 	};
 }
 
-function renderPlainReview(data: ReviewResultDataV1): string {
+/**
+ * Render v2 review as plain text. v1 triage (coverage, low-signal, no-action,
+ * open items) comes before ledger detail (R2). Claim labels come only from
+ * reducer-owned `allowed_claims`; the renderer never re-derives corroboration,
+ * trust, or readiness (R22, KTD5). Untrusted strings are sanitized so labels
+ * cannot spoof sections (R23, AE8).
+ */
+function renderPlainReview(data: ReviewResultData): string {
 	const lines = [
 		"Skill Feedback Review",
 		`Reports: ${data.coverage.total_reports}`,
@@ -888,27 +957,59 @@ function renderPlainReview(data: ReviewResultDataV1): string {
 		`Capture-only: ${data.coverage.capture_only_count}`,
 		`Unlinked: ${data.coverage.unlinked_count}`,
 		`Evidence gaps: ${data.coverage.evidence_gap_count}`,
-		`Codex capture: ${data.capture_readiness.implementation_status}`,
-		`Codex daily pilot: ${data.capture_readiness.daily_pilot_status}`,
-		`Codex Stop trusted: ${data.capture_readiness.trusted_codex_stop_count}`,
-		`Codex Stop evidence-only: ${data.capture_readiness.evidence_only_codex_stop_count}`,
 	];
-	if (data.capture_readiness.legacy_notify_count > 0) {
-		lines.push(`Codex notify legacy: ${data.capture_readiness.legacy_notify_count}`);
+	if (data.coverage.low_coverage_warning) {
+		lines.push(`Low coverage: ${plainSafe(data.coverage.low_coverage_warning)}`);
 	}
-	if (data.capture_readiness.reasons.length > 0) {
-		lines.push(`Codex capture reasons: ${data.capture_readiness.reasons.join(", ")}`);
-	}
+
+	// Triage before ledger detail (R2).
 	if (data.open_items.length === 0) {
-		lines.push(`No action: ${data.no_action?.rationale ?? "No open items."}`);
+		lines.push(`No action: ${plainSafe(data.no_action?.rationale ?? "No open items.")}`);
 	} else {
 		lines.push("Open items:");
 		for (const item of data.open_items) {
-			lines.push(`- ${item.open_reason}: ${item.evidence}`);
+			lines.push(`- ${item.open_reason}: ${plainSafe(item.evidence)}`);
 		}
 	}
+
+	// Readiness, split by claim (R20).
+	lines.push("Readiness:");
+	for (const [label, fact] of [
+		["runtime capture", data.claim_readiness.runtime_capture],
+		["trusted skill identity", data.claim_readiness.trusted_skill_identity],
+		["daily pilot", data.claim_readiness.daily_pilot],
+	] as const) {
+		const reasons =
+			fact.reason_ids.length > 0 ? ` (${fact.reason_ids.join(", ")})` : "";
+		lines.push(`- ${label}: ${fact.status}${reasons}`);
+	}
+
+	// Ledger detail last, claim labels straight from allowed_claims (R22).
+	if (data.ledger_entries.length > 0) {
+		lines.push("Ledger:");
+		for (const entry of data.ledger_entries) {
+			const claims =
+				entry.allowed_claims.length > 0
+					? ` claims=${entry.allowed_claims.join(",")}`
+					: "";
+			const anchor =
+				entry.anchor_strength === "weak"
+					? `weak:${entry.weak_anchor_reason ?? "unknown"}`
+					: (entry.ledger_anchor_key ?? "standalone");
+			lines.push(
+				`- ${plainSafe(anchor)} tier=${entry.evidence_tier} sources=${entry.source_mix.join("/")}${claims}`,
+			);
+		}
+	}
+	if (data.anchor_miss_telemetry.length > 0) {
+		const misses = data.anchor_miss_telemetry
+			.map((miss) => `${miss.weak_anchor_reason}×${miss.count}`)
+			.join(", ");
+		lines.push(`Anchor misses: ${misses}`);
+	}
+
 	if (data.retention.warning) {
-		lines.push(`Retention: ${data.retention.warning}`);
+		lines.push(`Retention: ${plainSafe(data.retention.warning)}`);
 	}
 	if (data.pilot_checkpoint) {
 		lines.push(
@@ -916,6 +1017,17 @@ function renderPlainReview(data: ReviewResultDataV1): string {
 		);
 	}
 	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Neutralize control characters and newlines in untrusted text so a label
+ * cannot inject a fake plain-output section heading (R23, AE8). Reports are
+ * already field-redacted on write; this guards against structural spoofing in
+ * the rendered layout.
+ */
+function plainSafe(value: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point.
+	return value.replace(/[\x00-\x1f\x7f]+/g, " ").trim();
 }
 
 function daysBetween(startIso: string, endIso: string): number | undefined {

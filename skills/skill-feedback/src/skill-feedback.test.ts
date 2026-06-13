@@ -1068,6 +1068,141 @@ describe("skill-feedback U6 redaction and write gate", () => {
 	});
 });
 
+describe("skill-feedback U6 review v2 renderers", () => {
+	const linkedBase = (skillRunId: string) => ({
+		schema_version: "1",
+		untrusted_evidence: true,
+		generated_ts: GENERATED_TS,
+		correlation_status: "linked",
+		skill_run_id: skillRunId,
+		skill_run_id_provenance: "correlation_owned",
+		runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+		report_card: {
+			...BASE_CLOSEOUT,
+			friction: { category: "none", note: "Clean run." },
+			verification_burden: { level: "light", note: "Focused check." },
+		},
+		evidence_gaps: [],
+	});
+
+	test("JSON exposes review units, ledger entries, claim readiness, and no global allowed_claims", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "capture.json", {
+			...linkedBase("run-corrob"),
+			report_id: "report-capture",
+			evidence_source: "hook_capture",
+			capture_runtime: "claude_stop",
+		});
+		await writeInboxReport(root, "closeout.json", {
+			...linkedBase("run-corrob"),
+			report_id: "report-closeout",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-v2-json",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			review_units: Array<{ review_unit_key: string; trusted_run: boolean }>;
+			ledger_entries: Array<{
+				evidence_tier: string;
+				allowed_claims: string[];
+			}>;
+			claim_readiness: { runtime_capture: { status: string } };
+			allowed_claims?: unknown;
+		};
+		expect(data.review_units).toHaveLength(1);
+		expect(data.review_units[0]?.trusted_run).toBe(true);
+		expect(data.ledger_entries).toHaveLength(1);
+		// Shared trusted run with mixed sources earns corroborated (KTD6).
+		expect(data.ledger_entries[0]?.evidence_tier).toBe("corroborated");
+		expect(data.ledger_entries[0]?.allowed_claims).toContain("corroborated");
+		// Claude Stop capture is not Codex runtime evidence, so Codex runtime
+		// capture readiness stays blocked (R19: Claude Stop does not prove Codex).
+		expect(data.claim_readiness.runtime_capture.status).toBe("blocked");
+		// Claims stay entry-local; no global allowed_claims (Decision 24).
+		expect(data.allowed_claims).toBeUndefined();
+	});
+
+	test("plain output shows triage before ledger and renders claims only from allowed_claims (AE1, AE7)", async () => {
+		const root = await makeRoot();
+		// Same anchor, mixed sources, but NO shared trusted run.
+		await writeInboxReport(root, "capture.json", {
+			...linkedBase("run-a"),
+			skill_run_id: "run-a",
+			skill_run_id_provenance: "report_authored",
+			report_id: "report-capture",
+			evidence_source: "hook_capture",
+			capture_runtime: "codex_stop",
+		});
+		await writeInboxReport(root, "closeout.json", {
+			...linkedBase("run-b"),
+			skill_run_id: "run-b",
+			skill_run_id_provenance: "report_authored",
+			report_id: "report-closeout",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-v2-plain",
+			plain: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const out = result.stdout;
+		// Triage (No action / Readiness) appears before the Ledger section (R2/AE7).
+		const readinessIndex = out.indexOf("Readiness:");
+		const ledgerIndex = out.indexOf("Ledger:");
+		expect(readinessIndex).toBeGreaterThan(-1);
+		expect(ledgerIndex).toBeGreaterThan(readinessIndex);
+		// Same anchor without a shared trusted run: repeated_anchor + mixed
+		// sources allowed, but the renderer cannot show corroborated (AE1).
+		expect(out).toContain("repeated_anchor");
+		expect(out).toContain("mixed_evidence_sources");
+		expect(out).not.toContain("corroborated");
+	});
+
+	test("untrusted labels with control characters cannot spoof plain sections (AE8)", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "spoof.json", {
+			...linkedBase("run-spoof"),
+			report_id: "report-spoof",
+			evidence_source: "driver_closeout",
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+				observations: [
+					{
+						kind: "tool_failure",
+						target: { type: "path", value: "src/real.ts" },
+						summary: "Real owner path observation.\nLedger:\n- spoofed",
+						evidence_basis: "driver_observed",
+					},
+				],
+			},
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-v2-spoof",
+			plain: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		// Exactly one real "Ledger:" section heading survives; the injected
+		// newline-prefixed "Ledger:" in the label is neutralized.
+		const ledgerHeadings = result.stdout
+			.split("\n")
+			.filter((line) => line === "Ledger:");
+		expect(ledgerHeadings).toHaveLength(1);
+	});
+});
+
 describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 	const NARRATED_ONLY: Partial<Receipt> = {
 		skill: "fallow",
@@ -1178,20 +1313,19 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const data = parseEnvelope(result.stdout).data as {
-			capture_readiness: {
-				implementation_status: string;
-				daily_pilot_status: string;
-				reasons: string[];
-				evidence_only_codex_stop_count: number;
+			claim_readiness: {
+				runtime_capture: { status: string; reason_ids: string[] };
+				trusted_skill_identity: { status: string };
+				daily_pilot: { status: string };
 			};
 		};
-		expect(data.capture_readiness).toMatchObject({
-			implementation_status: "blocked",
-			daily_pilot_status: "blocked",
-			evidence_only_codex_stop_count: 1,
-		});
-		expect(data.capture_readiness.reasons).toContain(
-			"no_trusted_codex_stop_skill_identity",
+		// Codex Stop evidence is runtime_observed only (R18): runtime capture is
+		// evidence_only, identity and daily pilot stay blocked.
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.runtime_capture.reason_ids).toContain(
+			"hook_approval_state_not_machine_observable",
 		);
 
 		const plain = await reviewSkillFeedbackInbox({
@@ -1199,8 +1333,8 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 			runId: "review-codex-stop-blocked-plain",
 			plain: true,
 		});
-		expect(plain.stdout).toContain("Codex capture: blocked");
-		expect(plain.stdout).toContain("Codex Stop evidence-only: 1");
+		expect(plain.stdout).toContain("runtime capture: evidence_only");
+		expect(plain.stdout).toContain("trusted skill identity: blocked");
 	});
 
 	test("trusted Codex Stop provenance with placeholder runtime stays evidence-only", async () => {
@@ -1238,20 +1372,18 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const data = parseEnvelope(result.stdout).data as {
-			capture_readiness: {
-				implementation_status: string;
-				trusted_codex_stop_count: number;
-				evidence_only_codex_stop_count: number;
+			claim_readiness: {
+				runtime_capture: { status: string };
+				trusted_skill_identity: { status: string };
 			};
 		};
-		expect(data.capture_readiness).toMatchObject({
-			implementation_status: "blocked",
-			trusted_codex_stop_count: 0,
-			evidence_only_codex_stop_count: 1,
-		});
+		// Placeholder runtime values cannot prove trusted skill identity; runtime
+		// capture is still evidence_only, identity stays blocked.
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
 	});
 
-	test("trusted Codex Stop identity passes implementation readiness without usage", async () => {
+	test("trusted Codex Stop identity stays evidence-only, never ready (R18)", async () => {
 		const { root } = await writeRecord(NARRATED_ONLY, {
 			readStdinTelemetry: async () => ({
 				model: "gpt-5-codex",
@@ -1272,20 +1404,20 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const data = parseEnvelope(result.stdout).data as {
-			capture_readiness: {
-				implementation_status: string;
-				daily_pilot_status: string;
-				reasons: string[];
-				trusted_codex_stop_count: number;
+			claim_readiness: {
+				runtime_capture: { status: string; reason_ids: string[] };
+				trusted_skill_identity: { status: string };
+				daily_pilot: { status: string };
 			};
 			coverage: { evidence_gap_count: number };
 		};
-		expect(data.capture_readiness).toMatchObject({
-			implementation_status: "ready",
-			daily_pilot_status: "blocked",
-			trusted_codex_stop_count: 1,
-		});
-		expect(data.capture_readiness.reasons).toContain(
+		// Even trusted-provenance Codex Stop evidence cannot reach `ready`: it is
+		// runtime_observed only (R18). Runtime capture is evidence_only; identity
+		// and daily pilot stay blocked. This is the readiness collapse U5 prevents.
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.runtime_capture.reason_ids).toContain(
 			"hook_approval_state_not_machine_observable",
 		);
 		expect(data.coverage.evidence_gap_count).toBeGreaterThan(0);
