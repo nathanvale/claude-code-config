@@ -124,11 +124,18 @@ the redaction boundary) are not browser-specific — they answer "how does a hum
 trust an autonomous agent did the right irreversible thing?"
 - **Why chosen:** it's the highest-leverage strategic question and surfaced independently
   from PM and Engineer lenses. Deciding this sets the product's identity and ceiling.
-- **Key assumption to validate (and the risk):** does the moat survive *outside* the
-  browser? Today it is physically real because CDP gives N independent lenses for free.
-  Discovery must find one non-browser substrate where N independent verifiers are as
-  near-free — otherwise the moat is specifically *CDP-as-a-multi-client-bus*, and
-  generalizing dilutes it. **Resolve this before repositioning.**
+- **Key assumption — RESOLVED (verdict: B, the moat is CDP-specific).** The discovery
+  experiment tested 9 non-browser substrates (filesystem, DB, API, OS/process, k8s, LLM
+  N-version, git, documents, cloud infra) against the four criteria. **None clears all four
+  for free.** They fail the same way: each ships with ONE canonical interpreter (one query
+  planner, one git spec, one API server), so the "N clients" are thin transports over a
+  single brain — cheap fan-out buys *correlated echoes, not independent second opinions*.
+  The browser is the rare exception because it exposes its one live state through several
+  independent abstraction layers (pixels / DOM / a11y / network / JS), each with its own
+  implementation and blind spots — so uncorrelated observer error is a *free byproduct of
+  the architecture*, not something you engineer. **Do NOT reposition as a general
+  "agent-trust protocol" — that overclaims.** The defensible identity is below.
+  (Experiment: `docs/research/2026-06-13-protocol-vs-cdp-experiment.md`.)
 
 #### 3. Cloak-Catcher — adversarial content-integrity monitoring
 *Detect when a site serves different content to different fingerprints* (cloaking, price/geo
@@ -264,20 +271,38 @@ OUTCOME: agent web-actions are trustworthy enough to commit + auditable after
 
 ---
 
+## Settled identity (assumption #1 resolved)
+
+The protocol-vs-CDP experiment is **done — verdict B.** The product identity is therefore
+settled:
+
+> **A browser-trust tool, not a general agent-trust protocol.** The core product is
+> *CDP-as-a-multi-client-bus: the browser is one world that honestly disagrees with itself,
+> giving uncorrelated second opinions for free.* The trust *pattern* (independent
+> re-derivations of one shared mutable instance, Set-diffed for consensus) is real and
+> intellectually general — but the *economics that make it free are browser-specific*, so the
+> defensible claim stays narrow and is stronger for it.
+
+What this rules in/out:
+- **In:** lean hard into the browser. Every dividend that exploits multi-layer browser
+  legibility (DOM vs a11y vs pixels vs network) is moat-pure. TrustLayer, Flake Oracle,
+  Cloak-Catcher, confidence-as-experience all stay.
+- **Out:** do not chase non-browser substrates as a near-term moat. The one possible future
+  "substrate #2" is OS/process introspection (the only other place with genuinely
+  independent observers — fails on cost/diffability, not independence), and it would have to
+  be *engineered*, not inherited. Park it; don't market it.
+
 ## Next discovery step
 
-Two assumptions are make-or-break and both are cheap to probe — run them before the
-roadmap commits to an identity:
+One make-or-break assumption remains, cheap to probe:
 
-1. **Is the moat the protocol or CDP?** (Part 2 #2). Find one non-browser substrate where N
-   independent verifiers are as near-free as fanning to 5 engines on one warm Chrome. If yes
-   → "agent-trust protocol." If no → "browser-trust tool, and that's plenty." Do not
-   reposition until answered.
-2. **Are the 5 lenses' fingerprints meaningfully distinct?** (Part 2 #3). Point them at a
-   known-cloaking / A-B site and check whether the diff is non-empty. If the lenses share a
-   near-identical Chrome signature, Cloak-Catcher is dead on arrival; if distinct, it's a
-   second moat-pure market.
+- **Are the 5 lenses' fingerprints meaningfully distinct?** (Part 2 #3 / Cloak-Catcher).
+  Point them at a known-cloaking / A-B site and check whether the diff is non-empty. If the
+  lenses share a near-identical Chrome signature, Cloak-Catcher is dead on arrival; if
+  distinct, it's a second moat-pure market. Note the experiment refined this: the 5 engines'
+  *observer independence* (different a11y pipelines) is proven, but *fingerprint* distinctness
+  (what the site sees) is a separate property still unverified.
 
 Everything else in Part 2 (TrustLayer, Flake Oracle, confidence-as-experience) builds on
 already-proven mechanisms and is sequencing/packaging work, not an open question — that's
-`ce-plan` territory once an identity is chosen.
+`ce-plan` territory now that the identity is settled.

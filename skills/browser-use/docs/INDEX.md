@@ -38,6 +38,7 @@ records. They are linked below but not moved.
 - [Round-2 dividends + accessible-name divergence](research/2026-06-12-round2-dividends-and-naming-divergence-findings.md) — live proof of confidence-annotated perception + stakes dial and reproduce-everywhere; the Hacker News finding that engines disagree on element NAMES (same link = "119 comments" vs "3 hours ago"), making single-engine agents silently fragile. Also: round-2b quorum-gated action + signed receipt, and drive-observe.
 - [Moat audit — what only N engines can do](research/2026-06-12-moat-audit-what-only-n-engines-can-do.md) — the honest line between structural moats (consensus/quorum/failover/repro — impossible for one engine) and conveniences (drive-observe, payload tiering — a single capable engine could do them). Answers "why not just chrome-devtools?"
 - [Ref-staleness → verify-layer spec](research/2026-06-13-ref-staleness-verify-layer-findings.md) — live staleness characterization settling R7: engines split three ways (hard-error / auto-recover / SILENT no-op), agent-browser lies about success, so the verify layer must check post-state, not return values.
+- [Protocol-vs-CDP experiment](research/2026-06-13-protocol-vs-cdp-experiment.md) — settles the product identity: 9 non-browser substrates tested, none gives N independent observers + cheap fan-out for free. Verdict B — the moat is CDP-specific (a browser is one world that honestly disagrees with itself); do NOT reposition as a general agent-trust protocol.
 
 ## Ideation
 
