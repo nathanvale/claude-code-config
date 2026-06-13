@@ -14,3 +14,7 @@ skills/fallow/scripts/.fallow/
 
 # TypeScript incremental build cache (generated)
 *.tsbuildinfo
+
+# playwright-cli runtime dumps (contain live page content / authed URLs — never commit)
+.playwright-cli/
+**/.playwright-cli/
