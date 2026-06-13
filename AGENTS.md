@@ -1,11 +1,9 @@
 # Work Style
 
-Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.md`, `SKILL.md`, skill references.
 
-- Artifacts: telegraph; bullets; no filler; edit source.
+- Telegraph; noun-phrases ok; drop grammar; min tokens.
 - One idea per bullet.
 - Imperative voice.
-- Avoid tables unless requested.
 - No decorative XML.
 - Generated files name source; edit source, not output.
 - Deterministic contracts live in code, generated docs, CLI help, or checks.
@@ -46,7 +44,7 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 - Keep skills thin: read maps, choose next safe actions, and call owners.
 - Design failures to expose cause, repair path, or human handoff.
 - Name contract, model, engine, discovery, and CLI owners before implementation.
-- For code-structure choices, use `context/code-style.md`.
+- Code-structure choices, a new module, or reaching for a design pattern: run the `context/code-style.md` pressure gate.
 - For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `create-cli` for the contract path.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
@@ -74,12 +72,12 @@ Applies when editing AGENTS.md, CLAUDE.md, `rules/`, `CONTEXT.md`, `PROVENANCE.m
 
 ## Tools
 
-- Search: `rg`; fallback only when unavailable.
-- Manual edits: `apply_patch`.
+- Search with `rg`; edit manually with `apply_patch`.
 - Parallel independent reads/checks: `multi_tool_use.parallel`.
-- Library/API docs: use Context7; if MCP is absent, run `npx -y ctx7 library <name> "<query>"` then `npx -y ctx7 docs <id> "<query>"`.
+- Research tools: use `context/search-tools.md`.
+- Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers; don't rely on ambient shell env.
+- MCP auth checks: never source `.env` or print key prefixes; check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
 - Tests/lint/types: prefer MCP runners; see `context/bun-runner.md`.
-- Exact project commands live in repo docs, package scripts, or owner skills.
 
 ## External Data
 
