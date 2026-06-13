@@ -266,6 +266,71 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 		expect(ledger_entries[0]?.evidence_tier).toBe("driver_declared");
 	});
 
+	test("duplicate report_id (weak anchors) cannot merge into one mixed-source entry", () => {
+		// A forged inbox repeats a report_id across two unrelated weak reports.
+		// They must stay two standalone entries — never one weak entry claiming
+		// mixed_evidence_sources (KTD4 weak-anchor merge prevention).
+		const labelOnly: readonly ReportCardTarget[] = [
+			{ type: "label", value: "shared-label" },
+		];
+		const { ledger_entries } = reduceReviewLedger([
+			report({
+				report_id: "dup",
+				evidence_source: "hook_capture",
+				touched_surfaces: labelOnly,
+			}),
+			report({
+				report_id: "dup",
+				evidence_source: "driver_closeout",
+				touched_surfaces: labelOnly,
+			}),
+		]);
+
+		expect(ledger_entries).toHaveLength(2);
+		for (const entry of ledger_entries) {
+			expect(entry.source_mix).toHaveLength(1);
+			expect(entry.allowed_claims).not.toContain("mixed_evidence_sources");
+			expect(entry.allowed_claims).not.toContain("corroborated");
+		}
+	});
+
+	test("duplicate report_id across two trusted runs cannot forge corroboration", () => {
+		// Same report_id, same strong anchor, but two different trusted runs.
+		// Occurrence-based indexing keeps the runs distinct, so the shared-anchor
+		// entry must not see one trusted unit with both sources => no corroboration.
+		const { ledger_entries } = reduceReviewLedger([
+			report({
+				report_id: "dup",
+				evidence_source: "hook_capture",
+				touched_surfaces: sharedAnchor,
+				skill_run_id: "run-a",
+				skill_run_id_provenance: "runtime_owned",
+			}),
+			report({
+				report_id: "dup",
+				evidence_source: "driver_closeout",
+				touched_surfaces: sharedAnchor,
+				skill_run_id: "run-b",
+				skill_run_id_provenance: "runtime_owned",
+			}),
+		]);
+
+		expect(ledger_entries).toHaveLength(1);
+		const entry = ledger_entries[0];
+		expect(entry?.evidence_tier).not.toBe("corroborated");
+		expect(entry?.allowed_claims).not.toContain("corroborated");
+		expect(entry?.allowed_claims).not.toContain("same_trusted_run");
+		// Distinct runs => two review_unit_keys on the shared-anchor entry.
+		expect(entry?.review_unit_keys).toHaveLength(2);
+	});
+
+	test("empty reports produce an empty, valid reducer result", () => {
+		const result = reduceReviewLedger([]);
+		expect(result.review_units).toEqual([]);
+		expect(result.ledger_entries).toEqual([]);
+		expect(result.anchor_miss_telemetry).toEqual([]);
+	});
+
 	test("evidence tier and allowed claims ignore renderer wording", () => {
 		// Same anchor, mixed sources, but DIFFERENT untrusted runs => no corroboration.
 		const { ledger_entries } = reduceReviewLedger([

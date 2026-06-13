@@ -48,22 +48,26 @@ export function reduceReviewLedger(
 	reports: readonly NormalizedSoftwareLearningReport[],
 ): ReviewLedgerResult {
 	const reviewUnits = buildReviewUnits(reports);
-	const reportToUnit = indexReportsToUnits(reviewUnits);
-	const anchorFacts = new Map(
-		reports.map((report) => [report.report_id, deriveLedgerAnchorFacts(report)]),
-	);
+	// Index by occurrence, not report_id: a forged inbox could repeat a
+	// report_id, and keying on it would merge unrelated reports into one entry
+	// (false mixed-sources on a weak anchor, or false corroboration across two
+	// runs). Each report occurrence carries its own anchor facts and unit.
+	const anchorFacts = reports.map((report) => deriveLedgerAnchorFacts(report));
+	const reportToUnit = indexReportOccurrencesToUnits(reviewUnits, reports);
 
 	const entries = new Map<string, MutableLedgerEntry>();
-	for (const report of reports) {
-		const unit = reportToUnit.get(report.report_id);
-		if (!unit) continue;
-		const anchor = anchorFacts.get(report.report_id);
-		if (!anchor) continue;
+	for (let index = 0; index < reports.length; index += 1) {
+		const report = reports[index];
+		const unit = reportToUnit[index];
+		const anchor = anchorFacts[index];
+		if (!report || !unit || !anchor) continue;
 
+		// Strong anchors merge on their shared key; weak anchors stay standalone,
+		// keyed by occurrence so duplicate report_ids cannot collapse together.
 		const key =
 			anchor.anchor_strength === "strong_path" && anchor.ledger_anchor_key
 				? anchor.ledger_anchor_key
-				: `standalone:${report.report_id}`;
+				: `standalone:${index}:${report.report_id}`;
 
 		let entry = entries.get(key);
 		if (!entry) {
@@ -95,7 +99,7 @@ export function reduceReviewLedger(
 	return {
 		review_units: reviewUnits.map(toReviewUnitData),
 		ledger_entries: ledgerEntries,
-		anchor_miss_telemetry: anchorMissTelemetry(reports, anchorFacts),
+		anchor_miss_telemetry: anchorMissTelemetry(anchorFacts),
 	};
 }
 
@@ -185,14 +189,33 @@ function trustedSkillRunId(
 	}
 }
 
-function indexReportsToUnits(
+/**
+ * Map each report occurrence (by index) to its review unit. Indexing by
+ * occurrence rather than report_id means a repeated report_id in a forged
+ * inbox cannot route two reports to the wrong unit.
+ */
+function indexReportOccurrencesToUnits(
 	units: readonly ReviewUnit[],
-): Map<string, ReviewUnit> {
-	const index = new Map<string, ReviewUnit>();
+	reports: readonly NormalizedSoftwareLearningReport[],
+): Array<ReviewUnit | undefined> {
+	const unitByReportId = new Map<string, ReviewUnit[]>();
 	for (const unit of units) {
-		for (const reportId of unit.report_ids) index.set(reportId, unit);
+		for (const reportId of unit.report_ids) {
+			const bucket = unitByReportId.get(reportId);
+			if (bucket) bucket.push(unit);
+			else unitByReportId.set(reportId, [unit]);
+		}
 	}
-	return index;
+	// Consume each report_id's unit assignments in order so duplicate ids map to
+	// their own occurrence's unit rather than collapsing to the last writer.
+	const cursors = new Map<string, number>();
+	return reports.map((report) => {
+		const bucket = unitByReportId.get(report.report_id);
+		if (!bucket) return undefined;
+		const cursor = cursors.get(report.report_id) ?? 0;
+		cursors.set(report.report_id, cursor + 1);
+		return bucket[Math.min(cursor, bucket.length - 1)];
+	});
 }
 
 function accumulateReport(
@@ -379,16 +402,14 @@ function toReviewUnitData(unit: ReviewUnit): ReviewUnitData {
  * anchor-source proposals.
  */
 function anchorMissTelemetry(
-	reports: readonly NormalizedSoftwareLearningReport[],
-	anchorFacts: ReadonlyMap<string, ReturnType<typeof deriveLedgerAnchorFacts>>,
+	anchorFacts: readonly ReturnType<typeof deriveLedgerAnchorFacts>[],
 ): readonly ReviewAnchorMissTelemetry[] {
 	const byReason = new Map<
 		ReviewWeakAnchorReason,
 		{ count: number; attempted_targets: ReportCardTarget[] }
 	>();
-	for (const report of reports) {
-		const anchor = anchorFacts.get(report.report_id);
-		if (!anchor || anchor.anchor_strength !== "weak" || !anchor.weak_anchor_reason) {
+	for (const anchor of anchorFacts) {
+		if (anchor.anchor_strength !== "weak" || !anchor.weak_anchor_reason) {
 			continue;
 		}
 		let bucket = byReason.get(anchor.weak_anchor_reason);
