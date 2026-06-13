@@ -18,7 +18,7 @@ composition, not redundancy.
 | Daily check | Strongest engine | Why |
 |---|---|---|
 | **React memory + performance (Chrome)** | chrome-devtools | the only engine with the 44-tool debug surface — heap snapshots, performance traces, real DevTools memory tooling |
-| **WCAG accessibility compliance** | the differential oracle over the a11y trees | WCAG *is* about the accessibility tree; engines compute it independently, so when they disagree on an element's accessible name (the live "119 comments" vs "3 hours ago" finding) that disagreement is often a real a11y defect — an ambiguous name a screen reader would also stumble on. A free a11y smoke test. |
+| **WCAG accessibility compliance** | chrome-devtools Lighthouse (full scan) **+** the differential oracle (name-ambiguity) | Two complementary signals. chrome-devtools runs Lighthouse natively for full WCAG coverage (contrast, ARIA, focus order). The oracle adds what Lighthouse can't: **accessible-name ambiguity** — when independent a11y pipelines compute different names for the same element (proven live: HN "N comments" vs timestamp; W3C demo's decorative "bullet" named on one lineage only), a real WCAG 4.1.2 smell a single engine cannot detect. PROVEN-QUALIFIED — `docs/research/2026-06-13-wcag-a11y-oracle-spike.md`. |
 | **Figma ↔ implementation design-parity** | playwright (robust capture) + screenshot diff | auto-wait robustness for stable capture, then compare against the Figma node |
 
 **Why the trust layer matters here:** when the agent reports "parity passed" or "no WCAG
