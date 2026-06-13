@@ -182,9 +182,102 @@ under multi-tenant CDP-root — revisit once #2 is answered).
 
 ---
 
+## Part 3 — Who, against what, measured how
+
+### Primary user & jobs-to-be-done
+
+The product has a **primary actor** (who calls it) and a **protected party** (who the
+trust is for). Keeping them distinct is what keeps the value proposition honest.
+
+| Actor | The job they hire us for | The pain today (N=1 world) |
+|---|---|---|
+| **AI agent** (primary caller) | "Act on the live web and *know when I might be wrong* before I commit." | One lens; trusts its only view; clicks the wrong element / fires on a stale ref and reports success. |
+| **Developer / platform team** (buyer) | "Ship an agent into high-stakes web work without a wrong irreversible action becoming an incident." | No way to gate or audit an autonomous click; can't prove what the agent saw before it acted. |
+| **QA / RPA engineer** (adjacent buyer) | "Tell me whether this flaky run is the site or my engine." | One runner can't separate site regression from engine artifact; manual bisection. |
+| **Trust-and-safety / verification analyst** (adjacent buyer) | "Catch when a site serves different content to different observers." | Brittle multi-proxy farms; impossible to hold the session constant while varying the observer. |
+| **End-user / auditor** (protected party) | "Prove the agent did the right irreversible thing on my behalf." | A single engine's log is self-attested; no independent witness. |
+
+The **core JTBD** that unifies them: *make an autonomous agent's web actions trustworthy
+enough to commit and auditable after the fact.* Capability is solved; trust is the gap.
+
+### Competitive landscape — why not the alternatives
+
+The framing question is always "why not just X?" The honest answer is the same each time:
+**X is a single witness; it cannot be a second opinion on itself.**
+
+| Alternative | What it does well | Why it can't do our core |
+|---|---|---|
+| **chrome-devtools (alone)** | 44 native tools, deep debug surface | One a11y pipeline; cannot disagree with itself → no consensus, quorum, or repro. (It is our adapter N1, not our competitor.) |
+| **Playwright / Selenium** | Robust automation, auto-wait, huge ecosystem | Single engine; same blind spot. Drives well, can't witness itself. |
+| **Browserbase / hosted-browser infra** | Managed browsers at scale | Provides *a* browser, not N *independent witnesses of one* browser. Scale ≠ consensus. |
+| **Computer-use models (vision-driving)** | No DOM dependency, general | One model's perception; no independent cross-check; the model judges itself. |
+| **A human in the loop** | Real judgment | Doesn't scale; not mechanical; not auditable as a signed artifact. |
+
+The moat is not "we automate better." It is **N independent witnesses of one shared world,
+made near-free by CDP-as-a-multi-client-bus** — a property none of the above have, and one
+that is structurally additive (more engines = more confidence) rather than a feature race.
+
+### Success metrics (what discovery should move)
+
+Outcome metrics (per the Opportunity Solution Tree — measure the outcome, not the output):
+
+- **Trust outcome:** rate of *caught* wrong-irreversible-actions per 1k agent commits
+  (quorum refusals that prevented a bad click) — the headline value.
+- **Silent-failure outcome:** rate of silent no-ops *detected by post-state verify* that a
+  single engine would have reported as success (directly from the ref-staleness finding).
+- **Triage outcome:** mean-time-to-classify a failing run as site-vs-engine (Flake Oracle).
+- **Cost discipline:** % of operations served by the cheapest capable lens; consensus spend
+  as a fraction of total (the stakes dial working).
+- **Adoption signal:** agents that gate behavior on `seen_by` tiers vs ignore them (proves
+  the confidence signal is *consumed*, not just emitted).
+
+Anti-metric to watch: **alarm fatigue** — divergence interrupts per session. If consensus is
+near-universal on clean pages (it is — 297/298 on Wikipedia), interrupts must stay rare or
+the signal gets ignored.
+
+### Opportunity Solution Tree (compressed)
+
+```
+OUTCOME: agent web-actions are trustworthy enough to commit + auditable after
+│
+├─ OPPORTUNITY: "I can't tell when my one engine is wrong"
+│   └─ SOLUTION: confidence-annotated perception (seen_by: N/5)  [PROVEN]
+│       └─ EXPERIMENT: do agents gate behavior on the tier? (Part 2 #4 assumption)
+│
+├─ OPPORTUNITY: "I can't safely commit an irreversible action"
+│   └─ SOLUTION: quorum gate + signed receipt  [PROVEN]
+│       └─ EXPERIMENT: does quorum's $/latency tax clear buyer ROI? (Part 2 #1)
+│
+├─ OPPORTUNITY: "I can't tell if it's the site or my engine"
+│   └─ SOLUTION: reproduce-everywhere triage  [PROVEN]
+│       └─ EXPERIMENT: does it cut triage time enough to switch runners? (Part 2 #5)
+│
+├─ OPPORTUNITY: "the site is lying to my client"
+│   └─ SOLUTION: cloaking detection  [moat, not yet run]
+│       └─ EXPERIMENT: are the 5 lenses' fingerprints distinct enough? (Part 2 #3 — make-or-break)
+│
+└─ OPPORTUNITY (meta): "is this even a browser product?"
+    └─ SOLUTION: reframe as a trust protocol  [premise challenge]
+        └─ EXPERIMENT: find ONE non-browser substrate where N independent
+           verifiers are near-free (Part 2 #2 — gates the product identity)
+```
+
+---
+
 ## Next discovery step
 
-Validate assumption **#2** (is the moat the protocol or CDP?) and assumption **#3's**
-fingerprint-distinctness unknown — both are make-or-break and both are cheap to probe. They
-gate which of the two product identities (browser-trust tool vs agent-trust protocol) the
-roadmap commits to.
+Two assumptions are make-or-break and both are cheap to probe — run them before the
+roadmap commits to an identity:
+
+1. **Is the moat the protocol or CDP?** (Part 2 #2). Find one non-browser substrate where N
+   independent verifiers are as near-free as fanning to 5 engines on one warm Chrome. If yes
+   → "agent-trust protocol." If no → "browser-trust tool, and that's plenty." Do not
+   reposition until answered.
+2. **Are the 5 lenses' fingerprints meaningfully distinct?** (Part 2 #3). Point them at a
+   known-cloaking / A-B site and check whether the diff is non-empty. If the lenses share a
+   near-identical Chrome signature, Cloak-Catcher is dead on arrival; if distinct, it's a
+   second moat-pure market.
+
+Everything else in Part 2 (TrustLayer, Flake Oracle, confidence-as-experience) builds on
+already-proven mechanisms and is sequencing/packaging work, not an open question — that's
+`ce-plan` territory once an identity is chosen.
