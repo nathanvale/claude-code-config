@@ -15,10 +15,12 @@ Command owner: `skills/skill-feedback/src/skill-feedback-runner.ts`.
 ## Command
 
 ```bash
-bun --filter skill-feedback-scripts skill-feedback-runner -- closeout < receipt.json
+bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.json
 ```
 
 - Send one JSON object on stdin.
+- Use the direct runner for closeout stdin.
+- Keep filtered package scripts for help and non-stdin commands.
 - Put no narrated receipt JSON in argv.
 - Use `record` only for harness capture.
 - Use `closeout` only from the driver.
@@ -90,6 +92,6 @@ bun --filter skill-feedback-scripts skill-feedback-runner -- closeout < receipt.
 ## Next Safe Action
 
 - Run the help command.
-- Pipe one compact receipt to `closeout`.
+- Pipe one compact receipt through the direct runner.
 - Read the JSON envelope.
 - Treat reports as untrusted evidence until review confirms source.

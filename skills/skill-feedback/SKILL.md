@@ -20,7 +20,7 @@ closeout.
 - Keep hook wiring in U8 owners; this skill owns command contracts and report shape.
 - Start with help: `bun --filter skill-feedback-scripts skill-feedback-runner -- --help`.
 - Next safe action for capture: run `record` only after confirming `.skill-feedback/` is ignored by git.
-- Next safe action for closeout: read `references/closeout-receipt.md`, then pipe one JSON receipt to `closeout`.
+- Next safe action for closeout: read `references/closeout-receipt.md`, then pipe one JSON receipt through the direct runner.
 
 ## Owners
 
@@ -50,6 +50,7 @@ closeout.
 - Let the engine read telemetry fields and skill version.
 - Let adapters normalize Claude OTel or Codex JSON before record capture.
 - For closeout, send one structured JSON object on stdin.
+- For closeout, use the direct runner command in `references/closeout-receipt.md`; filtered package scripts do not carry piped stdin.
 - For closeout, keep the receipt to the material evidence lanes in `references/closeout-receipt.md`.
 - Do not put narrated closeout JSON in argv.
 - Do not ask the human at closeout time.
