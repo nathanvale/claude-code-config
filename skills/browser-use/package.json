@@ -31,6 +31,7 @@
 		"prepack": "bun run build",
 		"preflight-browser-adapter": "./src/preflight-browser-adapter.ts",
 		"preflight-warm-chrome": "./src/preflight-warm-chrome.ts",
+		"prototype:agent-browser-vertical-slice": "bun run src/prototype-agent-browser-vertical-slice/prototype.ts",
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
