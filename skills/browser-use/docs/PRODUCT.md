@@ -80,6 +80,22 @@ CDP is **root over web identity**. The same power that makes the facade work mak
 The thing that makes the product possible is the thing that makes the security boundary
 mandatory; they are the same property.
 
+### The capability equalizer (cost-economics angle)
+
+The trust layer moves model-independent failures **off the model and into code**, so a
+*cheaper* model gets much of an *expensive* model's safety for free. The sharpest, proven
+case is **selector/element hallucination** — the failure weaker models hit hardest: a weak
+model invents a plausible selector (`#submit-btn`, `.cta`) from training priors instead of
+reading the page. The fleet **structurally rejects it** — refs come from what the engines
+*saw*, so an invented selector has nowhere to land; the gate is a `Set.has(target)` test
+with no IQ, identical for Qwen 3.5 and Opus 4.8. Proven 6/6 catch, 0 false rejects
+(`docs/research/2026-06-13-selector-hallucination-equalizer-spike.md`).
+
+The reframe: **run a cheaper model *safely* (architecture) instead of paying a frontier
+model to be *careful* (tokens).** The honest limit — this equalizes perception/targeting
+(hallucination, silent failure, bad commits), not *reasoning*; a weak model can still
+mis-plan. Sizing the full effect needs a two-model eval (scoped in the spike doc).
+
 ### Who it is for
 
 The primary consumer is an **AI agent** acting on the live web on someone's behalf — and,
