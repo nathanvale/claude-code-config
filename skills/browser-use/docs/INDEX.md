@@ -14,6 +14,7 @@ records. They are linked below but not moved.
 
 - [PRODUCT.md](PRODUCT.md) — what the core product IS: one warm Chrome driven by N independent engines over CDP; the trust-signal moat ("no engine can be a second opinion on itself"); who it's for; what it is NOT; plus the product-trio ideation and top-5 directions. Start here.
 - [PRODUCT-BASELINE.md](PRODUCT-BASELINE.md) — current-state baseline of the skill's shape.
+- [USE-CASES.md](USE-CASES.md) — the two daily-driver modes: engineering driver (human-supervised Figma-parity / WCAG / React memory-perf, engine-strength composition) and no-touch life-admin (timesheets/appointments via runbooks + 1Password, where the trust layer is a requirement not a feature).
 
 ## Plans
 
