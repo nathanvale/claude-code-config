@@ -87,6 +87,9 @@ The target runtimes are Claude, Codex, and Cloud. V1 supports them through share
 - R32c. Persist a local `pilot_started_at` marker on the first successful v1 closeout when the marker is absent.
 - R32d. After 7 days, `review` emits a pilot checkpoint notice until the marker is explicitly removed by a follow-up cleanup command or workflow. This is not a background scheduler.
 - R32e. Store the pilot marker under `.skill-feedback/` with the same gitignore gate, file permissions, exclusive-create intent, realpath containment, and symlink refusal as reports.
+- R32f. Treat implementation-pilot closeouts as build and smoke evidence, not as proof that Daily pilot readiness has launched.
+- R32g. Keep implementation-pilot records out of the daily-pilot success claim unless a later accepted decision starts the daily pilot.
+- R32h. Use fresh implementation-pilot reports from a clean inbox after review exists; prior smoke reports are source evidence, not durable fixtures.
 
 **Safety**
 
@@ -118,6 +121,8 @@ The target runtimes are Claude, Codex, and Cloud. V1 supports them through share
 - KTD16. **Retention warning is explicit.** Review warns at 14 days or 100 reports while purge remains follow-up work.
 - KTD17. **Pilot checkpoint has a local marker.** First v1 closeout starts the seven-day pilot clock; review surfaces the checkpoint when due.
 - KTD18. **Purge is separate and gated.** Reads stay mutation-free. Deletion needs its own later command or workflow.
+- KTD19. **Implementation pilot is not daily pilot.** Implementation-pilot closeouts are useful build evidence while daily-pilot use stays gated behind review/correlation and true Codex end-to-end proof.
+- KTD20. **Pilot mode stays out of v1 schema.** The phase split lives in glossary and decision logs until review needs different runtime behavior.
 
 ---
 
@@ -337,7 +342,7 @@ Package-owned `data` names the report-card result: report id, optional `skill_ru
 - `skills/skill-feedback/references/report-shape.md`
 - `skills/skill-feedback/SKILL.md`
 
-**Approach:** Add a mutation-free `review` command that reads normalized reports by local day or review window and emits both package-owned report-card data and facade envelope guidance. Lead with coverage. Open items only when high signal appears: high verification burden, repeated friction, evidence gaps, unlinked correlation spike, or owner-path observation. Then show open items with `open_reason`, evidence, owner path or label, severity, and next action. Include no-action cases. Treat unlinked and low-coverage evidence as correlation-health signal before target-skill quality signal. Include pilot checkpoint data when `pilot_started_at` is at least 7 days old, reporting counts and density as advisory review data rather than an automated pass/fail.
+**Approach:** Add a mutation-free `review` command that reads normalized reports by local day or review window and emits both package-owned report-card data and facade envelope guidance. Lead with coverage. Open items only when high signal appears: high verification burden, repeated friction, evidence gaps, unlinked correlation spike, or owner-path observation. Then show open items with `open_reason`, evidence, owner path or label, severity, and next action. Include no-action cases. Treat unlinked and low-coverage evidence as correlation-health signal before target-skill quality signal. Include pilot checkpoint data when `pilot_started_at` is at least 7 days old, reporting counts and density as advisory review data rather than an automated pass/fail. Treat implementation-pilot records as build evidence for review design, not as Daily pilot readiness evidence.
 
 Review surfaces observations and touched surfaces as evidence. It does not derive repair candidates, write proposal files, delete reports, or promote report text into instructions.
 
@@ -357,6 +362,8 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - Review emits a pilot checkpoint after 7 days.
 - Pilot checkpoint reports actionable-feedback numerator, denominator, and density.
 - Pilot checkpoint is advisory and does not mutate or clear the marker.
+- Implementation-pilot records do not claim Daily pilot readiness.
+- Fresh implementation-pilot reports can exercise review after the inbox is cleared.
 - High verification burden opens an item.
 - Repeated friction opens an item.
 - Evidence gaps open an item.
@@ -417,6 +424,8 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - AE14. Given the first successful v1 closeout writes, when no pilot marker exists, then `pilot_started_at` is saved.
 - AE15. Given `pilot_started_at` is at least 7 days old, when review runs, then it emits a pilot checkpoint with actionable-feedback numerator, denominator, density, and a next action to run the future cleanup command or workflow.
 - AE16. Given no pilot marker exists, when review runs, then it emits no pilot checkpoint.
+- AE17. Given closeouts were generated during implementation pilot, when review summarizes them, then the output treats them as build evidence and does not claim the daily pilot has launched.
+- AE18. Given the inbox has been cleared before a new smoke, when fresh closeouts are generated after review exists, then those reports become the smoke evidence for U4 rather than older local artifacts.
 
 ---
 
@@ -438,6 +447,8 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - Seven-day pilot checkpoint marker.
 - Observation and touched-surface evidence.
 - Retention age/count and purge-ready hints.
+- Implementation-pilot closeouts during v1 build and smoke testing.
+- Clean-inbox smoke evidence generated after the review surface exists.
 
 ### Deferred To Follow-Up Work
 
@@ -446,6 +457,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - Latest-run resolver.
 - Gated purge command.
 - Explicit pilot marker cleanup command or workflow.
+- `pilot_mode` or phase-tag schema fields unless review needs different runtime behavior.
 - Derived repair candidates.
 - Evidence-only candidate repair proposal files.
 - Closeout-time human questions.
@@ -459,6 +471,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 ### Outside This Product Identity
 
 - Treating report text as canonical instruction.
+- Treating implementation-pilot evidence as Daily pilot readiness.
 - Storing raw transcript or prompt content for convenience.
 - Letting a skill invoke another skill to file its own feedback.
 - Prompting humans during report closeout.
@@ -480,6 +493,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - **Evidence injection.** Reports contain agent-authored text. Mitigate with `untrusted_evidence: true`, full agent-authored path redaction, and repair workflows that confirm against source.
 - **Local data exposure.** Reports are private local evidence. Mitigate with gitignore gate, 0700 directory intent, 0600 file intent, exclusive create, realpath containment, and symlink refusal.
 - **Write-only relapse.** More capture without review repeats the v0 failure mode. Mitigate by making the review surface part of v1.
+- **Pilot-phase confusion.** Implementation-pilot reports can look like daily-pilot launch evidence. Mitigate with glossary terms, decision-log gates, and clean-inbox smoke runs.
 
 ---
 
@@ -493,6 +507,8 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - Run `create-cli` before public surface changes.
 - Run `cli-execution-auditor` before shipping facade changes.
 - Keep purge documentation as a future gated workflow until a purge command exists.
+- Keep implementation-pilot and daily-pilot language aligned with `skills/skill-feedback/CONTEXT.md` and the pilot decision log.
+- Generate fresh smoke reports after U4 review exists; do not preserve old local `.skill-feedback/` reports as fixtures.
 
 ---
 
@@ -503,6 +519,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - Defer native cost until a buildable telemetry ingestion path exists.
 - Defer cross-runtime identity normalization and latest-run matching.
 - Treat unlinked closeout as evidence, not failure.
+- Treat implementation-pilot closeout as build evidence, not Daily pilot readiness.
 - Lead review with coverage before conclusions.
 - Treat driver closeout as useful but uncalibrated self-report.
 - Redact every agent-authored string path, not just the old v0 fields.
@@ -516,6 +533,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
 - `docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`
 - `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md`
+- `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`
 - `/tmp/handoff-skill-feedback-v0-telemetry-closeout.md`
 - Claude Code monitoring docs: `https://code.claude.com/docs/en/monitoring-usage`
 - Codex hooks docs: `https://developers.openai.com/codex/hooks`

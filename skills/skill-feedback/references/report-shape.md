@@ -24,6 +24,27 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - `report_card`: closeout evidence lanes.
 - `evidence_gaps`: typed missing-or-weak evidence codes.
 
+## V2 Field Ownership
+
+- Keep v2 report and review field lists in this reference.
+- Hook-capture reports may carry `capture_runtime`.
+- Hook-capture reports may carry `skill_identity_provenance`.
+- Review output carries claim-specific readiness facts under `claim_readiness`.
+- Keep exact enum values and parser rules in `skills/skill-feedback/src/command-contract.ts`.
+- Keep hook command trust rules in the implementation plan and hook tests.
+- Keep glossary terms in `skills/skill-feedback/CONTEXT.md`.
+
+## V2 Readiness Shape
+
+- `claim_readiness` distinguishes ready, blocked, and evidence-only states.
+- `claim_readiness.runtime_capture`, `claim_readiness.trusted_skill_identity`, and `claim_readiness.daily_pilot` are separate facts.
+- Missing usage or cost stays an evidence gap, not a readiness blocker.
+- Fixture-backed evidence does not open readiness.
+- Transcript-only identity evidence does not open Trusted skill identity readiness.
+- Notify evidence does not open Codex capture readiness.
+- Manual approval attestation can open runtime capture readiness only.
+- Daily pilot readiness requires the accepted pilot gate, machine-observable hook approval, and Trusted skill identity evidence.
+
 ## Runtime Telemetry
 
 - `git_sha`: engine-read repository revision.

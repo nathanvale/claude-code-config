@@ -5,12 +5,24 @@ The skill-observability feedback loop: durable, structured Software Learning Rep
 ## Language
 
 **Capture point**:
-The end-of-turn at which a Software Learning Report is fired. Detected at the harness level, not by a skill announcing itself. Claude Stop is live in v0. Codex notify is an end-of-turn forwarder until a skill identity source is wired.
+The end-of-turn at which a Software Learning Report is fired. Detected at the harness level, not by a skill announcing itself. Claude Stop and Codex Stop are capture points; Codex notify is legacy forwarding evidence only.
 _Avoid_: trigger, auto-trigger, the finished skill, `## Close` breadcrumb
 
 **Close detection**:
-How a harness hook decides a skill ran this turn. Claude parses the Stop hook's `transcript_path` JSONL for a completed `Skill` tool call and dedupes by detection id. Codex notify payloads do not carry skill identity; Codex live detection is deferred until an item stream or equivalent identity source is reachable.
+How a harness hook decides a skill ran this turn. Claude parses the Stop hook's `transcript_path` JSONL for a completed `Skill` tool call and dedupes by detection id. Codex Stop capture exists, but Codex close detection is not trusted until a Trusted skill identity source is proven.
 _Avoid_: skill breadcrumb, `## Close` marker, agent recall
+
+**Stop-detected skill**:
+A runtime-specific evidence state where a Stop hook can name a completed skill run from that runtime's supported evidence. Claude Code may reach this state through Stop plus transcript evidence; it is stronger than a turn-level Stop capture and weaker than Trusted skill identity.
+_Avoid_: trusted skill identity, Codex proof, assistant claim
+
+**Stop-detected turn**:
+A runtime evidence state where a Stop hook proves a turn ended and capture ran, but does not prove which skill ran. Codex Stop is currently this state until an engine-owned skill invocation source exists.
+_Avoid_: stop-detected skill, skill captured, trusted identity
+
+**Trusted skill identity**:
+Engine-owned evidence that a named skill ran during a capture point. Assistant prose, placeholder labels, inferred latest-run matching, and transcript-only evidence do not qualify.
+_Avoid_: guessed skill, assistant claim, placeholder skill, latest run
 
 **Driver**:
 The top-level agent that may file a closeout for a material skill run. Capture owns `record`; driver closeout owns `closeout`. A finished skill never invokes `skill-feedback` itself.
@@ -52,6 +64,18 @@ _Avoid_: finding, recommendation, instruction, accepted rule, source change
 A skill run that shaped the plan, commands, checks, files, or decision path. V1 closeout is best-effort for material skill runs, not every skill invocation.
 _Avoid_: every launch, only failures, background route
 
+**Implementation pilot**:
+The build-phase use of closeout reports during v1 implementation, smoke tests, and report-value stress tests. It gathers evidence about the report-card loop without declaring skill-feedback ready for daily workflow use.
+_Avoid_: daily pilot, launch, production use, Codex end-to-end proof
+
+**Daily pilot**:
+The normal-use phase where skill-feedback reports become part of everyday review and triage. It starts only after review/correlation work and true Codex end-to-end proof satisfy the accepted pilot gate.
+_Avoid_: implementation pilot, smoke test, proof-of-run, closeout experiment
+
+**Codex capture readiness gate**:
+The readiness boundary for Codex capture. Runtime capture readiness can pass with Codex Stop capture, exact hook command allowlist, and recorded manual approval attestation when machine-observable approval state is unavailable. Trusted skill identity readiness stays separate and requires engine-owned skill identity evidence. Daily pilot readiness still requires the accepted pilot gate and machine-observable approval. Notify-era evidence can inform the review but never opens this gate.
+_Avoid_: Codex smoke, notifier proof, hook worked
+
 **Human review**:
 The later inspection of agent-filed reports and telemetry evidence. It is not closeout-time user input, and the report writer never blocks on a human answer.
 _Avoid_: human signal, required feedback, satisfaction score, blocking prompt
@@ -61,8 +85,44 @@ A read operation that summarizes inbox evidence without deleting, editing, or pr
 _Avoid_: cleanup, archive, review-and-delete
 
 **Review decision surface**:
-A facade-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
+A command-envelope-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
 _Avoid_: dashboard, raw dump, generic CLI output
+
+**Review unit**:
+The evidence bundle that review classifies as one thing. A linked unit represents one trusted `skill_run_id`; missing, untrusted, or placeholder ids produce one report-local unit.
+_Avoid_: report, file, merged row, fuzzy group
+
+**Pattern resolution ledger**:
+The primary review-value model for `skill-feedback review`: recurring evidence is grouped into patterns, and each pattern carries its resolution state, evidence quality, owner paths, verification burden, and next safe action. Pattern entries remain untrusted evidence until confirmed against owner source.
+_Avoid_: canonical instruction, repair proposal, chronological report list, evidence-quality dashboard
+
+**Pressure pattern**:
+A design-pattern name used only when a concrete review pressure has already named a seam. In v2, Facade, Adapter, Strategy, and fixed reducer flow are labels for pressure-tested ownership, not reasons to add abstraction.
+_Avoid_: pattern cosplay, GoF by default, framework, decorative abstraction
+
+**ReviewResultData Facade**:
+The claim-safe review result Interface that hides reducer internals from JSON, plain output, docs, and future agents. It exposes contract-owned facts: review units, ledger entries, allowed claims, split readiness, and anchor-miss telemetry.
+_Avoid_: dashboard, renderer copy, generic API, bag of fields
+
+**Anchor Adapter**:
+The internal Adapter that turns report target evidence into canonical anchor facts before ledger reduction. It owns repo-contained path canonicalization, anchor strength, and weak-anchor reasons; it does not own product claim language.
+_Avoid_: fuzzy matcher, classifier, taxonomy, grouping heuristic
+
+**Claim Strategy**:
+The contract-owned rule set that derives allowed claims from evidence tier, source mix, trusted review-unit state, and readiness facts. It makes renderer language repeatable without letting renderers invent claims.
+_Avoid_: badge enum, copy rule, renderer inference, claim prose
+
+**Reducer flow**:
+The fixed review pipeline that normalizes evidence, builds review units, adapts anchors, reduces ledger entries, derives claims, derives readiness, and renders. Steps can have internal helpers, but the flow owns locality for claim safety.
+_Avoid_: chain of responsibility, hidden gate order, dashboard pipeline
+
+**Failure class**:
+A named category for recurring review evidence that describes the kind of failure or friction. Two reports share a failure class when they describe the same problem shape, not just the same owner path or resolution path.
+_Avoid_: owner path, resolution status, fuzzy match, recommendation
+
+**Taxonomy gap**:
+A failure class for review evidence that does not match the predefined product-native class set. It stays standalone until a known class is assigned or the taxonomy changes.
+_Avoid_: other, junk drawer, shadow taxonomy, heuristic merge
 
 **Open signal**:
 A review threshold that makes a report worth opening: high verification burden, repeated friction, evidence gaps, unlinked correlation spike, or owner-path observation. Low-signal reports return no-action output.
@@ -101,12 +161,16 @@ The written evidence record in the skill-feedback inbox. v1 keeps hook capture a
 _Avoid_: log entry, eval row, transcript, feedback note
 
 **Runtime support**:
-The named runtime target for v1: Claude, Codex, and Cloud. Support comes from shared report-card records, facade envelopes, and explicit or unlinked correlation.
+The named runtime target for v1: Claude, Codex, and Cloud. Support comes from shared report-card records, command envelopes, and explicit or unlinked correlation.
 _Avoid_: agent agnostic, one-off runtime, guessed identity
 
 **Evidence source**:
 The origin lane of a Software Learning Report record, such as hook capture or driver closeout. It explains who or what produced the evidence without making narrated text trusted.
 _Avoid_: report type, mode, writer
+
+**Capture runtime**:
+The harness provenance for hook-capture evidence, such as Claude Stop, Codex Stop, or Codex notify. Evidence source says hook capture versus driver closeout; capture runtime says which hook family produced the capture.
+_Avoid_: evidence source, runtime support, provider
 
 **Skill run id**:
 The optional correlation id shared by capture evidence and later closeout enrichment for the same skill run. v1 accepts explicit trusted ids when available and writes unlinked evidence when not available.

@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"skill-feedback-runner": "bun run src/skill-feedback-runner.ts",
+		"prototype:review-result-contract": "bun run prototypes/review-result-contract-contenders.ts",
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

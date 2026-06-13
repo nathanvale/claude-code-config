@@ -1,0 +1,1469 @@
+---
+title: Skill Feedback Pilot Decision Log
+slug: skill-feedback-pilot
+type: decision-log
+status: in-progress
+date: "2026-06-12"
+timezone: Australia/Melbourne
+owner: skills/skill-feedback
+source:
+  - skills/skill-feedback/CONTEXT.md
+  - docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md
+  - "2026-06-12 Codex session: Fallow report-value smoke"
+decision_metadata_format: fenced-yaml-per-decision
+---
+
+# Skill Feedback Pilot Decision Log
+
+Use this log for accepted decisions about the skill-feedback pilot, report value,
+runtime support, and pilot gates.
+
+## Frame
+
+- Treat Software Learning Reports as untrusted evidence.
+- Use closeout reports for finding value.
+- Use hook capture for proof-of-run.
+- Keep Codex live capture gated until a skill identity source exists.
+- Record accepted pilot gates here.
+
+## Notes
+
+- The 2026-06-12 Fallow smoke produced three v1 closeout reports and one v0 hook-capture report in the local `.skill-feedback/` inbox.
+- Closeout reports preserved useful Fallow finding details and resolver verdicts.
+- Hook capture proved `fallow` ran without transcript payload, but did not carry finding details.
+- Review output surfaced counts and unlinked-correlation spikes, but hid the useful closeout observations.
+
+## Decision 1: Gate Daily Pilot Behind Review And Runtime Proof
+
+```yaml
+id: skill-feedback-pilot-001
+status: accepted
+decided_at: "2026-06-12"
+decision: Gate the skill-feedback daily pilot behind review/correlation work, then true Codex end-to-end proof, then pilot start
+owner: skills/skill-feedback
+source:
+  - skills/skill-feedback/CONTEXT.md
+  - docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md
+  - "2026-06-12 Codex session: Fallow report-value smoke"
+decision_mode:
+  question: Should the daily pilot start now, wait for true Codex E2E, or fix review/correlation first?
+  option: "3 then 2 then 1"
+  confidence: strong
+```
+
+Decision:
+
+- Fix review and correlation before starting the daily pilot.
+- Then prove true Codex end-to-end capture.
+- Then start the daily pilot.
+
+Rationale:
+
+- The smoke showed v1 closeout reports are useful for daily triage.
+- The smoke also showed review output is too shallow for daily use.
+- All reports remained unlinked, so correlation health would dominate review noise.
+- Claude Stop hook capture is proven as proof-of-run.
+- Codex notify is not proven as live skill capture because the notify payload lacks skill identity.
+
+Consequences:
+
+- Do not claim Codex end-to-end support from the Claude Stop hook smoke.
+- Treat Fallow closeout value as proven enough to preserve, but not enough to launch the daily pilot.
+- Prioritize richer review output and capture-closeout correlation before pilot usage.
+- Keep Codex live capture gated on a skill identity source or equivalent item stream.
+
+Next:
+
+- Improve `skill-feedback review` so daily triage exposes closeout observations and actionable report context.
+- Add or prove a correlation path between hook capture and driver closeout.
+- Re-run the smoke after review and correlation are improved.
+- Prove Codex live skill capture before starting the daily pilot.
+
+V2 Ideas:
+
+- Add a report-value score or grouped review view for closeout observations.
+- Add a Codex item-stream reader if the notify environment can reach one safely.
+- Add a pilot-start checklist command once the gates are satisfied.
+
+## Decision 2: Split Implementation Pilot From Daily Pilot
+
+```yaml
+id: skill-feedback-pilot-002
+status: accepted
+decided_at: "2026-06-12"
+decision: Continue an implementation pilot while keeping the daily pilot gated
+owner: skills/skill-feedback
+source:
+  - skills/skill-feedback/CONTEXT.md
+  - docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md
+  - docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md
+  - "2026-06-12 Codex session: implementation-pilot decision"
+decision_mode:
+  question: What should the next phase be called and allowed to do?
+  option: "1"
+  confidence: strong
+```
+
+Decision:
+
+- Call the next phase the implementation pilot.
+- Keep filing closeout reports during v1 implementation, smoke tests, and report-value stress tests.
+- Keep the daily pilot gated behind review/correlation work and true Codex end-to-end proof.
+
+Rationale:
+
+- The Fallow smoke showed v1 driver closeouts preserve useful report-card evidence.
+- Review output is still too shallow for daily triage.
+- Correlation is still noisy because current closeouts are unlinked.
+- Claude Stop hook is proof-of-run, but Codex notify is not live skill capture.
+- The implementation pilot creates real evidence without overclaiming daily readiness.
+
+Consequences:
+
+- Do not amend Decision 1's daily-pilot gate.
+- Treat implementation-pilot closeouts as build evidence and smoke data.
+- Do not use implementation-pilot success as proof of Codex live capture.
+- Use implementation-pilot reports to shape U4 review and correlation work.
+
+Next:
+
+- Continue v1 `ce-work` from the report-card plan.
+- Verify U0 and U1 before moving to U2.
+- File closeouts for material skill runs during implementation.
+- Use implementation-pilot reports as fixtures for richer review/correlation decisions.
+
+V2 Ideas:
+
+- Add a review lane that labels implementation-pilot evidence separately from daily-pilot evidence.
+- Add a pilot mode field if implementation-pilot and daily-pilot records need different review treatment.
+
+## Decision 3: Make review value the next optimization target
+
+```yaml
+id: skill-feedback-pilot-003
+status: accepted
+decided_at: "2026-06-12"
+decision: "Make review value the next optimization target"
+owner: "skills/skill-feedback"
+source:
+  - "docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md"
+  - "docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md"
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "2026-06-12 Codex session: deferred queue grill"
+```
+
+Decision:
+
+- Optimize the next skill-feedback branch for review value first.
+- Make `skill-feedback review` expose observations, owner paths, grouped signals, and next actions before deeper correlation or Codex live capture work.
+
+Rationale:
+
+- The product energy is the morning-review surface.
+- Review value makes the inbox worth opening before correlation is perfect.
+- The clean-inbox smoke already proves the loop can surface high verification burden, evidence gaps, and owner-path observations.
+- Correlation and Codex live capture remain required before the daily pilot starts.
+
+Consequences:
+
+- Treat richer review as the next branch spine.
+- Keep correlation work as the next unlock after review value.
+- Keep Codex end-to-end proof gated behind a skill identity source.
+- Do not claim Daily pilot readiness from implementation-pilot reports.
+
+Next:
+
+- Draft the next brainstorm around review value.
+- Stress-test grouped review, report-value scoring, and next-action hints.
+- Preserve separate follow-up lanes for correlation, Codex live capture, purge, cost, and repair candidates.
+
+V2 Ideas:
+
+- Add a report-value score for closeout observations.
+- Add grouped review by owner path, friction category, and verification burden.
+- Add a review lane for implementation-pilot evidence if phase labels become necessary.
+
+## Decision 4: Gate new skill-feedback feature work behind Codex lifecycle-hook proof
+
+```yaml
+id: skill-feedback-pilot-004
+status: accepted
+decided_at: "2026-06-12"
+decision: "Gate new skill-feedback feature work behind Codex lifecycle-hook proof"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md"
+  - "https://developers.openai.com/codex/hooks"
+  - "2026-06-12 Codex lifecycle-hook smoke"
+```
+
+Decision:
+
+- Gate new skill-feedback feature work behind a working Codex lifecycle-hook smoke.
+- Prove a real Codex lifecycle hook can execute in this repo before adding new review-value, pilot, purge, cost, or repair-candidate features.
+- Keep Decision 3's review-value direction as product strategy, but sequence hook proof first as the implementation gate.
+
+Rationale:
+
+- Latest Codex supports lifecycle hooks, so skill-feedback should use that path instead of old `notify` assumptions.
+- The first local smokes proved the hook feature is enabled, but did not prove project lifecycle hooks execute under the tested `codex exec` path.
+- Adding feature polish before hook proof risks building on an unproven capture surface.
+- The daily-pilot gate already depends on true Codex end-to-end proof.
+
+Consequences:
+
+- Treat Codex lifecycle-hook proof as the next blocking implementation task.
+- Do not add new exciting skill-feedback feature branches until a Codex hook smoke writes an inspectable payload or Software Learning Report.
+- Update the plan or next brainstorm to put hook proof before review-value expansion.
+- Preserve existing staged work and implementation-pilot evidence as useful, but not enough for this gate.
+
+Next:
+
+- Build the smallest repo-local Codex hook smoke that executes reliably.
+- Prefer `Stop` because skill-feedback needs turn-close evidence.
+- Capture hook stdin payload shape without raw transcript content.
+- Record whether the successful hook path is CLI, app, interactive, or `exec`.
+- After proof, continue review-value ideation from Decision 3.
+
+V2 Ideas:
+
+- Add a dedicated `skill-feedback codex-hook-smoke` command.
+- Add a Codex hook fixture from the proven payload shape.
+- Add a decision if `codex exec` and interactive/app Codex differ materially.
+
+## Decision 5: Make pattern resolution ledger the primary review model
+
+```yaml
+id: skill-feedback-pilot-005
+status: accepted
+decided_at: "2026-06-12"
+decision: "Make pattern resolution ledger the primary review model"
+owner: "skills/skill-feedback"
+source:
+  - "skills/skill-feedback/CONTEXT.md"
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "/Users/nathanvale/code/monash-smst/docs/ideation/2026-06-12-skill-feedback-review-value-ideation.html"
+  - "2026-06-12 Codex session: pattern-ledger grill"
+```
+
+Decision:
+
+- Make `skill-feedback review` primarily a pattern resolution ledger.
+- Treat evidence quality as an attribute on each pattern, not the top-level product model.
+- Keep implementation gated behind Codex lifecycle-hook proof.
+
+Rationale:
+
+- Review should answer which recurring pattern needs a resolution path.
+- Evidence quality still matters, but it supports trust inside the pattern.
+- Pattern grouping compounds across reports better than chronological open-item lists.
+- The product should stay action-oriented without treating report text as canonical instruction.
+
+Consequences:
+
+- Future review-value brainstorms use pattern resolution ledger as the product center.
+- Pattern entries can carry evidence quality, owner paths, run count, verification burden, and next safe action.
+- Evidence quality badges should prevent false confidence without becoming the main surface.
+- No implementation starts until the Codex lifecycle-hook proof gate from Decision 4 is satisfied.
+
+Next:
+
+- Grill the first ledger shape decision.
+- Decide which pattern key groups evidence first.
+- Update future brainstorm docs to treat pattern ledger as the review-value spine.
+
+V2 Ideas:
+
+- Add typed resolution paths such as `FIX`, `DEFER`, `SCOPE-CALL`, and `TIGHTEN`.
+- Add evidence-quality badges inside each pattern.
+- Add pattern aging, first-seen, last-seen, and resolved-state lanes.
+
+## Decision 6: Make failure class the primary pattern key
+
+```yaml
+id: skill-feedback-pilot-006
+status: accepted
+decided_at: "2026-06-12"
+decision: "Make failure class the primary pattern key"
+owner: "skills/skill-feedback"
+source:
+  - "skills/skill-feedback/CONTEXT.md"
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "/Users/nathanvale/code/monash-smst/docs/ideation/2026-06-12-skill-feedback-review-value-ideation.html"
+  - "2026-06-12 Codex session: failure-class grill"
+```
+
+Decision:
+
+- Make failure class the primary grouping key for the pattern resolution ledger.
+- Start with exact-match grouping against a small predefined class set.
+- Keep owner path, evidence quality, verification burden, and resolution path as attributes on the grouped pattern.
+- Do not use heuristic matching for MVP pattern merges.
+
+Rationale:
+
+- Failure class is the strongest review signal for recurring problem shape.
+- Owner path helps route work, but it should not hide the repeated class of failure.
+- Resolution path helps triage, but it depends on understanding the problem class first.
+- Exact-match grouping keeps false merges out of the first version.
+
+Consequences:
+
+- The next design step must define the initial failure-class taxonomy.
+- Unknown or ambiguous reports must remain unmerged until a known class applies.
+- Review output can stay trustworthy before smarter matching exists.
+- The ledger may under-group early evidence, which is safer than false pattern confidence.
+
+Next:
+
+- Decide the initial failure-class set.
+- Decide the unknown-class label and no-merge behavior.
+- Decide whether class assignment comes from closeout tags, review derivation, or both.
+
+V2 Ideas:
+
+- Add heuristic matching only after exact-match behavior produces useful evidence.
+- Add confidence markers for suggested class merges.
+- Add a review command for proposing taxonomy additions.
+
+## Decision 7: Use product-native failure classes and keep taxonomy gaps standalone
+
+```yaml
+id: skill-feedback-pilot-007
+status: accepted
+decided_at: "2026-06-12"
+decision: "Use product-native failure classes and keep taxonomy gaps standalone"
+owner: "skills/skill-feedback"
+source:
+  - "skills/skill-feedback/CONTEXT.md"
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "/Users/nathanvale/code/monash-smst/docs/ideation/2026-06-12-skill-feedback-review-value-ideation.html"
+  - "2026-06-12 Decision Mode: taxonomy gap grill"
+```
+
+Decision:
+
+- Use a product-native failure-class set for the pattern resolution ledger.
+- Seed the set with `capture_gap`, `correlation_gap`, `evidence_gap`, `verification_tax`, `ownership_gap`, `guidance_gap`, `scope_mismatch`, `tool_failure`, `signal_noise`, and `taxonomy_gap`.
+- Treat `taxonomy_gap` as a standalone item, not a mergeable pattern.
+- Merge only known failure classes by exact class match.
+
+Rationale:
+
+- Product-native classes fit the ledger language better than current friction categories or open-reason labels.
+- Friction categories and open reasons are input signals, not the durable pattern model.
+- `taxonomy_gap` keeps unknown shapes visible as product discovery instead of hiding them in `other`.
+- Standalone unknowns avoid shadow taxonomy and false pattern confidence.
+
+Consequences:
+
+- Future implementation maps existing signals into product-native classes before grouping.
+- Unknown or ambiguous reports stay separate until a known class is assigned.
+- Review may show more standalone items early, which is safer than false merges.
+- Taxonomy changes need explicit review instead of heuristic accumulation.
+
+Next:
+
+- Decide where failure-class assignment happens.
+- Decide how the review surface displays standalone taxonomy gaps.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add a command for proposing taxonomy additions from repeated standalone gaps.
+- Add suggested-class confidence only after exact-match behavior proves useful.
+- Add class aliases only with explicit migration evidence.
+
+## Decision 8: Let review assign failure classes from evidence
+
+```yaml
+id: skill-feedback-pilot-008
+status: accepted
+decided_at: "2026-06-12"
+decision: "Let review assign failure classes from evidence"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "/Users/nathanvale/code/monash-smst/docs/ideation/2026-06-12-skill-feedback-review-value-ideation.html"
+  - "2026-06-12 Decision Mode: class assignment grill"
+```
+
+Decision:
+
+- Let `skill-feedback review` assign failure classes from captured evidence.
+- Keep closeout receipts lightweight and evidence-only.
+- Do not require closeout writers to provide a failure class in MVP.
+- Keep product-native failure-class taxonomy ownership in review.
+
+Rationale:
+
+- Review has the broadest context for mapping signals into patterns.
+- Closeout should stay focused on receipts, not taxonomy authoring.
+- Driver-authored class labels would add burden and create bad-label risk.
+- This keeps the pattern ledger's vocabulary consistent while evidence capture remains simple.
+
+Consequences:
+
+- Future implementation maps closeout and capture signals into failure classes during review.
+- Closeout receipt schema does not grow a required failure-class field for MVP.
+- Existing friction categories and open reasons remain input signals, not class owners.
+- Classification mistakes are review-model issues, not closeout-author defects.
+
+Next:
+
+- Decide the first mapping table from current evidence signals to failure classes.
+- Decide how review displays standalone `taxonomy_gap` items.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add optional closeout class hints only after review-owned classification proves useful.
+- Add class-assignment diagnostics to show which evidence triggered a class.
+- Add a hybrid path where review can accept or reject closeout hints.
+
+## Decision 9: Use deterministic field rules for failure-class assignment
+
+```yaml
+id: skill-feedback-pilot-009
+status: accepted
+decided_at: "2026-06-12"
+decision: "Use deterministic field rules for failure-class assignment"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "/Users/nathanvale/code/monash-smst/docs/ideation/2026-06-12-skill-feedback-review-value-ideation.html"
+  - "2026-06-12 Decision Mode: mapping rules grill"
+```
+
+Decision:
+
+- Use deterministic structured-field rules for MVP failure-class assignment.
+- Let review map structured evidence fields into product-native failure classes.
+- Treat narrative notes and summaries as evidence, not class selectors.
+- Send ambiguous structured evidence to standalone `taxonomy_gap`.
+
+Rationale:
+
+- Deterministic field rules are inspectable and testable.
+- Narrative classification would add fuzzy behavior before the ledger has proof.
+- The review surface can explain which structured signal caused a class.
+- This keeps the first classifier boring enough to trust.
+
+Consequences:
+
+- Future implementation starts from fields such as correlation status, evidence gaps, verification burden, friction category, and observation kind.
+- The exact mapping table remains a follow-up decision.
+- Narrative content can help humans inspect a report, but does not decide class in MVP.
+- Review-owned classifier bugs stay separate from closeout receipt quality.
+
+Next:
+
+- Decide the first deterministic mapping priority.
+- Decide fallback precedence when multiple structured signals point at different classes.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add narrative-assisted suggestions after deterministic rules prove useful.
+- Add classifier diagnostics that list matched fields.
+- Add fixtures for mixed-signal reports before introducing richer matching.
+
+## Decision 10: Seed the first five deterministic failure-class mappings
+
+```yaml
+id: skill-feedback-pilot-010
+status: accepted
+decided_at: "2026-06-12"
+decision: "Seed the first five deterministic failure-class mappings"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: five-pack mapping grill"
+```
+
+Decision:
+
+- Map unlinked-correlation spike evidence to `correlation_gap`.
+- Map actionable evidence-gap evidence to `evidence_gap`.
+- Map heavy verification burden and verification-tax friction to `verification_tax`.
+- Map tool-failure friction or observations to `tool_failure`.
+- Map scope-mismatch friction or observations to `scope_mismatch`.
+
+Rationale:
+
+- Each mapping follows an existing structured signal without narrative interpretation.
+- The mappings cover the strongest current review open reasons and direct friction categories.
+- These classes are inspectable enough for MVP tests and help output.
+- Deferring weaker mappings keeps the first batch from smuggling in fuzzy ownership or guidance logic.
+
+Consequences:
+
+- Future implementation can test these five mappings with field-only fixtures.
+- `ownership_gap`, `guidance_gap`, `signal_noise`, `capture_gap`, and `taxonomy_gap` need separate rules.
+- The mapping table stays review-owned and closeout receipts remain unchanged.
+- No implementation starts until Codex lifecycle-hook proof satisfies Decision 4.
+
+Next:
+
+- Decide the next five-pack for ownership, guidance, signal noise, capture gaps, and taxonomy fallback.
+- Decide precedence for mixed-signal reports.
+- Add mapping fixtures only after the hook gate is satisfied.
+
+V2 Ideas:
+
+- Add per-pattern diagnostics showing the matched mapping rule.
+- Add mapping confidence only after deterministic rules produce useful review evidence.
+- Add migration notes if a future taxonomy split changes any seeded mapping.
+
+## Decision 11: Seed the remaining deterministic failure-class mappings
+
+```yaml
+id: skill-feedback-pilot-011
+status: accepted
+decided_at: "2026-06-12"
+decision: "Seed the remaining deterministic failure-class mappings"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: remaining mapping Five-Pack"
+```
+
+Decision:
+
+- Map ownership signals to `ownership_gap`.
+- Map guidance and missing-context signals to `guidance_gap`.
+- Map capture or runtime missingness that blocks usable evidence to `capture_gap`.
+- Map low-value structured open signals to `signal_noise`.
+- Map reports with no deterministic class match to standalone `taxonomy_gap`.
+
+Rationale:
+
+- The remaining mappings complete the first product-native classifier shape.
+- Each mapping still starts from structured fields instead of narrative text.
+- `taxonomy_gap` preserves unknown shapes without false merges.
+- `signal_noise` gives review a named low-value lane without promoting noise into an action pattern.
+
+Consequences:
+
+- Future implementation can cover the full seeded taxonomy with field-only fixtures.
+- Ownership, guidance, capture, signal-noise, and taxonomy fallback rules remain review-owned.
+- Closeout receipts still do not carry failure-class labels.
+- No implementation starts until Codex lifecycle-hook proof satisfies Decision 4.
+
+Next:
+
+- Decide precedence for mixed-signal reports.
+- Decide whether multiple failure classes can appear on one report or only one primary class.
+- Add mapping fixtures only after the hook gate is satisfied.
+
+V2 Ideas:
+
+- Split `guidance_gap` from `missing_context` only if review evidence shows they behave differently.
+- Add a noise-suppression view after `signal_noise` appears repeatedly.
+- Add taxonomy proposal workflow after repeated standalone `taxonomy_gap` items.
+
+## Decision 12: Let the review contract own failure-class precedence
+
+```yaml
+id: skill-feedback-pilot-012
+status: accepted
+decided_at: "2026-06-12"
+decision: "Let the review contract own failure-class precedence"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: precedence governor grill"
+```
+
+Decision:
+
+- Use one primary failure class per report for MVP ledger grouping.
+- Let the `skill-feedback review` contract own the exact failure-class precedence order.
+- Keep the decision log responsible for product rationale, not executable ordering.
+- Prove the order through code, help, and tests when implementation begins.
+
+Rationale:
+
+- One primary class keeps ledger counts clean.
+- Precedence is deterministic behavior, so it belongs with the review contract.
+- Decision prose can drift from implementation unless tests guard the order.
+- Configurable precedence adds unnecessary surface before the ledger proves value.
+
+Consequences:
+
+- Future implementation defines the precedence order in review-owned code.
+- Tests must prove mixed-signal reports pick the expected primary class.
+- Help or review diagnostics should expose the effective order when useful.
+- The next product decision can focus on the actual precedence ladder.
+
+Next:
+
+- Decide the first precedence order.
+- Decide whether matched-but-losing classes appear only in diagnostics or stay hidden for MVP.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add secondary matched-class diagnostics after the primary ledger stays useful.
+- Add config only if repeated product evidence shows repo-specific ordering is needed.
+- Add a drift check that compares documented order with tests.
+
+## Decision 13: Adopt trust-first failure-class precedence
+
+```yaml
+id: skill-feedback-pilot-013
+status: accepted
+decided_at: "2026-06-12"
+decision: "Adopt trust-first failure-class precedence"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: trust-first precedence grill"
+```
+
+Decision:
+
+- Adopt trust-first precedence for MVP failure-class selection.
+- Use this order as the product ladder: `capture_gap`, `correlation_gap`, `evidence_gap`, `verification_tax`, `ownership_gap`, `guidance_gap`, `tool_failure`, `scope_mismatch`, `taxonomy_gap`, `signal_noise`.
+- Keep the review contract as the executable owner of the exact order.
+- Treat matched-but-losing classes as future diagnostics, not MVP ledger lanes.
+
+Rationale:
+
+- Broken evidence should outrank action routing because routing untrusted reports creates false confidence.
+- Verification burden belongs before ownership and guidance because expensive trust still affects review value.
+- `taxonomy_gap` should outrank `signal_noise` because unknown shape is more useful than known low-value noise.
+- The ledger stays useful when its primary class answers what must be trusted before what can be routed.
+
+Consequences:
+
+- Future implementation starts from the trust-first order in review-owned code.
+- Mixed-signal fixtures need to prove the highest trust-first match wins.
+- Review output keeps one primary class per report for MVP.
+- Secondary matched classes wait for diagnostic work.
+
+Next:
+
+- Decide whether losing matched classes stay hidden or appear as diagnostics after MVP.
+- Decide the display shape for precedence diagnostics if they are included.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add a matched-rules diagnostic lane after primary-class grouping is stable.
+- Add precedence drift checks if docs, help, and tests start duplicating the order.
+- Revisit the ladder after real reports show action routing is being buried too often.
+
+## Decision 14: Put losing class matches in diagnostics, not ledger counts
+
+```yaml
+id: skill-feedback-pilot-014
+status: accepted
+decided_at: "2026-06-12"
+decision: "Put losing class matches in diagnostics, not ledger counts"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: matched-rule diagnostics Five-Pack"
+```
+
+Decision:
+
+- Keep one primary ledger lane per report in MVP.
+- Do not let losing class matches create extra pattern counts.
+- Expose losing class matches only as diagnostics.
+- Hide matched-class diagnostics from `--plain` MVP output.
+- Include matched-class diagnostics in JSON MVP output, with the exact field name owned by the review contract.
+
+Rationale:
+
+- The ledger stays clean when only the primary class contributes to counts.
+- Diagnostics preserve inspectability without bloating the morning-review surface.
+- Human plain output should stay focused on what to open and why.
+- JSON diagnostics give agents enough context to inspect mixed-signal reports.
+
+Consequences:
+
+- Future implementation must separate primary ledger grouping from matched-rule diagnostics.
+- Plain review output can omit losing matches without losing the primary decision.
+- JSON review output can carry matched-class evidence for agent inspection.
+- The review contract owns exact diagnostic field names, help text, and test fixtures.
+
+Next:
+
+- Decide the diagnostic display shape for JSON output.
+- Decide whether diagnostics include rule ids, source fields, or only losing classes.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add matched-rule diagnostics to plain output only if human review needs them.
+- Add rule ids if field-only class names are not enough to debug precedence.
+- Add an explicit drift check if diagnostic field names appear in docs and tests.
+
+## Decision 15: Shape JSON matched-class diagnostics with structured fields only
+
+```yaml
+id: skill-feedback-pilot-015
+status: accepted
+decided_at: "2026-06-12"
+decision: "Shape JSON matched-class diagnostics with structured fields only"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: JSON diagnostic shape Five-Pack"
+```
+
+Decision:
+
+- Include losing matched class names in JSON diagnostics.
+- Include the structured source fields that caused each losing class match.
+- Include the precedence rank for each losing class match.
+- Exclude narrative excerpts from matched-class diagnostics.
+- Omit matched-class diagnostics when a report has no losing matches.
+
+Rationale:
+
+- Losing class names show what else matched without changing ledger counts.
+- Source fields let agents inspect why a losing class matched.
+- Precedence rank makes the winner explainable without re-deriving the ladder.
+- Excluding narrative keeps diagnostics structured and avoids quote/noise creep.
+- Omitting empty diagnostics keeps JSON compact.
+
+Consequences:
+
+- Future JSON output can explain mixed-signal classification without bloating `--plain`.
+- The review contract owns exact field names, schemas, help text, and tests.
+- Narrative report text remains evidence for humans, not diagnostic classifier payload.
+- Mixed-signal fixtures need to prove diagnostic omission and inclusion behavior.
+
+Next:
+
+- Decide the rule-id question for diagnostics.
+- Decide whether source fields use exact report paths or stable symbolic names.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add rule ids if source fields and class names are not enough to debug precedence.
+- Add human-readable diagnostic summaries if JSON-only diagnostics prove too hard to inspect.
+- Add a compact diagnostic view after real agent consumers use the JSON payload.
+
+## Decision 16: Use stable symbolic source-field names for matched-class diagnostics
+
+```yaml
+id: skill-feedback-pilot-016
+status: accepted
+decided_at: "2026-06-12"
+decision: "Use stable symbolic source-field names for matched-class diagnostics"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: diagnostic source-field Five-Pack"
+```
+
+Decision:
+
+- Use stable symbolic source-field names for matched-class diagnostics.
+- Do not use indexed JSON paths in diagnostics.
+- Deduplicate repeated symbolic source names within one diagnostic.
+- Let the review contract own the allowed symbol set.
+- Keep raw evidence details behind report inspection, not inside diagnostics.
+
+Rationale:
+
+- Stable symbols survive report reordering, grouping, fixture changes, and compaction.
+- Indexed paths are brittle and make diagnostics depend on array positions.
+- Deduplication keeps diagnostic payloads compact.
+- Review contract ownership keeps field vocabulary code/help/test-owned.
+- Raw evidence belongs in report inspection to avoid narrative/noise creep.
+
+Consequences:
+
+- Future JSON diagnostics point to stable symbolic sources such as `friction.category`, `evidence_gaps[].code`, `observations[].kind`.
+- Diagnostic source-field symbols are guidance to inspect, not evidence excerpts.
+- The review contract must own exact allowed symbols and validation.
+- Mixed-signal fixtures need to prove indexed paths are not emitted.
+
+Next:
+
+- Decide whether diagnostics need rule ids now.
+- Decide whether source-field symbols are global or namespaced by report section.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+
+V2 Ideas:
+
+- Add exact report paths only in a debug-only mode if symbolic names prove insufficient.
+- Add symbol descriptions in generated help if agents struggle to interpret them.
+- Add source-field grouping in diagnostics if repeated classes create bulky output.
+
+## Decision 17: Omit rule ids from matched-class diagnostics MVP
+
+```yaml
+id: skill-feedback-pilot-017
+status: accepted
+decided_at: "2026-06-12"
+decision: "Omit rule ids from matched-class diagnostics MVP"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: rule-id diagnostics choice"
+```
+
+Decision:
+
+- Do not include rule ids in matched-class diagnostics MVP.
+- Use class, source fields, and precedence rank as the explainability payload.
+- Keep rule ids out of `--plain`.
+- Add rule ids only if fixtures or implementation debugging prove ambiguity.
+- If rule ids are added later, use stable symbolic ids owned by the review contract.
+
+Rationale:
+
+- Avoid expanding schema, naming, and test surface before evidence proves rule ids pay rent.
+- Existing fields explain which class lost, why it matched, and where it sits in the precedence ladder.
+- Source fields point to inspectable report data without narrative creep.
+- Rule-id vocabulary can wait until real ambiguity appears.
+
+Consequences:
+
+- JSON diagnostics MVP stays compact.
+- Mixed-signal fixtures should prove class, source fields, and precedence rank explain matched-class loss without rule ids.
+- The review contract can add rule ids later as a V2 diagnostic field.
+- `--plain` does not mention rule ids.
+
+Next:
+
+- Decide whether source-field symbols are global or namespaced by report section.
+- Keep implementation blocked by Codex lifecycle-hook proof from Decision 4.
+- Add rule-id ambiguity examples only if fixtures reveal them.
+
+V2 Ideas:
+
+- Add stable rule ids in JSON if class, source fields, and precedence rank are insufficient.
+- Add rule-id help text if future agents need deeper traceability.
+- Add debug-only diagnostics for rule-match internals.
+
+## Decision 18: Use a global source-field symbol set for matched-class diagnostics MVP
+
+```yaml
+id: skill-feedback-pilot-018
+status: accepted
+decided_at: "2026-06-12"
+decision: "Use a global source-field symbol set for matched-class diagnostics MVP"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: diagnostic source-field namespace choice"
+```
+
+Decision:
+
+- Use one global allowed source-field symbol set for diagnostics MVP.
+- Use fully qualified symbolic names such as `friction.category` and `evidence_gaps[].code`.
+- Do not create per-section namespace owners in MVP.
+- Let the review contract own the global symbol list and validation.
+- Add section-scoped extensions only if name collision or readability pain appears.
+
+Rationale:
+
+- Global symbols keep diagnostics as one vocabulary.
+- Fully qualified symbols already name the report section.
+- Section-scoped ownership adds schema surface before the symbol set is large enough to need it.
+- One symbol list is easier to test, document, and inspect.
+
+Consequences:
+
+- Diagnostic source fields stay under one contract surface.
+- Fixtures should assert only allowed global symbols are emitted.
+- Help can document one symbol list if diagnostics need discovery support.
+- The review contract may add section-scoped extensions later if collisions appear.
+
+Next:
+
+- Decide the exact Codex lifecycle-hook proof gate before implementation resumes.
+- Turn the decision trail into a brainstorm requirements doc after the hook-gate decision.
+
+V2 Ideas:
+
+- Split symbols into section namespaces if the list grows or collisions appear.
+- Generate symbol registry documentation from the review contract if the set becomes hard to scan.
+- Add debug mappings from symbols to report schema paths if agents need deeper traceability.
+
+## Decision 19: Require Codex hook plus trusted skill identity before new feature work
+
+```yaml
+id: skill-feedback-pilot-019
+status: accepted
+decided_at: "2026-06-12"
+decision: "Require Codex hook plus trusted skill identity before new feature work"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-12 Decision Mode: Codex hook proof gate"
+  - "2026-06-12 user-provided degraded codex-hook-smoke report example"
+```
+
+Decision:
+
+- Require Codex hook plus trusted skill identity proof before adding new exciting skill-feedback features.
+- The proof gate is not just "hook fired".
+- The proof gate passes only when a Codex lifecycle hook fires, writes an ignored `.skill-feedback/` report, includes trusted skill identity, and `review --plain` distinguishes hook capture from driver closeout.
+- A degraded fallback-style record does not satisfy the proof gate when it uses a placeholder skill such as `codex-hook-smoke`, unknown skill version, empty model, zero usage, degraded state, or missing model/usage gaps.
+- Do not describe the degraded fallback-style record as completed Codex lifecycle support.
+
+Rationale:
+
+- Hook-fire proof alone can show plumbing without proving useful skill attribution.
+- Trusted skill identity is the minimum signal needed before report review can support real product decisions.
+- Driver closeout evidence is already useful, but it is not a substitute for Codex lifecycle capture.
+- Treating degraded fallback capture as success would restart feature work on weak evidence.
+
+Consequences:
+
+- New exciting skill-feedback features stay blocked until hook plus identity proof passes.
+- Correlation between hook capture and driver closeout remains valuable but is not required to unblock the next implementation phase.
+- Smoke evidence must show trusted skill identity, not a placeholder smoke skill.
+- Review output must make hook capture and driver closeout visibly distinct.
+- Requirements docs should name this as the readiness gate.
+
+Next:
+
+- Turn the accepted decision trail into a brainstorm requirements doc.
+- Keep Codex hook plus identity proof as the first implementation gate.
+- Defer hook-to-closeout correlation to a later requirement unless implementation uncovers a dependency.
+
+V2 Ideas:
+
+- Add hook-to-closeout correlation as the next maturity gate after identity proof.
+- Add a lifecycle proof checklist command once the hook shape stabilizes.
+- Add degraded-capture diagnostics that explain why fallback records do not count.
+
+## Decision 20: Proceed with closeout-first anchor ledger
+
+```yaml
+id: skill-feedback-pilot-020
+status: accepted
+decided_at: "2026-06-13"
+decision: "Proceed with closeout-first anchor ledger and remove taxonomy-first v2 scope"
+owner: "skills/skill-feedback"
+source:
+  - "docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md"
+  - "docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "2026-06-13 grill-with-docs: Codex pivot research"
+  - "2026-06-13 user request: remove taxonomy-first scope"
+supersedes:
+  - skill-feedback-pilot-006
+  - skill-feedback-pilot-007
+  - skill-feedback-pilot-008
+  - skill-feedback-pilot-009
+  - skill-feedback-pilot-010
+  - skill-feedback-pilot-011
+  - skill-feedback-pilot-012
+  - skill-feedback-pilot-013
+  - skill-feedback-pilot-014
+  - skill-feedback-pilot-015
+  - skill-feedback-pilot-016
+  - skill-feedback-pilot-017
+  - skill-feedback-pilot-018
+  - skill-feedback-pilot-019
+```
+
+Decision:
+
+- Proceed with v2 closeout-first ledger work from `driver_declared` evidence while Trusted skill identity remains blocked.
+- Group ledger entries by stable review anchors, not failure classes.
+- Remove failure-class taxonomy, classifier, precedence, taxonomy-gap, and losing-class diagnostics from active v2 scope.
+- Treat Codex Stop as Stop-detected turn/runtime evidence, not skill identity.
+- Preserve Claude Code Stop-detected skill as runtime-specific evidence, still weaker than Trusted skill identity.
+- Keep daily pilot and `trusted_engine_identity` gated until readiness conditions pass.
+- Keep historical taxonomy decisions as superseded context instead of deleting them.
+
+Rationale:
+
+- Community signal supports hooks, OpenTelemetry, and evidence observability, but not a mature trusted skill-use lifecycle event for Codex.
+- Driver closeouts already carry useful LLM evidence for review value.
+- Evidence tiers fit current runtime support better than waiting for Trusted skill identity.
+- Taxonomy-first scope adds product modeling before real ledger data proves categories pay rent.
+- Anchor-based grouping preserves review value with less schema and less false confidence.
+
+Consequences:
+
+- Active v2 planning groups repeated evidence by stable anchors.
+- Decisions 6 through 18 no longer drive the active v2 branch.
+- Decision 19 is narrowed: daily pilot and Trusted skill identity stay gated, but closeout-first ledger implementation may proceed.
+- Codex Stop evidence can improve runtime observability without satisfying Trusted skill identity.
+- Future agents should not reintroduce failure-class contracts without a new accepted decision backed by ledger data.
+
+Next:
+
+- Implement the active v2 plan from the anchor-ledger requirements.
+- Keep Trusted skill identity as a separate readiness claim.
+- Mark earlier superseded entries in-place only if the log needs two-sided lifecycle metadata.
+
+V2 Ideas:
+
+- Reintroduce product-native categories only after real ledger data shows repeated anchors need higher-level grouping.
+- Add a taxonomy proposal workflow later if anchor-ledger review becomes too granular.
+
+## Decision 21: Make full claim-safe ReviewResultData the reducer contract
+
+```yaml
+id: skill-feedback-pilot-021
+status: accepted
+decided_at: "2026-06-13"
+decision: "Make full claim-safe ReviewResultData the v2 reducer contract"
+owner: "skills/skill-feedback"
+source:
+  - "skills/skill-feedback/prototypes/NOTES.md"
+  - "skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts"
+  - "docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md"
+  - "docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md"
+  - "2026-06-13 prototype verdict: ReviewResultData contract contenders"
+```
+
+Decision:
+
+- Make full claim-safe `ReviewResultData` v2 the reducer-owned Interface for active v2 work.
+- Keep the anchor Adapter internal behind that Interface.
+- Reject the minimal two-key reducer as the active implementation shape.
+- Reject reducer plus anchor Adapter alone as the active implementation shape.
+- Expose `review_unit_key`, `ledger_anchor_key`, `anchor_strength`, `weak_anchor_reason`, evidence tier, allowed claims, and split readiness from the review result.
+- Derive `review_unit_key` from trusted `skill_run_id`; otherwise use report id.
+- Derive `ledger_anchor_key` from canonical repo-contained path sets only.
+- Keep weak anchors standalone and emit anchor-miss telemetry.
+- Claim `corroborated` only when mixed evidence shares one trusted review unit.
+- Preserve Codex Stop as runtime evidence, Claude Stop-detected skill as runtime-specific evidence, and `trusted_engine_identity` as engine-owned identity only.
+
+Rationale:
+
+- The prototype judged three reducer shapes against false merge, false corroboration, weak-anchor merge, and false readiness.
+- Full claim-safe `ReviewResultData` scored highest with aggregate `52`.
+- The minimal two-key reducer leaked false corroboration, weak-anchor merging, and Codex Stop false readiness.
+- Reducer plus anchor Adapter prevented merge leaks but still left readiness and claim safety outside the Interface.
+- Contract-owned allowed claims and split readiness keep safety at the reducer Seam instead of in renderer language.
+
+Consequences:
+
+- The replacement v2 plan starts from `ReviewResultData`, not a generic anchor-ledger implementation.
+- The old v2 plan is superseded where it stops at anchor-ledger or adapter-only scope.
+- Review JSON and plain output consume reducer-owned claims instead of recomputing claim language.
+- Golden vectors need to prove same-anchor/no-trusted-run, weak-label-repeat, Codex Stop/no-identity, and Claude-linked-skill scenarios.
+- The prototype can be deleted after the winning contract shape is absorbed.
+
+Next:
+
+- Write a replacement v2 plan around claim-safe `ReviewResultData`.
+- Mark the old v2 plan as superseded by the replacement plan.
+- Implement from the replacement plan when work resumes.
+
+V2 Ideas:
+
+- Reintroduce product-native categories only after ledger data proves category pressure.
+- Use a future engine-owned skill lifecycle event as the clean `trusted_engine_identity` source when Codex exposes one.
+
+## Decision 22: Lock ReviewResultData claim-safe grill rules
+
+```yaml
+id: skill-feedback-pilot-022
+status: accepted
+decided_at: "2026-06-13"
+decision: "Lock ReviewResultData v2 claim-safe grill rules for reducer inputs, ledger output, readiness, corroboration, weak anchors, renderers, and field survival"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "2026-06-13 decision-mode grill: ReviewResultData v2"
+decision_mode:
+  question: "What claim-safe ReviewResultData v2 rules should implementation preserve?"
+  option: "claim-safe rules accepted across grill rounds 1-9"
+  confidence: strong
+```
+
+Decision:
+
+- `ReviewResultData` carries facts plus allowed claims; renderers own wording and layout only.
+- The reducer accepts normalized reports, review units, and anchor Adapter facts, not raw report mess.
+- Ledger entries carry stable anchor facts, source review-unit facts, evidence tier, source mix, weak-anchor quarantine, allowed claims, resolution state, verification burden, and next safe action.
+- Top-level `ReviewResultData` carries review units, ledger entries, anchor-miss telemetry, readiness by claim, allowed global claims, open actions, and no-action reason.
+- Readiness is tracked by claim, not as one global boolean.
+- Corroboration requires mixed Evidence source values inside the same trusted `review_unit_key`.
+- Weak anchors stay standalone with weak-anchor reason, attempted target context, and anchor-miss telemetry.
+- Renderers may format, filter, order, and choose wording; they may not infer readiness, corroboration, merge, trust, or new claim language.
+- A v2 field survives only when it prevents false merge, false corroboration, weak-anchor merge, renderer overclaim, false readiness, or unsafe next action.
+
+Rationale:
+
+- Decision 21 picked full claim-safe `ReviewResultData` as the reducer contract.
+- The grill clarified the exact safety rules needed to implement that contract without recreating unsafe renderer inference.
+- Raw report parsing belongs upstream because the reducer should evaluate shaped evidence, not path and report-text weirdness.
+- Allowed claims protect plain output, JSON, docs, and future agents from inventing stronger claims than the evidence supports.
+- The field survival rule keeps v2 from becoming a dashboard bag of useful-looking fields.
+
+Consequences:
+
+- Implementation agents should treat these rules as the ReviewResultData v2 contract pressure, not optional renderer polish.
+- Renderer code must consume allowed claims and readiness facts instead of recomputing claim language.
+- Tests should prove the named false-claim failures directly: false merge, false corroboration, weak-anchor merge, renderer overclaim, false readiness, and unsafe next action.
+- UX-only fields should stay out of `ReviewResultData` unless they block one of the named false claims or unsafe actions.
+
+Next:
+
+- Patch the replacement v2 plan with implementation-facing bullets from this decision before implementation resumes.
+- Keep deterministic field names and exact schemas owned by code, tests, and command help once implementation starts.
+
+V2 Ideas:
+
+- Add a generated contract map if the ReviewResultData field set becomes hard for agents to scan.
+- Add renderer lint tests if future output code starts inferring claim language again.
+
+## Decision 23: Grill remaining ReviewResultData v2 branches in implementation order
+
+```yaml
+id: skill-feedback-pilot-023
+status: accepted
+decided_at: "2026-06-13"
+decision: "Grill remaining ReviewResultData v2 branches in implementation order: plan capture, ICA vocabulary audit, golden vectors, field names, renderer migration, implementation order, and prototype absorption"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "2026-06-13 decision-mode grill: remaining ReviewResultData v2 branches"
+```
+
+Decision:
+
+- Apply Decision 22 to the replacement v2 plan first.
+- Run a narrow ICA vocabulary audit on the plan immediately after applying Decision 22.
+- Grill golden test vectors after the plan uses the accepted contract language.
+- Grill exact field names after golden vectors identify which facts need stable code-owned names.
+- Grill renderer migration after field names and allowed-claim facts are clear.
+- Grill implementation order after tests, fields, and renderer responsibilities are stable enough to sequence.
+- Grill prototype absorption last, once normal tests name the prototype scenarios that must survive.
+
+Rationale:
+
+- Decision 22 is accepted truth, but implementation agents will work from the v2 plan.
+- Applying the decision to the plan before more grilling prevents the next branches from drifting from the accepted contract.
+- The ICA vocabulary audit should happen before golden vectors so test language uses `Seam`, `Interface`, `Adapter`, `Depth`, `Locality`, `Leverage`, and deletion-test terms precisely.
+- Golden vectors should precede field names because tests expose which facts need stable names.
+- Renderer migration should follow field naming because renderers need the reducer-owned allowed-claim facts before their inference is removed.
+- Prototype deletion should be last because it depends on proof that prototype scenarios are represented in normal tests.
+
+Consequences:
+
+- Do not start with broad implementation sequencing.
+- Do not do a full ICA architecture review before applying Decision 22 to the plan.
+- Keep the ICA pass narrow: vocabulary and ownership audit only.
+- Treat golden vectors as the next real grill after plan capture and vocabulary audit.
+- Keep prototype files until their scenarios are absorbed into normal tests.
+
+Next:
+
+- Patch `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` with Decision 22.
+- Audit the patched plan for ICA vocabulary and owner drift.
+- Start the golden-vector grill from the patched, audited plan.
+
+V2 Ideas:
+
+- Add a generated implementation checklist if future agents lose the branch order.
+- Add a plan-lint check only if repeated wording drift appears after the ICA vocabulary audit.
+
+## Decision 24: Use seven golden vectors as the ReviewResultData v2 contract gate
+
+```yaml
+id: skill-feedback-pilot-024
+status: accepted
+decided_at: "2026-06-13"
+decision: "Use six claim-safety golden vectors plus one v1 no-action preservation vector as the minimum ReviewResultData v2 contract proof"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "2026-06-13 decision-mode grill: golden vectors"
+decision_mode:
+  question: "Which golden-vector set is the minimum contract proof for ReviewResultData v2?"
+  option: "six claim-safety vectors plus one no-action preservation vector"
+  confidence: strong
+```
+
+Decision:
+
+- Use seven golden vectors as the minimum pre-implementation contract gate.
+- Prove same anchor without trusted run cannot claim `corroborated`.
+- Prove repeated weak labels stay standalone.
+- Prove Codex Stop-detected turn gives runtime evidence without Trusted skill identity or Daily pilot readiness.
+- Prove Claude Stop-detected skill plus linked trusted review-unit evidence can claim `corroborated`.
+- Prove JSON and plain renderers cannot infer stronger claims than reducer-owned allowed claims.
+- Prove readiness advances per claim, not globally.
+- Prove v1 coverage, open-item, and no-action triage survive when ledger data exists.
+
+Rationale:
+
+- The first six vectors prove the new `ReviewResultData` contract cannot lie about merge safety, corroboration, identity, renderer claims, or readiness.
+- The seventh vector protects the v2 promise that ledger detail extends v1 review instead of replacing coverage and no-action behavior.
+- A broader matrix is deferred until exact field names are stable because otherwise tests would lock premature implementation vocabulary.
+
+Consequences:
+
+- Golden-vector tests should land before implementation code relies on the v2 reducer shape.
+- Field-name grilling should use these vectors to decide which facts need stable code-owned names.
+- Renderer migration should treat the renderer-overclaim vector as a contract test, not just a UX test.
+- Prototype deletion stays blocked until these vectors are represented in normal tests.
+
+Next:
+
+- Patch the replacement v2 plan so U4/U5/U6 name these seven vectors.
+- Continue the grill with exact field names after the golden-vector gate is captured.
+
+V2 Ideas:
+
+- Expand into a matrix of Evidence source, Capture runtime, anchor strength, review-unit trust, and renderer output after field names are accepted.
+- Add generated fixture documentation if golden vectors become hard to inspect in test code.
+
+## Decision 25: Freeze only claim-safety field names before implementation
+
+```yaml
+id: skill-feedback-pilot-025
+status: accepted
+decided_at: "2026-06-13"
+decision: "Freeze the ReviewResultData v2 field names that prevent false claims and leave display labels, helper names, and non-safety enum catalogues to implementation"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts"
+  - "2026-06-13 autonomous decision-mode batch: field names"
+decision_mode:
+  question: "Which names are stable enough for code-owned contract fields, and which stay conceptual until implementation?"
+  option: "freeze claim-safety fields only"
+  confidence: strong
+```
+
+Decision:
+
+- Keep v1 fields `coverage`, `open_items`, `no_action`, `retention`, and `pilot_checkpoint`.
+- Replace collapsed `capture_readiness` with `claim_readiness`.
+- Add top-level `review_units`, `ledger_entries`, `anchor_miss_telemetry`, and `allowed_claims`.
+- Use `claim_readiness.runtime_capture`, `claim_readiness.trusted_skill_identity`, and `claim_readiness.daily_pilot`.
+- Each readiness fact carries `status`, `reason_ids`, and `evidence_refs`.
+- Use readiness statuses `ready`, `blocked`, and `evidence_only`.
+- A review unit exposes `review_unit_key`, `report_ids`, `trusted_run`, and optional `trusted_skill_run_id`.
+- A ledger entry exposes `ledger_entry_key`, `review_unit_keys`, `ledger_anchor_key`, `anchor_strength`, `weak_anchor_reason`, `attempted_targets`, `owner_paths`, `evidence_tier`, `source_mix`, `capture_runtime_mix`, `allowed_claims`, `resolution_state`, `verification_burden`, and `next_safe_action`.
+- Use evidence tiers `driver_declared`, `runtime_observed`, `corroborated`, and `trusted_engine_identity`.
+- Use allowed claims `repeated_anchor`, `mixed_evidence_sources`, `same_trusted_run`, `corroborated`, and `trusted_engine_identity`.
+- Use anchor strengths `strong_path` and `weak`.
+- Use weak-anchor reasons `label_only`, `missing_anchor`, `out_of_repo`, and `unverifiable`.
+- Leave exact key serialization, `reason_ids` catalogue, `evidence_refs` shape, `resolution_state` values, renderer labels, section headings, and helper/module names to implementation tests and command-contract code.
+
+Rationale:
+
+- The stable fields are the fields needed by the seven golden vectors and Decision 22 false-claim guards.
+- Freezing renderer copy or internal helper names now would add entropy without increasing claim safety.
+- Keeping `claim_readiness` explicit prevents the current `capture_readiness` collapse from reappearing under a new name.
+
+Consequences:
+
+- U1 should update `command-contract.ts` around these field names before reducer work lands.
+- Tests should fail unknown evidence-tier, allowed-claim, anchor-strength, weak-anchor-reason, and readiness-status values.
+- Implementation may choose exact `reason_ids`, `evidence_refs`, and `resolution_state` catalogues only when tests need them.
+
+Next:
+
+- Patch the replacement v2 plan with the accepted field-name set.
+- Use the field-name set to constrain renderer migration and implementation order.
+
+V2 Ideas:
+
+- Add generated field-map output if agents struggle to inspect the v2 contract.
+- Add a reason-id catalogue only after readiness tests prove the minimum useful set.
+
+## Decision 26: Migrate renderers as claim consumers only
+
+```yaml
+id: skill-feedback-pilot-026
+status: accepted
+decided_at: "2026-06-13"
+decision: "Migrate JSON and plain review output to consume reducer-owned allowed claims and claim readiness without renderer-side claim inference"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-13 autonomous decision-mode batch: renderer migration"
+decision_mode:
+  question: "How do JSON and plain output stop inferring claims without losing useful review UX?"
+  option: "render from allowed claims and claim readiness only"
+  confidence: strong
+```
+
+Decision:
+
+- JSON returns the `ReviewResultData` Interface fields directly inside the existing command envelope.
+- Plain output preserves v1 coverage, low-signal, no-action, and open-item triage before ledger detail.
+- Plain output renders human labels from `allowed_claims`, `evidence_tier`, and `claim_readiness`.
+- Renderers may sort, filter, group, sanitize, and choose wording.
+- Renderers may not derive `corroborated`, `trusted_engine_identity`, merge safety, Daily pilot readiness, or new allowed-claim language from source mix, runtime mix, shared anchors, or hook counts.
+- Do not keep `capture_readiness` as a compatibility alias in v2 output.
+- Redaction and section-spoofing defenses remain renderer responsibilities.
+
+Rationale:
+
+- The useful review UX is the v1 triage order plus readable ledger detail, not renderer-owned trust logic.
+- A compatibility alias for `capture_readiness` would preserve the collapsed readiness shape that v2 is replacing.
+- JSON and plain output stay easier to audit when they share the same reducer-owned claim budget.
+
+Consequences:
+
+- U6 renderer tests must include a negative same-anchor/no-trusted-run fixture for JSON and plain output.
+- U6 renderer tests must prove Daily pilot readiness is not inferred from runtime capture readiness.
+- Plain review copy can change, but every strong claim must be traceable to reducer-owned fields.
+
+Next:
+
+- Patch U6 with the no-alias renderer migration rule.
+- Keep renderer migration after U1, U4, and U5 because it depends on field names, ledger claims, and readiness facts.
+
+V2 Ideas:
+
+- Add renderer-lint helpers if future output code starts branching on source mix or runtime mix for claim labels.
+
+## Decision 27: Execute ReviewResultData v2 serially from contract to cleanup
+
+```yaml
+id: skill-feedback-pilot-027
+status: accepted
+decided_at: "2026-06-13"
+decision: "Implement ReviewResultData v2 serially: contract, review-unit trust, anchor Adapter, reducer golden vectors, split readiness, renderers, then docs and prototype cleanup"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-13 autonomous decision-mode batch: implementation order"
+decision_mode:
+  question: "Which unit lands first after tests and plan language are stable?"
+  option: "U1 contract first, then serial dependency order"
+  confidence: strong
+```
+
+Decision:
+
+- Start implementation with U1, the `ReviewResultData` v2 contract shape and contract tests.
+- In U1, write the code-owned field/enumeration tests before runtime behavior depends on them.
+- Run U2 after U1 to replace broad `skill_run_id` coalescing with trusted review-unit semantics.
+- Run U3 after U1 to land the internal anchor Adapter and weak-anchor quarantine.
+- Run U4 after U2 and U3 to implement the reducer and golden-vector ledger tests.
+- Run U5 after U4 to replace collapsed readiness with `claim_readiness`.
+- Run U6 after U5 to migrate JSON and plain renderers.
+- Run U7 last to update docs and delete prototype scaffolding only after normal tests cover the vectors.
+- Prefer serial execution for ce-work because U1-U6 share `command-contract.ts`, `skill-feedback-runner.ts`, and runner tests.
+
+Rationale:
+
+- The contract must exist before reducer, readiness, or renderer work can consume stable names.
+- Review-unit trust and anchor facts are independent enough to follow U1, but both feed U4.
+- Renderer migration cannot be safe until reducer-owned claims and claim readiness exist.
+- Serial execution avoids shared-file conflicts in the current dirty worktree.
+
+Consequences:
+
+- ce-work should not parallelize U1-U6 in the same worktree.
+- The first implementation verification target is command-contract coverage, not renderer output.
+- Plan progress should not be tracked by editing checkboxes into the plan.
+
+Next:
+
+- Patch the replacement v2 plan with an explicit ce-work execution posture and serial unit order.
+- Prepare a handoff that points ce-work at the replacement plan.
+
+V2 Ideas:
+
+- Split U2 and U3 into parallel worktrees only if future execution starts from a clean branch and worktree isolation is available.
+
+## Decision 28: Absorb prototype scenarios into normal tests before deletion
+
+```yaml
+id: skill-feedback-pilot-028
+status: accepted
+decided_at: "2026-06-13"
+decision: "Delete ReviewResultData v2 prototype files only after their winning scenarios and Decision 24 vectors live in normal tests"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/prototypes/NOTES.md"
+  - "skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts"
+  - "2026-06-13 autonomous decision-mode batch: prototype absorption"
+decision_mode:
+  question: "What prototype scenarios must move into normal tests before deleting prototype files?"
+  option: "absorb all winning scenarios plus Decision 24 add-ons"
+  confidence: strong
+```
+
+Decision:
+
+- Absorb `same-anchor-no-trusted-run` into reducer tests.
+- Absorb `weak-label-repeat` into anchor Adapter or reducer tests.
+- Absorb `codex-stop-no-identity` into readiness tests.
+- Absorb `claude-linked-skill` into review-unit and reducer tests.
+- Add normal tests for renderer overclaim prevention, per-claim readiness advancement, and v1 triage preservation.
+- Do not absorb prototype contender scoring, aggregate scoreboard, terminal UI, or weaker rejected-contender behavior.
+- Delete `skills/skill-feedback/prototypes/`, its package script, and stale prototype references only after normal tests pass.
+
+Rationale:
+
+- The prototype proved the winning contract shape; permanent tests should preserve the behavior, not the exploratory scoring harness.
+- Keeping rejected-contender mechanics would confuse implementation agents and overfit the production code to prototype internals.
+- Deleting the prototype before absorption would lose the concrete edge cases that justified the wider Interface.
+
+Consequences:
+
+- U7 cleanup is blocked until U4, U5, and U6 tests cover the seven golden vectors.
+- Handoff should tell ce-work to read prototype files as source evidence, not as implementation patterns to keep.
+- Decision logs and plans may keep historical references to the prototype paths after deletion.
+
+Next:
+
+- Patch U7 with explicit prototype absorption and deletion conditions.
+- Create a ce-work handoff naming the prototype files as read-before-delete evidence.
+
+V2 Ideas:
+
+- Replace prototype notes with generated fixture documentation if future tests need a human-readable scenario index.
