@@ -58,6 +58,7 @@ records. They are linked below but not moved.
 - [Browser Adapter Multi-Adapter Decision Log](decisions/2026-06-03-browser-adapter-multi-adapter-decision-log.md) — adapter lifecycle gates, recovery contract ownership, proof handler registry.
 - [Browser Use Prepare And Operation Decision Log](decisions/2026-06-03-browser-use-prepare-operation-decision-log.md) — prepare/route/operate seam, target discovery/selection, privacy gates.
 - [Browser-Use Module Split](decisions/2026-06-10-002-browser-use-module-split-decision-log.md) — acyclic 8-module split, test-carving strategy, cycle-break decisions.
+- [GoF Pattern Naming](decisions/2026-06-13-001-gof-pattern-naming-decision-log.md) — pressure-earned pattern verdicts: Adapter kept, Strategy rejected (→ evidence-first selection), Facade qualified to the action surface, the oracle is N-version programming (not Facade — it surfaces divergence, doesn't hide it).
 
 ## ADRs (in repo-root `docs/adr/`)
 
