@@ -1279,7 +1279,7 @@ Decision:
 
 - Keep v1 fields `coverage`, `open_items`, `no_action`, `retention`, and `pilot_checkpoint`.
 - Replace collapsed `capture_readiness` with `claim_readiness`.
-- Add top-level `review_units`, `ledger_entries`, `anchor_miss_telemetry`, and `allowed_claims`.
+- Add top-level `review_units`, `ledger_entries`, `anchor_miss_telemetry`, and `claim_readiness`; Decision 30 keeps allowed claims entry-local.
 - Use `claim_readiness.runtime_capture`, `claim_readiness.trusted_skill_identity`, and `claim_readiness.daily_pilot`.
 - Each readiness fact carries `status`, `reason_ids`, and `evidence_refs`.
 - Use readiness statuses `ready`, `blocked`, and `evidence_only`.
@@ -1467,3 +1467,211 @@ Next:
 V2 Ideas:
 
 - Replace prototype notes with generated fixture documentation if future tests need a human-readable scenario index.
+
+## Decision 29: Separate trusted run proof from Trusted skill identity
+
+```yaml
+id: skill-feedback-pilot-029
+status: accepted
+decided_at: "2026-06-13"
+decision: "Separate trusted run proof from Trusted skill identity for ReviewResultData v2"
+owner: "skills/skill-feedback"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "2026-06-13 decision-mode grill: trusted run predicate"
+decision_mode:
+  question: "Should trusted_run be an intermediate proof of same-run correlation, or only exist after full Trusted skill identity exists?"
+  option: "trusted_run is separate same-run proof"
+  confidence: strong
+```
+
+Decision:
+
+- Treat `trusted_run` as runtime-owned or correlation-owned proof that reports belong to the same skill run.
+- Keep `trusted_run` separate from Trusted skill identity and `trusted_engine_identity`.
+- Treat raw, report-authored, missing, untrusted, or placeholder `skill_run_id` values as non-mergeable evidence.
+- Allow trusted run proof to support `same_trusted_run` and `corroborated`.
+- Do not allow trusted run proof alone to satisfy `trusted_engine_identity` or Daily pilot readiness.
+
+Rationale:
+
+- Current review coalesces reports by raw `skill_run_id`, which recreates the false-merge risk v2 exists to remove.
+- The code already carries identity provenance separately from the raw id, so same-run proof can be modeled without overclaiming engine identity.
+- Decision 24 needs the Claude-linked corroboration vector to remain possible, but Decision 20 keeps Trusted skill identity gated.
+- The split lets implementation preserve useful correlation while keeping identity claims conservative.
+
+Consequences:
+
+- U2 must add a trust/provenance input before grouping reports by `skill_run_id`.
+- Review-unit construction keys only on trusted provenance, not raw id presence.
+- Spoofed `trusted_run` or `trusted_skill_run_id` values in input reports must be ignored or downgraded to report-local units.
+- U4 and U5 tests must prove `same_trusted_run` and `corroborated` do not imply `trusted_engine_identity`.
+
+Next:
+
+- Patch the active v2 plan and glossary with the trusted-run boundary.
+- Continue the grill with top-level `allowed_claims` scope.
+
+V2 Ideas:
+
+- Replace trusted-run fixtures with engine-owned skill lifecycle evidence if Codex exposes a native source later.
+
+## Decision 30: Keep allowed claims entry-local
+
+```yaml
+id: skill-feedback-pilot-030
+status: accepted
+decided_at: "2026-06-13"
+decision: "Remove top-level allowed_claims from ReviewResultData v2 and keep allowed claims entry-local"
+owner: "skills/skill-feedback"
+scope: "ReviewResultData top-level allowed_claims"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "2026-06-13 decision-mode grill: top-level allowed_claims scope"
+decision_mode:
+  question: "Should top-level allowed_claims exist in ReviewResultData v2?"
+  option: "remove top-level allowed_claims and keep claims on entries only"
+  confidence: strong
+```
+
+Decision:
+
+- Remove top-level `allowed_claims` from the active v2 `ReviewResultData` shape.
+- Keep `allowed_claims` entry-local on ledger entries.
+- Require renderers and future agents to read claims from the ledger entry whose evidence supports the claim.
+- Add summary-level claim fields later only with distinct field names and result-level semantics.
+
+Rationale:
+
+- A global claim set can be read as safe for the whole review result even when only one entry supports the claim.
+- Entry-local claims keep every repeatable claim next to its evidence and anchor facts.
+- Decision 22's field survival rule keeps v2 fields only when they prevent false claims or unsafe actions; global `allowed_claims` adds scope machinery without current proof.
+- Removing the top-level field preserves renderer safety without weakening the ledger-entry contract.
+
+Consequences:
+
+- Decision 22 and Decision 25 are narrowed for the top-level `allowed_claims` field only.
+- U1 contract tests should assert no global `allowed_claims` field exists in v2 review output.
+- U4 and U6 tests should assert allowed claims are emitted and consumed from ledger entries.
+- Future summary claims require a separate accepted decision and a field name that cannot be confused with entry-local claims.
+
+Next:
+
+- Patch the active v2 plan and glossary so allowed claims are entry-local.
+- Continue the batch with Daily pilot readiness semantics, weak-anchor key presence, and review schema versioning.
+
+V2 Ideas:
+
+- Add `summary_claims` only if future agent consumers need result-level claim language backed by distinct predicates.
+
+## Decision 31: Defer timestamp proximity to future candidate correlation
+
+```yaml
+id: skill-feedback-pilot-031
+status: accepted
+decided_at: "2026-06-13"
+decision: "Defer timestamp-based driver-closeout to Stop-detected-turn correlation to a future inspect-only candidate-correlation lane"
+owner: "skills/skill-feedback"
+scope: "timestamp proximity correlation"
+source:
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "2026-06-13 decision-mode grill: timestamp proximity evidence"
+decision_mode:
+  question: "Should timestamp-based candidate correlation be recorded as a future-version decision, excluded from current v2?"
+  option: "record future-version deferral"
+  confidence: strong
+```
+
+Decision:
+
+- Treat timestamp proximity between driver closeout receipts and Stop-detected turns as future inspect-only candidate correlation.
+- Do not include timestamp-proximity correlation in the current v2 implementation scope.
+- Do not use timestamp proximity to derive `review_unit_key`, `ledger_anchor_key`, `same_trusted_run`, `corroborated`, `trusted_engine_identity`, Trusted skill identity readiness, or Daily pilot readiness.
+- Allow a future version to add a candidate-correlation lane such as `candidate_correlations[]` only with explicit inspect-only semantics.
+- Keep timestamps as supporting evidence, not identity proof.
+
+Rationale:
+
+- Timestamp proximity can reduce review noise by putting nearby closeout and Stop evidence in front of a human or future agent.
+- Clocks, delayed closeouts, multiple skills in one turn, and batched agent work make timestamps too weak for same-run proof.
+- Current v2 already protects claim safety by requiring trusted same-run proof before `same_trusted_run` or `corroborated`.
+- Recording the exclusion now prevents future implementation agents from using "nearby in time" as accidental trust glue.
+
+Consequences:
+
+- U1-U6 should not add timestamp-based candidate-correlation fields for v2.
+- U2 review-unit construction remains based on trusted run proof, not temporal proximity.
+- U4 and U6 tests should keep timestamp proximity out of corroboration and renderer claim derivation.
+- A future candidate-correlation feature needs its own field names, allowed language, and tests proving inspect-only behavior.
+
+Next:
+
+- Patch the active v2 plan Deferred and Outside This Version sections with the timestamp-proximity exclusion.
+- Continue current v2 implementation planning without broadening scope.
+
+V2 Ideas:
+
+- Add `candidate_correlations[]` with `kind: temporal_proximity`, evidence references, time delta, and inspect-only wording after v2 ships.
+
+## Decision 32: Apply remaining ReviewResultData v2 plan-review guardrails
+
+```yaml
+id: skill-feedback-pilot-032
+status: accepted
+decided_at: "2026-06-13"
+decision: "Apply remaining ReviewResultData v2 plan-review guardrails before ce-work"
+owner: "skills/skill-feedback"
+scope: "ReviewResultData v2 implementation guardrails"
+source:
+  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
+  - "2026-06-13 ce-doc-review: ReviewResultData v2 plan"
+  - "2026-06-13 decision-mode batch: remaining plan-review fixes"
+decision_mode:
+  question: "Accept the remaining five plan-review fixes before ce-work?"
+  option: "accept all five"
+  confidence: strong
+```
+
+Decision:
+
+- Track readiness as separate facts, not independent gates.
+- Make Daily pilot readiness depend on the accepted pilot gate, machine-observable approval, and Trusted skill identity evidence.
+- Expose `ledger_anchor_key` only for strong-path ledger entries.
+- Add a review-specific v2 schema/version path before removing `capture_readiness`.
+- Add redaction coverage for every new v2 agent-authored string path rendered through JSON or plain output.
+- Treat the active v2 plan and decision log as read-only U7 sources unless a separate accepted decision requires an append-only update.
+
+Rationale:
+
+- The doc review found these as concrete implementation guardrails, not product-scope relitigation.
+- Daily pilot readiness can falsely appear ready if separate readiness facts are described as independent gates.
+- Weak anchors must not gain mergeable keys through a universal ledger-entry field list.
+- Removing `capture_readiness` without a v2 review schema/version path would create a silent breaking change.
+- New v2 rendered strings expand the redaction surface beyond section-spoofing.
+- U7 should update durable source docs without turning the active plan or decision trail into execution-state artifacts.
+
+Consequences:
+
+- U1 tests must prove review-specific v2 schema/versioning and strong-only `ledger_anchor_key` shape.
+- U3 tests must prove weak anchors carry no mergeable `ledger_anchor_key`.
+- U5 tests must prove runtime capture can become ready while Daily pilot stays blocked until all dependencies are present.
+- U6 tests must prove redaction covers new v2 string paths before JSON and plain rendering.
+- U7 files should exclude the active plan and decision log from normal edit scope.
+
+Next:
+
+- Patch the active v2 plan with the five guardrails.
+- Re-run document checks before continuing to `ce-work`.
+
+V2 Ideas:
+
+- Add a generated v2 review contract map if schema/version and field-shape checks become hard to scan.

@@ -24,9 +24,9 @@ source:
 - Use `ReviewResultData Facade` for the claim-safe review result Interface.
 - Name `ReviewResultData` as the Interface at the reducer Seam.
 - Use `Anchor Adapter` only for the internal Adapter that emits canonical anchor facts for the reducer.
-- Use `Claim Strategy` for reducer-owned allowed-claim derivation.
+- Use `Claim derivation rules` for reducer-owned allowed-claim derivation.
 - Use `Reducer flow` for the fixed review pipeline.
-- Use `Review unit` only for trusted `skill_run_id` bundles or report-local units.
+- Use `Review unit` only for Trusted run proof bundles or report-local units.
 - Use `Trusted skill identity` for engine-owned evidence that a named skill ran.
 - Use `Stop-detected turn` for Codex Stop evidence without skill identity.
 - Use `Stop-detected skill` for runtime evidence that can name a skill from supported runtime evidence.
@@ -50,6 +50,7 @@ source:
 - Search for collapsed readiness drift: `capture_readiness`, `implementation readiness`.
 - Search for ICA drift: `reducer Seam`, `anchor Seam`, `boundary`, `component`, `service`, `API`.
 - Search for output-owner drift: `JSON facade`, `renderer inference`, `evidence sources`.
+- Search for source-layout drift: `patterns/`, `gof/`, legacy claim-strategy labels, standalone strategy modules.
 - Treat matches in historical decisions as immutable unless a new superseding decision is added.
 
 ## Next Safe Action
