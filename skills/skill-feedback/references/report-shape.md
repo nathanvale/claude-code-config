@@ -6,10 +6,10 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 
 - Keep `skills/skill-feedback/src/` flat.
 - Read `command-contract.ts` first for schema versions, contract ids, enums, exported result shapes, and parser rules.
-- Read current v1 review orchestration in `skill-feedback-runner.ts`.
+- Read review orchestration in `skill-feedback-runner.ts`.
 - Keep CLI orchestration, inbox reads, review dispatch, and rendering glue in `skill-feedback-runner.ts`.
-- Create `review-ledger-reducer.ts` during v2 implementation for reducer-owned review-unit, ledger-entry, evidence-tier, entry-local claim, and readiness logic.
-- Create `ledger-anchor-adapter.ts` during v2 implementation for repo-contained path canonicalization, anchor strength, weak-anchor reasons, and strong-only `ledger_anchor_key` facts.
+- Read `review-ledger-reducer.ts` for reducer-owned review-unit, ledger-entry, evidence-tier, entry-local claim, and readiness logic.
+- Read `ledger-anchor-adapter.ts` for repo-contained path canonicalization, anchor strength, weak-anchor reasons, and strong-only `ledger_anchor_key` facts.
 - Put agent-authored string safety in `redaction.ts`.
 - Put small shared report helpers in `report-helpers.ts`.
 - Put runtime capture adapter lanes in `capture-adapters.ts`.
@@ -42,8 +42,8 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 ## V2 Field Ownership
 
 - Keep exact v2 review fields, enum values, parser rules, and result version in `skills/skill-feedback/src/command-contract.ts`.
-- Treat `ReviewResultData` as the v2 review result contract.
-- Treat `ReviewResultDataV1` as the current runner compatibility shape until runner migration finishes.
+- Treat `ReviewResultData` as the v2 review result contract; the runner emits it.
+- `ReviewResultDataV1` survives only as a type source for reused v1 sub-shapes (`retention`, `pilot_checkpoint`); v2 review output never carries `capture_readiness`.
 - Use `SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION` for review output; do not reuse the persisted report schema version for v2 review output.
 - Do not copy the v2 review schema into this reference.
 - Hook-capture reports may carry `capture_runtime`.
