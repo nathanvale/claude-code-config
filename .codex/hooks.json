@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$(git rev-parse --show-toplevel)/hooks/skill-feedback-codex-stop.ts\"",
+            "timeout": 30,
+            "statusMessage": "Recording skill-feedback evidence"
+          }
+        ]
+      }
+    ]
+  }
+}

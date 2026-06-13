@@ -3,6 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+	CODEX_STOP_HOOK_COMMAND,
+	detectSkillFromCodexStopInput,
+	handleSkillFeedbackCodexStop,
+	isCodexStopHookInput,
+} from './skill-feedback-codex-stop'
+import {
 	detectSkillFromClaudeTranscriptText,
 	handleSkillFeedbackStop,
 } from './skill-feedback-stop'
@@ -23,6 +29,7 @@ const FIXTURE_PATH = join(
 	'skill-feedback',
 	'fallow-close.jsonl',
 )
+const CODEX_HOOKS_PATH = join(import.meta.dir, '..', '.codex', 'hooks.json')
 async function fixtureText(): Promise<string> {
 	return Bun.file(FIXTURE_PATH).text()
 }
@@ -206,6 +213,109 @@ describe('skill-feedback hooks', () => {
 		expect(result.captured).toBe(false)
 		expect(calls).toHaveLength(1)
 		expect(await dedupe.readLastDetectionId(FIXTURE_PATH)).toBeNull()
+	})
+
+	test('Codex Stop payload records evidence-only capture without transcript reads', async () => {
+		const calls: RecordRequest[] = []
+		const result = await handleSkillFeedbackCodexStop(
+			{
+				cwd: '/tmp/repo',
+				transcript_path: '/tmp/hostile-transcript.jsonl',
+				hook_event_name: 'Stop',
+				model: 'gpt-5-codex',
+				turn_id: 'turn-fixture',
+				last_assistant_message: 'Launching skill: fallow',
+			},
+			{
+				resolveGitRoot: async (cwd) => cwd,
+				nowIso: () => GENERATED_TS,
+				runRecord: async (request) => {
+					calls.push(request)
+					return { exitCode: 0, stdout: '', stderr: '' }
+				},
+			},
+		)
+
+		expect(result.captured).toBe(true)
+		expect(calls).toHaveLength(1)
+		expect(calls[0]).toMatchObject({
+			cwd: '/tmp/repo',
+			skill: 'unknown-skill',
+			generatedTs: GENERATED_TS,
+			telemetry: {
+				model: 'gpt-5-codex',
+				capture_runtime: 'codex_stop',
+				skill_identity_provenance: {
+					source: 'none',
+					trusted: false,
+					reason: 'codex_stop_payload_has_no_trusted_skill_identity',
+				},
+			},
+		})
+	})
+
+	test('Codex Stop payload does not infer skill identity from assistant text', () => {
+		const detection = detectSkillFromCodexStopInput({
+			cwd: '/tmp/repo',
+			model: 'gpt-5-codex',
+			last_assistant_message: 'Launching skill: fallow',
+		})
+
+		expect(detection.skill).toBe('unknown-skill')
+		expect(detection.telemetry?.skill_identity_provenance).toMatchObject({
+			source: 'none',
+			trusted: false,
+		})
+	})
+
+	test('Codex Stop recursion guard skips capture', async () => {
+		const calls: RecordRequest[] = []
+		const result = await handleSkillFeedbackCodexStop(
+			{ cwd: '/tmp/repo', stop_hook_active: true },
+			{
+				resolveGitRoot: async (cwd) => cwd,
+				nowIso: () => GENERATED_TS,
+				runRecord: async (request) => {
+					calls.push(request)
+					return { exitCode: 0, stdout: '', stderr: '' }
+				},
+			},
+		)
+
+		expect(result.captured).toBe(false)
+		expect(calls).toEqual([])
+	})
+
+	test('repo Codex Stop hook config matches code-owned command', async () => {
+		const raw = JSON.parse(await readFile(CODEX_HOOKS_PATH, 'utf8')) as {
+			hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> }
+		}
+
+		expect(raw.hooks.Stop[0]?.hooks[0]?.command).toBe(CODEX_STOP_HOOK_COMMAND)
+	})
+
+	test('isCodexStopHookInput accepts a minimal valid payload', () => {
+		expect(isCodexStopHookInput({ cwd: '/tmp/repo' })).toBe(true)
+		expect(
+			isCodexStopHookInput({
+				cwd: '/tmp/repo',
+				model: 'gpt-5-codex',
+				stop_hook_active: false,
+				last_assistant_message: 'done',
+			}),
+		).toBe(true)
+	})
+
+	test('isCodexStopHookInput rejects payloads with missing or wrong-typed fields', () => {
+		expect(isCodexStopHookInput(null)).toBe(false)
+		expect(isCodexStopHookInput('codex')).toBe(false)
+		expect(isCodexStopHookInput([{ cwd: '/tmp/repo' }])).toBe(false)
+		expect(isCodexStopHookInput({})).toBe(false)
+		expect(isCodexStopHookInput({ cwd: '   ' })).toBe(false)
+		expect(isCodexStopHookInput({ cwd: '/tmp/repo', model: 7 })).toBe(false)
+		expect(
+			isCodexStopHookInput({ cwd: '/tmp/repo', stop_hook_active: 'yes' }),
+		).toBe(false)
 	})
 
 	test('Codex notify parser skips payloads without skill identity', () => {

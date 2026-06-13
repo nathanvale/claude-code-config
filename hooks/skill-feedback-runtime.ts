@@ -2,7 +2,26 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
-export type SkillFeedbackSource = 'claude-stop' | 'codex-notify'
+export type SkillFeedbackSource = 'claude-stop' | 'codex-stop' | 'codex-notify'
+export type CaptureRuntime = 'claude_stop' | 'codex_stop' | 'codex_notify'
+/**
+ * Capture-source provenance. `trusted` means the adapter trusts the named
+ * source field; it is not Trusted skill identity or Trusted run proof.
+ */
+export type SkillIdentityProvenance = {
+	source:
+		| 'claude_transcript_skill_tool_result'
+		| 'codex_notify_payload'
+		| 'codex_stop_payload'
+		| 'none'
+	trusted: boolean
+	field?: string
+	reason?:
+		| 'claude_transcript_detection'
+		| 'legacy_notify_not_ready'
+		| 'codex_stop_payload_has_no_trusted_skill_identity'
+		| 'trusted_codex_stop_payload_identity'
+}
 
 /**
  * Engine-read telemetry lifted from the transcript alongside the skill
@@ -17,6 +36,8 @@ export type SkillFeedbackSource = 'claude-stop' | 'codex-notify'
  */
 export interface DetectionTelemetry {
 	model?: string
+	capture_runtime?: CaptureRuntime
+	skill_identity_provenance?: SkillIdentityProvenance
 }
 
 export interface SkillDetection {
@@ -60,6 +81,10 @@ export function buildRecordRequest(
 	detection: SkillDetection,
 	generatedTs: string,
 ): RecordRequest {
+	const telemetry = {
+		...captureTelemetryForSource(detection.source),
+		...detection.telemetry,
+	}
 	return {
 		cwd,
 		skill: detection.skill,
@@ -68,7 +93,43 @@ export function buildRecordRequest(
 		friction: 'Hook captured no transcript payload.',
 		generatedTs,
 		explanation: `Captured by ${detection.source}.`,
-		telemetry: detection.telemetry,
+		telemetry,
+	}
+}
+
+function captureTelemetryForSource(
+	source: SkillFeedbackSource,
+): Required<Pick<DetectionTelemetry, 'capture_runtime' | 'skill_identity_provenance'>> {
+	switch (source) {
+		case 'claude-stop':
+			return {
+				capture_runtime: 'claude_stop',
+				skill_identity_provenance: {
+					source: 'claude_transcript_skill_tool_result',
+					trusted: true,
+					field: 'toolUseResult.commandName',
+					reason: 'claude_transcript_detection',
+				},
+			}
+		case 'codex-notify':
+			return {
+				capture_runtime: 'codex_notify',
+				skill_identity_provenance: {
+					source: 'codex_notify_payload',
+					trusted: false,
+					field: 'skill',
+					reason: 'legacy_notify_not_ready',
+				},
+			}
+		case 'codex-stop':
+			return {
+				capture_runtime: 'codex_stop',
+				skill_identity_provenance: {
+					source: 'none',
+					trusted: false,
+					reason: 'codex_stop_payload_has_no_trusted_skill_identity',
+				},
+			}
 	}
 }
 
