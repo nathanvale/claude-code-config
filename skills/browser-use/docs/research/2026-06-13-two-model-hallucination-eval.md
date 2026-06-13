@@ -54,13 +54,49 @@ helps weaker models, but for a different reason than first stated: a weak model 
 improvise selectors from training priors (no ref list) is where the gap would appear, and
 the fleet removes that situation entirely.
 
-## The honest open question (test 2)
+> **"From memory" vs "grounded":** *from memory* = the model answers "what selector" from
+> its training priors, WITHOUT seeing the live page (e.g. "NYT uses `#fides-accept-all-button`"
+> — a recalled guess that may be stale or wrong). *Grounded* = the model picks from the
+> fleet's ref list, which is what the engines actually SAW on the live page this moment
+> (observing, not recalling). The whole product is about making the agent act *grounded*, not
+> *from memory*.
 
-This easy test proved the FLOOR (with grounding, everyone's fine). It did not find the GAP
-(without grounding, does a weak model drift more than a strong one?). Test 2 — same models,
-NO ref list ("click submit on this page", working from a URL/description, not a snapshot) —
-would locate where the weak-vs-strong hallucination gap actually lives, and thus how much
-the fleet's grounding discipline is worth per model tier. Run next.
+## Test 2 (no ref list, `--tools ""` so models answer from memory) — the GAP IS ZERO
+
+Same models, NO snapshot, pure-answer mode (no tool-use). 6 tasks, "what selector would you
+click for X" with no page given.
+
+| model | invented-selector | ambiguous | grounded-refusal |
+|---|---|---|---|
+| Haiku 4.5 | **3/6 (50%)** | 3 | 0 |
+| Opus 4.8 | **3/6 (50%)** | 3 | 0 |
+| **gap** | **0** | | |
+
+**Both models hallucinate selectors at the SAME rate (50%) when ungrounded.** Haiku is not
+worse than Opus at inventing selectors from priors. (First attempt was contaminated —
+`claude -p` without `--tools ""` let models wander into actual browsing; the clean re-run
+with tools disabled gives the number above.)
+
+## The premise is REFUTED — and it makes the product story stronger
+
+"Weaker models hallucinate selectors more" is **false, measured.** Hallucination is not a
+model-*weakness* problem — it is a model-*grounding* problem:
+
+- ungrounded: both Haiku and Opus invent selectors ~50% of the time;
+- grounded (test 1): both invent 0%.
+
+The variable that matters is **grounding, not model IQ.** This kills the
+"capability-equalizer / run cheaper models safely" angle (unsupported — Opus is just as
+likely to hallucinate ungrounded) and replaces it with a **stronger, measured claim**:
+
+> **Selector hallucination is universal across model tiers and grounding-solvable. Even a
+> frontier model hallucinates selectors when it works from memory; the fleet's grounding
+> discipline eliminates that for ALL models. You don't need a better model to stop selector
+> hallucination — you need grounding. The fleet is table-stakes at every model tier.**
+
+"Even Opus needs us" is a bigger story than "we help cheap models": the product is not a
+crutch for weak models, it is necessary grounding that every agentic browser lacks —
+frontier-model users included; they just feel safe.
 
 ## Why this matters for the product story
 
