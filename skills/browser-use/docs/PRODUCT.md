@@ -75,9 +75,22 @@ many tools a single engine has:
   tolerant; one stale/lying engine is outvoted.
 - **Reproduce-everywhere** — real-site-bug vs engine-artifact triage.
 - **Graceful degradation / failover** — an engine cannot fail over to itself.
+- **DOM-vs-paint occlusion** *(needs a vision lens — proven:
+  `docs/research/2026-06-13-vision-sixth-lineage-spike.md`)* — a pixel engine catches an
+  element the a11y tree says is clickable but is visually COVERED (overlay/cookie-wall/
+  z-index trap). The 5 DOM engines all read the same a11y tree and are structurally blind to
+  it; only a *different sense* (pixels) produces this signal. Demonstrated live: overlay
+  injected → DOM still reports the link, paint reports the overlay on top.
 - ~~Cloaking detection~~ — *removed: ruled out by spike.* All engines share one warm Chrome
   → one fingerprint → nothing to diff at the serving layer. Incompatible with this
   architecture (see `docs/research/2026-06-13-cloak-catcher-fingerprint-spike.md`).
+
+The moat is made of *diversity of perception*, not engine count. The DOM engines deepen
+consensus on structure; a vision engine adds an uncorrelated sense. Note the integration
+cost: a vision engine has **no ref** — perception is a sum type
+`{ RefObservation | PixelObservation }`, reconciled by a coordinate→DOM hit-test, not a 6th
+parser. It is a deliberate, costed, post-MVP addition; it is the one engine worth the cost
+because it adds a sense rather than another reader of the same tree.
 
 Proof it bites: on Hacker News, the chrome lineage names a link `"119 comments"` while the
 chromium lineage names the *same* DOM link `"3 hours ago"`. A single-engine agent told
