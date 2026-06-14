@@ -38,7 +38,7 @@ if ! $matches; then
   exit 0
 fi
 
-if ! "${CHECK_SCRIPT}" check > /tmp/prompt-drift-check.log 2>&1; then
+if ! bash "${CHECK_SCRIPT}" check > /tmp/prompt-drift-check.log 2>&1; then
   echo ""
   echo "Instruction health check failed - commit blocked."
   echo ""

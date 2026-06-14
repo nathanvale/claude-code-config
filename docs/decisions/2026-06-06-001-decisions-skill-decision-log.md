@@ -5735,3 +5735,40 @@ Consequences:
 Next:
 
 - Split further root vocabulary only when a stable scoped owner boundary is evident (carries Decision 61's V2 idea forward).
+
+## Decision 133: Resolve Startup Owner From Main Worktree When Linked Worktrees Lack The Relative Target
+
+```yaml
+id: decisions-skill-133
+status: accepted
+decided_at: "2026-06-14"
+decision: Resolve startup owner from main worktree when linked worktrees lack the relative target
+owner: scripts/agent-instructions.sh
+scope: agent-instructions.config
+source:
+  - "chat: 2026-06-14 VS Code commit blocked by instruction health check in Codex worktree"
+```
+
+Decision:
+
+- Keep `startup_owner` as the configured checkout owner.
+- Resolve relative `startup_owner` from the current checkout first.
+- If that target has no startup files and Git exposes a different main worktree, retry the same relative value from the main worktree.
+- Run the pre-commit health script through `bash` so Git does not depend on worktree-local shebang execution metadata.
+- Keep the projection check strict after owner resolution.
+
+Rationale:
+
+- Linked Codex worktrees can share one global startup owner with the main checkout.
+- `startup_owner=../claude-code-config` resolves correctly in the main checkout but not under `.codex/worktrees/<id>/claude-code-config`.
+- Failing projection checks in those worktrees blocks unrelated skill/doc commits even when home symlinks point at the intended owner.
+
+Consequences:
+
+- Worktree commits validate the configured shared startup owner instead of the transient worktree path.
+- Missing or wrong home symlinks still fail after resolution.
+- Absolute owner config remains unnecessary.
+
+Next:
+
+- Prefer repo-owned relative config; add a specific config value only if another checkout topology cannot be inferred from Git worktree state.
