@@ -17,11 +17,7 @@ load_config() {
 	while IFS='=' read -r key value; do
 		case "$key" in
 		startup_owner)
-			if [[ "$value" == /* ]]; then
-				STARTUP_OWNER="$value"
-			else
-				STARTUP_OWNER="$SCRIPT_DIR/$value"
-			fi
+			STARTUP_OWNER="$(resolve_startup_owner "$value")"
 			;;
 		'' | \#*)
 			;;
@@ -30,6 +26,55 @@ load_config() {
 			;;
 		esac
 	done < "$CONFIG_FILE"
+}
+
+startup_owner_has_files() {
+	local owner="$1"
+	[[ -f "$owner/AGENTS.md" || -f "$owner/CLAUDE.md" ]]
+}
+
+main_worktree_path() {
+	git -C "$SCRIPT_DIR" worktree list --porcelain 2>/dev/null |
+		awk 'NR == 1 && $1 == "worktree" { print substr($0, 10); exit }'
+}
+
+resolve_startup_owner() {
+	local value="$1"
+	if [[ "$value" == /* ]]; then
+		canonical_path "$value"
+		return
+	fi
+
+	local candidate
+	candidate="$(canonical_path "$SCRIPT_DIR/$value")"
+	local current_worktree
+	current_worktree="$(canonical_path "$SCRIPT_DIR")"
+	local main_worktree
+	main_worktree="$(main_worktree_path || true)"
+	if [[ -n "$main_worktree" ]]; then
+		main_worktree="$(canonical_path "$main_worktree")"
+	fi
+
+	local main_candidate=""
+	if [[ -n "$main_worktree" && "$main_worktree" != "$current_worktree" ]]; then
+		main_candidate="$(canonical_path "$main_worktree/$value")"
+		if [[ "$candidate" == "$current_worktree" ]] && startup_owner_has_files "$main_candidate"; then
+			printf "%s" "$main_candidate"
+			return
+		fi
+	fi
+
+	if startup_owner_has_files "$candidate"; then
+		canonical_path "$candidate"
+		return
+	fi
+
+	if [[ -n "$main_candidate" ]] && startup_owner_has_files "$main_candidate"; then
+		canonical_path "$main_candidate"
+		return
+	fi
+
+	canonical_path "$candidate"
 }
 
 if [[ $# -gt 0 ]]; then
