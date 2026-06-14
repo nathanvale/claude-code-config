@@ -18,6 +18,9 @@ records. They are linked below but not moved.
 
 ## Plans
 
+- [browser-domain-memory skill + browser-use consult-gate](plans/2026-05-30-001-feat-browser-domain-memory-plan.md) — durable per-domain browser memory; browser-use consumes it via a consult gate.
+- [browser-domain-memory — durable per-domain memory, three playback modes](plans/2026-05-31-001-feat-browser-domain-memory-plan.md) — record/replay/hybrid playback over per-domain memory.
+- [Make browser-domain-memory prerequisites executable](plans/2026-06-01-001-feat-browser-domain-memory-prerequisites-plan.md) — turn the prerequisite chain into runnable steps.
 - [Harden browser-use preflight agent feedback](plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md) — safety + JSON continuation contract for Warm Chrome preflight.
 - [Resolve Warm Chrome port through discovery](plans/2026-06-01-003-fix-warm-chrome-port-lifecycle-plan.md) — port resolution via discovery, not disagreeing defaults (superseded by ADR 0009).
 - [Apply runtime continuation guidance to Warm Chrome preflight](plans/2026-06-01-004-fix-warm-chrome-runtime-continuation-plan.md) — migrate preflight envelopes to the runtime continuation contract.
@@ -26,15 +29,18 @@ records. They are linked below but not moved.
 - [Design browser-use Browser Adapter Router](plans/2026-06-02-004-design-browser-use-adapter-router-plan.md) — evidence-first routing, adapter manifests, capability bundles.
 - [Router recovery metadata module](plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md) — extract recovery/continuation/action-lookup into its own module.
 - [Router command discovery flags](plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md) — narrow router command flags per command + drift tests.
+- [Facade-owned operator recovery choices](plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md) — recovery choices owned by the CLI facade contract; browser-use is the adopting consumer.
 - [Rewrite Browser Adapter Router clean](plans/2026-06-03-004-rewrite-browser-adapter-router-clean-plan.md) — clean router rewrite: route/report/status surface, selection policy.
 - [Implement browser-use prepare and operation front door](plans/2026-06-04-001-feat-browser-use-prepare-operation-front-door-plan.md) — prepare + targets/operate CLI, route-proof-target-operation binding.
 - [Split browser-use.ts into cohesive modules](plans/2026-06-10-001-refactor-browser-use-module-split-plan.md) — the 8-module acyclic split of the 4,449-line driver.
+- [Seam scaffold + naming convention (Plan 1 of 3)](plans/2026-06-13-001-feat-seam-scaffold-naming-convention-plan.md) — scaffold the 8 seam directories + legibility primitives (earned/provisional markers, deletion-test headers, acyclic-direction guard, banned-name guard) alongside the flat files. First of 3 architecture-legibility plans (scaffold → migration → CLI).
 
 ## Research
 
 - [Connecting browser-use to a warm real Chrome](research/2026-05-30-browser-use-warm-chrome-findings.md) — CDP/9222, dedicated profile, dual-mode adapter, pre-flight state record.
 - [Tape format for record-replay browser automation](research/2026-05-30-tape-format-record-replay-browser-automation.md) — deterministic JSON spine, variable-slot layer, tiered self-healing.
 - [Browser Adapter Router research stock](research/2026-06-02-browser-adapter-router-research-stock.md) — capability matrix for Playwright MCP, Chrome DevTools MCP, agent-browser.
+- [Agent Browser CLI rubric evaluation](research/2026-06-11-agent-browser-cli-rubric-evaluation.md) — rubric scoring of the agent-browser CLI surface against the agent-native bar.
 - [Multi-engine facade — N=5 spike findings](research/2026-06-12-multi-engine-facade-n5-spike-findings.md) — live proof of one facade over 5 engines: vocabulary-bound transport, two-axis mapping, measured cost-routing, differential oracle, graceful degradation.
 - [Round-2 dividends + accessible-name divergence](research/2026-06-12-round2-dividends-and-naming-divergence-findings.md) — live proof of confidence-annotated perception + stakes dial and reproduce-everywhere; the Hacker News finding that engines disagree on element NAMES (same link = "119 comments" vs "3 hours ago"), making single-engine agents silently fragile. Also: round-2b quorum-gated action + signed receipt, and drive-observe.
 - [Moat audit — what only N engines can do](research/2026-06-12-moat-audit-what-only-n-engines-can-do.md) — the honest line between structural moats (consensus/quorum/failover/repro — impossible for one engine) and conveniences (drive-observe, payload tiering — a single capable engine could do them). Answers "why not just chrome-devtools?"
@@ -53,6 +59,7 @@ records. They are linked below but not moved.
 - [browser-use × Chrome DevTools for Agents 1.0](ideation/2026-06-12-browser-use-chrome-devtools-agents-ideation.html) — facade reframe; subtraction vs addition; what Chrome 1.0 buys; the swappability dividends.
 - [Floor-verb semantics × ADR 0012](ideation/2026-06-12-floor-verb-semantics-adr0012-ideation.html) — same-verb-different-behavior across engines; converged on postcondition-floor + verify-as-leveler + loud typed divergence.
 - [Facade dividends — round 2](ideation/2026-06-12-facade-dividends-round-2-ideation.html) — NEW dividends beyond the proven 4: confidence-annotated perception + stakes dial, quorum-gated actions + signed receipts, drive-observe split, reproduce-everywhere, self-healing cost ledger, cloaking detection.
+- [browse + play record/replay — re-examined](ideation/2026-05-30-browse-play-record-replay-ideation.md) — early record/replay exploration; landed at steipete-weight lean record/replay.
 
 ## Brainstorms
 
@@ -76,10 +83,3 @@ records. They are linked below but not moved.
 - [0009 — browser-use fixed CDP convention and runtime proof](../../../docs/adr/0009-browser-use-fixed-cdp-convention-and-runtime-proof.md)
 - [0012 — Browser Adapter Router uses evidence-first routing](../../../docs/adr/0012-browser-adapter-router-uses-evidence-first-routing.md)
 - [0013 — Router research recovery uses diagnostic trail](../../../docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md)
-
-## Related (not collated — other domains)
-
-These touch browser-use but are owned elsewhere; left in repo-root `docs/`:
-
-- `docs/plans/2026-05-30-001` + `2026-05-31-001` + `2026-06-01-001` — browser-domain-memory (its own skill; browser-use is a consumer).
-- `docs/plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md` — CLI facade contract (browser-use is the adopting consumer).
