@@ -116,7 +116,11 @@ function weakAnchorFacts(
 
 function canonicalOwnerPath(rawPath: string): CanonicalPathResult {
 	const trimmedPath = rawPath.trim();
-	if (trimmedPath === "" || trimmedPath.includes("\0")) {
+	if (
+		trimmedPath === "" ||
+		trimmedPath.includes("\0") ||
+		containsRedactionMarker(trimmedPath)
+	) {
 		return { kind: "weak", reason: "unverifiable" };
 	}
 
@@ -142,4 +146,8 @@ function canonicalOwnerPath(rawPath: string): CanonicalPathResult {
 
 	if (parts.length === 0) return { kind: "weak", reason: "unverifiable" };
 	return { kind: "ok", path: parts.join("/") };
+}
+
+function containsRedactionMarker(value: string): boolean {
+	return /\[redacted(?:-[a-z-]+)?\]/i.test(value);
 }

@@ -28,6 +28,12 @@ export const SKILL_FEEDBACK_REVIEW_CONTRACT_ID =
 	"skill-feedback.review" as const;
 
 /**
+ * Stable result contract identity for inbox purge envelopes.
+ */
+export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
+	"skill-feedback.purge" as const;
+
+/**
  * Schema version for the package-owned Software Learning Report envelope.
  *
  * Increment when agent-visible record semantics change.
@@ -35,12 +41,17 @@ export const SKILL_FEEDBACK_REVIEW_CONTRACT_ID =
 export const SKILL_FEEDBACK_SCHEMA_VERSION = "1" as const;
 
 /**
- * Schema version for the review-specific v2 result envelope.
+ * Schema version for the review-specific claim-safe result envelope.
  *
  * Review result semantics can advance independently from persisted report
- * records so v1 readers do not silently accept claim-safe v2 output.
+ * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "2" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "3" as const;
+
+/**
+ * Schema version for purge-specific result envelopes.
+ */
+export const SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION = "1" as const;
 
 /**
  * Cost attribution stance for v1 report cards.
@@ -235,6 +246,12 @@ const REVIEW_RESOLUTION_STATES = [
 	"resolved",
 ] as const;
 
+export const SKILL_FEEDBACK_PURGE_LANES = [
+	"primary",
+	"low-signal",
+	"all",
+] as const;
+
 /**
  * V2 ledger verification levels include `unknown` for runtime-only evidence.
  */
@@ -247,6 +264,9 @@ const REVIEW_LEDGER_VERIFICATION_LEVELS = [
  * Skill-run outcome union (== success-verify three-way outcome).
  */
 export type SkillFeedbackOutcome = (typeof SKILL_FEEDBACK_OUTCOMES)[number];
+
+export type SkillFeedbackPurgeLane =
+	(typeof SKILL_FEEDBACK_PURGE_LANES)[number];
 
 /**
  * Software Learning Report evidence source.
@@ -517,6 +537,7 @@ export type ReviewOpenItem = {
 	open_reason: ReviewOpenReason;
 	severity: "info" | "warning" | "action";
 	evidence: string;
+	evidence_refs: readonly string[];
 	target?: ReportCardTarget;
 	next_action: string;
 };
@@ -537,6 +558,15 @@ export type ReviewRetention = {
 	oldest_report_age_days?: number;
 	warning?: string;
 	future_purge_action?: string;
+};
+
+export type ReviewInboxHealth = {
+	primary_count: number;
+	low_signal_count: number;
+	low_signal_newest_generated_ts?: string;
+	low_signal_reason_ids: readonly string[];
+	skipped_unsafe_count: number;
+	invalid_count: number;
 };
 
 export type ReviewPilotCheckpoint = {
@@ -693,6 +723,7 @@ export type ReviewResultData = {
 	contract: typeof SKILL_FEEDBACK_REVIEW_CONTRACT_ID;
 	schema_version: typeof SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION;
 	coverage: ReviewCoverage;
+	inbox_health: ReviewInboxHealth;
 	open_items: readonly ReviewOpenItem[];
 	open_actions: readonly ReviewOpenAction[];
 	no_action?: { rationale: string };
@@ -704,11 +735,45 @@ export type ReviewResultData = {
 	claim_readiness: ReviewClaimReadiness;
 };
 
+export type SkillFeedbackPurgeMode = "preview" | "execute";
+
+export type SkillFeedbackPurgeRetentionData =
+	| {
+			kind: "older_than";
+			older_than: string;
+			cutoff_ts: string;
+	  }
+	| {
+			kind: "keep_latest";
+			keep_latest: number;
+	  };
+
+export type SkillFeedbackPurgeResultData = {
+	contract: typeof SKILL_FEEDBACK_PURGE_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION;
+	mode: SkillFeedbackPurgeMode;
+	lane: SkillFeedbackPurgeLane;
+	retention: SkillFeedbackPurgeRetentionData;
+	scanned_count: number;
+	candidate_count: number;
+	deleted_count: number;
+	skipped_unsafe_count: number;
+	invalid_count: number;
+	candidate_paths: readonly string[];
+	deleted_paths: readonly string[];
+	skipped_paths: readonly string[];
+	invalid_paths: readonly string[];
+};
+
 /**
  * Result of validating v2 ReviewResultData from an unknown JSON value.
  */
 export type ParseReviewResultDataResult =
 	| { kind: "ok"; data: ReviewResultData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParsePurgeResultDataResult =
+	| { kind: "ok"; data: SkillFeedbackPurgeResultData }
 	| { kind: "invalid"; path: string; reason: string };
 
 /**
@@ -1127,6 +1192,7 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"contract",
 	"schema_version",
 	"coverage",
+	"inbox_health",
 	"open_items",
 	"open_actions",
 	"no_action",
@@ -1150,10 +1216,19 @@ const REVIEW_COVERAGE_FIELDS = [
 	"low_coverage",
 	"low_coverage_warning",
 ] as const;
+const REVIEW_INBOX_HEALTH_FIELDS = [
+	"primary_count",
+	"low_signal_count",
+	"low_signal_newest_generated_ts",
+	"low_signal_reason_ids",
+	"skipped_unsafe_count",
+	"invalid_count",
+] as const;
 const REVIEW_OPEN_ITEM_FIELDS = [
 	"open_reason",
 	"severity",
 	"evidence",
+	"evidence_refs",
 	"target",
 	"next_action",
 ] as const;
@@ -1218,6 +1293,22 @@ const REVIEW_CLAIM_READINESS_FACT_FIELDS = [
 	"status",
 	"reason_ids",
 	"evidence_refs",
+] as const;
+const PURGE_RESULT_FIELDS = [
+	"contract",
+	"schema_version",
+	"mode",
+	"lane",
+	"retention",
+	"scanned_count",
+	"candidate_count",
+	"deleted_count",
+	"skipped_unsafe_count",
+	"invalid_count",
+	"candidate_paths",
+	"deleted_paths",
+	"skipped_paths",
+	"invalid_paths",
 ] as const;
 const V0_PLACEHOLDER_FRICTION = new Set([
 	"",
@@ -1387,6 +1478,8 @@ export function parseReviewResultData(
 	}
 	const coverage = validateReviewCoverage(raw.coverage);
 	if (coverage) return coverage;
+	const inboxHealth = validateReviewInboxHealth(raw.inbox_health);
+	if (inboxHealth) return inboxHealth;
 	const openItems = validateReviewOpenItems(raw.open_items);
 	if (openItems) return openItems;
 	const openActions = validateReviewOpenActions(raw.open_actions);
@@ -1412,6 +1505,54 @@ export function parseReviewResultData(
 	const claimReadiness = validateReviewClaimReadiness(raw.claim_readiness);
 	if (claimReadiness) return claimReadiness;
 	return { kind: "ok", data: raw as ReviewResultData };
+}
+
+export function parsePurgeResultData(
+	raw: unknown,
+): ParsePurgeResultDataResult {
+	if (!isRecord(raw)) {
+		return { kind: "invalid", path: "$", reason: "expected_object" };
+	}
+	const topLevel = validateAllowedKeys(raw, new Set(PURGE_RESULT_FIELDS));
+	if (topLevel) return topLevel;
+	if (raw.contract !== SKILL_FEEDBACK_PURGE_CONTRACT_ID) {
+		return { kind: "invalid", path: "contract", reason: "unsupported" };
+	}
+	if (raw.schema_version !== SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION) {
+		return {
+			kind: "invalid",
+			path: "schema_version",
+			reason: "unsupported",
+		};
+	}
+	if (!isSkillFeedbackPurgeMode(raw.mode)) {
+		return { kind: "invalid", path: "mode", reason: "invalid" };
+	}
+	if (!isSkillFeedbackPurgeLane(raw.lane)) {
+		return { kind: "invalid", path: "lane", reason: "invalid" };
+	}
+	const retention = validatePurgeRetention(raw.retention);
+	if (retention) return retention;
+	for (const field of [
+		"scanned_count",
+		"candidate_count",
+		"deleted_count",
+		"skipped_unsafe_count",
+		"invalid_count",
+	] as const) {
+		const error = validateReviewNumber(raw[field], field);
+		if (error) return error;
+	}
+	for (const field of [
+		"candidate_paths",
+		"deleted_paths",
+		"skipped_paths",
+		"invalid_paths",
+	] as const) {
+		const error = validateReviewStringArray(raw[field], field);
+		if (error) return error;
+	}
+	return { kind: "ok", data: raw as SkillFeedbackPurgeResultData };
 }
 
 function normalizeV0Report(raw: Record<string, unknown>): NormalizeReportResult {
@@ -1575,9 +1716,9 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 			...(provenance ? { skill_identity_provenance: provenance } : {}),
 			correlation_status: correlationStatus,
 			skill_run_id: raw.skill_run_id as string | undefined,
-			...(skillRunIdProvenance
-				? { skill_run_id_provenance: skillRunIdProvenance }
-				: {}),
+			// Raw inbox JSON is evidence, not writer-owned proof. Keep the id as
+			// inspectable context, but do not let persisted provenance labels mint a
+			// trusted review unit.
 			skill: reportCard.receipt.skill ?? "",
 			outcome: reportCard.receipt.outcome ?? "ambiguous",
 			goal: reportCard.receipt.goal,
@@ -1602,18 +1743,21 @@ function parseV0SoftwareLearningReport(
 	| { ok: false; error: NormalizeReportResult } {
 	const rawGaps = parseV0ReceiptGaps(raw.gaps);
 	if ("kind" in rawGaps) return { ok: false, error: rawGaps };
-	const parsed = parseReceipt({
+	const receiptInput: Record<string, unknown> = {
 		skill: raw.skill,
 		goal: raw.goal,
 		outcome: raw.outcome,
 		friction: raw.friction,
-		explanation: raw.explanation ?? undefined,
 		skill_version: raw.skill_version,
 		git_sha: raw.git_sha,
 		model: raw.model,
 		usage: raw.usage,
 		generated_ts: raw.generated_ts,
-	});
+	};
+	if (raw.explanation !== undefined && raw.explanation !== null) {
+		receiptInput.explanation = raw.explanation;
+	}
+	const parsed = parseReceipt(receiptInput);
 	if (parsed.kind !== "ok" && parsed.kind !== "degraded") {
 		return {
 			ok: false,
@@ -2078,6 +2222,76 @@ function validateReviewCoverage(
 	}
 }
 
+function validateReviewInboxHealth(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const health = requireReviewRecord(raw, "inbox_health");
+	if (isReviewResultValidationError(health)) return health;
+	const unknown = validateAllowedKeys(
+		health,
+		new Set(REVIEW_INBOX_HEALTH_FIELDS),
+		"inbox_health",
+	);
+	if (unknown) return unknown;
+	for (const field of [
+		"primary_count",
+		"low_signal_count",
+		"skipped_unsafe_count",
+		"invalid_count",
+	] as const) {
+		const error = validateReviewNumber(health[field], `inbox_health.${field}`);
+		if (error) return error;
+	}
+	if ("low_signal_newest_generated_ts" in health) {
+		const newest = validateReviewString(
+			health.low_signal_newest_generated_ts,
+			"inbox_health.low_signal_newest_generated_ts",
+		);
+		if (newest) return newest;
+	}
+	return validateReviewStringArray(
+		health.low_signal_reason_ids,
+		"inbox_health.low_signal_reason_ids",
+	);
+}
+
+function validatePurgeRetention(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const retention = requireReviewRecord(raw, "retention");
+	if (isReviewResultValidationError(retention)) return retention;
+	const kind = retention.kind;
+	if (kind === "older_than") {
+		const unknown = validateAllowedKeys(
+			retention,
+			new Set(["kind", "older_than", "cutoff_ts"]),
+			"retention",
+		);
+		if (unknown) return unknown;
+		for (const field of ["older_than", "cutoff_ts"] as const) {
+			const error = validateReviewString(
+				retention[field],
+				`retention.${field}`,
+			);
+			if (error) return error;
+		}
+		return;
+	}
+	if (kind === "keep_latest") {
+		const unknown = validateAllowedKeys(
+			retention,
+			new Set(["kind", "keep_latest"]),
+			"retention",
+		);
+		if (unknown) return unknown;
+		return validateReviewNumber(
+			retention.keep_latest,
+			"retention.keep_latest",
+		);
+	}
+	return reviewResultError("retention.kind", "invalid");
+}
+
 function validateReviewOpenItems(
 	raw: unknown,
 ): ReviewResultValidationError | undefined {
@@ -2102,6 +2316,11 @@ function validateReviewOpenItems(
 			const error = validateReviewString(item[field], `${path}.${field}`);
 			if (error) return error;
 		}
+		const evidenceRefs = validateReviewStringArray(
+			item.evidence_refs,
+			`${path}.evidence_refs`,
+		);
+		if (evidenceRefs) return evidenceRefs;
 		if ("target" in item) {
 			const target = parseTarget(item.target, `${path}.target`);
 			if (isInvalidCloseoutParseResult(target)) {
@@ -2666,6 +2885,18 @@ function isVerificationBurdenLevel(
 	return (VERIFICATION_BURDEN_LEVELS as readonly unknown[]).includes(value);
 }
 
+function isSkillFeedbackPurgeMode(
+	value: unknown,
+): value is SkillFeedbackPurgeMode {
+	return value === "preview" || value === "execute";
+}
+
+function isSkillFeedbackPurgeLane(
+	value: unknown,
+): value is SkillFeedbackPurgeLane {
+	return (SKILL_FEEDBACK_PURGE_LANES as readonly unknown[]).includes(value);
+}
+
 function isObservationKind(value: unknown): value is ObservationKind {
 	return (OBSERVATION_KINDS as readonly unknown[]).includes(value);
 }
@@ -2692,7 +2923,12 @@ function isValidOwnerPath(path: string): boolean {
 /**
  * Public subcommands accepted by skill-feedback.
  */
-const SKILL_FEEDBACK_COMMANDS = ["record", "closeout", "review"] as const;
+const SKILL_FEEDBACK_COMMANDS = [
+	"record",
+	"closeout",
+	"review",
+	"purge",
+] as const;
 
 /**
  * Public command union for the facade-backed skill-feedback CLI.
@@ -2700,7 +2936,7 @@ const SKILL_FEEDBACK_COMMANDS = ["record", "closeout", "review"] as const;
 export type SkillFeedbackCommand = (typeof SKILL_FEEDBACK_COMMANDS)[number];
 
 type SkillFeedbackAudience = "agent";
-type SkillFeedbackMutation = "capture" | "closeout" | "review";
+type SkillFeedbackMutation = "capture" | "closeout" | "review" | "purge";
 type SkillFeedbackCommandContract = CommandFacadeContract<
 	SkillFeedbackCommand,
 	SkillFeedbackAudience,
@@ -2773,6 +3009,14 @@ const reviewResultContract = {
 	SkillFeedbackCommandContract["resultContract"]
 >;
 
+const purgeResultContract = {
+	id: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	kind: "Software Learning Report inbox purge envelope.",
+	schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
 const exitCodes = {
 	"0": "Record captured (possibly degraded) and written.",
 	"1": "Capture blocked before any write (gate refused or unsafe input).",
@@ -2790,6 +3034,35 @@ const reviewExitCodes = {
 	"1": "Review blocked by unreadable or invalid inbox state.",
 	"2": "Invalid review usage.",
 } as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const purgeExitCodes = {
+	"0": "Purge preview completed or selected safe reports were deleted.",
+	"1": "Purge blocked by unsafe inbox state or deletion failure.",
+	"2": "Invalid purge usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const purgeFlags = {
+	"--lane": {
+		type: "enum",
+		values: SKILL_FEEDBACK_PURGE_LANES,
+		description:
+			"Logical lane to purge: primary, low-signal, or all. Default: all.",
+	},
+	"--older-than": {
+		type: "string",
+		description:
+			"Select reports older than a duration at current run time, such as 14d or 48h.",
+	},
+	"--keep-latest": {
+		type: "string",
+		description:
+			"Keep the newest COUNT reports in the selected logical lane and select older reports.",
+	},
+	"--execute": {
+		type: "boolean",
+		description: "Delete selected safe reports. Default previews only.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
 
 /**
  * Facade-backed command metadata for the skill-feedback CLI.
@@ -2856,12 +3129,29 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 			},
 			exitCodes: reviewExitCodes,
 		},
+		purge: {
+			script: "skill-feedback-runner",
+			summary: "Preview or execute explicit inbox report retention purge.",
+			usage: [
+				"purge [--lane primary|low-signal|all] (--older-than <duration> | --keep-latest <count>) [--execute]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "purge",
+			sideEffects: ["write"],
+			executionModes: ["dry_run", "normal"],
+			outputModes: ["json"],
+			interactivity: "none",
+			resultContract: purgeResultContract,
+			flags: purgeFlags,
+			exitCodes: purgeExitCodes,
+		},
 	} as const satisfies Record<
 		SkillFeedbackCommand,
 		SkillFeedbackCommandContract
 	>,
 	{
 		path: "skills/skill-feedback/src/command-contract.ts",
-		writeImplyingMutations: new Set(["capture", "closeout"]),
+		writeImplyingMutations: new Set(["capture", "closeout", "purge"]),
 	},
 );

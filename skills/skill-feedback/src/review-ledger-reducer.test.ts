@@ -179,6 +179,9 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 			true,
 		);
 		expect(ledger_entries.every((entry) => !entry.ledger_anchor_key)).toBe(true);
+		expect(
+			ledger_entries.every((entry) => entry.resolution_state === "no_action"),
+		).toBe(true);
 		expect(anchor_miss_telemetry).toEqual([
 			expect.objectContaining({ weak_anchor_reason: "label_only", count: 2 }),
 		]);
@@ -237,6 +240,7 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 			"report:r-a",
 			"report:r-b",
 		]);
+		expect(ledger_entries[0]?.resolution_state).toBe("open");
 	});
 
 	test("vector: anchor-miss telemetry counts reasons without affecting ledger counts", () => {

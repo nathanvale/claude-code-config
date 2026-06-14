@@ -156,6 +156,40 @@ describe("skill-feedback U3 ledger anchor adapter", () => {
 		}
 	});
 
+	test("keeps redacted path markers weak and unmergeable", () => {
+		for (const path of [
+			"skills/[redacted]/SKILL.md",
+			"skills/[redacted-url]/SKILL.md",
+			"logs/[redacted-credentials]/hook.json",
+		]) {
+			const facts = deriveLedgerAnchorFacts({
+				report_id: `report-redacted-${path}`,
+				touched_surfaces: [{ type: "path", value: path }],
+				observations: [],
+			});
+
+			expectWeakUnmergeableAnchor(facts, "unverifiable");
+		}
+
+		const observationFacts = deriveLedgerAnchorFacts({
+			report_id: "report-redacted-observation",
+			touched_surfaces: [],
+			observations: [
+				{
+					kind: "ownership_gap",
+					target: {
+						type: "path",
+						value: "skills/[redacted-url]/CONTEXT.md",
+					},
+					summary: "Observation target was redacted.",
+					evidence_basis: "driver_observed",
+				},
+			],
+		});
+
+		expectWeakUnmergeableAnchor(observationFacts, "unverifiable");
+	});
+
 	test("does not rescue a weak touched path with an observation path", () => {
 		const facts = deriveLedgerAnchorFacts({
 			report_id: "report-weak-touched-wins",

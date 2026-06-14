@@ -62,7 +62,8 @@ const SECRET_PATTERNS: readonly RedactionPattern[] = [
 ];
 
 /**
- * Redact only the narrated trust-boundary fields.
+ * Redact agent-authored narration plus public stdin telemetry that can carry
+ * arbitrary strings before the report reaches disk.
  */
 export function redactSoftwareLearningReport(
 	report: SoftwareLearningReport,
@@ -76,6 +77,9 @@ export function redactSoftwareLearningReport(
 		assignNarratedReportField(redacted, field, result.value);
 		redactions += result.redactions;
 	}
+	const model = redactText(redacted.model);
+	redacted.model = model.value;
+	redactions += model.redactions;
 	redacted.redactions = redactions;
 	return { value: redacted, redactions };
 }

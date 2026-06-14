@@ -34,7 +34,7 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - `evidence_source`: `hook_capture` or `driver_closeout`.
 - `correlation_status`: `linked` or `unlinked`.
 - `skill_run_id`: optional explicit runtime correlation id.
-- `skill_run_id_provenance`: optional run-link trust label; only `runtime_owned` and `correlation_owned` can coalesce review units.
+- `skill_run_id_provenance`: optional run-link trust label in raw reports; persisted values are evidence-only at the inbox boundary.
 - `runtime`: allowlisted telemetry.
 - `report_card`: closeout evidence lanes.
 - `evidence_gaps`: typed missing-or-weak evidence codes.
@@ -50,8 +50,10 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Hook-capture reports may carry `skill_identity_provenance`.
 - Treat `skill_identity_provenance.trusted` as capture-source trust only.
 - Do not map `skill_identity_provenance.trusted` directly to Trusted skill identity, Trusted run proof, or `trusted_engine_identity`.
-- Review derives shared run units only from `runtime_owned` or `correlation_owned` `skill_run_id_provenance`.
+- Review derives shared run units only after a writer-owned source has preserved trusted run proof through normalization.
+- `normalizeReport` strips raw inbox `skill_run_id_provenance`; raw JSON cannot mint `same_trusted_run` or `corroborated`.
 - Review output carries review units, ledger entries, anchor-miss telemetry, open actions, no-action rationale, and claim-specific readiness facts.
+- Review output carries `inbox_health` for primary, low-signal, unsafe, and invalid artifact counts.
 - Keep `allowed_claims` entry-local on ledger entries.
 - Do not expose top-level `allowed_claims`.
 - Do not expose v1 `capture_readiness` in v2 review output.
@@ -113,18 +115,34 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Keep review mutation-free.
 - Lead with coverage.
 - Count closeout, capture-only, unlinked, and evidence-gap reports.
+- Count only primary reports in coverage.
+- Keep unknown-skill Codex Stop capture in the low-signal lane.
+- Treat low-signal as a logical lane: `.skill-feedback/low-signal/` plus legacy top-level unknown-skill Codex Stop reports.
+- Use low-signal evidence for capture-health/readiness context only.
+- Emit `inbox_health` for primary count, low-signal count, per-report low-signal reason ids, skipped unsafe artifacts, and invalid artifacts.
+- Use `unknown_skill_codex_stop` for unknown-skill Codex Stop reports.
+- Use `low_signal_lane_report` for reports treated as low-signal only because they live in `.skill-feedback/low-signal/`.
 - Warn when closeout coverage is low.
 - Open only high-signal items.
 - Use these open reasons: high verification burden, repeated friction, evidence gap, unlinked correlation spike, owner-path observation.
+- Treat `report:<id>` values in `evidence_refs` as report-id refs, not filenames.
+- Resolve `report:<id>` first through `review_units[*].report_ids`; scan safe inbox JSON by `report_id` only when raw report content is needed.
+- Do not add a `show` or `resolve-ref` command until real downstream usage proves the command surface is worth owning.
+- Treat interrupted `.json.tmp-*` artifacts as invalid inbox health; do not delete them before a separate temp-GC contract decision.
 - Keep expected `cost_unavailable`, `unlinked_correlation`, and `missing_runtime_model` gaps out of single-report open items.
 - Return no-action output when no high-signal item exists.
 - Surface observations and touched surfaces as evidence.
 - Do not derive repair candidates in v1.
 - Do not delete or mutate inbox files.
 - Emit pilot checkpoint data after the marker is at least 7 days old.
-- Emit retention age/count and future purge hints without deleting files.
+- Emit retention age/count and purge hints without deleting files.
 - Warn when the oldest report is at least 14 days old.
 - Warn when the inbox has at least 100 reports.
+- Run deletion only through `skill-feedback purge`.
+- Keep exact purge flags and selectors in command help and contract tests.
+- Treat purge preview as a current candidate listing, not an execute token.
+- Evaluate age selectors at current run time for each purge invocation.
+- Default purge lane is `all`; `keep_latest` applies across the selected logical lane.
 
 ## Reading Rule
 
@@ -132,4 +150,4 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Confirm every proposed instruction change against local source evidence.
 - Treat unlinked evidence as correlation health before target-skill quality.
 - Keep review mutation-free.
-- Run purge through a future gated workflow.
+- Run purge as a separate explicit mutation workflow.

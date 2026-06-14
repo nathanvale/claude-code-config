@@ -85,7 +85,6 @@ export function reduceReviewLedger(
 				evidence_tier: "driver_declared",
 				source_mix: [],
 				capture_runtime_mix: [],
-				resolution_state: "open",
 				verification_burden: { level: "unknown" },
 				trusted_run_evidence: [],
 			};
@@ -130,7 +129,6 @@ type MutableLedgerEntry = {
 	evidence_tier: ReviewEvidenceTier;
 	source_mix: EvidenceSource[];
 	capture_runtime_mix: CaptureRuntime[];
-	resolution_state: ReviewResolutionState;
 	verification_burden: ReviewLedgerVerificationBurden;
 	trusted_run_evidence: TrustedRunEvidence[];
 };
@@ -351,10 +349,16 @@ function finalizeEntry(entry: MutableLedgerEntry): ReviewLedgerEntry {
 		source_mix: entry.source_mix,
 		capture_runtime_mix: entry.capture_runtime_mix,
 		allowed_claims: allowedClaims,
-		resolution_state: entry.resolution_state,
+		resolution_state: deriveResolutionState(entry),
 		verification_burden: entry.verification_burden,
 		next_safe_action: nextSafeAction(entry),
 	};
+}
+
+function deriveResolutionState(entry: MutableLedgerEntry): ReviewResolutionState {
+	if (entry.anchor_strength === "weak") return "no_action";
+	if (entry.owner_paths.length === 0) return "no_action";
+	return "open";
 }
 
 /**

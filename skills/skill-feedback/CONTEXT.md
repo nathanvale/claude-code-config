@@ -94,6 +94,7 @@ _Avoid_: report, file, merged row, fuzzy group
 
 **Trusted run proof**:
 Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run` and `corroborated`; it does not prove Trusted skill identity or `trusted_engine_identity`.
+Raw persisted inbox provenance is evidence-only unless a writer-owned source preserved it through normalization.
 _Avoid_: raw `skill_run_id`, trusted skill identity, assistant claim
 
 **Pattern resolution ledger**:
@@ -107,6 +108,10 @@ _Avoid_: pattern cosplay, GoF by default, framework, decorative abstraction
 **ReviewResultData Facade**:
 The claim-safe review result Interface that hides reducer internals from JSON, plain output, docs, and future agents. It exposes contract-owned facts: review units, ledger entries with entry-local allowed claims, split readiness, and anchor-miss telemetry.
 _Avoid_: dashboard, renderer copy, generic API, bag of fields
+
+**Report ref**:
+A stable review reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
+_Avoid_: file path, content hash, display evidence, prose ref
 
 **Allowed claim**:
 Entry-local claim language that downstream agents may repeat about one ledger entry. The reducer derives it from trusted review-unit state, anchor facts, evidence tier, source mix, and readiness facts.
@@ -197,7 +202,7 @@ The optional correlation id shared by capture evidence and later closeout enrich
 _Avoid_: filename, Claude detection id, session id alone, report id
 
 **Skill run id provenance**:
-The report field that says who owns a `skill_run_id` link claim. `runtime_owned` and `correlation_owned` can coalesce review units; absent or `report_authored` values stay report-local.
+The report field that says who owns a `skill_run_id` link claim. Raw persisted values are evidence-only at the inbox boundary; only writer-owned provenance preserved through normalization can coalesce review units.
 _Avoid_: raw id trust, assistant claim, timestamp proximity
 
 **Cost attribution**:
@@ -208,8 +213,20 @@ _Avoid_: usage, token count, transcript sum
 The gitignored, repo-local `.skill-feedback/` directory that stores reports as evidence only. Review is mutation-free; purge is a separate gated workflow.
 _Avoid_: store, database, log dir, skill state
 
+**Low-signal lane**:
+The logical inbox lane for valid capture reports that prove capture health but cannot safely enter the primary review ledger. It includes `.skill-feedback/low-signal/` and legacy top-level unknown-skill Codex Stop reports until Trusted skill identity exists.
+_Avoid_: junk, discard, primary report, hidden failure
+
+**Inbox health**:
+The review summary for primary count, low-signal count, invalid artifacts, and skipped unsafe artifacts. It explains inbox state without mutating files.
+_Avoid_: cleanup result, purge result, ledger evidence, report quality
+
+**Purge workflow**:
+The explicit mutation command for inbox retention cleanup. It previews first, deletes only through an execute gate, and remains separate from review.
+_Avoid_: review cleanup, automatic retention, hidden delete, archive
+
 **Retention warning**:
-A review warning emitted when the oldest inbox report is at least 14 days old or the inbox has at least 100 reports. It is guidance for a future gated purge workflow, not a failure.
+A review warning emitted when the oldest primary inbox report is at least 14 days old or the primary inbox has at least 100 reports. It is guidance to inspect purge, not a failure.
 _Avoid_: purge, deletion, error, archive
 
 **Pilot checkpoint**:

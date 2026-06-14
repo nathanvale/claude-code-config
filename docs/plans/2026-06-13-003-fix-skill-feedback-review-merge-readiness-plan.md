@@ -14,6 +14,16 @@ Harden `skill-feedback review` v2 for merge by closing trusted-boundary gaps, se
 
 This follow-on plan keeps the claim-safe v2 contract shape from `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`, but treats the current implementation as not merge-ready until public input, raw inbox JSON, and live low-signal capture cannot manufacture review claims.
 
+## Execution Progress
+
+- [x] U1. Seal public capture telemetry and raw provenance
+- [x] U2. Quarantine redacted and unverifiable anchors
+- [x] U3. Add the low-signal capture lane
+- [x] U4. Harden inbox reads and add gated purge
+- [x] U5. Stabilize review actions and renderer claims
+- [x] U6. Make writes and subprocesses failure-contained
+- [x] U7. Prove cross-lane behavior and update references
+
 ---
 
 ## Problem Frame

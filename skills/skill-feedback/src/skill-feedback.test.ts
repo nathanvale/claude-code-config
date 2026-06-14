@@ -13,14 +13,23 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import type { CloseoutReceipt, Receipt } from "./command-contract";
-import { skillFeedbackContracts } from "./command-contract";
+import {
+	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+	skillFeedbackContracts,
+} from "./command-contract";
 import {
 	closeoutSkillFeedbackReceipt,
 	createDefaultSkillFeedbackRuntime,
+	parsePurgeArgs,
 	parseRecordFlags,
 	parseStdinTelemetry,
+	purgeSkillFeedbackInbox,
 	recordSkillFeedbackReceipt,
 	reviewSkillFeedbackInbox,
+	runProcessForTest,
 	type SkillFeedbackRuntime,
 } from "./skill-feedback-runner";
 
@@ -80,6 +89,13 @@ async function makeRoot(): Promise<string> {
 	return root;
 }
 
+async function makeIgnoredGitRoot(): Promise<string> {
+	const root = await makeRoot();
+	await run(["git", "init"], root);
+	await writeFile(join(root, ".gitignore"), ".skill-feedback/\n", "utf-8");
+	return root;
+}
+
 function stubRuntime(
 	root: string,
 	overrides: Partial<SkillFeedbackRuntime> = {},
@@ -133,6 +149,32 @@ async function writeInboxReport(root: string, name: string, value: unknown) {
 	const inbox = join(root, ".skill-feedback");
 	await mkdir(inbox, { recursive: true });
 	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+function v1CloseoutReport(input: {
+	reportId: string;
+	generatedTs: string;
+	skill?: string;
+	evidenceSource?: "driver_closeout" | "hook_capture";
+	captureRuntime?: "claude_stop" | "codex_stop";
+}) {
+	return {
+		schema_version: "1",
+		report_id: input.reportId,
+		untrusted_evidence: true,
+		generated_ts: input.generatedTs,
+		evidence_source: input.evidenceSource ?? "driver_closeout",
+		...(input.captureRuntime
+			? { capture_runtime: input.captureRuntime }
+			: {}),
+		correlation_status: "unlinked",
+		runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+		report_card: {
+			...BASE_CLOSEOUT,
+			skill: input.skill ?? BASE_CLOSEOUT.skill,
+		},
+		evidence_gaps: [],
+	};
 }
 
 function parseEnvelope(stdout: string): Record<string, unknown> {
@@ -333,6 +375,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		["complete path", async () => 1],
 		["degraded path", async () => 1],
 		["error status", async () => 128],
+		["timeout status", async () => 124],
 	] as const) {
 		test(`gitignore gate fail-closed blocks writes on ${label}`, async () => {
 			const receipt =
@@ -398,6 +441,83 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(fileMode).toBe(0o600);
 	});
 
+	test("record write failure returns an envelope and rolls back final paths", async () => {
+		const root = await makeRoot();
+		const finalPaths: string[] = [];
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: stubRuntime(root, {
+				writePrivateFile: async (path) => {
+					finalPaths.push(path);
+					await writeFile(path, "{partial");
+					throw new Error("write failed");
+				},
+			}),
+			runId: "record-write-failed",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"record_write_failed",
+		);
+		expect(envelope.data).toMatchObject({ changed_state: "none" });
+		expect(result.stdout).not.toContain("write failed");
+		await expect(readFile(finalPaths[0] ?? "", "utf-8")).rejects.toThrow();
+	});
+
+	test("closeout write failure returns an envelope with no changed state", async () => {
+		const { result } = await writeCloseout(BASE_CLOSEOUT, {
+			writePrivateFile: async () => {
+				throw new Error("closeout write failed");
+			},
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"closeout_write_failed",
+		);
+		expect(envelope.data).toMatchObject({
+			contract: "skill-feedback.closeout",
+			changed_state: "none",
+		});
+		expect(result.stdout).not.toContain("closeout write failed");
+	});
+
+	test("review reports partial temp files as inbox health", async () => {
+		const root = await makeRoot();
+		await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		await writeFile(
+			join(root, ".skill-feedback", "partial.json.tmp-fixture"),
+			"{partial",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-temp-health",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { total_reports: number };
+			inbox_health: { invalid_count: number };
+		};
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_health.invalid_count).toBe(1);
+	});
+
+	test("runner subprocess helper returns after its timeout", async () => {
+		const root = await makeRoot();
+		const start = Date.now();
+		const result = await runProcessForTest(["/bin/sleep", "1"], root, 50);
+
+		expect(result.exitCode).toBe(124);
+		expect(result.stderr).toContain("timed out after 50ms");
+		expect(Date.now() - start).toBeLessThan(900);
+	});
+
 	test("malformed or missing generated_ts is rejected before write", async () => {
 		const malformed = await writeRecord({
 			...BASE_RECEIPT,
@@ -454,6 +574,24 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			help: reviewHelp.stdout,
 			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
 		});
+
+		const purgeHelp = await runCli(["purge", "--help"]);
+		expect(purgeHelp.exitCode).toBe(0);
+		expect(purgeHelp.stderr).toBe("");
+		expect(purgeHelp.stdout).toContain("purge [--lane");
+		expect(purgeHelp.stdout).toContain("Default: all");
+		assertCommandHelpFlagSurface({
+			command: "purge",
+			contract: skillFeedbackContracts.purge,
+			help: purgeHelp.stdout,
+			absentFlags: [
+				"--plain",
+				"--goal",
+				"--friction",
+				"--model",
+				"--skill-version",
+			],
+		});
 	});
 
 	test("runner front door renders help", async () => {
@@ -462,6 +600,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain("record --skill");
+		expect(result.stdout).toContain("purge [--lane");
 	});
 
 	test("CLI usage errors return JSON without writing", async () => {
@@ -675,6 +814,23 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(plain.stdout).toContain("No action: No skill-feedback reports found.");
 	});
 
+	test("review failure envelope uses the review result schema version", async () => {
+		const root = await makeRoot();
+		await writeFile(join(root, ".skill-feedback"), "not a directory");
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-failure-contract",
+		});
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+		});
+	});
+
 	test("review treats low-signal mixed v0 and v1 reports as no-action", async () => {
 		const root = await makeRoot();
 		await writeInboxReport(root, "v1-low.json", {
@@ -714,7 +870,494 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.no_action?.rationale).toContain("No high-signal");
 	});
 
-	test("review coalesces coverage only with trusted skill_run_id provenance", async () => {
+	test("record routes unknown-skill Codex Stop capture to the low-signal lane", async () => {
+		const { result, disk } = await writeRecord(
+			{
+				...BASE_RECEIPT,
+				skill: "unknown-skill",
+			},
+			{
+				readStdinTelemetry: async () => ({
+					model: "gpt-5-codex",
+					capture_runtime: "codex_stop",
+					skill_identity_provenance: {
+						source: "none",
+						trusted: false,
+						reason: "codex_stop_payload_has_no_trusted_skill_identity",
+					},
+				}),
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.reportPath).toContain(join(".skill-feedback", "low-signal"));
+		expect(disk).toContain('"capture_runtime": "codex_stop"');
+	});
+
+	test("review reports low-signal lane and legacy unknown-skill health without ledger entries", async () => {
+		const root = await makeRoot();
+		const lowSignal = {
+			schema_version: "1",
+			report_id: "report-low-signal",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "hook_capture",
+			capture_runtime: "codex_stop",
+			skill_identity_provenance: {
+				source: "none",
+				trusted: false,
+				reason: "codex_stop_payload_has_no_trusted_skill_identity",
+			},
+			correlation_status: "unlinked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				skill: "unknown-skill",
+			},
+			evidence_gaps: [],
+		};
+		const lowSignalInbox = join(root, ".skill-feedback", "low-signal");
+		await mkdir(lowSignalInbox, { recursive: true });
+		await writeFile(
+			join(lowSignalInbox, "new-low.json"),
+			`${JSON.stringify(lowSignal, null, "\t")}\n`,
+		);
+		await writeFile(
+			join(lowSignalInbox, "lane-only-low.json"),
+			`${JSON.stringify(
+				{
+					schema_version: "1",
+					report_id: "report-lane-only-low-signal",
+					untrusted_evidence: true,
+					generated_ts: "2026-06-09T09:00:00.000Z",
+					evidence_source: "driver_closeout",
+					correlation_status: "linked",
+					runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+					report_card: {
+						...BASE_CLOSEOUT,
+						skill: "create-skill",
+					},
+					evidence_gaps: [],
+				},
+				null,
+				"\t",
+			)}\n`,
+		);
+		await writeInboxReport(root, "legacy-low.json", {
+			...lowSignal,
+			report_id: "report-legacy-low-signal",
+			generated_ts: "2026-06-10T09:00:00.000Z",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-low-signal-health",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { total_reports: number };
+			inbox_health: {
+				low_signal_count: number;
+				low_signal_newest_generated_ts?: string;
+				low_signal_reason_ids: string[];
+			};
+			ledger_entries: unknown[];
+			open_items: unknown[];
+		};
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_health.low_signal_count).toBe(3);
+		expect(data.inbox_health.low_signal_newest_generated_ts).toBe(GENERATED_TS);
+		expect(data.inbox_health.low_signal_reason_ids).toEqual([
+			"low_signal_lane_report",
+			"unknown_skill_codex_stop",
+		]);
+		expect(data.ledger_entries).toEqual([]);
+		expect(data.open_items).toEqual([]);
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-low-signal-health-plain",
+			plain: true,
+		});
+		expect(plain.stdout).toContain("Inbox health: low-signal=3");
+	});
+
+	test("review reports unsafe and invalid artifacts as inbox health", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "valid.json", {
+			schema_version: "1",
+			report_id: "report-valid",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: BASE_CLOSEOUT,
+			evidence_gaps: [],
+		});
+		await writeFile(join(root, ".skill-feedback", "invalid.json"), "{nope");
+		const outside = join(root, "outside.json");
+		await writeFile(outside, "{}");
+		await symlink(outside, join(root, ".skill-feedback", "unsafe.json"));
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-health-invalid",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { total_reports: number };
+			inbox_health: {
+				primary_count: number;
+				skipped_unsafe_count: number;
+				invalid_count: number;
+			};
+		};
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.inbox_health.primary_count).toBe(1);
+		expect(data.inbox_health.skipped_unsafe_count).toBe(1);
+		expect(data.inbox_health.invalid_count).toBe(1);
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-health-invalid-plain",
+			plain: true,
+		});
+		expect(plain.stdout).toContain("Inbox health: low-signal=0 skipped=1 invalid=1");
+	});
+
+	test("purge preview lists old safe candidates without deleting", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"new.json",
+			v1CloseoutReport({
+				reportId: "report-new",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+			}),
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-preview",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			mode: string;
+			candidate_count: number;
+			deleted_count: number;
+			candidate_paths: string[];
+		};
+		expect(data.mode).toBe("preview");
+		expect(data.candidate_count).toBe(1);
+		expect(data.deleted_count).toBe(0);
+		expect(data.candidate_paths).toEqual([".skill-feedback/old.json"]);
+		await expect(readFile(join(root, ".skill-feedback", "old.json"), "utf-8"))
+			.resolves.toContain("report-old");
+	});
+
+	test("purge execute deletes selected low-signal reports only", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old-primary.json",
+			v1CloseoutReport({
+				reportId: "report-old-primary",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const lowSignalInbox = join(root, ".skill-feedback", "low-signal");
+		await mkdir(lowSignalInbox, { recursive: true });
+		await writeFile(
+			join(lowSignalInbox, "old-low.json"),
+			`${JSON.stringify(
+				v1CloseoutReport({
+					reportId: "report-old-low",
+					generatedTs: "2026-05-19T00:00:00.000Z",
+					skill: "unknown-skill",
+					evidenceSource: "hook_capture",
+					captureRuntime: "codex_stop",
+				}),
+				null,
+				"\t",
+			)}\n`,
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-execute",
+			purge: {
+				lane: "low-signal",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			mode: string;
+			candidate_count: number;
+			deleted_count: number;
+			deleted_paths: string[];
+		};
+		expect(data.mode).toBe("execute");
+		expect(data.candidate_count).toBe(1);
+		expect(data.deleted_count).toBe(1);
+		expect(data.deleted_paths).toEqual([
+			".skill-feedback/low-signal/old-low.json",
+		]);
+		await expect(
+			readFile(join(root, ".skill-feedback", "old-primary.json"), "utf-8"),
+		).resolves.toContain("report-old-primary");
+		await expect(
+			readFile(join(lowSignalInbox, "old-low.json"), "utf-8"),
+		).rejects.toThrow();
+	});
+
+	test("purge delete failure reports partial state and deleted paths", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old-a.json",
+			v1CloseoutReport({
+				reportId: "report-old-a",
+				generatedTs: "2026-05-19T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"old-b.json",
+			v1CloseoutReport({
+				reportId: "report-old-b",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		let deleteCount = 0;
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+				removeFile: async (path) => {
+					deleteCount += 1;
+					if (deleteCount === 1) {
+						await rm(path);
+						return;
+					}
+					throw new Error("simulated delete failure");
+				},
+			}),
+			runId: "purge-partial-delete",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"purge_delete_failed",
+		);
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+			changed_state: "partial",
+			deleted_paths: [".skill-feedback/old-a.json"],
+		});
+		await expect(
+			readFile(join(root, ".skill-feedback", "old-a.json"), "utf-8"),
+		).rejects.toThrow();
+		await expect(
+			readFile(join(root, ".skill-feedback", "old-b.json"), "utf-8"),
+		).resolves.toContain("report-old-b");
+	});
+
+	test("purge execute lane all spans primary and low-signal reports", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old-primary.json",
+			v1CloseoutReport({
+				reportId: "report-old-primary",
+				generatedTs: "2026-05-19T00:00:00.000Z",
+			}),
+		);
+		const lowSignalInbox = join(root, ".skill-feedback", "low-signal");
+		await mkdir(lowSignalInbox, { recursive: true });
+		await writeFile(
+			join(lowSignalInbox, "old-low.json"),
+			`${JSON.stringify(
+				v1CloseoutReport({
+					reportId: "report-old-low",
+					generatedTs: "2026-05-20T00:00:00.000Z",
+					skill: "unknown-skill",
+					evidenceSource: "hook_capture",
+					captureRuntime: "codex_stop",
+				}),
+				null,
+				"\t",
+			)}\n`,
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-all-execute",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			deleted_count: number;
+			deleted_paths: string[];
+		};
+		expect(data.candidate_count).toBe(2);
+		expect(data.deleted_count).toBe(2);
+		expect(data.deleted_paths).toEqual([
+			".skill-feedback/old-primary.json",
+			".skill-feedback/low-signal/old-low.json",
+		]);
+	});
+
+	test("purge keep-latest execute keeps newest selected-lane report", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"oldest.json",
+			v1CloseoutReport({
+				reportId: "report-oldest",
+				generatedTs: "2026-05-19T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"middle.json",
+			v1CloseoutReport({
+				reportId: "report-middle",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"newest.json",
+			v1CloseoutReport({
+				reportId: "report-newest",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+			}),
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-keep-latest",
+			purge: {
+				lane: "primary",
+				execute: true,
+				retention: { kind: "keep_latest", count: 1 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_paths: string[];
+			deleted_paths: string[];
+		};
+		expect(data.candidate_paths).toEqual([
+			".skill-feedback/oldest.json",
+			".skill-feedback/middle.json",
+		]);
+		expect(data.deleted_paths).toEqual(data.candidate_paths);
+		await expect(
+			readFile(join(root, ".skill-feedback", "newest.json"), "utf-8"),
+		).resolves.toContain("report-newest");
+	});
+
+	test("purge reports unsafe and invalid artifacts without following them", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		await writeFile(join(root, ".skill-feedback", "invalid.json"), "{nope");
+		const outside = join(root, "outside.json");
+		await writeFile(outside, "{}");
+		await symlink(outside, join(root, ".skill-feedback", "unsafe.json"));
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-health",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			skipped_unsafe_count: number;
+			invalid_count: number;
+			skipped_paths: string[];
+			invalid_paths: string[];
+		};
+		expect(data.candidate_count).toBe(1);
+		expect(data.skipped_unsafe_count).toBe(1);
+		expect(data.invalid_count).toBe(1);
+		expect(data.skipped_paths).toEqual([".skill-feedback/unsafe.json"]);
+		expect(data.invalid_paths).toEqual([".skill-feedback/invalid.json"]);
+	});
+
+	test("purge public argv rejects execute without a retention selector", async () => {
+		const root = await makeRoot();
+		const result = await runCli(["purge", "--execute"], { cwd: root });
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("review treats raw inbox skill_run_id provenance as evidence-only", async () => {
 		const root = await makeRoot();
 		const linkedReport = {
 			schema_version: "1",
@@ -748,13 +1391,191 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		expectReviewCoverage(result.stdout, {
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: {
+				total_reports: number;
+				closeout_count: number;
+				capture_only_count: number;
+				closeout_rate: number;
+				low_coverage: boolean;
+			};
+			review_units: Array<{ trusted_run: boolean }>;
+			ledger_entries: Array<{ allowed_claims: string[]; evidence_tier: string }>;
+		};
+		expect(data.coverage).toMatchObject({
 			total_reports: 2,
 			closeout_count: 1,
-			capture_only_count: 0,
-			closeout_rate: 1,
+			capture_only_count: 1,
+			closeout_rate: 0.5,
 			low_coverage: false,
 		});
+		expect(data.review_units).toHaveLength(2);
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(true);
+		expect(data.ledger_entries).toHaveLength(1);
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"mixed_evidence_sources",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"same_trusted_run",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain("corroborated");
+		expect(data.ledger_entries[0]?.evidence_tier).not.toBe("corroborated");
+	});
+
+	test("real runner keeps Codex Stop unknown-skill capture low-signal beside closeout", async () => {
+		const root = await makeIgnoredGitRoot();
+		const capture = await runCli(
+			[
+				"record",
+				"--skill",
+				"unknown-skill",
+				"--goal",
+				"Harness hook observed a completed skill run.",
+				"--outcome",
+				"ambiguous",
+				"--friction",
+				"Hook captured no transcript payload.",
+				"--generated-ts",
+				"2026-06-11T10:00:00.000Z",
+			],
+			{
+				cwd: root,
+				stdin: JSON.stringify({
+					model: "gpt-5-codex",
+					capture_runtime: "codex_stop",
+					skill_identity_provenance: {
+						source: "none",
+						trusted: false,
+						reason: "codex_stop_payload_has_no_trusted_skill_identity",
+					},
+				}),
+			},
+		);
+		expect(capture.exitCode).toBe(0);
+
+		const closeout = await runCli(["closeout"], {
+			cwd: root,
+			stdin: `${JSON.stringify({
+				...BASE_CLOSEOUT,
+				skill: "fallow",
+				touched_surfaces: [{ type: "path", value: "skills/fallow/SKILL.md" }],
+			})}\n`,
+		});
+		expect(closeout.exitCode).toBe(0);
+
+		const review = await runCli(["review"], { cwd: root });
+
+		expect(review.exitCode).toBe(0);
+		const data = parseEnvelope(review.stdout).data as {
+			schema_version: string;
+			coverage: { total_reports: number };
+			inbox_health: { primary_count: number; low_signal_count: number };
+			ledger_entries: Array<{ owner_paths: string[]; allowed_claims: string[] }>;
+			claim_readiness: { runtime_capture: { status: string } };
+		};
+		expect(data.schema_version).toBe(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION);
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.inbox_health.primary_count).toBe(1);
+		expect(data.inbox_health.low_signal_count).toBe(1);
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.ledger_entries).toHaveLength(1);
+		expect(data.ledger_entries[0]?.owner_paths).toEqual([
+			"skills/fallow/SKILL.md",
+		]);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"corroborated",
+		);
+	});
+
+	test("real runner keeps named Claude Stop capture in the primary lane", async () => {
+		const root = await makeIgnoredGitRoot();
+		const capture = await runCli(
+			[
+				"record",
+				"--skill",
+				"fallow",
+				"--goal",
+				"Harness hook observed a completed skill run.",
+				"--outcome",
+				"ambiguous",
+				"--friction",
+				"Hook captured no transcript payload.",
+				"--generated-ts",
+				"2026-06-11T10:00:00.000Z",
+			],
+			{
+				cwd: root,
+				stdin: JSON.stringify({
+					model: "claude-opus-4-8",
+					capture_runtime: "claude_stop",
+					skill_identity_provenance: {
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
+					},
+				}),
+			},
+		);
+		expect(capture.exitCode).toBe(0);
+
+		const review = await runCli(["review"], { cwd: root });
+
+		expect(review.exitCode).toBe(0);
+		const data = parseEnvelope(review.stdout).data as {
+			coverage: { total_reports: number; capture_only_count: number };
+			inbox_health: { low_signal_count: number };
+		};
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.coverage.capture_only_count).toBe(1);
+		expect(data.inbox_health.low_signal_count).toBe(0);
+	});
+
+	test("primary hook capture and closeout with one strong anchor show mixed evidence only", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"capture.json",
+			v1CloseoutReport({
+				reportId: "report-primary-capture",
+				generatedTs: "2026-06-11T10:00:00.000Z",
+				skill: "fallow",
+				evidenceSource: "hook_capture",
+				captureRuntime: "claude_stop",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"closeout.json",
+			v1CloseoutReport({
+				reportId: "report-primary-closeout",
+				generatedTs: "2026-06-11T10:01:00.000Z",
+				skill: "fallow",
+				evidenceSource: "driver_closeout",
+			}),
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-primary-mixed",
+		});
+
+		expect(review.exitCode).toBe(0);
+		const data = parseEnvelope(review.stdout).data as {
+			inbox_health: { low_signal_count: number };
+			ledger_entries: Array<{ allowed_claims: string[] }>;
+		};
+		expect(data.inbox_health.low_signal_count).toBe(0);
+		expect(data.ledger_entries).toHaveLength(1);
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"repeated_anchor",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"mixed_evidence_sources",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"corroborated",
+		);
 	});
 
 	test("review keeps untrusted shared skill_run_id reports separate", async () => {
@@ -888,6 +1709,96 @@ describe("skill-feedback U6 redaction and write gate", () => {
 				"owner_path_observation",
 			]),
 		);
+	});
+
+	test("review open actions use stable refs instead of prose or inbox order", async () => {
+		const makeReport = (reportId: string, skillRunId: string) => ({
+			schema_version: "1",
+			report_id: reportId,
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: skillRunId,
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: reportId === "report-heavy" ? "heavy" : "light",
+					note: "Focused check.",
+				},
+				observations:
+					reportId === "report-heavy"
+						? [
+								{
+									kind: "tool_failure",
+									target: {
+										type: "path",
+										value: "skills/skill-feedback/SKILL.md",
+									},
+									summary: "The owner path needed inspection.",
+									evidence_basis: "driver_observed",
+								},
+							]
+						: [],
+			},
+			evidence_gaps:
+				reportId === "report-heavy"
+					? [
+							{
+								code: "missing_runtime_git_sha",
+								path: "runtime.git_sha",
+								message: "No git SHA source.",
+							},
+						]
+					: [],
+		});
+		const readActionSummary = async (
+			files: Array<{ name: string; value: unknown }>,
+		) => {
+			const root = await makeRoot();
+			for (const file of files) {
+				await writeInboxReport(root, file.name, file.value);
+			}
+			const result = await reviewSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+				runId: "review-actions-stable",
+			});
+			expect(result.exitCode).toBe(0);
+			const data = parseEnvelope(result.stdout).data as {
+				open_actions: Array<{
+					action_key: string;
+					open_reason: string;
+					evidence_refs: string[];
+				}>;
+			};
+			return data.open_actions
+				.map((action) => ({
+					key: action.action_key,
+					reason: action.open_reason,
+					refs: [...action.evidence_refs].sort(),
+				}))
+				.sort((left, right) => left.key.localeCompare(right.key));
+		};
+		const heavy = makeReport("report-heavy", "run-heavy");
+		const repeat = makeReport("report-repeat", "run-repeat");
+
+		const first = await readActionSummary([
+			{ name: "a-heavy.json", value: heavy },
+			{ name: "b-repeat.json", value: repeat },
+		]);
+		const second = await readActionSummary([
+			{ name: "a-repeat.json", value: repeat },
+			{ name: "b-heavy.json", value: heavy },
+		]);
+
+		expect(second).toEqual(first);
+		for (const action of first) {
+			expect(action.refs.every((ref) => ref.startsWith("report:"))).toBe(true);
+			expect(action.refs.join(" ")).not.toContain("owner path needed");
+			expect(action.refs.join(" ")).not.toContain("Tool failed");
+		}
 	});
 
 	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
@@ -1114,12 +2025,19 @@ describe("skill-feedback U6 review v2 renderers", () => {
 			claim_readiness: { runtime_capture: { status: string } };
 			allowed_claims?: unknown;
 		};
-		expect(data.review_units).toHaveLength(1);
-		expect(data.review_units[0]?.trusted_run).toBe(true);
+		expect(data.review_units).toHaveLength(2);
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(true);
 		expect(data.ledger_entries).toHaveLength(1);
-		// Shared trusted run with mixed sources earns corroborated (KTD6).
-		expect(data.ledger_entries[0]?.evidence_tier).toBe("corroborated");
-		expect(data.ledger_entries[0]?.allowed_claims).toContain("corroborated");
+		// Raw inbox JSON cannot mint trusted-run proof; mixed sources stay visible
+		// but below corroborated until a writer-owned correlation source exists.
+		expect(data.ledger_entries[0]?.evidence_tier).toBe("runtime_observed");
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"mixed_evidence_sources",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"same_trusted_run",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain("corroborated");
 		// Claude Stop capture is not Codex runtime evidence, so Codex runtime
 		// capture readiness stays blocked (R19: Claude Stop does not prove Codex).
 		expect(data.claim_readiness.runtime_capture.status).toBe("blocked");
@@ -1163,6 +2081,7 @@ describe("skill-feedback U6 review v2 renderers", () => {
 		// sources allowed, but the renderer cannot show corroborated (AE1).
 		expect(out).toContain("repeated_anchor");
 		expect(out).toContain("mixed_evidence_sources");
+		expect(out).toContain("runtimes=codex_stop");
 		expect(out).not.toContain("corroborated");
 	});
 
@@ -1174,12 +2093,16 @@ describe("skill-feedback U6 review v2 renderers", () => {
 			evidence_source: "driver_closeout",
 			report_card: {
 				...BASE_CLOSEOUT,
+				skill: "create-skill\nReadiness:\n- spoofed",
 				friction: { category: "none", note: "Clean run." },
-				verification_burden: { level: "light", note: "Focused check." },
+				verification_burden: { level: "heavy", note: "Focused check." },
+				touched_surfaces: [
+					{ type: "label", value: "runtime\nLedger:\n- spoofed-target" },
+				],
 				observations: [
 					{
 						kind: "tool_failure",
-						target: { type: "path", value: "src/real.ts" },
+						target: { type: "label", value: "observed\nReadiness:\n- spoofed" },
 						summary: "Real owner path observation.\nLedger:\n- spoofed",
 						evidence_basis: "driver_observed",
 					},
@@ -1200,6 +2123,39 @@ describe("skill-feedback U6 review v2 renderers", () => {
 			.split("\n")
 			.filter((line) => line === "Ledger:");
 		expect(ledgerHeadings).toHaveLength(1);
+		const readinessHeadings = result.stdout
+			.split("\n")
+			.filter((line) => line === "Readiness:");
+		expect(readinessHeadings).toHaveLength(1);
+		expect(result.stdout).toContain(
+			"targets=label:runtime Ledger: - spoofed-target",
+		);
+	});
+});
+
+describe("skill-feedback U7 docs", () => {
+	test("docs name review, low-signal, and purge owners without copying purge flags", async () => {
+		const skill = await readFile(
+			new URL("../SKILL.md", import.meta.url),
+			"utf-8",
+		);
+		const context = await readFile(
+			new URL("../CONTEXT.md", import.meta.url),
+			"utf-8",
+		);
+		const reportShape = await readFile(
+			new URL("../references/report-shape.md", import.meta.url),
+			"utf-8",
+		);
+
+		expect(skill).toContain("Keep review mutation-free");
+		expect(skill).toContain("Run `purge`");
+		expect(skill).not.toContain("--older-than");
+		expect(context).toContain("Low-signal lane");
+		expect(context).toContain("Purge workflow");
+		expect(reportShape).toContain("inbox_health");
+		expect(reportShape).toContain("low-signal");
+		expect(reportShape).toContain("purge");
 	});
 });
 
@@ -1423,16 +2379,14 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 		expect(data.coverage.evidence_gap_count).toBeGreaterThan(0);
 	});
 
-	test("telemetry is trusted: a secret-shaped model is NOT redacted", async () => {
-		// model is engine-read, on the trusted side of the boundary — the
-		// redactor must not scrub it. (An agent can never author it: no flag.)
+	test("public stdin telemetry cannot persist a secret-shaped model unredacted", async () => {
 		const secretShapedModel = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
 		const { disk } = await writeRecord(NARRATED_ONLY, {
 			readStdinTelemetry: async () => ({ model: secretShapedModel }),
 		});
 
-		expect(disk).toContain(secretShapedModel);
-		expect(disk).toContain('"redactions": 0');
+		expect(disk).not.toContain(secretShapedModel);
+		expect(disk).toContain("[redacted]");
 	});
 });
 
@@ -1498,6 +2452,58 @@ describe("skill-feedback parseRecordFlags", () => {
 		expect(parseRecordFlags(["--outcome", "maybe"])).toEqual({
 			ok: false,
 			message: "--outcome is invalid.",
+		});
+	});
+});
+
+describe("skill-feedback parsePurgeArgs", () => {
+	test("parses preview and execute purge flags", () => {
+		expect(parsePurgeArgs(["purge", "--older-than", "14d"])).toEqual({
+			ok: true,
+			options: {
+				lane: "all",
+				execute: false,
+				retention: {
+					kind: "older_than",
+					raw: "14d",
+					durationMs: 1_209_600_000,
+				},
+			},
+		});
+		expect(
+			parsePurgeArgs([
+				"--lane",
+				"low-signal",
+				"--keep-latest",
+				"5",
+				"--execute",
+			]),
+		).toEqual({
+			ok: true,
+			options: {
+				lane: "low-signal",
+				execute: true,
+				retention: { kind: "keep_latest", count: 5 },
+			},
+		});
+	});
+
+	test("rejects unsafe or ambiguous purge selectors", () => {
+		expect(parsePurgeArgs(["--execute"])).toEqual({
+			ok: false,
+			message: "Purge requires exactly one retention selector.",
+		});
+		expect(parsePurgeArgs(["--older-than", "14d", "--keep-latest", "5"])).toEqual({
+			ok: false,
+			message: "Purge requires exactly one retention selector.",
+		});
+		expect(parsePurgeArgs(["--older-than", "0d"])).toEqual({
+			ok: false,
+			message: "--older-than must use a positive duration such as 14d or 48h.",
+		});
+		expect(parsePurgeArgs(["--lane", "archive", "--older-than", "14d"])).toEqual({
+			ok: false,
+			message: "--lane is invalid.",
 		});
 	});
 });

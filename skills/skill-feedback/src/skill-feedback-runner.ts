@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
 	chmod,
+	link,
 	lstat,
 	mkdir,
 	open,
@@ -24,6 +25,9 @@ import {
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	SKILL_FEEDBACK_PURGE_LANES,
+	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
 	type CaptureMetadata,
@@ -39,8 +43,11 @@ import {
 	type ReviewClaimReadiness,
 	type ReviewClaimReadinessFact,
 	type ReviewOpenItem,
+	type ReportCardTarget,
 	type ReviewResultData,
 	type ReviewResultDataV1,
+	type SkillFeedbackPurgeResultData,
+	type SkillFeedbackPurgeLane,
 	type SkillFeedbackOutcome,
 	type SoftwareLearningReport,
 	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
@@ -66,8 +73,12 @@ import {
 const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
 const INBOX_DIR = ".skill-feedback";
+const LOW_SIGNAL_INBOX_DIR = "low-signal";
+const LOW_SIGNAL_UNKNOWN_SKILL_REASON_ID = "unknown_skill_codex_stop";
+const LOW_SIGNAL_LANE_REPORT_REASON_ID = "low_signal_lane_report";
 const PILOT_MARKER_FILE = "pilot_started_at";
 const MAX_CLOSEOUT_STDIN_BYTES = 64_000;
+const DEFAULT_RUNNER_PROCESS_TIMEOUT_MS = 6_000;
 const CLOSEOUT_RECEIPT_DOCS_URL =
 	"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md";
 const NON_ACTIONABLE_EVIDENCE_GAP_CODES: ReadonlySet<EvidenceGapCode> = new Set([
@@ -145,14 +156,7 @@ export function createDefaultSkillFeedbackRuntime(
 			await mkdir(path, { recursive: true, mode });
 			await chmod(path, mode);
 		},
-		writePrivateFile: async (path, content, mode) => {
-			const handle = await open(path, "wx", mode);
-			try {
-				await handle.writeFile(content, "utf-8");
-			} finally {
-				await handle.close();
-			}
-		},
+		writePrivateFile: writeAtomicPrivateFile,
 		removeFile: async (path) => {
 			await unlink(path);
 		},
@@ -245,13 +249,49 @@ export async function recordSkillFeedbackReceipt(
 			},
 		);
 	}
-	const inboxPath = inbox.path;
+	const lane = isLowSignalCodexStopReport(redacted) ? "low-signal" : "primary";
+	const laneInbox =
+		lane === "low-signal"
+			? await prepareSkillFeedbackSubdirectory(
+					inbox.path,
+					LOW_SIGNAL_INBOX_DIR,
+					runtime,
+				)
+			: { ok: true as const, path: inbox.path };
+	if (!laneInbox.ok) {
+		return errorResult(
+			runId,
+			RUNTIME_FAILURE_EXIT_CODE,
+			laneInbox.code,
+			"Skill-feedback low-signal inbox is unsafe.",
+			{
+				recoverability: "repair_state",
+				hint: laneInbox.hint,
+			},
+		);
+	}
+	const inboxPath = laneInbox.path;
 	const reportPath = join(inboxPath, reportFileName(redacted));
-	await runtime.writePrivateFile(
-		reportPath,
-		`${JSON.stringify(redacted, null, "\t")}\n`,
-		0o600,
-	);
+	try {
+		await runtime.writePrivateFile(
+			reportPath,
+			`${JSON.stringify(redacted, null, "\t")}\n`,
+			0o600,
+		);
+	} catch {
+		const rollback = await rollbackReportPath(reportPath, runtime);
+		return errorResult(
+			runId,
+			RUNTIME_FAILURE_EXIT_CODE,
+			"record_write_failed",
+			"Skill-feedback record could not be written.",
+			{
+				recoverability: "repair_state",
+				hint: "Inspect inbox ownership and permissions before retrying.",
+				changedState: rollback === "failed" ? "partial" : "none",
+			},
+		);
+	}
 
 	const envelope = createCliRuntimeSuccessEnvelope({
 		run_id: runId,
@@ -358,11 +398,27 @@ export async function closeoutSkillFeedbackReceipt(
 		}
 		const fileName = reportFileName(redacted.value);
 		const reportPath = join(inboxPath, fileName);
-		await runtime.writePrivateFile(
-			reportPath,
-			`${JSON.stringify(redacted.value, null, "\t")}\n`,
-			0o600,
-		);
+		try {
+			await runtime.writePrivateFile(
+				reportPath,
+				`${JSON.stringify(redacted.value, null, "\t")}\n`,
+				0o600,
+			);
+		} catch {
+			const rollback = await rollbackReportPath(reportPath, runtime);
+			return errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				"closeout_write_failed",
+				"Closeout report could not be written.",
+				{
+					recoverability: "repair_state",
+					hint: "Inspect inbox ownership and permissions before retrying.",
+					contract: SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+					changedState: rollback === "failed" ? "partial" : "none",
+				},
+			);
+		}
 		if (markerCheck.state === "missing") {
 			const markerWrite = await writeMissingPilotMarker(
 				inboxPath,
@@ -445,10 +501,13 @@ export async function reviewSkillFeedbackInbox(
 	const runId = options.runId ?? "skill-feedback-review";
 	const repoRoot = resolve(runtime.repoRoot());
 	try {
-		const reports = await readNormalizedInboxReports(repoRoot);
+		const inbox = await readReviewInbox(repoRoot, runtime);
 		const pilotStartedAt = await readPilotStartedAt(repoRoot);
 		const data = buildReviewResultData({
-			reports,
+			reports: inbox.primaryReports,
+			lowSignalReports: inbox.lowSignalReports,
+			skippedUnsafeCount: inbox.skippedUnsafeCount,
+			invalidCount: inbox.invalidCount,
 			nowIso: runtime.nowIso(),
 			pilotStartedAt,
 		});
@@ -498,28 +557,473 @@ export async function reviewSkillFeedbackInbox(
 	}
 }
 
-async function readNormalizedInboxReports(
-	repoRoot: string,
-): Promise<NormalizedSoftwareLearningReport[]> {
-	const inboxPath = join(repoRoot, INBOX_DIR);
-	let entries: string[];
-	try {
-		entries = await readdir(inboxPath);
-	} catch (error) {
-		if (isNodeErrorCode(error, "ENOENT")) return [];
-		throw error;
+type SkillFeedbackPurgeRetention =
+	| {
+			kind: "older_than";
+			raw: string;
+			durationMs: number;
+	  }
+	| {
+			kind: "keep_latest";
+			count: number;
+	  };
+
+export type SkillFeedbackPurgeOptions = {
+	lane: SkillFeedbackPurgeLane;
+	execute: boolean;
+	retention: SkillFeedbackPurgeRetention;
+};
+
+type SkillFeedbackPurgeCandidate = {
+	path: string;
+	relativePath: string;
+	lane: Exclude<SkillFeedbackPurgeLane, "all">;
+	generatedTs: string;
+	generatedMs: number;
+};
+
+type SkillFeedbackPurgeScan = {
+	candidates: SkillFeedbackPurgeCandidate[];
+	skippedUnsafePaths: string[];
+	invalidPaths: string[];
+};
+
+export async function purgeSkillFeedbackInbox(
+	options: {
+		runtime?: SkillFeedbackRuntime;
+		runId?: string;
+		purge: SkillFeedbackPurgeOptions;
+	},
+): Promise<SkillFeedbackProcessResult> {
+	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
+	const runId = options.runId ?? "skill-feedback-purge";
+	const repoRoot = resolve(runtime.repoRoot());
+	const purge = options.purge;
+	const nowIso = runtime.nowIso();
+	const scan = await scanPurgeCandidates(repoRoot, runtime);
+	const selected = selectPurgeCandidates(scan.candidates, purge, nowIso);
+	const deletedPaths: string[] = [];
+	const skippedPaths = [...scan.skippedUnsafePaths];
+	if (purge.execute) {
+		const inboxPath = join(repoRoot, INBOX_DIR);
+		const inboxReal = await safeRealpath(inboxPath, runtime);
+		if (!inboxReal) {
+			return errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				"purge_inbox_missing",
+				"Skill-feedback inbox is missing during purge.",
+				{
+					recoverability: "repair_state",
+					hint: "Re-run purge after confirming the private inbox exists.",
+					contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+				},
+			);
+		}
+		for (const candidate of selected) {
+			const safe = await assertSafePurgeCandidate(candidate, inboxReal, runtime);
+			if (!safe.ok) {
+				skippedPaths.push(candidate.relativePath);
+				continue;
+			}
+			try {
+				await runtime.removeFile(candidate.path);
+				deletedPaths.push(candidate.relativePath);
+			} catch {
+				return errorResult(
+					runId,
+					RUNTIME_FAILURE_EXIT_CODE,
+					"purge_delete_failed",
+					"Skill-feedback purge could not delete a selected report.",
+					{
+						recoverability: "repair_state",
+						hint: "Inspect inbox ownership and permissions before retrying.",
+						contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+						changedState: deletedPaths.length > 0 ? "partial" : "none",
+						data: { deleted_paths: deletedPaths },
+					},
+				);
+			}
+		}
 	}
-	const reports: NormalizedSoftwareLearningReport[] = [];
-	for (const entry of entries.sort()) {
-		if (!entry.endsWith(".json")) continue;
-		const raw = JSON.parse(await readFile(join(inboxPath, entry), "utf-8")) as unknown;
+	const data: SkillFeedbackPurgeResultData = {
+		contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+		schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+		mode: purge.execute ? "execute" : "preview",
+		lane: purge.lane,
+		retention: purgeRetentionOutput(purge.retention, nowIso),
+		scanned_count: scan.candidates.length,
+		candidate_count: selected.length,
+		deleted_count: deletedPaths.length,
+		skipped_unsafe_count: skippedPaths.length,
+		invalid_count: scan.invalidPaths.length,
+		candidate_paths: selected.map((candidate) => candidate.relativePath),
+		deleted_paths: deletedPaths,
+		skipped_paths: skippedPaths,
+		invalid_paths: scan.invalidPaths,
+	};
+	const actionId = purge.execute ? "purge-complete" : "inspect-purge-preview";
+	const envelope = createCliRuntimeSuccessEnvelope({
+		run_id: runId,
+		data,
+		runtime_actions: [
+			{
+				id: actionId,
+				summary: purge.execute
+					? "Selected safe inbox reports were deleted."
+					: "Inspect selected purge candidates before executing deletion.",
+				side_effects: purge.execute ? ["write"] : ["read"],
+			},
+		],
+		continuation: { next_action_id: actionId },
+	}) satisfies CliRuntimeSuccessEnvelope<SkillFeedbackPurgeResultData>;
+	return {
+		exitCode: 0,
+		stdout: `${JSON.stringify(envelope)}\n`,
+		stderr: "",
+	};
+}
+
+type ReviewInboxRead = {
+	primaryReports: NormalizedSoftwareLearningReport[];
+	lowSignalReports: LowSignalReport[];
+	skippedUnsafeCount: number;
+	invalidCount: number;
+};
+
+type InboxArtifactLane = "primary" | "low-signal";
+
+type LowSignalReasonId =
+	| typeof LOW_SIGNAL_UNKNOWN_SKILL_REASON_ID
+	| typeof LOW_SIGNAL_LANE_REPORT_REASON_ID;
+
+type LowSignalReport = {
+	report: NormalizedSoftwareLearningReport;
+	reasonId: LowSignalReasonId;
+};
+
+type SafeInboxJsonFile = {
+	path: string;
+	relativePath: string;
+	lane: InboxArtifactLane;
+};
+
+type InboxJsonFileScan = {
+	files: SafeInboxJsonFile[];
+	skippedUnsafeCount: number;
+	skippedUnsafePaths: string[];
+	invalidPaths: string[];
+};
+
+function emptyReviewInboxRead(): ReviewInboxRead {
+	return {
+		primaryReports: [],
+		lowSignalReports: [],
+		skippedUnsafeCount: 0,
+		invalidCount: 0,
+	};
+}
+
+async function readReviewInbox(
+	repoRoot: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<ReviewInboxRead> {
+	const scan = await scanSafeInboxJsonFiles(repoRoot, runtime);
+	const state: ReviewInboxRead = {
+		...emptyReviewInboxRead(),
+		skippedUnsafeCount: scan.skippedUnsafeCount,
+		invalidCount: scan.invalidPaths.length,
+	};
+	for (const file of scan.files) {
+		let raw: unknown;
+		try {
+			raw = JSON.parse(await runtime.readText(file.path)) as unknown;
+		} catch {
+			state.invalidCount += 1;
+			continue;
+		}
 		const normalized = normalizeReport(raw);
 		if (normalized.kind !== "ok") {
-			throw new Error(`Invalid skill-feedback report ${entry}`);
+			state.invalidCount += 1;
+			continue;
 		}
-		reports.push(normalized.report);
+		const lowSignalReasonId = lowSignalReasonIdFor(file, normalized.report);
+		if (lowSignalReasonId) {
+			state.lowSignalReports.push({
+				report: normalized.report,
+				reasonId: lowSignalReasonId,
+			});
+		} else {
+			state.primaryReports.push(normalized.report);
+		}
 	}
-	return reports;
+	return state;
+}
+
+function lowSignalReasonIdFor(
+	file: SafeInboxJsonFile,
+	report: NormalizedSoftwareLearningReport,
+): LowSignalReasonId | undefined {
+	if (isLowSignalCodexStopReport(report)) return LOW_SIGNAL_UNKNOWN_SKILL_REASON_ID;
+	if (file.lane === "low-signal") return LOW_SIGNAL_LANE_REPORT_REASON_ID;
+	return undefined;
+}
+
+async function scanSafeInboxJsonFiles(
+	repoRoot: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<InboxJsonFileScan> {
+	const inboxPath = join(repoRoot, INBOX_DIR);
+	const state: InboxJsonFileScan = {
+		files: [],
+		skippedUnsafeCount: 0,
+		skippedUnsafePaths: [],
+		invalidPaths: [],
+	};
+	const inboxStats = await lstatOptional(inboxPath, runtime);
+	if (!inboxStats) return state;
+	if (inboxStats.isSymbolicLink() || !inboxStats.isDirectory()) {
+		state.skippedUnsafeCount += 1;
+		state.skippedUnsafePaths.push(relative(repoRoot, inboxPath));
+		return state;
+	}
+	const repoReal = await runtime.realpathPath(repoRoot);
+	const inboxReal = await runtime.realpathPath(inboxPath);
+	if (!isContainedPath(repoReal, inboxReal)) {
+		state.skippedUnsafeCount += 1;
+		state.skippedUnsafePaths.push(relative(repoRoot, inboxPath));
+		return state;
+	}
+	await scanSafeJsonDirectory({
+		directoryPath: inboxPath,
+		inboxReal,
+		repoRoot,
+		lane: "primary",
+		state,
+		runtime,
+	});
+	await scanLowSignalInboxDirectory({
+		inboxPath,
+		inboxReal,
+		repoRoot,
+		state,
+		runtime,
+	});
+	return state;
+}
+
+async function scanLowSignalInboxDirectory(input: {
+	inboxPath: string;
+	inboxReal: string;
+	repoRoot: string;
+	state: InboxJsonFileScan;
+	runtime: SkillFeedbackRuntime;
+}): Promise<void> {
+	const lowSignalPath = join(input.inboxPath, LOW_SIGNAL_INBOX_DIR);
+	const stats = await lstatOptional(lowSignalPath, input.runtime);
+	if (!stats) return;
+	if (stats.isSymbolicLink() || !stats.isDirectory()) {
+		input.state.skippedUnsafeCount += 1;
+		input.state.skippedUnsafePaths.push(relative(input.repoRoot, lowSignalPath));
+		return;
+	}
+	const lowSignalReal = await input.runtime.realpathPath(lowSignalPath);
+	if (!isContainedPath(input.inboxReal, lowSignalReal)) {
+		input.state.skippedUnsafeCount += 1;
+		input.state.skippedUnsafePaths.push(relative(input.repoRoot, lowSignalPath));
+		return;
+	}
+	await scanSafeJsonDirectory({
+		directoryPath: lowSignalPath,
+		inboxReal: input.inboxReal,
+		repoRoot: input.repoRoot,
+		lane: "low-signal",
+		state: input.state,
+		runtime: input.runtime,
+	});
+}
+
+async function scanSafeJsonDirectory(input: {
+	directoryPath: string;
+	inboxReal: string;
+	repoRoot: string;
+	lane: InboxArtifactLane;
+	state: InboxJsonFileScan;
+	runtime: SkillFeedbackRuntime;
+}): Promise<void> {
+	let entries: string[];
+	try {
+		entries = await readdir(input.directoryPath);
+	} catch (error) {
+		if (isNodeErrorCode(error, "ENOENT")) return;
+		throw error;
+	}
+	for (const entry of entries.sort()) {
+		const reportPath = join(input.directoryPath, entry);
+		if (!entry.endsWith(".json")) {
+			if (isPartialInboxTempEntry(entry)) {
+				input.state.invalidPaths.push(relative(input.repoRoot, reportPath));
+			}
+			continue;
+		}
+		const stats = await lstatOptional(reportPath, input.runtime);
+		if (!stats) continue;
+		if (stats.isSymbolicLink() || !stats.isFile()) {
+			input.state.skippedUnsafeCount += 1;
+			input.state.skippedUnsafePaths.push(relative(input.repoRoot, reportPath));
+			continue;
+		}
+		const reportReal = await input.runtime.realpathPath(reportPath);
+		if (!isContainedPath(input.inboxReal, reportReal)) {
+			input.state.skippedUnsafeCount += 1;
+			input.state.skippedUnsafePaths.push(relative(input.repoRoot, reportPath));
+			continue;
+		}
+		input.state.files.push({
+			path: reportPath,
+			relativePath: relative(input.repoRoot, reportPath),
+			lane: input.lane,
+		});
+	}
+}
+
+async function scanPurgeCandidates(
+	repoRoot: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<SkillFeedbackPurgeScan> {
+	const scan = await scanSafeInboxJsonFiles(repoRoot, runtime);
+	const candidates: SkillFeedbackPurgeCandidate[] = [];
+	const invalidPaths: string[] = [...scan.invalidPaths];
+	for (const file of scan.files) {
+		let raw: unknown;
+		try {
+			raw = JSON.parse(await runtime.readText(file.path)) as unknown;
+		} catch {
+			invalidPaths.push(file.relativePath);
+			continue;
+		}
+		const normalized = normalizeReport(raw);
+		if (normalized.kind !== "ok") {
+			invalidPaths.push(file.relativePath);
+			continue;
+		}
+		const generatedMs = Date.parse(normalized.report.generated_ts);
+		if (!Number.isFinite(generatedMs)) {
+			invalidPaths.push(file.relativePath);
+			continue;
+		}
+		candidates.push({
+			path: file.path,
+			relativePath: file.relativePath,
+			lane:
+				file.lane === "low-signal" ||
+				isLowSignalCodexStopReport(normalized.report)
+					? "low-signal"
+					: "primary",
+			generatedTs: normalized.report.generated_ts,
+			generatedMs,
+		});
+	}
+	return {
+		candidates,
+		skippedUnsafePaths: scan.skippedUnsafePaths,
+		invalidPaths,
+	};
+}
+
+function isPartialInboxTempEntry(entry: string): boolean {
+	return entry.includes(".json.tmp-") || entry.endsWith(".json.tmp");
+}
+
+function selectPurgeCandidates(
+	candidates: readonly SkillFeedbackPurgeCandidate[],
+	options: SkillFeedbackPurgeOptions,
+	nowIso: string,
+): SkillFeedbackPurgeCandidate[] {
+	const scoped = candidates.filter(
+		(candidate) => options.lane === "all" || candidate.lane === options.lane,
+	);
+	if (options.retention.kind === "older_than") {
+		const cutoffMs = purgeCutoffMs(options.retention, nowIso);
+		return sortOldestFirst(
+			scoped.filter((candidate) => candidate.generatedMs < cutoffMs),
+		);
+	}
+	const newestFirst = [...scoped].sort(compareNewestFirst);
+	return sortOldestFirst(newestFirst.slice(options.retention.count));
+}
+
+function purgeRetentionOutput(
+	retention: SkillFeedbackPurgeRetention,
+	nowIso: string,
+): SkillFeedbackPurgeResultData["retention"] {
+	if (retention.kind === "older_than") {
+		return {
+			kind: "older_than",
+			older_than: retention.raw,
+			cutoff_ts: new Date(purgeCutoffMs(retention, nowIso)).toISOString(),
+		};
+	}
+	return {
+		kind: "keep_latest",
+		keep_latest: retention.count,
+	};
+}
+
+function purgeCutoffMs(
+	retention: Extract<SkillFeedbackPurgeRetention, { kind: "older_than" }>,
+	nowIso: string,
+): number {
+	const nowMs = Date.parse(nowIso);
+	const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+	return safeNowMs - retention.durationMs;
+}
+
+function compareNewestFirst(
+	left: SkillFeedbackPurgeCandidate,
+	right: SkillFeedbackPurgeCandidate,
+): number {
+	return (
+		right.generatedMs - left.generatedMs ||
+		left.relativePath.localeCompare(right.relativePath)
+	);
+}
+
+function sortOldestFirst(
+	candidates: readonly SkillFeedbackPurgeCandidate[],
+): SkillFeedbackPurgeCandidate[] {
+	return [...candidates].sort(
+		(left, right) =>
+			left.generatedMs - right.generatedMs ||
+			left.relativePath.localeCompare(right.relativePath),
+	);
+}
+
+async function assertSafePurgeCandidate(
+	candidate: SkillFeedbackPurgeCandidate,
+	inboxReal: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<{ ok: true } | { ok: false }> {
+	const stats = await lstatOptional(candidate.path, runtime);
+	if (!stats || stats.isSymbolicLink() || !stats.isFile()) {
+		return { ok: false };
+	}
+	const candidateReal = await safeRealpath(candidate.path, runtime);
+	if (!candidateReal || !isContainedPath(inboxReal, candidateReal)) {
+		return { ok: false };
+	}
+	return { ok: true };
+}
+
+async function safeRealpath(
+	path: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<string | undefined> {
+	try {
+		return await runtime.realpathPath(path);
+	} catch {
+		return undefined;
+	}
 }
 
 async function readPilotStartedAt(repoRoot: string): Promise<string | undefined> {
@@ -537,10 +1041,14 @@ async function readPilotStartedAt(repoRoot: string): Promise<string | undefined>
 
 function buildReviewResultData(input: {
 	reports: readonly NormalizedSoftwareLearningReport[];
+	lowSignalReports?: readonly LowSignalReport[];
+	skippedUnsafeCount?: number;
+	invalidCount?: number;
 	nowIso: string;
 	pilotStartedAt?: string;
 }): ReviewResultData {
 	const reports = input.reports;
+	const lowSignalReports = input.lowSignalReports ?? [];
 	const reviewUnits = coalesceReviewUnits(reports);
 	const closeoutUnits = reviewUnits.filter(hasCloseoutEvidence);
 	const captureOnlyUnits = reviewUnits.filter(
@@ -573,7 +1081,10 @@ function buildReviewResultData(input: {
 			: {}),
 	};
 	const ledger = reduceReviewLedger(reports);
-	const claimReadiness = deriveClaimReadiness(reports);
+	const claimReadiness = deriveClaimReadiness([
+		...reports,
+		...lowSignalReports.map((entry) => entry.report),
+	]);
 	const retention = retentionSummary(reports, input.nowIso);
 	const pilotCheckpoint = pilotCheckpointSummary({
 		startedAt: input.pilotStartedAt,
@@ -588,6 +1099,12 @@ function buildReviewResultData(input: {
 		contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 		schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		coverage,
+		inbox_health: deriveInboxHealth(
+			reports,
+			lowSignalReports,
+			input.skippedUnsafeCount ?? 0,
+			input.invalidCount ?? 0,
+		),
 		open_items: openItems,
 		open_actions: deriveOpenActions(openItems),
 		...(openItems.length === 0
@@ -617,13 +1134,55 @@ function buildReviewResultData(input: {
 function deriveOpenActions(
 	openItems: readonly ReviewOpenItem[],
 ): ReviewResultData["open_actions"] {
-	return openItems.map((item, index) => ({
-		action_key: `${item.open_reason}:${index}`,
+	return openItems.map((item) => ({
+		action_key: reviewActionKey(item),
 		open_reason: item.open_reason,
 		...(item.target ? { target: item.target } : {}),
 		next_safe_action: item.next_action,
-		evidence_refs: [item.evidence],
+		evidence_refs: item.evidence_refs,
 	}));
+}
+
+function reviewActionKey(item: ReviewOpenItem): string {
+	const target = item.target ? `${item.target.type}:${item.target.value}` : "";
+	const seed = JSON.stringify({
+		open_reason: item.open_reason,
+		evidence_refs: [...item.evidence_refs].sort(),
+		target,
+	});
+	return `action:${createHash("sha256").update(seed).digest("hex").slice(0, 16)}`;
+}
+
+function reportEvidenceRef(report: NormalizedSoftwareLearningReport): string {
+	return `report:${report.report_id}`;
+}
+
+function deriveInboxHealth(
+	primaryReports: readonly NormalizedSoftwareLearningReport[],
+	lowSignalReports: readonly LowSignalReport[],
+	skippedUnsafeCount: number,
+	invalidCount: number,
+): ReviewResultData["inbox_health"] {
+	const lowSignalAges = lowSignalReports
+		.map((entry) => entry.report.generated_ts)
+		.filter((value) => Number.isFinite(Date.parse(value)))
+		.sort();
+	const lowSignalReasonIds = [
+		...new Set(lowSignalReports.map((entry) => entry.reasonId)),
+	].sort();
+	return {
+		primary_count: primaryReports.length,
+		low_signal_count: lowSignalReports.length,
+		...(lowSignalAges.length > 0
+			? {
+					low_signal_newest_generated_ts:
+						lowSignalAges[lowSignalAges.length - 1],
+				}
+			: {}),
+		low_signal_reason_ids: lowSignalReasonIds,
+		skipped_unsafe_count: skippedUnsafeCount,
+		invalid_count: invalidCount,
+	};
 }
 
 /**
@@ -776,6 +1335,20 @@ function isTrustedCodexStopReport(
 	);
 }
 
+function isLowSignalCodexStopReport(report: {
+	evidence_source?: string;
+	capture_runtime?: string;
+	skill?: string;
+}): boolean {
+	if (report.evidence_source && report.evidence_source !== "hook_capture") {
+		return false;
+	}
+	return (
+		report.capture_runtime === "codex_stop" &&
+		!isNonPlaceholderSkill(report.skill ?? "")
+	);
+}
+
 function isNonPlaceholderSkill(value: string): boolean {
 	const normalized = value.trim().toLowerCase();
 	return normalized !== "" && normalized !== "unknown" && normalized !== "unknown-skill";
@@ -811,6 +1384,7 @@ function deriveReviewOpenItems(
 				open_reason: "high_verification_burden",
 				severity: "action",
 				evidence: `${report.skill} reported heavy verification burden.`,
+				evidence_refs: [reportEvidenceRef(report)],
 				next_action: "Inspect the verification burden note against source and tests.",
 			});
 		}
@@ -820,6 +1394,7 @@ function deriveReviewOpenItems(
 				open_reason: "evidence_gap",
 				severity: "warning",
 				evidence: `${report.skill} has ${actionableGaps.length} actionable evidence gap(s).`,
+				evidence_refs: [reportEvidenceRef(report)],
 				next_action: "Inspect missing evidence before drawing skill-quality conclusions.",
 			});
 		}
@@ -829,6 +1404,7 @@ function deriveReviewOpenItems(
 				open_reason: "owner_path_observation",
 				severity: "action",
 				evidence: observation.summary,
+				evidence_refs: [reportEvidenceRef(report)],
 				target: observation.target,
 				next_action: "Inspect the owner path and confirm evidence before editing.",
 			});
@@ -837,10 +1413,15 @@ function deriveReviewOpenItems(
 	for (const [category, count] of repeatedFriction(reports).filter(([category]) =>
 		signalContext.repeatedFrictionCategories.has(category),
 	)) {
+		const refs = reports
+			.filter((report) => report.friction?.category === category)
+			.map(reportEvidenceRef)
+			.sort();
 		items.push({
 			open_reason: "repeated_friction",
 			severity: "warning",
 			evidence: `${count} reports mention ${category} friction.`,
+			evidence_refs: refs,
 			next_action: "Group reports by friction category and inspect the common owner.",
 		});
 	}
@@ -848,10 +1429,15 @@ function deriveReviewOpenItems(
 		(report) => report.correlation_status === "unlinked",
 	).length;
 	if (signalContext.unlinkedSpike) {
+		const refs = reports
+			.filter((report) => report.correlation_status === "unlinked")
+			.map(reportEvidenceRef)
+			.sort();
 		items.push({
 			open_reason: "unlinked_correlation_spike",
 			severity: "warning",
 			evidence: `${unlinkedCount} reports are unlinked.`,
+			evidence_refs: refs,
 			next_action: "Inspect skill-feedback or runtime adapter correlation.",
 		});
 	}
@@ -961,6 +1547,15 @@ function renderPlainReview(data: ReviewResultData): string {
 	if (data.coverage.low_coverage_warning) {
 		lines.push(`Low coverage: ${plainSafe(data.coverage.low_coverage_warning)}`);
 	}
+	if (
+		data.inbox_health.low_signal_count > 0 ||
+		data.inbox_health.skipped_unsafe_count > 0 ||
+		data.inbox_health.invalid_count > 0
+	) {
+		lines.push(
+			`Inbox health: low-signal=${data.inbox_health.low_signal_count} skipped=${data.inbox_health.skipped_unsafe_count} invalid=${data.inbox_health.invalid_count}`,
+		);
+	}
 
 	// Triage before ledger detail (R2).
 	if (data.open_items.length === 0) {
@@ -992,12 +1587,20 @@ function renderPlainReview(data: ReviewResultData): string {
 				entry.allowed_claims.length > 0
 					? ` claims=${entry.allowed_claims.join(",")}`
 					: "";
+			const runtimes =
+				entry.capture_runtime_mix.length > 0
+					? ` runtimes=${entry.capture_runtime_mix.join("/")}`
+					: "";
+			const targets =
+				entry.attempted_targets.length > 0
+					? ` targets=${entry.attempted_targets.map(plainTarget).join(",")}`
+					: "";
 			const anchor =
 				entry.anchor_strength === "weak"
 					? `weak:${entry.weak_anchor_reason ?? "unknown"}`
 					: (entry.ledger_anchor_key ?? "standalone");
 			lines.push(
-				`- ${plainSafe(anchor)} tier=${entry.evidence_tier} sources=${entry.source_mix.join("/")}${claims}`,
+				`- ${plainSafe(anchor)} tier=${entry.evidence_tier} sources=${entry.source_mix.join("/")}${runtimes}${claims}${targets}`,
 			);
 		}
 	}
@@ -1028,6 +1631,10 @@ function renderPlainReview(data: ReviewResultData): string {
 function plainSafe(value: string): string {
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point.
 	return value.replace(/[\x00-\x1f\x7f]+/g, " ").trim();
+}
+
+function plainTarget(target: ReportCardTarget): string {
+	return plainSafe(`${target.type}:${target.value}`);
 }
 
 function daysBetween(startIso: string, endIso: string): number | undefined {
@@ -1103,6 +1710,69 @@ async function prepareSkillFeedbackInbox(
 	return { ok: true, path: inboxPath };
 }
 
+async function prepareSkillFeedbackSubdirectory(
+	parentPath: string,
+	name: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<
+	| { ok: true; path: string }
+	| { ok: false; code: string; hint: string }
+> {
+	const subdirectoryPath = join(parentPath, name);
+	const existing = await lstatOptional(subdirectoryPath, runtime);
+	if (existing?.isSymbolicLink()) {
+		return {
+			ok: false,
+			code: "skill_feedback_low_signal_symlink_refused",
+			hint: "Replace .skill-feedback/low-signal with a private directory.",
+		};
+	}
+	if (existing && !existing.isDirectory()) {
+		return {
+			ok: false,
+			code: "skill_feedback_low_signal_not_directory",
+			hint: "Replace .skill-feedback/low-signal with a private directory.",
+		};
+	}
+	if (!existing) {
+		await runtime.mkdirPrivate(subdirectoryPath, 0o700);
+	}
+
+	const verified = await lstatOptional(subdirectoryPath, runtime);
+	if (!verified) {
+		return {
+			ok: false,
+			code: "skill_feedback_low_signal_missing_after_create",
+			hint: "Inspect .skill-feedback/low-signal ownership and rerun.",
+		};
+	}
+	if (verified.isSymbolicLink()) {
+		return {
+			ok: false,
+			code: "skill_feedback_low_signal_symlink_refused",
+			hint: "Replace .skill-feedback/low-signal with a private directory.",
+		};
+	}
+	if (!verified.isDirectory()) {
+		return {
+			ok: false,
+			code: "skill_feedback_low_signal_not_directory",
+			hint: "Replace .skill-feedback/low-signal with a private directory.",
+		};
+	}
+
+	const parentReal = await runtime.realpathPath(parentPath);
+	const subdirectoryReal = await runtime.realpathPath(subdirectoryPath);
+	if (!isContainedPath(parentReal, subdirectoryReal)) {
+		return {
+			ok: false,
+			code: "skill_feedback_low_signal_escape_refused",
+			hint: "Move .skill-feedback/low-signal inside the inbox and rerun.",
+		};
+	}
+	return { ok: true, path: subdirectoryPath };
+}
+
 async function lstatOptional(
 	path: string,
 	runtime: SkillFeedbackRuntime,
@@ -1112,6 +1782,42 @@ async function lstatOptional(
 	} catch (error) {
 		if (isNodeErrorCode(error, "ENOENT")) return undefined;
 		throw error;
+	}
+}
+
+async function writeAtomicPrivateFile(
+	path: string,
+	content: string,
+	mode: number,
+): Promise<void> {
+	const tempPath = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random()
+		.toString(16)
+		.slice(2)}`;
+	let handle: Awaited<ReturnType<typeof open>> | undefined;
+	try {
+		handle = await open(tempPath, "wx", mode);
+		await handle.writeFile(content, "utf-8");
+		await handle.close();
+		handle = undefined;
+		await chmod(tempPath, mode);
+		await link(tempPath, path);
+	} finally {
+		if (handle) await handle.close().catch(() => undefined);
+		await unlink(tempPath).catch(() => undefined);
+	}
+}
+
+async function rollbackReportPath(
+	reportPath: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<"missing" | "removed" | "failed"> {
+	const stats = await lstatOptional(reportPath, runtime);
+	if (!stats) return "missing";
+	try {
+		await runtime.removeFile(reportPath);
+		return "removed";
+	} catch {
+		return "failed";
 	}
 }
 
@@ -1379,8 +2085,10 @@ function errorResult(
 		contract?:
 			| typeof SKILL_FEEDBACK_CONTRACT_ID
 			| typeof SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID
-			| typeof SKILL_FEEDBACK_REVIEW_CONTRACT_ID;
+			| typeof SKILL_FEEDBACK_REVIEW_CONTRACT_ID
+			| typeof SKILL_FEEDBACK_PURGE_CONTRACT_ID;
 		changedState?: "none" | "partial";
+		data?: Record<string, unknown>;
 	},
 ): SkillFeedbackProcessResult {
 	const hintAction: AgentHint["action"] =
@@ -1410,9 +2118,15 @@ function errorResult(
 			hint,
 		},
 		data: {
+			...options.data,
 			changed_state: options.changedState ?? "none",
 			contract: options.contract ?? SKILL_FEEDBACK_CONTRACT_ID,
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			schema_version:
+				options.contract === SKILL_FEEDBACK_REVIEW_CONTRACT_ID
+					? SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION
+					: options.contract === SKILL_FEEDBACK_PURGE_CONTRACT_ID
+						? SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION
+					: SKILL_FEEDBACK_SCHEMA_VERSION,
 		},
 	});
 	return { exitCode, stdout: `${JSON.stringify(envelope)}\n`, stderr: "" };
@@ -1498,18 +2212,50 @@ export function parseStdinTelemetry(raw: string): StdinTelemetry {
 async function runProcess(
 	command: readonly string[],
 	cwd: string,
+	timeoutMs: number = DEFAULT_RUNNER_PROCESS_TIMEOUT_MS,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	const child = Bun.spawn([...command], {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	return { exitCode, stdout, stderr };
+	let timedOut = false;
+	const timeout =
+		timeoutMs > 0
+			? setTimeout(() => {
+					timedOut = true;
+					child.kill();
+				}, timeoutMs)
+			: null;
+	try {
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		return {
+			exitCode: timedOut ? 124 : exitCode,
+			stdout,
+			stderr: timedOut
+				? appendRunnerTimeoutMessage(stderr, timeoutMs)
+				: stderr,
+		};
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
+}
+
+function appendRunnerTimeoutMessage(stderr: string, timeoutMs: number): string {
+	const separator = stderr === "" || stderr.endsWith("\n") ? "" : "\n";
+	return `${stderr}${separator}skill-feedback runner subprocess timed out after ${timeoutMs}ms.\n`;
+}
+
+export async function runProcessForTest(
+	command: readonly string[],
+	cwd: string,
+	timeoutMs: number,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	return runProcess(command, cwd, timeoutMs);
 }
 
 export async function runSkillFeedbackCli(
@@ -1587,6 +2333,31 @@ export async function runSkillFeedbackCli(
 		if (result.stderr) process.stderr.write(result.stderr);
 		return result.exitCode;
 	}
+	if (command === "purge") {
+		const parsed = parsePurgeArgs(argv.slice(1));
+		if (!parsed.ok) {
+			const result = errorResult(
+				options.runId ?? "skill-feedback-purge",
+				USAGE_EXIT_CODE,
+				"usage_error",
+				parsed.message,
+				{
+					recoverability: "change_input",
+					hint: "Use purge help and retry with one valid retention selector.",
+					contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+				},
+			);
+			process.stdout.write(result.stdout);
+			return result.exitCode;
+		}
+		const result = await purgeSkillFeedbackInbox({
+			...options,
+			purge: parsed.options,
+		});
+		process.stdout.write(result.stdout);
+		if (result.stderr) process.stderr.write(result.stderr);
+		return result.exitCode;
+	}
 	if (command && command !== "record" && !command.startsWith("--")) {
 		const result = errorResult(
 			options.runId ?? "skill-feedback-record",
@@ -1632,10 +2403,14 @@ function renderSkillFeedbackHelp(command: string | undefined): string {
 	if (command === "review") {
 		return renderCommandUsage(skillFeedbackContracts.review);
 	}
+	if (command === "purge") {
+		return renderCommandUsage(skillFeedbackContracts.purge);
+	}
 	return [
 		renderCommandUsage(skillFeedbackContracts.record).trimEnd(),
 		renderCommandUsage(skillFeedbackContracts.closeout).trimEnd(),
 		renderCommandUsage(skillFeedbackContracts.review).trimEnd(),
+		renderCommandUsage(skillFeedbackContracts.purge).trimEnd(),
 		"",
 	].join("\n\n");
 }
@@ -1679,6 +2454,112 @@ function parseCloseoutStdin(
 			hint: "Fix the closeout receipt JSON and retry.",
 		};
 	}
+}
+
+export function parsePurgeArgs(
+	argv: readonly string[],
+):
+	| { ok: true; options: SkillFeedbackPurgeOptions }
+	| { ok: false; message: string } {
+	const args = argv[0] === "purge" ? argv.slice(1) : argv;
+	let lane: SkillFeedbackPurgeLane = "all";
+	let execute = false;
+	let olderThan: string | undefined;
+	let keepLatest: string | undefined;
+	for (let index = 0; index < args.length; index += 1) {
+		const flag = args[index];
+		if (!flag?.startsWith("--")) {
+			return { ok: false, message: "Expected a purge flag." };
+		}
+		switch (flag) {
+			case "--execute":
+				execute = true;
+				break;
+			case "--lane": {
+				const value = args[index + 1];
+				if (value === undefined || value.startsWith("--")) {
+					return { ok: false, message: "--lane requires a value." };
+				}
+				if (!isPurgeLane(value)) {
+					return { ok: false, message: "--lane is invalid." };
+				}
+				lane = value;
+				index += 1;
+				break;
+			}
+			case "--older-than": {
+				const value = args[index + 1];
+				if (value === undefined || value.startsWith("--")) {
+					return { ok: false, message: "--older-than requires a value." };
+				}
+				olderThan = value;
+				index += 1;
+				break;
+			}
+			case "--keep-latest": {
+				const value = args[index + 1];
+				if (value === undefined || value.startsWith("--")) {
+					return { ok: false, message: "--keep-latest requires a value." };
+				}
+				keepLatest = value;
+				index += 1;
+				break;
+			}
+			default:
+				return { ok: false, message: `Unknown flag ${flag}.` };
+		}
+	}
+	if ((olderThan ? 1 : 0) + (keepLatest ? 1 : 0) !== 1) {
+		return {
+			ok: false,
+			message: "Purge requires exactly one retention selector.",
+		};
+	}
+	if (olderThan) {
+		const durationMs = parsePurgeDurationMs(olderThan);
+		if (durationMs === undefined) {
+			return {
+				ok: false,
+				message: "--older-than must use a positive duration such as 14d or 48h.",
+			};
+		}
+		return {
+			ok: true,
+			options: {
+				lane,
+				execute,
+				retention: { kind: "older_than", raw: olderThan, durationMs },
+			},
+		};
+	}
+	const count = Number(keepLatest);
+	if (!Number.isSafeInteger(count) || count < 1) {
+		return {
+			ok: false,
+			message: "--keep-latest must be a positive integer.",
+		};
+	}
+	return {
+		ok: true,
+		options: {
+			lane,
+			execute,
+			retention: { kind: "keep_latest", count },
+		},
+	};
+}
+
+function isPurgeLane(value: string): value is SkillFeedbackPurgeLane {
+	return SKILL_FEEDBACK_PURGE_LANES.includes(value as SkillFeedbackPurgeLane);
+}
+
+function parsePurgeDurationMs(raw: string): number | undefined {
+	const match = /^([1-9][0-9]*)([dh])$/.exec(raw);
+	if (!match) return undefined;
+	const value = Number(match[1]);
+	if (!Number.isSafeInteger(value)) return undefined;
+	const unitMs = match[2] === "d" ? 86_400_000 : 3_600_000;
+	return value * unitMs;
 }
 
 export function parseRecordFlags(

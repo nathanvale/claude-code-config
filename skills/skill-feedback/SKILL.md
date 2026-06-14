@@ -14,6 +14,7 @@ closeout.
 - Use when a harness hook or manual smoke needs to record a finished skill run.
 - Use when the driver needs to file closeout evidence for a material skill run.
 - Use when the driver or human wants a mutation-free inbox review.
+- Use when the driver or human wants explicit inbox retention cleanup.
 - Do not use for human-facing summaries, durable instruction updates, or skill-to-skill calls.
 - Keep `record` capture-owned.
 - Call `closeout` only from the driver; a finished skill does not file its own report.
@@ -41,7 +42,8 @@ closeout.
 - Keep `model`, `git_sha`, and `skill_version` engine-read; do not add flags for them.
 - Keep review mutation-free.
 - Treat retention warnings as guidance, not failure.
-- Run purge through a future gated workflow.
+- Run `purge` as the only inbox deletion workflow.
+- Keep purge preview-first; inspect help for exact selectors.
 
 ## Workflow
 
@@ -56,6 +58,13 @@ closeout.
 - Do not ask the human at closeout time.
 - Run `review` to inspect coverage, open evidence, no-action rationale, retention, and pilot checkpoint data.
 - Add `--plain` when human-readable output is better than JSON.
+- Resolve `report:<id>` refs through JSON review output before opening raw inbox files.
+- Match `report:<id>` to `review_units[*].report_ids`; when raw JSON is needed, scan safe `.skill-feedback/**/*.json` reports by `report_id`.
+- Do not infer a report filename from `report:<id>`; filenames include timestamp, skill, and content hash.
+- Inspect `inbox_health` before treating an empty ledger as no evidence.
+- Treat low-signal counts as capture-health evidence, not primary ledger evidence.
+- Run `purge` only after review; default behavior previews selected artifacts.
+- Use purge execute only after checking the preview and command help.
 - Read stdout JSON as the primary result.
 - Treat exit `1` as a blocked state repair.
 - Treat exit `2` as input repair.

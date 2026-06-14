@@ -12,6 +12,8 @@ import {
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_COST_STATUS,
+	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_OUTCOMES,
@@ -22,9 +24,11 @@ import {
 	buildSoftwareLearningReport,
 	normalizeReport,
 	parseCloseoutReceipt,
+	parsePurgeResultData,
 	parseReviewResultData,
 	parseReceipt,
 	skillFeedbackContracts,
+	type SkillFeedbackPurgeResultData,
 } from "./command-contract";
 
 const COMPLETE_RECEIPT = {
@@ -74,6 +78,14 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 		evidence_gap_count: 0,
 		closeout_rate: 0.5,
 		low_coverage: false,
+	},
+	inbox_health: {
+		primary_count: 2,
+		low_signal_count: 1,
+		low_signal_newest_generated_ts: "2026-06-13T00:00:00.000Z",
+		low_signal_reason_ids: ["unknown_skill_codex_stop"],
+		skipped_unsafe_count: 0,
+		invalid_count: 0,
 	},
 	open_items: [],
 	open_actions: [
@@ -167,11 +179,32 @@ function reviewResultV2Fixture(): ReviewResultData {
 	return structuredClone(MINIMAL_REVIEW_RESULT_V2);
 }
 
+const MINIMAL_PURGE_RESULT = {
+	contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+	mode: "preview",
+	lane: "all",
+	retention: {
+		kind: "older_than",
+		older_than: "14d",
+		cutoff_ts: "2026-05-30T00:00:00.000Z",
+	},
+	scanned_count: 2,
+	candidate_count: 1,
+	deleted_count: 0,
+	skipped_unsafe_count: 0,
+	invalid_count: 0,
+	candidate_paths: [".skill-feedback/old.json"],
+	deleted_paths: [],
+	skipped_paths: [],
+	invalid_paths: [],
+} as const satisfies SkillFeedbackPurgeResultData;
+
 describe("skill-feedback U2 command contract", () => {
 	test("declares valid facade-backed record, closeout, and review commands", () => {
 		const result = parseCommandFacadeContract(skillFeedbackContracts, {
 			path: "skills/skill-feedback/src/command-contract.ts",
-			writeImplyingMutations: new Set(["capture", "closeout"]),
+			writeImplyingMutations: new Set(["capture", "closeout", "purge"]),
 		});
 
 		expect(result.ok).toBe(true);
@@ -179,6 +212,7 @@ describe("skill-feedback U2 command contract", () => {
 			"record",
 			"closeout",
 			"review",
+			"purge",
 		]);
 		expect(discoveryTree().commands.record?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_CONTRACT_ID,
@@ -192,6 +226,15 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
+		expect(discoveryTree().commands.purge?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+		});
+		expect(skillFeedbackContracts.purge.sideEffects).toEqual(["write"]);
+		expect(skillFeedbackContracts.purge.executionModes).toEqual([
+			"dry_run",
+			"normal",
+		]);
 	});
 
 	test("record flags expose narrated inputs but closeout reads receipt stdin", () => {
@@ -347,9 +390,57 @@ describe("skill-feedback U2 command contract", () => {
 			true,
 		);
 	});
+
+	test("normalizes v0 null explanation as absent", () => {
+		const normalized = normalizeReport({
+			...usableReport(COMPLETE_RECEIPT),
+			explanation: null,
+		});
+
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.source_schema_version).toBe("v0");
+		expect(normalized.report.evidence_source).toBe("hook_capture");
+		expect(normalized.report.goal).toBe(COMPLETE_RECEIPT.goal);
+	});
 });
 
 describe("skill-feedback U1 review result v2 contract", () => {
+	test("validates purge result output at the contract boundary", () => {
+		const parsed = parsePurgeResultData(MINIMAL_PURGE_RESULT);
+
+		expect(parsed.kind).toBe("ok");
+		if (parsed.kind !== "ok") throw new Error("expected valid purge result");
+		expect(parsed.data.contract).toBe(SKILL_FEEDBACK_PURGE_CONTRACT_ID);
+		expect(parsed.data.schema_version).toBe(
+			SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+		);
+		expect(parsed.data.candidate_paths).toEqual([".skill-feedback/old.json"]);
+	});
+
+	test("rejects invalid purge result retention variants", () => {
+		expect(
+			parsePurgeResultData({
+				...MINIMAL_PURGE_RESULT,
+				retention: { kind: "older_than", older_than: "14d" },
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "retention.cutoff_ts",
+			reason: "expected_string",
+		});
+		expect(
+			parsePurgeResultData({
+				...MINIMAL_PURGE_RESULT,
+				retention: { kind: "everything" },
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "retention.kind",
+			reason: "invalid",
+		});
+	});
+
 	test("validates minimal v2 review output and keeps claims entry-local", () => {
 		const parsed = parseReviewResultData(reviewResultV2Fixture());
 
@@ -540,6 +631,27 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		} satisfies ReviewResultData;
 
 		expect(parseReviewResultData(data)).toMatchObject({ kind: "ok" });
+	});
+
+	test("requires stable evidence refs on open items", () => {
+		const data = reviewResultV2Fixture() as Record<string, any>;
+		data.open_items = [
+			{
+				open_reason: "owner_path_observation",
+				severity: "action",
+				evidence: "Owner path needs inspection.",
+				evidence_refs: ["report:report_1"],
+				target: { type: "path", value: "skills/create-skill/SKILL.md" },
+				next_action: "Inspect the owner path.",
+			},
+		];
+		expect(parseReviewResultData(data).kind).toBe("ok");
+
+		delete data.open_items[0].evidence_refs;
+		expect(parseReviewResultData(data)).toMatchObject({
+			kind: "invalid",
+			path: "open_items[0].evidence_refs",
+		});
 	});
 });
 
@@ -825,7 +937,7 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		});
 	});
 
-	test("normalizes skill-run provenance and rejects invalid trust labels", () => {
+	test("normalizes skill-run provenance as evidence-only and rejects invalid trust labels", () => {
 		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
 		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
 		const baseReport = {
@@ -845,15 +957,25 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 			evidence_gaps: parsed.evidence_gaps,
 		};
 
-		const trusted = normalizeReport({
+		const normalized = normalizeReport({
 			...baseReport,
 			skill_run_id_provenance: "correlation_owned",
 		});
 
-		expect(trusted.kind).toBe("ok");
-		if (trusted.kind !== "ok") throw new Error("expected normalized report");
-		expect(trusted.report.skill_run_id).toBe("run-trusted-1");
-		expect(trusted.report.skill_run_id_provenance).toBe("correlation_owned");
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.skill_run_id).toBe("run-trusted-1");
+		expect(normalized.report.skill_run_id_provenance).toBeUndefined();
+
+		const runtimeOwned = normalizeReport({
+			...baseReport,
+			skill_run_id_provenance: "runtime_owned",
+		});
+
+		expect(runtimeOwned.kind).toBe("ok");
+		if (runtimeOwned.kind !== "ok") throw new Error("expected normalized report");
+		expect(runtimeOwned.report.skill_run_id).toBe("run-trusted-1");
+		expect(runtimeOwned.report.skill_run_id_provenance).toBeUndefined();
 
 		expect(
 			normalizeReport({

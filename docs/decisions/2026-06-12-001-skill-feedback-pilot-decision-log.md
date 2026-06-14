@@ -1675,3 +1675,518 @@ Next:
 V2 Ideas:
 
 - Add a generated v2 review contract map if schema/version and field-shape checks become hard to scan.
+
+## Decision 33: Use DAG Build Validator Pattern For Merge Readiness
+
+```yaml
+id: skill-feedback-pilot-033
+status: accepted
+decided_at: "2026-06-13"
+decision: "Use the DAG build validator pattern for skill-feedback review merge readiness"
+owner: "skills/skill-feedback"
+scope: "review merge-readiness execution"
+source:
+  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "2026-06-13 Codex session: requested DAG build validator pattern"
+```
+
+Decision:
+
+- Execute the merge-readiness plan as a dependency graph of implementation units.
+- Treat tests and command-surface proofs as validators for each node before downstream nodes are considered complete.
+- Keep the validator pattern as execution evidence, not as a new runtime abstraction.
+
+Rationale:
+
+- The plan has explicit dependencies across trusted-boundary, low-signal, purge, renderer, and cross-lane proof work.
+- Validator-style checks prevent downstream review output from masking upstream trust-boundary gaps.
+- The current code already has enough reducer and facade structure; a new pattern module would add ceremony without a second adapter.
+
+Consequences:
+
+- Implement U1 before U2 and U3, then use U4-U6 validators before U7 cross-lane proof.
+- Prefer focused failing tests at each node, then implementation, then focused verification.
+- Do not add a DAG runtime or pattern-named directory for this merge-readiness work.
+
+Next:
+
+- Run the U1 trusted-boundary validator tests first.
+- Continue through dependent units only after the current node has focused passing checks.
+
+V2 Ideas:
+
+- Add machine-readable plan DAG validation only if future merge-readiness plans repeatedly drift from their dependency graph.
+
+## Decision 34: Keep Low-Signal Codex Stop Evidence In Inbox Health
+
+```yaml
+id: skill-feedback-pilot-034
+status: accepted
+decided_at: "2026-06-13"
+decision: "Keep unknown-skill Codex Stop evidence in inbox health instead of the primary review ledger"
+owner: "skills/skill-feedback"
+scope: "low-signal capture lane"
+source:
+  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "skills/skill-feedback/src/command-contract.ts"
+```
+
+Decision:
+
+- Route new unknown-skill Codex Stop capture to `.skill-feedback/low-signal/`.
+- Classify legacy top-level unknown-skill Codex Stop reports as low-signal during review.
+- Expose low-signal volume through `inbox_health`.
+- Keep low-signal reports out of primary review units and ledger entries.
+
+Rationale:
+
+- Unknown-skill Codex Stop reports prove hook activity, not skill evidence.
+- Review still needs hook-health visibility so capture problems are inspectable.
+- A dedicated health surface prevents placeholder reports from flooding primary ledger claims.
+
+Consequences:
+
+- `coverage.total_reports` counts primary review reports, not low-signal capture volume.
+- `claim_readiness.runtime_capture` may use low-signal capture evidence as evidence-only.
+- Agents inspect `inbox_health.low_signal_count` before treating a quiet ledger as no hook activity.
+
+Next:
+
+- Add purge preview and execute support for both primary and low-signal lanes.
+- Extend inbox health with invalid and unsafe artifact counts.
+
+V2 Ideas:
+
+- Add low-signal reason counts if multiple low-signal capture classes appear.
+
+## Decision 35: Keep Review Read-Only And Put Deletion Behind Purge
+
+```yaml
+id: skill-feedback-pilot-035
+status: accepted
+decided_at: "2026-06-13"
+decision: "Keep review read-only and put inbox deletion behind explicit purge"
+owner: "skills/skill-feedback"
+scope: "inbox lifecycle and purge command"
+source:
+  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "skills/skill-feedback/src/command-contract.ts"
+```
+
+Decision:
+
+- Keep `skill-feedback review` mutation-free.
+- Let review observe invalid, unsafe, primary, and low-signal inbox artifacts through `inbox_health`.
+- Make `skill-feedback purge` the only inbox deletion owner.
+- Default purge to preview mode.
+- Require exactly one retention selector before preview or execute.
+- Require `--execute` before deletion.
+- Recheck each selected candidate as a regular file inside `.skill-feedback/` immediately before deletion.
+
+Rationale:
+
+- Review should remain a validator, not a cleanup tool.
+- Unsafe and invalid artifacts should not block valid evidence review.
+- Deletion needs a distinct write contract with preview and execute semantics.
+- A pre-delete recheck closes symlink and path-race gaps that scanner-time validation cannot prove.
+
+Consequences:
+
+- Agents can inspect inbox health without mutating evidence.
+- Purge command metadata, help, parser, and runtime tests must move together.
+- Low-signal reports are purgeable without entering primary ledger claims.
+- Invalid artifacts remain for human or future repair unless purge grows a separate invalid-artifact policy.
+
+Next:
+
+- Continue to U5 renderer and action stability.
+- Keep purge docs in U7 thin and point to command help or contract tests for exact flags.
+
+V2 Ideas:
+
+- Add per-lane retention defaults only after real inbox volume shows a stable threshold.
+
+## Decision 36: Use Stable Evidence Refs For Review Actions
+
+```yaml
+id: skill-feedback-pilot-036
+status: accepted
+decided_at: "2026-06-13"
+decision: "Use stable evidence refs for review actions and keep renderer claims reducer-owned"
+owner: "skills/skill-feedback"
+scope: "review action identity and plain rendering"
+source:
+  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "skills/skill-feedback/src/review-ledger-reducer.ts"
+  - "skills/skill-feedback/src/command-contract.ts"
+```
+
+Decision:
+
+- Require `open_items.evidence_refs`.
+- Derive `open_actions.action_key` from reason, stable refs, and target, not array index.
+- Keep `open_actions.evidence_refs` as stable refs instead of prose evidence.
+- Derive ledger `resolution_state` from anchor/actionability at projection time.
+- Show capture runtime mix in plain ledger output.
+- Sanitize every untrusted string rendered into plain review output.
+
+Rationale:
+
+- Index-based action keys drift when inbox file order changes.
+- Prose evidence is useful for humans but unsafe as an agent address.
+- Weak or label-only ledger entries can be evidence without being open work.
+- Plain renderers should repeat reducer-owned facts, not recreate claims.
+
+Consequences:
+
+- Agents can store and compare action keys across equivalent inbox orderings.
+- Weak ledger entries default to `no_action`.
+- Plain output exposes hook runtime context without implying corroboration.
+- Renderer tests cover control-character spoofing for action evidence and target labels.
+
+Next:
+
+- Continue to U6 failure containment for writes and subprocesses.
+
+V2 Ideas:
+
+- Add dedicated `review_unit:` or `ledger:` refs once downstream consumers need finer-grained action routing.
+
+## Decision 37: Contain Writes And Subprocesses Before Review Merge
+
+```yaml
+id: skill-feedback-pilot-037
+status: accepted
+decided_at: "2026-06-13"
+decision: "Contain skill-feedback writes and subprocesses before review merge"
+owner: "skills/skill-feedback"
+scope: "write safety and subprocess timeout behavior"
+source:
+  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "hooks/skill-feedback-runtime.ts"
+```
+
+Decision:
+
+- Write inbox reports through a temp-plus-link helper instead of writing final JSON paths directly.
+- Roll back any final-path partial after record or closeout report write failure.
+- Return facade error envelopes for record and closeout write failures.
+- Count interrupted `*.json.tmp-*` files as invalid inbox health during review.
+- Bound runner subprocesses with the same timeout convention used by hooks.
+- Let git SHA timeout degrade telemetry, while gitignore timeout blocks writes fail-closed.
+
+Rationale:
+
+- Final-path partial JSON can poison review and confuse later purge decisions.
+- Write failures should tell agents whether state changed.
+- Temp artifacts are useful health evidence but not valid reports.
+- Hung git subprocesses should not trap hooks or agents.
+
+Consequences:
+
+- Successful writes keep restrictive permissions and no-overwrite semantics.
+- Review remains available when temp artifacts exist.
+- Timeout exit code `124` is the shared bounded-subprocess signal.
+- Hook and runner tests must both cover timeout behavior.
+
+Next:
+
+- Continue to U7 cross-lane proof and reference updates.
+
+V2 Ideas:
+
+- Add fsync and permission-preservation hardening if inbox writes become shared across platforms.
+
+## Decision 38: Prove Cross-Lane Review With Conservative Claims
+
+```yaml
+id: skill-feedback-pilot-038
+status: accepted
+decided_at: "2026-06-13"
+decision: "Prove cross-lane review with conservative claims before merge"
+owner: "skills/skill-feedback"
+scope: "cross-lane review validation and references"
+source:
+  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/src/skill-feedback.test.ts"
+  - "skills/skill-feedback/src/command-contract.test.ts"
+  - "skills/skill-feedback/SKILL.md"
+  - "skills/skill-feedback/references/report-shape.md"
+```
+
+Decision:
+
+- Prove unknown-skill Codex Stop capture stays in low-signal health beside closeout evidence.
+- Prove named Claude Stop capture stays in the primary lane.
+- Prove primary hook capture plus closeout can show `repeated_anchor` and `mixed_evidence_sources`.
+- Keep live cross-lane review below `corroborated` until writer-owned trusted-run proof exists.
+- Keep purge and review references thin; command flags and exact semantics stay in help, contract tests, and runner tests.
+
+Rationale:
+
+- Low-signal capture is hook-health evidence, not skill evidence.
+- Named hook capture is valid primary evidence but still untrusted without writer-owned correlation.
+- Mixed-source evidence helps agents inspect a path without promoting it to a trusted claim.
+- Durable docs should route agents to owners, not copy CLI contracts that can drift.
+
+Consequences:
+
+- Review merge readiness is proved by real-runner cross-lane tests plus reducer vectors.
+- `inbox_health` remains the observable surface for low-signal volume.
+- `corroborated` remains a synthetic or future writer-owned-correlation claim, not a raw inbox claim.
+- Docs can stay shorter because command discovery, help, parser tests, and runtime tests own deterministic behavior.
+
+Next:
+
+- Run final gates across skill-feedback scripts, hook tests, typecheck, and Biome.
+- Use fallow and skill-feedback closeout after verification.
+
+V2 Ideas:
+
+- Add a writer-owned correlation source and promote only those runs to live `corroborated` claims.
+
+## Decision 39: Bump Review Result Schema For Required Agent Fields
+
+```yaml
+id: skill-feedback-pilot-039
+status: accepted
+decided_at: "2026-06-14"
+decision: "Bump skill-feedback review result schema to 3 for required inbox health and evidence refs"
+owner: "skills/skill-feedback"
+scope: "ReviewResultData result contract"
+source:
+  - "skills/skill-feedback/src/command-contract.ts"
+  - "docs/reviews/2026-06-13-003-skill-feedback-merge-readiness/INDEX.md"
+  - "2026-06-14 decision-mode: review schema version"
+decision_mode:
+  question: "Should skill-feedback review bump its result schema from 2 to 3 for the new required review fields?"
+  option: "1"
+  confidence: strong
+```
+
+Decision:
+
+- Bump `SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION` from `"2"` to `"3"`.
+- Treat required `inbox_health` and `evidence_refs` as a review result contract change.
+- Keep persisted Software Learning Report records on schema `"1"`.
+
+Rationale:
+
+- `inbox_health` and `evidence_refs` are required agent-facing review fields.
+- Older readers should not silently accept changed review output assumptions.
+- The review surface is facade-backed and machine-consumed even before Daily pilot launch.
+- A schema bump is clearer than documenting an intra-pilot exception to contract hygiene.
+
+Consequences:
+
+- Review JSON, review error envelopes, discovery metadata, and parser tests use schema `"3"`.
+- Agents can branch on review result schema instead of guessing field availability.
+- Future required review result fields should repeat this explicit schema-version check.
+
+Next:
+
+- Run focused review contract and runner tests.
+- Continue resolving remaining review-open questions without deleting review artifacts.
+
+V2 Ideas:
+
+- Add generated review contract maps if future schema upgrades become hard to audit manually.
+
+## Decision 40: Document Report Ref Lookup Before Adding A Resolver Command
+
+```yaml
+id: skill-feedback-pilot-040
+status: accepted
+decided_at: "2026-06-14"
+decision: "Document report ref lookup now and defer a show or resolve-ref command"
+owner: "skills/skill-feedback"
+scope: "agent-facing review evidence refs"
+source:
+  - "skills/skill-feedback/SKILL.md"
+  - "skills/skill-feedback/references/report-shape.md"
+  - "docs/reviews/2026-06-13-003-skill-feedback-merge-readiness/INDEX.md"
+  - "2026-06-14 decision-mode: report ref resolution"
+decision_mode:
+  question: "Should report refs get a resolver command before merge?"
+  option: "1"
+  confidence: strong
+```
+
+Decision:
+
+- Document the lookup path for `report:<id>` refs before merge.
+- Resolve `report:<id>` through JSON review output and `review_units[*].report_ids`.
+- Scan safe `.skill-feedback/**/*.json` reports by `report_id` only when raw report content is needed.
+- Do not add `show report:<id>` or `resolve-ref` before merge.
+
+Rationale:
+
+- `report:<id>` is stable agent-addressable evidence, but filenames are timestamp/skill/hash artifacts.
+- Documentation closes the immediate agent-native gap without adding a new command surface.
+- A new command would need discovery metadata, help, parser, runtime semantics, and tests.
+- Real downstream usage can justify a resolver command later with better evidence.
+
+Consequences:
+
+- Agents should not infer filenames from `report:<id>`.
+- Review docs remain the audit trail; this decision updates routing guidance only.
+- Future resolver work is additive and should use `create-cli` before adding the command.
+
+Next:
+
+- Keep `show` or `resolve-ref` as deferred follow-up work.
+- Continue resolving remaining review-open questions.
+
+V2 Ideas:
+
+- Add `show report:<id>` if agents repeatedly need raw report inspection from review refs.
+
+## Decision 41: Defer Temp Artifact GC Until A Separate Contract Decision
+
+```yaml
+id: skill-feedback-pilot-041
+status: accepted
+decided_at: "2026-06-14"
+decision: "Defer orphaned temp artifact GC and treat temp files as invalid inbox health"
+owner: "skills/skill-feedback"
+scope: "inbox temp artifact lifecycle"
+source:
+  - "skills/skill-feedback/references/report-shape.md"
+  - "docs/reviews/2026-06-13-003-skill-feedback-merge-readiness/INDEX.md"
+  - "2026-06-14 decision-mode: temp artifact GC"
+decision_mode:
+  question: "What should we do with orphaned .tmp-* files before merge?"
+  option: "1"
+  confidence: strong
+```
+
+Decision:
+
+- Defer temp-artifact deletion before merge.
+- Treat interrupted `.json.tmp-*` artifacts as invalid inbox health.
+- Do not include temp artifact cleanup in `purge --execute` without a separate result-contract decision.
+
+Rationale:
+
+- Review already exposes temp artifacts as invalid inbox health.
+- Deleting temp artifacts changes mutation semantics.
+- Adding temp deletion to `deleted_paths` would mix report deletion with writer-cleanup artifacts.
+- A separate temp-GC result field or command can be designed later if live inbox data proves the need.
+
+Consequences:
+
+- Merge readiness does not depend on temp artifact cleanup.
+- Agents inspect inbox health rather than assuming purge clears all invalid artifacts.
+- Future temp-GC work needs an explicit contract owner and tests.
+
+Next:
+
+- Keep temp GC as follow-up work.
+- Continue resolving remaining review-open questions.
+
+V2 Ideas:
+
+- Add `deleted_temp_paths` or a temp-cleanup mode if temp artifacts accumulate in real inboxes.
+
+## Decision 42: Derive Low-Signal Reason Ids Per Report
+
+```yaml
+id: skill-feedback-pilot-042
+status: accepted
+decided_at: "2026-06-14"
+decision: "Derive low-signal reason ids per report from current classifier branches"
+owner: "skills/skill-feedback"
+scope: "review inbox health low-signal reasons"
+source:
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "skills/skill-feedback/src/skill-feedback.test.ts"
+  - "skills/skill-feedback/references/report-shape.md"
+  - "docs/reviews/2026-06-13-003-skill-feedback-merge-readiness/INDEX.md"
+  - "2026-06-14 decision-mode: low-signal reason ids"
+decision_mode:
+  question: "Should low-signal reason ids be derived per report before merge?"
+  option: "2"
+  confidence: accepted_after_challenge
+```
+
+Decision:
+
+- Derive `inbox_health.low_signal_reason_ids` from each low-signal report.
+- Emit `unknown_skill_codex_stop` for unknown-skill Codex Stop reports.
+- Emit `low_signal_lane_report` for reports treated as low-signal only because they live in `.skill-feedback/low-signal/`.
+- Keep the existing review schema because the field already accepts a string array.
+- Avoid a broader reason taxonomy until another producer exists.
+
+Rationale:
+
+- The array shape should carry real per-report signal, not a hardcoded singleton.
+- Current implementation has two classification branches: content-classified unknown-skill Codex Stop and explicit low-signal lane placement.
+- Narrow derivation closes the review P3 without inventing stable categories beyond code-owned branches.
+
+Consequences:
+
+- Mixed low-signal inboxes expose all observed reason ids deterministically.
+- Agents can distinguish classifier-owned unknown-skill capture from explicit low-signal lane artifacts.
+- Future low-signal producers should add a classifier branch, test, and report-shape line.
+
+Next:
+
+- Run focused review lane tests, full skill-feedback tests, and typecheck.
+- Continue resolving the remaining subprocess timeout cleanup question.
+
+V2 Ideas:
+
+- Add a contract-owned low-signal reason enum only after multiple producers need a public catalog.
+
+## Decision 43: Keep Hook And Runner Timeout Constants Local
+
+```yaml
+id: skill-feedback-pilot-043
+status: accepted
+decided_at: "2026-06-14"
+decision: "Keep hook and runner subprocess timeout constants local until extraction is pressure-earned"
+owner: "skills/skill-feedback"
+scope: "bounded subprocess timeout ownership"
+source:
+  - "hooks/skill-feedback-runtime.ts"
+  - "skills/skill-feedback/src/skill-feedback-runner.ts"
+  - "docs/reviews/2026-06-13-003-skill-feedback-merge-readiness/INDEX.md"
+  - "2026-06-14 decision-mode: subprocess timeout constants"
+decision_mode:
+  question: "Should subprocess timeout constants be shared before merge?"
+  option: "1"
+  confidence: strong
+```
+
+Decision:
+
+- Keep `DEFAULT_HOOK_PROCESS_TIMEOUT_MS` in `hooks/skill-feedback-runtime.ts`.
+- Keep `DEFAULT_RUNNER_PROCESS_TIMEOUT_MS` in `skills/skill-feedback/src/skill-feedback-runner.ts`.
+- Treat the duplicated `6_000` value as intentional local ownership.
+- Extract only if a third timeout owner appears or a drift bug proves shared ownership is needed.
+
+Rationale:
+
+- Hook runtime and skill-feedback runner have different ownership boundaries.
+- Sharing one number would force `hooks/` to import skill package internals, the package to import hook code, or a new shared module for one value.
+- Current tests prove the meaningful invariant: subprocesses are bounded and timeout exits report `124`.
+- Two local constants with tests create less entropy than a shared abstraction without pressure.
+
+Consequences:
+
+- Merge readiness does not depend on timeout constant extraction.
+- Future timeout changes must update both local owners deliberately.
+- Review docs close the optional timeout-sharing item as accepted local duplication.
+
+Next:
+
+- Keep timeout behavior covered by hook and runner tests.
+- Revisit extraction only after another owner or drift failure appears.
+
+V2 Ideas:
+
+- Add a shared subprocess helper only if more skill-feedback surfaces need identical process control.
