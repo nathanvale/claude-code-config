@@ -1,5 +1,5 @@
 /**
- * Stable result-contract identity for wt render/delegate envelopes.
+ * Stable result-contract identity for wt render and shared lifecycle envelopes.
  *
  * Carried in every facade success/error envelope so agents can pin the
  * package that produced the result. Mirrors the record-decision contract-id
@@ -90,7 +90,7 @@ export interface Registry {
 }
 
 /**
- * One live worktree as discovered from `@side-quest/git worktree list`.
+ * One live worktree as discovered through `agent-worktree`.
  *
  * Temp/throwaway entries (fallow-audit-*, detached-HEAD scratch) are filtered
  * out before the engine sees them, so this only ever represents real work.
@@ -100,6 +100,8 @@ export interface Worktree {
 	path: string;
 	/** Branch checked out in this worktree (e.g. `codex/harden-test-runner`). */
 	branch: string;
+	/** True when this entry is the main durable worktree for the repo. */
+	isMain?: boolean;
 }
 
 /**

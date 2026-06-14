@@ -1,19 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import { renderCommandUsage } from "@side-quest/cli-command-facade";
+import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { wtContracts } from "./command-contract.ts";
 import { WT_COLOR_PALETTE } from "./model.ts";
 import type { RunResult } from "./wt-discovery.ts";
 import {
 	createDefaultRuntime,
+	main,
 	parseInvocation,
 	runCommand,
 	validateColor,
 	type WtRuntime,
 } from "./wt.ts";
 
-const fixture = await Bun.file(
-	new URL("./fixtures/worktree-list.json", import.meta.url),
-).text();
+function runtimeFixtureFor(cwd = "/code/my-repo"): string {
+	const ownerRoot = cwd.includes("/code/other-repo") ? "/code/other-repo" : "/code/my-repo";
+	return `worktree ${ownerRoot}
+HEAD abc
+branch refs/heads/main
+
+worktree ${ownerRoot}/.worktrees/browser-use-refactor
+HEAD def
+branch refs/heads/codex/browser-use-refactor
+
+worktree ${ownerRoot}/.worktrees/harden-test-runner
+HEAD ghi
+branch refs/heads/codex/harden-test-runner
+`;
+}
 
 /**
  * Build a fully in-memory runtime: no real fs, subprocess, or VS Code.
@@ -22,9 +36,13 @@ const fixture = await Bun.file(
 function fakeRuntime(overrides: Partial<WtRuntime> = {}): WtRuntime & {
 	writes: Map<string, string>;
 	runCalls: string[][];
+	launched: Array<{ workspacePath: string; codeBin?: string }>;
+	ensuredDirs: string[];
 } {
 	const writes = new Map<string, string>();
 	const runCalls: string[][] = [];
+	const launched: Array<{ workspacePath: string; codeBin?: string }> = [];
+	const ensuredDirs: string[] = [];
 	const base = createDefaultRuntime({
 		repoRoot: () => "/code/my-repo",
 		readTextFile: async (path) => writes.get(path) ?? null,
@@ -32,25 +50,76 @@ function fakeRuntime(overrides: Partial<WtRuntime> = {}): WtRuntime & {
 			writes.set(path, content);
 		},
 		pathExists: async () => false,
+		ensureDirectory: async (path) => {
+			ensuredDirs.push(path);
+		},
 		isInteractive: () => false,
-		launchCode: async () => true,
+		launchCode: async (workspacePath, codeBin) => {
+			launched.push({ workspacePath, codeBin });
+			return true;
+		},
 		now: () => 1000,
-		run: async (args) => {
+		run: async (args, options) => {
 			runCalls.push([...args]);
-			if (args.includes("list")) {
-				return { ok: true, stdout: fixture, stderr: "" } satisfies RunResult;
-			}
-			return { ok: true, stdout: "{}", stderr: "" } satisfies RunResult;
+			const key = args.join(" ");
+			const outputs: Record<string, string> = {
+				"git rev-parse --show-toplevel": options?.cwd?.includes("/code/other-repo")
+					? "/code/other-repo\n"
+					: "/code/my-repo\n",
+				"git worktree list --porcelain": runtimeFixtureFor(options?.cwd),
+				"git branch --show-current": "main\n",
+				"git symbolic-ref --short refs/remotes/origin/HEAD": "origin/main\n",
+				"git status --porcelain": "",
+				"git rev-parse --is-shallow-repository": "false\n",
+				"git merge-base --is-ancestor codex/browser-use-refactor main": "",
+				"git rev-list --left-right --count main...codex/browser-use-refactor":
+					"1 0\n",
+				"git worktree add -b feat/z /code/my-repo/.worktrees/feat-z main":
+					"",
+				"git worktree remove /code/my-repo/.worktrees/browser-use-refactor":
+					"",
+				"git for-each-ref --format=%(refname:short) refs/heads":
+					"main\ncodex/browser-use-refactor\ncodex/harden-test-runner\nold/branch\n",
+			};
+			const stdout = outputs[key];
+			return stdout === undefined
+				? { ok: false, stdout: "", stderr: "missing fake output", code: 1 } satisfies RunResult
+				: { ok: true, stdout, stderr: "", code: 0 } satisfies RunResult;
 		},
 		...overrides,
 	});
-	return Object.assign(base, { writes, runCalls });
+	return Object.assign(base, { writes, runCalls, launched, ensuredDirs });
 }
 
 describe("parseInvocation", () => {
 	test("splits verb, positionals, and the force flag", () => {
 		const parsed = parseInvocation(["color", "codex/x", "blue", "--force", "--json"]);
-		expect(parsed).toEqual({ command: "color", positionals: ["codex/x", "blue"], force: true });
+		expect(parsed).toEqual({
+			command: "color",
+			positionals: ["codex/x", "blue"],
+			force: true,
+			noInput: false,
+			repoRoot: undefined,
+		});
+	});
+
+	test("captures --repo and --no-input", () => {
+		const parsed = parseInvocation(["sync", "--repo", "/code/other", "--no-input", "--json"]);
+		expect(parsed).toMatchObject({
+			command: "sync",
+			positionals: [],
+			force: false,
+			noInput: true,
+			repoRoot: "/code/other",
+		});
+	});
+
+	test("rejects a foreign flag for the selected command", () => {
+		const parsed = parseInvocation(["open", "--force", "--json"]);
+		expect(parsed.parseError?.ok).toBe(false);
+		if (parsed.parseError && !parsed.parseError.ok) {
+			expect(parsed.parseError.exitCode).toBe(2);
+		}
 	});
 });
 
@@ -67,6 +136,14 @@ describe("sync + drift gate", () => {
 		const result = await runCommand({ command: "sync", positionals: [], force: false }, runtime);
 		expect(result.ok).toBe(true);
 		expect([...runtime.writes.keys()]).toContain("/code/my-repo.code-workspace");
+	});
+
+	test("from a linked worktree, writes the durable main-owner workspace", async () => {
+		const runtime = fakeRuntime({ repoRoot: () => "/code/my-repo/.worktrees/feature-x" });
+		const result = await runCommand({ command: "sync", positionals: [], force: true }, runtime);
+		expect(result.ok).toBe(true);
+		expect([...runtime.writes.keys()]).toContain("/code/my-repo.code-workspace");
+		expect([...runtime.writes.keys()]).not.toContain("/code/my-repo/.worktrees/feature-x.code-workspace");
 	});
 
 	test("blocks overwrite when the existing file drifted, non-interactive, no --force", async () => {
@@ -110,6 +187,32 @@ describe("sync + drift gate", () => {
 		expect(result.ok).toBe(true);
 		expect(runtime.writes.get(path)?.startsWith("// GENERATED by wt")).toBe(true);
 	});
+
+	test("creates a configured WIP folder before rendering", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set(
+			"/code/my-repo/wt.config.json",
+			JSON.stringify({ branches: {}, defaults: { wip: "/code/_wip" } }),
+		);
+		const result = await runCommand({ command: "sync", positionals: [], force: true, noInput: false }, runtime);
+		expect(result.ok).toBe(true);
+		expect(runtime.ensuredDirs).toContain("/code/_wip");
+	});
+
+	test("does not create a configured WIP folder when drift blocks the render", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set(
+			"/code/my-repo/wt.config.json",
+			JSON.stringify({ branches: {}, defaults: { wip: "/code/_wip" } }),
+		);
+		runtime.writes.set("/code/my-repo.code-workspace", "{ hand edited, no wt header }");
+		const result = await runCommand({ command: "sync", positionals: [], force: false, noInput: false }, runtime);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("drift_blocked");
+		}
+		expect(runtime.ensuredDirs).toEqual([]);
+	});
 });
 
 describe("focus + color", () => {
@@ -122,6 +225,17 @@ describe("focus + color", () => {
 		expect(result.ok).toBe(true);
 		const registry = JSON.parse(runtime.writes.get("/code/my-repo/wt.config.json") ?? "{}");
 		expect(registry.branches["codex/x"].focus).toBe("skills/y");
+	});
+
+	test("from a linked worktree, focus writes the durable main-owner registry", async () => {
+		const runtime = fakeRuntime({ repoRoot: () => "/code/my-repo/.worktrees/feature-x" });
+		const result = await runCommand(
+			{ command: "focus", positionals: ["codex/x", "skills/y"], force: true },
+			runtime,
+		);
+		expect(result.ok).toBe(true);
+		expect(runtime.writes.has("/code/my-repo/wt.config.json")).toBe(true);
+		expect(runtime.writes.has("/code/my-repo/.worktrees/feature-x/wt.config.json")).toBe(false);
 	});
 
 	test("malformed wt.config.json yields registry_unreadable, exit 1, not a throw", async () => {
@@ -159,41 +273,75 @@ describe("focus + color", () => {
 	});
 });
 
-describe("delegated verbs", () => {
-	test("new delegates to `worktree create` then re-renders", async () => {
+describe("shared lifecycle verbs", () => {
+	test("new creates through agent-worktree then re-renders", async () => {
 		const runtime = fakeRuntime();
 		const result = await runCommand(
 			{ command: "new", positionals: ["feat/z"], force: true },
 			runtime,
 		);
 		expect(result.ok).toBe(true);
-		expect(runtime.runCalls).toContainEqual(["@side-quest/git", "worktree", "create", "feat/z"]);
-	});
-
-	test("clean delegates to `worktree orphans --delete`", async () => {
-		const runtime = fakeRuntime();
-		await runCommand({ command: "clean", positionals: [], force: true }, runtime);
 		expect(runtime.runCalls).toContainEqual([
-			"@side-quest/git",
+			"git",
 			"worktree",
-			"orphans",
-			"--delete",
+			"add",
+			"-b",
+			"feat/z",
+			"/code/my-repo/.worktrees/feat-z",
+			"main",
 		]);
 	});
 
-	test("upstream failure surfaces delegate_failed, exit 1, no re-render", async () => {
-		const runtime = fakeRuntime({
-			run: async (args) => {
-				if (args.includes("delete")) {
-					return { ok: false, stdout: "", stderr: "branch not found" };
-				}
-				return { ok: true, stdout: fixture, stderr: "" };
-			},
-		});
-		const result = await runCommand({ command: "rm", positionals: ["feat/gone"], force: true }, runtime);
+	test("rm removes through agent-worktree", async () => {
+		const runtime = fakeRuntime();
+		await runCommand({ command: "rm", positionals: ["codex/browser-use-refactor"], force: true, noInput: false }, runtime);
+		expect(runtime.runCalls).toContainEqual([
+			"git",
+			"worktree",
+			"remove",
+			"/code/my-repo/.worktrees/browser-use-refactor",
+		]);
+	});
+
+	test("destructive shared verbs require force in non-interactive runs", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{ command: "rm", positionals: ["codex/browser-use-refactor"], force: false, noInput: true },
+			runtime,
+		);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.code).toBe("delegate_failed");
+			expect(result.exitCode).toBe(2);
+		}
+		expect(runtime.runCalls).not.toContainEqual([
+			"git",
+			"worktree",
+			"remove",
+			"/code/my-repo/.worktrees/browser-use-refactor",
+		]);
+	});
+
+	test("clean previews candidates without destructive calls", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand({ command: "clean", positionals: [], force: false }, runtime);
+		expect(result.ok).toBe(true);
+		expect(runtime.runCalls.some((call) => call.join(" ").includes("branch -D"))).toBe(false);
+		expect(runtime.runCalls.some((call) => call.join(" ").includes("worktree remove"))).toBe(false);
+	});
+
+	test("shared runtime failure surfaces agent_worktree_failed, exit 1, no re-render", async () => {
+		const runtime = fakeRuntime({
+			run: async (args, options) => {
+				if (args.join(" ") === "git worktree remove /code/my-repo/.worktrees/browser-use-refactor") {
+					return { ok: false, stdout: "", stderr: "remove failed", code: 1 };
+				}
+				return fakeRuntime().run(args, options);
+			},
+		});
+		const result = await runCommand({ command: "rm", positionals: ["codex/browser-use-refactor"], force: true }, runtime);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("agent_worktree_failed");
 			expect(result.exitCode).toBe(1);
 		}
 	});
@@ -205,6 +353,15 @@ describe("open", () => {
 		const result = await runCommand({ command: "open", positionals: [], force: false }, runtime);
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.data.action).toBe("list_workspaces");
+	});
+
+	test("from a linked worktree, open lists the durable main-owner workspace", async () => {
+		const runtime = fakeRuntime({ repoRoot: () => "/code/my-repo/.worktrees/feature-x" });
+		const result = await runCommand({ command: "open", positionals: [], force: false }, runtime);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.data.workspace).toBe("/code/my-repo.code-workspace");
+		}
 	});
 
 	test("missing `code` binary yields code_not_found, exit 2", async () => {
@@ -219,21 +376,41 @@ describe("open", () => {
 			expect(result.exitCode).toBe(2);
 		}
 	});
+
+	test("named workspace resolves beside the current repo and uses defaults.codeBin", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set(
+			"/code/my-repo/wt.config.json",
+			JSON.stringify({ branches: {}, defaults: { codeBin: "/bin/code-custom" } }),
+		);
+		const result = await runCommand({ command: "open", positionals: ["other-repo"], force: false, noInput: false }, runtime);
+		expect(result.ok).toBe(true);
+		expect(runtime.launched).toEqual([
+			{ workspacePath: "/code/other-repo.code-workspace", codeBin: "/bin/code-custom" },
+		]);
+	});
 });
 
 describe("Command Surface Alignment Proof", () => {
 	test("every advertised flag for each verb appears in its rendered help", () => {
 		for (const command of Object.keys(wtContracts) as (keyof typeof wtContracts)[]) {
 			const help = renderCommandUsage(wtContracts[command]);
-			for (const flag of Object.keys(wtContracts[command].flags)) {
-				expect(help).toContain(flag);
-			}
+			assertCommandHelpFlagSurface({
+				command,
+				contract: wtContracts[command],
+				help,
+			});
 		}
 	});
 
 	test("command-foreign flags do not leak into help (open has no --force)", () => {
 		const openHelp = renderCommandUsage(wtContracts.open);
-		expect(openHelp).not.toContain("--force");
+		assertCommandHelpFlagSurface({
+			command: "open",
+			contract: wtContracts.open,
+			help: openHelp,
+			absentFlags: ["--force"],
+		});
 		expect(Object.keys(wtContracts.open.flags)).not.toContain("--force");
 	});
 
@@ -253,5 +430,26 @@ describe("Command Surface Alignment Proof", () => {
 		const result = await runCommand({ command: "frobnicate", positionals: [], force: false }, runtime);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.exitCode).toBe(2);
+	});
+
+	test("public argv honors --repo by writing the requested repo workspace", async () => {
+		const runtime = fakeRuntime();
+		let output = "";
+		const exitCode = await main(["sync", "--repo", "/code/other-repo", "--json"], {
+			runtime,
+			stdout: { write: (chunk) => { output += chunk; } },
+		});
+		expect(exitCode).toBe(0);
+		expect([...runtime.writes.keys()]).toContain("/code/other-repo.code-workspace");
+		expect(output).toContain("\"status\": \"ok\"");
+	});
+
+	test("public argv rejects command-foreign flags", async () => {
+		const runtime = fakeRuntime();
+		const exitCode = await main(["open", "--force", "--json"], {
+			runtime,
+			stdout: { write: () => {} },
+		});
+		expect(exitCode).toBe(2);
 	});
 });

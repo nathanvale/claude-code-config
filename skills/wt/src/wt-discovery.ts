@@ -1,20 +1,10 @@
 import { basename, dirname, join } from "node:path";
+import {
+	defaultGitRunner,
+	discoverRepo,
+	type GitRunner,
+} from "../../../runtime/agent-worktree/src/index.ts";
 import type { Registry, Worktree } from "./model.ts";
-
-/**
- * Raw worktree entry as emitted by `@side-quest/git worktree list --all`.
- *
- * Only `branch` and `path` are consumed; the rest are carried for possible
- * future use (dirty/merged power the deferred v2 dashboard).
- */
-interface RawWorktreeEntry {
-	branch: string;
-	path: string;
-	head?: string;
-	dirty?: boolean;
-	merged?: boolean;
-	isMain?: boolean;
-}
 
 /**
  * Result of running a subprocess: captured stdout plus success flag.
@@ -29,15 +19,26 @@ export interface RunResult {
 	stdout: string;
 	/** Captured stderr, used for failure diagnostics. */
 	stderr: string;
+	/** Process exit code, when known. */
+	code?: number;
+}
+
+/**
+ * Subprocess execution options.
+ */
+export interface RunOptions {
+	/** Working directory for repo-scoped upstream CLI calls. */
+	cwd?: string;
 }
 
 /**
  * Subprocess runner signature: takes argv, returns captured output.
  *
- * @param args - Full argv (e.g. `["@side-quest/git", "worktree", "list", "--all"]`)
+ * @param args - Full argv (e.g. `["git", "worktree", "list", "--porcelain"]`)
+ * @param options - Optional process execution controls
  * @returns The captured run result
  */
-export type Runner = (args: readonly string[]) => Promise<RunResult>;
+export type Runner = (args: readonly string[], options?: RunOptions) => Promise<RunResult>;
 
 /**
  * Failure raised when the upstream worktree CLI cannot be read.
@@ -62,15 +63,8 @@ export class WtDiscoveryError extends Error {
  * @returns Captured run result
  * @internal
  */
-const defaultRunner: Runner = async (args) => {
-	const proc = Bun.spawn(["bunx", ...args], { stdout: "pipe", stderr: "pipe" });
-	const [stdout, stderr] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-	]);
-	const code = await proc.exited;
-	return { ok: code === 0, stdout, stderr };
-};
+const defaultRunner: Runner = (args, options = {}) =>
+	defaultGitRunner(args, { cwd: options.cwd ?? process.cwd() });
 
 /**
  * True when a worktree entry is a real, named worktree (not a throwaway temp).
@@ -82,8 +76,12 @@ const defaultRunner: Runner = async (args) => {
  * @returns True to keep, false to drop
  * @internal
  */
-function isRealWorktree(entry: RawWorktreeEntry): boolean {
-	if (entry.branch === "(detached)" || entry.branch.trim() === "") {
+function isRealWorktree(entry: { branch?: string; path: string }): entry is {
+	branch: string;
+	path: string;
+	isMain?: boolean;
+} {
+	if (!entry.branch || entry.branch === "(detached)" || entry.branch.trim() === "") {
 		return false;
 	}
 	if (entry.path.includes("/fallow-audit-")) {
@@ -93,7 +91,7 @@ function isRealWorktree(entry: RawWorktreeEntry): boolean {
 }
 
 /**
- * List real worktrees for a repo via `@side-quest/git worktree list --all`.
+ * List real worktrees for a repo via the shared `agent-worktree` runtime.
  *
  * Filters out detached-HEAD and `fallow-audit-*` temp entries so only named
  * work reaches the engine.
@@ -108,24 +106,40 @@ function isRealWorktree(entry: RawWorktreeEntry): boolean {
  * const worktrees = await listWorktrees()
  * ```
  */
-export async function listWorktrees(run: Runner = defaultRunner): Promise<Worktree[]> {
-	const result = await run(["@side-quest/git", "worktree", "list", "--all"]);
-	if (!result.ok) {
+export async function listWorktrees(repoRoot: string, run: Runner = defaultRunner): Promise<Worktree[]> {
+	const discovery = await discoverRepo({ cwd: repoRoot, run: adaptRunner(run) });
+	if (!discovery.gitRoot || discovery.issues.some((issue) => issue.code === "worktree_list_failed")) {
 		throw new WtDiscoveryError(
 			"worktree_list_failed",
-			`@side-quest/git worktree list failed: ${result.stderr.trim() || "non-zero exit"}`,
+			"agent-worktree discovery could not read git worktrees.",
 		);
 	}
-	let raw: RawWorktreeEntry[];
-	try {
-		raw = JSON.parse(result.stdout) as RawWorktreeEntry[];
-	} catch {
-		throw new WtDiscoveryError(
-			"worktree_list_failed",
-			"@side-quest/git worktree list emitted unparseable output",
-		);
-	}
-	return raw.filter(isRealWorktree).map((entry) => ({ path: entry.path, branch: entry.branch }));
+	return discovery.worktrees.flatMap((entry) =>
+		isRealWorktree(entry)
+			? [{ path: entry.path, branch: entry.branch, isMain: entry.isMain }]
+			: [],
+	);
+}
+
+export function adaptRunner(run: Runner): GitRunner {
+	return async (args, options) => {
+		const result = await run(args, options);
+		return { ...result, code: result.code ?? (result.ok ? 0 : 1) };
+	};
+}
+
+/**
+ * Pick the durable repo owner root from live worktree state.
+ *
+ * Linked worktrees are disposable; registry and workspace files need the main
+ * worktree root so branch prefs survive deleting/recreating a linked worktree.
+ *
+ * @param worktrees - Real worktrees from `listWorktrees`
+ * @param fallbackRoot - Current repo root when upstream lacks `isMain`
+ * @returns The main worktree path, or fallback when unavailable
+ */
+export function repoOwnerRootFor(worktrees: readonly Worktree[], fallbackRoot: string): string {
+	return worktrees.find((worktree) => worktree.isMain)?.path ?? fallbackRoot;
 }
 
 /**
@@ -150,8 +164,15 @@ export async function loadRegistry(repoRoot: string): Promise<Registry> {
 	if (!(await file.exists())) {
 		return { branches: {} };
 	}
+	return parseRegistryText(await file.text());
+}
+
+export function parseRegistryText(existing: string | null): Registry {
+	if (existing === null) {
+		return { branches: {} };
+	}
 	try {
-		const parsed = (await file.json()) as Registry;
+		const parsed = JSON.parse(existing) as Registry;
 		return { branches: parsed.branches ?? {}, defaults: parsed.defaults };
 	} catch {
 		throw new WtDiscoveryError(

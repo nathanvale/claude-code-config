@@ -18,6 +18,7 @@ skills/fallow/scripts/.fallow/
 # wt: generated workspace + per-machine registry (rendered from wt.config.json; never commit)
 wt.config.json
 *.code-workspace
+.agent-worktree/
 
 # Shared worktrees live here (gitignored; see docs/git/worktree.md)
 .worktrees

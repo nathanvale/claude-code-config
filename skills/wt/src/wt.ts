@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import {
 	type CliWriter,
 	createCliRuntimeErrorEnvelope,
@@ -9,6 +12,12 @@ import {
 	renderCommandUsage,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
+import {
+	cleanPreview,
+	createWorktree,
+	deleteWorktree,
+	type GitRunner,
+} from "../../../runtime/agent-worktree/src/index.ts";
 import { wtContracts } from "./command-contract.ts";
 import {
 	WT_COLOR_PALETTE,
@@ -19,10 +28,12 @@ import {
 } from "./model.ts";
 import { isDrift, renderWorkspace, stampHeader } from "./wt-engine.ts";
 import {
-	loadRegistry,
 	listWorktrees,
+	repoOwnerRootFor,
 	type Runner,
 	WtDiscoveryError,
+	adaptRunner,
+	parseRegistryText,
 	workspacePathFor,
 } from "./wt-discovery.ts";
 
@@ -43,12 +54,14 @@ export interface WtRuntime {
 	writeTextFile: (path: string, content: string) => Promise<void>;
 	/** True when a path exists on disk. Backs focus probing. */
 	pathExists: (path: string) => Promise<boolean>;
+	/** Create a directory and parents when needed. */
+	ensureDirectory: (path: string) => Promise<void>;
 	/** True when stdin is an interactive TTY. */
 	isInteractive: () => boolean;
 	/** Subprocess runner for worktree discovery and delegation. */
 	run: Runner;
-	/** Launch VS Code on a workspace path; resolves false when `code` is absent. */
-	launchCode: (workspacePath: string) => Promise<boolean>;
+	/** Launch VS Code on a workspace path; resolves false when the binary is absent. */
+	launchCode: (workspacePath: string, codeBin?: string) => Promise<boolean>;
 	/** Current epoch millis; injected so envelope durations are deterministic in tests. */
 	now: () => number;
 }
@@ -68,23 +81,33 @@ export function createDefaultRuntime(overrides: Partial<WtRuntime> = {}): WtRunt
 	return {
 		repoRoot: () => process.cwd(),
 		readTextFile: async (path) => {
-			const file = Bun.file(path);
-			return (await file.exists()) ? file.text() : null;
+			try {
+				return await Bun.file(path).text();
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+				throw error;
+			}
 		},
 		writeTextFile: (path, content) => Bun.write(path, content).then(() => undefined),
 		pathExists: (path) => Bun.file(path).exists(),
+		ensureDirectory: (path) => mkdir(path, { recursive: true }).then(() => undefined),
 		isInteractive: () => Boolean(process.stdin.isTTY),
-		run: async (args) => {
-			const proc = Bun.spawn(["bunx", ...args], { stdout: "pipe", stderr: "pipe" });
+		run: async (args, options = {}) => {
+			const proc = Bun.spawn([...args], {
+				cwd: options.cwd,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
 			const [stdout, stderr] = await Promise.all([
 				new Response(proc.stdout).text(),
 				new Response(proc.stderr).text(),
 			]);
-			return { ok: (await proc.exited) === 0, stdout, stderr };
+			const code = await proc.exited;
+			return { ok: code === 0, stdout, stderr, code };
 		},
-		launchCode: async (workspacePath) => {
+		launchCode: async (workspacePath, codeBin = "code") => {
 			try {
-				const proc = Bun.spawn(["code", workspacePath], { stdout: "ignore", stderr: "ignore" });
+				const proc = Bun.spawn([codeBin, workspacePath], { stdout: "ignore", stderr: "ignore" });
 				return (await proc.exited) === 0;
 			} catch {
 				return false;
@@ -116,17 +139,30 @@ export async function syncWorkspace(
 	| { kind: "error"; code: string; message: string }
 > {
 	const repoRoot = runtime.repoRoot();
-	const workspacePath = workspacePathFor(repoRoot);
+	let ownerRoot = repoRoot;
 	let registry: Registry;
 	let worktrees: Awaited<ReturnType<typeof listWorktrees>>;
 	try {
-		registry = await loadRegistry(repoRoot);
-		worktrees = await listWorktrees(runtime.run);
+		worktrees = await listWorktrees(repoRoot, runtime.run);
+		ownerRoot = repoOwnerRootFor(worktrees, repoRoot);
+		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
 	} catch (error) {
 		if (error instanceof WtDiscoveryError) {
 			return { kind: "error", code: error.code, message: error.message };
 		}
 		throw error;
+	}
+	const workspacePath = workspacePathFor(ownerRoot);
+
+	const wip = registry.defaults?.wip ? expandHome(registry.defaults.wip) : null;
+	if (wip) {
+		registry = {
+			...registry,
+			defaults: {
+				...registry.defaults,
+				wip,
+			},
+		};
 	}
 
 	const existing = await runtime.readTextFile(workspacePath);
@@ -134,16 +170,35 @@ export async function syncWorkspace(
 		return { kind: "drift_blocked", path: workspacePath };
 	}
 
+	if (wip) {
+		try {
+			await runtime.ensureDirectory(wip);
+		} catch {
+			return {
+				kind: "error",
+				code: "write_failed",
+				message: "Could not create the WIP scratch folder.",
+			};
+		}
+	}
+
 	// Pre-resolve focus-folder existence async (the engine's probe is sync), so
 	// guessFocus can probe `<worktree>/skills/<stem>` without an async boundary.
-	const probed = new Set<string>();
-	for (const worktree of worktrees) {
+	const probes = worktrees.map((worktree) => {
 		const stem = worktree.branch.includes("/")
 			? worktree.branch.slice(worktree.branch.indexOf("/") + 1)
 			: worktree.branch;
 		const candidate = `skills/${stem.replace(/^harden-/, "").replace(/-(refactor|harden|fix|feat|wip)$/, "")}`;
-		if (await runtime.pathExists(`${worktree.path}/${candidate}`)) {
-			probed.add(`${worktree.path}::${candidate}`);
+		return { worktreePath: worktree.path, candidate };
+	});
+	const probed = new Set<string>();
+	const probeResults = await Promise.all(
+		probes.map((probe) => runtime.pathExists(`${probe.worktreePath}/${probe.candidate}`)),
+	);
+	for (const [index, found] of probeResults.entries()) {
+		if (found) {
+			const probe = probes[index];
+			probed.add(`${probe.worktreePath}::${probe.candidate}`);
 		}
 	}
 	const workspace = renderWorkspace(registry, worktrees, (worktreePath, subfolder) =>
@@ -182,11 +237,21 @@ export async function setPrefAndSync(
 	force: boolean,
 ): Promise<Awaited<ReturnType<typeof syncWorkspace>>> {
 	const repoRoot = runtime.repoRoot();
-	const registryPath = `${repoRoot}/wt.config.json`;
+	let ownerRoot = repoRoot;
+	try {
+		const worktrees = await listWorktrees(repoRoot, runtime.run);
+		ownerRoot = repoOwnerRootFor(worktrees, repoRoot);
+	} catch (error) {
+		if (error instanceof WtDiscoveryError) {
+			return { kind: "error", code: error.code, message: error.message };
+		}
+		throw error;
+	}
+	const registryPath = `${ownerRoot}/wt.config.json`;
 	const existing = await runtime.readTextFile(registryPath);
 	let registry: Registry;
 	try {
-		registry = existing ? (JSON.parse(existing) as Registry) : { branches: {} };
+		registry = parseRegistryText(existing);
 	} catch {
 		return {
 			kind: "error",
@@ -217,34 +282,6 @@ export async function setPrefAndSync(
  */
 export function validateColor(value: string): WtColor | null {
 	return (WT_COLOR_PALETTE as readonly string[]).includes(value) ? (value as WtColor) : null;
-}
-
-/**
- * Worktree verbs delegated to `@side-quest/git worktree`.
- *
- * One extracted helper over three real call sites (new/rm/clean); shells the
- * matching subcommand, maps failure to the `delegate_failed` code. Not an
- * Adapter -- a single function over one upstream CLI.
- *
- * @param runtime - Injected I/O adapter (supplies the subprocess runner)
- * @param subcommand - Upstream worktree subcommand argv tail
- * @returns Captured output, or a delegate_failed error result
- */
-export async function delegateWorktree(
-	runtime: WtRuntime,
-	subcommand: readonly string[],
-): Promise<{ ok: true; stdout: string } | { ok: false; code: "delegate_failed"; message: string }> {
-	const result = await runtime.run(["@side-quest/git", "worktree", ...subcommand]);
-	if (!result.ok) {
-		return {
-			ok: false,
-			code: "delegate_failed",
-			message: `@side-quest/git worktree ${subcommand.join(" ")} failed: ${
-				result.stderr.trim() || "non-zero exit"
-			}`,
-		};
-	}
-	return { ok: true, stdout: result.stdout };
 }
 
 /**
@@ -343,6 +380,9 @@ export interface ParsedInvocation {
 	command: string;
 	positionals: string[];
 	force: boolean;
+	noInput?: boolean;
+	repoRoot?: string;
+	parseError?: CommandResult;
 }
 
 /**
@@ -360,21 +400,54 @@ export interface ParsedInvocation {
 export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	const positionals: string[] = [];
 	let force = false;
+	let noInput = false;
+	let repoRoot: string | undefined;
 	let command = "";
-	for (const arg of argv) {
+	const usedFlags = new Set<string>();
+	const fail = (message: string): ParsedInvocation => ({
+		command,
+		positionals,
+		force,
+		noInput,
+		repoRoot,
+		parseError: usageFailure("usage_error", message, "Review the command help and retry."),
+	});
+	for (let i = 0; i < argv.length; i += 1) {
+		const arg = argv[i];
 		if (arg === "--force") {
 			force = true;
-		} else if (arg === "--json" || arg === "--no-input") {
-			// --json selects output mode (always JSON here); --no-input is the test default.
+			usedFlags.add(arg);
+		} else if (arg === "--no-input") {
+			noInput = true;
+			usedFlags.add(arg);
+		} else if (arg === "--json") {
+			// --json selects output mode; wt always emits JSON envelopes.
+			usedFlags.add(arg);
+		} else if (arg === "--repo") {
+			usedFlags.add(arg);
+			const value = argv[i + 1];
+			if (!value || value.startsWith("--")) {
+				return fail("--repo needs a path value.");
+			}
+			repoRoot = value;
+			i += 1;
 		} else if (arg.startsWith("--")) {
-			// Unknown flags ignored; the alignment proof asserts foreign-flag exclusion.
+			return fail(`Unknown flag '${arg}'.`);
 		} else if (command === "") {
 			command = arg;
 		} else {
 			positionals.push(arg);
 		}
 	}
-	return { command, positionals, force };
+	if (command in wtContracts) {
+		const allowed = new Set(Object.keys(wtContracts[command as keyof typeof wtContracts].flags));
+		for (const flag of usedFlags) {
+			if (!allowed.has(flag)) {
+				return fail(`Flag '${flag}' is not accepted by wt ${command}.`);
+			}
+		}
+	}
+	return { command, positionals, force, noInput, repoRoot };
 }
 
 /**
@@ -393,6 +466,9 @@ export async function runCommand(
 	runtime: WtRuntime,
 ): Promise<CommandResult> {
 	const { command, positionals, force } = invocation;
+	if (invocation.parseError) {
+		return invocation.parseError;
+	}
 
 	switch (command) {
 		case "sync":
@@ -441,20 +517,46 @@ export async function runCommand(
 		}
 
 		case "new":
-		case "rm":
-		case "clean": {
-			const subcommandMap = {
-				new: ["create", ...positionals],
-				rm: ["delete", ...positionals],
-				clean: ["orphans", "--delete"],
-			} as const;
-			const delegated = await delegateWorktree(runtime, subcommandMap[command]);
-			if (!delegated.ok) {
+		case "rm": {
+			if (command === "rm" && !force && (invocation.noInput || !runtime.isInteractive())) {
+				return usageFailure(
+					"usage_error",
+					`${command} needs an explicit force flag in non-interactive runs.`,
+					"Retry with explicit confirmation, or run interactively.",
+				);
+			}
+			const [branch] = positionals;
+			if (!branch) {
+				return usageFailure(
+					"usage_error",
+					`${command} needs <branch>.`,
+					`Rerun as: wt ${command} <branch>.`,
+				);
+			}
+			const lifecycle =
+				command === "new"
+					? await createWorktree({
+							cwd: runtime.repoRoot(),
+							run: adaptRunner(runtime.run),
+							branch,
+							dryRun: false,
+							runId: `wt-${runtime.now()}`,
+						})
+					: await deleteWorktree({
+							cwd: runtime.repoRoot(),
+							run: adaptRunner(runtime.run),
+							branch,
+							dryRun: false,
+							force,
+							deleteBranch: false,
+							runId: `wt-${runtime.now()}`,
+						});
+			if (lifecycle.failureRef || lifecycle.changedState === "partial" || lifecycle.changedState === "unknown") {
 				return {
 					ok: false,
-					code: delegated.code,
-					message: delegated.message,
-					action: "Inspect worktree state, resolve the upstream failure, then retry.",
+					code: "agent_worktree_failed",
+					message: "Shared worktree runtime reported an incomplete lifecycle result.",
+					action: "Inspect worktree state with agent-worktree, then retry.",
 					exitCode: 1,
 					recoverability: "repair_state",
 				};
@@ -462,20 +564,59 @@ export async function runCommand(
 			return fromSync(command, await syncWorkspace(runtime, force));
 		}
 
+		case "clean": {
+			const preview = await cleanPreview({
+				cwd: runtime.repoRoot(),
+				run: adaptRunner(runtime.run),
+			});
+			return {
+				ok: true,
+				data: {
+					contract_id: WT_CONTRACT_ID,
+					schema_version: WT_SCHEMA_VERSION,
+					action: "clean_preview",
+					changed_state: "none",
+					preview,
+					next_safe_action: "Review cleanup candidates before pruning.",
+				},
+			};
+		}
+
 		case "open": {
 			const [name] = positionals;
+			let registry: Registry = { branches: {} };
+			let ownerRoot = runtime.repoRoot();
+			try {
+				const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+				ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
+			} catch {
+				ownerRoot = runtime.repoRoot();
+			}
+			try {
+				registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+			} catch {
+				return {
+					ok: false,
+					code: "registry_unreadable",
+					message: "wt.config.json exists but is not valid JSON.",
+					action: "Repair the registry JSON, then retry.",
+					exitCode: 1,
+					recoverability: "repair_state",
+				};
+			}
 			if (!name) {
 				return {
 					ok: true,
 					data: {
-						contract_id: WT_CONTRACT_ID,
-						schema_version: WT_SCHEMA_VERSION,
-						action: "list_workspaces",
-						workspace: workspacePathFor(runtime.repoRoot()),
-					},
-				};
-			}
-			const launched = await runtime.launchCode(name);
+							contract_id: WT_CONTRACT_ID,
+							schema_version: WT_SCHEMA_VERSION,
+							action: "list_workspaces",
+							workspace: workspacePathFor(ownerRoot),
+						},
+					};
+				}
+			const workspacePath = workspaceTargetFor(ownerRoot, name);
+			const launched = await runtime.launchCode(workspacePath, registry.defaults?.codeBin);
 			if (!launched) {
 				return usageFailure(
 					"code_not_found",
@@ -490,6 +631,7 @@ export async function runCommand(
 					schema_version: WT_SCHEMA_VERSION,
 					action: "open_workspace",
 					launched: true,
+					workspace_path: workspacePath,
 				},
 			};
 		}
@@ -555,7 +697,10 @@ export async function main(
 	const runId = parsedDiagnostics.options.runId;
 	const startedAtMs = parsedDiagnostics.options.startedAtMs;
 	const invocation = parseInvocation(parsedDiagnostics.argv);
-	const result = await runCommand(invocation, runtime);
+	const runtimeForInvocation = invocation.repoRoot
+		? createRepoRuntime(runtime, invocation.repoRoot)
+		: runtime;
+	const result = await runCommand(invocation, runtimeForInvocation);
 	const durationMs = runtime.now() - startedAtMs;
 
 	if (result.ok) {
@@ -592,6 +737,37 @@ export async function main(
 		{ runId, durationMs },
 	);
 	return result.exitCode;
+}
+
+function createRepoRuntime(runtime: WtRuntime, repoRoot: string): WtRuntime {
+	return {
+		...runtime,
+		repoRoot: () => repoRoot,
+	};
+}
+
+async function loadRegistryFromRuntime(runtime: WtRuntime, repoRoot = runtime.repoRoot()): Promise<Registry> {
+	return parseRegistryText(await runtime.readTextFile(`${repoRoot}/wt.config.json`));
+}
+
+function workspaceTargetFor(currentRepoRoot: string, name: string): string {
+	if (name.endsWith(".code-workspace")) {
+		return name;
+	}
+	if (isAbsolute(name)) {
+		return workspacePathFor(name);
+	}
+	return workspacePathFor(join(dirname(currentRepoRoot), name));
+}
+
+function expandHome(path: string): string {
+	if (path === "~") {
+		return homedir();
+	}
+	if (path.startsWith("~/")) {
+		return join(homedir(), path.slice(2));
+	}
+	return path;
 }
 
 if (import.meta.main) {

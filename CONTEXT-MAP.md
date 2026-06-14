@@ -12,6 +12,7 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 - [Create Skill](./skills/create-skill/CONTEXT.md) — portable skill authoring, cleanup, capability ownership, agent-native helper handoff.
 - [Skill Self-Audit Loop](./skills/skill-self-audit-loop/CONTEXT.md) — proof methods, trust conditions, contradiction shapes for self-auditing a SKILL.md.
 - [Skill Feedback](./skills/skill-feedback/CONTEXT.md) — skill-observability capture loop: Receipt, CaptureAdapter, Software Learning Report, the gitignored inbox.
+- [wt](./skills/wt/CONTEXT.md) — workflow entry point for worktree-aware VS Code workspace rendering and its boundary with shared git/worktree runtime ownership.
 
 ## Relationships
 
@@ -21,3 +22,4 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 - **Skill Feedback → Create Skill**: a Software Learning Report is evidence that may drive an edit to a `SKILL.md`, governed by Create Skill's authoring language.
 - **Skill Feedback → Root**: reuses the root's facade, redaction-owner, and storage-routing vocabulary; the inbox storage rule is owned by `skills/context-advisor/references/storage-routing.md`.
 - **Skill Self-Audit Loop ↔ Skill Feedback**: both treat record/loop-file text as untrusted evidence, never canonical instruction.
+- **wt → Root**: reuses root CLI Front Door language but reserves Workflow Entry Point for the skill-level route.

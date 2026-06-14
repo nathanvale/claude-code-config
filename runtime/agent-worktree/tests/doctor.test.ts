@@ -1,0 +1,137 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
+
+import { doctorMapFromDiscovery, runDoctor } from "../src/doctor.ts";
+import type { GitRunner, RepoDiscovery } from "../src/discovery.ts";
+import { createFileStore } from "../src/store.ts";
+
+describe("agent-worktree doctor", () => {
+	test("returns a blocked map when git root cannot be read", async () => {
+		const map = await runDoctor({
+			cwd: "/not-a-repo",
+			run: async () => ({
+				ok: false,
+				stdout: "",
+				stderr: "not a git repository",
+				code: 128,
+			}),
+		});
+
+		expect(map.status).toBe("blocked");
+		expect(map.mutationReadiness).toBe("blocked");
+		expect(map.nextActions).toContain("handoff");
+	});
+
+	test("keeps worktree list failures as unknown readable data", () => {
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			mainOwnerRoot: "/repo",
+			worktrees: [],
+			linkedWorktrees: [],
+			staleDirs: [],
+			storeRoot: "/repo/.agent-worktree",
+			issues: [
+				{
+					code: "worktree_list_failed",
+					status: "unknown",
+					summary: "Git worktree list failed.",
+				},
+			],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+
+		expect(map.status).toBe("unknown");
+		expect(map.mutationReadiness).toBe("unknown");
+		expect(map.checks.some((check) => check.id === "worktrees")).toBe(true);
+	});
+
+	test("reports dirty linked worktrees as mutation blockers", async () => {
+		const outputs = {
+			["git rev-parse --show-toplevel"]: "/repo\n",
+			["git worktree list --porcelain"]: `worktree /repo
+HEAD abc
+branch refs/heads/main
+
+worktree /repo/.worktrees/feat-x
+HEAD def
+branch refs/heads/feat/x
+`,
+			["git branch --show-current"]: "feat/x\n",
+			["git symbolic-ref --short refs/remotes/origin/HEAD"]: "origin/main\n",
+			["git rev-parse --is-shallow-repository"]: "false\n",
+			["git merge-base --is-ancestor main main"]: "",
+			["git rev-list --left-right --count main...main"]: "0 0\n",
+			["git merge-base --is-ancestor feat/x main"]: "",
+			["git rev-list --left-right --count main...feat/x"]: "1 0\n",
+		};
+		const map = await runDoctor({
+			cwd: "/repo/.worktrees/feat-x",
+			run: async (args, options) => {
+				if (args.join(" ") === "git status --porcelain") {
+					return {
+						ok: true,
+						stdout: options.cwd.endsWith("feat-x") ? " M file.txt\n" : "",
+						stderr: "",
+						code: 0,
+					};
+				}
+				return fakeGitRunner(outputs)(args, options);
+			},
+		});
+
+		expect(map.status).toBe("blocked");
+		expect(map.mutationReadiness).toBe("blocked");
+		expect(
+			map.checks.find((check) => check.id === "mutations")?.blockers,
+		).toContain("feat/x:dirty");
+	});
+
+	test("warns when durable records exceed retention threshold", async () => {
+		const root = await mkdtemp(join(tmpdir(), "awt-retention-"));
+		const store = createFileStore(join(root, ".agent-worktree"));
+		await store.writeRun({
+			runId: "old-run",
+			command: "refresh",
+			status: "completed",
+			changedState: "complete",
+			steps: [],
+			events: [],
+			createdAtMs: 1,
+		});
+
+		const map = await runDoctor({
+			cwd: root,
+			now: () => 31 * 24 * 60 * 60 * 1000,
+			run: fakeGitRunner({
+				["git rev-parse --show-toplevel"]: `${root}\n`,
+				["git worktree list --porcelain"]: `worktree ${root}
+HEAD abc
+branch refs/heads/main
+`,
+				["git branch --show-current"]: "main\n",
+				["git symbolic-ref --short refs/remotes/origin/HEAD"]: "origin/main\n",
+				["git status --porcelain"]: "",
+				["git rev-parse --is-shallow-repository"]: "false\n",
+				["git merge-base --is-ancestor main main"]: "",
+				["git rev-list --left-right --count main...main"]: "0 0\n",
+			}),
+		});
+
+		expect(map.checks.find((check) => check.id === "store")?.status).toBe(
+			"warn",
+		);
+	});
+});
+
+function fakeGitRunner(outputs: Record<string, string>): GitRunner {
+	return async (args) => {
+		const stdout = outputs[args.join(" ")];
+		return stdout === undefined
+			? { ok: false, stdout: "", stderr: "missing fake output", code: 1 }
+			: { ok: true, stdout, stderr: "", code: 0 };
+	};
+}
