@@ -136,6 +136,15 @@ bunx @side-quest/git worktree install <path>
 bunx @side-quest/git worktree orphans [--delete]
 ```
 
+## Shared location across tools (Claude + Codex)
+
+One worktree location serves every tool. Worktrees live in `<repo>/.worktrees/<branch>/` (gitignored). A git worktree is just a directory — no tool owns it, so all of them open the same one.
+
+- **Create** worktrees here yourself (or via the worktree CLI / `ce-worktree`), not by letting a tool auto-create its own.
+- **Claude / shell:** `cd <repo>/.worktrees/<branch>`.
+- **Codex:** open the worktree by pointing the thread's working directory at that path (`cwd` / `workingDirectory`). Do not rely on Codex auto-creating worktrees under `~/.codex/worktrees/<hash>/` — those are invisible to the shared convention. (Codex resolves project hooks/trust from the root checkout, so a linked worktree under `.worktrees/` is fully supported.)
+- **Never** scatter worktrees across `~/.codex/worktrees/`, `<repo>/.claude/worktrees/`, and `<repo>/.worktrees/` — that split is what makes a worktree invisible to one tool or the other.
+
 ## Important Notes
 
 - Worktrees are created in the `directory` specified in config (default: `.worktrees/`)
