@@ -8,3 +8,9 @@ skills/fallow/scripts/.fallow/
 
 # Review-convergence workflow scratch (generated)
 .review/
+
+# Skill feedback inbox (generated, evidence-only, never canonical)
+.skill-feedback/
+
+# TypeScript incremental build cache (generated)
+*.tsbuildinfo

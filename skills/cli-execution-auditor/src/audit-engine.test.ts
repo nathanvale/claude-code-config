@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	detectFacadeLane,
+	discoverCommandContractPaths,
 	enumerateInvocations,
+	resolveScriptEntryFile,
 	resolveTargetLayout,
 	runFullAudit,
 	runStaticAudit,
@@ -32,6 +35,37 @@ describe("lane detection", () => {
 	});
 });
 
+describe("command contract locator", () => {
+	test("discovers the package-level command contract", async () => {
+		const contractPaths = await discoverCommandContractPaths(fixture("good-baseline"));
+		expect(contractPaths.map((path) => path.replace(fixture("good-baseline"), ""))).toEqual([
+			"/src/command-contract.ts",
+		]);
+	});
+
+	test("discovers CLI Front Door command contracts in canonical order", async () => {
+		const contractPaths = await discoverCommandContractPaths(fixture("good-front-door-local"));
+		expect(
+			contractPaths.map((path) => path.replace(fixture("good-front-door-local"), "")),
+		).toEqual([
+			"/src/front-doors/admin/command-contract.ts",
+			"/src/front-doors/app/command-contract.ts",
+		]);
+		const layout = await resolveTargetLayout(fixture("good-front-door-local"));
+		expect(layout.contractPath).toBe(contractPaths[0]);
+		expect(layout.contractPaths).toEqual(contractPaths);
+	});
+
+	test("discovers grouped (depth-2) front-door contracts, not just depth-1", async () => {
+		// A single-segment glob silently skips src/front-doors/admin/users/command-contract.ts
+		// and reports that surface unaudited (adversarial finding C).
+		const contractPaths = await discoverCommandContractPaths(fixture("good-front-door-nested"));
+		expect(
+			contractPaths.map((path) => path.replace(fixture("good-front-door-nested"), "")),
+		).toEqual(["/src/front-doors/admin/users/command-contract.ts"]);
+	});
+});
+
 // --- contract acquisition (KTD6) ---
 
 describe("contract acquisition (KTD6)", () => {
@@ -56,15 +90,58 @@ describe("contract acquisition (KTD6)", () => {
 		}
 	});
 
+	test("front-door-local contracts merge into one acquired command map", async () => {
+		const outcome = await runStaticAudit({
+			targetRoot: fixture("good-front-door-local"),
+			only: null,
+		});
+		expect(outcome.findings).toEqual([]);
+		expect(Object.keys(outcome.contracts ?? {}).sort()).toEqual(["admin", "app"]);
+	});
+
+	test("duplicate front-door-local command names fail acquisition", async () => {
+		const outcome = await runStaticAudit({
+			targetRoot: fixture("bad-front-door-duplicate-command"),
+			only: null,
+		});
+		expect(outcome.findings).toHaveLength(1);
+		const summary = outcome.findings[0]?.summary ?? "";
+		expect(summary).toContain("duplicate command contract for check");
+		// The repair hint names BOTH colliding files, not just the command.
+		expect(summary).toContain("src/front-doors/admin/command-contract.ts");
+		expect(summary).toContain("src/front-doors/app/command-contract.ts");
+	});
+
 	test("findContractByShape finds the contract export by shape, not by name", () => {
-		const found = findContractByShape({
+		const result = findContractByShape({
 			somethingElse: { foo: 1 },
 			weirdlyNamedExport: {
 				check: { script: "x", summary: "y", flags: {}, exitCodes: { "0": "a" } },
 			},
 		});
-		expect(found).not.toBeNull();
-		expect(Object.keys(found ?? {})).toEqual(["check"]);
+		expect(result.kind).toBe("found");
+		if (result.kind !== "found") throw new Error("expected a single shape match");
+		expect(Object.keys(result.contracts)).toEqual(["check"]);
+	});
+
+	test("findContractByShape reports ambiguity when a decoy shadows the real contract", () => {
+		// A decoy export declared before the real contract must NOT silently win:
+		// returning the first match would exercise the wrong object (adversarial E).
+		const result = findContractByShape({
+			decoyFirst: {
+				demo: { script: "d", summary: "s", flags: {}, exitCodes: { "0": "a" } },
+			},
+			realContracts: {
+				run: { script: "r", summary: "s", flags: {}, exitCodes: { "0": "a" } },
+			},
+		});
+		expect(result.kind).toBe("ambiguous");
+		if (result.kind === "ambiguous") expect(result.count).toBe(2);
+	});
+
+	test("findContractByShape reports none when no export is contract-shaped", () => {
+		const result = findContractByShape({ notAContract: { foo: 1 }, alsoNot: 42 });
+		expect(result.kind).toBe("none");
 	});
 });
 
@@ -79,6 +156,15 @@ describe("static audit — clean target", () => {
 
 	test("good-baseline produces zero findings", async () => {
 		const outcome = await runStaticAudit({ targetRoot: fixture("good-baseline"), only: null });
+		expect(outcome.laneDetected).toBe(true);
+		expect(outcome.findings).toEqual([]);
+	});
+
+	test("front-door-local contracts produce zero static findings", async () => {
+		const outcome = await runStaticAudit({
+			targetRoot: fixture("good-front-door-local"),
+			only: null,
+		});
 		expect(outcome.laneDetected).toBe(true);
 		expect(outcome.findings).toEqual([]);
 	});
@@ -231,6 +317,15 @@ describe("surface audit — each clause fires", () => {
 		expect(outcome.findings).toEqual([]);
 	});
 
+	test("front-door-local contracts are clean under the full audit", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("good-front-door-local"),
+			only: null,
+		});
+		expect(outcome.laneDetected).toBe(true);
+		expect(outcome.findings).toEqual([]);
+	});
+
 	test("a facade CLI with a .sh entrypoint is exercised, not false-flagged", async () => {
 		// good-sh-entrypoint fronts its facade CLI with a shell script (like the real
 		// test-runner: "test-runner": "./src/test-runner.sh"). A .ts-only resolver
@@ -239,6 +334,103 @@ describe("surface audit — each clause fires", () => {
 		const outcome = await runFullAudit({ targetRoot: fixture("good-sh-entrypoint"), only: null });
 		expect(outcome.laneDetected).toBe(true);
 		expect(outcome.findings).toEqual([]);
+	});
+
+	test("an unresolved per-command script produces a finding", async () => {
+		// Acquire a real, fully-projected contract so enumeration runs; override only
+		// the script so it resolves to no runnable entrypoint. A synthetic contract
+		// would be missing projection fields (usage, audience, ...) and throw on spread.
+		const root = fixture("good-front-door-local");
+		const acquisition = await acquireTargetContract(
+			join(root, "src", "front-doors", "app", "command-contract.ts"),
+		);
+		if (!acquisition.ok) throw new Error("fixture app contract should acquire");
+		const contracts = {
+			app: { ...acquisition.contracts.app, script: "missing" },
+		} as typeof acquisition.contracts;
+		const findings = await runSurfaceAudit({
+			layout: await resolveTargetLayout(root),
+			contracts,
+			only: null,
+		});
+		// The unresolved script fires once per enumerated invocation (bare + each flag),
+		// under runnable-resolves — NOT json-valid-under-failure (that clause is about
+		// the --json envelope; mis-attributing here corrupts per-clause reporting).
+		// The message names the precise cause: "missing" is undeclared in package.json.
+		expect(findings.length).toBeGreaterThan(0);
+		expect(
+			findings.every(
+				(f) =>
+					f.clauseId === "runnable-resolves" &&
+					f.summary.includes("script missing is not declared in package.json scripts"),
+			),
+		).toBe(true);
+	});
+
+	test("a declared script with a missing entrypoint names the missing file", async () => {
+		const root = await mkdtemp(join(tmpdir(), "cli-audit-missing-entrypoint-"));
+		await mkdir(join(root, "src"));
+		await Bun.write(
+			join(root, "package.json"),
+			JSON.stringify({ scripts: { app: "bun run src/missing.ts" } }),
+		);
+		const acquisition = await acquireTargetContract(
+			join(fixture("good-front-door-local"), "src", "front-doors", "app", "command-contract.ts"),
+		);
+		if (!acquisition.ok) throw new Error("fixture app contract should acquire");
+		const contracts = {
+			app: { ...acquisition.contracts.app, script: "app" },
+		} as typeof acquisition.contracts;
+		const findings = await runSurfaceAudit({
+			layout: await resolveTargetLayout(root),
+			contracts,
+			only: null,
+		});
+
+		expect(findings.length).toBeGreaterThan(0);
+		expect(
+			findings.every(
+				(f) =>
+					f.clauseId === "runnable-resolves" &&
+					f.summary.includes("script app points to a missing entrypoint file"),
+			),
+		).toBe(true);
+	});
+
+	test("script-resolution findings respect --only (no clause leak)", async () => {
+		// With only:"declared-coverage-runs", an unresolved script must NOT leak a
+		// runnable-resolves finding — the gate sits before the push (finding B).
+		const root = fixture("good-front-door-local");
+		const acquisition = await acquireTargetContract(
+			join(root, "src", "front-doors", "app", "command-contract.ts"),
+		);
+		if (!acquisition.ok) throw new Error("fixture app contract should acquire");
+		const contracts = {
+			app: { ...acquisition.contracts.app, script: "missing" },
+		} as typeof acquisition.contracts;
+		const findings = await runSurfaceAudit({
+			layout: await resolveTargetLayout(root),
+			contracts,
+			only: "declared-coverage-runs",
+		});
+		expect(findings.map((f) => f.clauseId)).not.toContain("runnable-resolves");
+	});
+
+	test("an uncovered front door (script but no contract) fires runnable-resolves", async () => {
+		// bad-front-door-uncovered ships src/front-doors/legacy/legacy.ts via a
+		// package.json script with NO command-contract.ts beside it. Without
+		// reconciliation the auditor reports clean while legacy goes unaudited
+		// (adversarial finding A: silent coverage drop).
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-front-door-uncovered"),
+			only: null,
+		});
+		expect(outcome.laneDetected).toBe(true);
+		const finding = outcome.findings.find(
+			(f) => f.clauseId === "runnable-resolves" && f.summary.includes("legacy"),
+		);
+		expect(finding).toBeDefined();
+		expect(finding?.summary).toContain("goes unaudited");
 	});
 
 	test("a broken --json failure envelope fires json-valid-under-failure", async () => {
@@ -261,6 +453,74 @@ describe("surface audit — each clause fires", () => {
 		expect(finding).toBeDefined();
 		expect(finding?.kind).toBe("surface");
 		expect(finding?.summary).toContain("ran 1 of 4");
+	});
+
+	// Exit-code findings are owned by exit-code-matches-declared, NOT
+	// json-valid-under-failure: the two clauses read the same failing invocation
+	// but are gated independently, so `--only` on one never suppresses the other.
+	test("exit-code findings carry the exit-code-matches-declared clauseId, not json-valid-under-failure", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: "json-valid-under-failure",
+		});
+		// The envelope is broken (json-valid fires); the exit code 1 IS declared, so
+		// no exit-code finding is expected. Crucially, no exit-code drift is ever
+		// misattributed to the json-valid clause.
+		expect(outcome.findings.map((f) => f.clauseId)).toContain("json-valid-under-failure");
+		const exitMisattributed = outcome.findings.find(
+			(f) =>
+				f.clauseId === "json-valid-under-failure" &&
+				f.summary.includes("is not declared in the contract"),
+		);
+		expect(exitMisattributed).toBeUndefined();
+	});
+
+	test("--only on exit-code-matches-declared does not surface json-valid-under-failure findings", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("bad-envelope-on-failure"),
+			only: "exit-code-matches-declared",
+		});
+		expect(outcome.findings.map((f) => f.clauseId)).not.toContain("json-valid-under-failure");
+	});
+});
+
+// --- script entry resolution (adversarial finding D) ---
+
+describe("resolveScriptEntryFile — only resolves a simple, single entrypoint", () => {
+	const root = "/repo";
+
+	test("resolves a plain `bun run <file>`", () => {
+		expect(resolveScriptEntryFile(root, "bun run src/app.ts")).toBe("/repo/src/app.ts");
+	});
+
+	test("resolves a direct `./path/file.sh`", () => {
+		expect(resolveScriptEntryFile(root, "./src/test-runner.sh")).toBe("/repo/src/test-runner.sh");
+	});
+
+	test("keeps the entrypoint when trailing args/flags follow", () => {
+		expect(resolveScriptEntryFile(root, "bun run src/app.ts --json")).toBe("/repo/src/app.ts");
+	});
+
+	test("rejects a chained `a.ts && b.ts` (would half-audit the wrong binary)", () => {
+		expect(resolveScriptEntryFile(root, "bun run a.ts && bun run b.ts")).toBeNull();
+	});
+
+	test("rejects a `cd foo && …` prefix (resolves against the wrong root)", () => {
+		expect(resolveScriptEntryFile(root, "cd foo && bun run x.ts")).toBeNull();
+	});
+
+	test("rejects a decoy `echo build.sh && …` (would exec the decoy, not the real CLI)", () => {
+		expect(resolveScriptEntryFile(root, "echo build.sh && bun run real.ts")).toBeNull();
+	});
+
+	test("rejects a piped or subshell script", () => {
+		expect(resolveScriptEntryFile(root, "bun run a.ts | tee log")).toBeNull();
+		expect(resolveScriptEntryFile(root, "bun run $(which x).ts")).toBeNull();
+	});
+
+	test("rejects entrypoint paths that escape the audited root", () => {
+		expect(resolveScriptEntryFile(root, "bun run ../outside.ts")).toBeNull();
+		expect(resolveScriptEntryFile(root, "./../outside.sh")).toBeNull();
 	});
 });
 

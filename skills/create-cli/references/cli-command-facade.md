@@ -37,7 +37,7 @@ as the enforcement backend.
 
 ## Workflow
 
-- Capture the Minimum CLI design brief from `../SKILL.md`.
+- Capture the Minimum CLI design brief from `SKILL.md`.
 - Apply `agent-native-cli-design.md`.
 - Name owners before implementation:
   - Contract owner.
@@ -80,6 +80,29 @@ judgment for:
 - Deprecation and migration posture.
 - Package-owned safety policy.
 - Package-owned recovery meaning.
+
+## Gotchas
+
+### Error hints reject commands and local paths
+
+- The facade scans every agent-facing envelope text and refuses commands
+  (`bun`, `npm`, `git`, ...) and local paths (`/Users/...`).
+- Rule owner: `runtime/cli-command-facade/src/runtime-text-safety.ts`.
+- A hint that inlines a fix command throws at envelope construction, not in a
+  test; the command path never runs.
+- Repair channel: keep the hint prose-only `summary`, set a structured
+  `action`, and point `docs_url` at the doc that owns the real command.
+- Commands live in docs; hints reference docs. No command string, no drift.
+
+### `bun --filter` is a display wrapper, not a CLI surface
+
+- `bun --filter <pkg> <script>` (Bun 1.3.14) elides child stdout to ~10 lines
+  and does not forward parent stdin to the child.
+- Never pipe a stdin receipt through `--filter`; the child sees empty stdin.
+- Never assert program help or output through `--filter`; the wrapper truncates
+  it and the assertion tests display budget, not the program.
+- Invoke the runner directly for stdin-fed commands and for output assertions:
+  `bun run <path-to-runner> <command>`.
 
 ## Local Link
 

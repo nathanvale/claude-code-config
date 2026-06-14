@@ -32,7 +32,7 @@ import { AUDIT_CLAUSE_IDS, getClause } from "./clause-catalog.ts";
 import { auditorContracts } from "./command-contract.ts";
 import { readLedgerFile, upsertFinding, writeLedgerFile } from "./ledger/index.ts";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 // --- parsed command shape ---
 

@@ -1,0 +1,10 @@
+{
+	"name": "fixture-bad-front-door-duplicate-command-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-bad facade CLI fixture with duplicate command names across front-door-local contracts.",
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

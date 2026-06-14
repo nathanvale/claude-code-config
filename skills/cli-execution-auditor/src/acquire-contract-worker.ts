@@ -23,11 +23,19 @@ async function main(): Promise<void> {
 	// throw's own message reaches stderr verbatim.
 	const moduleExports = (await import(contractPath)) as Record<string, unknown>;
 
-	const contracts = findContractByShape(moduleExports);
-	if (!contracts) {
+	const shape = findContractByShape(moduleExports);
+	if (shape.kind === "none") {
 		const result: ContractAcquisition = {
 			ok: false,
 			reason: "no facade contract export found (no object whose values are command contracts)",
+		};
+		process.stdout.write(JSON.stringify(result));
+		return;
+	}
+	if (shape.kind === "ambiguous") {
+		const result: ContractAcquisition = {
+			ok: false,
+			reason: `ambiguous facade contract: ${shape.count} shape-matching exports — export exactly one command contract object so the auditor exercises the real surface, not a decoy`,
 		};
 		process.stdout.write(JSON.stringify(result));
 		return;
@@ -38,8 +46,9 @@ async function main(): Promise<void> {
 	// is the boundary between untyped acquisition and typed validation.
 	const parsed = parseCommandFacadeContract(
 		// biome-ignore lint/suspicious/noExplicitAny: foreign contract validated by this call.
-		contracts as any,
+		shape.contracts as any,
 	);
+	const contracts = shape.contracts;
 	const driftCodes = parsed.ok ? [] : parsed.issues.map((issue) => issue.category);
 	const result: ContractAcquisition = { ok: true, contracts, driftCodes };
 	process.stdout.write(JSON.stringify(result));

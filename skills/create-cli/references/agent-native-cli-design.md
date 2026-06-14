@@ -59,6 +59,24 @@ Add recipes when they change driver behavior or reduce real risk.
   `../../../CONTEXT.md`.
 - Private implementation detail stays out of create-cli prose.
 
+## CLI Front Door Shape
+
+- Keep simple single-CLI packages flat.
+- Use `src/front-doors/<cli-name>/` only when a package has multiple CLI Front
+  Doors or one CLI Front Door needs an owner folder.
+- Keep package-level `src/command-contract.ts` when command vocabulary, result
+  literals, actions, or facade contract fragments are shared.
+- Put a front-door-local `command-contract.ts` under
+  `src/front-doors/<cli-name>/` only when that CLI Front Door owns distinct
+  public Interface vocabulary.
+- Keep one package-root `package.json` unless distribution, dependency, or
+  runtime ownership needs an independent package.
+- Let the Command Contract Locator find `src/command-contract.ts` and
+  `src/front-doors/**/command-contract.ts`.
+- Treat Command Contract Locator discovery behavior as owned by
+  `cli-execution-auditor` and `scripts/check-workspace-facade-invariants.ts`.
+- Keep consumer folder topology out of `runtime/cli-command-facade`.
+
 ## Implementation Shape
 
 Use when planning or building an agent-native CLI with multiple commands,

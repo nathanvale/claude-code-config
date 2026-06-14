@@ -101,6 +101,10 @@ Use when one skill owns more than one CLI tool or runtime helper.
 - Keep all Bun-owned source under `src/`.
 - Put public CLI entrypoints at `src/<command-name>.ts`.
 - Put shared contracts at `src/command-contract.ts` when commands share discovery, metadata, or result vocabulary.
+- Use `src/front-doors/<cli-name>/` only when a package has multiple CLI Front Doors or one CLI Front Door needs an owner folder.
+- Put front-door-local contracts at `src/front-doors/<cli-name>/command-contract.ts` only when that CLI Front Door owns distinct public Interface vocabulary.
+- Let the Command Contract Locator discover `src/command-contract.ts` and `src/front-doors/*/command-contract.ts`.
+- Keep package-level contracts first when shared vocabulary exists.
 - Put shared model and policy files at `src/<domain>-model.ts`, `src/<domain>-engine.ts`, `src/<domain>-validation.ts`, or similarly owned names.
 - Prefer command-domain prefixes over a generic `src/tools/` bucket.
 - Use `src/<command-name>/` only after one command grows enough files that a flat prefix becomes harder to scan.

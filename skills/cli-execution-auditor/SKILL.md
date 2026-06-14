@@ -17,19 +17,19 @@ facade lane only.
 ## Command
 
 ```text
-auditor audit <target> [--only <clause>] [--ledger <path>] [--json]
+bun run auditor -- audit <target> [--only <clause>] [--ledger <path>] [--json]
 ```
 
-- `<target>` — path to a facade-backed skill (has `@side-quest/cli-command-facade` dep + `src/command-contract.ts`).
+- `<target>` — path to a facade-backed skill with `@side-quest/cli-command-facade` and a discovered command contract.
 - `--only <clause>` — restrict to one clause id (see the catalog).
 - `--ledger <path>` — ledger destination (default `docs/cli-audits/<cli-name>/audit.md`).
 - Exit: `0` clean, `1` findings, `2` usage error.
 
-Front door: `package.json#scripts` (`auditor`). Run via `bun run src/auditor.ts`.
+Front door: `package.json#scripts` (`auditor`).
 
 ## Workflow
 
-1. Run `auditor audit <target>` on a facade-backed CLI.
+1. Run `bun run auditor -- audit <target>` on a facade-backed CLI.
 2. Read the plain summary; escalate to `--json` for the structured envelope (repair hints, run correlation).
 3. A non-facade target is skipped with a reason, not a crash.
 4. Findings write to the ledger; re-running dedupes by signature and preserves resolved history.

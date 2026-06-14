@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
+import { discoverCommandContractPaths } from "../skills/cli-execution-auditor/src/command-contract-discovery.ts";
 
 type Workspaces =
 	| string[]
@@ -207,10 +208,8 @@ function discoverLocalScripts(packageJson: PackageJson | null): Record<string, s
 	return localScripts;
 }
 
-function discoverContractPaths(packagePath: string): string[] {
-	const contractPath = join(packagePath, "src/command-contract.ts");
-
-	return existsSync(repoPath(contractPath)) ? [contractPath] : [];
+async function discoverContractPaths(packagePath: string): Promise<string[]> {
+	return discoverCommandContractPaths(repoPath(packagePath));
 }
 
 function expectedShebangForBinTarget(binTarget: string): string | null {
@@ -1078,8 +1077,8 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 		continue;
 	}
 
-	for (const contractPath of discoverContractPaths(packagePath)) {
-		const contractText = readFileSync(repoPath(contractPath), "utf8");
+	for (const contractPath of await discoverContractPaths(packagePath)) {
+		const contractText = readFileSync(contractPath, "utf8");
 
 		const scriptValueMatches = contractText.matchAll(/script:\s*"([^"]+)"/g);
 
@@ -1088,7 +1087,7 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 
 			if (!allowedScriptNames.has(scriptValue)) {
 				findings.push({
-					path: contractPath,
+					path: displayPath(contractPath),
 					message: `Command metadata script ${scriptValue} must be a declared local command name for ${packagePath}; contracts name command identity, not bun run, dist, src, or local paths.`,
 				});
 			}

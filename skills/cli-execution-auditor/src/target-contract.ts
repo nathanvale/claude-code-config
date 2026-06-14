@@ -74,25 +74,39 @@ export async function acquireTargetContract(contractPath: string): Promise<Contr
 	}
 }
 
+/** Result of shape-based contract discovery: the match, nothing, or ambiguity. */
+export type ContractShapeResult =
+	| { kind: "found"; contracts: Record<string, AcquiredCommandContract> }
+	| { kind: "none" }
+	| { kind: "ambiguous"; count: number };
+
 /**
  * Find the facade contract export in a target module by SHAPE, not name (KTD6:
  * no naming convention). The contract is the exported object whose values all
  * look like facade command contracts (have `script`, `summary`, `flags`,
- * `exitCodes`). Returns the first such export, or null.
+ * `exitCodes`).
+ *
+ * Returns ALL shape-matching exports, not the first: a module with more than one
+ * is AMBIGUOUS. Returning the first silently lets a decoy export (a template or
+ * example object declared before the real contract) shadow the shipping contract,
+ * so the auditor would exercise the wrong object and could report clean while the
+ * real surface drifts. Ambiguity is surfaced as a structured acquisition failure
+ * (repair: export exactly one facade contract object) rather than a wrong guess.
  */
-export function findContractByShape(
-	moduleExports: Record<string, unknown>,
-): Record<string, AcquiredCommandContract> | null {
+export function findContractByShape(moduleExports: Record<string, unknown>): ContractShapeResult {
+	const matches: Record<string, AcquiredCommandContract>[] = [];
 	for (const value of Object.values(moduleExports)) {
 		if (!value || typeof value !== "object") continue;
 		const entries = Object.values(value as Record<string, unknown>);
 		if (entries.length === 0) continue;
 		const allLookLikeContracts = entries.every((entry) => isCommandContractShape(entry));
 		if (allLookLikeContracts) {
-			return value as Record<string, AcquiredCommandContract>;
+			matches.push(value as Record<string, AcquiredCommandContract>);
 		}
 	}
-	return null;
+	if (matches.length === 0) return { kind: "none" };
+	if (matches.length > 1) return { kind: "ambiguous", count: matches.length };
+	return { kind: "found", contracts: matches[0] };
 }
 
 function isCommandContractShape(value: unknown): boolean {
