@@ -16,13 +16,16 @@
 
 import { spawnSync } from "node:child_process";
 import {
+	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { wtContracts } from "../skills/wt/src/command-contract.ts";
@@ -247,6 +250,120 @@ function parseEnvelope(result: RunResult): Record<string, unknown> {
 	}
 }
 
+function envelopeData(
+	envelope: Record<string, unknown>,
+	result: RunResult,
+): Record<string, unknown> {
+	const data = envelope.data;
+	if (typeof data !== "object" || data === null || Array.isArray(data)) {
+		throw new Error(`Expected envelope.data object:\n${describeRun(result)}`);
+	}
+	return data as Record<string, unknown>;
+}
+
+function expectOkEnvelope(result: RunResult, contractId: string): Record<string, unknown> {
+	expect(result.exitCode, describeRun(result)).toBe(0);
+	const envelope = parseEnvelope(result);
+	expect(envelope.status, describeRun(result)).toBe("ok");
+	const data = envelopeData(envelope, result);
+	expect(data.contract_id, describeRun(result)).toBe(contractId);
+	return data;
+}
+
+function expectErrorEnvelope(result: RunResult, contractId: string): Record<string, unknown> {
+	expect(result.exitCode, describeRun(result)).not.toBe(0);
+	const envelope = parseEnvelope(result);
+	expect(envelope.status, describeRun(result)).toBe("error");
+	const data = envelopeData(envelope, result);
+	expect(data.contract_id, describeRun(result)).toBe(contractId);
+	return data;
+}
+
+function expectRef(
+	result: RunResult,
+	value: unknown,
+	kind: string,
+): { kind: string; id: string } {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error(`Expected ${kind} ref object:\n${describeRun(result)}`);
+	}
+	const record = value as Record<string, unknown>;
+	expect(record.kind, describeRun(result)).toBe(kind);
+	expect(typeof record.id, describeRun(result)).toBe("string");
+	expect((record.id as string).length, describeRun(result)).toBeGreaterThan(0);
+	return { kind: record.kind as string, id: record.id as string };
+}
+
+function refArg(ref: { kind: string; id: string }): string {
+	return `${ref.kind}:${ref.id}`;
+}
+
+function runAgentWorktreePackage(
+	args: readonly string[],
+	label: string,
+): RunResult {
+	return runCommand(
+		runners.packageCwd({
+			packageRoot: packageRoots.agentWorktree,
+			script: "agent-worktree",
+			args,
+			label,
+		}),
+	);
+}
+
+function expectInspectableAgentWorktreeRef(
+	repo: string,
+	ref: { kind: string; id: string },
+	label: string,
+): void {
+	const result = runAgentWorktreePackage(
+		["inspect", refArg(ref), "--repo", repo, "--json"],
+		label,
+	);
+	const data = expectOkEnvelope(result, "agent-worktree.lifecycle");
+	expect(data.found, describeRun(result)).toBe(true);
+	expect(data.ref, describeRun(result)).toEqual(ref);
+}
+
+function expectStringArrayContaining(
+	result: RunResult,
+	value: unknown,
+	substring: string,
+): void {
+	if (!Array.isArray(value)) {
+		throw new Error(`Expected string array containing ${substring}:\n${describeRun(result)}`);
+	}
+	expect(
+		value.some((entry) => typeof entry === "string" && entry.includes(substring)),
+		describeRun(result),
+	).toBe(true);
+}
+
+function workspacePathForRepo(repo: string): string {
+	const realRepo = realpathSync(repo);
+	return join(dirname(realRepo), `${basename(realRepo)}.code-workspace`);
+}
+
+function gitOutput(cwd: string, args: readonly string[]): string {
+	const result = spawnSync("git", [...args], {
+		cwd,
+		env: process.env,
+		encoding: "utf8",
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: KILL_SIGNAL,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (result.status !== 0) {
+		throw new Error(
+			`git ${args.join(" ")} failed:\ncwd=${cwd}\nexit=${result.status}\nstdout=${JSON.stringify(
+				excerpt(result.stdout ?? ""),
+			)}\nstderr=${JSON.stringify(excerpt(result.stderr ?? ""))}`,
+		);
+	}
+	return result.stdout ?? "";
+}
+
 /**
  * Create a tracked temp root, run `body`, and delete the root only on success.
  *
@@ -281,33 +398,23 @@ async function withTempRepo<T>(
 	body: (repo: string) => Promise<T>,
 ): Promise<T> {
 	return withTempRoot(prefix, async (root) => {
+		const repoPath = join(root, "repo");
+		mkdirSync(repoPath, { recursive: true });
+		const repo = realpathSync(repoPath);
 		const git = (args: readonly string[]): void => {
-			const result = spawnSync("git", [...args], {
-				cwd: root,
-				env: process.env,
-				encoding: "utf8",
-				timeout: SPAWN_TIMEOUT_MS,
-				killSignal: KILL_SIGNAL,
-			});
-			if (result.status !== 0) {
-				throw new Error(
-					`git ${args.join(" ")} failed in temp repo:\ncwd=${root}\nexit=${result.status}\nstderr=${JSON.stringify(
-						excerpt(result.stderr ?? ""),
-					)}`,
-				);
-			}
+			gitOutput(repo, args);
 		};
 
 		git(["init", "--initial-branch=main"]);
 		git(["config", "user.name", "Command Entrypoint Test"]);
 		git(["config", "user.email", "command-entrypoint@example.test"]);
 		git(["commit", "--allow-empty", "-m", "chore: seed repo"]);
+		git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+		git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
 
-		return body(root);
+		return body(repo);
 	});
 }
-
-void withTempRepo;
 
 /**
  * Read a package.json's `scripts` block from disk.
@@ -714,4 +821,200 @@ describe("command entrypoint integration: runtime json", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+});
+
+describe("command entrypoint integration: wt real-repo lifecycle", () => {
+	test(
+		"wt sync --json writes a generated workspace in a real temp repo",
+		async () => {
+			await withTempRepo("wt-sync", async (repo) => {
+				const result = runCommand(
+					runners.packageCwd({
+						packageRoot: packageRoots.wt,
+						script: "wt",
+						args: ["sync", "--repo", repo, "--json"],
+						label: "wt sync --json real repo (package-cwd)",
+					}),
+				);
+				const data = expectOkEnvelope(result, "wt.workspace");
+				const workspacePath = workspacePathForRepo(repo);
+
+				expect(data.action, describeRun(result)).toBe("sync");
+				expect(data.changed_state, describeRun(result)).toBe("written");
+				expect(data.workspace_path, describeRun(result)).toBe(workspacePath);
+				expect(existsSync(workspacePath), describeRun(result)).toBe(true);
+				expect(
+					readFileSync(workspacePath, "utf8").startsWith("// GENERATED by wt"),
+					describeRun(result),
+				).toBe(true);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"wt new and rm create, remove, and re-render a real linked worktree",
+		async () => {
+			await withTempRepo("wt-new-rm", async (repo) => {
+				const branch = "feat/command-entrypoint";
+				const targetPath = join(repo, ".worktrees", "feat-command-entrypoint");
+
+				const create = runCommand(
+					runners.packageCwd({
+						packageRoot: packageRoots.wt,
+						script: "wt",
+						args: ["new", branch, "--repo", repo, "--json"],
+						label: "wt new --json real repo (package-cwd)",
+					}),
+				);
+				const createData = expectOkEnvelope(create, "wt.workspace");
+				expect(createData.action, describeRun(create)).toBe("new");
+				expect(createData.changed_state, describeRun(create)).toBe("written");
+				expect(existsSync(targetPath), describeRun(create)).toBe(true);
+				expect(
+					gitOutput(repo, ["worktree", "list", "--porcelain"]),
+					describeRun(create),
+				).toContain(`branch refs/heads/${branch}`);
+
+				const remove = runCommand(
+					runners.packageCwd({
+						packageRoot: packageRoots.wt,
+						script: "wt",
+						args: ["rm", branch, "--force", "--repo", repo, "--json"],
+						label: "wt rm --json real repo (package-cwd)",
+					}),
+				);
+				const removeData = expectOkEnvelope(remove, "wt.workspace");
+				expect(removeData.action, describeRun(remove)).toBe("rm");
+				expect(removeData.changed_state, describeRun(remove)).toBe("written");
+				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
+				expect(
+					gitOutput(repo, ["worktree", "list", "--porcelain"]),
+					describeRun(remove),
+				).not.toContain(`branch refs/heads/${branch}`);
+				expect(existsSync(workspacePathForRepo(repo)), describeRun(remove)).toBe(true);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("command entrypoint integration: agent-worktree real-repo lifecycle", () => {
+	test(
+		"agent-worktree create persists a run ref and delete previews branch deletion",
+		async () => {
+			await withTempRepo("agent-worktree-create", async (repo) => {
+				const branch = "feat/agent-worktree-entrypoint";
+				const targetPath = join(repo, ".worktrees", "feat-agent-worktree-entrypoint");
+
+				const create = runAgentWorktreePackage(
+					["create", branch, "--repo", repo, "--json"],
+					"agent-worktree create --json real repo (package-cwd)",
+				);
+				const createData = expectOkEnvelope(create, "agent-worktree.lifecycle");
+				const runRef = expectRef(create, createData.run_ref, "run");
+
+				expect(createData.action, describeRun(create)).toBe("create");
+				expect(createData.changed_state, describeRun(create)).toBe("complete");
+				expect(createData.preview, describeRun(create)).toBe(false);
+				expect(existsSync(targetPath), describeRun(create)).toBe(true);
+
+				expectInspectableAgentWorktreeRef(
+					repo,
+					runRef,
+					"agent-worktree inspect run ref real repo (package-cwd)",
+				);
+
+				const deletePreview = runAgentWorktreePackage(
+					[
+						"delete",
+						branch,
+						"--dry-run",
+						"--delete-branch",
+						"--repo",
+						repo,
+						"--json",
+					],
+					"agent-worktree delete --dry-run --delete-branch real repo (package-cwd)",
+				);
+				const previewData = expectOkEnvelope(
+					deletePreview,
+					"agent-worktree.lifecycle",
+				);
+				expect(previewData.action, describeRun(deletePreview)).toBe("delete");
+				expect(previewData.preview, describeRun(deletePreview)).toBe(true);
+				expect(previewData.changed_state, describeRun(deletePreview)).toBe("none");
+				expectStringArrayContaining(
+					deletePreview,
+					previewData.changes,
+					`delete branch ${branch}`,
+				);
+				expect(existsSync(targetPath), describeRun(deletePreview)).toBe(true);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("command entrypoint integration: preflight recovery refs", () => {
+	test(
+		"protected branch delete failure ref survives inspect and recover process boundaries",
+		async () => {
+			await withTempRepo("agent-worktree-recovery", async (repo) => {
+				const deleteMain = runAgentWorktreePackage(
+					["delete", "main", "--force", "--repo", repo, "--json"],
+					"agent-worktree delete main protected branch (package-cwd)",
+				);
+				const failureData = expectErrorEnvelope(
+					deleteMain,
+					"agent-worktree.lifecycle",
+				);
+				const failureRef = expectRef(deleteMain, failureData.failure_ref, "failure");
+				const failureArg = refArg(failureRef);
+
+				expect(failureData.action, describeRun(deleteMain)).toBe("delete");
+				expect(failureData.changed_state, describeRun(deleteMain)).toBe("none");
+				expect(failureData.reason, describeRun(deleteMain)).toBe("protected_branch");
+				expect(failureData.next_safe_action, describeRun(deleteMain)).toBe("inspect");
+
+				expectInspectableAgentWorktreeRef(
+					repo,
+					failureRef,
+					"agent-worktree inspect failure ref (package-cwd)",
+				);
+
+				const recover = runAgentWorktreePackage(
+					["recover", failureArg, "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree recover failure ref dry-run (package-cwd)",
+				);
+				const recoverData = expectOkEnvelope(recover, "agent-worktree.lifecycle");
+				expect(recoverData.action, describeRun(recover)).toBe("recover");
+				expect(recoverData.preview, describeRun(recover)).toBe(true);
+				expect(recoverData.changed_state, describeRun(recover)).toBe("none");
+				expect(recoverData.failure_ref, describeRun(recover)).toEqual(failureRef);
+				expectStringArrayContaining(recover, recoverData.changes, `inspect ${failureArg}`);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("command entrypoint integration: promotion boundary", () => {
+	test("root default gates do not run the explicit integration suite", () => {
+		const rootScripts = readPackageScripts(repoRoot);
+		const portabilityProof = readFileSync(
+			join(repoRoot, "scripts/prove-workspace-portability.ts"),
+			"utf8",
+		);
+
+		expect(rootScripts["command-entrypoint:integration"]).toBe(
+			"bun test scripts/command-entrypoint.integration.test.ts",
+		);
+		expect(rootScripts.test ?? "").not.toContain("command-entrypoint");
+		expect(rootScripts["prove:workspace-portability"] ?? "").not.toContain(
+			"command-entrypoint",
+		);
+		expect(portabilityProof).not.toContain("command-entrypoint:integration");
+		expect(portabilityProof).not.toContain("command-entrypoint.integration.test");
+	});
 });

@@ -12,18 +12,22 @@ import {
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_COST_STATUS,
+	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
+	type HealthResultData,
 	type Receipt,
 	type ReviewResultData,
 	type SkillFeedbackCommand,
 	buildSoftwareLearningReport,
 	normalizeReport,
 	parseCloseoutReceipt,
+	parseHealthResultData,
 	parsePurgeResultData,
 	parseReviewResultData,
 	parseReceipt,
@@ -179,6 +183,56 @@ function reviewResultV2Fixture(): ReviewResultData {
 	return structuredClone(MINIMAL_REVIEW_RESULT_V2);
 }
 
+const MINIMAL_HEALTH_RESULT = {
+	contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+	inbox_status: "populated",
+	counts: {
+		primary: 2,
+		low_signal: 1,
+		invalid: 0,
+		skipped_unsafe: 0,
+		unlinked_primary: 1,
+	},
+	newest: {
+		primary_generated_ts: "2026-06-13T00:00:00.000Z",
+		low_signal_generated_ts: "2026-06-12T00:00:00.000Z",
+	},
+	warnings: [
+		{
+			reason_id: "unlinked_primary_reports",
+			summary: "Primary reports lack trusted skill-run correlation.",
+		},
+	],
+	claim_readiness: {
+		runtime_capture: {
+			status: "evidence_only",
+			reason_ids: ["hook_approval_state_not_machine_observable"],
+		},
+		trusted_skill_identity: {
+			status: "blocked",
+			reason_ids: ["missing_engine_owned_identity"],
+		},
+		daily_pilot: {
+			status: "blocked",
+			reason_ids: ["pilot_gate_not_accepted"],
+		},
+	},
+	correlation: {
+		status: "partially_linked",
+		linked_primary_count: 1,
+		unlinked_primary_count: 1,
+	},
+	next_action: {
+		action_id: "run-review",
+		summary: "Run review for claim-safe ledger detail.",
+	},
+} as const satisfies HealthResultData;
+
+function healthResultFixture(): HealthResultData {
+	return structuredClone(MINIMAL_HEALTH_RESULT);
+}
+
 const MINIMAL_PURGE_RESULT = {
 	contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
@@ -201,7 +255,7 @@ const MINIMAL_PURGE_RESULT = {
 } as const satisfies SkillFeedbackPurgeResultData;
 
 describe("skill-feedback U2 command contract", () => {
-	test("declares valid facade-backed record, closeout, and review commands", () => {
+	test("declares valid facade-backed record, closeout, review, health, and purge commands", () => {
 		const result = parseCommandFacadeContract(skillFeedbackContracts, {
 			path: "skills/skill-feedback/src/command-contract.ts",
 			writeImplyingMutations: new Set(["capture", "closeout", "purge"]),
@@ -212,6 +266,7 @@ describe("skill-feedback U2 command contract", () => {
 			"record",
 			"closeout",
 			"review",
+			"health",
 			"purge",
 		]);
 		expect(discoveryTree().commands.record?.result_contract).toMatchObject({
@@ -225,6 +280,10 @@ describe("skill-feedback U2 command contract", () => {
 		expect(discoveryTree().commands.review?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+		});
+		expect(discoveryTree().commands.health?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 		});
 		expect(discoveryTree().commands.purge?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
@@ -269,6 +328,18 @@ describe("skill-feedback U2 command contract", () => {
 		expect(skillFeedbackContracts.review.usage).toEqual([
 			"review [--plain] [--repo <path>]",
 		]);
+	});
+
+	test("health flags mirror review as read-only JSON/plain output", () => {
+		expect(Object.keys(skillFeedbackContracts.health.flags).sort()).toEqual([
+			"--plain",
+			"--repo",
+		]);
+		expect(skillFeedbackContracts.health.usage).toEqual([
+			"health [--plain] [--repo <path>]",
+		]);
+		expect(skillFeedbackContracts.health.sideEffects).toEqual(["read"]);
+		expect(skillFeedbackContracts.health.outputModes).toEqual(["json", "plain"]);
 	});
 
 	test("parses a complete flat receipt into the full report field set", () => {
@@ -416,6 +487,80 @@ describe("skill-feedback U2 command contract", () => {
 });
 
 describe("skill-feedback U1 review result v2 contract", () => {
+	test("validates health result output at the contract boundary", () => {
+		const parsed = parseHealthResultData(healthResultFixture());
+
+		expect(parsed.kind).toBe("ok");
+		if (parsed.kind !== "ok") throw new Error("expected valid health result");
+		expect(parsed.data.contract).toBe(SKILL_FEEDBACK_HEALTH_CONTRACT_ID);
+		expect(parsed.data.schema_version).toBe(
+			SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+		);
+		expect(parsed.data.inbox_status).toBe("populated");
+		expect(parsed.data.next_action.action_id).toBe("run-review");
+	});
+
+	test("rejects malformed health result fields and enums", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "unknown top-level field",
+				mutate: (data) => {
+					data.repo_root = "/repo";
+				},
+				path: "repo_root",
+				reason: "unknown_field",
+			},
+			{
+				name: "invalid inbox status",
+				mutate: (data) => {
+					data.inbox_status = "stale";
+				},
+				path: "inbox_status",
+				reason: "invalid",
+			},
+			{
+				name: "bad warning reason",
+				mutate: (data) => {
+					data.warnings[0].reason_id = "mystery_warning";
+				},
+				path: "warnings[0].reason_id",
+				reason: "invalid_warning_reason",
+			},
+			{
+				name: "bad readiness status",
+				mutate: (data) => {
+					data.claim_readiness.runtime_capture.status = "waiting";
+				},
+				path: "claim_readiness.runtime_capture.status",
+				reason: "invalid_readiness_status",
+			},
+			{
+				name: "bad next action",
+				mutate: (data) => {
+					data.next_action.action_id = "delete-now";
+				},
+				path: "next_action.action_id",
+				reason: "invalid_action_id",
+			},
+		];
+
+		for (const scenario of cases) {
+			const data = healthResultFixture() as Record<string, any>;
+			scenario.mutate(data);
+
+			expect(parseHealthResultData(data), scenario.name).toMatchObject({
+				kind: "invalid",
+				path: scenario.path,
+				reason: scenario.reason,
+			});
+		}
+	});
+
 	test("validates purge result output at the contract boundary", () => {
 		const parsed = parsePurgeResultData(MINIMAL_PURGE_RESULT);
 
@@ -482,6 +627,75 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		} satisfies ReviewResultData;
 
 		expect(parseReviewResultData(data)).toMatchObject({ kind: "ok" });
+		expect(
+			parseReviewResultData({
+				...reviewResultV2Fixture(),
+				read_target: {
+					explicit: false,
+					repo_root: "/repo",
+					inbox_path: "/repo/.skill-feedback",
+				},
+			}),
+		).toMatchObject({ kind: "ok" });
+	});
+
+	test("rejects malformed review read-target diagnostics", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "unknown read-target field",
+				mutate: (data) => {
+					data.read_target.extra = true;
+				},
+				path: "read_target.extra",
+				reason: "unknown_field",
+			},
+			{
+				name: "non-boolean explicit marker",
+				mutate: (data) => {
+					data.read_target.explicit = "true";
+				},
+				path: "read_target.explicit",
+				reason: "expected_boolean",
+			},
+			{
+				name: "non-string repo root",
+				mutate: (data) => {
+					data.read_target.repo_root = 42;
+				},
+				path: "read_target.repo_root",
+				reason: "expected_string",
+			},
+			{
+				name: "non-string optional target path",
+				mutate: (data) => {
+					data.read_target.target_path = false;
+				},
+				path: "read_target.target_path",
+				reason: "expected_string",
+			},
+		];
+
+		for (const scenario of cases) {
+			const data = structuredClone(reviewResultV2Fixture()) as Record<string, any>;
+			data.read_target = {
+				explicit: true,
+				repo_root: "/repo",
+				inbox_path: "/repo/.skill-feedback",
+				target_path: "/repo/package",
+			};
+			scenario.mutate(data);
+
+			expect(parseReviewResultData(data), scenario.name).toMatchObject({
+				kind: "invalid",
+				path: scenario.path,
+				reason: scenario.reason,
+			});
+		}
 	});
 
 	test("rejects unknown v2 enum values", () => {

@@ -6,8 +6,8 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 
 - Keep `skills/skill-feedback/src/` flat.
 - Read `command-contract.ts` first for schema versions, contract ids, enums, exported result shapes, and parser rules.
-- Read review orchestration in `skill-feedback-runner.ts`.
-- Keep CLI orchestration, inbox reads, review dispatch, and rendering glue in `skill-feedback-runner.ts`.
+- Read review and health orchestration in `skill-feedback-runner.ts`.
+- Keep CLI orchestration, inbox reads, review/health dispatch, and rendering glue in `skill-feedback-runner.ts`.
 - Read `review-ledger-reducer.ts` for reducer-owned review-unit, ledger-entry, evidence-tier, entry-local claim, and readiness logic.
 - Read `ledger-anchor-adapter.ts` for repo-contained path canonicalization, anchor strength, weak-anchor reasons, and strong-only `ledger_anchor_key` facts.
 - Put agent-authored string safety in `redaction.ts`.
@@ -43,9 +43,12 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 
 - Keep exact v2 review fields, enum values, parser rules, and result version in `skills/skill-feedback/src/command-contract.ts`.
 - Treat `ReviewResultData` as the v2 review result contract; the runner emits it.
+- Treat `HealthResultData` as the health result contract; the runner emits it.
 - `ReviewResultDataV1` survives only as a type source for reused v1 sub-shapes (`retention`, `pilot_checkpoint`); v2 review output never carries `capture_readiness`.
 - Use `SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION` for review output; do not reuse the persisted report schema version for v2 review output.
+- Use `SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION` for health output; do not reuse review or persisted report schema versions.
 - Do not copy the v2 review schema into this reference.
+- Do not copy the health schema into this reference.
 - Hook-capture reports may carry `capture_runtime`.
 - Hook-capture reports may carry `skill_identity_provenance`.
 - Treat `skill_identity_provenance.trusted` as capture-source trust only.
@@ -144,10 +147,34 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Evaluate age selectors at current run time for each purge invocation.
 - Default purge lane is `all`; `keep_latest` applies across the selected logical lane.
 
+## Health Output
+
+- Run health through `skill-feedback health`.
+- Keep health mutation-free.
+- Emit JSON by default.
+- Support `--plain` for compact human reading.
+- Support `--repo <path>` through the same read-target resolver as review.
+- Do not fall back from a failed explicit `--repo` to caller cwd.
+- Do not expose absolute `repo_root` or `inbox_path` in healthy success data.
+- Emit `inbox_status` for missing, empty, populated, partially readable, or unsafe storage.
+- Return exit 0 for missing and empty valid-repo inbox states.
+- Return exit 1 for unsafe inbox roots.
+- Count primary, low-signal, invalid, skipped unsafe, and unlinked primary reports.
+- Reuse the safe inbox scan path shared by review and purge.
+- Treat low-signal as capture-health evidence only.
+- Summarize runtime capture, Trusted skill identity, and Daily pilot readiness separately.
+- Summarize linked, partially linked, all-unlinked, or absent primary correlation.
+- Warn when all primary evidence is unlinked.
+- Warn when low-signal capture volume reaches the runtime-inspection threshold.
+- Warn when retention age/count is ready for explicit purge preview.
+- Emit one next action id and summary.
+- Never delete, repair, or call purge helpers.
+
 ## Reading Rule
 
 - Use reports to find candidate improvements.
 - Confirm every proposed instruction change against local source evidence.
 - Treat unlinked evidence as correlation health before target-skill quality.
+- Use health before review when inbox operability or capture readiness is unclear.
 - Keep review mutation-free.
 - Run purge as a separate explicit mutation workflow.
