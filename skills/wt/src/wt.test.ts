@@ -81,6 +81,18 @@ describe("sync + drift gate", () => {
 		}
 	});
 
+	test("blocks overwrite when drifted in an interactive session, no --force", async () => {
+		const path = "/code/my-repo.code-workspace";
+		const runtime = fakeRuntime({ isInteractive: () => true });
+		runtime.writes.set(path, "{ hand edited, no wt header }");
+		const result = await runCommand({ command: "sync", positionals: [], force: false }, runtime);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("drift_blocked");
+			expect(result.exitCode).toBe(3);
+		}
+	});
+
 	test("--force overwrites a drifted file", async () => {
 		const path = "/code/my-repo.code-workspace";
 		const runtime = fakeRuntime();
@@ -110,6 +122,20 @@ describe("focus + color", () => {
 		expect(result.ok).toBe(true);
 		const registry = JSON.parse(runtime.writes.get("/code/my-repo/wt.config.json") ?? "{}");
 		expect(registry.branches["codex/x"].focus).toBe("skills/y");
+	});
+
+	test("malformed wt.config.json yields registry_unreadable, exit 1, not a throw", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set("/code/my-repo/wt.config.json", "{ not valid json");
+		const result = await runCommand(
+			{ command: "focus", positionals: ["codex/x", "skills/y"], force: true },
+			runtime,
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("registry_unreadable");
+			expect(result.exitCode).toBe(1);
+		}
 	});
 
 	test("color rejects an unknown color with exit 2", async () => {

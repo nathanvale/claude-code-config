@@ -72,7 +72,7 @@ Nathan hand-edits his VS Code workspace file across git worktrees. Manual editin
 
 ### Module ownership (maps to the contract's named owners)
 
-```
+```text
 skills/wt/
   SKILL.md                    # thin: owner paths + route, no copied contract
   package.json                # bin: wt → src/wt.ts; dep @side-quest/cli-command-facade

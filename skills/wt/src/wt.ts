@@ -99,8 +99,9 @@ export function createDefaultRuntime(overrides: Partial<WtRuntime> = {}): WtRunt
  * Render the repo's workspace and apply the drift gate before writing.
  *
  * Reads the registry and live worktrees, renders the workspace, then refuses to
- * overwrite a file that was edited since the last render unless `force` is set
- * or the session is interactive. This is the product's core safety rule.
+ * overwrite a file that was edited since the last render unless `force` is set.
+ * The gate holds in both interactive and non-interactive sessions; `--force` is
+ * the only override. This is the product's core safety rule.
  *
  * @param runtime - Injected I/O adapter
  * @param force - Overwrite a drift-detected workspace
@@ -129,7 +130,7 @@ export async function syncWorkspace(
 	}
 
 	const existing = await runtime.readTextFile(workspacePath);
-	if (existing !== null && isDrift(existing) && !force && !runtime.isInteractive()) {
+	if (existing !== null && isDrift(existing) && !force) {
 		return { kind: "drift_blocked", path: workspacePath };
 	}
 
@@ -148,18 +149,31 @@ export async function syncWorkspace(
 	const workspace = renderWorkspace(registry, worktrees, (worktreePath, subfolder) =>
 		probed.has(`${worktreePath}::${subfolder}`),
 	);
-	await runtime.writeTextFile(workspacePath, stampHeader(workspace));
+	try {
+		await runtime.writeTextFile(workspacePath, stampHeader(workspace));
+	} catch {
+		return {
+			kind: "error",
+			code: "write_failed",
+			message: "Could not write the workspace file.",
+		};
+	}
 	return { kind: "written", path: workspacePath };
 }
 
 /**
  * Persist a single branch preference into the registry, then re-render.
  *
+ * Parse and write failures are caught and returned as structured `error`
+ * results so a malformed `wt.config.json` or an I/O failure surfaces as a
+ * facade envelope instead of an uncaught exception escaping `runCommand`.
+ *
  * @param runtime - Injected I/O adapter
  * @param branch - Branch whose pref is being set
  * @param mutate - Applies the change to the branch's prefs in place
  * @param force - Passed through to the drift gate on the follow-up render
- * @returns The sync result after the registry write
+ * @returns The sync result after the registry write, or an `error` result when
+ *   the registry is unreadable or the write fails
  */
 export async function setPrefAndSync(
 	runtime: WtRuntime,
@@ -170,11 +184,28 @@ export async function setPrefAndSync(
 	const repoRoot = runtime.repoRoot();
 	const registryPath = `${repoRoot}/wt.config.json`;
 	const existing = await runtime.readTextFile(registryPath);
-	const registry: Registry = existing ? (JSON.parse(existing) as Registry) : { branches: {} };
+	let registry: Registry;
+	try {
+		registry = existing ? (JSON.parse(existing) as Registry) : { branches: {} };
+	} catch {
+		return {
+			kind: "error",
+			code: "registry_unreadable",
+			message: "wt.config.json is not valid JSON.",
+		};
+	}
 	const prefs = (registry.branches[branch] ?? {}) as Record<string, unknown>;
 	mutate(prefs);
 	registry.branches[branch] = prefs as Registry["branches"][string];
-	await runtime.writeTextFile(registryPath, `${JSON.stringify(registry, null, "\t")}\n`);
+	try {
+		await runtime.writeTextFile(registryPath, `${JSON.stringify(registry, null, "\t")}\n`);
+	} catch {
+		return {
+			kind: "error",
+			code: "write_failed",
+			message: "Could not write the registry file.",
+		};
+	}
 	return syncWorkspace(runtime, force);
 }
 
