@@ -62,8 +62,8 @@ that treats any one target as already selected.
   <inferred_seam>the exact path or concept the action options will use</inferred_seam>
   <target_alternatives>optional list when target confidence is ambiguous</target_alternatives>
   <options>
-    <option number="1" recommended="true">Run a solo Standard Seam Swarm pass for the selected seam.</option>
-    <option number="2">Dispatch 3 read-only subagents for a Standard Seam Swarm pass.</option>
+    <option number="1" recommended="true">Run a solo Standard Seam Swarm pass for <inferred_seam>.</option>
+    <option number="2">Dispatch 3 read-only subagents for a Standard Seam Swarm pass on <inferred_seam>.</option>
     <option number="3">Run ICA Candidate Factory for architecture opportunities or entropy lanes.</option>
     <option number="4">Run Adversary Review on an existing report, plan, ADR, or candidate list.</option>
     <option number="5">Resume / Compress an existing swarm handoff.</option>

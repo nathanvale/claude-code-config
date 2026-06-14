@@ -384,7 +384,7 @@ Resume / Compress:
 
 Prompt Pack Only:
 - `## Orchestrator Preflight`: compact target, file-list command, file count, exclusions, context docs, scope lock, and shard independence notes.
-- `## Shared Context Packet`: one shared packet with the complete file list once or a shared reference to it.
+- `## Shared Context Packet`: one shared packet containing the complete file list once.
 - `## Shard Plan`: shard names, personas, assigned file groups, and prompt mechanics.
 - `## Prompt Deltas`: per-shard deltas that refer back to the shared packet.
 - `## Synthesis Prompt`: compact synthesis prompt and selected output contract.
