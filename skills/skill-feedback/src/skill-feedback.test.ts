@@ -3,6 +3,7 @@ import {
 	mkdir,
 	readFile,
 	readdir,
+	realpath,
 	rm,
 	stat,
 	symlink,
@@ -25,10 +26,12 @@ import {
 	createDefaultSkillFeedbackRuntime,
 	parsePurgeArgs,
 	parseRecordFlags,
+	parseReviewArgs,
 	parseStdinTelemetry,
 	purgeSkillFeedbackInbox,
 	recordSkillFeedbackReceipt,
 	reviewSkillFeedbackInbox,
+	resolveSkillFeedbackReadTarget,
 	runProcessForTest,
 	type SkillFeedbackRuntime,
 } from "./skill-feedback-runner";
@@ -119,6 +122,13 @@ function stubRuntime(
 ): SkillFeedbackRuntime {
 	return createDefaultSkillFeedbackRuntime({
 		repoRoot: () => root,
+		resolveReadTarget: async (targetPath) => ({
+			ok: true,
+			explicit: targetPath !== undefined,
+			seedPath: targetPath ?? root,
+			repoRoot: root,
+			inboxPath: join(root, ".skill-feedback"),
+		}),
 		checkIgnored: async () => 0,
 		readGitSha: async () => BASE_RECEIPT.git_sha,
 		readSkillVersion: async (skill) => `${skill}@0.1.0`,
@@ -947,6 +957,202 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
+	});
+
+	test("review resolves the containing git root from a nested package cwd", async () => {
+		const root = await makeIgnoredGitRoot();
+		const packageCwd = join(root, "skills", "skill-feedback");
+		await mkdir(packageCwd, { recursive: true });
+		await writeInboxReport(
+			root,
+			"root-report.json",
+			v1CloseoutReport({
+				reportId: "report-at-root",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+
+		const result = await runCli(["review"], { cwd: packageCwd });
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result).data as {
+			coverage: { total_reports: number };
+			read_target?: unknown;
+		};
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.read_target).toBeUndefined();
+	});
+
+	test("review --repo resolves an explicit target without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeInboxReport(
+			caller,
+			"caller-a.json",
+			v1CloseoutReport({
+				reportId: "report-caller-a",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+		await writeInboxReport(
+			caller,
+			"caller-b.json",
+			v1CloseoutReport({
+				reportId: "report-caller-b",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+			}),
+		);
+		const target = await makeIgnoredGitRoot();
+		const realTarget = await realpath(target);
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+		await writeInboxReport(
+			target,
+			"target.json",
+			v1CloseoutReport({
+				reportId: "report-target",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+
+		const result = await runCli(["review", "--repo", nestedTarget], { cwd: caller });
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result).data as {
+			coverage: { total_reports: number };
+			read_target: {
+				explicit: boolean;
+				repo_root: string;
+				inbox_path: string;
+				target_path: string;
+			};
+		};
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: realTarget,
+			inbox_path: join(realTarget, ".skill-feedback"),
+			target_path: nestedTarget,
+		});
+	});
+
+	test("review --repo failure does not fall back to caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeInboxReport(
+			caller,
+			"caller.json",
+			v1CloseoutReport({
+				reportId: "report-caller",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+		const outsideGit = await makeRoot();
+
+		const result = await runCli(["review", "--repo", outsideGit], { cwd: caller });
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect((envelope.error as { code: string }).code).toBe(
+			"read_target_resolution_failed",
+		);
+		expect(envelope.data).toMatchObject({
+			changed_state: "none",
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			read_target: {
+				explicit: true,
+				target_path: outsideGit,
+			},
+		});
+	});
+
+	test("review outside git returns a repair-state envelope", async () => {
+		const outsideGit = await makeRoot();
+		const realOutsideGit = await realpath(outsideGit);
+
+		const result = await runCli(["review"], { cwd: outsideGit });
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect((envelope.error as { code: string }).code).toBe(
+			"read_target_resolution_failed",
+		);
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			read_target: {
+				explicit: false,
+				target_path: realOutsideGit,
+			},
+		});
+	});
+
+	test("review resolves a linked worktree top-level instead of the main checkout", async () => {
+		const main = await makeIgnoredGitRoot();
+		await run(["git", "config", "user.name", "Skill Feedback Test"], main);
+		await run(["git", "config", "user.email", "skill-feedback@example.test"], main);
+		await run(["git", "add", ".gitignore"], main);
+		await run(["git", "commit", "-m", "chore: seed repo"], main);
+		const linkedParent = await makeRoot();
+		const linked = join(linkedParent, "linked");
+		await run(["git", "worktree", "add", "-b", "feat/linked", linked], main);
+		await writeInboxReport(
+			main,
+			"main-a.json",
+			v1CloseoutReport({
+				reportId: "report-main-a",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+		await writeInboxReport(
+			main,
+			"main-b.json",
+			v1CloseoutReport({
+				reportId: "report-main-b",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			linked,
+			"linked.json",
+			v1CloseoutReport({
+				reportId: "report-linked",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+
+		const result = await runCli(["review"], { cwd: linked });
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result).data as {
+			coverage: { total_reports: number };
+			read_target?: unknown;
+		};
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.read_target).toBeUndefined();
+	});
+
+	test("read-target resolver passes full git argv and cwd to the runner", async () => {
+		const git = fakeGitRunner({
+			"git -C /repo/package rev-parse --show-toplevel": "/repo\n",
+		});
+
+		const resolution = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: git,
+		});
+
+		expect(resolution).toMatchObject({
+			ok: true,
+			explicit: true,
+			seedPath: "/repo/package",
+			repoRoot: "/repo",
+			inboxPath: "/repo/.skill-feedback",
+		});
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "-C", "/repo/package", "rev-parse", "--show-toplevel"],
+				cwd: "/repo/package",
+			},
+		]);
 	});
 
 	test("review treats low-signal mixed v0 and v1 reports as no-action", async () => {
@@ -1920,7 +2126,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 	});
 
 	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
-		const root = await makeRoot();
+		const root = await makeIgnoredGitRoot();
 		await writeInboxReport(root, "plain-heavy.json", {
 			schema_version: "1",
 			report_id: "report-plain-heavy",
@@ -2601,6 +2807,29 @@ describe("skill-feedback parseRecordFlags", () => {
 		expect(parseRecordFlags(["--outcome", "maybe"])).toEqual({
 			ok: false,
 			message: "--outcome is invalid.",
+		});
+	});
+});
+
+describe("skill-feedback parseReviewArgs", () => {
+	test("parses plain and explicit repo flags", () => {
+		expect(parseReviewArgs(["review", "--plain", "--repo", "/repo"])).toEqual({
+			ok: true,
+			options: {
+				plain: true,
+				targetPath: "/repo",
+			},
+		});
+	});
+
+	test("rejects missing repo values and unknown review flags", () => {
+		expect(parseReviewArgs(["--repo"])).toMatchObject({
+			ok: false,
+			message: "--repo requires a value.",
+		});
+		expect(parseReviewArgs(["--execute"])).toMatchObject({
+			ok: false,
+			message: "Unknown flag --execute.",
 		});
 	});
 });

@@ -569,6 +569,17 @@ export type ReviewInboxHealth = {
 	invalid_count: number;
 };
 
+/**
+ * Diagnostic read-target facts emitted only when path context changes review
+ * interpretation, such as an explicit `--repo` override.
+ */
+export type ReviewReadTarget = {
+	explicit: boolean;
+	repo_root: string;
+	inbox_path: string;
+	target_path?: string;
+};
+
 export type ReviewPilotCheckpoint = {
 	started_at: string;
 	age_days: number;
@@ -724,6 +735,7 @@ export type ReviewResultData = {
 	schema_version: typeof SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION;
 	coverage: ReviewCoverage;
 	inbox_health: ReviewInboxHealth;
+	read_target?: ReviewReadTarget;
 	open_items: readonly ReviewOpenItem[];
 	open_actions: readonly ReviewOpenAction[];
 	no_action?: { rationale: string };
@@ -1193,6 +1205,7 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"schema_version",
 	"coverage",
 	"inbox_health",
+	"read_target",
 	"open_items",
 	"open_actions",
 	"no_action",
@@ -1223,6 +1236,12 @@ const REVIEW_INBOX_HEALTH_FIELDS = [
 	"low_signal_reason_ids",
 	"skipped_unsafe_count",
 	"invalid_count",
+] as const;
+const REVIEW_READ_TARGET_FIELDS = [
+	"explicit",
+	"repo_root",
+	"inbox_path",
+	"target_path",
 ] as const;
 const REVIEW_OPEN_ITEM_FIELDS = [
 	"open_reason",
@@ -1480,6 +1499,10 @@ export function parseReviewResultData(
 	if (coverage) return coverage;
 	const inboxHealth = validateReviewInboxHealth(raw.inbox_health);
 	if (inboxHealth) return inboxHealth;
+	if ("read_target" in raw) {
+		const readTarget = validateReviewReadTarget(raw.read_target);
+		if (readTarget) return readTarget;
+	}
 	const openItems = validateReviewOpenItems(raw.open_items);
 	if (openItems) return openItems;
 	const openActions = validateReviewOpenActions(raw.open_actions);
@@ -2253,6 +2276,28 @@ function validateReviewInboxHealth(
 		health.low_signal_reason_ids,
 		"inbox_health.low_signal_reason_ids",
 	);
+}
+
+function validateReviewReadTarget(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const target = requireReviewRecord(raw, "read_target");
+	if (isReviewResultValidationError(target)) return target;
+	const unknown = validateAllowedKeys(
+		target,
+		new Set(REVIEW_READ_TARGET_FIELDS),
+		"read_target",
+	);
+	if (unknown) return unknown;
+	const explicit = validateReviewBoolean(target.explicit, "read_target.explicit");
+	if (explicit) return explicit;
+	for (const field of ["repo_root", "inbox_path"] as const) {
+		const error = validateReviewString(target[field], `read_target.${field}`);
+		if (error) return error;
+	}
+	if ("target_path" in target) {
+		return validateReviewString(target.target_path, "read_target.target_path");
+	}
 }
 
 function validatePurgeRetention(
@@ -3112,7 +3157,7 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 		review: {
 			script: "skill-feedback-runner",
 			summary: "Review inbox evidence without mutating reports.",
-			usage: ["review [--plain]"],
+			usage: ["review [--plain] [--repo <path>]"],
 			json: true,
 			audience: "agent",
 			mutation: "review",
@@ -3125,6 +3170,11 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 				"--plain": {
 					type: "boolean",
 					description: "Emit a compact human-readable review.",
+				},
+				"--repo": {
+					type: "string",
+					description:
+						"Resolve the read target from this path's repository root.",
 				},
 			},
 			exitCodes: reviewExitCodes,

@@ -261,6 +261,16 @@ describe("skill-feedback U2 command contract", () => {
 		]);
 	});
 
+	test("review flags expose plain output and explicit repo targeting", () => {
+		expect(Object.keys(skillFeedbackContracts.review.flags).sort()).toEqual([
+			"--plain",
+			"--repo",
+		]);
+		expect(skillFeedbackContracts.review.usage).toEqual([
+			"review [--plain] [--repo <path>]",
+		]);
+	});
+
 	test("parses a complete flat receipt into the full report field set", () => {
 		const parsed = parseReceipt(COMPLETE_RECEIPT);
 		expect(parsed.kind).toBe("ok");
@@ -458,6 +468,20 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		);
 		expect("allowed_claims" in parsed.data).toBe(false);
 		expect("capture_readiness" in parsed.data).toBe(false);
+	});
+
+	test("accepts optional review read-target diagnostics", () => {
+		const data = {
+			...reviewResultV2Fixture(),
+			read_target: {
+				explicit: true,
+				repo_root: "/repo",
+				inbox_path: "/repo/.skill-feedback",
+				target_path: "/repo/package",
+			},
+		} satisfies ReviewResultData;
+
+		expect(parseReviewResultData(data)).toMatchObject({ kind: "ok" });
 	});
 
 	test("rejects unknown v2 enum values", () => {

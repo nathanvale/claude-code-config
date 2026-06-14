@@ -43,6 +43,7 @@ import {
 	type ReviewClaimReadiness,
 	type ReviewClaimReadinessFact,
 	type ReviewOpenItem,
+	type ReviewReadTarget,
 	type ReportCardTarget,
 	type ReviewResultData,
 	type ReviewResultDataV1,
@@ -102,6 +103,45 @@ export type SkillFeedbackProcessResult = {
 };
 
 /**
+ * Subprocess result shape for repository discovery calls.
+ */
+export type SkillFeedbackGitResult = {
+	ok: boolean;
+	stdout: string;
+	stderr: string;
+	code: number;
+};
+
+/**
+ * Injectable git runner used by read-target resolution tests.
+ */
+export type SkillFeedbackGitRunner = (
+	args: readonly string[],
+	options: { cwd: string },
+) => Promise<SkillFeedbackGitResult>;
+
+/**
+ * Repository target selected for read commands, or repair-state context.
+ */
+export type ReadTargetResolution =
+	| {
+			ok: true;
+			explicit: boolean;
+			seedPath: string;
+			repoRoot: string;
+			inboxPath: string;
+	  }
+	| {
+			ok: false;
+			explicit: boolean;
+			seedPath: string;
+			code: "read_target_resolution_failed";
+			message: string;
+			hint: string;
+			gitExitCode?: number;
+	  };
+
+/**
  * Engine-read telemetry merged into the receipt from stdin (KTD2a).
  *
  * `model` is NEVER a CLI flag — it arrives only here, lifted from the harness
@@ -120,6 +160,8 @@ export type StdinTelemetry = {
 
 export type SkillFeedbackRuntime = {
 	repoRoot: () => string;
+	resolveReadTarget: (targetPath?: string) => Promise<ReadTargetResolution>;
+	runGit: SkillFeedbackGitRunner;
 	readGitSha: () => Promise<string>;
 	readSkillVersion: (skill: string) => Promise<string>;
 	readStdinTelemetry: () => Promise<StdinTelemetry>;
@@ -137,8 +179,18 @@ export type SkillFeedbackRuntime = {
 export function createDefaultSkillFeedbackRuntime(
 	overrides: Partial<SkillFeedbackRuntime> = {},
 ): SkillFeedbackRuntime {
+	const runGit = overrides.runGit ?? defaultGitRunner;
 	return {
 		repoRoot: () => process.cwd(),
+		resolveReadTarget:
+			overrides.resolveReadTarget ??
+			((targetPath) =>
+				resolveSkillFeedbackReadTarget({
+					targetPath,
+					cwd: process.cwd(),
+					runGit,
+				})),
+		runGit,
 		readGitSha: async () => {
 			const result = await runProcess(["git", "rev-parse", "HEAD"], process.cwd());
 			return result.exitCode === 0 ? result.stdout.trim() : "";
@@ -495,11 +547,35 @@ export async function reviewSkillFeedbackInbox(
 		runtime?: SkillFeedbackRuntime;
 		runId?: string;
 		plain?: boolean;
+		targetPath?: string;
 	} = {},
 ): Promise<SkillFeedbackProcessResult> {
 	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
 	const runId = options.runId ?? "skill-feedback-review";
-	const repoRoot = resolve(runtime.repoRoot());
+	const readTarget = await runtime.resolveReadTarget(options.targetPath);
+	if (!readTarget.ok) {
+		return errorResult(
+			runId,
+			RUNTIME_FAILURE_EXIT_CODE,
+			readTarget.code,
+			readTarget.message,
+			{
+				recoverability: "repair_state",
+				hint: readTarget.hint,
+				contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+				data: {
+					read_target: {
+						explicit: readTarget.explicit,
+						target_path: readTarget.seedPath,
+						...(readTarget.gitExitCode === undefined
+							? {}
+							: { git_exit_code: readTarget.gitExitCode }),
+					},
+				},
+			},
+		);
+	}
+	const repoRoot = readTarget.repoRoot;
 	try {
 		const inbox = await readReviewInbox(repoRoot, runtime);
 		const pilotStartedAt = await readPilotStartedAt(repoRoot, runtime);
@@ -510,6 +586,7 @@ export async function reviewSkillFeedbackInbox(
 			invalidCount: inbox.invalidCount,
 			nowIso: runtime.nowIso(),
 			pilotStartedAt,
+			readTarget: reviewReadTargetData(readTarget),
 		});
 		if (options.plain) {
 			return {
@@ -1056,6 +1133,7 @@ function buildReviewResultData(input: {
 	invalidCount?: number;
 	nowIso: string;
 	pilotStartedAt?: string;
+	readTarget?: ReviewReadTarget;
 }): ReviewResultData {
 	const reports = input.reports;
 	const lowSignalReports = input.lowSignalReports ?? [];
@@ -1115,6 +1193,7 @@ function buildReviewResultData(input: {
 			input.skippedUnsafeCount ?? 0,
 			input.invalidCount ?? 0,
 		),
+		...(input.readTarget ? { read_target: input.readTarget } : {}),
 		open_items: openItems,
 		open_actions: deriveOpenActions(openItems),
 		...(openItems.length === 0
@@ -1133,6 +1212,18 @@ function buildReviewResultData(input: {
 		ledger_entries: ledger.ledger_entries,
 		anchor_miss_telemetry: ledger.anchor_miss_telemetry,
 		claim_readiness: claimReadiness,
+	};
+}
+
+function reviewReadTargetData(
+	resolution: Extract<ReadTargetResolution, { ok: true }>,
+): ReviewReadTarget | undefined {
+	if (!resolution.explicit) return undefined;
+	return {
+		explicit: resolution.explicit,
+		repo_root: resolution.repoRoot,
+		inbox_path: resolution.inboxPath,
+		target_path: resolution.seedPath,
 	};
 }
 
@@ -2219,6 +2310,74 @@ export function parseStdinTelemetry(raw: string): StdinTelemetry {
 	return telemetry;
 }
 
+async function defaultGitRunner(
+	args: readonly string[],
+	options: { cwd: string },
+): Promise<SkillFeedbackGitResult> {
+	const result = await runProcess(args, options.cwd);
+	return {
+		ok: result.exitCode === 0,
+		stdout: result.stdout,
+		stderr: result.stderr,
+		code: result.exitCode,
+	};
+}
+
+/**
+ * Resolve the repository root a read command should inspect.
+ *
+ * @param input - Target path, caller cwd, and injectable git runner
+ * @returns Resolved repository and inbox paths, or a repair-state failure
+ */
+export async function resolveSkillFeedbackReadTarget(input: {
+	targetPath?: string;
+	cwd: string;
+	runGit: SkillFeedbackGitRunner;
+}): Promise<ReadTargetResolution> {
+	const explicit = input.targetPath !== undefined;
+	const seedPath = resolve(input.targetPath ?? input.cwd);
+	let result: SkillFeedbackGitResult;
+	try {
+		result = await input.runGit(
+			["git", "-C", seedPath, "rev-parse", "--show-toplevel"],
+			{ cwd: seedPath },
+		);
+	} catch {
+		return readTargetResolutionFailure(explicit, seedPath);
+	}
+	if (!result.ok || result.code !== 0) {
+		return readTargetResolutionFailure(explicit, seedPath, result.code);
+	}
+	const rawRepoRoot = result.stdout.trim();
+	if (!rawRepoRoot) {
+		return readTargetResolutionFailure(explicit, seedPath, result.code);
+	}
+	const repoRoot = resolve(rawRepoRoot);
+	return {
+		ok: true,
+		explicit,
+		seedPath,
+		repoRoot,
+		inboxPath: join(repoRoot, INBOX_DIR),
+	};
+}
+
+function readTargetResolutionFailure(
+	explicit: boolean,
+	seedPath: string,
+	gitExitCode?: number,
+): ReadTargetResolution {
+	return {
+		ok: false,
+		explicit,
+		seedPath,
+		code: "read_target_resolution_failed",
+		message: "Skill-feedback read target is outside a repository.",
+		hint: "Choose a path inside the intended repository or start from that repository.",
+		...(gitExitCode === undefined ? {} : { gitExitCode }),
+	};
+}
+
 async function runProcess(
 	command: readonly string[],
 	cwd: string,
@@ -2319,13 +2478,13 @@ export async function runSkillFeedbackCli(
 		return result.exitCode;
 	}
 	if (command === "review") {
-		const args = argv.slice(1);
-		if (args.some((arg) => arg !== "--plain")) {
+		const parsed = parseReviewArgs(argv.slice(1));
+		if (!parsed.ok) {
 			const result = errorResult(
 				options.runId ?? "skill-feedback-review",
 				USAGE_EXIT_CODE,
 				"usage_error",
-				"Review accepts only --plain.",
+				parsed.message,
 				{
 					recoverability: "change_input",
 					hint: "Run skill-feedback review --help and retry with valid flags.",
@@ -2337,7 +2496,8 @@ export async function runSkillFeedbackCli(
 		}
 		const result = await reviewSkillFeedbackInbox({
 			...options,
-			plain: args.includes("--plain"),
+			plain: parsed.options.plain,
+			targetPath: parsed.options.targetPath,
 		});
 		process.stdout.write(result.stdout);
 		if (result.stderr) process.stderr.write(result.stderr);
@@ -2464,6 +2624,45 @@ function parseCloseoutStdin(
 			hint: "Fix the closeout receipt JSON and retry.",
 		};
 	}
+}
+
+/**
+ * Parse public `review` argv without touching the inbox.
+ *
+ * @param argv - Review command arguments with or without the leading subcommand
+ * @returns Parsed read options or a usage error message
+ */
+export function parseReviewArgs(
+	argv: readonly string[],
+):
+	| { ok: true; options: { plain: boolean; targetPath?: string } }
+	| { ok: false; message: string } {
+	const args = argv[0] === "review" ? argv.slice(1) : argv;
+	let plain = false;
+	let targetPath: string | undefined;
+	for (let index = 0; index < args.length; index += 1) {
+		const flag = args[index];
+		if (!flag?.startsWith("--")) {
+			return { ok: false, message: "Expected a review flag." };
+		}
+		switch (flag) {
+			case "--plain":
+				plain = true;
+				break;
+			case "--repo": {
+				const value = args[index + 1];
+				if (value === undefined || value.startsWith("--")) {
+					return { ok: false, message: "--repo requires a value." };
+				}
+				targetPath = value;
+				index += 1;
+				break;
+			}
+			default:
+				return { ok: false, message: `Unknown flag ${flag}.` };
+		}
+	}
+	return { ok: true, options: { plain, targetPath } };
 }
 
 export function parsePurgeArgs(
