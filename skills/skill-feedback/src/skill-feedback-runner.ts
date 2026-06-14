@@ -47,6 +47,7 @@ import {
 	type HealthWarningReasonId,
 	type NormalizedSoftwareLearningReport,
 	type Receipt,
+	type ReportCardObservation,
 	type ReportCardSoftwareLearningReport,
 	type ReviewClaimReadiness,
 	type ReviewClaimReadinessFact,
@@ -72,7 +73,7 @@ import {
 	redactReportCardSoftwareLearningReport,
 	redactSoftwareLearningReport,
 } from "./redaction";
-import { reduceReviewLedger } from "./review-ledger-reducer";
+import { reduceReviewLedger, trustedSkillRunId } from "./review-ledger-reducer";
 import {
 	evidenceGap,
 	stableReportId,
@@ -230,6 +231,20 @@ type ReadOnlyArgsState = {
 	plain: boolean;
 	targetPath?: string;
 };
+type SkillFeedbackOkResult<
+	Fields extends object = Record<never, never>,
+> = { ok: true } & Fields;
+type SkillFeedbackErrorResult<
+	Fields extends object = Record<never, never>,
+> = { ok: false } & Fields;
+type SkillFeedbackResult<
+	Success extends object = Record<never, never>,
+	Failure extends object = Record<never, never>,
+> = SkillFeedbackOkResult<Success> | SkillFeedbackErrorResult<Failure>;
+type SkillFeedbackRepairFailure = { code: string; hint: string };
+type SkillFeedbackRepairResult<
+	Success extends object = Record<never, never>,
+> = SkillFeedbackResult<Success, SkillFeedbackRepairFailure>;
 type ParsedReadOnlyFlag =
 	| {
 			ok: true;
@@ -1375,7 +1390,7 @@ async function assertSafePurgeCandidate(
 	candidate: SkillFeedbackPurgeCandidate,
 	inboxReal: string,
 	runtime: SkillFeedbackRuntime,
-): Promise<{ ok: true } | { ok: false }> {
+): Promise<SkillFeedbackResult> {
 	const stats = await lstatOptional(candidate.path, runtime);
 	if (!stats || stats.isSymbolicLink() || !stats.isFile()) {
 		return { ok: false };
@@ -1930,14 +1945,28 @@ type ReviewSignalContext = {
 	unlinkedSpike: boolean;
 };
 
+type OwnerPathObservation = ReportCardObservation & {
+	target: { type: "path"; value: string };
+};
+
+type ReviewOpenReasonEvidence =
+	| { open_reason: "high_verification_burden" }
+	| { open_reason: "evidence_gap"; gaps: readonly EvidenceGap[] }
+	| {
+			open_reason: "owner_path_observation";
+			observation: OwnerPathObservation;
+	  }
+	| { open_reason: "repeated_friction"; category: FrictionCategory }
+	| { open_reason: "unlinked_correlation_spike" };
+
 function coalesceReviewUnits(
 	reports: readonly NormalizedSoftwareLearningReport[],
 ): ReviewUnit[] {
 	const units: ReviewUnit[] = [];
 	const linkedUnits = new Map<string, ReviewUnit>();
 	for (const report of reports) {
-		const trustedSkillRunId = trustedSkillRunIdForReport(report);
-		if (!trustedSkillRunId) {
+		const trustedRunId = trustedSkillRunId(report);
+		if (!trustedRunId) {
 			units.push({
 				key: `report:${report.report_id}`,
 				trustedRun: false,
@@ -1945,33 +1974,20 @@ function coalesceReviewUnits(
 			});
 			continue;
 		}
-		let unit = linkedUnits.get(trustedSkillRunId);
+		let unit = linkedUnits.get(trustedRunId);
 		if (!unit) {
 			unit = {
-				key: `run:${trustedSkillRunId}`,
+				key: `run:${trustedRunId}`,
 				trustedRun: true,
-				trustedSkillRunId,
+				trustedSkillRunId: trustedRunId,
 				reports: [],
 			};
-			linkedUnits.set(trustedSkillRunId, unit);
+			linkedUnits.set(trustedRunId, unit);
 			units.push(unit);
 		}
 		unit.reports.push(report);
 	}
 	return units;
-}
-
-function trustedSkillRunIdForReport(
-	report: NormalizedSoftwareLearningReport,
-): string | undefined {
-	if (!report.skill_run_id) return undefined;
-	switch (report.skill_run_id_provenance) {
-		case "runtime_owned":
-		case "correlation_owned":
-			return report.skill_run_id;
-		default:
-			return undefined;
-	}
 }
 
 function hasCloseoutEvidence(unit: ReviewUnit): boolean {
@@ -2039,41 +2055,52 @@ function deriveReviewOpenItems(
 	signalContext: ReviewSignalContext,
 ): ReviewOpenItem[] {
 	const items: ReviewOpenItem[] = [];
+	const repeatedFrictionCategories = new Set<FrictionCategory>();
+	let hasUnlinkedSpikeReason = false;
 	for (const report of reports) {
-		if (report.verification_burden?.level === "heavy") {
-			items.push({
-				open_reason: "high_verification_burden",
-				severity: "action",
-				evidence: `${report.skill} reported heavy verification burden.`,
-				evidence_refs: [reportEvidenceRef(report)],
-				next_action: "Inspect the verification burden note against source and tests.",
-			});
-		}
-		const actionableGaps = report.evidence_gaps.filter(isActionableEvidenceGap);
-		if (actionableGaps.length > 0) {
-			items.push({
-				open_reason: "evidence_gap",
-				severity: "warning",
-				evidence: `${report.skill} has ${actionableGaps.length} actionable evidence gap(s).`,
-				evidence_refs: [reportEvidenceRef(report)],
-				next_action: "Inspect missing evidence before drawing skill-quality conclusions.",
-			});
-		}
-		for (const observation of report.observations) {
-			if (observation.target?.type !== "path") continue;
-			items.push({
-				open_reason: "owner_path_observation",
-				severity: "action",
-				evidence: observation.summary,
-				evidence_refs: [reportEvidenceRef(report)],
-				target: observation.target,
-				next_action: "Inspect the owner path and confirm evidence before editing.",
-			});
+		for (const reason of reviewOpenReasons(report, signalContext)) {
+			switch (reason.open_reason) {
+				case "high_verification_burden":
+					items.push({
+						open_reason: "high_verification_burden",
+						severity: "action",
+						evidence: `${report.skill} reported heavy verification burden.`,
+						evidence_refs: [reportEvidenceRef(report)],
+						next_action:
+							"Inspect the verification burden note against source and tests.",
+					});
+					break;
+				case "evidence_gap":
+					items.push({
+						open_reason: "evidence_gap",
+						severity: "warning",
+						evidence: `${report.skill} has ${reason.gaps.length} actionable evidence gap(s).`,
+						evidence_refs: [reportEvidenceRef(report)],
+						next_action:
+							"Inspect missing evidence before drawing skill-quality conclusions.",
+					});
+					break;
+				case "owner_path_observation":
+					items.push({
+						open_reason: "owner_path_observation",
+						severity: "action",
+						evidence: reason.observation.summary,
+						evidence_refs: [reportEvidenceRef(report)],
+						target: reason.observation.target,
+						next_action:
+							"Inspect the owner path and confirm evidence before editing.",
+					});
+					break;
+				case "repeated_friction":
+					repeatedFrictionCategories.add(reason.category);
+					break;
+				case "unlinked_correlation_spike":
+					hasUnlinkedSpikeReason = true;
+					break;
+			}
 		}
 	}
-	for (const [category, count] of repeatedFriction(reports).filter(([category]) =>
-		signalContext.repeatedFrictionCategories.has(category),
-	)) {
+	for (const category of repeatedFrictionCategories) {
 		const refs = reports
 			.filter((report) => report.friction?.category === category)
 			.map(reportEvidenceRef)
@@ -2081,15 +2108,12 @@ function deriveReviewOpenItems(
 		items.push({
 			open_reason: "repeated_friction",
 			severity: "warning",
-			evidence: `${count} reports mention ${category} friction.`,
+			evidence: `${refs.length} reports mention ${category} friction.`,
 			evidence_refs: refs,
 			next_action: "Group reports by friction category and inspect the common owner.",
 		});
 	}
-	const unlinkedCount = reports.filter(
-		(report) => report.correlation_status === "unlinked",
-	).length;
-	if (signalContext.unlinkedSpike) {
+	if (hasUnlinkedSpikeReason) {
 		const refs = reports
 			.filter((report) => report.correlation_status === "unlinked")
 			.map(reportEvidenceRef)
@@ -2097,7 +2121,7 @@ function deriveReviewOpenItems(
 		items.push({
 			open_reason: "unlinked_correlation_spike",
 			severity: "warning",
-			evidence: `${unlinkedCount} reports are unlinked.`,
+			evidence: `${refs.length} reports are unlinked.`,
 			evidence_refs: refs,
 			next_action: "Inspect skill-feedback or runtime adapter correlation.",
 		});
@@ -2109,16 +2133,47 @@ function reportHasReviewOpenSignal(
 	report: NormalizedSoftwareLearningReport,
 	signalContext: ReviewSignalContext,
 ): boolean {
-	if (report.verification_burden?.level === "heavy") return true;
-	if (report.evidence_gaps.some(isActionableEvidenceGap)) return true;
-	if (report.observations.some((observation) => observation.target?.type === "path")) {
-		return true;
+	return reviewOpenReasons(report, signalContext).length > 0;
+}
+
+function reviewOpenReasons(
+	report: NormalizedSoftwareLearningReport,
+	signalContext: ReviewSignalContext,
+): ReviewOpenReasonEvidence[] {
+	const reasons: ReviewOpenReasonEvidence[] = [];
+	if (report.verification_burden?.level === "heavy") {
+		reasons.push({ open_reason: "high_verification_burden" });
+	}
+	const gaps = actionableEvidenceGaps(report);
+	if (gaps.length > 0) {
+		reasons.push({ open_reason: "evidence_gap", gaps });
+	}
+	for (const observation of ownerPathObservations(report)) {
+		reasons.push({ open_reason: "owner_path_observation", observation });
 	}
 	const category = report.friction?.category;
 	if (category && signalContext.repeatedFrictionCategories.has(category)) {
-		return true;
+		reasons.push({ open_reason: "repeated_friction", category });
 	}
-	return signalContext.unlinkedSpike && report.correlation_status === "unlinked";
+	if (signalContext.unlinkedSpike && report.correlation_status === "unlinked") {
+		reasons.push({ open_reason: "unlinked_correlation_spike" });
+	}
+	return reasons;
+}
+
+function actionableEvidenceGaps(
+	report: NormalizedSoftwareLearningReport,
+): EvidenceGap[] {
+	return report.evidence_gaps.filter(isActionableEvidenceGap);
+}
+
+function ownerPathObservations(
+	report: NormalizedSoftwareLearningReport,
+): OwnerPathObservation[] {
+	return report.observations.filter(
+		(observation): observation is OwnerPathObservation =>
+			observation.target?.type === "path",
+	);
 }
 
 function isActionableEvidenceGap(gap: EvidenceGap): boolean {
@@ -2486,10 +2541,7 @@ function roundRatio(value: number): number {
 async function prepareSkillFeedbackInbox(
 	repoRoot: string,
 	runtime: SkillFeedbackRuntime,
-): Promise<
-	| { ok: true; path: string }
-	| { ok: false; code: string; hint: string }
-> {
+): Promise<SkillFeedbackRepairResult<{ path: string }>> {
 	const inboxPath = join(repoRoot, INBOX_DIR);
 	const existing = await lstatOptional(inboxPath, runtime);
 	if (existing?.isSymbolicLink()) {
@@ -2549,10 +2601,7 @@ async function prepareSkillFeedbackSubdirectory(
 	parentPath: string,
 	name: string,
 	runtime: SkillFeedbackRuntime,
-): Promise<
-	| { ok: true; path: string }
-	| { ok: false; code: string; hint: string }
-> {
+): Promise<SkillFeedbackRepairResult<{ path: string }>> {
 	const subdirectoryPath = join(parentPath, name);
 	const existing = await lstatOptional(subdirectoryPath, runtime);
 	if (existing?.isSymbolicLink()) {
@@ -2764,10 +2813,7 @@ function buildCloseoutReport(input: {
 async function inspectPilotMarker(
 	inboxPath: string,
 	runtime: SkillFeedbackRuntime,
-): Promise<
-	| { ok: true; state: "missing" | "present" }
-	| { ok: false; code: string; hint: string }
-> {
+): Promise<SkillFeedbackRepairResult<{ state: "missing" | "present" }>> {
 	const markerPath = join(inboxPath, PILOT_MARKER_FILE);
 	let marker: Stats;
 	try {
@@ -2799,7 +2845,7 @@ async function writeMissingPilotMarker(
 	inboxPath: string,
 	generatedTs: string,
 	runtime: SkillFeedbackRuntime,
-): Promise<{ ok: true } | { ok: false; code: string; hint: string }> {
+): Promise<SkillFeedbackRepairResult> {
 	const markerPath = join(inboxPath, PILOT_MARKER_FILE);
 	try {
 		await runtime.writePrivateFile(markerPath, `${generatedTs}\n`, 0o600);
@@ -3093,7 +3139,7 @@ export async function resolveSkillFeedbackReadTarget(input: {
 async function readGitTopLevel(
 	runGit: SkillFeedbackGitRunner,
 	seedPath: string,
-): Promise<{ ok: true; repoRoot: string } | { ok: false; gitExitCode?: number }> {
+): Promise<SkillFeedbackResult<{ repoRoot: string }, { gitExitCode?: number }>> {
 	let result: SkillFeedbackGitResult;
 	try {
 		result = await runGit(["git", "-C", seedPath, "rev-parse", "--show-toplevel"], {

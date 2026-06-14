@@ -2790,6 +2790,70 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 	});
 
+	test("review pilot density counts grouped repeated friction open signal", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: "2026-06-01T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			evidence_gaps: [],
+		};
+		for (const [fileName, reportId, skillRunId] of [
+			["one.json", "report-friction-one", "run-friction-one"],
+			["two.json", "report-friction-two", "run-friction-two"],
+		] as const) {
+			await writeInboxReport(root, fileName, {
+				...report,
+				report_id: reportId,
+				skill_run_id: skillRunId,
+				report_card: {
+					...BASE_CLOSEOUT,
+					friction: {
+						category: "tool_failure",
+						note: "Tool failed during closeout.",
+					},
+					verification_burden: {
+						level: "light",
+						note: "Focused check.",
+					},
+				},
+			});
+		}
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2026-06-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot-repeated-friction",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			open_items: Array<{ open_reason: string }>;
+			pilot_checkpoint?: {
+				actionable_feedback_numerator: number;
+				material_closeout_denominator: number;
+				density: number;
+			};
+		};
+		expect(data.open_items.map((item) => item.open_reason)).toContain(
+			"repeated_friction",
+		);
+		expect(data.pilot_checkpoint).toMatchObject({
+			actionable_feedback_numerator: 2,
+			material_closeout_denominator: 2,
+			density: 1,
+		});
+	});
+
 	test("review emits a pilot checkpoint after seven days without mutating marker", async () => {
 		const { root } = await writeCloseout(BASE_CLOSEOUT, {
 			nowIso: () => "2026-06-01T00:00:00.000Z",

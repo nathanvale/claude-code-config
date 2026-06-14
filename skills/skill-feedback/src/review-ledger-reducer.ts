@@ -187,13 +187,22 @@ function countReportIds(
 }
 
 /**
- * A `skill_run_id` is trusted only when runtime-owned or correlation-owned
- * provenance proves the link. Raw or report-authored ids are untrusted (R7b);
- * spoofed trust fields on input reports never reach this path.
+ * Return the trusted run id when writer-owned provenance proves the link.
+ *
+ * Raw or report-authored ids are evidence only (R7b); spoofed trust fields on
+ * input reports never reach this normalized path.
+ *
+ * @param report - Normalized inbox report being considered for same-run linkage.
+ * @returns Trusted `skill_run_id`, or undefined when provenance is untrusted.
+ *
+ * @example
+ * ```typescript
+ * const runId = trustedSkillRunId(report)
+ * ```
  */
-function trustedSkillRunId(
+export function trustedSkillRunId(
 	report: NormalizedSoftwareLearningReport,
-): string | undefined {
+): string | undefined {	
 	if (!report.skill_run_id) return undefined;
 	switch (report.skill_run_id_provenance) {
 		case "runtime_owned":
