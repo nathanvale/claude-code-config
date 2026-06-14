@@ -54,6 +54,23 @@ export interface ProjectionOptions {
 }
 
 /**
+ * Metadata that tells agents whether bounded output hid records.
+ *
+ * @example
+ * ```typescript
+ * const summary = summarizeProjection(42, 20)
+ * ```
+ */
+export interface ProjectionSummary {
+	/** Total records available before slicing. */
+	total: number;
+	/** Limit applied to the projected output. */
+	limit: number;
+	/** True when records were omitted by the projection limit. */
+	truncated: boolean;
+}
+
+/**
  * Normalize projection options for bounded output.
  *
  * @param input - Partial caller options
@@ -77,6 +94,29 @@ export function normalizeProjectionOptions(
 	const defaultFields: readonly ProjectionFieldSet[] = ["default"];
 	const fields = [...new Set(input.fields ?? defaultFields)];
 	return { mode, limit, fields };
+}
+
+/**
+ * Summarize bounded output after applying a projection limit.
+ *
+ * @param total - Number of records available before slicing
+ * @param limit - Projection limit applied by the caller
+ * @returns Projection metadata for machine-readable results
+ *
+ * @example
+ * ```typescript
+ * summarizeProjection(25, 20)
+ * ```
+ */
+export function summarizeProjection(
+	total: number,
+	limit: number,
+): ProjectionSummary {
+	return {
+		total,
+		limit,
+		truncated: total > limit,
+	};
 }
 
 /**

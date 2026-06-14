@@ -8,7 +8,7 @@ import {
 	type AgentWorktreeStore,
 	createFileStore,
 } from "./store.ts";
-import { normalizeProjectionOptions } from "./projection.ts";
+import { normalizeProjectionOptions, summarizeProjection } from "./projection.ts";
 
 /**
  * Resolved store target for an inspectable ref.
@@ -59,6 +59,10 @@ export interface HandoffSnapshot {
 	storeRoot: string;
 	/** Compact latest durable context. */
 	latest: readonly unknown[];
+	/** Total durable records available before projection. */
+	total: number;
+	/** True when projection omitted durable records. */
+	truncated: boolean;
 	/** Safe next actions. */
 	nextSafeActions: readonly string[];
 }
@@ -180,9 +184,12 @@ export async function buildHandoffSnapshot(
 			record,
 		})),
 	].sort((left, right) => right.observedAtMs - left.observedAtMs);
+	const projectionSummary = summarizeProjection(latest.length, projection.limit);
 	return {
 		storeRoot,
 		latest: latest.slice(0, projection.limit),
+		total: projectionSummary.total,
+		truncated: projectionSummary.truncated,
 		nextSafeActions: ["doctor", "inspect"],
 	};
 }

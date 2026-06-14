@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 
 import {
@@ -23,9 +24,8 @@ import {
 	type AgentWorktreeRecoveryRetrySafety,
 	type AgentWorktreeSeam,
 } from "./model.ts";
-import { normalizeProjectionOptions } from "./projection.ts";
+import { normalizeProjectionOptions, summarizeProjection } from "./projection.ts";
 import {
-	type AgentWorktreeFailureRecord,
 	type AgentWorktreeOperationEvent,
 	type AgentWorktreeOperationStep,
 	type AgentWorktreeRunRecord,
@@ -85,6 +85,10 @@ export interface RecoveryPlan {
 export interface WorktreeListResult {
 	/** Worktrees after projection limits. */
 	worktrees: readonly DiscoveredWorktree[];
+	/** Total worktrees before projection. */
+	total: number;
+	/** True when projection omitted worktrees. */
+	truncated: boolean;
 	/** Main owner root. */
 	mainOwnerRoot?: string;
 	/** Active worktree path. */
@@ -103,6 +107,18 @@ export interface WorktreeStatus {
 	mergeEvidence?: MergeEvidence;
 	/** Branch safety decision when evidence exists. */
 	safety?: BranchSafetyDecision;
+}
+
+/**
+ * Status rows plus projection metadata.
+ */
+export interface WorktreeStatusResult {
+	/** Status rows after projection limits. */
+	statuses: readonly WorktreeStatus[];
+	/** Total worktrees before projection. */
+	total: number;
+	/** True when projection omitted worktrees. */
+	truncated: boolean;
 }
 
 /**
@@ -161,6 +177,14 @@ export interface CleanPreviewResult {
 	staleDirs: readonly string[];
 	/** Blocked candidates and reasons. */
 	blockers: readonly { target: string; reason: string }[];
+	/** Total registered worktrees before projection. */
+	totalRegisteredWorktrees: number;
+	/** Total orphan branches before projection. */
+	totalOrphanBranches: number;
+	/** Total stale dirs before projection. */
+	totalStaleDirs: number;
+	/** True when any preview list was projection-limited. */
+	truncated: boolean;
 	/** Preview-only v1 marker. */
 	previewOnly: true;
 }
@@ -255,8 +279,14 @@ export async function listWorktrees(options: DiscoverRepoOptions & {
 }): Promise<WorktreeListResult> {
 	const discovery = await discoverRepo(options);
 	const projection = normalizeProjectionOptions({ limit: options.limit });
+	const projectionSummary = summarizeProjection(
+		discovery.worktrees.length,
+		projection.limit,
+	);
 	return {
 		worktrees: discovery.worktrees.slice(0, projection.limit),
+		total: projectionSummary.total,
+		truncated: projectionSummary.truncated,
 		mainOwnerRoot: discovery.mainOwnerRoot,
 		activeWorktree: discovery.activeWorktree?.path,
 	};
@@ -276,9 +306,36 @@ export async function listWorktrees(options: DiscoverRepoOptions & {
 export async function statusWorktrees(options: DiscoverRepoOptions & {
 	limit?: number;
 }): Promise<readonly WorktreeStatus[]> {
+	return (await statusWorktreeResult(options)).statuses;
+}
+
+/**
+ * Return status rows with projection metadata.
+ *
+ * @param options - Discovery and projection options
+ * @returns Status result with truncation metadata
+ *
+ * @example
+ * ```typescript
+ * const result = await statusWorktreeResult({ cwd: process.cwd(), limit: 10 })
+ * ```
+ */
+export async function statusWorktreeResult(options: DiscoverRepoOptions & {
+	limit?: number;
+}): Promise<WorktreeStatusResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
-	return statusWorktreesForDiscovery(discovery, { ...options, run });
+	const statuses = await statusWorktreesForDiscovery(discovery, { ...options, run });
+	const projection = normalizeProjectionOptions({ limit: options.limit });
+	const projectionSummary = summarizeProjection(
+		discovery.worktrees.length,
+		projection.limit,
+	);
+	return {
+		statuses,
+		total: projectionSummary.total,
+		truncated: projectionSummary.truncated,
+	};
 }
 
 /**
@@ -705,7 +762,7 @@ export async function refreshWorktrees(options: DiscoverRepoOptions & {
 		await store.writeWorktree({
 			ref: {
 				kind: "worktree",
-				id: sanitizeBranchPath(worktree.branch ?? basename(worktree.path)),
+				id: worktreeRecordId(worktree),
 			},
 			branch: worktree.branch ?? "(detached)",
 			path: worktree.path,
@@ -783,11 +840,30 @@ export async function cleanPreview(options: DiscoverRepoOptions & {
 			reason: "protected_branch",
 		})),
 	);
+	const registeredSummary = summarizeProjection(
+		discovery.worktrees.length,
+		projection.limit,
+	);
+	const orphanSummary = summarizeProjection(
+		orphanBranches.length,
+		projection.limit,
+	);
+	const staleSummary = summarizeProjection(
+		discovery.staleDirs.length,
+		projection.limit,
+	);
 	return {
 		registeredWorktrees: statuses.slice(0, projection.limit),
 		orphanBranches: orphanBranches.slice(0, projection.limit),
 		staleDirs: discovery.staleDirs.slice(0, projection.limit),
 		blockers,
+		totalRegisteredWorktrees: registeredSummary.total,
+		totalOrphanBranches: orphanSummary.total,
+		totalStaleDirs: staleSummary.total,
+		truncated:
+			registeredSummary.truncated ||
+			orphanSummary.truncated ||
+			staleSummary.truncated,
 		previewOnly: true,
 	};
 }
@@ -882,6 +958,15 @@ function handoffReasonForDecision(
 	return undefined;
 }
 
+function worktreeRecordId(worktree: DiscoveredWorktree): string {
+	const label = sanitizeBranchPath(worktree.branch ?? basename(worktree.path));
+	const pathHash = createHash("sha256")
+		.update(worktree.path)
+		.digest("hex")
+		.slice(0, 8);
+	return `${label}-${pathHash}`;
+}
+
 async function failedLifecycle(input: {
 	command: "create" | "delete" | "refresh";
 	storeRoot?: string;
@@ -967,6 +1052,16 @@ async function writeRun(
 	if (!storeRoot) return undefined;
 	const runId = packageRunId(input.runId);
 	const changedState = summarizeOperationChangedState(input.steps);
+	const createdAtMs = input.now ? input.now() : Date.now();
+	const events =
+		input.events.length > 0
+			? input.events
+			: buildOperationEvents({
+					runId,
+					steps: input.steps,
+					changedState,
+					createdAtMs,
+				});
 	const record: AgentWorktreeRunRecord = {
 		runId,
 		facadeRunId: input.runId,
@@ -976,8 +1071,8 @@ async function writeRun(
 			: "completed",
 		changedState,
 		steps: input.steps,
-		events: input.events,
-		createdAtMs: input.now ? input.now() : Date.now(),
+		events,
+		createdAtMs,
 		backupRef: input.backupRef,
 	};
 	try {
@@ -986,6 +1081,61 @@ async function writeRun(
 		return undefined;
 	}
 	return { kind: "run", id: runId };
+}
+
+function buildOperationEvents(input: {
+	runId: string;
+	steps: readonly AgentWorktreeOperationStep[];
+	changedState: AgentWorktreeChangedState;
+	createdAtMs: number;
+}): readonly AgentWorktreeOperationEvent[] {
+	const events: AgentWorktreeOperationEvent[] = [
+		{
+			kind: "run_started",
+			runId: input.runId,
+			changedState: "none",
+			createdAtMs: input.createdAtMs,
+		},
+	];
+	for (const step of input.steps) {
+		if (step.status === "completed") {
+			events.push({
+				kind: "step_completed",
+				runId: input.runId,
+				stepId: step.id,
+				changedState: step.changedState,
+				createdAtMs: input.createdAtMs,
+			});
+		}
+		if (step.status === "failed") {
+			events.push({
+				kind: "step_failed",
+				runId: input.runId,
+				stepId: step.id,
+				changedState: step.changedState,
+				...(step.failureRef ? { ref: step.failureRef } : {}),
+				createdAtMs: input.createdAtMs,
+			});
+		}
+		if (step.status === "running") {
+			events.push({
+				kind: "step_started",
+				runId: input.runId,
+				stepId: step.id,
+				changedState: "none",
+				createdAtMs: input.createdAtMs,
+			});
+		}
+	}
+	if (!input.steps.some((step) => step.status === "failed")) {
+		events.push({
+			kind: "run_completed",
+			runId: input.runId,
+			changedState: input.changedState,
+			createdAtMs: input.createdAtMs,
+		});
+	}
+	return events;
 }
 
 function sanitizeBranchPath(branch: string): string {

@@ -8,9 +8,11 @@ import {
 	checkWorktree,
 	cleanPreview,
 	deleteWorktree,
+	refreshWorktrees,
 	statusWorktrees,
 } from "../src/worktrees.ts";
 import { inspectRefFromRoot } from "../src/inspect.ts";
+import { createFileStore } from "../src/store.ts";
 
 describe("agent-worktree lifecycle reads", () => {
 	test("status does not treat cherry output as squash merge proof", async () => {
@@ -135,6 +137,10 @@ branch refs/heads/feat/x
 		expect(result.previewOnly).toBe(true);
 		expect(result.orphanBranches).toEqual(["old/branch"]);
 		expect(result.staleDirs).toEqual([stale]);
+		expect(result.totalRegisteredWorktrees).toBe(2);
+		expect(result.totalOrphanBranches).toBe(2);
+		expect(result.totalStaleDirs).toBe(2);
+		expect(result.truncated).toBe(true);
 		expect(calls.some((call) => call.includes("branch -D"))).toBe(false);
 		expect(calls.some((call) => call.includes("worktree remove"))).toBe(false);
 	});
@@ -192,6 +198,25 @@ branch refs/heads/feat/x
 		expect(inspected?.found).toBe(true);
 		expect((inspected?.record as { changedState?: string }).changedState).toBe(
 			"partial",
+		);
+		const inspectedRun = await inspectRefFromRoot(
+			join(root, ".agent-worktree"),
+			"run:facade_run",
+		);
+		expect(
+			(
+				inspectedRun?.record as {
+					events?: readonly { kind: string; stepId?: string }[];
+				}
+			).events,
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "run_started" }),
+				expect.objectContaining({
+					kind: "step_failed",
+					stepId: "delete_branch",
+				}),
+			]),
 		);
 	});
 
@@ -289,6 +314,48 @@ branch refs/heads/feat/x
 		expect(
 			(inspected?.record as { whatHappened?: string }).whatHappened,
 		).toContain("dirty");
+	});
+
+	test("refresh records path-stable worktree ids when labels collide", async () => {
+		const root = await mkdtemp(join(tmpdir(), "awt-refresh-ids-"));
+		const first = join(root, "a", "same");
+		const second = join(root, "b", "same");
+
+		const result = await refreshWorktrees({
+			cwd: root,
+			dryRun: false,
+			runId: "refresh/run",
+			now: () => 10,
+			run: fakeGitRunner({
+				["git rev-parse --show-toplevel"]: `${root}\n`,
+				["git worktree list --porcelain"]: `worktree ${root}
+HEAD abc
+branch refs/heads/main
+
+worktree ${first}
+HEAD def
+detached
+
+worktree ${second}
+HEAD ghi
+detached
+`,
+				["git branch --show-current"]: "main\n",
+				["git symbolic-ref --short refs/remotes/origin/HEAD"]:
+					"origin/main\n",
+			}),
+		});
+
+		expect(result.changedState).toBe("complete");
+		const records = await createFileStore(
+			join(root, ".agent-worktree"),
+		).listWorktrees();
+		const detachedIds = records
+			.filter((record) => record.branch === "(detached)")
+			.map((record) => record.ref.id);
+
+		expect(detachedIds).toHaveLength(2);
+		expect(new Set(detachedIds).size).toBe(2);
 	});
 });
 

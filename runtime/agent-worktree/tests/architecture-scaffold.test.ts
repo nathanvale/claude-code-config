@@ -14,13 +14,13 @@ describe("agent-worktree architecture scaffolds", () => {
 	test("aggregates doctor blockers and unknowns into mutation readiness", () => {
 		const checks = [
 			doctorCheck("repo", "ok"),
-			doctorCheck("worktrees", "blocked", ["delete"], ["inspect_failure"]),
+			doctorCheck("worktrees", "blocked", ["delete"], ["inspect"]),
 		] satisfies readonly DoctorCheck[];
 
 		expect(aggregateDoctorMap(checks)).toMatchObject({
 			status: "blocked",
 			mutationReadiness: "blocked",
-			nextActions: ["inspect_failure"],
+			nextActions: ["inspect"],
 		});
 
 		expect(aggregateDoctorMap([doctorCheck("store", "unknown")])).toMatchObject({
@@ -135,7 +135,7 @@ function doctorCheck(
 	id: DoctorCheck["id"],
 	status: DoctorCheck["status"],
 	blockers: readonly string[] = [],
-	nextActions: readonly string[] = [],
+	nextActions: DoctorCheck["nextActions"] = [],
 ): DoctorCheck {
 	return {
 		id,

@@ -1,6 +1,7 @@
 import {
 	AGENT_WORKTREE_COMMANDS,
 	AGENT_WORKTREE_RETENTION_WARN_AFTER_DAYS,
+	type AgentWorktreeCommand,
 	type AgentWorktreeMutationReadiness,
 	type AgentWorktreeSeam,
 	type AgentWorktreeStatus,
@@ -53,7 +54,7 @@ export interface DoctorCheck {
 	/** Mutation blockers found by this check. */
 	blockers: readonly string[];
 	/** Actions that remain safe after this check. */
-	nextActions: readonly string[];
+	nextActions: readonly AgentWorktreeCommand[];
 }
 
 /**
@@ -67,7 +68,7 @@ export interface DoctorMap {
 	/** Check list that produced the aggregate. */
 	checks: readonly DoctorCheck[];
 	/** Safe actions derived from non-ok checks. */
-	nextActions: readonly string[];
+	nextActions: readonly AgentWorktreeCommand[];
 	/** Raw repo discovery facts. */
 	repo: DoctorRepoSummary;
 	/** Commands available from the facade contract. */
@@ -200,7 +201,7 @@ export function aggregateDoctorMap(checks: readonly DoctorCheck[]): {
 	status: AgentWorktreeStatus;
 	mutationReadiness: AgentWorktreeMutationReadiness;
 	checks: readonly DoctorCheck[];
-	nextActions: readonly string[];
+	nextActions: readonly AgentWorktreeCommand[];
 } {
 	const status = aggregateDoctorStatus(checks);
 	return {

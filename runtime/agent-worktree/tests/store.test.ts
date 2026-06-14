@@ -80,10 +80,18 @@ describe("agent-worktree store", () => {
 			whatChanged: ["Worktree removed."],
 			nextSafeActions: ["inspect"],
 		});
+		await store.writeWorktree({
+			ref: { kind: "worktree", id: "feat-x" },
+			branch: "feat/x",
+			path: "/repo/.worktrees/feat-x",
+			observedAtMs: 5,
+		});
 
 		const snapshot = await buildHandoffSnapshot(root, { limit: 2 });
 
 		expect(snapshot.latest).toHaveLength(2);
+		expect(snapshot.total).toBe(3);
+		expect(snapshot.truncated).toBe(true);
 		expect(
 			snapshot.latest.map((entry) => (entry as { kind?: string }).kind),
 		).toContain("failure");

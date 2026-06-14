@@ -40,7 +40,7 @@ import {
 	listWorktrees,
 	recoverPreview,
 	refreshWorktrees,
-	statusWorktrees,
+	statusWorktreeResult,
 } from "./worktrees.ts";
 
 const VERSION = "0.1.0";
@@ -360,13 +360,13 @@ export async function runCommand(
 			case "status":
 				return {
 					ok: true,
-					data: baseData({
-						statuses: await statusWorktrees({
+					data: baseData(
+						await statusWorktreeResult({
 							cwd,
 							run: runtime.run,
 							limit: invocation.limit,
 						}),
-					}),
+					),
 				};
 			case "check": {
 				const branch = invocation.positionals[0];
