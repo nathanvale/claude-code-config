@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	MERGE_EVIDENCE_CASCADE_STEPS,
+	MERGE_EVIDENCE_ISSUE_CODES,
 	classifyBranchSafety,
 	createGitEvidencePort,
 	type MergeEvidence,
@@ -21,6 +22,22 @@ describe("merge intelligence architecture scaffold", () => {
 			"ancestor",
 			"ahead_behind",
 			"squash",
+		]);
+	});
+
+	test("keeps issue code vocabulary compatible with reserved v1 lanes", () => {
+		expect(MERGE_EVIDENCE_ISSUE_CODES).toEqual([
+			"shallow_clone",
+			"shallow_check_failed",
+			"merge_base_failed",
+			"merge_base_lookup_failed",
+			"cherry_timeout",
+			"cherry_failed",
+			"commit_tree_failed",
+			"git_path_failed",
+			"detection_disabled",
+			"detection_aborted",
+			"enrichment_failed",
 		]);
 	});
 

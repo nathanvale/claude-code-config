@@ -34,10 +34,12 @@ export type AgentWorktreeOperationEventKind =
  * Operation step status values persisted in run records.
  */
 export const AGENT_WORKTREE_OPERATION_STEP_STATUSES = [
+	// reserved: v2 mid-run persistence and status-watch states.
 	"pending",
 	"running",
 	"completed",
 	"failed",
+	// reserved: v2 operation-plan skip states.
 	"skipped",
 ] as const;
 
@@ -234,17 +236,25 @@ export interface AgentWorktreeStore {
  * ```
  */
 export function createFileStore(root: string): AgentWorktreeStore {
+	let ensurePromise: Promise<void> | undefined;
+	const ensure = async (): Promise<void> => {
+		ensurePromise ??= Promise.all(
+			AGENT_WORKTREE_STORE_DIRS.map((dir) =>
+				mkdir(join(root, dir), { recursive: true }),
+			),
+		).then(() => undefined);
+		try {
+			await ensurePromise;
+		} catch (error) {
+			ensurePromise = undefined;
+			throw error;
+		}
+	};
 	return {
 		root,
-		async ensure() {
-			await Promise.all(
-				AGENT_WORKTREE_STORE_DIRS.map((dir) =>
-					mkdir(join(root, dir), { recursive: true }),
-				),
-			);
-		},
+		ensure,
 		async writeRun(record) {
-			await this.ensure();
+			await ensure();
 			await writeJson(storeJsonPath(root, "runs", record.runId), record);
 			await writeFile(
 				join(root, "runs", `${record.runId}.jsonl`),
@@ -259,7 +269,7 @@ export function createFileStore(root: string): AgentWorktreeStore {
 			return listJsonRecords<AgentWorktreeRunRecord>(root, "runs");
 		},
 		async writeFailure(record) {
-			await this.ensure();
+			await ensure();
 			await writeJson(
 				storeJsonPath(root, "failures", record.ref.id),
 				record,
@@ -274,7 +284,7 @@ export function createFileStore(root: string): AgentWorktreeStore {
 			return listJsonRecords<AgentWorktreeFailureRecord>(root, "failures");
 		},
 		async writeWorktree(record) {
-			await this.ensure();
+			await ensure();
 			await writeJson(
 				storeJsonPath(root, "worktrees", record.ref.id),
 				record,

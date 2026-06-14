@@ -16,9 +16,9 @@ import {
 	cleanPreview,
 	createWorktree,
 	deleteWorktree,
-	type GitRunner,
+	type LifecycleResult,
 } from "../../../runtime/agent-worktree/src/index.ts";
-import { wtContracts } from "./command-contract.ts";
+import { type WtDiagnosticCode, wtContracts } from "./command-contract.ts";
 import {
 	WT_COLOR_PALETTE,
 	WT_CONTRACT_ID,
@@ -136,7 +136,7 @@ export async function syncWorkspace(
 ): Promise<
 	| { kind: "written"; path: string }
 	| { kind: "drift_blocked"; path: string }
-	| { kind: "error"; code: string; message: string }
+	| { kind: "error"; code: WtDiagnosticCode; message: string }
 > {
 	const repoRoot = runtime.repoRoot();
 	let ownerRoot = repoRoot;
@@ -295,11 +295,12 @@ export type CommandResult =
 	| { ok: true; data: Record<string, unknown> }
 	| {
 			ok: false;
-			code: string;
+			code: WtDiagnosticCode;
 			message: string;
 			action: string;
 			exitCode: number;
 			recoverability: "change_input" | "repair_state";
+			data?: Record<string, unknown>;
 	  };
 
 /**
@@ -369,8 +370,91 @@ function fromSync(
  * @returns A failing command result
  * @internal
  */
-function usageFailure(code: string, message: string, action: string): CommandResult {
+function usageFailure(code: WtDiagnosticCode, message: string, action: string): CommandResult {
 	return { ok: false, code, message, action, exitCode: 2, recoverability: "change_input" };
+}
+
+function lifecycleEnvelopeData(
+	command: string,
+	lifecycle: LifecycleResult,
+): Record<string, unknown> {
+	return {
+		contract_id: WT_CONTRACT_ID,
+		schema_version: WT_SCHEMA_VERSION,
+		action: command,
+		lifecycle_action: lifecycle.action,
+		changed_state: lifecycle.changedState,
+		preview: lifecycle.preview,
+		run_ref: lifecycle.runRef,
+		failure_ref: lifecycle.failureRef,
+		changes: lifecycle.changes,
+		next_safe_action: lifecycle.nextSafeAction,
+		reason: lifecycle.reason,
+		recovery: lifecycle.recovery,
+		retry_safety: lifecycle.recovery?.choices[0]?.retrySafety,
+		backup_ref: lifecycle.backupRef,
+	};
+}
+
+function fromLifecycleFailure(command: string, lifecycle: LifecycleResult): CommandResult {
+	const blocked = lifecycle.changedState === "none" && !lifecycle.failureRef;
+	const nextSafeAction = lifecycle.nextSafeAction || "inspect";
+	return {
+		ok: false,
+		code: blocked ? "agent_worktree_blocked" : "agent_worktree_failed",
+		message: blocked
+			? "Shared worktree runtime blocked the lifecycle result."
+			: "Shared worktree runtime reported an incomplete lifecycle result.",
+		action: `Follow shared runtime recovery action: ${nextSafeAction}.`,
+		exitCode: 1,
+		recoverability:
+			lifecycle.reason === "target_not_found" ? "change_input" : "repair_state",
+		data: lifecycleEnvelopeData(command, lifecycle),
+	};
+}
+
+function fromPostLifecycleSyncFailure(
+	command: string,
+	lifecycle: LifecycleResult,
+	sync: Exclude<Awaited<ReturnType<typeof syncWorkspace>>, { kind: "written" }>,
+): CommandResult {
+	const data = {
+		...lifecycleEnvelopeData(command, lifecycle),
+		render_status: sync.kind,
+		render_workspace_path: "path" in sync ? sync.path : undefined,
+		render_error_code: "code" in sync ? sync.code : undefined,
+	};
+	if (sync.kind === "drift_blocked") {
+		return {
+			ok: false,
+			code: "drift_blocked",
+			message:
+				"The worktree lifecycle completed, but the workspace was edited since the last render.",
+			action:
+				"Review the diff, port real edits into wt.config.json, then rerun render with force.",
+			exitCode: 3,
+			recoverability: "repair_state",
+			data,
+		};
+	}
+	return {
+		ok: false,
+		code: sync.code,
+		message: `The worktree lifecycle completed, but the workspace render failed: ${sync.message}`,
+		action: "Inspect worktree and registry state, resolve the render failure, then retry.",
+		exitCode: 1,
+		recoverability: "repair_state",
+		data,
+	};
+}
+
+async function stableOwnerRuntime(runtime: WtRuntime): Promise<WtRuntime> {
+	try {
+		const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+		return createRepoRuntime(runtime, repoOwnerRootFor(worktrees, runtime.repoRoot()));
+	} catch {
+		return runtime;
+	}
 }
 
 /**
@@ -380,6 +464,7 @@ export interface ParsedInvocation {
 	command: string;
 	positionals: string[];
 	force: boolean;
+	forceRender?: boolean;
 	noInput?: boolean;
 	repoRoot?: string;
 	parseError?: CommandResult;
@@ -400,6 +485,7 @@ export interface ParsedInvocation {
 export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	const positionals: string[] = [];
 	let force = false;
+	let forceRender = false;
 	let noInput = false;
 	let repoRoot: string | undefined;
 	let command = "";
@@ -408,6 +494,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		command,
 		positionals,
 		force,
+		forceRender,
 		noInput,
 		repoRoot,
 		parseError: usageFailure("usage_error", message, "Review the command help and retry."),
@@ -416,6 +503,9 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		const arg = argv[i];
 		if (arg === "--force") {
 			force = true;
+			usedFlags.add(arg);
+		} else if (arg === "--force-render") {
+			forceRender = true;
 			usedFlags.add(arg);
 		} else if (arg === "--no-input") {
 			noInput = true;
@@ -447,7 +537,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			}
 		}
 	}
-	return { command, positionals, force, noInput, repoRoot };
+	return { command, positionals, force, forceRender, noInput, repoRoot };
 }
 
 /**
@@ -533,35 +623,33 @@ export async function runCommand(
 					`Rerun as: wt ${command} <branch>.`,
 				);
 			}
+			const lifecycleRuntime = await stableOwnerRuntime(runtime);
 			const lifecycle =
 				command === "new"
 					? await createWorktree({
-							cwd: runtime.repoRoot(),
-							run: adaptRunner(runtime.run),
+							cwd: lifecycleRuntime.repoRoot(),
+							run: adaptRunner(lifecycleRuntime.run),
 							branch,
 							dryRun: false,
 							runId: `wt-${runtime.now()}`,
 						})
 					: await deleteWorktree({
-							cwd: runtime.repoRoot(),
-							run: adaptRunner(runtime.run),
+							cwd: lifecycleRuntime.repoRoot(),
+							run: adaptRunner(lifecycleRuntime.run),
 							branch,
 							dryRun: false,
 							force,
 							deleteBranch: false,
 							runId: `wt-${runtime.now()}`,
-						});
-			if (lifecycle.failureRef || lifecycle.changedState === "partial" || lifecycle.changedState === "unknown") {
-				return {
-					ok: false,
-					code: "agent_worktree_failed",
-					message: "Shared worktree runtime reported an incomplete lifecycle result.",
-					action: "Inspect worktree state with agent-worktree, then retry.",
-					exitCode: 1,
-					recoverability: "repair_state",
-				};
+			});
+			if (lifecycle.changedState !== "complete") {
+				return fromLifecycleFailure(command, lifecycle);
 			}
-			return fromSync(command, await syncWorkspace(runtime, force));
+			const sync = await syncWorkspace(lifecycleRuntime, Boolean(invocation.forceRender));
+			if (sync.kind !== "written") {
+				return fromPostLifecycleSyncFailure(command, lifecycle, sync);
+			}
+			return { ok: true, data: renderSuccessData(command, sync.path) };
 		}
 
 		case "clean": {
@@ -732,6 +820,7 @@ export async function main(
 				schema_version: WT_SCHEMA_VERSION,
 				changed_state: "none",
 				next_safe_action: result.action,
+				...result.data,
 			},
 		}),
 		{ runId, durationMs },

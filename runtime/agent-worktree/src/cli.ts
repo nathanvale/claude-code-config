@@ -127,6 +127,7 @@ type CommandResult =
 			message: string;
 			action: string;
 			changedState: AgentWorktreeChangedState;
+			data?: Record<string, unknown>;
 	  };
 
 /**
@@ -202,6 +203,7 @@ export async function main(
 			data: baseData({
 				changed_state: result.changedState,
 				next_safe_action: result.action,
+				...result.data,
 			}),
 		}),
 		{ runId, durationMs },
@@ -388,11 +390,7 @@ export async function runCommand(
 					runId,
 					now: runtime.now,
 				});
-				return {
-					ok: true,
-					data: baseData(lifecycleData(result)),
-					changedState: result.changedState,
-				};
+				return lifecycleCommandResult(result, invocation.dryRun);
 			}
 			case "delete": {
 				const branch = invocation.positionals[0];
@@ -410,11 +408,7 @@ export async function runCommand(
 					runId,
 					now: runtime.now,
 				});
-				return {
-					ok: true,
-					data: baseData(lifecycleData(result)),
-					changedState: result.changedState,
-				};
+				return lifecycleCommandResult(result, invocation.dryRun);
 			}
 			case "refresh": {
 				const result = await refreshWorktrees({
@@ -424,11 +418,7 @@ export async function runCommand(
 					runId,
 					now: runtime.now,
 				});
-				return {
-					ok: true,
-					data: baseData(lifecycleData(result)),
-					changedState: result.changedState,
-				};
+				return lifecycleCommandResult(result, invocation.dryRun);
 			}
 			case "clean":
 				return {
@@ -547,6 +537,7 @@ function runtimeFailure(
 	message: string,
 	action: string,
 	changedState: AgentWorktreeChangedState,
+	data?: Record<string, unknown>,
 ): CommandResult {
 	return {
 		ok: false,
@@ -555,7 +546,30 @@ function runtimeFailure(
 		message,
 		action,
 		changedState,
+		data,
 	};
+}
+
+function lifecycleCommandResult(
+	result: Parameters<typeof lifecycleData>[0],
+	previewAllowed: boolean,
+): CommandResult {
+	const data = lifecycleData(result);
+	if (result.changedState === "complete" || (previewAllowed && result.preview)) {
+		return {
+			ok: true,
+			data: baseData(data),
+			changedState: result.changedState,
+		};
+	}
+	return runtimeFailure(
+		result.reason
+			? `Lifecycle ${result.action} did not complete: ${result.reason}.`
+			: `Lifecycle ${result.action} did not complete.`,
+		`Follow lifecycle recovery action: ${result.nextSafeAction}.`,
+		result.changedState,
+		data,
+	);
 }
 
 function baseData(data: object): Record<string, unknown> {

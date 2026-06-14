@@ -32,11 +32,12 @@ type WtCommandContract = CommandFacadeContract<WtCommand, WtAudience, WtMutation
  * product's core safety stop: a manual edit was detected and the sync refused
  * to overwrite it.
  */
-const WT_DIAGNOSTIC_CODES = [
+export const WT_DIAGNOSTIC_CODES = [
 	"usage_error",
 	"drift_blocked",
 	"registry_unreadable",
 	"worktree_list_failed",
+	"agent_worktree_blocked",
 	"agent_worktree_failed",
 	"unknown_color",
 	"code_not_found",
@@ -112,7 +113,21 @@ const jsonFlag = {
 const forceFlag = {
 	"--force": {
 		type: "boolean",
-		description: "Overwrite a drift-detected workspace, or skip a destructive confirmation.",
+		description: "Overwrite a drift-detected workspace.",
+	},
+} as const;
+
+const destructiveForceFlag = {
+	"--force": {
+		type: "boolean",
+		description: "Confirm destructive worktree removal.",
+	},
+} as const;
+
+const forceRenderFlag = {
+	"--force-render": {
+		type: "boolean",
+		description: "Overwrite a drift-detected workspace after lifecycle completion.",
 	},
 } as const;
 
@@ -239,13 +254,13 @@ export const wtContracts = defineCommandFacadeContract(
 			previewExemption: {
 				reason: "Worktree creation is owned by agent-worktree; wt only re-renders through the drift gate after.",
 			},
-			flags: { ...repoFlag, ...jsonFlag },
+			flags: { ...repoFlag, ...forceRenderFlag, ...jsonFlag },
 			exitCodes,
 		},
 		rm: {
 			script: "wt",
 			summary: "Remove a worktree through agent-worktree, then re-render.",
-			usage: ["wt rm <branch> --force --json"],
+			usage: ["wt rm <branch> --force --json", "wt rm <branch> --force --force-render --json"],
 			json: true,
 			audience: "agent",
 			mutation: "destructive",
@@ -261,7 +276,7 @@ export const wtContracts = defineCommandFacadeContract(
 			previewExemption: {
 				reason: "Worktree removal is owned and confirmed by agent-worktree; wt re-renders through the drift gate after.",
 			},
-			flags: { ...repoFlag, ...forceFlag, ...noInputFlag, ...jsonFlag },
+			flags: { ...repoFlag, ...destructiveForceFlag, ...forceRenderFlag, ...noInputFlag, ...jsonFlag },
 			exitCodes,
 		},
 		clean: {

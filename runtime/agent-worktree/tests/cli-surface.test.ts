@@ -83,6 +83,43 @@ describe("agent-worktree CLI surface", () => {
 		expect(envelope.error.message).toContain("--force");
 	});
 
+	test("delete target misses exit non-zero with lifecycle recovery data", async () => {
+		const root = await mkdtemp(join(tmpdir(), "awt-cli-delete-missing-"));
+		const stdout = createMemoryWriter();
+		const exitCode = await main(
+			["delete", "feat/missing", "--force", "--repo", root, "--json"],
+			{
+				stdout,
+				runtime: {
+					cwd: () => root,
+					now: () => 1,
+					run: fakeGitRunner({
+						["git rev-parse --show-toplevel"]: `${root}\n`,
+						["git worktree list --porcelain"]: `worktree ${root}
+HEAD abc
+branch refs/heads/main
+`,
+						["git branch --show-current"]: "main\n",
+						["git symbolic-ref --short refs/remotes/origin/HEAD"]:
+							"origin/main\n",
+					}),
+				},
+			},
+		);
+		const envelope = JSON.parse(stdout.output);
+
+		expect(exitCode).toBe(1);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error.code).toBe("runtime_error");
+		expect(envelope.data).toMatchObject({
+			action: "delete",
+			changed_state: "none",
+			preview: true,
+			next_safe_action: "list",
+			reason: "target_not_found",
+		});
+	});
+
 	test("recover rejects force because it is preview-only in v1", async () => {
 		const stdout = createMemoryWriter();
 		const exitCode = await main(

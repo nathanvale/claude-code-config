@@ -518,7 +518,6 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 				changedState: "complete",
 			},
 		],
-		events: [],
 	});
 	return {
 		action: "create",
@@ -653,7 +652,6 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 					changedState: "complete",
 				},
 			],
-			events: [],
 		});
 		return {
 			action: "delete",
@@ -718,7 +716,6 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 				changedState: "complete",
 			},
 		],
-		events: [],
 	});
 	return {
 		action: "delete",
@@ -782,7 +779,6 @@ export async function refreshWorktrees(options: DiscoverRepoOptions & {
 				changedState: "complete",
 			},
 		],
-		events: [],
 	});
 	return {
 		action: "refresh",
@@ -996,7 +992,6 @@ async function failedLifecycle(input: {
 				failureRef,
 			},
 		],
-		events: [],
 	});
 	if (input.storeRoot) {
 		const store = createFileStore(input.storeRoot);
@@ -1044,7 +1039,6 @@ async function writeRun(
 		runId: string;
 		command: "create" | "delete" | "refresh";
 		steps: readonly AgentWorktreeOperationStep[];
-		events: readonly AgentWorktreeOperationEvent[];
 		backupRef?: string;
 		now?: () => number;
 	},
@@ -1053,15 +1047,12 @@ async function writeRun(
 	const runId = packageRunId(input.runId);
 	const changedState = summarizeOperationChangedState(input.steps);
 	const createdAtMs = input.now ? input.now() : Date.now();
-	const events =
-		input.events.length > 0
-			? input.events
-			: buildOperationEvents({
-					runId,
-					steps: input.steps,
-					changedState,
-					createdAtMs,
-				});
+	const events = buildOperationEvents({
+		runId,
+		steps: input.steps,
+		changedState,
+		createdAtMs,
+	});
 	const record: AgentWorktreeRunRecord = {
 		runId,
 		facadeRunId: input.runId,

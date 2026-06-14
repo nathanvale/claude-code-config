@@ -43,8 +43,9 @@ export type MergeIntegrationMethod = "ancestor" | "squash";
 /**
  * Structured issue codes for merge evidence.
  *
- * These mirror the important SideQuest failure lanes while staying package-owned
- * for agent-worktree envelopes and tests.
+ * Some codes are reserved/deprecated v1 compatibility lanes from the
+ * SideQuest-derived public surface. The current evidence cascade emits only a
+ * subset, but strict consumers can still type-check older stored records.
  */
 export const MERGE_EVIDENCE_ISSUE_CODES = [
 	"shallow_clone",
@@ -75,11 +76,11 @@ export type MergeEvidenceIssueCode =
  * @example
  * ```typescript
  * const issue: MergeEvidenceIssue = {
- *   code: "shallow_check_failed",
- *   severity: "warning",
+ *   code: "shallow_clone",
+ *   severity: "error",
  *   source: "shallow_guard",
- *   message: "Shallow check failed; detection continued.",
- *   countsReliable: true,
+ *   message: "Shallow clone prevents reliable merge evidence.",
+ *   countsReliable: false,
  * }
  * ```
  */

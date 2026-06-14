@@ -49,6 +49,45 @@ describe("agent-worktree doctor", () => {
 		expect(map.checks.some((check) => check.id === "worktrees")).toBe(true);
 	});
 
+	test("keeps discovery issue checks legible without overloading repo", () => {
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			mainOwnerRoot: "/repo",
+			worktrees: [],
+			linkedWorktrees: [],
+			staleDirs: [],
+			storeRoot: "/repo/.agent-worktree",
+			issues: [
+				{
+					code: "current_branch_failed",
+					status: "unknown",
+					summary: "Current branch could not be resolved.",
+				},
+				{
+					code: "default_branch_unknown",
+					status: "warn",
+					summary: "Default branch could not be inferred.",
+				},
+				{
+					code: "stale_dir_scan_failed",
+					status: "warn",
+					summary: "Stale worktree dirs could not be scanned.",
+				},
+			],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+		const issueCheckIds = map.checks
+			.filter((check) => check.owner === "discovery")
+			.map((check) => check.id);
+
+		expect(issueCheckIds).toContain("current_branch");
+		expect(issueCheckIds).toContain("default_branch");
+		expect(issueCheckIds).toContain("stale_dirs");
+		expect(issueCheckIds.filter((id) => id === "repo")).toHaveLength(1);
+	});
+
 	test("reports dirty linked worktrees as mutation blockers", async () => {
 		const outputs = {
 			["git rev-parse --show-toplevel"]: "/repo\n",

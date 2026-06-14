@@ -8,6 +8,7 @@ import {
 } from "./model.ts";
 import {
 	type DiscoverRepoOptions,
+	type DiscoveryIssue,
 	defaultGitRunner,
 	type RepoDiscovery,
 	discoverRepo,
@@ -29,12 +30,23 @@ export const DOCTOR_CHECK_IDS = [
 	"contracts",
 	"dependencies",
 	"mutations",
+	"current_branch",
+	"default_branch",
+	"stale_dirs",
 ] as const;
 
 /**
  * Doctor check id.
  */
 export type DoctorCheckId = (typeof DOCTOR_CHECK_IDS)[number];
+
+const DISCOVERY_ISSUE_CHECK_IDS = {
+	git_root_failed: "repo",
+	worktree_list_failed: "worktrees",
+	current_branch_failed: "current_branch",
+	default_branch_unknown: "default_branch",
+	stale_dir_scan_failed: "stale_dirs",
+} as const satisfies Record<DiscoveryIssue["code"], DoctorCheckId>;
 
 /**
  * One readable check inside the doctor map.
@@ -362,7 +374,7 @@ function checksFromDiscoveryIssues(discovery: RepoDiscovery): DoctorCheck[] {
 				issue.code !== "worktree_list_failed",
 		)
 		.map((issue) => ({
-			id: "repo",
+			id: DISCOVERY_ISSUE_CHECK_IDS[issue.code],
 			owner: "discovery",
 			status: issue.status,
 			summary: issue.summary,

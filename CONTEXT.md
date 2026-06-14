@@ -76,6 +76,10 @@ _Avoid_: front-door skill role, universal CLI folder, facade-owned topology
 Tooling-owned discovery seam that finds package command contracts without making the facade runtime own consumer folders. Current conventional locations are `src/command-contract.ts` and `src/front-doors/*/command-contract.ts`.
 _Avoid_: package manifest by default, nested package metadata, runtime-owned consumer topology
 
+**Command Entrypoint Integration Test**:
+A process-boundary test that proves a command can be invoked through its repo-local command entrypoints while preserving the expected machine contract.
+_Avoid_: smoke test, front door smoke, command surface proof
+
 ## Example Dialogue
 
 Dev: "Is `/ce-plan` producing implementation tasks or candidate batches?"
