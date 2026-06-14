@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Task Doctor</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f2;
+    --paper: #ffffff;
+    --ink: #202520;
+    --muted: #5f665f;
+    --line: #d9ded5;
+    --accent: #245c73;
+    --accent-soft: #e3f0f4;
+    --accent-text: #1a4456;
+    --green: #2e6a4e;
+    --green-soft: #e6f2eb;
+    --gold: #765b18;
+    --gold-soft: #f5ecd3;
+    --red: #8a3d37;
+    --red-soft: #f3dfdc;
+    --code: #eef1ed;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .page { max-width: 940px; margin: 0 auto; padding: 40px 24px 56px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 24px; margin-bottom: 28px; }
+  .eyebrow { text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 8px; }
+  h1 { font-size: 33px; line-height: 1.15; margin: 0 0 12px; }
+  h2 { font-size: 22px; margin: 40px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 17px; margin: 0 0 4px; }
+  p { max-width: 72ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--muted); }
+  .pill.k { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 4px; }
+  .stat { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  section { margin-bottom: 8px; }
+  .ground { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .ground h3 { margin-top: 14px; color: var(--accent-text); font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .ground h3:first-child { margin-top: 0; }
+  .ground ul { margin: 6px 0 0; padding-left: 20px; }
+  .ground li { margin-bottom: 4px; }
+  .axes { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .axes li { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+  .axes b { color: var(--accent-text); }
+  .jump { background: var(--accent-soft); border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; }
+  .jump ol { margin: 6px 0 0; padding-left: 22px; }
+  .jump a { color: var(--accent-text); text-decoration: none; }
+  .jump a:hover { text-decoration: underline; }
+  article.idea { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-bottom: 18px; }
+  .idea-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .idnum { font-weight: 700; color: var(--accent); font-size: 18px; }
+  .idea .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 14px; }
+  .chip { font-size: 11px; padding: 3px 9px; border-radius: 999px; font-weight: 600; }
+  .chip.axis { background: var(--accent-soft); color: var(--accent-text); }
+  .chip.conf-high { background: var(--green-soft); color: var(--green); }
+  .chip.conf-med { background: var(--gold-soft); color: var(--gold); }
+  .chip.cx { background: var(--code); color: var(--muted); }
+  dl.fields { margin: 0; }
+  dl.fields dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin-top: 12px; }
+  dl.fields dd { margin: 3px 0 0; max-width: 74ch; }
+  .basis-direct { border-left: 3px solid var(--green); padding-left: 10px; }
+  .basis-external { border-left: 3px solid var(--accent); padding-left: 10px; }
+  .basis-reasoned { border-left: 3px solid var(--gold); padding-left: 10px; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  svg.fig { display: block; max-width: 100%; height: auto; margin: 14px 0 4px; background: var(--paper); }
+  .figcap { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  td.n { width: 34px; color: var(--muted); }
+  .callout { background: var(--gold-soft); border-radius: 10px; padding: 14px 18px; margin: 16px 0; }
+  .callout .lbl { text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; font-weight: 700; color: var(--gold); }
+  footer.composition-signal { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">Compound Engineering · Ideation</div>
+  <h1>Task Doctor</h1>
+  <p>Deepening the highest-ranked direction from the repo-workability set: one repo-local surface that turns scattered post-change rituals into a single inspectable answer to <em>"what should I run now, and why?"</em></p>
+  <div class="meta">
+    <span class="pill">date: 2026-06-14</span>
+    <span class="pill">topic: task-doctor</span>
+    <span class="pill">focus: deepen the Task Doctor idea</span>
+    <span class="pill k">mode: repo-grounded</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>6</b><span>ideation frames</span></div>
+    <div class="stat"><b>~45</b><span>raw candidates</span></div>
+    <div class="stat"><b>7</b><span>survivors</span></div>
+    <div class="stat"><b>5</b><span>axes covered</span></div>
+  </div>
+</header>
+
+<section>
+  <h2>Grounding Context</h2>
+  <div class="ground">
+    <h3>Codebase Context</h3>
+    <ul>
+      <li><b>Source idea:</b> ideation #1 in <code>docs/ideation/2026-06-13-repo-workability-improvements-ideation.html</code> &mdash; a command that reads diff + recent plan + touched owner paths + skill rules + ignored evidence folders, then emits the next safe check bundle (focused tests, typecheck, lint, doc parse, startup health, fallow, skill-feedback closeout, caveats) with a WHY and a repair hint per check. Confidence 90%, Medium complexity, axis "check orchestration."</li>
+      <li><b>Repo philosophy it must embody</b> (<code>AGENTS.md</code> Agent-Native Work): give maps, owners, next safe actions, inspectable state; prefer legible tools over prose policy; build mechanical CLI surfaces that emit maps, continuations, and repair hints; keep skills thin &mdash; read maps, call owners.</li>
+      <li><b>The one hard prohibition</b> (<code>AGENTS.md</code> Skill Authoring): never copy contracts, flags, schemas, state machines, or output semantics &mdash; name owner paths instead. New/changed CLI surfaces need the facade four-surface proof (discovery metadata + help + parser + runtime can't drift).</li>
+      <li><b>~8 check owners exist today:</b> <code>test-runner.sh</code>, <code>context/bun-runner.md</code>, Biome MCP, tsc MCP, <code>fallow</code>, <code>skill-feedback</code>, the create-cli facade proof, and startup health (<code>scripts/agent-instructions.sh</code> / <code>check-workspace-facade-invariants.ts</code>).</li>
+      <li><b>Proven precedent:</b> <code>mcp-doctor</code> already implements the "doctor" shape (diagnose static config health, emit one-line fixes, exit 2 = the doctor itself could not run). Task Doctor is its working-tree analogue.</li>
+      <li><b>Known failure mode</b> (memory <code>feedback_prompt_fragments_janitor_tax</code>): validations that need manual upkeep rot; each check must catch real breakage and self-maintain or fail loud.</li>
+      <li><b>Live evidence</b> (this session): completing plan-003 review, the correct route existed but had to be assembled by hand &mdash; the cost was <em>assembly</em>, not capability.</li>
+      <li><b>Adjacent ideas</b> from the same set: #2 Command Surface Map (a generated index of skill CLIs) and #6 Workability Pulse (the strategic, longitudinal read). Both interlock with Task Doctor.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>Topic Axes</h2>
+  <ul class="axes">
+    <li><b>Route derivation</b> &mdash; how it turns diff / plan / touched paths into the check list.</li>
+    <li><b>Owner coupling</b> &mdash; how it calls checks without copying their contracts.</li>
+    <li><b>Drift resistance</b> &mdash; how it stays current as owners and rules change.</li>
+    <li><b>Output shape &amp; consumption</b> &mdash; what it emits and how agent/human act on it.</li>
+    <li><b>Trigger &amp; lifecycle</b> &mdash; when it runs and how it fits the ritual chain.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Ranked Ideas</h2>
+  <div class="jump">
+    <b>Jump to:</b>
+    <ol>
+      <li><a href="#i1">Owner-declared check verb; doctor is a thin reducer</a></li>
+      <li><a href="#i2">Generated route table; fail loud on unmapped path</a></li>
+      <li><a href="#i3">Advisor, never orchestrator</a></li>
+      <li><a href="#i4">Output is the owed-minus-done delta, not a fresh checklist</a></li>
+      <li><a href="#i5">Bind the route at intake; reconcile post-diff</a></li>
+      <li><a href="#i6">Andon cord: get loud on surfaces no owner claims</a></li>
+      <li><a href="#i7">Emit a machine-readable route artifact other tools consume</a></li>
+    </ol>
+  </div>
+
+  <article class="idea" id="i1">
+    <div class="idea-head"><span class="idnum">1.</span><h3>Owner-declared check verb &mdash; the doctor is a thin reducer, and the verbs are the real win</h3></div>
+    <div class="chips"><span class="chip axis">Owner coupling</span><span class="chip conf-high">Confidence High</span><span class="chip cx">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Invert the router. Instead of a central command that reads the diff and <em>infers</em> which of the 8 owners apply (which means encoding each owner's applicability logic &mdash; copying contracts), each owner declares its own trigger predicate and exposes a uniform <code>check --json</code> verb. Task Doctor degenerates to: collect predicates, evaluate against the diff, emit the union. The "doctor" owns zero check knowledge.</dd>
+      <dt>Axis</dt><dd>Owner coupling</dd>
+      <dt>Basis</dt>
+      <dd class="basis-reasoned"><b>reasoned + direct:</b> Four independent frames (inversion, assumption-breaking, leverage, constraint-flipping) converged on this same move &mdash; the strongest signal in the set. Direct: <code>AGENTS.md</code> "keep skills thin: read maps, choose next safe actions, and call owners"; <code>fallow</code> already hand-authors a Skill Route Index (an owner-local predicate table, just in prose). The convergence is the basis: every lens that tried to make the doctor safe landed on "push the knowledge to the owner."</dd>
+      <dt>Rationale</dt>
+      <dd>This dissolves three risks at once. A central deriver that knows "fallow applies when JS/TS changed" has <em>copied fallow's contract</em> &mdash; the one thing <code>AGENTS.md</code> forbids. Owner-declared predicates can't disagree with a route they themselves produced. And the durable asset isn't the router (disposable) &mdash; it's N owners each speaking one verb, reusable by CI, the Pulse, ce-code-review, and any future "is this slice safe?" consumer. <strong>The doctor is the forcing function; the verbs are the compounding output.</strong></dd>
+      <dt>Owner readiness gradient (the implementation map)</dt>
+      <dd>The 8 owners are three tiers, and the tier sets the cost. <b>Tier A &mdash; already CLI-shaped:</b> <code>test-runner</code>, <code>fallow</code>, <code>skill-feedback</code> have facade-backed runners with command contracts; adding a <code>check</code>/<code>applies</code> verb is cheap and the four-surface proof already guards it. <b>Tier B &mdash; MCP-only:</b> Biome and tsc live behind <code>rules/code-quality.md</code> as MCP tools (<code>biome_lintCheck</code>, <code>tsc_check</code>) with no skill CLI. <b>Tier C &mdash; script/proof-only:</b> the create-cli facade proof and startup health are a script and a test invariant, with no "owner" object to hang a verb on.</dd>
+      <dt>The cleanup makes tier B vanish &mdash; and test-runner is its proof</dt>
+      <dd>The decisive move (this session's direction): rather than route Task Doctor around the MCP-only checks, <strong>promote them into agent-native runners by cloning the proven <code>test-runner</code> shape</strong>. <code>test-runner</code> (subcommands <code>run</code>/<code>status</code>/<code>detail</code>; compact/repair/triage/json modes; a <code>command-contract.ts</code>; benchmark + auditor proof) is the reference implementation that <code>format-runner</code> (Biome) and <code>typescript-runner</code> (tsc) get built against &mdash; same Agent Runner family, same facade contract, each proven by <code>cli-execution-auditor</code> the way test-runner proves the family. <code>context/bun-runner.md</code> already names them a runner family with MCP as a stopgap ("prefer MCP runners <em>when available</em>"); the cleanup retires that hedge. The work is "clone the test-runner facade twice," not three bespoke CLI builds.</dd>
+      <dt>Predicate and verb are separable (rescues tier C)</dt>
+      <dd>Idea #1 bundled "declare a predicate" and "expose a check verb," but they're independent. An owner with no CLI (tier C: a script, a test invariant) can still declare its applies-when predicate as static metadata the generator (idea #2) reads, while a tier-A/B runner declares both. The doctor reduces over predicates regardless of whether the owner has an executable verb &mdash; so startup-health and the facade proof participate by declaring a path glob, without growing a CLI they don't need.</dd>
+      <dt>Downsides</dt>
+      <dd>The cleanup is now in scope, so the effort is real and front-loaded: two new runners (format, typescript) cloned and auditor-proven, plus a predicate-declaration convention every owner adopts. Tier-B promotion also means deciding the fate of the existing MCP tools and the <code>rules/code-quality.md</code> "use the MCP runner tools" hard rule &mdash; the cleanup must update that rule in lockstep or the two guidance sources contradict. Bigger blast radius than the original "thin reducer" framing implied; better sequenced as its own runner-family cleanup with Task Doctor as the acceptance test, not a side effect.</dd>
+      <dt>Confidence</dt><dd>High &mdash; raised: the test-runner template + cli-execution-auditor + create-cli facade are all present, so the cleanup path is proven, not speculative</dd>
+      <dt>Complexity</dt><dd>Medium for the reducer + tier-A verbs; Medium-High once the format-runner / typescript-runner cleanup is counted (but it clones a working template)</dd>
+    </dl>
+    <svg class="fig" viewBox="0 0 760 220" role="img" aria-label="Central-router design copies each owner's contract; owner-declared design reduces over self-reported predicates">
+      <text x="180" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#8a3d37">Central deriver (copies contracts)</text>
+      <rect x="120" y="34" width="120" height="34" rx="6" fill="#f3dfdc" stroke="#8a3d37"/>
+      <text x="180" y="55" text-anchor="middle" font-size="12" fill="#202520">Task Doctor knows</text>
+      <text x="180" y="68" text-anchor="middle" font-size="10" fill="#5f665f">all 8 owners' rules</text>
+      <line x1="180" y1="68" x2="90" y2="120" stroke="#8a3d37"/>
+      <line x1="180" y1="68" x2="180" y2="120" stroke="#8a3d37"/>
+      <line x1="180" y1="68" x2="270" y2="120" stroke="#8a3d37"/>
+      <rect x="50" y="120" width="80" height="28" rx="5" fill="#fff" stroke="#d9ded5"/><text x="90" y="138" text-anchor="middle" font-size="10" fill="#5f665f">fallow</text>
+      <rect x="140" y="120" width="80" height="28" rx="5" fill="#fff" stroke="#d9ded5"/><text x="180" y="138" text-anchor="middle" font-size="10" fill="#5f665f">test-runner</text>
+      <rect x="230" y="120" width="80" height="28" rx="5" fill="#fff" stroke="#d9ded5"/><text x="270" y="138" text-anchor="middle" font-size="10" fill="#5f665f">create-cli</text>
+      <text x="180" y="178" text-anchor="middle" font-size="10" fill="#8a3d37">owner changes a rule &rarr; doctor drifts silently</text>
+
+      <text x="580" y="20" text-anchor="middle" font-size="12" font-weight="700" fill="#2e6a4e">Owner-declared (reduces over)</text>
+      <rect x="520" y="34" width="120" height="34" rx="6" fill="#e6f2eb" stroke="#2e6a4e"/>
+      <text x="580" y="55" text-anchor="middle" font-size="12" fill="#202520">Task Doctor asks</text>
+      <text x="580" y="68" text-anchor="middle" font-size="10" fill="#5f665f">"do you apply?"</text>
+      <line x1="490" y1="134" x2="520" y2="55" stroke="#2e6a4e"/>
+      <line x1="580" y1="120" x2="580" y2="68" stroke="#2e6a4e"/>
+      <line x1="670" y1="134" x2="640" y2="55" stroke="#2e6a4e"/>
+      <rect x="450" y="120" width="80" height="28" rx="5" fill="#fff" stroke="#2e6a4e"/><text x="490" y="134" text-anchor="middle" font-size="9" fill="#202520">fallow</text><text x="490" y="144" text-anchor="middle" font-size="8" fill="#5f665f">+predicate</text>
+      <rect x="540" y="120" width="80" height="28" rx="5" fill="#fff" stroke="#2e6a4e"/><text x="580" y="134" text-anchor="middle" font-size="9" fill="#202520">test-runner</text><text x="580" y="144" text-anchor="middle" font-size="8" fill="#5f665f">+predicate</text>
+      <rect x="630" y="120" width="80" height="28" rx="5" fill="#fff" stroke="#2e6a4e"/><text x="670" y="134" text-anchor="middle" font-size="9" fill="#202520">create-cli</text><text x="670" y="144" text-anchor="middle" font-size="8" fill="#5f665f">+predicate</text>
+      <text x="580" y="178" text-anchor="middle" font-size="10" fill="#2e6a4e">owner owns its own rule &rarr; nothing to drift</text>
+    </svg>
+    <p class="figcap">The basis, not the title: every frame that tried to make the doctor <em>safe</em> moved the applicability knowledge out of the center and into the owner.</p>
+  </article>
+
+  <article class="idea" id="i2">
+    <div class="idea-head"><span class="idnum">2.</span><h3>Generated route table from the Command Surface Map; fail loud on an unmapped touched path</h3></div>
+    <div class="chips"><span class="chip axis">Drift resistance</span><span class="chip conf-high">Confidence High</span><span class="chip cx">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>The owner&rarr;check&rarr;trigger table is <em>generated</em> by scanning owner manifests (SKILL.md frontmatter, facade discovery metadata, the runner table already rendered into <code>AGENTS.md</code>), filtered by the touched paths in the diff &mdash; never hand-listed. When an owner is added, regeneration picks it up. When a touched path matches no owner, the generator emits a loud "no check owner for this surface" finding instead of silently skipping it.</dd>
+      <dt>Axis</dt><dd>Drift resistance</dd>
+      <dt>Basis</dt>
+      <dd class="basis-direct"><b>direct:</b> ideation #2 (Command Surface Map) is explicitly framed as "a stable input for Task Doctor"; <code>AGENTS.md</code> "Generated files name source; edit source, not output"; memory <code>feedback_prompt_fragments_janitor_tax</code> "each check must catch real breakage and self-maintain." The Bazel/Make affected-targets pattern (external) is the same shape: derive the work-set from a generated reverse-dependency graph, never a hand list.</dd>
+      <dt>Rationale</dt>
+      <dd>This is the dependency the original idea under-priced. A hand-authored routing table across 8 owners rots exactly like a stale catalog &mdash; the janitor-tax trap. Generation makes the Command Surface Map the single chokepoint that the doctor, the Pulse, and CI all read; building the Map once pays off many times. The fail-loud-on-unmapped-path turn converts the most dangerous failure (a false-clean route because coverage has a hole) into a visible finding.</dd>
+      <dt>What it indexes (per owner)</dt>
+      <dd>One row per command surface: <code>command</code> (e.g. <code>test-runner run</code>), <code>owner-path</code>, <code>contract-id</code> + <code>schema_version</code>, <code>side-effect stance</code> (read / write), <code>execution modes</code> (dry_run / normal), <code>output modes</code> (json / plain), <code>audience</code> (agent / human), help command, and proof file(s). Plus the field idea #1 adds: the <strong>applies-when predicate</strong> (the path glob / condition that says "this check is relevant to this diff").</dd>
+      <dt>What it generates FROM &mdash; and the gaps (grounded)</dt>
+      <dd>The source already half-exists. <b>7 skills ship a <code>command-contract.ts</code></b> (<code>test-runner</code>, <code>fallow</code>, <code>skill-feedback</code>, <code>record-decision</code>, <code>browser-use</code>, <code>classic-cinema</code>, <code>cli-execution-auditor</code>) that already expose contract IDs, schema versions, and side-effect / execution / output / audience metadata &mdash; the Map is an <em>aggregator over what these owners already emit</em>, not a fresh registry. The gaps are precise: (1) <strong>no index aggregates them today</strong> &mdash; there's no existing map/catalog file; (2) the tier-B/C owners (Biome, tsc, startup health) have <strong>no contract to read</strong> until idea #1's cleanup gives them one; (3) SKILL.md frontmatter carries only <code>name</code> + <code>description</code> &mdash; the <strong>applies-when predicate is a net-new field</strong> every owner must declare. So the Map's real cost is "aggregate 7 existing contracts + add the predicate field," scaling to all owners as the runner-family cleanup lands.</dd>
+      <dt>How it stays drift-proof</dt>
+      <dd>The Map is a generated artifact (<code>AGENTS.md</code> "edit source, not output"), regenerated from owner contracts on demand or in CI. Borrow two proven mechanisms: the existing route-catalog <strong>contract-drift extractor</strong> (memory <code>feedback_route_catalog_extractor_format</code>) reconciles the Map against the live contracts and fails CI on divergence; and a missing predicate for a registered owner is a <em>generation error</em>, not a silent omission. The Map can't quietly fall out of date because regeneration is mechanical and drift is a test failure.</dd>
+      <dt>Bidirectional with idea #1</dt>
+      <dd>The two interlock: idea #1 says owners <em>declare</em> a predicate + verb; the Map is <em>where that declaration is aggregated and read</em>. Neither stands alone &mdash; #1 without the Map has nowhere to put the declarations; the Map without #1 has nothing meaningful to index beyond what 7 contracts already say. Build them as one move: every owner gains a predicate, the Map aggregates them, the doctor reduces over the Map.</dd>
+      <dt>Downsides</dt>
+      <dd>Hard sequencing dependency runs both ways now: the Map needs idea #1's predicate field to be useful, and idea #1 needs the Map to read from. Partial coverage during the runner-family cleanup means the Map is incomplete until tier-B/C owners are promoted &mdash; the doctor must treat "owner not yet in the Map" as a known gap (the andon turn, idea #6), not a silent skip. Risk of the Map becoming a second source of truth if it ever carries hand-edited rows the contracts don't back &mdash; generation-only is the invariant that prevents it.</dd>
+      <dt>Confidence</dt><dd>High (conditional on the Map) &mdash; raised slightly: 7 owners already emit the source metadata, so the aggregator is grounded, not speculative</dd>
+      <dt>Complexity</dt><dd>Medium &mdash; Medium-High when the predicate-field rollout across owners is counted</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i3">
+    <div class="idea-head"><span class="idnum">3.</span><h3>Advisor, never orchestrator &mdash; it names checks, it does not run them</h3></div>
+    <div class="chips"><span class="chip axis">Owner coupling</span><span class="chip conf-high">Confidence High</span><span class="chip cx">Complexity Low</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Task Doctor has no <code>--run</code>. It emits the ordered, annotated route &mdash; <code>{check, owner-command, why, repair-hint}</code> &mdash; and stops. Execution stays with the owners and the agent's existing tool routing (<code>rules/code-quality.md</code> already owns <em>how</em> each check runs and forbids raw <code>bun test</code>). A doctor that can run nothing can't drift into a fragile orchestrator that mirrors 8 owners' flags and output semantics.</dd>
+      <dt>Axis</dt><dd>Owner coupling</dd>
+      <dt>Basis</dt>
+      <dd class="basis-direct"><b>direct:</b> <code>AGENTS.md</code> "keep skills thin: read maps, choose next safe actions, and call owners"; <code>rules/code-quality.md</code> already owns check execution. The live evidence isolates the cost: the route had to be <em>assembled</em> by hand &mdash; assembly, not execution. The advisor removes 100% of the assembly cost and 0% of the execution coupling.</dd>
+      <dt>Rationale</dt>
+      <dd>This is the decision that keeps the whole thing thin. The moment the doctor executes, it owns failure handling, retry, timeout, and output parsing for every owner &mdash; the universal-orchestrator bloat the source idea warned about, by definition. The value was never in running the checks. A separate one-keystroke "run the bundle" wrapper can consume the doctor's output later; it is not the doctor.</dd>
+      <dt>Downsides</dt>
+      <dd>Two-step for the user (read route, then run) unless a thin runner wrapper is added. Some will want the doctor to "just do it" &mdash; the constraint has to be held deliberately against that pull.</dd>
+      <dt>Confidence</dt><dd>High</dd>
+      <dt>Complexity</dt><dd>Low (it's a constraint, not code)</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i4">
+    <div class="idea-head"><span class="idnum">4.</span><h3>Output is the owed-minus-done delta, not a fresh checklist</h3></div>
+    <div class="chips"><span class="chip axis">Output shape &amp; consumption</span><span class="chip conf-med">Confidence Medium</span><span class="chip cx">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>Instead of "here are 8 things to do," the doctor reads what is <em>already satisfied</em> &mdash; an existing skill-feedback closeout receipt for this slice, a fallow audit already run, tests green in the last runner packet &mdash; and emits only the unmet delta. The bundle shrinks as you work; an empty bundle means the slice is review-ready. Render it as a single next-safe-action head when the user wants a loop, or the full delta when they want the map.</dd>
+      <dt>Axis</dt><dd>Output shape &amp; consumption</dd>
+      <dt>Basis</dt>
+      <dd class="basis-direct"><b>direct:</b> <code>skills/skill-feedback/references/closeout-receipt.md</code> is exactly the "ritual-done" artifact a delta can read; <code>AGENTS.md</code> "after meaningful implementation use fallow; after a material skill run file a skill-feedback closeout"; Nathan/ADHD profile "reduce cognitive load." A fresh full checklist every turn is noise the agent learns to skim.</dd>
+      <dt>Rationale</dt>
+      <dd>A re-shown full bundle invites cherry-picking and re-running passed checks; a shrinking debt list is a progress signal and a definition-of-done. It reframes the doctor from a reminder into a ledger &mdash; which also makes the ADHD-context "where was I in the ritual chain?" question answerable from inspectable state rather than memory.</dd>
+      <dt>Downsides</dt>
+      <dd>Requires a legible "this ritual is done" signal per owner (a receipt file, a runner packet, a commit convention). Defining that signal is a prerequisite, and a wrong "done" inference is worse than re-listing.</dd>
+      <dt>Confidence</dt><dd>Medium</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i5">
+    <div class="idea-head"><span class="idnum">5.</span><h3>Bind the route at intake; reconcile it post-diff</h3></div>
+    <div class="chips"><span class="chip axis">Trigger &amp; lifecycle</span><span class="chip conf-med">Confidence Medium</span><span class="chip cx">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>"Read the diff after the change" is treated as the moment, but the most expensive failure is discovering at closeout that the task needed a decision log or a facade proof you never set up. Bind the expected check bundle at task <em>intake</em> (from the plan + the owner paths it predicts), then the post-change job is reconciliation: "you committed to these checks; here's what's still red, and here's what the diff added that the plan didn't predict." Intent is an input, not just the diff. This needs a lightweight task handle (base-ref + plan ref) so re-invocation is idempotent against the same task rather than a fresh scan.</dd>
+      <dt>Axis</dt><dd>Trigger &amp; lifecycle</dd>
+      <dt>Basis</dt>
+      <dd class="basis-direct"><b>direct:</b> the source idea already lists "recent plan" as an input; <code>fallow</code> already parameterizes on <code>--base-ref HEAD</code>, proving task-scoping is a live primitive. reasoned: a route known only post-diff cannot prevent the missing-ritual class of friction the workability report named &mdash; you can't set up a decision log you only learn you owed after the work is done.</dd>
+      <dt>Rationale</dt>
+      <dd>Shifts the doctor from autopsy to contract. Detecting "you forgot the decision log" up front is a cheaper loop than discovering it at PR review. The task handle is also the precondition that makes the owed-minus-done delta (#4) stable across commits within one task &mdash; without it, "current diff" silently drifts as the branch moves.</dd>
+      <dt>Downsides</dt>
+      <dd>Adds an intake step and a task-handle primitive the repo doesn't have yet. Plans don't always exist (bare-prompt work), so intake-binding must degrade gracefully to diff-only.</dd>
+      <dt>Confidence</dt><dd>Medium</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i6">
+    <div class="idea-head"><span class="idnum">6.</span><h3>Andon cord: get loud on surfaces no owner claims</h3></div>
+    <div class="chips"><span class="chip axis">Drift resistance</span><span class="chip conf-med">Confidence Medium</span><span class="chip cx">Complexity Low</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>When the diff touches a path that no owner's predicate claims, the doctor emits a distinct first-class route item &mdash; "uncovered: <code>&lt;paths&gt;</code> &mdash; no check owner; classify or register one" &mdash; rather than producing a short, clean-looking route. It also runs a fast self-check before emitting (every owner it would route to still resolves; mcp-doctor's exit-2 "the doctor itself could not run" pattern), so doctor drift surfaces as the first finding, not a silent wrong answer.</dd>
+      <dt>Axis</dt><dd>Drift resistance</dd>
+      <dt>Basis</dt>
+      <dd class="basis-external"><b>external + direct:</b> Toyota Production System andon cord / poka-yoke &mdash; any worker can halt the line at an off-the-known-path condition. Direct: <code>mcp-doctor</code> "exit 2 means the doctor itself could not run"; <code>AGENTS.md</code> "design failures to expose cause, repair path, or human handoff."</dd>
+      <dt>Rationale</dt>
+      <dd>The dangerous failure of a router is the false-clean &mdash; a short route because coverage has a hole, not because the change is safe. The andon turn distinguishes "verified, nothing needed" from "nobody knows," and every run that hits a gap becomes a free coverage audit feeding the Pulse. A self-checking doctor is the janitor-tax discipline applied to the doctor itself.</dd>
+      <dt>Downsides</dt>
+      <dd>Risk of false alarms on genuinely check-free paths (pure docs, generated output) &mdash; needs an explicit "no check needed" classification so the andon doesn't cry wolf.</dd>
+      <dt>Confidence</dt><dd>Medium</dd>
+      <dt>Complexity</dt><dd>Low</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="i7">
+    <div class="idea-head"><span class="idnum">7.</span><h3>Emit a machine-readable route artifact other tools consume</h3></div>
+    <div class="chips"><span class="chip axis">Output shape &amp; consumption</span><span class="chip conf-med">Confidence Medium</span><span class="chip cx">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd>The derived route is written to a structured task-local artifact (route JSON: each check with owner path, why, repair hint, side-effect stance), and the chat rendering is one consumer of it. The same file then feeds skill-feedback closeout (auto-fill <code>touched_surfaces</code>), the Workability Pulse (signal source), CI (run the same bundle headless), and a drift monitor (did the route the agent ran match the route the doctor recommended?). A per-run ledger of these artifacts becomes the Pulse's longitudinal feed.</dd>
+      <dt>Axis</dt><dd>Output shape &amp; consumption</dd>
+      <dt>Basis</dt>
+      <dd class="basis-direct"><b>direct:</b> skill-feedback closeout already takes <code>touched_surfaces</code> (owner paths) and <code>observations</code>; ideation #6 (Workability Pulse) lists "failed checks" as a signal source; <code>AGENTS.md</code> "emit maps, continuations, and repair hints." Reuse the existing route-catalog extractor format (memory <code>feedback_route_catalog_extractor_format</code>) so the artifact inherits an already-paid-for drift test.</dd>
+      <dt>Rationale</dt>
+      <dd>One structured emission unlocks four downstream consumers without rebuilding any of them &mdash; the route stops being a throwaway chat reply and becomes a reusable evidence object. This is the compounding shape choice: the per-task instrument funds the strategic tool (the Pulse) for free.</dd>
+      <dt>Downsides</dt>
+      <dd>Over-engineering risk if built before any consumer exists &mdash; a structured artifact with no reader is speculative. Best sequenced once at least one consumer (closeout auto-fill, or CI) is real.</dd>
+      <dt>Confidence</dt><dd>Medium</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+</section>
+
+<section>
+  <h2>Cross-Cutting Synthesis</h2>
+  <div class="callout">
+    <span class="lbl">The strongest claim in the set</span>
+    <p style="margin-top:6px;">Ideas 1, 2, and 3 are one argument seen from three sides: <strong>the real compounding win is not the doctor at all &mdash; it is that building it forces every owner to declare a trigger predicate and a uniform <code>check --json</code> verb (1), read through a generated Command Surface Map (2), consumed by a thin advisor that never executes (3).</strong> The doctor is the forcing function; the owner contracts and the Map are what actually accumulate. Ideas 4 and 7 then make the doctor's exhaust feed every downstream consumer (closeout, Pulse, CI). The sharpest decision for a brainstorm: does the doctor <em>derive</em> routes (orchestrator, forbidden) or <em>reduce over</em> what owners declare (advisor, sanctioned)? That single fork decides whether this survives six months of owner churn.</p>
+  </div>
+  <div class="callout" style="background:var(--green-soft);">
+    <span class="lbl" style="color:var(--green);">Reframe from this session &mdash; the runner-family cleanup is the actual project</span>
+    <p style="margin-top:6px;">Once the MCP-only checks (Biome, tsc) are promoted into agent-native runners, Task Doctor stops being the goal and becomes the <strong>acceptance test for a uniform Agent Runner family</strong>. <code>test-runner</code> is the proven template; <code>format-runner</code> and <code>typescript-runner</code> clone its facade and are proven by <code>cli-execution-auditor</code> &mdash; the same way test-runner proves itself today. The sequence inverts: don't build the doctor and route around the ragged owners; <em>level the owners first</em> (every check is an agent-native runner with a declared predicate), and the doctor falls out as a thin reducer with nothing ragged left to special-case. The deliverable is N uniform runners + one generated Map; the doctor is the thing that proves they compose. This also retires the <code>rules/code-quality.md</code> "use the MCP runner tools" hard rule and the <code>context/bun-runner.md</code> "prefer MCP when available" hedge &mdash; update both in lockstep with the cleanup.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Rejection Summary</h2>
+  <table>
+    <thead><tr><th class="n">#</th><th>Idea</th><th>Reason rejected</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1</td><td>No command &mdash; Stop-hook prints the bundle unprompted</td><td>Good triggering variant, but it's a lifecycle flavor of #5/#3, not a separate product; fold the auto-trigger into them.</td></tr>
+      <tr><td class="n">2</td><td>Single next command vs a bundle (loop head, not menu)</td><td>Folded into #4 as a rendering choice over the same owed-minus-done delta.</td></tr>
+      <tr><td class="n">3</td><td>Differential by exclusion (show crossed-out non-triggered owners)</td><td>Output polish on #2/#4 &mdash; a presentation of the same route, not a distinct idea.</td></tr>
+      <tr><td class="n">4</td><td>Surgical time-out read-back header (diff+plan confirm line)</td><td>A nice one-line affordance, but it's a feature of #5's reconciliation, not standalone.</td></tr>
+      <tr><td class="n">5</td><td>Tax-interview WHY = the matched predicate rendered as prose</td><td>Mechanically follows from #1 (the predicate is the WHY); captured inside it.</td></tr>
+      <tr><td class="n">6</td><td>Mechanic diagnostic tree &mdash; order by cheapest-eliminating-first</td><td>Route-ordering polish; a refinement of #4's rendering, below the meeting-test alone.</td></tr>
+      <tr><td class="n">7</td><td>ATC handoff strip (route as transferable diff-hash token)</td><td>Real, but it's the cross-session shape of #7's artifact; merged there.</td></tr>
+      <tr><td class="n">8</td><td>Repair-hint inheritance (quote owner's hint, never author)</td><td>Correct and important &mdash; absorbed as a constraint inside #1/#3 (pointer, not copy), not a separate survivor.</td></tr>
+      <tr><td class="n">9</td><td>Always-run-all-8 wall</td><td>Constraint-flip probe, not a product; its value is the question "is selection worth its cost?" &mdash; which informs #3, doesn't ship.</td></tr>
+      <tr><td class="n">10</td><td>Build-breaking gate (missed check = red CI)</td><td>Contradicts the advisor constraint (#3) head-on; useful as the tension to debate, but the gate version recreates the orchestrator coupling.</td></tr>
+      <tr><td class="n">11</td><td>&lt;50ms map-only probe / agent-only wire format</td><td>Implementation constraints on #3/#7 (cheapness enforces advisor; audience decides format), not standalone ideas.</td></tr>
+      <tr><td class="n">12</td><td>Evidence folders drop a <code>.needs-closeout</code> marker</td><td>Plausible, but pushes a new convention onto every producer; weaker than reading existing receipts (#4). Brainstorm variant at best.</td></tr>
+      <tr><td class="n">13</td><td>Task identity as the doctor's unit</td><td>A genuine precondition, but it's the enabling primitive for #4/#5 rather than a user-facing idea; noted inside #5.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer class="composition-signal">Composed 2026-06-14 by ce-ideate from the conversation prompt and repo-local grounding in <code>claude-code-config</code>; deepens idea #1 of <code>docs/ideation/2026-06-13-repo-workability-improvements-ideation.html</code>.</footer>
+
+</div>
+</body>
+</html>
