@@ -1,0 +1,248 @@
+[
+  {
+    "branch": "main",
+    "path": "/Users/nathanvale/code/claude-code-config",
+    "head": "80240ce",
+    "dirty": true,
+    "merged": true,
+    "isMain": true
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-0874c9738ba18507-260070ec7b4220ee",
+    "head": "260070e",
+    "dirty": false,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-0874c9738ba18507-d56243e4fcac6936",
+    "head": "d56243e",
+    "dirty": false,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-05e9d45c26be3f3b",
+    "head": "05e9d45",
+    "dirty": false,
+    "merged": false,
+    "isMain": false,
+    "status": "enrichment failed",
+    "detectionError": "ENOENT: no such file or directory, posix_spawn 'git'"
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-08f4d0798dad85eb",
+    "head": "08f4d07",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-2ab98f4dd879db98",
+    "head": "2ab98f4",
+    "dirty": false,
+    "merged": false,
+    "isMain": false,
+    "status": "enrichment failed",
+    "detectionError": "ENOENT: no such file or directory, posix_spawn 'git'"
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-38ab9f7207890d2c",
+    "head": "38ab9f7",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-38ad24cc2c9175fc",
+    "head": "38ad24c",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-57925ae59775565d",
+    "head": "57925ae",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-70d68180f323cb38",
+    "head": "70d6818",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-8a48ce67ae4c45ab",
+    "head": "8a48ce6",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-8acb4492e86a0e9d",
+    "head": "8acb449",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-aefe8ff187095ebb",
+    "head": "aefe8ff",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-b5fa6012edeec983",
+    "head": "b5fa601",
+    "dirty": false,
+    "merged": false,
+    "isMain": false,
+    "status": "enrichment failed",
+    "detectionError": "ENOENT: no such file or directory, posix_spawn 'git'"
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-c04de8ade68b35b5",
+    "head": "c04de8a",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-cc42b5c839d5eda9",
+    "head": "cc42b5c",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-d52907461e2b3797",
+    "head": "d529074",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-da87db8c17f39808",
+    "head": "da87db8",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-e8d28a253495f949",
+    "head": "e8d28a2",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-ed676e1ae9d04b37",
+    "head": "ed676e1",
+    "dirty": false,
+    "merged": false,
+    "isMain": false,
+    "status": "enrichment failed",
+    "detectionError": "ENOENT: no such file or directory, posix_spawn 'git'"
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-1a4d9b4ba5a8cc61-f41fac19d66191b2",
+    "head": "f41fac1",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-655cb1e943d3633d-8acb4492e86a0e9d",
+    "head": "8acb449",
+    "dirty": false,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-688bda9d87126821-8acb4492e86a0e9d",
+    "head": "8acb449",
+    "dirty": false,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-92357b7146e06928-8acb4492e86a0e9d",
+    "head": "8acb449",
+    "dirty": false,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-ea99ed402a7a5e0d-48750b8fb4c8de80",
+    "head": "48750b8",
+    "dirty": true,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "(detached)",
+    "path": "/private/var/folders/_b/0fxx_szx34qchf5vq6j5xd1h0000gn/T/fallow-audit-base-cache-fc4cee3367f0b36b-8acb4492e86a0e9d",
+    "head": "8acb449",
+    "dirty": false,
+    "merged": false,
+    "isMain": false
+  },
+  {
+    "branch": "codex/browser-use-refactor",
+    "path": "/Users/nathanvale/.codex/worktrees/8b47/claude-code-config",
+    "head": "48750b8",
+    "dirty": true,
+    "merged": false,
+    "isMain": false,
+    "commitsAhead": 21,
+    "status": "21 ahead, dirty"
+  },
+  {
+    "branch": "codex/harden-test-runner",
+    "path": "/Users/nathanvale/.codex/worktrees/af52/claude-code-config",
+    "head": "8c1b3a4",
+    "dirty": false,
+    "merged": false,
+    "isMain": false,
+    "commitsAhead": 3,
+    "status": "3 ahead"
+  },
+  {
+    "branch": "worktree-browser-use-chrome-devtools-ideation",
+    "path": "/Users/nathanvale/code/claude-code-config/.claude/worktrees/browser-use-chrome-devtools-ideation",
+    "head": "e1110fd",
+    "dirty": true,
+    "merged": false,
+    "isMain": false,
+    "commitsAhead": 19,
+    "status": "19 ahead, dirty"
+  }
+]
