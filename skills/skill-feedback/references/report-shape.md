@@ -57,6 +57,8 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - `normalizeReport` strips raw inbox `skill_run_id_provenance`; raw JSON cannot mint `same_trusted_run` or `corroborated`.
 - Review output carries review units, ledger entries, anchor-miss telemetry, open actions, no-action rationale, and claim-specific readiness facts.
 - Review output carries `inbox_health` for primary, low-signal, unsafe, and invalid artifact counts.
+- Review output carries minimal health projection fields for direct-review safety: `inbox_status`, `counts`, `warnings`, and `next_action`.
+- Keep exact health projection fields, enum values, reason ids, and next-action ids in `skills/skill-feedback/src/command-contract.ts`.
 - Keep `allowed_claims` entry-local on ledger entries.
 - Do not expose top-level `allowed_claims`.
 - Do not expose v1 `capture_readiness` in v2 review output.
@@ -116,7 +118,8 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 
 - Run review through `skill-feedback review`.
 - Keep review mutation-free.
-- Lead with coverage.
+- Lead plain review with a compact health block when inbox state or warnings can change interpretation.
+- Lead with coverage when no health-critical state is present.
 - Count closeout, capture-only, unlinked, and evidence-gap reports.
 - Count only primary reports in coverage.
 - Keep unknown-skill Codex Stop capture in the low-signal lane.

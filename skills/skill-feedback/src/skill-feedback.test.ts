@@ -1018,6 +1018,19 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(envelope.status).toBe("ok");
 		expect(envelope.data).toMatchObject({
 			open_items: [],
+			inbox_status: "missing",
+			counts: {
+				primary: 0,
+				low_signal: 0,
+			},
+			read_target: {
+				explicit: false,
+				repo_root: root,
+				inbox_path: join(root, ".skill-feedback"),
+			},
+			next_action: {
+				action_id: "confirm-capture-path",
+			},
 			no_action: {
 				rationale: "No skill-feedback reports found.",
 			},
@@ -1029,6 +1042,13 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			plain: true,
 		});
 		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout.indexOf("Review health:")).toBeLessThan(
+			plain.stdout.indexOf("No action:"),
+		);
+		expect(plain.stdout).toContain(`repo_root=${root}`);
+		expect(plain.stdout).toContain(
+			`inbox_path=${join(root, ".skill-feedback")}`,
+		);
 		expect(plain.stdout).toContain("No action: No skill-feedback reports found.");
 	});
 
@@ -1338,6 +1358,20 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			runId: "review-after-health-partial",
 		});
 		expect(review.exitCode).toBe(0);
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData).toMatchObject({
+			inbox_status: "partially_readable",
+			counts: {
+				primary: 1,
+				invalid: 2,
+			},
+			next_action: {
+				action_id: "repair-inbox-state",
+			},
+		});
+		expect(reviewData.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
 		expectReviewCoverage(review.stdout, {
 			total_reports: 1,
 			closeout_count: 1,
@@ -1345,7 +1379,22 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			closeout_rate: 1,
 			low_coverage: false,
 		});
-	});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-after-health-partial-plain",
+			plain: true,
+		});
+		const healthIndex = plain.stdout.indexOf("Review health:");
+		const reportsIndex = plain.stdout.indexOf("Reports:");
+		expect(healthIndex).toBeGreaterThan(-1);
+		expect(healthIndex).toBeLessThan(reportsIndex);
+		const healthBlock = plain.stdout.slice(healthIndex, reportsIndex);
+		expect(healthBlock).toContain("inbox_status=partially_readable");
+		expect(healthBlock).toContain("top_warning=partial_readability");
+		expect(healthBlock).not.toContain("trusted skill identity");
+		expect(healthBlock).not.toContain("Correlation:");
+		});
 
 	test("health summarizes all-unlinked primary reports as report-level evidence", async () => {
 		const root = await makeRoot();
@@ -1721,9 +1770,10 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			runtime: stubRuntime(root),
 			runId: "review-low-signal-health-plain",
 			plain: true,
+			});
+			expect(plain.stdout).toContain("Review health:");
+			expect(plain.stdout).toContain("counts primary=0 low-signal=3");
 		});
-		expect(plain.stdout).toContain("Inbox health: low-signal=3");
-	});
 
 	test("review reports unsafe and invalid artifacts as inbox health", async () => {
 		const root = await makeRoot();
@@ -1749,26 +1799,31 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		const data = parseEnvelope(result.stdout).data as {
-			coverage: { total_reports: number };
-			inbox_health: {
-				primary_count: number;
-				skipped_unsafe_count: number;
-				invalid_count: number;
-			};
-		};
+		const data = parseEnvelope(result.stdout).data as ReviewResultData;
 		expect(data.coverage.total_reports).toBe(1);
 		expect(data.inbox_health.primary_count).toBe(1);
 		expect(data.inbox_health.skipped_unsafe_count).toBe(1);
 		expect(data.inbox_health.invalid_count).toBe(1);
+		expect(data.inbox_status).toBe("partially_readable");
+		expect(data.counts).toMatchObject({
+			primary: 1,
+			skipped_unsafe: 1,
+			invalid: 1,
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
 
 		const plain = await reviewSkillFeedbackInbox({
 			runtime: stubRuntime(root),
 			runId: "review-health-invalid-plain",
 			plain: true,
 		});
-		expect(plain.stdout).toContain("Inbox health: low-signal=0 skipped=1 invalid=1");
-	});
+		expect(plain.stdout).toContain("Review health:");
+		expect(plain.stdout).toContain(
+			"counts primary=1 low-signal=0 invalid=1 skipped=1",
+		);
+		});
 
 	test("purge preview lists old safe candidates without deleting", async () => {
 		const root = await makeRoot();
@@ -2543,6 +2598,77 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		}
 	});
 
+	test("review open actions rank actionable evidence before correlation context", async () => {
+		const root = await makeRoot();
+		const report = (input: {
+			reportId: string;
+			heavy?: boolean;
+			ownerPath?: boolean;
+		}) => ({
+			schema_version: "1",
+			report_id: input.reportId,
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "unlinked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: input.heavy ? "heavy" : "light",
+					note: "Focused check.",
+				},
+				observations: input.ownerPath
+					? [
+							{
+								kind: "tool_failure",
+								target: {
+									type: "path",
+									value: "skills/skill-feedback/SKILL.md",
+								},
+								summary: "The owner path needed inspection.",
+								evidence_basis: "driver_observed",
+							},
+						]
+					: [],
+			},
+			evidence_gaps: input.heavy
+				? [
+						{
+							code: "missing_runtime_git_sha",
+							path: "runtime.git_sha",
+							message: "No git SHA source.",
+						},
+					]
+				: [],
+		});
+		await writeInboxReport(
+			root,
+			"heavy.json",
+			report({ reportId: "report-heavy", heavy: true, ownerPath: true }),
+		);
+		await writeInboxReport(root, "repeat.json", report({ reportId: "report-repeat" }));
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-actions-ranked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as ReviewResultData;
+		expect(data.open_actions.map((action) => action.open_reason)).toEqual([
+			"owner_path_observation",
+			"high_verification_burden",
+			"repeated_friction",
+			"evidence_gap",
+			"unlinked_correlation_spike",
+		]);
+		expect(data.open_actions.at(-1)?.open_reason).toBe(
+			"unlinked_correlation_spike",
+		);
+	});
+
 	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
 		const root = await makeIgnoredGitRoot();
 		await writeInboxReport(root, "plain-heavy.json", {
@@ -3231,89 +3357,52 @@ describe("skill-feedback parseRecordFlags", () => {
 	});
 });
 
-describe("skill-feedback parseReviewArgs", () => {
-	test("parses plain and explicit repo flags", () => {
-		expect(parseReviewArgs(["review", "--plain", "--repo", "/repo"])).toEqual({
-			ok: true,
-			options: {
-				plain: true,
-				targetPath: "/repo",
-			},
+for (const { command, parse } of [
+	{ command: "review", parse: parseReviewArgs },
+	{ command: "health", parse: parseHealthArgs },
+] as const) {
+	describe(`skill-feedback parse ${command} args`, () => {
+		test("parses plain and explicit repo flags", () => {
+			expect(parse([command, "--plain", "--repo", "/repo"])).toEqual({
+				ok: true,
+				options: {
+					plain: true,
+					targetPath: "/repo",
+				},
+			});
 		});
-	});
 
-	test("parses empty args and rejects positional review inputs", () => {
-		expect(parseReviewArgs([])).toEqual({
-			ok: true,
-			options: { plain: false, targetPath: undefined },
+		test("parses empty args and rejects positional inputs", () => {
+			expect(parse([])).toEqual({
+				ok: true,
+				options: { plain: false, targetPath: undefined },
+			});
+			expect(parse([command])).toEqual({
+				ok: true,
+				options: { plain: false, targetPath: undefined },
+			});
+			expect(parse(["/repo"])).toMatchObject({
+				ok: false,
+				message: `Expected a ${command} flag.`,
+			});
 		});
-		expect(parseReviewArgs(["review"])).toEqual({
-			ok: true,
-			options: { plain: false, targetPath: undefined },
-		});
-		expect(parseReviewArgs(["/repo"])).toMatchObject({
-			ok: false,
-			message: "Expected a review flag.",
-		});
-	});
 
-	test("rejects missing repo values and unknown review flags", () => {
-		expect(parseReviewArgs(["--repo"])).toMatchObject({
-			ok: false,
-			message: "--repo requires a value.",
-		});
-		expect(parseReviewArgs(["--repo", "--plain"])).toMatchObject({
-			ok: false,
-			message: "--repo requires a value.",
-		});
-		expect(parseReviewArgs(["--execute"])).toMatchObject({
-			ok: false,
-			message: "Unknown flag --execute.",
-		});
-	});
-});
-
-describe("skill-feedback parseHealthArgs", () => {
-	test("parses plain and explicit repo flags", () => {
-		expect(parseHealthArgs(["health", "--plain", "--repo", "/repo"])).toEqual({
-			ok: true,
-			options: {
-				plain: true,
-				targetPath: "/repo",
-			},
+		test("rejects missing repo values and unknown flags", () => {
+			expect(parse(["--repo"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--repo", "--plain"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--execute"])).toMatchObject({
+				ok: false,
+				message: "Unknown flag --execute.",
+			});
 		});
 	});
-
-	test("parses empty args and rejects positional health inputs", () => {
-		expect(parseHealthArgs([])).toEqual({
-			ok: true,
-			options: { plain: false, targetPath: undefined },
-		});
-		expect(parseHealthArgs(["health"])).toEqual({
-			ok: true,
-			options: { plain: false, targetPath: undefined },
-		});
-		expect(parseHealthArgs(["/repo"])).toMatchObject({
-			ok: false,
-			message: "Expected a health flag.",
-		});
-	});
-
-	test("rejects missing repo values and unknown health flags", () => {
-		expect(parseHealthArgs(["--repo"])).toMatchObject({
-			ok: false,
-			message: "--repo requires a value.",
-		});
-		expect(parseHealthArgs(["--repo", "--plain"])).toMatchObject({
-			ok: false,
-			message: "--repo requires a value.",
-		});
-		expect(parseHealthArgs(["--execute"])).toMatchObject({
-			ok: false,
-			message: "Unknown flag --execute.",
-		});
-	});
-});
+}
 
 describe("skill-feedback parsePurgeArgs", () => {
 	test("parses preview and execute purge flags", () => {

@@ -89,8 +89,8 @@ const PILOT_MARKER_FILE = "pilot_started_at";
 const MAX_CLOSEOUT_STDIN_BYTES = 64_000;
 const DEFAULT_RUNNER_PROCESS_TIMEOUT_MS = 6_000;
 const HEALTH_LOW_SIGNAL_WARNING_THRESHOLD = 10;
-const HEALTH_RETENTION_AGE_WARNING_DAYS = 14;
-const HEALTH_RETENTION_COUNT_WARNING_THRESHOLD = 100;
+const RETENTION_AGE_WARNING_DAYS = 14;
+const RETENTION_COUNT_WARNING_THRESHOLD = 100;
 const CLOSEOUT_RECEIPT_DOCS_URL =
 	"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md";
 const NON_ACTIONABLE_EVIDENCE_GAP_CODES: ReadonlySet<EvidenceGapCode> = new Set([
@@ -98,6 +98,25 @@ const NON_ACTIONABLE_EVIDENCE_GAP_CODES: ReadonlySet<EvidenceGapCode> = new Set(
 	"unlinked_correlation",
 	"missing_runtime_model",
 ]);
+const REVIEW_OPEN_REASON_RANK: Record<ReviewOpenItem["open_reason"], number> = {
+	owner_path_observation: 0,
+	high_verification_burden: 1,
+	repeated_friction: 2,
+	evidence_gap: 3,
+	unlinked_correlation_spike: 4,
+};
+const REVIEW_OPEN_SEVERITY_RANK: Record<ReviewOpenItem["severity"], number> = {
+	action: 0,
+	warning: 1,
+	info: 2,
+};
+const SKILL_FEEDBACK_HELP_COMMANDS = [
+	"record",
+	"closeout",
+	"review",
+	"health",
+	"purge",
+] as const satisfies readonly (keyof typeof skillFeedbackContracts)[];
 
 type HealthNextActionInput = {
 	status: HealthInboxStatus;
@@ -108,17 +127,6 @@ type HealthNextActionInput = {
 type HealthNextActionRule = {
 	matches: (input: HealthNextActionInput) => boolean;
 	action: HealthNextAction;
-};
-
-type PlainReadinessFact = {
-	status: string;
-	reason_ids: readonly string[];
-};
-
-type PlainClaimReadiness = {
-	runtime_capture: PlainReadinessFact;
-	trusted_skill_identity: PlainReadinessFact;
-	daily_pilot: PlainReadinessFact;
 };
 
 type HealthInboxStatusRule = {
@@ -198,7 +206,7 @@ const HEALTH_NEXT_ACTION_RULES: readonly HealthNextActionRule[] = [
 		matches: needsPurgePreview,
 		action: {
 			action_id: "preview-purge",
-			summary: "Preview retention cleanup; health does not delete reports.",
+			summary: "Preview explicit purge; health does not delete reports.",
 		},
 	},
 ];
@@ -235,19 +243,6 @@ type SkillFeedbackResultContractId =
 	| typeof SKILL_FEEDBACK_REVIEW_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_HEALTH_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_PURGE_CONTRACT_ID;
-
-const RESULT_SCHEMA_VERSION_BY_CONTRACT: Record<
-	SkillFeedbackResultContractId,
-	string
-> = {
-	[SKILL_FEEDBACK_CONTRACT_ID]: SKILL_FEEDBACK_SCHEMA_VERSION,
-	[SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID]: SKILL_FEEDBACK_SCHEMA_VERSION,
-	[SKILL_FEEDBACK_REVIEW_CONTRACT_ID]:
-		SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
-	[SKILL_FEEDBACK_HEALTH_CONTRACT_ID]:
-		SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
-	[SKILL_FEEDBACK_PURGE_CONTRACT_ID]: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
-};
 
 export type SkillFeedbackProcessResult = {
 	exitCode: number;
@@ -736,13 +731,10 @@ export async function reviewSkillFeedbackInbox(
 		const inbox = await readReviewInbox(repoRoot, runtime);
 		const pilotStartedAt = await readPilotStartedAt(repoRoot, runtime);
 		const data = buildReviewResultData({
-			reports: inbox.primaryReports,
-			lowSignalReports: inbox.lowSignalReports,
-			skippedUnsafeCount: inbox.skippedUnsafeCount,
-			invalidCount: inbox.invalidCount,
+			inbox,
 			nowIso: runtime.nowIso(),
 			pilotStartedAt,
-			readTarget: reviewReadTargetData(readTarget),
+			readTarget,
 		});
 		if (options.plain) {
 			return {
@@ -1430,16 +1422,13 @@ async function readPilotStartedAt(
 }
 
 function buildReviewResultData(input: {
-	reports: readonly NormalizedSoftwareLearningReport[];
-	lowSignalReports?: readonly LowSignalReport[];
-	skippedUnsafeCount?: number;
-	invalidCount?: number;
+	inbox: ReviewInboxRead;
 	nowIso: string;
 	pilotStartedAt?: string;
-	readTarget?: ReviewReadTarget;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
 }): ReviewResultData {
-	const reports = input.reports;
-	const lowSignalReports = input.lowSignalReports ?? [];
+	const reports = input.inbox.primaryReports;
+	const lowSignalReports = input.inbox.lowSignalReports;
 	const reviewUnits = coalesceReviewUnits(reports);
 	const closeoutUnits = reviewUnits.filter(hasCloseoutEvidence);
 	const captureOnlyUnits = reviewUnits.filter(
@@ -1476,7 +1465,20 @@ function buildReviewResultData(input: {
 		...reports,
 		...lowSignalReports.map((entry) => entry.report),
 	]);
+	const inboxStatus = healthInboxStatus(input.inbox);
+	const correlation = healthCorrelation(reports);
+	const counts = healthCounts(input.inbox, correlation);
 	const retention = retentionSummary(reports, input.nowIso);
+	const warnings = deriveHealthWarnings({
+		status: inboxStatus,
+		counts,
+		retentionWarning: retention.warning,
+	});
+	const nextAction = deriveHealthNextAction({
+		status: inboxStatus,
+		counts,
+		retentionWarning: retention.warning,
+	});
 	const pilotCheckpoint = pilotCheckpointSummary({
 		startedAt: input.pilotStartedAt,
 		nowIso: input.nowIso,
@@ -1486,6 +1488,7 @@ function buildReviewResultData(input: {
 		).length,
 		noAction: openItems.length === 0,
 	});
+	const readTarget = reviewReadTargetData(input.readTarget, inboxStatus);
 	return {
 		contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 		schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
@@ -1493,10 +1496,14 @@ function buildReviewResultData(input: {
 		inbox_health: deriveInboxHealth(
 			reports,
 			lowSignalReports,
-			input.skippedUnsafeCount ?? 0,
-			input.invalidCount ?? 0,
+			input.inbox.skippedUnsafeCount,
+			input.inbox.invalidCount,
 		),
-		...(input.readTarget ? { read_target: input.readTarget } : {}),
+		inbox_status: inboxStatus,
+		counts,
+		warnings,
+		next_action: nextAction,
+		...(readTarget ? { read_target: readTarget } : {}),
 		open_items: openItems,
 		open_actions: deriveOpenActions(openItems),
 		...(openItems.length === 0
@@ -1520,8 +1527,9 @@ function buildReviewResultData(input: {
 
 function reviewReadTargetData(
 	resolution: Extract<ReadTargetResolution, { ok: true }>,
+	inboxStatus: HealthInboxStatus,
 ): ReviewReadTarget | undefined {
-	if (!resolution.explicit) return undefined;
+	if (!resolution.explicit && inboxStatus === "populated") return undefined;
 	return {
 		explicit: resolution.explicit,
 		repo_root: resolution.repoRoot,
@@ -1536,23 +1544,17 @@ function buildHealthResultData(input: {
 }): HealthResultData {
 	const primaryReports = input.inbox.primaryReports;
 	const lowSignalReports = input.inbox.lowSignalReports;
-	const counts = {
-		primary: primaryReports.length,
-		low_signal: lowSignalReports.length,
-		invalid: input.inbox.invalidCount,
-		skipped_unsafe: input.inbox.skippedUnsafeCount,
-		unlinked_primary: primaryReports.filter(
-			(report) => report.correlation_status === "unlinked",
-		).length,
-	};
+	const inboxStatus = healthInboxStatus(input.inbox);
+	const correlation = healthCorrelation(primaryReports);
+	const counts = healthCounts(input.inbox, correlation);
 	const retention = retentionSummary(primaryReports, input.nowIso);
 	const warnings = deriveHealthWarnings({
-		status: healthInboxStatus(input.inbox),
+		status: inboxStatus,
 		counts,
 		retentionWarning: retention.warning,
 	});
 	const nextAction = deriveHealthNextAction({
-		status: healthInboxStatus(input.inbox),
+		status: inboxStatus,
 		counts,
 		retentionWarning: retention.warning,
 	});
@@ -1565,7 +1567,7 @@ function buildHealthResultData(input: {
 	return {
 		contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 		schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
-		inbox_status: healthInboxStatus(input.inbox),
+		inbox_status: inboxStatus,
 		counts,
 		newest: {
 			...newestGeneratedTs(primaryReports, "primary_generated_ts"),
@@ -1576,7 +1578,7 @@ function buildHealthResultData(input: {
 		},
 		warnings,
 		claim_readiness: claimReadiness,
-		correlation: healthCorrelation(primaryReports),
+		correlation,
 		next_action: nextAction,
 	};
 }
@@ -1586,6 +1588,19 @@ function healthInboxStatus(inbox: ReviewInboxRead): HealthInboxStatus {
 		HEALTH_INBOX_STATUS_RULES.find((rule) => rule.matches(inbox))?.status ??
 		"populated"
 	);
+}
+
+function healthCounts(
+	inbox: ReviewInboxRead,
+	correlation: HealthResultData["correlation"],
+): HealthResultData["counts"] {
+	return {
+		primary: inbox.primaryReports.length,
+		low_signal: inbox.lowSignalReports.length,
+		invalid: inbox.invalidCount,
+		skipped_unsafe: inbox.skippedUnsafeCount,
+		unlinked_primary: correlation.unlinked_primary_count,
+	};
 }
 
 function newestGeneratedTs<Key extends keyof HealthResultData["newest"]>(
@@ -1740,13 +1755,53 @@ function healthCorrelation(
 function deriveOpenActions(
 	openItems: readonly ReviewOpenItem[],
 ): ReviewResultData["open_actions"] {
-	return openItems.map((item) => ({
-		action_key: reviewActionKey(item),
-		open_reason: item.open_reason,
-		...(item.target ? { target: item.target } : {}),
-		next_safe_action: item.next_action,
-		evidence_refs: item.evidence_refs,
-	}));
+	return [...openItems]
+		.map((item) => ({
+			item,
+			action: {
+				action_key: reviewActionKey(item),
+				open_reason: item.open_reason,
+				...(item.target ? { target: item.target } : {}),
+				next_safe_action: item.next_action,
+				evidence_refs: item.evidence_refs,
+			},
+		}))
+		.sort((left, right) => compareReviewOpenItems(left.item, right.item))
+		.map(({ action }) => action);
+}
+
+function compareReviewOpenItems(
+	left: ReviewOpenItem,
+	right: ReviewOpenItem,
+): number {
+	const leftRank = reviewOpenItemRank(left);
+	const rightRank = reviewOpenItemRank(right);
+	const rank = leftRank.reduce(
+		(result, value, index) => result || value - (rightRank[index] ?? 0),
+		0,
+	);
+	if (rank !== 0) return rank;
+	return reviewActionKey(left).localeCompare(reviewActionKey(right));
+}
+
+function reviewOpenItemRank(item: ReviewOpenItem): readonly number[] {
+	return [
+		REVIEW_OPEN_SEVERITY_RANK[item.severity],
+		REVIEW_OPEN_REASON_RANK[item.open_reason],
+		-item.evidence_refs.length,
+		reviewOpenItemOwnerRank(item),
+		reviewOpenItemNextActionRank(item),
+	];
+}
+
+function reviewOpenItemOwnerRank(item: ReviewOpenItem): number {
+	if (item.target?.type === "path") return 0;
+	if (item.target) return 1;
+	return 2;
+}
+
+function reviewOpenItemNextActionRank(item: ReviewOpenItem): number {
+	return item.next_action.trim() === "" ? 1 : 0;
 }
 
 function reviewActionKey(item: ReviewOpenItem): string {
@@ -2091,8 +2146,8 @@ function retentionSummary(
 		.filter((age): age is number => age !== undefined);
 	const oldest = ages.length > 0 ? Math.max(...ages) : undefined;
 	const warning =
-		(oldest !== undefined && oldest >= HEALTH_RETENTION_AGE_WARNING_DAYS) ||
-		reports.length >= HEALTH_RETENTION_COUNT_WARNING_THRESHOLD
+		(oldest !== undefined && oldest >= RETENTION_AGE_WARNING_DAYS) ||
+		reports.length >= RETENTION_COUNT_WARNING_THRESHOLD
 			? "Inbox is ready for a future gated purge workflow."
 			: undefined;
 	return {
@@ -2131,7 +2186,7 @@ function pilotCheckpointSummary(input: {
 		material_closeout_denominator: denominator,
 		density: denominator === 0 ? 0 : roundRatio(numerator / denominator),
 		next_action:
-			"Review pilot density and run the future cleanup workflow when it exists.",
+			"Review pilot density and run the future purge workflow when it exists.",
 	};
 }
 
@@ -2143,8 +2198,9 @@ function pilotCheckpointSummary(input: {
  * cannot spoof sections (R23, AE8).
  */
 function renderPlainReview(data: ReviewResultData): string {
-	const lines = plainReviewHeaderLines(data);
-	appendPlainReviewInboxHealth(lines, data.inbox_health);
+	const lines = ["Skill Feedback Review"];
+	appendPlainReviewHealthBlock(lines, data);
+	appendPlainReviewCoverage(lines, data);
 	appendPlainReviewTriage(lines, data);
 	appendPlainReadiness(lines, data.claim_readiness);
 	appendPlainReviewLedger(lines, data);
@@ -2152,40 +2208,83 @@ function renderPlainReview(data: ReviewResultData): string {
 	return `${lines.join("\n")}\n`;
 }
 
-function plainReviewHeaderLines(data: ReviewResultData): string[] {
-	const lines = [
-		"Skill Feedback Review",
+function appendPlainReviewCoverage(lines: string[], data: ReviewResultData): void {
+	lines.push(
 		`Reports: ${data.coverage.total_reports}`,
 		`Closeouts: ${data.coverage.closeout_count}`,
 		`Capture-only: ${data.coverage.capture_only_count}`,
 		`Unlinked: ${data.coverage.unlinked_count}`,
 		`Evidence gaps: ${data.coverage.evidence_gap_count}`,
-	];
+	);
 	if (data.coverage.low_coverage_warning) {
 		lines.push(`Low coverage: ${plainSafe(data.coverage.low_coverage_warning)}`);
 	}
-	return lines;
 }
 
-function appendPlainReviewInboxHealth(
+function appendPlainReviewHealthBlock(
 	lines: string[],
-	health: ReviewResultData["inbox_health"],
+	data: Pick<
+		ReviewResultData,
+		"inbox_status" | "counts" | "warnings" | "next_action" | "read_target"
+	>,
 ): void {
-	if (hasReviewInboxHealthSignal(health)) {
-		lines.push(
-			`Inbox health: low-signal=${health.low_signal_count} skipped=${health.skipped_unsafe_count} invalid=${health.invalid_count}`,
-		);
-	}
+	if (!hasReviewHealthBlockSignal(data)) return;
+	lines.push(...plainReviewHealthBlockLines(data));
 }
 
-function hasReviewInboxHealthSignal(
-	health: ReviewResultData["inbox_health"],
+function hasReviewHealthBlockSignal(
+	data: Pick<
+		ReviewResultData,
+		"inbox_status" | "counts" | "warnings" | "read_target"
+	>,
 ): boolean {
 	return (
-		health.low_signal_count > 0 ||
-		health.skipped_unsafe_count > 0 ||
-		health.invalid_count > 0
+		data.inbox_status !== "populated" ||
+		data.counts.low_signal > 0 ||
+		data.warnings.length > 0 ||
+		data.read_target !== undefined
 	);
+}
+
+function plainReviewHealthBlockLines(
+	data: Pick<
+		ReviewResultData,
+		"inbox_status" | "counts" | "warnings" | "next_action" | "read_target"
+	>,
+): string[] {
+	return [
+		"Review health:",
+		plainReviewHealthCountsLine(data),
+		plainReviewTopWarningLine(data.warnings[0]),
+		`- next_action=${data.next_action.action_id}: ${plainSafe(data.next_action.summary)}`,
+		...plainReviewReadTargetLines(data.read_target),
+	];
+}
+
+function plainReviewHealthCountsLine(
+	data: Pick<ReviewResultData, "inbox_status" | "counts">,
+): string {
+	return `- inbox_status=${data.inbox_status} counts primary=${data.counts.primary} low-signal=${data.counts.low_signal} invalid=${data.counts.invalid} skipped=${data.counts.skipped_unsafe} unlinked=${data.counts.unlinked_primary}`;
+}
+
+function plainReviewTopWarningLine(
+	warning: ReviewResultData["warnings"][number] | undefined,
+): string {
+	if (!warning) return "- top_warning=none";
+	return `- top_warning=${warning.reason_id}: ${plainSafe(warning.summary)}`;
+}
+
+function plainReviewReadTargetLines(
+	readTarget: ReviewResultData["read_target"],
+): string[] {
+	if (!readTarget) return [];
+	return [
+		`- repo_root=${plainSafe(readTarget.repo_root)}`,
+		`- inbox_path=${plainSafe(readTarget.inbox_path)}`,
+		...(readTarget.target_path
+			? [`- target_path=${plainSafe(readTarget.target_path)}`]
+			: []),
+	];
 }
 
 function appendPlainReviewTriage(
@@ -2344,7 +2443,7 @@ function appendPlainWarnings(
 
 function appendPlainReadiness(
 	lines: string[],
-	readiness: PlainClaimReadiness,
+	readiness: HealthClaimReadiness | ReviewClaimReadiness,
 ): void {
 	lines.push("Readiness:");
 	for (const [label, fact] of [
@@ -2862,7 +2961,13 @@ function errorResult(
 function schemaVersionForContract(
 	contract: SkillFeedbackResultContractId | undefined,
 ): string {
-	return RESULT_SCHEMA_VERSION_BY_CONTRACT[contract ?? SKILL_FEEDBACK_CONTRACT_ID];
+	const contractId = contract ?? SKILL_FEEDBACK_CONTRACT_ID;
+	return (
+		SKILL_FEEDBACK_HELP_COMMANDS.map(
+			(command) => skillFeedbackContracts[command].resultContract,
+		).find((resultContract) => resultContract?.id === contractId)?.schema_version ??
+		SKILL_FEEDBACK_SCHEMA_VERSION
+	);
 }
 
 function isStrictIsoTimestamp(value: unknown): value is string {
@@ -2971,23 +3076,11 @@ export async function resolveSkillFeedbackReadTarget(input: {
 		input.targetPath === undefined
 			? resolve(input.cwd)
 			: resolve(input.cwd, input.targetPath);
-	let result: SkillFeedbackGitResult;
-	try {
-		result = await input.runGit(
-			["git", "-C", seedPath, "rev-parse", "--show-toplevel"],
-			{ cwd: seedPath },
-		);
-	} catch {
-		return readTargetResolutionFailure(explicit, seedPath);
+	const topLevel = await readGitTopLevel(input.runGit, seedPath);
+	if (!topLevel.ok) {
+		return readTargetResolutionFailure(explicit, seedPath, topLevel.gitExitCode);
 	}
-	if (!result.ok || result.code !== 0) {
-		return readTargetResolutionFailure(explicit, seedPath, result.code);
-	}
-	const rawRepoRoot = result.stdout.trim();
-	if (!rawRepoRoot) {
-		return readTargetResolutionFailure(explicit, seedPath, result.code);
-	}
-	const repoRoot = resolve(rawRepoRoot);
+	const repoRoot = resolve(topLevel.repoRoot);
 	return {
 		ok: true,
 		explicit,
@@ -2995,6 +3088,25 @@ export async function resolveSkillFeedbackReadTarget(input: {
 		repoRoot,
 		inboxPath: join(repoRoot, INBOX_DIR),
 	};
+}
+
+async function readGitTopLevel(
+	runGit: SkillFeedbackGitRunner,
+	seedPath: string,
+): Promise<{ ok: true; repoRoot: string } | { ok: false; gitExitCode?: number }> {
+	let result: SkillFeedbackGitResult;
+	try {
+		result = await runGit(["git", "-C", seedPath, "rev-parse", "--show-toplevel"], {
+			cwd: seedPath,
+		});
+	} catch {
+		return { ok: false };
+	}
+	const repoRoot = result.stdout.trim();
+	if (result.ok && result.code === 0 && repoRoot) {
+		return { ok: true, repoRoot };
+	}
+	return { ok: false, gitExitCode: result.code };
 }
 
 function readTargetResolutionFailure(
@@ -3285,29 +3397,20 @@ function runReadCommand(
 }
 
 function renderSkillFeedbackHelp(command: string | undefined): string {
-	if (command === "record") {
-		return renderCommandUsage(skillFeedbackContracts.record);
+	if (isSkillFeedbackHelpCommand(command)) {
+		return renderCommandUsage(skillFeedbackContracts[command]);
 	}
-	if (command === "closeout") {
-		return renderCommandUsage(skillFeedbackContracts.closeout);
-	}
-	if (command === "review") {
-		return renderCommandUsage(skillFeedbackContracts.review);
-	}
-	if (command === "health") {
-		return renderCommandUsage(skillFeedbackContracts.health);
-	}
-	if (command === "purge") {
-		return renderCommandUsage(skillFeedbackContracts.purge);
-	}
-	return [
-		renderCommandUsage(skillFeedbackContracts.record).trimEnd(),
-		renderCommandUsage(skillFeedbackContracts.closeout).trimEnd(),
-		renderCommandUsage(skillFeedbackContracts.review).trimEnd(),
-		renderCommandUsage(skillFeedbackContracts.health).trimEnd(),
-		renderCommandUsage(skillFeedbackContracts.purge).trimEnd(),
-		"",
-	].join("\n\n");
+	return `${SKILL_FEEDBACK_HELP_COMMANDS.map((helpCommand) =>
+		renderCommandUsage(skillFeedbackContracts[helpCommand]).trimEnd(),
+	).join("\n\n")}\n`;
+}
+
+function isSkillFeedbackHelpCommand(
+	command: string | undefined,
+): command is (typeof SKILL_FEEDBACK_HELP_COMMANDS)[number] {
+	return SKILL_FEEDBACK_HELP_COMMANDS.includes(
+		command as (typeof SKILL_FEEDBACK_HELP_COMMANDS)[number],
+	);
 }
 
 function parseCloseoutStdin(

@@ -111,6 +111,7 @@ _Avoid_: pattern cosplay, GoF by default, framework, decorative abstraction
 
 **ReviewResultData Facade**:
 The claim-safe review result Interface that hides reducer internals from JSON, plain output, docs, and future agents. It exposes contract-owned facts: review units, ledger entries with entry-local allowed claims, split readiness, and anchor-miss telemetry.
+It also carries minimal inbox status, warning, count, and next-action facts so direct review callers can spot false-empty and degraded-read states before ledger detail.
 _Avoid_: dashboard, renderer copy, generic API, bag of fields
 
 **Report ref**:

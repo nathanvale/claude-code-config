@@ -853,6 +853,10 @@ export type ReviewResultData = {
 	schema_version: typeof SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION;
 	coverage: ReviewCoverage;
 	inbox_health: ReviewInboxHealth;
+	inbox_status: HealthInboxStatus;
+	counts: HealthCounts;
+	warnings: readonly HealthWarning[];
+	next_action: HealthNextAction;
 	read_target?: ReviewReadTarget;
 	open_items: readonly ReviewOpenItem[];
 	open_actions: readonly ReviewOpenAction[];
@@ -1327,6 +1331,10 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"schema_version",
 	"coverage",
 	"inbox_health",
+	"inbox_status",
+	"counts",
+	"warnings",
+	"next_action",
 	"read_target",
 	"open_items",
 	"open_actions",
@@ -1637,54 +1645,48 @@ export function normalizeReport(raw: unknown): NormalizeReportResult {
 export function parseReviewResultData(
 	raw: unknown,
 ): ParseReviewResultDataResult {
-	if (!isRecord(raw)) {
-		return { kind: "invalid", path: "$", reason: "expected_object" };
-	}
-	const topLevel = validateAllowedKeys(raw, REVIEW_RESULT_V2_FIELD_SET);
-	if (topLevel) return topLevel;
-	if (raw.contract !== SKILL_FEEDBACK_REVIEW_CONTRACT_ID) {
-		return { kind: "invalid", path: "contract", reason: "unsupported" };
-	}
-	if (raw.schema_version !== SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION) {
-		return {
-			kind: "invalid",
-			path: "schema_version",
-			reason: "unsupported",
-		};
-	}
-	const coverage = validateReviewCoverage(raw.coverage);
-	if (coverage) return coverage;
-	const inboxHealth = validateReviewInboxHealth(raw.inbox_health);
-	if (inboxHealth) return inboxHealth;
-	if ("read_target" in raw) {
-		const readTarget = validateReviewReadTarget(raw.read_target);
-		if (readTarget) return readTarget;
-	}
-	const openItems = validateReviewOpenItems(raw.open_items);
-	if (openItems) return openItems;
-	const openActions = validateReviewOpenActions(raw.open_actions);
-	if (openActions) return openActions;
-	if ("no_action" in raw) {
-		const noAction = validateNoAction(raw.no_action);
-		if (noAction) return noAction;
-	}
-	const retention = validateReviewRetention(raw.retention);
-	if (retention) return retention;
-	if ("pilot_checkpoint" in raw) {
-		const pilotCheckpoint = validateReviewPilotCheckpoint(raw.pilot_checkpoint);
-		if (pilotCheckpoint) return pilotCheckpoint;
-	}
-	const reviewUnits = validateReviewUnits(raw.review_units);
-	if (reviewUnits) return reviewUnits;
-	const ledgerEntries = validateReviewLedgerEntries(raw.ledger_entries);
-	if (ledgerEntries) return ledgerEntries;
-	const anchorMissTelemetry = validateReviewAnchorMissTelemetry(
-		raw.anchor_miss_telemetry,
-	);
-	if (anchorMissTelemetry) return anchorMissTelemetry;
-	const claimReadiness = validateReviewClaimReadiness(raw.claim_readiness);
-	if (claimReadiness) return claimReadiness;
-	return { kind: "ok", data: raw as ReviewResultData };
+	const review = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(review)) return review;
+	const error = validateReviewResultDataShape(review);
+	if (error) return error;
+	return { kind: "ok", data: review as ReviewResultData };
+}
+
+function validateReviewResultDataShape(
+	review: Record<string, unknown>,
+): ReviewResultValidationError | undefined {
+	return [
+		validateAllowedKeys(review, REVIEW_RESULT_V2_FIELD_SET),
+		validateExpectedValue(
+			review.contract,
+			SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+		validateExpectedValue(
+			review.schema_version,
+			SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+			"schema_version",
+			"unsupported",
+		),
+		validateReviewCoverage(review.coverage),
+		validateReviewInboxHealth(review.inbox_health),
+		validateReviewHealthProjection(review),
+		"read_target" in review
+			? validateReviewReadTarget(review.read_target)
+			: undefined,
+		validateReviewOpenItems(review.open_items),
+		validateReviewOpenActions(review.open_actions),
+		"no_action" in review ? validateNoAction(review.no_action) : undefined,
+		validateReviewRetention(review.retention),
+		"pilot_checkpoint" in review
+			? validateReviewPilotCheckpoint(review.pilot_checkpoint)
+			: undefined,
+		validateReviewUnits(review.review_units),
+		validateReviewLedgerEntries(review.ledger_entries),
+		validateReviewAnchorMissTelemetry(review.anchor_miss_telemetry),
+		validateReviewClaimReadiness(review.claim_readiness),
+	].find(isReviewResultValidationError);
 }
 
 export function parseHealthResultData(
@@ -2473,6 +2475,17 @@ function validateReviewInboxHealth(
 		health.low_signal_reason_ids,
 		"inbox_health.low_signal_reason_ids",
 	);
+}
+
+function validateReviewHealthProjection(
+	raw: Record<string, unknown>,
+): ReviewResultValidationError | undefined {
+	return [
+		validateHealthInboxStatus(raw.inbox_status),
+		validateHealthCounts(raw.counts),
+		validateHealthWarnings(raw.warnings),
+		validateHealthNextAction(raw.next_action),
+	].find(isReviewResultValidationError);
 }
 
 function validateReviewReadTarget(

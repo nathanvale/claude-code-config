@@ -354,14 +354,23 @@ function gitOutput(cwd: string, args: readonly string[]): string {
 		killSignal: KILL_SIGNAL,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
-	if (result.status !== 0) {
-		throw new Error(
-			`git ${args.join(" ")} failed:\ncwd=${cwd}\nexit=${result.status}\nstdout=${JSON.stringify(
-				excerpt(result.stdout ?? ""),
-			)}\nstderr=${JSON.stringify(excerpt(result.stderr ?? ""))}`,
-		);
-	}
-	return result.stdout ?? "";
+	const stdout = result.stdout ?? "";
+	if (result.status === 0) return stdout;
+	throw new Error(
+		gitFailureMessage(cwd, args, result.status, stdout, result.stderr ?? ""),
+	);
+}
+
+function gitFailureMessage(
+	cwd: string,
+	args: readonly string[],
+	status: number | null,
+	stdout: string,
+	stderr: string,
+): string {
+	return `git ${args.join(" ")} failed:\ncwd=${cwd}\nexit=${status}\nstdout=${JSON.stringify(
+		excerpt(stdout),
+	)}\nstderr=${JSON.stringify(excerpt(stderr))}`;
 }
 
 /**
@@ -467,6 +476,28 @@ function firstUsageLine(contract: { usage: readonly string[] }): string {
 	return `Usage: ${usage}`;
 }
 
+function expectDiscoveredCommandHelp(input: {
+	commandIds: readonly string[];
+	contracts: Record<string, { usage: readonly string[] }>;
+	packageRoot: string;
+	script: string;
+}): void {
+	for (const command of input.commandIds) {
+		const contract = input.contracts[command];
+		if (!contract) throw new Error(`Missing contract for ${command}`);
+		const result = runCommand(
+			runners.packageCwd({
+				packageRoot: input.packageRoot,
+				script: input.script,
+				args: [command, "--help"],
+				label: `${input.script} ${command} --help (package-cwd)`,
+			}),
+		);
+		expect(result.exitCode, describeRun(result)).toBe(0);
+		expect(result.stdout, describeRun(result)).toContain(firstUsageLine(contract));
+	}
+}
+
 const wtTopLevelUsageLine = firstUsageLine(wtContracts.sync);
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
 
@@ -549,21 +580,12 @@ describe("command entrypoint integration: help contracts", () => {
 	test(
 		"every discovered wt command help renders its first contract usage line",
 		() => {
-			for (const command of discoveredWtCommandIds) {
-				const contract = wtContracts[command as keyof typeof wtContracts];
-				const result = runCommand(
-					runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
-						args: [command, "--help"],
-						label: `wt ${command} --help (package-cwd)`,
-					}),
-				);
-				expect(result.exitCode, describeRun(result)).toBe(0);
-				expect(result.stdout, describeRun(result)).toContain(
-					firstUsageLine(contract),
-				);
-			}
+			expectDiscoveredCommandHelp({
+				commandIds: discoveredWtCommandIds,
+				contracts: wtContracts,
+				packageRoot: packageRoots.wt,
+				script: "wt",
+			});
 		},
 		TEST_TIMEOUT_MS,
 	);
@@ -571,22 +593,12 @@ describe("command entrypoint integration: help contracts", () => {
 	test(
 		"every discovered agent-worktree command help renders its first contract usage line",
 		() => {
-			for (const command of discoveredAgentWorktreeCommandIds) {
-				const contract =
-					agentWorktreeContracts[command as keyof typeof agentWorktreeContracts];
-				const result = runCommand(
-					runners.packageCwd({
-						packageRoot: packageRoots.agentWorktree,
-						script: "agent-worktree",
-						args: [command, "--help"],
-						label: `agent-worktree ${command} --help (package-cwd)`,
-					}),
-				);
-				expect(result.exitCode, describeRun(result)).toBe(0);
-				expect(result.stdout, describeRun(result)).toContain(
-					firstUsageLine(contract),
-				);
-			}
+			expectDiscoveredCommandHelp({
+				commandIds: discoveredAgentWorktreeCommandIds,
+				contracts: agentWorktreeContracts,
+				packageRoot: packageRoots.agentWorktree,
+				script: "agent-worktree",
+			});
 		},
 		TEST_TIMEOUT_MS,
 	);
@@ -807,17 +819,9 @@ describe("command entrypoint integration: runtime json", () => {
 				}),
 			);
 
-			let parseError: Error | undefined;
-			try {
-				parseEnvelope(result);
-			} catch (error) {
-				parseError = error instanceof Error ? error : new Error(String(error));
-			}
-
-			expect(parseError).toBeDefined();
-			expect(parseError?.message).toContain("Failed to parse JSON envelope");
-			expect(parseError?.message).toContain("stdout=");
-			expect(parseError?.message).toContain("stderr=");
+			expect(() => parseEnvelope(result)).toThrow(
+				/Failed to parse JSON envelope[\s\S]*stdout=[\s\S]*stderr=/,
+			);
 		},
 		TEST_TIMEOUT_MS,
 	);

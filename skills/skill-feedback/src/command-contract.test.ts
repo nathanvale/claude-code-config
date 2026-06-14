@@ -91,6 +91,24 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 		skipped_unsafe_count: 0,
 		invalid_count: 0,
 	},
+	inbox_status: "populated",
+	counts: {
+		primary: 2,
+		low_signal: 1,
+		invalid: 0,
+		skipped_unsafe: 0,
+		unlinked_primary: 1,
+	},
+	warnings: [
+		{
+			reason_id: "unlinked_primary_reports",
+			summary: "Primary reports lack trusted skill-run correlation.",
+		},
+	],
+	next_action: {
+		action_id: "run-review",
+		summary: "Run review for claim-safe ledger detail.",
+	},
 	open_items: [],
 	open_actions: [
 		{
@@ -320,27 +338,18 @@ describe("skill-feedback U2 command contract", () => {
 		]);
 	});
 
-	test("review flags expose plain output and explicit repo targeting", () => {
-		expect(Object.keys(skillFeedbackContracts.review.flags).sort()).toEqual([
-			"--plain",
-			"--repo",
-		]);
-		expect(skillFeedbackContracts.review.usage).toEqual([
-			"review [--plain] [--repo <path>]",
-		]);
-	});
-
-	test("health flags mirror review as read-only JSON/plain output", () => {
-		expect(Object.keys(skillFeedbackContracts.health.flags).sort()).toEqual([
-			"--plain",
-			"--repo",
-		]);
-		expect(skillFeedbackContracts.health.usage).toEqual([
-			"health [--plain] [--repo <path>]",
-		]);
-		expect(skillFeedbackContracts.health.sideEffects).toEqual(["read"]);
-		expect(skillFeedbackContracts.health.outputModes).toEqual(["json", "plain"]);
-	});
+	for (const [command, usage] of [
+		["review", "review [--plain] [--repo <path>]"],
+		["health", "health [--plain] [--repo <path>]"],
+	] as const) {
+		test(`${command} flags expose read-only JSON/plain repo targeting`, () => {
+			const contract = skillFeedbackContracts[command];
+			expect(Object.keys(contract.flags).sort()).toEqual(["--plain", "--repo"]);
+			expect(contract.usage).toEqual([usage]);
+			expect(contract.sideEffects).toEqual(["read"]);
+			expect(contract.outputModes).toEqual(["json", "plain"]);
+		});
+	}
 
 	test("parses a complete flat receipt into the full report field set", () => {
 		const parsed = parseReceipt(COMPLETE_RECEIPT);
@@ -608,6 +617,16 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		expect(parsed.data.ledger_entries).toHaveLength(2);
 		expect(parsed.data.anchor_miss_telemetry).toHaveLength(1);
 		expect(parsed.data.open_actions).toHaveLength(1);
+		expect(parsed.data.inbox_status).toBe("populated");
+		expect(parsed.data.counts).toMatchObject({
+			primary: 2,
+			low_signal: 1,
+			unlinked_primary: 1,
+		});
+		expect(parsed.data.warnings.map((warning) => warning.reason_id)).toEqual([
+			"unlinked_primary_reports",
+		]);
+		expect(parsed.data.next_action.action_id).toBe("run-review");
 		expect(parsed.data.claim_readiness.runtime_capture.status).toBe(
 			"evidence_only",
 		);
@@ -688,6 +707,59 @@ describe("skill-feedback U1 review result v2 contract", () => {
 				inbox_path: "/repo/.skill-feedback",
 				target_path: "/repo/package",
 			};
+			scenario.mutate(data);
+
+			expect(parseReviewResultData(data), scenario.name).toMatchObject({
+				kind: "invalid",
+				path: scenario.path,
+				reason: scenario.reason,
+			});
+		}
+	});
+
+	test("rejects malformed review health projection fields", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "invalid inbox status",
+				mutate: (data) => {
+					data.inbox_status = "trusted";
+				},
+				path: "inbox_status",
+				reason: "invalid",
+			},
+			{
+				name: "non-numeric count",
+				mutate: (data) => {
+					data.counts.primary = "two";
+				},
+				path: "counts.primary",
+				reason: "expected_number",
+			},
+			{
+				name: "invalid warning reason",
+				mutate: (data) => {
+					data.warnings[0].reason_id = "mystery_warning";
+				},
+				path: "warnings[0].reason_id",
+				reason: "invalid_warning_reason",
+			},
+			{
+				name: "invalid next action",
+				mutate: (data) => {
+					data.next_action.action_id = "delete-reports";
+				},
+				path: "next_action.action_id",
+				reason: "invalid_action_id",
+			},
+		];
+
+		for (const scenario of cases) {
+			const data = structuredClone(reviewResultV2Fixture()) as Record<string, any>;
 			scenario.mutate(data);
 
 			expect(parseReviewResultData(data), scenario.name).toMatchObject({
