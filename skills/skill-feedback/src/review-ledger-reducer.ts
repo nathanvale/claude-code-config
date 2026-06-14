@@ -143,11 +143,18 @@ function buildReviewUnits(
 ): ReviewUnit[] {
 	const units: ReviewUnit[] = [];
 	const byRun = new Map<string, ReviewUnit>();
+	const reportIdTotals = countReportIds(reports);
+	const reportIdOccurrences = new Map<string, number>();
 	for (const report of reports) {
 		const trustedRunId = trustedSkillRunId(report);
 		if (!trustedRunId) {
+			const occurrence = reportIdOccurrences.get(report.report_id) ?? 0;
+			reportIdOccurrences.set(report.report_id, occurrence + 1);
 			units.push({
-				review_unit_key: `report:${report.report_id}`,
+				review_unit_key:
+					(reportIdTotals.get(report.report_id) ?? 0) > 1
+						? `report:${report.report_id}#${occurrence + 1}`
+						: `report:${report.report_id}`,
 				report_ids: [report.report_id],
 				trusted_run: false,
 			});
@@ -167,6 +174,16 @@ function buildReviewUnits(
 		unit.report_ids.push(report.report_id);
 	}
 	return units;
+}
+
+function countReportIds(
+	reports: readonly NormalizedSoftwareLearningReport[],
+): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const report of reports) {
+		counts.set(report.report_id, (counts.get(report.report_id) ?? 0) + 1);
+	}
+	return counts;
 }
 
 /**

@@ -277,7 +277,7 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 		const labelOnly: readonly ReportCardTarget[] = [
 			{ type: "label", value: "shared-label" },
 		];
-		const { ledger_entries } = reduceReviewLedger([
+		const { ledger_entries, review_units } = reduceReviewLedger([
 			report({
 				report_id: "dup",
 				evidence_source: "hook_capture",
@@ -290,6 +290,10 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 			}),
 		]);
 
+		expect(review_units.map((unit) => unit.review_unit_key)).toEqual([
+			"report:dup#1",
+			"report:dup#2",
+		]);
 		expect(ledger_entries).toHaveLength(2);
 		for (const entry of ledger_entries) {
 			expect(entry.source_mix).toHaveLength(1);

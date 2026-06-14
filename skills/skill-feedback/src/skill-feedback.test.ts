@@ -248,24 +248,33 @@ async function collectCliResult(child: {
 	return { stdout, stderr, exitCode };
 }
 
-describe("skill-feedback U6 redaction and write gate", () => {
-	for (const [label, secret] of [
-		["bearer", "Bearer live-secret-token"],
-		["jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature"],
+function syntheticSecretFixtures(): Array<readonly [string, string]> {
+	const lower = "a".repeat(26);
+	const lowerShort = "b".repeat(16);
+	const digits = "1".repeat(12);
+	const alphaNumeric = "A1".repeat(8);
+	const jwtPart = (seed: string) => `eyJ${seed.repeat(8)}`;
+	return [
+		["bearer", `Bearer ${"token".repeat(4)}`],
+		["jwt", `${jwtPart("a")}.${jwtPart("b")}.${"signature".repeat(2)}`],
 		[
 			"pem",
-			"-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+			`-----BEGIN PRIVATE KEY-----\n${"x".repeat(12)}\n-----END PRIVATE KEY-----`,
 		],
-		["dsn", "postgresql://user:secret-password@localhost/db"],
-		["ghp", "ghp_1234567890abcdefghijklmnopqrstuvwxyz"],
-		["github_pat", "github_pat_1234567890abcdefghijklmnopqrstuvwxyz"],
-		["xoxb", "xoxb-123456789012-abcdefghijklmnop"],
-		["xoxp", "xoxp-123456789012-abcdefghijklmnop"],
-		["akia", "AKIA1234567890ABCDEF"],
-		["sk", "sk-1234567890abcdefghijklmnopqrstuvwxyz"],
-		["sk-proj", "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz"],
-		["glpat", "glpat-1234567890abcdefghijklmnop"],
-	] as const) {
+		["dsn", `postgresql://user:${"pw".repeat(8)}@localhost/db`],
+		["ghp", `ghp_${lower}`],
+		["github_pat", `github_pat_${lower}`],
+		["xoxb", `xoxb-${digits}-${lowerShort}`],
+		["xoxp", `xoxp-${digits}-${lowerShort}`],
+		["akia", `AKIA${alphaNumeric}`],
+		["sk", `sk-${lower}`],
+		["sk-proj", `sk-proj-${lower}`],
+		["glpat", `glpat-${lower}`],
+	];
+}
+
+describe("skill-feedback U6 redaction and write gate", () => {
+	for (const [label, secret] of syntheticSecretFixtures()) {
 		test(`redacts ${label} secret from written friction bytes`, async () => {
 			const { result, disk } = await writeRecord({
 				...BASE_RECEIPT,
@@ -1944,6 +1953,37 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			density: 1,
 		});
 		expect(await readFile(markerPath, "utf-8")).toBe(markerBefore);
+	});
+
+	test("review ignores symlinked pilot marker paths", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"closeout.json",
+			v1CloseoutReport({
+				reportId: "report-symlink-marker",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+		const outsideMarker = join(root, "outside-pilot-started-at");
+		await writeFile(outsideMarker, "2026-06-01T00:00:00.000Z\n", "utf-8");
+		await symlink(
+			outsideMarker,
+			join(root, ".skill-feedback", "pilot_started_at"),
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-symlink-marker",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			pilot_checkpoint?: unknown;
+		};
+		expect(data.pilot_checkpoint).toBeUndefined();
 	});
 
 	test("review emits retention warning without deleting old reports", async () => {

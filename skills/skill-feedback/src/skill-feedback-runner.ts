@@ -502,7 +502,7 @@ export async function reviewSkillFeedbackInbox(
 	const repoRoot = resolve(runtime.repoRoot());
 	try {
 		const inbox = await readReviewInbox(repoRoot, runtime);
-		const pilotStartedAt = await readPilotStartedAt(repoRoot);
+		const pilotStartedAt = await readPilotStartedAt(repoRoot, runtime);
 		const data = buildReviewResultData({
 			reports: inbox.primaryReports,
 			lowSignalReports: inbox.lowSignalReports,
@@ -1026,12 +1026,22 @@ async function safeRealpath(
 	}
 }
 
-async function readPilotStartedAt(repoRoot: string): Promise<string | undefined> {
+async function readPilotStartedAt(
+	repoRoot: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<string | undefined> {
+	const inboxPath = join(repoRoot, INBOX_DIR);
+	const markerPath = join(inboxPath, PILOT_MARKER_FILE);
+	const stats = await lstatOptional(markerPath, runtime);
+	if (!stats) return undefined;
+	if (stats.isSymbolicLink() || !stats.isFile()) return undefined;
+	const inboxReal = await safeRealpath(inboxPath, runtime);
+	const markerReal = await safeRealpath(markerPath, runtime);
+	if (!inboxReal || !markerReal || !isContainedPath(inboxReal, markerReal)) {
+		return undefined;
+	}
 	try {
-		const raw = await readFile(
-			join(repoRoot, INBOX_DIR, PILOT_MARKER_FILE),
-			"utf-8",
-		);
+		const raw = await runtime.readText(markerPath);
 		return raw.trim() || undefined;
 	} catch (error) {
 		if (isNodeErrorCode(error, "ENOENT")) return undefined;

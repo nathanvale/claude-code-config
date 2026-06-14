@@ -5,6 +5,7 @@ import {
 	CodexJsonAdapter,
 	type CaptureResult,
 	type CaptureAdapterRuntime,
+	type HarnessId,
 	assertHarnessId,
 	selectAdapter,
 } from "./capture-adapters";
@@ -200,6 +201,9 @@ describe("skill-feedback capture adapters", () => {
 		);
 		expect(selectAdapter("codex-json", runtime)).toBeInstanceOf(
 			CodexJsonAdapter,
+		);
+		expect(() => selectAdapter("unknown" as HarnessId, runtime)).toThrow(
+			/Unknown skill-feedback harness/,
 		);
 		expect(() => assertHarnessId("unknown")).toThrow(
 			/Unknown skill-feedback harness/,

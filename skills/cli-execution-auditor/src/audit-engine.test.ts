@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -366,6 +367,36 @@ describe("surface audit — each clause fires", () => {
 		).toBe(true);
 	});
 
+	test("a declared script with a missing entrypoint names the missing file", async () => {
+		const root = await mkdtemp(join(tmpdir(), "cli-audit-missing-entrypoint-"));
+		await mkdir(join(root, "src"));
+		await Bun.write(
+			join(root, "package.json"),
+			JSON.stringify({ scripts: { app: "bun run src/missing.ts" } }),
+		);
+		const acquisition = await acquireTargetContract(
+			join(fixture("good-front-door-local"), "src", "front-doors", "app", "command-contract.ts"),
+		);
+		if (!acquisition.ok) throw new Error("fixture app contract should acquire");
+		const contracts = {
+			app: { ...acquisition.contracts.app, script: "app" },
+		} as typeof acquisition.contracts;
+		const findings = await runSurfaceAudit({
+			layout: await resolveTargetLayout(root),
+			contracts,
+			only: null,
+		});
+
+		expect(findings.length).toBeGreaterThan(0);
+		expect(
+			findings.every(
+				(f) =>
+					f.clauseId === "runnable-resolves" &&
+					f.summary.includes("script app points to a missing entrypoint file"),
+			),
+		).toBe(true);
+	});
+
 	test("script-resolution findings respect --only (no clause leak)", async () => {
 		// With only:"declared-coverage-runs", an unresolved script must NOT leak a
 		// runnable-resolves finding — the gate sits before the push (finding B).
@@ -485,6 +516,11 @@ describe("resolveScriptEntryFile — only resolves a simple, single entrypoint",
 	test("rejects a piped or subshell script", () => {
 		expect(resolveScriptEntryFile(root, "bun run a.ts | tee log")).toBeNull();
 		expect(resolveScriptEntryFile(root, "bun run $(which x).ts")).toBeNull();
+	});
+
+	test("rejects entrypoint paths that escape the audited root", () => {
+		expect(resolveScriptEntryFile(root, "bun run ../outside.ts")).toBeNull();
+		expect(resolveScriptEntryFile(root, "./../outside.sh")).toBeNull();
 	});
 });
 

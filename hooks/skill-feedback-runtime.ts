@@ -81,9 +81,11 @@ export function buildRecordRequest(
 	detection: SkillDetection,
 	generatedTs: string,
 ): RecordRequest {
-	const telemetry = {
-		...captureTelemetryForSource(detection.source),
+	const sourceTelemetry = captureTelemetryForSource(detection.source)
+	const telemetry: DetectionTelemetry = {
 		...detection.telemetry,
+		capture_runtime: sourceTelemetry.capture_runtime,
+		skill_identity_provenance: sourceTelemetry.skill_identity_provenance,
 	}
 	return {
 		cwd,

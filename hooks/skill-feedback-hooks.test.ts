@@ -20,7 +20,7 @@ import {
 	parseNotifyInvocation,
 } from './codex-notify-dispatcher'
 import type { RecordRequest } from './skill-feedback-runtime'
-import { runBufferedProcess } from './skill-feedback-runtime'
+import { buildRecordRequest, runBufferedProcess } from './skill-feedback-runtime'
 
 const GENERATED_TS = '2026-06-11T10:00:00.000Z'
 const FIXTURE_PATH = join(
@@ -56,7 +56,7 @@ describe('skill-feedback hooks', () => {
 			skill: 'fallow',
 			outcome: 'ambiguous',
 			detectionId:
-				'44772d83-5da8-4091-908b-9d093059265b:784c9d1b-7773-4480-a5fd-f37b26a47589',
+				'session-fixture-skill-feedback:tool-result-fixture-fallow',
 		})
 	})
 
@@ -67,6 +67,82 @@ describe('skill-feedback hooks', () => {
 		const detection = detectSkillFromClaudeTranscriptText(await fixtureText())
 
 		expect(detection?.telemetry).toEqual({ model: 'claude-opus-4-8' })
+	})
+
+	test('Claude Stop couples model telemetry to the matching tool result', () => {
+		const transcript = [
+			JSON.stringify({
+				type: 'assistant',
+				message: {
+					model: 'model-for-fallow',
+					role: 'assistant',
+					content: [
+						{
+							type: 'tool_use',
+							id: 'toolu_fallow',
+							name: 'Skill',
+							input: { skill: 'fallow' },
+						},
+					],
+				},
+			}),
+			JSON.stringify({
+				type: 'assistant',
+				message: {
+					model: 'model-for-other',
+					role: 'assistant',
+					content: [
+						{
+							type: 'tool_use',
+							id: 'toolu_other',
+							name: 'Skill',
+							input: { skill: 'other-skill' },
+						},
+					],
+				},
+			}),
+			JSON.stringify({
+				type: 'user',
+				message: {
+					role: 'user',
+					content: [
+						{
+							type: 'tool_result',
+							tool_use_id: 'toolu_fallow',
+							content: 'Launching skill: fallow',
+						},
+					],
+				},
+				toolUseResult: { success: true, commandName: 'fallow' },
+				sessionId: 'session',
+				uuid: 'result',
+			}),
+		].join('\n')
+
+		const detection = detectSkillFromClaudeTranscriptText(transcript)
+
+		expect(detection?.telemetry).toEqual({ model: 'model-for-fallow' })
+	})
+
+	test('Claude Stop tool result must match the detected command name', () => {
+		const transcript = JSON.stringify({
+			type: 'user',
+			message: {
+				role: 'user',
+				content: [
+					{
+						type: 'tool_result',
+						tool_use_id: 'toolu_other',
+						content: 'Launching skill: other-skill',
+					},
+				],
+			},
+			toolUseResult: { success: true, commandName: 'fallow' },
+			sessionId: 'session',
+			uuid: 'result',
+		})
+
+		expect(detectSkillFromClaudeTranscriptText(transcript)).toBeNull()
 	})
 
 	test('Claude Stop handler writes record request without transcript payload', async () => {
@@ -254,6 +330,37 @@ describe('skill-feedback hooks', () => {
 		})
 	})
 
+	test('source-owned capture provenance overrides caller telemetry', () => {
+		const request = buildRecordRequest(
+			'/tmp/repo',
+			{
+				source: 'codex-stop',
+				skill: 'unknown-skill',
+				outcome: 'ambiguous',
+				telemetry: {
+					model: 'gpt-5-codex',
+					capture_runtime: 'claude_stop',
+					skill_identity_provenance: {
+						source: 'claude_transcript_skill_tool_result',
+						trusted: true,
+						reason: 'claude_transcript_detection',
+					},
+				},
+			},
+			GENERATED_TS,
+		)
+
+		expect(request.telemetry).toEqual({
+			model: 'gpt-5-codex',
+			capture_runtime: 'codex_stop',
+			skill_identity_provenance: {
+				source: 'none',
+				trusted: false,
+				reason: 'codex_stop_payload_has_no_trusted_skill_identity',
+			},
+		})
+	})
+
 	test('Codex Stop payload does not infer skill identity from assistant text', () => {
 		const detection = detectSkillFromCodexStopInput({
 			cwd: '/tmp/repo',
@@ -415,9 +522,9 @@ describe('skill-feedback hooks', () => {
 		})
 	})
 
-	test('Codex default runtime forwards payload as an argument', async () => {
+	test('Codex default runtime forwards payload via stdin', async () => {
 		const result = await createDefaultCodexRuntime().runNext(
-			['/bin/sh', '-c', 'printf "%s" "$1"', 'payload-printer'],
+			['/bin/sh', '-c', 'cat'],
 			'notify payload\n',
 		)
 

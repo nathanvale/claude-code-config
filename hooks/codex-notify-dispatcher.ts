@@ -134,7 +134,7 @@ async function runNext(
 	command: readonly string[],
 	payload: string,
 ): Promise<HookRunResult> {
-	return runBufferedProcess([...command, payload])
+	return runBufferedProcess(command, { stdin: payload })
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {

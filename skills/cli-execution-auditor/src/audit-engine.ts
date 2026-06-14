@@ -10,7 +10,7 @@
 // emitting; volatile fields (timestamps, durations, absolute paths) are excluded
 // from findings, so re-running identical input in a different cwd is identical.
 
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import {
 	COMMAND_FACADE_BASELINE_EXIT_CODES,
@@ -369,7 +369,7 @@ export async function runStaticAudit(input: {
 					clauseId: "exit-floor",
 					kind: "static",
 					summary:
-						"facade lane detected but no command contract found at src/command-contract.ts or src/front-doors/*/command-contract.ts",
+						"facade lane detected but no command contract found at src/command-contract.ts or src/front-doors/**/command-contract.ts",
 					argv: [],
 				},
 			],
@@ -514,7 +514,9 @@ function describeUnresolvedScript(scriptName: string, reason: string): string {
 		case "script-undeclared":
 			return `script ${scriptName} is not declared in package.json scripts`;
 		case "unsupported-shape":
-			return `script ${scriptName} has an unsupported shape (compound/piped/prefixed) — declare a simple "bun run <file>" or "./<file>.sh"`;
+			return `script ${scriptName} has an unsupported shape (compound/piped/prefixed); declare a simple "bun run <file>" or "./<file>.sh"`;
+		case "file-missing":
+			return `script ${scriptName} points to a missing entrypoint file`;
 		default:
 			return `script ${scriptName} maps to no runnable entrypoint`;
 	}
@@ -539,11 +541,21 @@ export function resolveScriptEntryFile(root: string, scriptValue: string): strin
 	if (/[;|]|&&|\|\||\$\(|`/.test(value)) return null;
 	// `bun run <file> [args…]` — the entry is the token immediately after `run`.
 	const bunRun = value.match(/^bun\s+(?:run\s+)?([\w./-]+\.(?:ts|js|mjs))\b/);
-	if (bunRun) return join(root, bunRun[1]);
+	if (bunRun) return containedScriptPath(root, bunRun[1]);
 	// Direct executable: `./path/file.sh [args…]` or `path/file.sh`.
 	const direct = value.match(/^\.?\/?([\w./-]+\.sh)\b/);
-	if (direct) return join(root, direct[1]);
+	if (direct) return containedScriptPath(root, direct[1]);
 	return null;
+}
+
+function containedScriptPath(root: string, entry: string): string | null {
+	const rootPath = resolve(root);
+	const entryPath = resolve(rootPath, entry);
+	const relativePath = relative(rootPath, entryPath);
+	if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+		return null;
+	}
+	return entryPath;
 }
 
 /**

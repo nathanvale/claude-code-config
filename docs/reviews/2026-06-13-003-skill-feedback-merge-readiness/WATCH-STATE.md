@@ -1,4 +1,4 @@
-# Watch state — plan 003 review loop
+# Watch state - plan 003 review loop
 
 Goal: every implementation unit (U1-U7) reviewed via ce-code-review (findings only, no code edits by the watcher).
 
@@ -37,7 +37,7 @@ Artifacts: `/tmp/compound-engineering/ce-code-review/20260613-982f71e0/`.
 Second run `20260613-u6u7` (focused increment) reviewed the newly-ticked U6/U7 surface:
 artifacts `/tmp/compound-engineering/ce-code-review/20260613-u6u7/`.
 
-## GOAL REACHED — all 7 units reviewed
+## GOAL REACHED - all 7 units reviewed
 
 Overall verdict: **Ready with fixes**. No P0/P1/P2-blocker. 14 findings total, all P2/P3,
 concentrated in the new purge surface (U4). Trust boundary (U1), purge containment (U4),
@@ -48,3 +48,4 @@ Severity recalibrations (documented in review.json coverage):
   constructors updated atomically); break is latent for external consumers that don't exist yet.
 - SIGKILL escalation P1 → P3: only git rev-parse/check-ignore spawned, both die on SIGTERM (100% confidence non-issue).
 - U6 hook timeout "alignment" → done (runner adopted the hook's pattern; hook file unchanged is correct).
+- Next safe action: `skills/skill-feedback` owner keeps temp-GC as follow-up contract work if real inboxes accumulate `.json.tmp-*` artifacts.

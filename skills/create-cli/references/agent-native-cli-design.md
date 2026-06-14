@@ -72,10 +72,10 @@ Add recipes when they change driver behavior or reduce real risk.
 - Keep one package-root `package.json` unless distribution, dependency, or
   runtime ownership needs an independent package.
 - Let the Command Contract Locator find `src/command-contract.ts` and
-  `src/front-doors/*/command-contract.ts`.
+  `src/front-doors/**/command-contract.ts`.
+- Treat Command Contract Locator discovery behavior as owned by
+  `cli-execution-auditor` and `scripts/check-workspace-facade-invariants.ts`.
 - Keep consumer folder topology out of `runtime/cli-command-facade`.
-- Treat exact locator behavior as owned by `cli-execution-auditor` and
-  `scripts/check-workspace-facade-invariants.ts`.
 
 ## Implementation Shape
 

@@ -75,10 +75,10 @@ contradictory, or missing the pressure gate.
 
 Ask planned-ICA questions before naming a pattern hypothesis:
 
-- What seam will change?
-- What caller complexity concentrates behind the Interface?
+- Which seam will change?
+- How does caller complexity concentrate behind the Interface?
 - What deletion-test consequence would prove the Module earns its keep?
-- What locality or leverage improves?
+- Which locality or leverage improves?
 - What second adapter, variation point, or future caller would make the seam real?
 
 Name patterns as hypotheses until implementation or artifact evidence exists.
@@ -108,8 +108,8 @@ Return:
 ## V2
 
 - Add a runtime validator only after repeated prose-gate failure or machine-readable output need.
-- Add an ICA facade-backed output envelope only through ICA and `create-cli`.
-- Add an ICA reference overlay only if standalone discoverability creates duplicate-review behavior.
+- Introduce an ICA facade-backed output envelope only through ICA and `create-cli`.
+- Overlay ICA references only if standalone discoverability creates duplicate-review behavior.
 
 ## Next Safe Action
 

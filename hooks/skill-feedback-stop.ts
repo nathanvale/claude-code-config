@@ -54,7 +54,7 @@ export function detectSkillFromClaudeTranscriptText(
 	text: string,
 ): ClaudeSkillDetection | null {
 	let latest: ClaudeSkillDetection | null = null
-	let latestSkillModel: string | undefined
+	const modelByToolUseId = new Map<string, string>()
 	for (const line of text.split('\n')) {
 		const trimmed = line.trim()
 		if (!trimmed) continue
@@ -70,15 +70,22 @@ export function detectSkillFromClaudeTranscriptText(
 		// transcript carries no skill-scoped token total, only whole-session
 		// counts. v0 leaves usage an explicit gap; v1 sources it from OTel.
 		// Reading only the model id keeps transcript prose out of the record.
-		const model = readSkillLaunchModel(parsed)
-		if (model) latestSkillModel = model
+		for (const launch of readSkillLaunchModels(parsed)) {
+			modelByToolUseId.set(launch.toolUseId, launch.model)
+		}
 		const detection = detectSkillFromClaudeTranscriptEntry(parsed)
-		if (detection) latest = detection
+		if (detection) {
+			const record = objectFrom(parsed)
+			const toolUseId = record
+				? readMatchedSkillToolResultId(record, detection.skill)
+				: null
+			const model = toolUseId ? modelByToolUseId.get(toolUseId) : undefined
+			latest = model
+				? { ...detection, telemetry: { ...detection.telemetry, model } }
+				: detection
+		}
 	}
-	if (!latest) return null
-	return latestSkillModel
-		? { ...latest, telemetry: { model: latestSkillModel } }
-		: latest
+	return latest
 }
 
 function detectSkillFromClaudeTranscriptEntry(
@@ -89,7 +96,7 @@ function detectSkillFromClaudeTranscriptEntry(
 	const toolUseResult = objectFrom(record.toolUseResult)
 	const commandName = stringFrom(toolUseResult?.commandName)
 	if (!commandName) return null
-	if (!hasSkillToolResult(record)) return null
+	if (!hasSkillToolResult(record, commandName)) return null
 	return {
 		source: 'claude-stop',
 		skill: commandName,
@@ -98,15 +105,31 @@ function detectSkillFromClaudeTranscriptEntry(
 	}
 }
 
-function hasSkillToolResult(entry: Record<string, unknown>): boolean {
+function hasSkillToolResult(
+	entry: Record<string, unknown>,
+	commandName: string,
+): boolean {
+	return readMatchedSkillToolResultId(entry, commandName) !== null
+}
+
+function readMatchedSkillToolResultId(
+	entry: Record<string, unknown>,
+	commandName: string,
+): string | null {
 	const message = objectFrom(entry.message)
 	const content = Array.isArray(message?.content) ? message.content : []
-	return content.some((item) => {
+	for (const item of content) {
 		const object = objectFrom(item)
-		if (!object || object.type !== 'tool_result') return false
+		if (!object || object.type !== 'tool_result') continue
 		const text = stringFrom(object.content)
-		return text?.startsWith('Launching skill: ') ?? false
-	})
+		const expected = `Launching skill: ${commandName}`
+		const matches =
+			text === expected || (text?.startsWith(`${expected}\n`) ?? false)
+		if (matches) {
+			return stringFrom(object.tool_use_id) ?? stringFrom(entry.sourceToolUseID)
+		}
+	}
+	return null
 }
 
 /**
@@ -117,19 +140,22 @@ function hasSkillToolResult(entry: Record<string, unknown>): boolean {
  * detected skill — never a model id from an unrelated turn. Reads only the
  * model id; no message content is touched.
  */
-function readSkillLaunchModel(entry: unknown): string | undefined {
+function readSkillLaunchModels(
+	entry: unknown,
+): Array<{ toolUseId: string; model: string }> {
 	const message = objectFrom(objectFrom(entry)?.message)
-	if (!message || message.role !== 'assistant') return undefined
-	if (!hasSkillToolUse(message)) return undefined
-	return stringFrom(message.model) ?? undefined
-}
-
-function hasSkillToolUse(message: Record<string, unknown>): boolean {
+	if (!message || message.role !== 'assistant') return []
+	const model = stringFrom(message.model)
+	if (!model) return []
 	const content = Array.isArray(message.content) ? message.content : []
-	return content.some((item) => {
+	const launches: Array<{ toolUseId: string; model: string }> = []
+	for (const item of content) {
 		const object = objectFrom(item)
-		return object?.type === 'tool_use' && object.name === 'Skill'
-	})
+		if (object?.type !== 'tool_use' || object.name !== 'Skill') continue
+		const toolUseId = stringFrom(object.id)
+		if (toolUseId) launches.push({ toolUseId, model })
+	}
+	return launches
 }
 
 export async function handleSkillFeedbackStop(

@@ -4,11 +4,11 @@ Repo-owned research-tool contract for agents.
 
 ## Contract
 
-- Use `rg` first for repository text search.
-- Use Context7 for current library, framework, SDK, API, CLI, and cloud-service docs.
-- Use Firecrawl for web research, current public pages, docs outside Context7, and search-result discovery.
-- Use Kit tools only when available and useful for semantic, symbol, AST, or file-tree repository lookup.
-- Use built-in web search only when Firecrawl is unavailable or the requested source type is outside Firecrawl.
+- Prefer `rg` first for repository text search.
+- Query Context7 for current library, framework, SDK, API, CLI, and cloud-service docs.
+- Start Firecrawl for web research, current public pages, docs outside Context7, and search-result discovery.
+- Reach for Kit tools only when available and useful for semantic, symbol, AST, or file-tree repository lookup.
+- Fall back to built-in web search only when Firecrawl is unavailable or the requested source type is outside Firecrawl.
 - Never put secrets, token values, key prefixes, cookies, or auth-bearing URLs into docs, prompts, logs, or feedback.
 
 ## Context7
