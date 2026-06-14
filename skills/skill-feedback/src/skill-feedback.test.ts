@@ -39,6 +39,23 @@ const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
 	.pathname;
 const REPO_ROOT = new URL("../../..", import.meta.url).pathname;
 
+type TestProcessResult = {
+	command: readonly string[];
+	cwd?: string;
+	stdout: string;
+	stderr: string;
+	exitCode: number;
+};
+
+type TestGitResult = {
+	ok: boolean;
+	stdout: string;
+	stderr: string;
+	code: number;
+};
+
+type TestGitRunner = (args: readonly string[], options: { cwd: string }) => Promise<TestGitResult>;
+
 const BASE_RECEIPT: Receipt = {
 	skill: "create-skill",
 	goal: "Repair the skill route.",
@@ -177,8 +194,31 @@ function v1CloseoutReport(input: {
 	};
 }
 
-function parseEnvelope(stdout: string): Record<string, unknown> {
-	return JSON.parse(stdout) as Record<string, unknown>;
+function describeProcessResult(result: TestProcessResult): string {
+	return [
+		`command=${result.command.join(" ")}`,
+		...(result.cwd ? [`cwd=${result.cwd}`] : []),
+		`exit=${result.exitCode}`,
+		`stdout=${JSON.stringify(result.stdout)}`,
+		`stderr=${JSON.stringify(result.stderr)}`,
+	].join("\n");
+}
+
+function parseEnvelope(
+	result: TestProcessResult | string,
+): Record<string, unknown> {
+	const stdout = typeof result === "string" ? result : result.stdout;
+	try {
+		return JSON.parse(stdout) as Record<string, unknown>;
+	} catch (error) {
+		const context =
+			typeof result === "string"
+				? `stdout=${JSON.stringify(stdout)}`
+				: describeProcessResult(result);
+		throw new Error(`Could not parse JSON envelope:\n${context}`, {
+			cause: error,
+		});
+	}
 }
 
 function expectReviewCoverage(
@@ -203,21 +243,26 @@ function expectReviewCoverage(
 	expect(data.coverage).toMatchObject(expected);
 }
 
-async function run(command: readonly string[], cwd: string) {
+async function run(
+	command: readonly string[],
+	cwd: string,
+): Promise<TestProcessResult> {
 	const child = Bun.spawn([...command], {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	await new Response(child.stdout).text();
-	await new Response(child.stderr).text();
-	return child.exited;
+	const result = await collectCliResult(child, command, cwd);
+	if (result.exitCode !== 0) {
+		throw new Error(`Test setup command failed:\n${describeProcessResult(result)}`);
+	}
+	return result;
 }
 
 async function runCli(
 	args: readonly string[],
 	options: { stdin?: string; cwd?: string } = {},
-) {
+): Promise<TestProcessResult> {
 	const stdin = options.stdin ?? "";
 	const child = Bun.spawn(
 		[process.execPath, RUNNER_PATH, ...args],
@@ -232,20 +277,45 @@ async function runCli(
 		child.stdin.write(stdin);
 		child.stdin.end();
 	}
-	return collectCliResult(child);
+	return collectCliResult(
+		child,
+		[process.execPath, RUNNER_PATH, ...args],
+		options.cwd,
+	);
 }
 
 async function collectCliResult(child: {
 	stdout: ReadableStream<Uint8Array>;
 	stderr: ReadableStream<Uint8Array>;
 	exited: Promise<number>;
-}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+}, command: readonly string[], cwd?: string): Promise<TestProcessResult> {
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
-	return { stdout, stderr, exitCode };
+	return { command, cwd, stdout, stderr, exitCode };
+}
+
+function fakeGitRunner(
+	outputs: Record<string, TestGitResult | string>,
+): TestGitRunner & { calls: Array<{ args: readonly string[]; cwd: string }> } {
+	const calls: Array<{ args: readonly string[]; cwd: string }> = [];
+	const runner = async (
+		args: readonly string[],
+		options: { cwd: string },
+	): Promise<TestGitResult> => {
+		calls.push({ args: [...args], cwd: options.cwd });
+		const output = outputs[args.join(" ")];
+		if (output === undefined) {
+			return { ok: false, stdout: "", stderr: "missing fake output", code: 1 };
+		}
+		if (typeof output === "string") {
+			return { ok: true, stdout: output, stderr: "", code: 0 };
+		}
+		return output;
+	};
+	return Object.assign(runner, { calls });
 }
 
 function syntheticSecretFixtures(): Array<readonly [string, string]> {
@@ -272,6 +342,45 @@ function syntheticSecretFixtures(): Array<readonly [string, string]> {
 		["glpat", `glpat-${lower}`],
 	];
 }
+
+describe("skill-feedback test harness helpers", () => {
+	test("setup command failures include process context", async () => {
+		const root = await makeRoot();
+
+		await expect(run(["git", "not-a-real-skill-feedback-test-command"], root))
+			.rejects.toThrow(/command=git not-a-real-skill-feedback-test-command[\s\S]*cwd=/);
+	});
+
+	test("JSON envelope parse failures include command context", () => {
+		expect(() =>
+			parseEnvelope({
+				command: ["skill-feedback-runner", "review"],
+				cwd: "/tmp/skill-feedback-fixture",
+				exitCode: 1,
+				stdout: "not json",
+				stderr: "diagnostic stderr",
+			}),
+		).toThrow(/stdout="not json"[\s\S]*stderr="diagnostic stderr"/);
+	});
+
+	test("fake git runner records cwd and branches by argv key", async () => {
+		const git = fakeGitRunner({
+			"git rev-parse --show-toplevel": "/repo\n",
+		});
+
+		const result = await git(["git", "rev-parse", "--show-toplevel"], {
+			cwd: "/repo/package",
+		});
+
+		expect(result).toMatchObject({ ok: true, stdout: "/repo\n", code: 0 });
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "rev-parse", "--show-toplevel"],
+				cwd: "/repo/package",
+			},
+		]);
+	});
+});
 
 describe("skill-feedback U6 redaction and write gate", () => {
 	for (const [label, secret] of syntheticSecretFixtures()) {
