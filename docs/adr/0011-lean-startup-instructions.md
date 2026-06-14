@@ -53,7 +53,8 @@ Lean authoring keeps the model simple:
 - Claude startup wrapper: `~/.claude/CLAUDE.md` symlinks to the configured owner `CLAUDE.md`.
 - Claude shared startup: `~/.claude/AGENTS.md` symlinks to the configured owner `AGENTS.md`.
 - Codex user startup: `~/.codex/AGENTS.md` symlinks to, or is a managed copy of, the configured owner `AGENTS.md`.
-- Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, and delivery drift.
+- Skill deploy: `skills/` is the source; `~/.claude/skills` is a whole-folder symlink, `~/.codex/skills` is per-skill symlinks via `install.sh`. A real directory in a deploy target that shadows a repo skill is drift.
+- Health check: `scripts/agent-instructions.sh check --json` proves line budgets, owner paths, leakage, appendices, delivery drift, and skill deploy drift.
 
 ## Registered Owners
 
