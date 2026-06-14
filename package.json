@@ -13,7 +13,8 @@
       "skills/fallow",
       "skills/record-decision",
       "skills/skill-feedback",
-      "skills/test-runner"
+      "skills/test-runner",
+      "skills/wt"
     ],
     "catalog": {
       "@types/bun": "1.3.14",

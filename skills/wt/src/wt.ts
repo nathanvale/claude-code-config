@@ -1,0 +1,570 @@
+#!/usr/bin/env bun
+
+import {
+	type CliWriter,
+	createCliRuntimeErrorEnvelope,
+	createCliRuntimeSuccessEnvelope,
+	parseCliDiagnosticArgv,
+	projectCommandDiscoveryTree,
+	renderCommandUsage,
+	writeJsonEnvelope,
+} from "@side-quest/cli-command-facade";
+import { wtContracts } from "./command-contract.ts";
+import {
+	WT_COLOR_PALETTE,
+	WT_CONTRACT_ID,
+	WT_SCHEMA_VERSION,
+	type Registry,
+	type WtColor,
+} from "./model.ts";
+import { isDrift, renderWorkspace, stampHeader } from "./wt-engine.ts";
+import {
+	loadRegistry,
+	listWorktrees,
+	type Runner,
+	WtDiscoveryError,
+	workspacePathFor,
+} from "./wt-discovery.ts";
+
+const VERSION = "0.1.0";
+
+/**
+ * Runtime adapter for the filesystem, subprocess, and existence checks.
+ *
+ * Injected so the dispatcher's handlers run under test without touching real
+ * files, spawning processes, or launching VS Code.
+ */
+export interface WtRuntime {
+	/** Repo root the command operates on. */
+	repoRoot: () => string;
+	/** Read a UTF-8 file, or null when it does not exist. */
+	readTextFile: (path: string) => Promise<string | null>;
+	/** Write a UTF-8 file (creating parents as needed). */
+	writeTextFile: (path: string, content: string) => Promise<void>;
+	/** True when a path exists on disk. Backs focus probing. */
+	pathExists: (path: string) => Promise<boolean>;
+	/** True when stdin is an interactive TTY. */
+	isInteractive: () => boolean;
+	/** Subprocess runner for worktree discovery and delegation. */
+	run: Runner;
+	/** Launch VS Code on a workspace path; resolves false when `code` is absent. */
+	launchCode: (workspacePath: string) => Promise<boolean>;
+	/** Current epoch millis; injected so envelope durations are deterministic in tests. */
+	now: () => number;
+}
+
+/**
+ * Build the default runtime adapter backed by Bun's filesystem and spawn APIs.
+ *
+ * @param overrides - Hooks tests use to avoid real I/O
+ * @returns A runtime adapter
+ *
+ * @example
+ * ```typescript
+ * const runtime = createDefaultRuntime({ repoRoot: () => "/code/my-repo" })
+ * ```
+ */
+export function createDefaultRuntime(overrides: Partial<WtRuntime> = {}): WtRuntime {
+	return {
+		repoRoot: () => process.cwd(),
+		readTextFile: async (path) => {
+			const file = Bun.file(path);
+			return (await file.exists()) ? file.text() : null;
+		},
+		writeTextFile: (path, content) => Bun.write(path, content).then(() => undefined),
+		pathExists: (path) => Bun.file(path).exists(),
+		isInteractive: () => Boolean(process.stdin.isTTY),
+		run: async (args) => {
+			const proc = Bun.spawn(["bunx", ...args], { stdout: "pipe", stderr: "pipe" });
+			const [stdout, stderr] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+			]);
+			return { ok: (await proc.exited) === 0, stdout, stderr };
+		},
+		launchCode: async (workspacePath) => {
+			try {
+				const proc = Bun.spawn(["code", workspacePath], { stdout: "ignore", stderr: "ignore" });
+				return (await proc.exited) === 0;
+			} catch {
+				return false;
+			}
+		},
+		now: () => Date.now(),
+		...overrides,
+	};
+}
+
+/**
+ * Render the repo's workspace and apply the drift gate before writing.
+ *
+ * Reads the registry and live worktrees, renders the workspace, then refuses to
+ * overwrite a file that was edited since the last render unless `force` is set
+ * or the session is interactive. This is the product's core safety rule.
+ *
+ * @param runtime - Injected I/O adapter
+ * @param force - Overwrite a drift-detected workspace
+ * @returns A discriminated result: written, drift-blocked, or a discovery error
+ */
+export async function syncWorkspace(
+	runtime: WtRuntime,
+	force: boolean,
+): Promise<
+	| { kind: "written"; path: string }
+	| { kind: "drift_blocked"; path: string }
+	| { kind: "error"; code: string; message: string }
+> {
+	const repoRoot = runtime.repoRoot();
+	const workspacePath = workspacePathFor(repoRoot);
+	let registry: Registry;
+	let worktrees: Awaited<ReturnType<typeof listWorktrees>>;
+	try {
+		registry = await loadRegistry(repoRoot);
+		worktrees = await listWorktrees(runtime.run);
+	} catch (error) {
+		if (error instanceof WtDiscoveryError) {
+			return { kind: "error", code: error.code, message: error.message };
+		}
+		throw error;
+	}
+
+	const existing = await runtime.readTextFile(workspacePath);
+	if (existing !== null && isDrift(existing) && !force && !runtime.isInteractive()) {
+		return { kind: "drift_blocked", path: workspacePath };
+	}
+
+	// Pre-resolve focus-folder existence async (the engine's probe is sync), so
+	// guessFocus can probe `<worktree>/skills/<stem>` without an async boundary.
+	const probed = new Set<string>();
+	for (const worktree of worktrees) {
+		const stem = worktree.branch.includes("/")
+			? worktree.branch.slice(worktree.branch.indexOf("/") + 1)
+			: worktree.branch;
+		const candidate = `skills/${stem.replace(/^harden-/, "").replace(/-(refactor|harden|fix|feat|wip)$/, "")}`;
+		if (await runtime.pathExists(`${worktree.path}/${candidate}`)) {
+			probed.add(`${worktree.path}::${candidate}`);
+		}
+	}
+	const workspace = renderWorkspace(registry, worktrees, (worktreePath, subfolder) =>
+		probed.has(`${worktreePath}::${subfolder}`),
+	);
+	await runtime.writeTextFile(workspacePath, stampHeader(workspace));
+	return { kind: "written", path: workspacePath };
+}
+
+/**
+ * Persist a single branch preference into the registry, then re-render.
+ *
+ * @param runtime - Injected I/O adapter
+ * @param branch - Branch whose pref is being set
+ * @param mutate - Applies the change to the branch's prefs in place
+ * @param force - Passed through to the drift gate on the follow-up render
+ * @returns The sync result after the registry write
+ */
+export async function setPrefAndSync(
+	runtime: WtRuntime,
+	branch: string,
+	mutate: (prefs: Record<string, unknown>) => void,
+	force: boolean,
+): Promise<Awaited<ReturnType<typeof syncWorkspace>>> {
+	const repoRoot = runtime.repoRoot();
+	const registryPath = `${repoRoot}/wt.config.json`;
+	const existing = await runtime.readTextFile(registryPath);
+	const registry: Registry = existing ? (JSON.parse(existing) as Registry) : { branches: {} };
+	const prefs = (registry.branches[branch] ?? {}) as Record<string, unknown>;
+	mutate(prefs);
+	registry.branches[branch] = prefs as Registry["branches"][string];
+	await runtime.writeTextFile(registryPath, `${JSON.stringify(registry, null, "\t")}\n`);
+	return syncWorkspace(runtime, force);
+}
+
+/**
+ * Validate a color name against the fixed palette.
+ *
+ * @param value - User-supplied color token
+ * @returns The validated color, or null when unknown
+ */
+export function validateColor(value: string): WtColor | null {
+	return (WT_COLOR_PALETTE as readonly string[]).includes(value) ? (value as WtColor) : null;
+}
+
+/**
+ * Worktree verbs delegated to `@side-quest/git worktree`.
+ *
+ * One extracted helper over three real call sites (new/rm/clean); shells the
+ * matching subcommand, maps failure to the `delegate_failed` code. Not an
+ * Adapter -- a single function over one upstream CLI.
+ *
+ * @param runtime - Injected I/O adapter (supplies the subprocess runner)
+ * @param subcommand - Upstream worktree subcommand argv tail
+ * @returns Captured output, or a delegate_failed error result
+ */
+export async function delegateWorktree(
+	runtime: WtRuntime,
+	subcommand: readonly string[],
+): Promise<{ ok: true; stdout: string } | { ok: false; code: "delegate_failed"; message: string }> {
+	const result = await runtime.run(["@side-quest/git", "worktree", ...subcommand]);
+	if (!result.ok) {
+		return {
+			ok: false,
+			code: "delegate_failed",
+			message: `@side-quest/git worktree ${subcommand.join(" ")} failed: ${
+				result.stderr.trim() || "non-zero exit"
+			}`,
+		};
+	}
+	return { ok: true, stdout: result.stdout };
+}
+
+/**
+ * Pure command outcome: either success data or a structured failure.
+ *
+ * runCommand returns this instead of a facade envelope so the whole verb
+ * surface is testable without diagnostics context or writers; main() converts
+ * it into the facade envelope at the I/O edge.
+ */
+export type CommandResult =
+	| { ok: true; data: Record<string, unknown> }
+	| {
+			ok: false;
+			code: string;
+			message: string;
+			action: string;
+			exitCode: number;
+			recoverability: "change_input" | "repair_state";
+	  };
+
+/**
+ * Success data carried inside the facade envelope for a render outcome.
+ *
+ * @param action - The verb that produced this result
+ * @param workspacePath - Path to the rendered workspace
+ * @returns A success data object
+ * @internal
+ */
+function renderSuccessData(action: string, workspacePath: string): Record<string, unknown> {
+	return {
+		contract_id: WT_CONTRACT_ID,
+		schema_version: WT_SCHEMA_VERSION,
+		action,
+		workspace_path: workspacePath,
+		changed_state: "written",
+		next_safe_action: "Reload the VS Code window to pick up the rendered workspace.",
+	};
+}
+
+/**
+ * Convert a sync outcome into a CommandResult.
+ *
+ * Drift-blocked maps to exit 3 with `repair_state` recoverability; discovery
+ * errors map to exit 1. Hints stay prose-only -- the real recovery command
+ * lives in docs/git/worktree.md, never inlined.
+ *
+ * @param action - The verb that triggered the sync
+ * @param outcome - The sync result
+ * @returns The command result
+ * @internal
+ */
+function fromSync(
+	action: string,
+	outcome: Awaited<ReturnType<typeof syncWorkspace>>,
+): CommandResult {
+	if (outcome.kind === "written") {
+		return { ok: true, data: renderSuccessData(action, outcome.path) };
+	}
+	if (outcome.kind === "drift_blocked") {
+		return {
+			ok: false,
+			code: "drift_blocked",
+			message: "The workspace was edited since the last render; refusing to overwrite.",
+			action: "Review the diff, port real edits into wt.config.json, then rerun with --force.",
+			exitCode: 3,
+			recoverability: "repair_state",
+		};
+	}
+	return {
+		ok: false,
+		code: outcome.code,
+		message: outcome.message,
+		action: "Inspect worktree and registry state, resolve the failure, then retry.",
+		exitCode: 1,
+		recoverability: "repair_state",
+	};
+}
+
+/**
+ * A usage failure: bad arguments or an unknown color, mapped to exit 2.
+ *
+ * @param code - Package-owned diagnostic code
+ * @param message - Human-readable failure description
+ * @param action - Prose-only repair hint
+ * @returns A failing command result
+ * @internal
+ */
+function usageFailure(code: string, message: string, action: string): CommandResult {
+	return { ok: false, code, message, action, exitCode: 2, recoverability: "change_input" };
+}
+
+/**
+ * Parsed wt invocation: the verb plus its positional arguments and flags.
+ */
+export interface ParsedInvocation {
+	command: string;
+	positionals: string[];
+	force: boolean;
+}
+
+/**
+ * Parse a diagnostic-stripped argv into a verb, positionals, and the force flag.
+ *
+ * @param argv - argv tail with diagnostic flags already removed
+ * @returns The parsed invocation
+ *
+ * @example
+ * ```typescript
+ * parseInvocation(["color", "codex/x", "blue"])
+ * // → { command: "color", positionals: ["codex/x", "blue"], force: false }
+ * ```
+ */
+export function parseInvocation(argv: readonly string[]): ParsedInvocation {
+	const positionals: string[] = [];
+	let force = false;
+	let command = "";
+	for (const arg of argv) {
+		if (arg === "--force") {
+			force = true;
+		} else if (arg === "--json" || arg === "--no-input") {
+			// --json selects output mode (always JSON here); --no-input is the test default.
+		} else if (arg.startsWith("--")) {
+			// Unknown flags ignored; the alignment proof asserts foreign-flag exclusion.
+		} else if (command === "") {
+			command = arg;
+		} else {
+			positionals.push(arg);
+		}
+	}
+	return { command, positionals, force };
+}
+
+/**
+ * Route a parsed invocation to its handler and return a pure CommandResult.
+ *
+ * Owns verb routing and result shape; delegates all I/O to the injected
+ * runtime, so the entire command surface is testable without spawning
+ * processes or touching disk.
+ *
+ * @param invocation - The parsed verb and flags
+ * @param runtime - Injected I/O adapter
+ * @returns The command result
+ */
+export async function runCommand(
+	invocation: ParsedInvocation,
+	runtime: WtRuntime,
+): Promise<CommandResult> {
+	const { command, positionals, force } = invocation;
+
+	switch (command) {
+		case "sync":
+			return fromSync("sync", await syncWorkspace(runtime, force));
+
+		case "focus": {
+			const [branch, subfolder] = positionals;
+			if (!branch || !subfolder) {
+				return usageFailure(
+					"usage_error",
+					"focus needs <branch> and <subfolder>.",
+					"Rerun as: wt focus <branch> <subfolder>.",
+				);
+			}
+			return fromSync(
+				"focus",
+				await setPrefAndSync(runtime, branch, (prefs) => {
+					prefs.focus = subfolder;
+				}, force),
+			);
+		}
+
+		case "color": {
+			const [branch, color] = positionals;
+			if (!branch || !color) {
+				return usageFailure(
+					"usage_error",
+					"color needs <branch> and <color>.",
+					"Rerun as: wt color <branch> <color>.",
+				);
+			}
+			const validated = validateColor(color);
+			if (validated === null) {
+				return usageFailure(
+					"unknown_color",
+					`Unknown color '${color}'. Allowed: ${WT_COLOR_PALETTE.join(", ")}.`,
+					"Rerun with a color from the allowed palette.",
+				);
+			}
+			return fromSync(
+				"color",
+				await setPrefAndSync(runtime, branch, (prefs) => {
+					prefs.color = validated;
+				}, force),
+			);
+		}
+
+		case "new":
+		case "rm":
+		case "clean": {
+			const subcommandMap = {
+				new: ["create", ...positionals],
+				rm: ["delete", ...positionals],
+				clean: ["orphans", "--delete"],
+			} as const;
+			const delegated = await delegateWorktree(runtime, subcommandMap[command]);
+			if (!delegated.ok) {
+				return {
+					ok: false,
+					code: delegated.code,
+					message: delegated.message,
+					action: "Inspect worktree state, resolve the upstream failure, then retry.",
+					exitCode: 1,
+					recoverability: "repair_state",
+				};
+			}
+			return fromSync(command, await syncWorkspace(runtime, force));
+		}
+
+		case "open": {
+			const [name] = positionals;
+			if (!name) {
+				return {
+					ok: true,
+					data: {
+						contract_id: WT_CONTRACT_ID,
+						schema_version: WT_SCHEMA_VERSION,
+						action: "list_workspaces",
+						workspace: workspacePathFor(runtime.repoRoot()),
+					},
+				};
+			}
+			const launched = await runtime.launchCode(name);
+			if (!launched) {
+				return usageFailure(
+					"code_not_found",
+					"Could not launch VS Code; `code` was not found on PATH.",
+					"Install the `code` shell command, or set defaults.codeBin in wt.config.json.",
+				);
+			}
+			return {
+				ok: true,
+				data: {
+					contract_id: WT_CONTRACT_ID,
+					schema_version: WT_SCHEMA_VERSION,
+					action: "open_workspace",
+					launched: true,
+				},
+			};
+		}
+
+		case "commands":
+			return {
+				ok: true,
+				data: {
+					contract_id: WT_CONTRACT_ID,
+					schema_version: WT_SCHEMA_VERSION,
+					...projectCommandDiscoveryTree([
+						["sync", wtContracts.sync],
+						["focus", wtContracts.focus],
+						["color", wtContracts.color],
+						["open", wtContracts.open],
+						["new", wtContracts.new],
+						["rm", wtContracts.rm],
+						["clean", wtContracts.clean],
+						["commands", wtContracts.commands],
+					]),
+				},
+			};
+
+		default:
+			return usageFailure(
+				"usage_error",
+				`Unknown command '${command || "(none)"}'.`,
+				"Run with --help to see available commands.",
+			);
+	}
+}
+
+/**
+ * CLI entry point: parse argv, run the command, emit the JSON envelope, exit.
+ *
+ * @param argv - Process argv tail (after the executable name)
+ * @param options - Optional runtime and writers for tests
+ * @returns The process exit code
+ *
+ * @example
+ * ```typescript
+ * const code = await main(["sync", "--json"], { runtime })
+ * ```
+ */
+export async function main(
+	argv: readonly string[],
+	options: { runtime?: WtRuntime; stdout?: CliWriter; stderr?: CliWriter } = {},
+): Promise<number> {
+	const runtime = options.runtime ?? createDefaultRuntime();
+	const stdout = options.stdout ?? process.stdout;
+
+	if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
+		const command = argv.find((a) => a in wtContracts) as keyof typeof wtContracts | undefined;
+		stdout.write(renderCommandUsage(wtContracts[command ?? "sync"]));
+		return 0;
+	}
+	if (argv.includes("--version")) {
+		stdout.write(`wt ${VERSION}\n`);
+		return 0;
+	}
+
+	const parsedDiagnostics = parseCliDiagnosticArgv(argv);
+	const runId = parsedDiagnostics.options.runId;
+	const startedAtMs = parsedDiagnostics.options.startedAtMs;
+	const invocation = parseInvocation(parsedDiagnostics.argv);
+	const result = await runCommand(invocation, runtime);
+	const durationMs = runtime.now() - startedAtMs;
+
+	if (result.ok) {
+		writeJsonEnvelope(
+			stdout,
+			createCliRuntimeSuccessEnvelope({ run_id: runId, data: result.data }),
+			{ runId, durationMs },
+		);
+		return 0;
+	}
+
+	writeJsonEnvelope(
+		stdout,
+		createCliRuntimeErrorEnvelope({
+			run_id: runId,
+			process_exit_code: result.exitCode,
+			error: {
+				run_id: runId,
+				code: result.code,
+				message: result.message,
+				exit_code: result.exitCode,
+				severity: "error",
+				recoverability: result.recoverability,
+				retryable: false,
+				hint: { action: result.recoverability, summary: result.action },
+			},
+			data: {
+				contract_id: WT_CONTRACT_ID,
+				schema_version: WT_SCHEMA_VERSION,
+				changed_state: "none",
+				next_safe_action: result.action,
+			},
+		}),
+		{ runId, durationMs },
+	);
+	return result.exitCode;
+}
+
+if (import.meta.main) {
+	main(process.argv.slice(2)).then((code) => {
+		process.exit(code);
+	});
+}
