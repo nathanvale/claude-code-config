@@ -28,9 +28,28 @@ symlinks=(
 	"${CLAUDE_HOME}/settings.json|${SCRIPT_DIR}/settings.json"
 	"${CLAUDE_HOME}/.mcp.json|${SCRIPT_DIR}/.mcp.json"
 	"${CODEX_HOME}/AGENTS.md|${SCRIPT_DIR}/AGENTS.md"
-	"${CODEX_HOME}/skills/record-decision|${SCRIPT_DIR}/skills/record-decision"
 	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
+
+# Codex shares ~/.codex/skills/ across multiple sources (this repo, side-quest,
+# codex-native), so it cannot symlink the whole folder the way Claude does.
+# Instead, link each repo skill individually — but never disturb a name that is
+# already a real directory or a foreign symlink (those belong to another source).
+# This loop means new skills are picked up automatically: no per-skill edits.
+for skill_dir in "${SCRIPT_DIR}"/skills/*/; do
+	skill_name="$(basename "$skill_dir")"
+	codex_link="${CODEX_HOME}/skills/${skill_name}"
+	# Adopt the name only if it is absent, or already a symlink INTO this repo
+	# (a managed link we may be refreshing). Skip real dirs and foreign links.
+	if [[ -e "$codex_link" || -L "$codex_link" ]]; then
+		if [[ -L "$codex_link" && "$(readlink "$codex_link")" == "${SCRIPT_DIR}/skills/"* ]]; then
+			: # managed link into this repo — safe to (re)assert
+		else
+			continue # real dir or foreign source — leave it alone
+		fi
+	fi
+	symlinks+=("${codex_link}|${SCRIPT_DIR}/skills/${skill_name}")
+done
 
 create_links() {
 	echo "Creating symlinks..."

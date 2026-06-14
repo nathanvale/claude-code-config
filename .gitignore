@@ -18,3 +18,7 @@ skills/fallow/scripts/.fallow/
 # playwright-cli runtime dumps (contain live page content / authed URLs — never commit)
 .playwright-cli/
 **/.playwright-cli/
+
+# wt: generated workspace + per-machine registry (rendered from wt.config.json; never commit)
+wt.config.json
+*.code-workspace
