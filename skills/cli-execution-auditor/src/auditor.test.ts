@@ -112,6 +112,16 @@ describe("auditor argv surface", () => {
 		expect(result.stderr).toContain("--only must be one of");
 	});
 
+	test("rejects empty inline flag values", async () => {
+		const only = await runForTest(["some-target", "--only="], stubRuntime({}));
+		expect(only.exitCode).toBe(2);
+		expect(only.stderr).toContain("--only requires a value");
+
+		const ledger = await runForTest(["some-target", "--ledger="], stubRuntime({}));
+		expect(ledger.exitCode).toBe(2);
+		expect(ledger.stderr).toContain("--ledger requires a value");
+	});
+
 	test("accepts a bare target (audit is the default command)", async () => {
 		const result = await runForTest(["some-target"], stubRuntime({}));
 		expect(result.exitCode).toBe(0);
