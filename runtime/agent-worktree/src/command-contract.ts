@@ -114,22 +114,7 @@ const limitFlag = {
 	},
 } as const;
 
-const fieldsFlag = {
-	"--fields": {
-		type: "string",
-		description: "Comma-separated projection field sets for context-heavy reads.",
-	},
-} as const;
-
-const selectFlag = {
-	"--select": {
-		type: "string",
-		description: "Selector for a subset of context-heavy read output.",
-	},
-} as const;
-
 const commonReadFlags = { ...repoFlag, ...jsonFlag } as const;
-const projectionFlags = { ...limitFlag, ...fieldsFlag, ...selectFlag } as const;
 const commonWriteFlags = {
 	...repoFlag,
 	...dryRunFlag,
@@ -177,7 +162,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 				success: inspectBeforeMutating,
 				failure: inspectFailure,
 			},
-			flags: { ...commonReadFlags, ...projectionFlags },
+			flags: commonReadFlags,
 			exitCodes,
 		},
 		list: {
@@ -192,7 +177,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 			outputModes: ["json"],
 			interactivity: "none",
 			resultContract,
-			flags: { ...commonReadFlags, ...projectionFlags },
+			flags: { ...commonReadFlags, ...limitFlag },
 			exitCodes,
 		},
 		create: {
@@ -226,7 +211,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 			outputModes: ["json"],
 			interactivity: "none",
 			resultContract,
-			flags: { ...commonReadFlags, ...projectionFlags },
+			flags: { ...commonReadFlags, ...limitFlag },
 			exitCodes,
 		},
 		check: {
@@ -282,7 +267,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 			outputModes: ["json"],
 			interactivity: "none",
 			resultContract,
-			flags: { ...commonReadFlags, ...previewFlag, ...projectionFlags },
+			flags: { ...commonReadFlags, ...previewFlag, ...limitFlag },
 			exitCodes,
 		},
 		recover: {
@@ -356,7 +341,7 @@ export const agentWorktreeContracts = defineCommandFacadeContract(
 			outputModes: ["json"],
 			interactivity: "none",
 			resultContract,
-			flags: { ...commonReadFlags, ...projectionFlags },
+			flags: { ...commonReadFlags, ...limitFlag },
 			exitCodes,
 		},
 		commands: {

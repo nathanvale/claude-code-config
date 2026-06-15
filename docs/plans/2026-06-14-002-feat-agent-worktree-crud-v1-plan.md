@@ -85,29 +85,6 @@ The current `wt` skill owns workspace rendering, but delegates git and worktree 
 - Merge evidence: record squash merge separately from ancestor merge; shallow clone evidence is `unknown`.
 - Clean classification: classify registered worktrees, orphan branches, and stale directories separately.
 
-### Accepted V1 Command And Output Defaults
-
-- Doctor JSON shape: top-level `summary`, `checks[]`, `mutation_readiness`, `blockers[]`, and `next_actions[]`.
-- Check aggregation: worst severity wins; `unknown` blocks mutation.
-- `status` reports evidence; `check` returns a mutation verdict.
-- Worktree identity: generated short id plus branch and path aliases.
-- Worktree lookup: accept id, branch, or path; error on ambiguity.
-- Stale directory detection: compare filesystem `.worktrees/*` with `git worktree list`.
-- Protected branch source: built-ins in v1, optional local config later.
-- Default protected patterns: `main`, `master`, default branch, and `release/*`.
-- Config copy allowlist: copy only known safe local config files.
-- Install behavior: never run install by default.
-- Failure record schema: `what_happened`, `changed_state`, `changed[]`, `same_input_retry`, `next_actions`, and `diagnostics`.
-- Retry semantics: `same_input_retry` values are `safe`, `unsafe`, and `unknown`.
-- Recovery actions: named actions only, no embedded shell strings.
-- Projection flags: `--limit`, `--fields`, and `--select`.
-- JSON output: object envelopes only, never bare arrays.
-- Diagnostics: stderr plus durable refs; stdout stays machine JSON.
-- Unknown git evidence: preserve `unknown` with reason and command failure metadata.
-- Timeouts: bound subprocess evidence checks.
-- `wt` error mapping: preserve upstream `failure_domain`, `changed_state`, and `next_safe_action`.
-- Adoption order: doctor, read commands, write commands, then `wt` migration.
-
 ---
 
 ## High-Level Technical Design
@@ -194,7 +171,7 @@ runtime/agent-worktree/
 - **Requirements:** R1, R2, R3, R10, R15, R16.
 - **Dependencies:** U1.
 - **Files:** `runtime/agent-worktree/src/discovery.ts`, `runtime/agent-worktree/src/doctor.ts`, `runtime/agent-worktree/src/store.ts`, `runtime/agent-worktree/tests/doctor.test.ts`, `runtime/agent-worktree/tests/discovery.test.ts`.
-- **Approach:** Port the SideQuest porcelain parser shape, then enrich it with active worktree, main owner root, linked worktrees, stale dirs, dependency readiness, command readiness, contract health, blocked mutations, retention warnings, and next safe actions. Public doctor JSON uses `summary`, `checks[]`, `mutation_readiness`, `blockers[]`, and `next_actions[]`; check aggregation uses worst severity, and `unknown` blocks mutation.
+- **Approach:** Port the SideQuest porcelain parser shape, then enrich it with active worktree, main owner root, linked worktrees, stale dirs, dependency readiness, command readiness, contract health, blocked mutations, retention warnings, and next safe actions.
 - **Patterns to follow:** `skills/wt/src/wt-discovery.ts`, SideQuest Git `src/worktree/list.ts`, SideQuest Git `src/worktree/status.ts`.
 - **Test scenarios:** Given a linked worktree, doctor identifies main owner, active worktree, linked worktrees, and next safe action. Given malformed or partial git data, doctor returns readable checks and marks failed checks as `blocked` or `unknown`. Given dirty state, doctor reports mutation blockers without failing the read. Given old records or backup refs, doctor reports retention warnings without deleting them.
 - **Verification:** Doctor output can be parsed from JSON stdout and does not require stderr or human prose for routing. A blocked or unknown map exits `0` when the map is readable.
@@ -205,7 +182,7 @@ runtime/agent-worktree/
 - **Requirements:** R4, R6, R10, R14, R17.
 - **Dependencies:** U1, U2.
 - **Files:** `runtime/agent-worktree/src/worktrees.ts`, `runtime/agent-worktree/src/merge-intelligence.ts`, `runtime/agent-worktree/tests/worktrees.test.ts`, `runtime/agent-worktree/tests/merge-intelligence.test.ts`.
-- **Approach:** Port SideQuest's bounded git evidence model for dirty state, upstream-gone state, ancestor merge, squash merge, ahead/behind, shallow clones, and timeout behavior. Keep merge evidence as data, not terminal text. Treat squash merge as separate evidence from ancestor merge, and shallow clone evidence as `unknown` with reason and command failure metadata. `status` reports evidence; `check` returns a mutation verdict.
+- **Approach:** Port SideQuest's bounded git evidence model for dirty state, upstream-gone state, ancestor merge, squash merge, ahead/behind, shallow clones, and timeout behavior. Keep merge evidence as data, not terminal text. Treat squash merge as separate evidence from ancestor merge, and shallow clone evidence as `unknown`.
 - **Patterns to follow:** SideQuest Git `src/worktree/list.ts`, SideQuest Git `src/worktree/merge-status.ts`, SideQuest Git `src/worktree/status.ts`.
 - **Test scenarios:** Given a clean merged branch, `check` allows deletion evidence. Given a dirty linked worktree, `check` blocks mutation. Given a squash-merged branch, status records squash evidence separately from ancestor evidence. Given shallow clone uncertainty, status returns `unknown` rather than guessing.
 - **Verification:** Status and check decisions cite evidence fields that doctor can reuse.
@@ -216,7 +193,7 @@ runtime/agent-worktree/
 - **Requirements:** R4, R6, R7, R8, R9, R15, R16.
 - **Dependencies:** U1, U2, U3.
 - **Files:** `runtime/agent-worktree/src/worktrees.ts`, `runtime/agent-worktree/src/store.ts`, `runtime/agent-worktree/src/inspect.ts`, `runtime/agent-worktree/tests/lifecycle.test.ts`, `runtime/agent-worktree/tests/store.test.ts`.
-- **Approach:** Use the durable store for run records, operation journal events, typed refs, and recovery choices. Create and delete record start, changed-state, refs, and recovery choices. Store a facade `run_id` plus package-owned run record id. Use `failure:<run-id>/<step-id>` for failure identity. Failure records include `what_happened`, `changed_state`, `changed[]`, `same_input_retry`, `next_actions`, and `diagnostics`, with `same_input_retry` as `safe`, `unsafe`, or `unknown`. Keep the default recovery planner in `worktrees.ts` so lifecycle failures answer retry safety and next inspect action without reconstructing terminal output. Recovery actions are named actions only, not embedded shell strings. Create defaults from the current branch unless `--base` is provided, copies minimum safe config, and does not install dependencies by default. Delete removes the worktree by default; branch deletion requires an explicit flag. Delete always creates a per-run backup ref at `refs/agent-worktree/backups/<branch>/<run-id>` before attempting branch deletion, then records that exact backup in the durable run state. Non-interactive destructive delete requires `--force`. `recover` examples use `--ref` because recovery mutates; positional refs remain accepted for handoff flow.
+- **Approach:** Use the durable store for run records, operation journal events, typed refs, and recovery choices. Create and delete record start, changed-state, refs, and recovery choices. Store a facade `run_id` plus package-owned run record id. Use `failure:<run-id>/<step-id>` for failure identity. Keep the default recovery planner in `worktrees.ts` so lifecycle failures answer retry safety and next inspect action without reconstructing terminal output. Create defaults from the current branch unless `--base` is provided, copies minimum safe config, and does not install dependencies by default. Delete removes the worktree by default; branch deletion requires an explicit flag. Delete always creates a per-run backup ref at `refs/agent-worktree/backups/<branch>/<run-id>` before attempting branch deletion, then records that exact backup in the durable run state. Non-interactive destructive delete requires `--force`. `recover` examples use `--ref` because recovery mutates; positional refs remain accepted for handoff flow.
 - **Patterns to follow:** SideQuest Git `src/worktree/backup.ts`, SideQuest Git `src/worktree/remove.ts`, SideQuest Git `src/worktree/create.ts`.
 - **Test scenarios:** Given `create --dry-run`, output names intended changes and writes nothing. Given create succeeds after writing store state, changed-state is `complete`. Given delete removes a worktree but branch deletion fails, changed-state is `partial`, the per-run backup ref is recorded, and a failure ref can be inspected. Given branch deletion is not requested, delete leaves the branch in place. Given missing confirmation or missing `--force` in a non-interactive destructive path, delete fails before mutation. Given a protected branch, delete is hard-blocked.
 - **Verification:** Same-input retry safety is explicit on each known failure path.
@@ -238,7 +215,7 @@ runtime/agent-worktree/
 - **Requirements:** R7, R8, R9, R15, R16, R17.
 - **Dependencies:** U1, U4.
 - **Files:** `runtime/agent-worktree/src/store.ts`, `runtime/agent-worktree/src/inspect.ts`, `runtime/agent-worktree/tests/inspect.test.ts`, `runtime/agent-worktree/tests/store.test.ts`.
-- **Approach:** Store records under the main-owner `.agent-worktree/` root using `runs/`, `failures/`, and `worktrees/`. Keep layouts package-owned and ignored by git unless a later decision promotes tracked artifacts. Append a JSONL operation journal per run. Worktree records use a generated short id plus branch and path aliases; lookup accepts id, branch, or path and errors on ambiguity. `inspect <ref>` uses the package-owned typed-ref resolver and returns next safe actions. `handoff` emits read-only context snapshots and creates no `handoff:<id>` ref in v1.
+- **Approach:** Store records under the main-owner `.agent-worktree/` root using `runs/`, `failures/`, and `worktrees/`. Keep layouts package-owned and ignored by git unless a later decision promotes tracked artifacts. Append a JSONL operation journal per run. `inspect <ref>` uses the package-owned typed-ref resolver and returns next safe actions. `handoff` emits read-only context snapshots and creates no `handoff:<id>` ref in v1.
 - **Patterns to follow:** `runtime/cli-command-facade/src/runtime-envelope.ts`, SideQuest Git `src/worktree/backup.ts`.
 - **Test scenarios:** Given `failure:<id>`, inspect returns changed-state, retry safety, recovery choices, and diagnostic trail. Given an unknown ref, inspect returns a usage-safe error. Given handoff runs after a partial failure, it returns the latest durable context without mutating.
 - **Verification:** A fresh process can inspect records written by an earlier process.
@@ -249,7 +226,7 @@ runtime/agent-worktree/
 - **Requirements:** R14, R15, R16, R17.
 - **Dependencies:** U1 through U6.
 - **Files:** `runtime/agent-worktree/tests/cli-surface.test.ts`, `runtime/agent-worktree/tests/scaffold.test.ts`, `runtime/agent-worktree/tests/architecture-scaffold.test.ts`, `runtime/agent-worktree/src/cli.ts`, `runtime/agent-worktree/src/command-contract.ts`, `runtime/agent-worktree/src/projection.ts`.
-- **Approach:** Test through the public CLI entry point. Derive expected help and discovery from `agentWorktreeContracts`, then assert parser behavior and runtime results against the same command ids. Keep projection as the shared bounded-output contract for doctor, list, status, clean, and handoff so read commands do not invent separate context-budget controls. Public JSON uses object envelopes only; diagnostics go to stderr or durable refs, not stdout.
+- **Approach:** Test through the public CLI entry point. Derive expected help and discovery from `agentWorktreeContracts`, then assert parser behavior and runtime results against the same command ids. Keep projection as the shared bounded-output contract for doctor, list, status, and handoff so read commands do not invent separate context-budget controls.
 - **Patterns to follow:** `skills/wt/src/wt.test.ts`, `runtime/cli-command-facade/tests/command-facade.test.ts`.
 - **Test scenarios:** Verify every advertised command supports `--help` and `--json` where declared. Verify invalid flags fail with exit code `2`. Verify mutation commands expose preview or destructive gates. Verify `commands` discovery matches the contract. Verify runtime envelopes carry run id and changed-state where relevant.
 - **Verification:** The workspace facade invariant check includes `runtime/agent-worktree/src/command-contract.ts`.
@@ -260,7 +237,7 @@ runtime/agent-worktree/
 - **Requirements:** R10, R11, R12, R13.
 - **Dependencies:** U2 through U7.
 - **Files:** `skills/wt/package.json`, `skills/wt/src/wt.ts`, `skills/wt/src/wt-discovery.ts`, `skills/wt/src/wt.test.ts`, `skills/wt/src/wt-discovery.test.ts`.
-- **Approach:** Keep `wt`'s public command contract stable while replacing delegate calls. Migrate shared discovery reads first, then lifecycle commands. Map upstream shared-package failures into `wt` envelopes without losing `failure_domain`, `changed_state`, or `next_safe_action`.
+- **Approach:** Keep `wt`'s public command contract stable while replacing delegate calls. Migrate shared discovery reads first, then lifecycle commands. Map upstream shared-package failures into `wt` envelopes without losing recoverability, changed-state, or next safe action.
 - **Patterns to follow:** `skills/wt/src/wt.ts`, `skills/wt/src/wt-discovery.ts`, `skills/wt/src/command-contract.ts`.
 - **Test scenarios:** Given shared discovery succeeds, `wt sync` renders the same workspace shape before lifecycle commands migrate. Given shared discovery blocks on dirty state, `wt clean` preserves the upstream failure category. Given `wt new` creates through shared runtime, the workspace re-render still follows the drift gate. Given `@side-quest/git` is absent after lifecycle migration, `wt` no longer fails on that dependency.
 - **Verification:** `wt` tests pass, `wt` typecheck passes, and no `@side-quest/git worktree` delegation remains in `skills/wt/src`.

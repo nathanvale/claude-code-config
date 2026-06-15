@@ -1,12 +1,4 @@
 import type { CommandFacadeContract } from "./command-facade";
-export {
-	DEFAULT_CLI_PROCESS_TIMEOUT_MS,
-	describeCliProcessRun,
-	parseCliProcessJson,
-	runCliProcess,
-	type CliProcessCommand,
-	type CliProcessResult,
-} from "./process-testing";
 
 export type CommandHelpFlagSurfaceInput = {
 	command: string;

@@ -4,8 +4,6 @@
 - JSON success writes one envelope line to stdout.
 - JSON errors write to stderr only.
 - Quiet mode has no noisy stderr on success.
-- Station Maps claim Declared Branch Coverage only.
-- Missing, drifted, skipped, and declared-unreachable Branch Stations stay visible as data.
 
 ## Error and hints
 - Known codes map to expected action + family.

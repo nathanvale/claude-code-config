@@ -159,14 +159,14 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Support `--repo <path>` through the same read-target resolver as review.
 - Do not fall back from a failed explicit `--repo` to caller cwd.
 - Do not expose absolute `repo_root` or `inbox_path` in healthy success data.
-- Emit `inbox_status` from the enum owned by `skills/skill-feedback/src/command-contract.ts`.
+- Emit `inbox_status` for missing, empty, populated, partially readable, or unsafe storage.
 - Return exit 0 for missing and empty valid-repo inbox states.
 - Return exit 1 for unsafe inbox roots.
 - Count primary, low-signal, invalid, skipped unsafe, and unlinked primary reports.
 - Reuse the safe inbox scan path shared by review and purge.
 - Treat low-signal as capture-health evidence only.
 - Summarize runtime capture, Trusted skill identity, and Daily pilot readiness separately.
-- Summarize primary correlation using the enum owned by `skills/skill-feedback/src/command-contract.ts`.
+- Summarize linked, partially linked, all-unlinked, or absent primary correlation.
 - Warn when all primary evidence is unlinked.
 - Warn when low-signal capture volume reaches the runtime-inspection threshold.
 - Warn when retention age/count is ready for explicit purge preview.

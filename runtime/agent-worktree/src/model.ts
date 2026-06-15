@@ -250,79 +250,6 @@ export const AGENT_WORKTREE_DOCTOR_EXIT_POLICY =
 	"exit_zero_with_readable_map" as const;
 
 /**
- * Public doctor JSON fields agents route from.
- *
- * The CLI contract uses these snake_case field names for machine JSON. Internal
- * helpers may keep local naming conventions.
- */
-export const AGENT_WORKTREE_DOCTOR_JSON_FIELDS = [
-	"summary",
-	"checks",
-	"mutation_readiness",
-	"blockers",
-	"next_actions",
-] as const;
-
-/**
- * Same-input retry values emitted by failure records.
- *
- * This field answers only whether repeating the same command input is safe.
- * Richer recovery choices remain named actions.
- */
-export const AGENT_WORKTREE_SAME_INPUT_RETRY = [
-	"safe",
-	"unsafe",
-	"unknown",
-] as const;
-
-/**
- * Same-input retry value.
- */
-export type AgentWorktreeSameInputRetry =
-	(typeof AGENT_WORKTREE_SAME_INPUT_RETRY)[number];
-
-/**
- * Failure-record fields required for recovery routing.
- *
- * The fields mirror the recovery questions a later agent needs answered before
- * retry, repair, or handoff.
- */
-export const AGENT_WORKTREE_FAILURE_RECORD_FIELDS = [
-	"what_happened",
-	"changed_state",
-	"changed",
-	"same_input_retry",
-	"next_actions",
-	"diagnostics",
-] as const;
-
-/**
- * Worktree lookup inputs accepted by lifecycle commands.
- */
-export const AGENT_WORKTREE_LOOKUP_INPUTS = ["id", "branch", "path"] as const;
-
-/**
- * Public JSON output policy for command results.
- *
- * Commands return object envelopes so metadata, projection, pagination, and
- * diagnostic refs can be added without changing result shape.
- *
- * @defaultValue "object_envelopes_only"
- */
-export const AGENT_WORKTREE_JSON_OUTPUT_POLICY =
-	"object_envelopes_only" as const;
-
-/**
- * Diagnostic output policy for the public CLI.
- *
- * Machine JSON stays on stdout; diagnostics route to stderr or durable refs.
- *
- * @defaultValue "stderr_or_durable_refs"
- */
-export const AGENT_WORKTREE_DIAGNOSTIC_OUTPUT_POLICY =
-	"stderr_or_durable_refs" as const;
-
-/**
  * Diagnostic codes owned by the scaffolded package.
  *
  * Behavior-bearing units will expand this list as recovery paths land.
@@ -427,20 +354,20 @@ export const AGENT_WORKTREE_SCAFFOLD_SEAMS = [
 			"Deleting it turns cleanup and delete safety back into weak branch heuristics.",
 		nextUnit: "U3",
 	},
-	{
-		id: "store",
-		ownerPath: "runtime/agent-worktree/src/store.ts",
-		status: "earned",
-		deletionTest:
-			"Deleting it drops the durable recovery surface for partial mutations.",
-		nextUnit: "U4",
-	},
+		{
+			id: "store",
+			ownerPath: "runtime/agent-worktree/src/store.ts",
+			status: "earned",
+			deletionTest:
+				"Deleting it drops the durable recovery surface for partial mutations.",
+			nextUnit: "U4",
+		},
 	{
 		id: "projection",
 		ownerPath: "runtime/agent-worktree/src/projection.ts",
 		status: "earned",
 		deletionTest:
-			"Deleting it makes doctor, list, status, clean, and handoff invent separate output-budget controls.",
+			"Deleting it makes doctor, list, status, and handoff invent separate output-budget controls.",
 		nextUnit: "U7",
 	},
 	{

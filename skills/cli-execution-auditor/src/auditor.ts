@@ -9,7 +9,6 @@
 //
 // Commands:
 //   audit <target> [--only <clause>] [--ledger <path>] [--json]
-//   station-map <target> [--ledger <path>] [--json]
 //
 // Exit codes (per contract):
 //   0 target clean — all lane clauses pass
@@ -32,11 +31,6 @@ import { runFullAudit } from "./audit-engine.ts";
 import { AUDIT_CLAUSE_IDS, getClause } from "./clause-catalog.ts";
 import { auditorContracts } from "./command-contract.ts";
 import { readLedgerFile, upsertFinding, writeLedgerFile } from "./ledger/index.ts";
-import {
-	runStationMapAudit,
-	type StationFinding,
-	type StationMapOutcome,
-} from "./station-map.ts";
 
 const VERSION = "0.2.0";
 
@@ -44,7 +38,7 @@ const VERSION = "0.2.0";
 
 type OutputMode = "plain" | "json";
 
-type ParsedAuditorCommand =
+type ParsedAuditCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| {
@@ -52,12 +46,6 @@ type ParsedAuditorCommand =
 			outputMode: OutputMode;
 			target: string;
 			only: string | null;
-			ledger: string | null;
-	  }
-	| {
-			kind: "station-map";
-			outputMode: OutputMode;
-			target: string;
 			ledger: string | null;
 	  };
 
@@ -84,15 +72,14 @@ function parseClauseId(flag: string, value: string): string {
 
 // --- argv parsing (validated against the contract's flags) ---
 
-function parseAuditorArgv(argv: readonly string[]): ParsedAuditorCommand {
+function parseAuditorArgv(argv: readonly string[]): ParsedAuditCommand {
 	if (argv.includes("--version")) return { kind: "version" };
 	if (argv.includes("--help") || argv.includes("-h")) return { kind: "help" };
 
 	const args = [...argv];
-	const command = args[0] === "station-map" ? "station-map" : "audit";
-	// The first non-flag token is the command; "audit" is also the default, so a
-	// bare `auditor <target>` is accepted.
-	if (args[0] === "audit" || args[0] === "station-map") args.shift();
+	// The first non-flag token is the command; "audit" is the only command and
+	// also the default, so a bare `auditor <target>` is accepted.
+	if (args[0] === "audit") args.shift();
 	if (args[0] === "help") return { kind: "help" };
 
 	let outputMode: OutputMode = "plain";
@@ -107,7 +94,6 @@ function parseAuditorArgv(argv: readonly string[]): ParsedAuditorCommand {
 				outputMode = "json";
 				break;
 			case "--only":
-				if (command === "station-map") throw usageError("unknown option: --only");
 				only = parseClauseId("--only", requireNext(args, index, "--only"));
 				index += 1;
 				break;
@@ -117,7 +103,6 @@ function parseAuditorArgv(argv: readonly string[]): ParsedAuditorCommand {
 				break;
 			default:
 				if (arg.startsWith("--only=")) {
-					if (command === "station-map") throw usageError("unknown option: --only");
 					only = parseClauseId("--only", requireInlineValue(arg, "--only"));
 				} else if (arg.startsWith("--ledger=")) {
 					ledger = requireInlineValue(arg, "--ledger");
@@ -132,14 +117,7 @@ function parseAuditorArgv(argv: readonly string[]): ParsedAuditorCommand {
 	}
 
 	if (target === null) {
-		throw usageError(
-			command === "audit"
-				? "audit requires a target: audit <target> [--only <clause>] [--json]"
-				: "station-map requires a target: station-map <target> [--json]",
-		);
-	}
-	if (command === "station-map") {
-		return { kind: "station-map", outputMode, target, ledger };
+		throw usageError("audit requires a target: audit <target> [--only <clause>] [--json]");
 	}
 	return { kind: "audit", outputMode, target, only, ledger };
 }
@@ -167,7 +145,6 @@ export interface AuditOutcome {
 export type AuditorRuntime = {
 	now: () => number;
 	audit: (input: { target: string; only: string | null; ledger: string | null }) => Promise<AuditOutcome>;
-	stationMap: (input: { target: string; ledger: string | null }) => Promise<StationMapOutcome>;
 };
 
 /** Default ledger path for a target: docs/cli-audits/<cli-name>/audit.md. */
@@ -224,29 +201,6 @@ export function createDefaultAuditorRuntime(
 				ledgerPath,
 			};
 		},
-		stationMap: async ({ target, ledger }) => {
-			const targetRoot = resolve(target);
-			const outcome = await runStationMapAudit({ targetRoot });
-			if (!outcome.catalogDetected) return outcome;
-
-			const ledgerPath = ledger ?? defaultLedgerPath(targetRoot, outcome.target);
-			const ledgerState = await readLedgerFile(ledgerPath, outcome.target);
-			for (const finding of outcome.findings) {
-				upsertFinding(ledgerState, {
-					clauseId: "station-map",
-					kind: "station",
-					summary: finding.summary,
-					station: {
-						stationId: finding.stationId,
-						command: finding.command,
-						findingKind: finding.findingKind,
-					},
-				});
-			}
-			await writeLedgerFile(ledgerPath, ledgerState);
-
-			return { ...outcome, ledgerPath };
-		},
 		...overrides,
 	};
 }
@@ -254,7 +208,6 @@ export function createDefaultAuditorRuntime(
 // --- command result ---
 
 interface AuditResult {
-	report_kind: "audit";
 	run_id: string;
 	duration_ms: number;
 	exit_code: number;
@@ -266,26 +219,8 @@ interface AuditResult {
 	ledger_path?: string;
 }
 
-interface StationMapResult {
-	report_kind: "station-map";
-	run_id: string;
-	duration_ms: number;
-	exit_code: number;
-	action: string;
-	target: string;
-	lane_detected: boolean;
-	catalog_detected: boolean;
-	skip_reason?: string;
-	catalog_path?: string;
-	evidence_path?: string;
-	completeness_claim?: string;
-	station_map?: StationMapOutcome["stationMap"];
-	findings: StationFinding[];
-	ledger_path?: string;
-}
-
 async function runAudit(input: {
-	parsed: Extract<ParsedAuditorCommand, { kind: "audit" }>;
+	parsed: Extract<ParsedAuditCommand, { kind: "audit" }>;
 	runtime: AuditorRuntime;
 	runId: string;
 	startedAt: number;
@@ -297,7 +232,6 @@ async function runAudit(input: {
 	});
 	const hasFinding = outcome.findings.length > 0;
 	return {
-		report_kind: "audit",
 		run_id: input.runId,
 		duration_ms: input.runtime.now() - input.startedAt,
 		exit_code: hasFinding ? 1 : 0,
@@ -314,47 +248,13 @@ async function runAudit(input: {
 	};
 }
 
-async function runStationMapCommand(input: {
-	parsed: Extract<ParsedAuditorCommand, { kind: "station-map" }>;
-	runtime: AuditorRuntime;
-	runId: string;
-	startedAt: number;
-}): Promise<StationMapResult> {
-	const outcome = await input.runtime.stationMap({
-		target: input.parsed.target,
-		ledger: input.parsed.ledger,
-	});
-	const hasFinding = outcome.findings.length > 0;
-	return {
-		report_kind: "station-map",
-		run_id: input.runId,
-		duration_ms: input.runtime.now() - input.startedAt,
-		exit_code: hasFinding ? 1 : 0,
-		action: hasFinding
-			? "station_findings_present"
-			: outcome.skipReason
-				? "station_map_skipped"
-				: "declared_branch_coverage_clean",
-		target: outcome.target,
-		lane_detected: outcome.laneDetected,
-		catalog_detected: outcome.catalogDetected,
-		skip_reason: outcome.skipReason,
-		catalog_path: outcome.catalogPath,
-		evidence_path: outcome.evidencePath,
-		completeness_claim: outcome.stationMap?.completeness_claim,
-		station_map: outcome.stationMap,
-		findings: outcome.findings,
-		ledger_path: outcome.ledgerPath,
-	};
-}
-
 // --- output ---
 
 function clauseKindLabel(clauseId: string): string {
 	return getClause(clauseId)?.kind ?? "?";
 }
 
-function renderPlainAudit(result: AuditResult): string {
+function renderPlain(result: AuditResult): string {
 	if (result.skip_reason && result.findings.length === 0) {
 		return `• ${result.target}: ${result.skip_reason}\n`;
 	}
@@ -369,34 +269,7 @@ function renderPlainAudit(result: AuditResult): string {
 	return `${lines.join("\n")}\n`;
 }
 
-function renderPlainStationMap(result: StationMapResult): string {
-	if (result.skip_reason && result.findings.length === 0) {
-		return `• ${result.target}: ${result.skip_reason}\n`;
-	}
-	if (result.findings.length === 0) {
-		return `${result.target}: Station Map clean (${result.completeness_claim ?? "no catalog"})\n`;
-	}
-	const lines: string[] = [`${result.target}: ${result.findings.length} station finding(s)`];
-	for (const finding of result.findings) {
-		lines.push(`  [${finding.findingKind}] ${finding.stationId}: ${finding.summary}`);
-	}
-	if (result.ledger_path) lines.push(`  ledger: ${result.ledger_path}`);
-	return `${lines.join("\n")}\n`;
-}
-
-type AuditorCommandResult = AuditResult | StationMapResult;
-
-function renderPlain(result: AuditorCommandResult): string {
-	return result.report_kind === "audit"
-		? renderPlainAudit(result)
-		: renderPlainStationMap(result);
-}
-
-function writeResult(
-	stdout: CliWriter,
-	result: AuditorCommandResult,
-	outputMode: OutputMode,
-): void {
+function writeResult(stdout: CliWriter, result: AuditResult, outputMode: OutputMode): void {
 	if (outputMode === "json") {
 		if (result.exit_code === 0) {
 			writeJsonEnvelope(
@@ -408,19 +281,16 @@ function writeResult(
 		}
 		writeJsonEnvelope(
 			stdout,
-				createCliRuntimeErrorEnvelope({
+			createCliRuntimeErrorEnvelope({
+				run_id: result.run_id,
+				process_exit_code: result.exit_code,
+				error: {
 					run_id: result.run_id,
-					process_exit_code: result.exit_code,
-					error: {
-						run_id: result.run_id,
-						code: "findings_present",
-					message:
-						result.report_kind === "audit"
-							? "Lane-contract findings present; see findings[] and the ledger."
-							: "Station Map findings present; see findings[] and the ledger.",
-						exit_code: result.exit_code,
-						severity: "warning",
-						recoverability: "repair_state",
+					code: "findings_present",
+					message: "Lane-contract findings present; see findings[] and the ledger.",
+					exit_code: result.exit_code,
+					severity: "warning",
+					recoverability: "repair_state",
 					retryable: false,
 				},
 				data: result,
@@ -430,15 +300,6 @@ function writeResult(
 		return;
 	}
 	stdout.write(renderPlain(result));
-}
-
-function renderAuditorHelp(): string {
-	return [
-		renderCommandUsage(auditorContracts.audit).trimEnd(),
-		"",
-		renderCommandUsage(auditorContracts["station-map"]).trimEnd(),
-		"",
-	].join("\n");
 }
 
 function inferOutputMode(argv: readonly string[]): OutputMode {
@@ -510,7 +371,7 @@ export async function runAuditorCli(
 	const runId = parsedDiagnostics.options.runId;
 	const startedAt = parsedDiagnostics.options.startedAtMs;
 
-	let parsed: ParsedAuditorCommand;
+	let parsed: ParsedAuditCommand;
 	try {
 		parsed = parseAuditorArgv(parsedDiagnostics.argv);
 	} catch (error) {
@@ -529,16 +390,13 @@ export async function runAuditorCli(
 		return 0;
 	}
 	if (parsed.kind === "help") {
-		stdout.write(renderAuditorHelp());
+		stdout.write(renderCommandUsage(auditorContracts.audit));
 		return 0;
 	}
 
-	let result: AuditorCommandResult;
+	let result: AuditResult;
 	try {
-		result =
-			parsed.kind === "audit"
-				? await runAudit({ parsed, runtime, runId, startedAt })
-				: await runStationMapCommand({ parsed, runtime, runId, startedAt });
+		result = await runAudit({ parsed, runtime, runId, startedAt });
 	} catch (error) {
 		return emitUsageError({
 			error,

@@ -6,8 +6,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	discoverRepo,
 	parseWorktreePorcelain,
+	type GitRunner,
 } from "../src/discovery.ts";
-import { fakeGitRunner } from "./support.ts";
 
 describe("agent-worktree discovery", () => {
 	test("parses porcelain worktree output with main and linked entries", () => {
@@ -73,3 +73,12 @@ branch refs/heads/feat/x
 		expect(discovery.storeRoot).toBe(join(root, ".agent-worktree"));
 	});
 });
+
+function fakeGitRunner(outputs: Record<string, string>): GitRunner {
+	return async (args) => {
+		const stdout = outputs[args.join(" ")];
+		return stdout === undefined
+			? { ok: false, stdout: "", stderr: "missing fake output", code: 1 }
+			: { ok: true, stdout, stderr: "", code: 0 };
+	};
+}

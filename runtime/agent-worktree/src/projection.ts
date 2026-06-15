@@ -11,7 +11,9 @@ export const PROJECTION_MODES = ["summary", "detail"] as const;
 export type ProjectionMode = (typeof PROJECTION_MODES)[number];
 
 /**
- * Named field sets for read-command density controls.
+ * Named field sets for future read-command density controls.
+ *
+ * reserved: v2 --fields projection for doctor, list, status, and handoff.
  */
 export const PROJECTION_FIELD_SETS = [
 	"default",
@@ -49,7 +51,7 @@ export interface ProjectionOptions {
 	mode: ProjectionMode;
 	/** Maximum number of records returned by a collection command. */
 	limit: number;
-	/** Field groups requested by projection flags. */
+	/** reserved: v2 --fields field groups. */
 	fields: readonly ProjectionFieldSet[];
 }
 

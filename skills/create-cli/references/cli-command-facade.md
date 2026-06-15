@@ -28,18 +28,12 @@ as the enforcement backend.
 - Contract grammar, drift checks, usage helpers, discovery projection, and JSON
   writer mechanics:
   `runtime/cli-command-facade/src/command-facade.ts`
-- Branch Station model and Station Map projection:
-  `runtime/cli-command-facade/src/station-map.ts`
 - Diagnostics mechanics:
   `runtime/cli-command-facade/src/cli-diagnostics.ts`
 - Test-support subpath:
   `runtime/cli-command-facade/src/testing.ts`
 - Package tests and fixtures:
   `runtime/cli-command-facade/tests/command-facade.test.ts`
-- Cross-package Station Map report:
-  `skills/cli-execution-auditor/src/station-map.ts`
-  This path appears here because the facade owns the generic Station Map model;
-  the auditor owns the cross-package report that applies it to target CLIs.
 
 ## Workflow
 
@@ -54,10 +48,6 @@ as the enforcement backend.
   - Test owner.
 - Read the owner paths above for exact runtime shape.
 - Emit or update the package-owned command contract in the consuming package.
-- For new or expanded facade-backed CLIs, name the initial Branch Station ids
-  in the plan before implementation writes code.
-- Scaffold a package-owned Branch Station Catalog beside `command-contract.ts`
-  before runner behavior or process integration rows.
 - Validate at construction with the facade runtime.
 - Use the no-throw parse path when an autonomous loop needs repair hints.
 - Stop and hand off when validation returns an issue with no known correction.
@@ -73,9 +63,6 @@ as the enforcement backend.
 - Cover public argv acceptance and rejection.
 - Cover command semantics through runtime probes.
 - Assert package-owned result vocabulary from package-owned constants.
-- For Branch Station work, prove the Station Map only claims Declared Branch
-  Coverage and reports missing, drifted, skipped, or declared-unreachable
-  stations mechanically.
 
 ## Coach-Filled Gaps
 

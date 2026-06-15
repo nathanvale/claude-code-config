@@ -513,17 +513,8 @@ export async function recordSkillFeedbackReceipt(
 
 	const envelope = createCliRuntimeSuccessEnvelope({
 		run_id: runId,
-		data: {
-			contract: SKILL_FEEDBACK_CONTRACT_ID,
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-			...redacted,
-		},
-	}) satisfies CliRuntimeSuccessEnvelope<
-		SoftwareLearningReport & {
-			contract: typeof SKILL_FEEDBACK_CONTRACT_ID;
-			schema_version: typeof SKILL_FEEDBACK_SCHEMA_VERSION;
-		}
-	>;
+		data: redacted,
+	}) satisfies CliRuntimeSuccessEnvelope<SoftwareLearningReport>;
 	return {
 		exitCode: 0,
 		stdout: `${JSON.stringify(envelope)}\n`,
@@ -739,7 +730,7 @@ export async function reviewSkillFeedbackInbox(
 				hint: readTarget.hint,
 				contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 				data: {
-					read_target_failure: {
+					read_target: {
 						explicit: readTarget.explicit,
 						target_path: readTarget.seedPath,
 						...(readTarget.gitExitCode === undefined
@@ -753,114 +744,57 @@ export async function reviewSkillFeedbackInbox(
 	const repoRoot = readTarget.repoRoot;
 	try {
 		const inbox = await readReviewInbox(repoRoot, runtime);
-		const pilotStartedAt =
-			inbox.inboxRootStatus === "unsafe"
-				? undefined
-				: await readPilotStartedAt(repoRoot, runtime);
+		const pilotStartedAt = await readPilotStartedAt(repoRoot, runtime);
 		const data = buildReviewResultData({
 			inbox,
 			nowIso: runtime.nowIso(),
 			pilotStartedAt,
 			readTarget,
 		});
-		return reviewProcessResult(runId, data, options.plain === true);
-	} catch (error) {
-		return reviewFailedError(runId, error);
-	}
-}
-
-function reviewProcessResult(
-	runId: string,
-	data: ReviewResultData,
-	plain: boolean,
-): SkillFeedbackProcessResult {
-	if (plain) return reviewPlainResult(data);
-	if (data.inbox_status === "unsafe") return reviewUnsafeResult(runId, data);
-	return reviewSuccessResult(runId, data);
-}
-
-function reviewPlainResult(data: ReviewResultData): SkillFeedbackProcessResult {
-	return {
-		exitCode: data.inbox_status === "unsafe" ? RUNTIME_FAILURE_EXIT_CODE : 0,
-		stdout: renderPlainReview(data),
-		stderr: "",
-	};
-}
-
-function reviewUnsafeResult(
-	runId: string,
-	data: ReviewResultData,
-): SkillFeedbackProcessResult {
-	return errorResult(
-		runId,
-		RUNTIME_FAILURE_EXIT_CODE,
-		"review_inbox_unsafe",
-		"Skill-feedback review inbox is unsafe.",
-		{
-			recoverability: "repair_state",
-			hint: data.next_action.summary,
-			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+		if (options.plain) {
+			return {
+				exitCode: 0,
+				stdout: renderPlainReview(data),
+				stderr: "",
+			};
+		}
+		const actionId =
+			data.open_items.length > 0
+				? "inspect-open-items"
+				: "review-complete";
+		const envelope = createCliRuntimeSuccessEnvelope({
+			run_id: runId,
 			data,
-		},
-	);
-}
-
-function reviewSuccessResult(
-	runId: string,
-	data: ReviewResultData,
-): SkillFeedbackProcessResult {
-	const actionId =
-		data.open_items.length > 0 ? "inspect-open-items" : "review-complete";
-	const envelope = createCliRuntimeSuccessEnvelope({
-		run_id: runId,
-		data,
-		runtime_actions: [
-			{
-				id: actionId,
-				summary:
-					data.open_items.length > 0
-						? "Inspect open skill-feedback evidence."
-						: "No source change is suggested by this review.",
-				side_effects: ["read"],
-			},
-		],
-		continuation: { next_action_id: actionId },
-	}) satisfies CliRuntimeSuccessEnvelope<ReviewResultData>;
-	return {
-		exitCode: 0,
-		stdout: `${JSON.stringify(envelope)}\n`,
-		stderr: "",
-	};
-}
-
-function reviewFailedError(
-	runId: string,
-	error: unknown,
-): SkillFeedbackProcessResult {
-	if (isPermissionErrorCode(error)) {
+			runtime_actions: [
+				{
+					id: actionId,
+					summary:
+						data.open_items.length > 0
+							? "Inspect open skill-feedback evidence."
+							: "No source change is suggested by this review.",
+					side_effects: ["read"],
+				},
+			],
+			continuation: { next_action_id: actionId },
+		}) satisfies CliRuntimeSuccessEnvelope<ReviewResultData>;
+		return {
+			exitCode: 0,
+			stdout: `${JSON.stringify(envelope)}\n`,
+			stderr: "",
+		};
+	} catch {
 		return errorResult(
 			runId,
 			RUNTIME_FAILURE_EXIT_CODE,
-			"review_inbox_permission_denied",
-			"Skill-feedback review could not read the inbox because permissions denied access.",
+			"review_failed",
+			"Skill-feedback review could not read the inbox.",
 			{
 				recoverability: "repair_state",
-				hint: "Inspect .skill-feedback/ ownership and permissions before retrying.",
+				hint: "Inspect .skill-feedback/ files and remove invalid report artifacts before retrying.",
 				contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			},
 		);
 	}
-	return errorResult(
-		runId,
-		RUNTIME_FAILURE_EXIT_CODE,
-		"review_failed",
-		"Skill-feedback review could not read the inbox.",
-		{
-			recoverability: "repair_state",
-			hint: "Inspect .skill-feedback/ files and remove invalid report artifacts before retrying.",
-			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
-		},
-	);
 }
 
 export async function healthSkillFeedbackInbox(
@@ -888,19 +822,18 @@ async function readHealthProcessResult(
 ): Promise<SkillFeedbackProcessResult> {
 	try {
 		const inbox = await readReviewInbox(readTarget.repoRoot, runtime);
-			return healthProcessResult(
-				runId,
-				buildHealthResultData({
-					inbox,
-					nowIso: runtime.nowIso(),
-					readTarget,
-				}),
-				plain,
-			);
-		} catch (error) {
-			return healthFailedError(runId, error);
-		}
+		return healthProcessResult(
+			runId,
+			buildHealthResultData({
+				inbox,
+				nowIso: runtime.nowIso(),
+			}),
+			plain,
+		);
+	} catch {
+		return healthFailedError(runId);
 	}
+}
 
 function healthReadTargetError(
 	runId: string,
@@ -913,13 +846,13 @@ function healthReadTargetError(
 		readTarget.message,
 		{
 			recoverability: "repair_state",
-				hint: readTarget.hint,
-				contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
-				data: {
-					read_target_failure: {
-						explicit: readTarget.explicit,
-						target_path: readTarget.seedPath,
-						...(readTarget.gitExitCode === undefined
+			hint: readTarget.hint,
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			data: {
+				read_target: {
+					explicit: readTarget.explicit,
+					target_path: readTarget.seedPath,
+					...(readTarget.gitExitCode === undefined
 						? {}
 						: { git_exit_code: readTarget.gitExitCode }),
 				},
@@ -987,23 +920,7 @@ function healthSuccessResult(
 	};
 }
 
-function healthFailedError(
-	runId: string,
-	error: unknown,
-): SkillFeedbackProcessResult {
-	if (isPermissionErrorCode(error)) {
-		return errorResult(
-			runId,
-			RUNTIME_FAILURE_EXIT_CODE,
-			"health_inbox_permission_denied",
-			"Skill-feedback health could not read the inbox because permissions denied access.",
-			{
-				recoverability: "repair_state",
-				hint: "Inspect .skill-feedback/ ownership and permissions before retrying.",
-				contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
-			},
-		);
-	}
+function healthFailedError(runId: string): SkillFeedbackProcessResult {
 	return errorResult(
 		runId,
 		RUNTIME_FAILURE_EXIT_CODE,
@@ -1179,15 +1096,6 @@ type InboxJsonFileScan = {
 	invalidPaths: string[];
 };
 
-function markSkippedUnsafePath(
-	state: InboxJsonFileScan,
-	repoRoot: string,
-	artifactPath: string,
-): void {
-	state.skippedUnsafeCount += 1;
-	state.skippedUnsafePaths.push(relative(repoRoot, artifactPath));
-}
-
 function emptyReviewInboxRead(): ReviewInboxRead {
 	return {
 		primaryReports: [],
@@ -1209,18 +1117,14 @@ async function readReviewInbox(
 		skippedUnsafeCount: scan.skippedUnsafeCount,
 		invalidCount: scan.invalidPaths.length,
 	};
-		for (const file of scan.files) {
-			let raw: unknown;
-			try {
-				raw = JSON.parse(await runtime.readText(file.path)) as unknown;
-			} catch (error) {
-				if (isPermissionErrorCode(error)) {
-					state.skippedUnsafeCount += 1;
-					continue;
-				}
-				state.invalidCount += 1;
-				continue;
-			}
+	for (const file of scan.files) {
+		let raw: unknown;
+		try {
+			raw = JSON.parse(await runtime.readText(file.path)) as unknown;
+		} catch {
+			state.invalidCount += 1;
+			continue;
+		}
 		const normalized = normalizeReport(raw);
 		if (normalized.kind !== "ok") {
 			state.invalidCount += 1;
@@ -1264,23 +1168,16 @@ async function scanSafeInboxJsonFiles(
 	if (!inboxStats) return state;
 	if (inboxStats.isSymbolicLink() || !inboxStats.isDirectory()) {
 		state.rootStatus = "unsafe";
-		markSkippedUnsafePath(state, repoRoot, inboxPath);
+		state.skippedUnsafeCount += 1;
+		state.skippedUnsafePaths.push(relative(repoRoot, inboxPath));
 		return state;
 	}
-	let repoReal: string;
-	let inboxReal: string;
-	try {
-		repoReal = await runtime.realpathPath(repoRoot);
-		inboxReal = await runtime.realpathPath(inboxPath);
-	} catch (error) {
-		if (!isPermissionErrorCode(error)) throw error;
-		state.rootStatus = "unsafe";
-		markSkippedUnsafePath(state, repoRoot, inboxPath);
-		return state;
-	}
+	const repoReal = await runtime.realpathPath(repoRoot);
+	const inboxReal = await runtime.realpathPath(inboxPath);
 	if (!isContainedPath(repoReal, inboxReal)) {
 		state.rootStatus = "unsafe";
-		markSkippedUnsafePath(state, repoRoot, inboxPath);
+		state.skippedUnsafeCount += 1;
+		state.skippedUnsafePaths.push(relative(repoRoot, inboxPath));
 		return state;
 	}
 	state.rootStatus = "readable";
@@ -1313,19 +1210,14 @@ async function scanLowSignalInboxDirectory(input: {
 	const stats = await lstatOptional(lowSignalPath, input.runtime);
 	if (!stats) return;
 	if (stats.isSymbolicLink() || !stats.isDirectory()) {
-		markSkippedUnsafePath(input.state, input.repoRoot, lowSignalPath);
+		input.state.skippedUnsafeCount += 1;
+		input.state.skippedUnsafePaths.push(relative(input.repoRoot, lowSignalPath));
 		return;
 	}
-	let lowSignalReal: string;
-	try {
-		lowSignalReal = await input.runtime.realpathPath(lowSignalPath);
-	} catch (error) {
-		if (!isPermissionErrorCode(error)) throw error;
-		markSkippedUnsafePath(input.state, input.repoRoot, lowSignalPath);
-		return;
-	}
+	const lowSignalReal = await input.runtime.realpathPath(lowSignalPath);
 	if (!isContainedPath(input.inboxReal, lowSignalReal)) {
-		markSkippedUnsafePath(input.state, input.repoRoot, lowSignalPath);
+		input.state.skippedUnsafeCount += 1;
+		input.state.skippedUnsafePaths.push(relative(input.repoRoot, lowSignalPath));
 		return;
 	}
 	await scanSafeJsonDirectory({
@@ -1349,13 +1241,9 @@ async function scanSafeJsonDirectory(input: {
 	let entries: string[];
 	try {
 		entries = await readdir(input.directoryPath);
-		} catch (error) {
-			if (isNodeErrorCode(error, "ENOENT")) return;
-			if (isPermissionErrorCode(error)) {
-				markSkippedUnsafePath(input.state, input.repoRoot, input.directoryPath);
-				return;
-			}
-			throw error;
+	} catch (error) {
+		if (isNodeErrorCode(error, "ENOENT")) return;
+		throw error;
 	}
 	for (const entry of entries.sort()) {
 		const reportPath = join(input.directoryPath, entry);
@@ -1365,29 +1253,17 @@ async function scanSafeJsonDirectory(input: {
 			}
 			continue;
 		}
-		let stats: Stats | undefined;
-		try {
-			stats = await lstatOptional(reportPath, input.runtime);
-		} catch (error) {
-			if (!isPermissionErrorCode(error)) throw error;
-			markSkippedUnsafePath(input.state, input.repoRoot, reportPath);
-			continue;
-		}
+		const stats = await lstatOptional(reportPath, input.runtime);
 		if (!stats) continue;
 		if (stats.isSymbolicLink() || !stats.isFile()) {
-			markSkippedUnsafePath(input.state, input.repoRoot, reportPath);
+			input.state.skippedUnsafeCount += 1;
+			input.state.skippedUnsafePaths.push(relative(input.repoRoot, reportPath));
 			continue;
 		}
-		let reportReal: string;
-		try {
-			reportReal = await input.runtime.realpathPath(reportPath);
-		} catch (error) {
-			if (!isPermissionErrorCode(error)) throw error;
-			markSkippedUnsafePath(input.state, input.repoRoot, reportPath);
-			continue;
-		}
+		const reportReal = await input.runtime.realpathPath(reportPath);
 		if (!isContainedPath(input.inboxReal, reportReal)) {
-			markSkippedUnsafePath(input.state, input.repoRoot, reportPath);
+			input.state.skippedUnsafeCount += 1;
+			input.state.skippedUnsafePaths.push(relative(input.repoRoot, reportPath));
 			continue;
 		}
 		input.state.files.push({
@@ -1680,7 +1556,6 @@ function reviewReadTargetData(
 function buildHealthResultData(input: {
 	inbox: ReviewInboxRead;
 	nowIso: string;
-	readTarget: Extract<ReadTargetResolution, { ok: true }>;
 }): HealthResultData {
 	const primaryReports = input.inbox.primaryReports;
 	const lowSignalReports = input.inbox.lowSignalReports;
@@ -1704,7 +1579,6 @@ function buildHealthResultData(input: {
 			...lowSignalReports.map((entry) => entry.report),
 		]),
 	);
-	const readTarget = healthReadTargetData(input.readTarget, inboxStatus);
 	return {
 		contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 		schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
@@ -1721,26 +1595,6 @@ function buildHealthResultData(input: {
 		claim_readiness: claimReadiness,
 		correlation,
 		next_action: nextAction,
-		...(readTarget ? { read_target: readTarget } : {}),
-	};
-}
-
-function healthReadTargetData(
-	resolution: Extract<ReadTargetResolution, { ok: true }>,
-	inboxStatus: HealthInboxStatus,
-): ReviewReadTarget | undefined {
-	if (
-		!resolution.explicit &&
-		inboxStatus !== "unsafe" &&
-		inboxStatus !== "partially_readable"
-	) {
-		return undefined;
-	}
-	return {
-		explicit: resolution.explicit,
-		repo_root: resolution.repoRoot,
-		inbox_path: resolution.inboxPath,
-		target_path: resolution.seedPath,
 	};
 }
 
@@ -1769,14 +1623,11 @@ function newestGeneratedTs<Key extends keyof HealthResultData["newest"]>(
 	key: Key,
 ): Partial<Pick<HealthResultData["newest"], Key>> {
 	const values = reports
-		.map((report) => ({
-			value: report.generated_ts,
-			epochMs: Date.parse(report.generated_ts),
-		}))
-		.filter((entry) => Number.isFinite(entry.epochMs))
-		.sort((left, right) => left.epochMs - right.epochMs);
+		.map((report) => report.generated_ts)
+		.filter((value) => Number.isFinite(Date.parse(value)))
+		.sort();
 	if (values.length === 0) return {};
-	return { [key]: values[values.length - 1]?.value } as Partial<
+	return { [key]: values[values.length - 1] } as Partial<
 		Pick<HealthResultData["newest"], Key>
 	>;
 }
@@ -3042,10 +2893,6 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
 	);
 }
 
-function isPermissionErrorCode(error: unknown): boolean {
-	return isNodeErrorCode(error, "EACCES") || isNodeErrorCode(error, "EPERM");
-}
-
 async function prepareReceipt(
 	rawReceipt: unknown,
 	runtime: SkillFeedbackRuntime,
@@ -3719,7 +3566,7 @@ function parseReadOnlyRepoFlag(
 	index: number,
 ): ParsedReadOnlyFlag {
 	const value = args[index + 1];
-	if (value === undefined || value.startsWith("--") || value.trim() === "") {
+	if (value === undefined || value.startsWith("--")) {
 		return { ok: false, message: "--repo requires a value." };
 	}
 	return {

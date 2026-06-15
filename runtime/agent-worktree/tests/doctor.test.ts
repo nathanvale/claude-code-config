@@ -4,9 +4,8 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { doctorMapFromDiscovery, runDoctor } from "../src/doctor.ts";
-import type { RepoDiscovery } from "../src/discovery.ts";
+import type { GitRunner, RepoDiscovery } from "../src/discovery.ts";
 import { createFileStore } from "../src/store.ts";
-import { fakeGitRunner } from "./support.ts";
 
 describe("agent-worktree doctor", () => {
 	test("returns a blocked map when git root cannot be read", async () => {
@@ -166,3 +165,12 @@ branch refs/heads/main
 		);
 	});
 });
+
+function fakeGitRunner(outputs: Record<string, string>): GitRunner {
+	return async (args) => {
+		const stdout = outputs[args.join(" ")];
+		return stdout === undefined
+			? { ok: false, stdout: "", stderr: "missing fake output", code: 1 }
+			: { ok: true, stdout, stderr: "", code: 0 };
+	};
+}

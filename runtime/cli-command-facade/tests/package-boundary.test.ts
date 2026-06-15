@@ -24,8 +24,6 @@ describe("CLI command facade package boundary", () => {
 	test("keeps the public root value export inventory stable", () => {
 		expect(Object.keys(facade).sort()).toEqual([
 			"AGENT_HINT_ACTIONS",
-			"BRANCH_STATION_CLASSIFICATIONS",
-			"BRANCH_STATION_EVIDENCE_STATUSES",
 			"CLI_DIAGNOSTIC_FLAGS",
 			"CLI_WRITER_CONTRACT_EXIT_CODE",
 			"COMMAND_FACADE_AUDIENCES",
@@ -41,7 +39,6 @@ describe("CLI command facade package boundary", () => {
 			"DIAGNOSTIC_TRAIL_SURFACE_KINDS",
 			"RUNTIME_ERROR_RECOVERABILITIES",
 			"RUNTIME_ERROR_SEVERITIES",
-			"STATION_MAP_COMPLETENESS_CLAIM",
 			"cliWriterContractErrorProperties",
 			"composeAliasArgv",
 			"configureCliDiagnostics",
@@ -50,7 +47,6 @@ describe("CLI command facade package boundary", () => {
 			"createCliRuntimeSuccessEnvelope",
 			"defineCommandFacadeContract",
 			"emitCliDiagnostic",
-			"findBranchStationCatalogDrift",
 			"findCommandDiscoveryTreeDrift",
 			"findCommandFacadeMetadataDrift",
 			"formatEnumFlagError",
@@ -66,7 +62,6 @@ describe("CLI command facade package boundary", () => {
 			"projectCommandDiscoveryFlag",
 			"projectCommandDiscoveryResultContract",
 			"projectCommandDiscoveryTree",
-			"projectStationMap",
 			"projectUsageToRoute",
 			"projectUsagesToRoute",
 			"recordCliDomainRunId",
