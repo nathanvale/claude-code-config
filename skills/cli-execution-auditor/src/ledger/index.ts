@@ -11,35 +11,42 @@
 // CODE consumer exists (KTD2); this writer is format-compatible so that
 // extraction is mechanical when warranted.
 
-import { type FindingSignatureInput, renderInvocation, signature } from "./signature.ts";
+import {
+	type FindingSignatureInput,
+	renderInvocation,
+	signature,
+	type StationFindingSignatureInput,
+} from "./signature.ts";
 
 // --- finding model ---
 
 /** Finding lifecycle states (the findings-table subset of R6). */
 export type FindingStatus = "open" | "resolved" | "rejected" | "duplicate" | "superseded";
+export type FindingKind = "static" | "surface" | "station";
 
 /** Active findings live in Open Findings; everything else in Finding History. */
 const ACTIVE_STATUSES: ReadonlySet<FindingStatus> = new Set(["open"]);
 
 /**
- * The clause-derived re-check (R7): a structured reference to the clause id +
- * invocation that generated the finding, used to re-run the CLAUSE ASSERTION on
- * close — never free text authored from the symptom.
+ * Structured re-check anchor: clause + invocation for lane findings, or station
+ * id + command + finding kind for Station Map findings.
  */
 export interface FindingRecheck {
 	clauseId: string;
 	/** Canonical invocation argv; [] for a static clause. */
 	argv: readonly string[];
+	/** Station anchor for Station Map findings. */
+	station?: StationFindingSignatureInput;
 }
 
 export interface Finding {
 	/** Stable dedupe key (clause id + canonical invocation). */
 	signature: string;
 	clauseId: string;
-	kind: "static" | "surface";
+	kind: FindingKind;
 	status: FindingStatus;
 	summary: string;
-	/** Structured clause-derived re-check (R7), serialized as a reference. */
+	/** Structured re-check anchor, serialized as a reference. */
 	recheck: FindingRecheck;
 	/** Resolution evidence or reason — required when status is not open (R6). */
 	resolution?: string;
@@ -50,10 +57,12 @@ export interface Finding {
 /** What a caller upserts: a clause violation it just observed. */
 export interface FindingInput {
 	clauseId: string;
-	kind: "static" | "surface";
+	kind: FindingKind;
 	summary: string;
 	/** Invocation that surfaced it; [] for a static clause. */
-	argv: readonly string[];
+	argv?: readonly string[];
+	/** Station anchor for Station Map findings. */
+	station?: StationFindingSignatureInput;
 }
 
 // --- in-memory ledger (read → mutate → write) ---
@@ -69,7 +78,11 @@ export function createLedger(skillName: string): LedgerState {
 }
 
 function recheckOf(input: FindingSignatureInput): FindingRecheck {
-	return { clauseId: input.clauseId, argv: [...input.argv] };
+	return {
+		clauseId: input.clauseId,
+		argv: [...(input.argv ?? [])],
+		...(input.station ? { station: input.station } : {}),
+	};
 }
 
 /**
@@ -81,7 +94,11 @@ function recheckOf(input: FindingSignatureInput): FindingRecheck {
  * Returns the resulting finding.
  */
 export function upsertFinding(ledger: LedgerState, input: FindingInput): Finding {
-	const sig = signature({ clauseId: input.clauseId, argv: input.argv });
+	const sig = signature({
+		clauseId: input.clauseId,
+		argv: input.argv ?? [],
+		station: input.station,
+	});
 	const existing = ledger.findings.get(sig);
 	if (existing) {
 		// Dedupe: refresh the human summary, keep state + history intact.
@@ -94,7 +111,11 @@ export function upsertFinding(ledger: LedgerState, input: FindingInput): Finding
 		kind: input.kind,
 		status: "open",
 		summary: input.summary,
-		recheck: recheckOf({ clauseId: input.clauseId, argv: input.argv }),
+	recheck: recheckOf({
+		clauseId: input.clauseId,
+		argv: input.argv,
+		station: input.station,
+	}),
 	};
 	ledger.findings.set(sig, finding);
 	return finding;
@@ -140,6 +161,9 @@ function bySignature(a: Finding, b: Finding): number {
 // --- Markdown serialization (findings-table subset; format-compatible R6) ---
 
 function serializeRecheck(recheck: FindingRecheck): string {
+	if (recheck.station) {
+		return `station=${recheck.station.stationId} command=${recheck.station.command} finding=${recheck.station.findingKind}`;
+	}
 	// A structured reference, not free text: clause id + canonical invocation.
 	return `clause=${recheck.clauseId} invocation=\`${renderInvocation(recheck.argv)}\``;
 }
@@ -187,7 +211,7 @@ export function renderLedger(ledger: LedgerState): string {
 // --- Markdown parse (read an existing ledger back) ---
 
 const FINDING_HEADER =
-	/^- \*\*(?<clauseId>[^*]+)\*\* \((?<kind>static|surface)\) `(?<signature>sig_[0-9a-f]+)` — status: (?<status>open|resolved|rejected|duplicate|superseded)$/;
+	/^- \*\*(?<clauseId>[^*]+)\*\* \((?<kind>static|surface|station)\) `(?<signature>sig_[0-9a-f]+)` — status: (?<status>open|resolved|rejected|duplicate|superseded)$/;
 
 /**
  * Parse a rendered ledger back into state. Tolerant of the documented
@@ -210,7 +234,7 @@ export function parseLedger(skillName: string, markdown: string): LedgerState {
 			current = {
 				signature: header.groups.signature,
 				clauseId: header.groups.clauseId,
-				kind: header.groups.kind as "static" | "surface",
+				kind: header.groups.kind as FindingKind,
 				status: header.groups.status as FindingStatus,
 				summary: "",
 				recheck: { clauseId: header.groups.clauseId, argv: [] },
@@ -226,6 +250,20 @@ export function parseLedger(skillName: string, markdown: string): LedgerState {
 			current.recheck = {
 				clauseId: recheck.groups.c,
 				argv: inv === "(static — no invocation)" ? [] : inv.split(" "),
+			};
+		}
+		const stationRecheck = line.match(
+			/^ {2}- recheck: station=(?<stationId>\S+) command=(?<command>\S+) finding=(?<findingKind>\S+)$/,
+		);
+		if (stationRecheck?.groups) {
+			current.recheck = {
+				clauseId: current.clauseId,
+				argv: [],
+				station: {
+					stationId: stationRecheck.groups.stationId,
+					command: stationRecheck.groups.command,
+					findingKind: stationRecheck.groups.findingKind,
+				},
 			};
 		}
 		const resolution = line.match(/^ {2}- resolution: (?<v>.*)$/);
