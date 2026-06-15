@@ -2,13 +2,13 @@ import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
-import { WT_CONTRACT_ID, WT_SCHEMA_VERSION } from "./model.ts";
+import { WT_COLOR_PALETTE, WT_CONTRACT_ID, WT_SCHEMA_VERSION } from "./model.ts";
 
 /**
  * Public command ids for the wt front door.
  *
- * Owned render verbs (`sync`/`focus`/`color`/`open`) plus delegated worktree
- * verbs (`new`/`rm`/`clean`) that pass through to `@side-quest/git worktree`.
+ * Owned render verbs (`sync`/`focus`/`color`/`open`) plus shared-runtime
+ * worktree verbs (`new`/`rm`/`clean`) powered by `agent-worktree`.
  * `commands` emits machine-readable discovery metadata.
  */
 export type WtCommand =
@@ -32,12 +32,13 @@ type WtCommandContract = CommandFacadeContract<WtCommand, WtAudience, WtMutation
  * product's core safety stop: a manual edit was detected and the sync refused
  * to overwrite it.
  */
-const WT_DIAGNOSTIC_CODES = [
+export const WT_DIAGNOSTIC_CODES = [
 	"usage_error",
 	"drift_blocked",
 	"registry_unreadable",
 	"worktree_list_failed",
-	"delegate_failed",
+	"agent_worktree_blocked",
+	"agent_worktree_failed",
 	"unknown_color",
 	"code_not_found",
 	"write_failed",
@@ -74,8 +75,26 @@ const WT_DRIFT_FAILURE_ACTIONS = [
 	},
 ] as const;
 
+const WT_COLOR_FAILURE_SUMMARY = `Choose one of: ${WT_COLOR_PALETTE.join(", ")}.`;
+
 /**
- * Discovery action advertised when a delegated worktree verb fails.
+ * Discovery actions advertised when `wt color` fails.
+ *
+ * Unknown colors need a palette-selection continuation before the generic
+ * drift-repair fallback, so agents get a concrete next input instead of only a
+ * render recovery path.
+ */
+const WT_COLOR_FAILURE_ACTIONS = [
+	{
+		id: "choose_palette_color",
+		summary: WT_COLOR_FAILURE_SUMMARY,
+		sideEffects: ["read"],
+	},
+	...WT_DRIFT_FAILURE_ACTIONS,
+] as const;
+
+/**
+ * Discovery action advertised when a shared worktree verb fails.
  */
 const WT_DELEGATE_FAILURE_ACTIONS = [
 	{
@@ -87,7 +106,7 @@ const WT_DELEGATE_FAILURE_ACTIONS = [
 
 const renderResultContract = {
 	id: WT_CONTRACT_ID,
-	kind: "wt workspace render or worktree-delegation result.",
+	kind: "wt workspace render or shared worktree lifecycle result.",
 	schema_version: WT_SCHEMA_VERSION,
 } as const satisfies NonNullable<WtCommandContract["resultContract"]>;
 
@@ -112,7 +131,21 @@ const jsonFlag = {
 const forceFlag = {
 	"--force": {
 		type: "boolean",
-		description: "Overwrite a drift-detected workspace, or skip a destructive confirmation.",
+		description: "Overwrite a drift-detected workspace.",
+	},
+} as const;
+
+const destructiveForceFlag = {
+	"--force": {
+		type: "boolean",
+		description: "Confirm destructive worktree removal.",
+	},
+} as const;
+
+const forceRenderFlag = {
+	"--force-render": {
+		type: "boolean",
+		description: "Overwrite a drift-detected workspace after lifecycle completion.",
 	},
 } as const;
 
@@ -197,7 +230,7 @@ export const wtContracts = defineCommandFacadeContract(
 			resultContract: renderResultContract,
 			actionAffordances: {
 				success: WT_SYNC_SUCCESS_ACTIONS,
-				failure: WT_DRIFT_FAILURE_ACTIONS,
+				failure: WT_COLOR_FAILURE_ACTIONS,
 			},
 			previewExemption: {
 				reason: "Writes the registry then re-renders through the drift gate, which previews before overwrite.",
@@ -222,7 +255,7 @@ export const wtContracts = defineCommandFacadeContract(
 		},
 		new: {
 			script: "wt",
-			summary: "Create a worktree via @side-quest/git, then re-render.",
+			summary: "Create a worktree through agent-worktree, then re-render.",
 			usage: ["wt new <branch> --json"],
 			json: true,
 			audience: "agent",
@@ -237,15 +270,15 @@ export const wtContracts = defineCommandFacadeContract(
 				failure: WT_DELEGATE_FAILURE_ACTIONS,
 			},
 			previewExemption: {
-				reason: "Worktree creation is owned by @side-quest/git; wt only re-renders through the drift gate after.",
+				reason: "Worktree creation is owned by agent-worktree; wt only re-renders through the drift gate after.",
 			},
-			flags: { ...repoFlag, ...jsonFlag },
+			flags: { ...repoFlag, ...forceRenderFlag, ...jsonFlag },
 			exitCodes,
 		},
 		rm: {
 			script: "wt",
-			summary: "Remove a worktree via @side-quest/git, then re-render.",
-			usage: ["wt rm <branch> --force --json"],
+			summary: "Remove a worktree through agent-worktree, then re-render.",
+			usage: ["wt rm <branch> --force --json", "wt rm <branch> --force --force-render --json"],
 			json: true,
 			audience: "agent",
 			mutation: "destructive",
@@ -259,20 +292,20 @@ export const wtContracts = defineCommandFacadeContract(
 				failure: WT_DELEGATE_FAILURE_ACTIONS,
 			},
 			previewExemption: {
-				reason: "Worktree removal is owned and confirmed by @side-quest/git; wt previews removals before delegating.",
+				reason: "Worktree removal is owned and confirmed by agent-worktree; wt re-renders through the drift gate after.",
 			},
-			flags: { ...repoFlag, ...forceFlag, ...noInputFlag, ...jsonFlag },
+			flags: { ...repoFlag, ...destructiveForceFlag, ...forceRenderFlag, ...noInputFlag, ...jsonFlag },
 			exitCodes,
 		},
 		clean: {
 			script: "wt",
-			summary: "Prune throwaway worktrees via @side-quest/git orphans, then re-render.",
-			usage: ["wt clean --force --json"],
+			summary: "Preview cleanup candidates through agent-worktree.",
+			usage: ["wt clean --json"],
 			json: true,
 			audience: "agent",
-			mutation: "destructive",
-			sideEffects: ["read", "write", "destructive"],
-			executionModes: ["normal"],
+			mutation: "check",
+			sideEffects: ["read", "check"],
+			executionModes: ["check"],
 			outputModes: ["json"],
 			interactivity: "optional",
 			resultContract: renderResultContract,
@@ -280,10 +313,7 @@ export const wtContracts = defineCommandFacadeContract(
 				success: WT_SYNC_SUCCESS_ACTIONS,
 				failure: WT_DELEGATE_FAILURE_ACTIONS,
 			},
-			previewExemption: {
-				reason: "Pruning is owned by @side-quest/git orphans; wt previews the prune set before delegating.",
-			},
-			flags: { ...repoFlag, ...forceFlag, ...noInputFlag, ...jsonFlag },
+			flags: { ...repoFlag, ...jsonFlag },
 			exitCodes,
 		},
 		commands: {

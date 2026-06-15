@@ -3,6 +3,7 @@ import {
 	mkdir,
 	readFile,
 	readdir,
+	realpath,
 	rm,
 	stat,
 	symlink,
@@ -12,8 +13,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
-import type { CloseoutReceipt, Receipt } from "./command-contract";
+import type {
+	CloseoutReceipt,
+	HealthResultData,
+	Receipt,
+	ReviewResultData,
+} from "./command-contract";
 import {
+	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
@@ -23,13 +31,19 @@ import {
 import {
 	closeoutSkillFeedbackReceipt,
 	createDefaultSkillFeedbackRuntime,
+	healthSkillFeedbackInbox,
+	parseHealthArgs,
 	parsePurgeArgs,
 	parseRecordFlags,
+	parseReviewArgs,
 	parseStdinTelemetry,
 	purgeSkillFeedbackInbox,
 	recordSkillFeedbackReceipt,
 	reviewSkillFeedbackInbox,
+	resolveSkillFeedbackReadTarget,
 	runProcessForTest,
+	type SkillFeedbackGitResult,
+	type SkillFeedbackGitRunner,
 	type SkillFeedbackRuntime,
 } from "./skill-feedback-runner";
 
@@ -38,6 +52,33 @@ const GENERATED_TS = "2026-06-11T09:00:00.000Z";
 const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
 	.pathname;
 const REPO_ROOT = new URL("../../..", import.meta.url).pathname;
+
+type TestProcessResult = {
+	command: readonly string[];
+	cwd?: string;
+	stdout: string;
+	stderr: string;
+	exitCode: number;
+};
+
+type V1CloseoutReportInput = {
+	reportId: string;
+	generatedTs: string;
+	skill?: string;
+	evidenceSource?: "driver_closeout" | "hook_capture";
+	captureRuntime?: "claude_stop" | "codex_stop";
+	correlationStatus?: "linked" | "unlinked";
+	skillRunId?: string;
+	skillRunIdProvenance?:
+		| "runtime_owned"
+		| "correlation_owned"
+		| "report_authored";
+};
+
+type ReviewEnvelopeData = Pick<
+	ReviewResultData,
+	"coverage" | "inbox_status" | "read_target"
+>;
 
 const BASE_RECEIPT: Receipt = {
 	skill: "create-skill",
@@ -102,11 +143,51 @@ function stubRuntime(
 ): SkillFeedbackRuntime {
 	return createDefaultSkillFeedbackRuntime({
 		repoRoot: () => root,
+		resolveReadTarget: async (targetPath) => ({
+			ok: true,
+			explicit: targetPath !== undefined,
+			seedPath: targetPath ?? root,
+			repoRoot: root,
+			inboxPath: join(root, ".skill-feedback"),
+		}),
 		checkIgnored: async () => 0,
 		readGitSha: async () => BASE_RECEIPT.git_sha,
 		readSkillVersion: async (skill) => `${skill}@0.1.0`,
 		readStdinTelemetry: async () => ({}),
 		...overrides,
+	});
+}
+
+function stubInboxLstatPermissionDeniedRuntime(
+	root: string,
+	code: "EACCES" | "EPERM",
+): SkillFeedbackRuntime {
+	const baseRuntime = stubRuntime(root);
+	return stubRuntime(root, {
+		lstatPath: async (path) => {
+			if (path === join(root, ".skill-feedback")) {
+				throw Object.assign(new Error("permission denied"), { code });
+			}
+			return baseRuntime.lstatPath(path);
+		},
+	});
+}
+
+function expectPermissionDeniedEnvelope(
+	result: Pick<TestProcessResult, "exitCode" | "stdout">,
+	expected: {
+		errorCode: string;
+		contract: string;
+		schemaVersion: string;
+	},
+): void {
+	expect(result.exitCode).toBe(1);
+	const envelope = parseEnvelope(result.stdout);
+	expect((envelope.error as { code: string }).code).toBe(expected.errorCode);
+	expect(envelope.data).toMatchObject({
+		contract: expected.contract,
+		schema_version: expected.schemaVersion,
+		changed_state: "none",
 	});
 }
 
@@ -151,23 +232,47 @@ async function writeInboxReport(root: string, name: string, value: unknown) {
 	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
 }
 
-function v1CloseoutReport(input: {
-	reportId: string;
-	generatedTs: string;
-	skill?: string;
-	evidenceSource?: "driver_closeout" | "hook_capture";
-	captureRuntime?: "claude_stop" | "codex_stop";
-}) {
+async function writeLowSignalInboxReport(
+	root: string,
+	name: string,
+	value: unknown,
+) {
+	const inbox = join(root, ".skill-feedback", "low-signal");
+	await mkdir(inbox, { recursive: true });
+	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeLowSignalReportBatch(
+	root: string,
+	count: number,
+	reportIdPrefix: string,
+): Promise<void> {
+	for (let index = 0; index < count; index += 1) {
+		await writeLowSignalInboxReport(
+			root,
+			`low-${index}.json`,
+			v1CloseoutReport({
+				reportId: `${reportIdPrefix}-${index}`,
+				generatedTs: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+				skill: "unknown-skill",
+				evidenceSource: "hook_capture",
+				captureRuntime: "codex_stop",
+			}),
+		);
+	}
+}
+
+function v1CloseoutReport(input: V1CloseoutReportInput) {
 	return {
 		schema_version: "1",
 		report_id: input.reportId,
 		untrusted_evidence: true,
 		generated_ts: input.generatedTs,
 		evidence_source: input.evidenceSource ?? "driver_closeout",
-		...(input.captureRuntime
-			? { capture_runtime: input.captureRuntime }
-			: {}),
-		correlation_status: "unlinked",
+		capture_runtime: input.captureRuntime,
+		correlation_status: input.correlationStatus ?? "unlinked",
+		skill_run_id: input.skillRunId,
+		skill_run_id_provenance: input.skillRunIdProvenance,
 		runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
 		report_card: {
 			...BASE_CLOSEOUT,
@@ -177,8 +282,39 @@ function v1CloseoutReport(input: {
 	};
 }
 
-function parseEnvelope(stdout: string): Record<string, unknown> {
-	return JSON.parse(stdout) as Record<string, unknown>;
+async function writeV1CloseoutInboxReport(
+	root: string,
+	name: string,
+	input: V1CloseoutReportInput,
+): Promise<void> {
+	await writeInboxReport(root, name, v1CloseoutReport(input));
+}
+
+function describeProcessResult(result: TestProcessResult): string {
+	return [
+		`command=${result.command.join(" ")}`,
+		...(result.cwd ? [`cwd=${result.cwd}`] : []),
+		`exit=${result.exitCode}`,
+		`stdout=${JSON.stringify(result.stdout)}`,
+		`stderr=${JSON.stringify(result.stderr)}`,
+	].join("\n");
+}
+
+function parseEnvelope(
+	result: TestProcessResult | string,
+): Record<string, unknown> {
+	const stdout = typeof result === "string" ? result : result.stdout;
+	try {
+		return JSON.parse(stdout) as Record<string, unknown>;
+	} catch (error) {
+		const context =
+			typeof result === "string"
+				? `stdout=${JSON.stringify(stdout)}`
+				: describeProcessResult(result);
+		throw new Error(`Could not parse JSON envelope:\n${context}`, {
+			cause: error,
+		});
+	}
 }
 
 function expectReviewCoverage(
@@ -203,21 +339,83 @@ function expectReviewCoverage(
 	expect(data.coverage).toMatchObject(expected);
 }
 
-async function run(command: readonly string[], cwd: string) {
+function parseReviewEnvelopeData(result: TestProcessResult): ReviewEnvelopeData {
+	return parseEnvelope(result).data as ReviewEnvelopeData;
+}
+
+function parseHealthEnvelopeData(
+	result: { stdout: string },
+): HealthResultData {
+	return parseEnvelope(result.stdout).data as HealthResultData;
+}
+
+async function runCliHealth(root: string): Promise<{
+	result: TestProcessResult;
+	data: HealthResultData;
+}> {
+	const result = await runCli(["health"], { cwd: root });
+	return { result, data: parseHealthEnvelopeData(result) };
+}
+
+function expectReviewTotalReports(
+	result: TestProcessResult,
+	totalReports: number,
+): ReviewEnvelopeData {
+	expect(result.exitCode).toBe(0);
+	const data = parseReviewEnvelopeData(result);
+	expect(data.coverage.total_reports).toBe(totalReports);
+	return data;
+}
+
+function expectReadTargetResolutionFailure(
+	result: TestProcessResult,
+	expected: {
+		explicit: boolean;
+		targetPath: string;
+		changedState?: string;
+		contract?: string;
+		schemaVersion?: string;
+	},
+): void {
+	expect(result.exitCode).toBe(1);
+	const envelope = parseEnvelope(result);
+	expect((envelope.error as { code: string }).code).toBe(
+		"read_target_resolution_failed",
+	);
+	expect(envelope.data).toMatchObject({
+		...(expected.changedState ? { changed_state: expected.changedState } : {}),
+		contract: expected.contract ?? SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+		...(expected.schemaVersion
+			? { schema_version: expected.schemaVersion }
+			: {}),
+		read_target_failure: {
+			explicit: expected.explicit,
+			target_path: expected.targetPath,
+		},
+	});
+	expect((envelope.data as Record<string, unknown>).read_target).toBeUndefined();
+}
+
+async function run(
+	command: readonly string[],
+	cwd: string,
+): Promise<TestProcessResult> {
 	const child = Bun.spawn([...command], {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	await new Response(child.stdout).text();
-	await new Response(child.stderr).text();
-	return child.exited;
+	const result = await collectCliResult(child, command, cwd);
+	if (result.exitCode !== 0) {
+		throw new Error(`Test setup command failed:\n${describeProcessResult(result)}`);
+	}
+	return result;
 }
 
 async function runCli(
 	args: readonly string[],
 	options: { stdin?: string; cwd?: string } = {},
-) {
+): Promise<TestProcessResult> {
 	const stdin = options.stdin ?? "";
 	const child = Bun.spawn(
 		[process.execPath, RUNNER_PATH, ...args],
@@ -232,20 +430,45 @@ async function runCli(
 		child.stdin.write(stdin);
 		child.stdin.end();
 	}
-	return collectCliResult(child);
+	return collectCliResult(
+		child,
+		[process.execPath, RUNNER_PATH, ...args],
+		options.cwd,
+	);
 }
 
 async function collectCliResult(child: {
 	stdout: ReadableStream<Uint8Array>;
 	stderr: ReadableStream<Uint8Array>;
 	exited: Promise<number>;
-}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+}, command: readonly string[], cwd?: string): Promise<TestProcessResult> {
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
-	return { stdout, stderr, exitCode };
+	return { command, cwd, stdout, stderr, exitCode };
+}
+
+function fakeGitRunner(
+	outputs: Record<string, SkillFeedbackGitResult | string>,
+): SkillFeedbackGitRunner & { calls: Array<{ args: readonly string[]; cwd: string }> } {
+	const calls: Array<{ args: readonly string[]; cwd: string }> = [];
+	const runner = async (
+		args: readonly string[],
+		options: { cwd: string },
+	): Promise<SkillFeedbackGitResult> => {
+		calls.push({ args: [...args], cwd: options.cwd });
+		const output = outputs[args.join(" ")];
+		if (output === undefined) {
+			return { ok: false, stdout: "", stderr: "missing fake output", code: 1 };
+		}
+		if (typeof output === "string") {
+			return { ok: true, stdout: output, stderr: "", code: 0 };
+		}
+		return output;
+	};
+	return Object.assign(runner, { calls });
 }
 
 function syntheticSecretFixtures(): Array<readonly [string, string]> {
@@ -272,6 +495,45 @@ function syntheticSecretFixtures(): Array<readonly [string, string]> {
 		["glpat", `glpat-${lower}`],
 	];
 }
+
+describe("skill-feedback test harness helpers", () => {
+	test("setup command failures include process context", async () => {
+		const root = await makeRoot();
+
+		await expect(run(["git", "not-a-real-skill-feedback-test-command"], root))
+			.rejects.toThrow(/command=git not-a-real-skill-feedback-test-command[\s\S]*cwd=/);
+	});
+
+	test("JSON envelope parse failures include command context", () => {
+		expect(() =>
+			parseEnvelope({
+				command: ["skill-feedback-runner", "review"],
+				cwd: "/tmp/skill-feedback-fixture",
+				exitCode: 1,
+				stdout: "not json",
+				stderr: "diagnostic stderr",
+			}),
+		).toThrow(/stdout="not json"[\s\S]*stderr="diagnostic stderr"/);
+	});
+
+	test("fake git runner records cwd and branches by argv key", async () => {
+		const git = fakeGitRunner({
+			"git rev-parse --show-toplevel": "/repo\n",
+		});
+
+		const result = await git(["git", "rev-parse", "--show-toplevel"], {
+			cwd: "/repo/package",
+		});
+
+		expect(result).toMatchObject({ ok: true, stdout: "/repo\n", code: 0 });
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "rev-parse", "--show-toplevel"],
+				cwd: "/repo/package",
+			},
+		]);
+	});
+});
 
 describe("skill-feedback U6 redaction and write gate", () => {
 	for (const [label, secret] of syntheticSecretFixtures()) {
@@ -584,6 +846,17 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
 		});
 
+		const healthHelp = await runCli(["health", "--help"]);
+		expect(healthHelp.exitCode).toBe(0);
+		expect(healthHelp.stderr).toBe("");
+		expect(healthHelp.stdout).toContain("health [--plain]");
+		assertCommandHelpFlagSurface({
+			command: "health",
+			contract: skillFeedbackContracts.health,
+			help: healthHelp.stdout,
+			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
+		});
+
 		const purgeHelp = await runCli(["purge", "--help"]);
 		expect(purgeHelp.exitCode).toBe(0);
 		expect(purgeHelp.stderr).toBe("");
@@ -609,6 +882,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain("record --skill");
+		expect(result.stdout).toContain("health [--plain]");
 		expect(result.stdout).toContain("purge [--lane");
 	});
 
@@ -809,6 +1083,19 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(envelope.status).toBe("ok");
 		expect(envelope.data).toMatchObject({
 			open_items: [],
+			inbox_status: "missing",
+			counts: {
+				primary: 0,
+				low_signal: 0,
+			},
+			read_target: {
+				explicit: false,
+				repo_root: root,
+				inbox_path: join(root, ".skill-feedback"),
+			},
+			next_action: {
+				action_id: "confirm-capture-path",
+			},
 			no_action: {
 				rationale: "No skill-feedback reports found.",
 			},
@@ -820,6 +1107,13 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			plain: true,
 		});
 		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout.indexOf("Review health:")).toBeLessThan(
+			plain.stdout.indexOf("No action:"),
+		);
+		expect(plain.stdout).toContain(`repo_root=${root}`);
+		expect(plain.stdout).toContain(
+			`inbox_path=${join(root, ".skill-feedback")}`,
+		);
 		expect(plain.stdout).toContain("No action: No skill-feedback reports found.");
 	});
 
@@ -834,10 +1128,750 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(1);
 		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("review_inbox_unsafe");
 		expect(envelope.data).toMatchObject({
 			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+			inbox_status: "unsafe",
 		});
+	});
+
+	test("review resolves the containing git root from a nested package cwd", async () => {
+		const root = await makeIgnoredGitRoot();
+		const packageCwd = join(root, "skills", "skill-feedback");
+		await mkdir(packageCwd, { recursive: true });
+		await writeV1CloseoutInboxReport(root, "root-report.json", {
+			reportId: "report-at-root",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["review"], { cwd: packageCwd });
+
+		const data = expectReviewTotalReports(result, 1);
+		expect(data.read_target).toBeUndefined();
+	});
+
+	test("review --repo resolves an explicit target without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller-a.json", {
+			reportId: "report-caller-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(caller, "caller-b.json", {
+			reportId: "report-caller-b",
+			generatedTs: "2026-06-12T00:00:00.000Z",
+		});
+		const target = await makeIgnoredGitRoot();
+		const realTarget = await realpath(target);
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+		await writeV1CloseoutInboxReport(target, "target.json", {
+			reportId: "report-target",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["review", "--repo", nestedTarget], { cwd: caller });
+
+		const data = expectReviewTotalReports(result, 1);
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: realTarget,
+			inbox_path: join(realTarget, ".skill-feedback"),
+			target_path: nestedTarget,
+		});
+	});
+
+	test("review --repo failure does not fall back to caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const outsideGit = await makeRoot();
+
+		const result = await runCli(["review", "--repo", outsideGit], { cwd: caller });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: true,
+			targetPath: outsideGit,
+			changedState: "none",
+		});
+	});
+
+	test("review outside git returns a repair-state envelope", async () => {
+		const outsideGit = await makeRoot();
+		const realOutsideGit = await realpath(outsideGit);
+
+		const result = await runCli(["review"], { cwd: outsideGit });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: false,
+			targetPath: realOutsideGit,
+		});
+	});
+
+	test("review resolves a linked worktree top-level instead of the main checkout", async () => {
+		const main = await makeIgnoredGitRoot();
+		await run(["git", "config", "user.name", "Skill Feedback Test"], main);
+		await run(["git", "config", "user.email", "skill-feedback@example.test"], main);
+		await run(["git", "add", ".gitignore"], main);
+		await run(["git", "commit", "-m", "chore: seed repo"], main);
+		const linkedParent = await makeRoot();
+		const linked = join(linkedParent, "linked");
+		await run(["git", "worktree", "add", "-b", "feat/linked", linked], main);
+		await writeV1CloseoutInboxReport(main, "main-a.json", {
+			reportId: "report-main-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(main, "main-b.json", {
+			reportId: "report-main-b",
+			generatedTs: "2026-06-12T00:00:00.000Z",
+		});
+		await writeV1CloseoutInboxReport(linked, "linked.json", {
+			reportId: "report-linked",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["review"], { cwd: linked });
+
+		const data = expectReviewTotalReports(result, 1);
+		expect(data.read_target).toBeUndefined();
+	});
+
+	test("review and health resolve the same containing root from nested cwd", async () => {
+		const root = await makeIgnoredGitRoot();
+		const packageCwd = join(root, "skills", "skill-feedback");
+		await mkdir(packageCwd, { recursive: true });
+		await writeV1CloseoutInboxReport(root, "root-report.json", {
+			reportId: "report-shared-root",
+			generatedTs: GENERATED_TS,
+			correlationStatus: "linked",
+			skillRunId: "run-shared-root",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const review = await runCli(["review"], { cwd: packageCwd });
+		const health = await runCli(["health"], { cwd: packageCwd });
+
+		expectReviewTotalReports(review, 1);
+		const healthData = parseHealthEnvelopeData(health);
+		expect(health.exitCode).toBe(0);
+		expect(healthData.counts.primary).toBe(1);
+		expect(healthData.read_target).toBeUndefined();
+	});
+
+	test("review --repo can point at an empty target repo without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+
+		const result = await runCli(["review", "--repo", nestedTarget], { cwd: caller });
+
+		expect(result.exitCode).toBe(0);
+		const data = parseReviewEnvelopeData(result);
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_status).toBe("missing");
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			target_path: nestedTarget,
+		});
+	});
+
+	test("health reports a missing inbox in a valid repo without exposing local paths", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli(["health"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const data = parseHealthEnvelopeData(result);
+		expect(data).toMatchObject({
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			inbox_status: "missing",
+			counts: {
+				primary: 0,
+				low_signal: 0,
+				invalid: 0,
+				skipped_unsafe: 0,
+				unlinked_primary: 0,
+			},
+			next_action: {
+				action_id: "confirm-capture-path",
+			},
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"inbox_missing",
+		);
+		expect(result.stdout).not.toContain(root);
+		expect(result.stdout).not.toContain("repo_root");
+		expect(result.stdout).not.toContain("inbox_path");
+	});
+
+		test("health reports an empty inbox as exit-zero ready state", async () => {
+			const root = await makeIgnoredGitRoot();
+			await mkdir(join(root, ".skill-feedback"));
+
+			const { data, result } = await runCliHealth(root);
+
+			expect(result.exitCode).toBe(0);
+			expect(data.inbox_status).toBe("empty");
+			expect(data.counts.primary).toBe(0);
+			expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"inbox_empty",
+		);
+	});
+
+	test("health omits diagnostic target paths for healthy populated default reads", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(root, "healthy.json", {
+			reportId: "report-healthy",
+			generatedTs: GENERATED_TS,
+			correlationStatus: "linked",
+			skillRunId: "run-healthy",
+				skillRunIdProvenance: "correlation_owned",
+			});
+
+			const { data, result } = await runCliHealth(root);
+
+			expect(result.exitCode).toBe(0);
+			expect(data.inbox_status).toBe("populated");
+			expect(data.read_target).toBeUndefined();
+			expect(result.stdout).not.toContain("repo_root");
+		expect(result.stdout).not.toContain("inbox_path");
+	});
+
+	test("health --plain renders status, counts, warnings, readiness, correlation, and action", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli(["health", "--plain"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback Health");
+		expect(result.stdout).toContain("Inbox status: missing");
+		expect(result.stdout).toContain("Counts: primary=0 low-signal=0");
+		expect(result.stdout).toContain("Warnings:");
+		expect(result.stdout).toContain("- inbox_missing:");
+		expect(result.stdout).toContain("Readiness:");
+		expect(result.stdout).toContain("Correlation: none linked=0 unlinked=0");
+		expect(result.stdout).toContain("Next action: confirm-capture-path");
+	});
+
+	test("health usage errors return the health envelope contract", async () => {
+		const result = await runCli(["health", "--execute"]);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("health outside git returns a repair-state envelope", async () => {
+		const outsideGit = await makeRoot();
+		const realOutsideGit = await realpath(outsideGit);
+
+		const result = await runCli(["health"], { cwd: outsideGit });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: false,
+			targetPath: realOutsideGit,
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changedState: "none",
+		});
+	});
+
+	test("health --repo resolves the explicit target without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const realTarget = await realpath(target);
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+
+		const result = await runCli(["health", "--repo", nestedTarget], {
+			cwd: caller,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.inbox_status).toBe("missing");
+		expect(data.counts.primary).toBe(0);
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: realTarget,
+			inbox_path: join(realTarget, ".skill-feedback"),
+			target_path: nestedTarget,
+		});
+		expect(result.stdout).not.toContain(caller);
+	});
+
+	test("health --repo failure does not fall back to caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const outsideGit = await makeRoot();
+
+		const result = await runCli(["health", "--repo", outsideGit], {
+			cwd: caller,
+		});
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: true,
+			targetPath: outsideGit,
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changedState: "none",
+		});
+	});
+
+	test("health exits nonzero for unsafe inbox roots", async () => {
+		for (const setup of ["symlink", "file"] as const) {
+			const root = await makeRoot();
+			if (setup === "symlink") {
+				const outside = await makeRoot();
+				await symlink(outside, join(root, ".skill-feedback"));
+			} else {
+				await writeFile(join(root, ".skill-feedback"), "not a directory");
+			}
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+				runId: `health-unsafe-${setup}`,
+			});
+
+			expect(result.exitCode, setup).toBe(1);
+			const envelope = parseEnvelope(result.stdout);
+			expect((envelope.error as { code: string }).code).toBe(
+				"health_inbox_unsafe",
+			);
+			expect(envelope.data).toMatchObject({
+				contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+				schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+				inbox_status: "unsafe",
+				counts: {
+					primary: 0,
+					skipped_unsafe: 1,
+				},
+			});
+		}
+	});
+
+	test("review and health map inbox permission errors to unsafe diagnostics", async () => {
+		const root = await makeRoot();
+		await mkdir(join(root, ".skill-feedback"));
+		const baseRuntime = stubRuntime(root);
+		const runtime = stubRuntime(root, {
+			realpathPath: async (path) => {
+				if (path === join(root, ".skill-feedback")) {
+					throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+				}
+				return baseRuntime.realpathPath(path);
+			},
+		});
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-permission-denied",
+		});
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-permission-denied",
+		});
+
+		expect(health.exitCode).toBe(1);
+		expect(review.exitCode).toBe(1);
+		const healthEnvelope = parseEnvelope(health.stdout);
+		const reviewEnvelope = parseEnvelope(review.stdout);
+		expect((healthEnvelope.error as { code: string }).code).toBe(
+			"health_inbox_unsafe",
+		);
+		expect((reviewEnvelope.error as { code: string }).code).toBe(
+			"review_inbox_unsafe",
+		);
+		expect(healthEnvelope.data).toMatchObject({
+			inbox_status: "unsafe",
+			counts: { skipped_unsafe: 1 },
+		});
+		expect(reviewEnvelope.data).toMatchObject({
+			inbox_status: "unsafe",
+			counts: { skipped_unsafe: 1 },
+		});
+	});
+
+	test("health maps inbox lstat EACCES to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EACCES"),
+			runId: "health-inbox-lstat-permission-denied",
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "health_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+		});
+	});
+
+	test("review maps inbox lstat EPERM to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EPERM"),
+			runId: "review-inbox-lstat-permission-denied",
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "review_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+		});
+	});
+
+	test("health reports partial readability while review remains allowed", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "valid.json", {
+			reportId: "report-valid",
+			generatedTs: GENERATED_TS,
+		});
+		await writeFile(join(root, ".skill-feedback", "invalid.json"), "{nope");
+		await writeFile(join(root, ".skill-feedback", "partial.json.tmp"), "{}");
+
+		const health = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-partial",
+		});
+
+		expect(health.exitCode).toBe(0);
+		const healthData = parseHealthEnvelopeData(health);
+		expect(healthData).toMatchObject({
+			inbox_status: "partially_readable",
+			counts: {
+				primary: 1,
+				invalid: 2,
+			},
+			next_action: {
+				action_id: "repair-inbox-state",
+			},
+		});
+		expect(healthData.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-after-health-partial",
+		});
+		expect(review.exitCode).toBe(0);
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData).toMatchObject({
+			inbox_status: "partially_readable",
+			counts: {
+				primary: 1,
+				invalid: 2,
+			},
+			next_action: {
+				action_id: "repair-inbox-state",
+			},
+		});
+		expect(reviewData.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
+		expectReviewCoverage(review.stdout, {
+			total_reports: 1,
+			closeout_count: 1,
+			capture_only_count: 0,
+			closeout_rate: 1,
+			low_coverage: false,
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-after-health-partial-plain",
+			plain: true,
+		});
+		const healthIndex = plain.stdout.indexOf("Review health:");
+		const reportsIndex = plain.stdout.indexOf("Reports:");
+		expect(healthIndex).toBeGreaterThan(-1);
+		expect(healthIndex).toBeLessThan(reportsIndex);
+		const healthBlock = plain.stdout.slice(healthIndex, reportsIndex);
+		expect(healthBlock).toContain("inbox_status=partially_readable");
+		expect(healthBlock).toContain("top_warning=partial_readability");
+		expect(healthBlock).not.toContain("trusted skill identity");
+		expect(healthBlock).not.toContain("Correlation:");
+		});
+
+	test("health summarizes all-unlinked primary reports as report-level evidence", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "a.json", {
+			reportId: "report-unlinked-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(root, "b.json", {
+			reportId: "report-unlinked-b",
+			generatedTs: "2026-06-12T00:00:00.000Z",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-all-unlinked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.unlinked_primary).toBe(2);
+		expect(data.correlation).toMatchObject({
+			status: "all_unlinked",
+			linked_primary_count: 0,
+			unlinked_primary_count: 2,
+		});
+		expect(data.next_action.action_id).toBe("inspect-report-correlation");
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"unlinked_primary_reports",
+		);
+	});
+
+	test("health chooses newest timestamps by time, not lexicographic order", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "early-offset.json", {
+			reportId: "report-early-offset",
+			generatedTs: "2026-06-13T09:30:00.000+11:00",
+			correlationStatus: "linked",
+			skillRunId: "run-early-offset",
+			skillRunIdProvenance: "correlation_owned",
+		});
+		await writeV1CloseoutInboxReport(root, "newer-utc.json", {
+			reportId: "report-newer-utc",
+			generatedTs: "2026-06-13T00:00:00.000Z",
+			correlationStatus: "linked",
+			skillRunId: "run-newer-utc",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-newest-chronological",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.newest.primary_generated_ts).toBe("2026-06-13T00:00:00.000Z");
+	});
+
+	test("health treats unknown-skill Codex Stop as runtime evidence while identity stays blocked", async () => {
+		const root = await makeRoot();
+		await writeLowSignalInboxReport(
+			root,
+			"codex-stop-low.json",
+			v1CloseoutReport({
+				reportId: "report-codex-stop-low",
+				generatedTs: GENERATED_TS,
+				skill: "unknown-skill",
+				evidenceSource: "hook_capture",
+				captureRuntime: "codex_stop",
+			}),
+		);
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-codex-low",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.inbox_status).toBe("populated");
+		expect(data.counts.primary).toBe(0);
+		expect(data.counts.low_signal).toBe(1);
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+	});
+
+		test("health does not warn below the low-signal threshold", async () => {
+			const root = await makeRoot();
+			await writeLowSignalReportBatch(root, 9, "report-low-below");
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+			runId: "health-low-signal-below-threshold",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.low_signal).toBe(9);
+		expect(data.warnings.map((warning) => warning.reason_id)).not.toContain(
+			"low_signal_threshold",
+		);
+	});
+
+		test("health warns on low-signal volume without deleting reports", async () => {
+			const root = await makeRoot();
+			await writeLowSignalReportBatch(root, 10, "report-low");
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+			runId: "health-low-signal-volume",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts).toMatchObject({
+			primary: 0,
+			low_signal: 10,
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"low_signal_threshold",
+		);
+		expect(data.next_action.action_id).toBe("inspect-capture-identity");
+		expect(await readdir(join(root, ".skill-feedback", "low-signal"))).toHaveLength(
+			10,
+		);
+	});
+
+	test("health emits retention preview guidance without deleting reports", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 100; index += 1) {
+			await writeV1CloseoutInboxReport(root, `old-${index}.json`, {
+				reportId: `report-old-${index}`,
+				generatedTs: "2026-05-20T00:00:00.000Z",
+				correlationStatus: "linked",
+				skillRunId: `run-old-${index}`,
+				skillRunIdProvenance: "correlation_owned",
+			});
+		}
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "health-retention",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.primary).toBe(100);
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"retention_preview_recommended",
+		);
+		expect(data.next_action.action_id).toBe("preview-purge");
+		expect(await readdir(join(root, ".skill-feedback"))).toHaveLength(100);
+	});
+
+	test("read-target resolver passes full git argv and cwd to the runner", async () => {
+		const git = fakeGitRunner({
+			"git -C /repo/package rev-parse --show-toplevel": "/repo\n",
+		});
+
+		const resolution = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: git,
+		});
+
+		expect(resolution).toMatchObject({
+			ok: true,
+			explicit: true,
+			seedPath: "/repo/package",
+			repoRoot: "/repo",
+			inboxPath: "/repo/.skill-feedback",
+		});
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "-C", "/repo/package", "rev-parse", "--show-toplevel"],
+				cwd: "/repo/package",
+			},
+		]);
+	});
+
+	test("read-target resolver resolves relative targets from the injected cwd", async () => {
+		const git = fakeGitRunner({
+			"git -C /caller/package rev-parse --show-toplevel": "/caller\n",
+		});
+
+		const resolution = await resolveSkillFeedbackReadTarget({
+			targetPath: "package",
+			cwd: "/caller",
+			runGit: git,
+		});
+
+		expect(resolution).toMatchObject({
+			ok: true,
+			explicit: true,
+			seedPath: "/caller/package",
+			repoRoot: "/caller",
+			inboxPath: "/caller/.skill-feedback",
+		});
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "-C", "/caller/package", "rev-parse", "--show-toplevel"],
+				cwd: "/caller/package",
+			},
+		]);
+	});
+
+	test("read-target resolver reports git, empty-output, and thrown failures", async () => {
+		const gitFailure = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: fakeGitRunner({
+				"git -C /repo/package rev-parse --show-toplevel": {
+					ok: false,
+					stdout: "",
+					stderr: "fatal: not a git repository",
+					code: 128,
+				},
+			}),
+		});
+		expect(gitFailure).toMatchObject({
+			ok: false,
+			explicit: true,
+			seedPath: "/repo/package",
+			code: "read_target_resolution_failed",
+			gitExitCode: 128,
+		});
+
+		const emptyOutput = await resolveSkillFeedbackReadTarget({
+			cwd: "/caller",
+			runGit: fakeGitRunner({
+				"git -C /caller rev-parse --show-toplevel": "\n",
+			}),
+		});
+		expect(emptyOutput).toMatchObject({
+			ok: false,
+			explicit: false,
+			seedPath: "/caller",
+			code: "read_target_resolution_failed",
+			gitExitCode: 0,
+		});
+
+		const thrown = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: async () => {
+				throw new Error("git unavailable");
+			},
+		});
+		expect(thrown).toMatchObject({
+			ok: false,
+			explicit: true,
+			seedPath: "/repo/package",
+			code: "read_target_resolution_failed",
+		});
+		expect(thrown).not.toHaveProperty("gitExitCode");
 	});
 
 	test("review treats low-signal mixed v0 and v1 reports as no-action", async () => {
@@ -988,9 +2022,10 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			runtime: stubRuntime(root),
 			runId: "review-low-signal-health-plain",
 			plain: true,
+			});
+			expect(plain.stdout).toContain("Review health:");
+			expect(plain.stdout).toContain("counts primary=0 low-signal=3");
 		});
-		expect(plain.stdout).toContain("Inbox health: low-signal=3");
-	});
 
 	test("review reports unsafe and invalid artifacts as inbox health", async () => {
 		const root = await makeRoot();
@@ -1016,26 +2051,31 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		const data = parseEnvelope(result.stdout).data as {
-			coverage: { total_reports: number };
-			inbox_health: {
-				primary_count: number;
-				skipped_unsafe_count: number;
-				invalid_count: number;
-			};
-		};
+		const data = parseEnvelope(result.stdout).data as ReviewResultData;
 		expect(data.coverage.total_reports).toBe(1);
 		expect(data.inbox_health.primary_count).toBe(1);
 		expect(data.inbox_health.skipped_unsafe_count).toBe(1);
 		expect(data.inbox_health.invalid_count).toBe(1);
+		expect(data.inbox_status).toBe("partially_readable");
+		expect(data.counts).toMatchObject({
+			primary: 1,
+			skipped_unsafe: 1,
+			invalid: 1,
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
 
 		const plain = await reviewSkillFeedbackInbox({
 			runtime: stubRuntime(root),
 			runId: "review-health-invalid-plain",
 			plain: true,
 		});
-		expect(plain.stdout).toContain("Inbox health: low-signal=0 skipped=1 invalid=1");
-	});
+		expect(plain.stdout).toContain("Review health:");
+		expect(plain.stdout).toContain(
+			"counts primary=1 low-signal=0 invalid=1 skipped=1",
+		);
+		});
 
 	test("purge preview lists old safe candidates without deleting", async () => {
 		const root = await makeRoot();
@@ -1810,8 +2850,79 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		}
 	});
 
-	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
+	test("review open actions rank actionable evidence before correlation context", async () => {
 		const root = await makeRoot();
+		const report = (input: {
+			reportId: string;
+			heavy?: boolean;
+			ownerPath?: boolean;
+		}) => ({
+			schema_version: "1",
+			report_id: input.reportId,
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "unlinked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: input.heavy ? "heavy" : "light",
+					note: "Focused check.",
+				},
+				observations: input.ownerPath
+					? [
+							{
+								kind: "tool_failure",
+								target: {
+									type: "path",
+									value: "skills/skill-feedback/SKILL.md",
+								},
+								summary: "The owner path needed inspection.",
+								evidence_basis: "driver_observed",
+							},
+						]
+					: [],
+			},
+			evidence_gaps: input.heavy
+				? [
+						{
+							code: "missing_runtime_git_sha",
+							path: "runtime.git_sha",
+							message: "No git SHA source.",
+						},
+					]
+				: [],
+		});
+		await writeInboxReport(
+			root,
+			"heavy.json",
+			report({ reportId: "report-heavy", heavy: true, ownerPath: true }),
+		);
+		await writeInboxReport(root, "repeat.json", report({ reportId: "report-repeat" }));
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-actions-ranked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as ReviewResultData;
+		expect(data.open_actions.map((action) => action.open_reason)).toEqual([
+			"owner_path_observation",
+			"high_verification_burden",
+			"repeated_friction",
+			"evidence_gap",
+			"unlinked_correlation_spike",
+		]);
+		expect(data.open_actions.at(-1)?.open_reason).toBe(
+			"unlinked_correlation_spike",
+		);
+	});
+
+	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
+		const root = await makeIgnoredGitRoot();
 		await writeInboxReport(root, "plain-heavy.json", {
 			schema_version: "1",
 			report_id: "report-plain-heavy",
@@ -1928,6 +3039,70 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			actionable_feedback_numerator: 1,
 			material_closeout_denominator: 2,
 			density: 0.5,
+		});
+	});
+
+	test("review pilot density counts grouped repeated friction open signal", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: "2026-06-01T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			evidence_gaps: [],
+		};
+		for (const [fileName, reportId, skillRunId] of [
+			["one.json", "report-friction-one", "run-friction-one"],
+			["two.json", "report-friction-two", "run-friction-two"],
+		] as const) {
+			await writeInboxReport(root, fileName, {
+				...report,
+				report_id: reportId,
+				skill_run_id: skillRunId,
+				report_card: {
+					...BASE_CLOSEOUT,
+					friction: {
+						category: "tool_failure",
+						note: "Tool failed during closeout.",
+					},
+					verification_burden: {
+						level: "light",
+						note: "Focused check.",
+					},
+				},
+			});
+		}
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2026-06-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot-repeated-friction",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			open_items: Array<{ open_reason: string }>;
+			pilot_checkpoint?: {
+				actionable_feedback_numerator: number;
+				material_closeout_denominator: number;
+				density: number;
+			};
+		};
+		expect(data.open_items.map((item) => item.open_reason)).toContain(
+			"repeated_friction",
+		);
+		expect(data.pilot_checkpoint).toMatchObject({
+			actionable_feedback_numerator: 2,
+			material_closeout_denominator: 2,
+			density: 1,
 		});
 	});
 
@@ -2192,7 +3367,9 @@ describe("skill-feedback U7 docs", () => {
 		expect(skill).toContain("Run `purge`");
 		expect(skill).not.toContain("--older-than");
 		expect(context).toContain("Low-signal lane");
+		expect(context).toContain("Health command");
 		expect(context).toContain("Purge workflow");
+		expect(reportShape).toContain("Health Output");
 		expect(reportShape).toContain("inbox_health");
 		expect(reportShape).toContain("low-signal");
 		expect(reportShape).toContain("purge");
@@ -2495,6 +3672,57 @@ describe("skill-feedback parseRecordFlags", () => {
 		});
 	});
 });
+
+for (const { command, parse } of [
+	{ command: "review", parse: parseReviewArgs },
+	{ command: "health", parse: parseHealthArgs },
+] as const) {
+	describe(`skill-feedback parse ${command} args`, () => {
+		test("parses plain and explicit repo flags", () => {
+			expect(parse([command, "--plain", "--repo", "/repo"])).toEqual({
+				ok: true,
+				options: {
+					plain: true,
+					targetPath: "/repo",
+				},
+			});
+		});
+
+		test("parses empty args and rejects positional inputs", () => {
+			expect(parse([])).toEqual({
+				ok: true,
+				options: { plain: false, targetPath: undefined },
+			});
+			expect(parse([command])).toEqual({
+				ok: true,
+				options: { plain: false, targetPath: undefined },
+			});
+			expect(parse(["/repo"])).toMatchObject({
+				ok: false,
+				message: `Expected a ${command} flag.`,
+			});
+		});
+
+		test("rejects missing repo values and unknown flags", () => {
+			expect(parse(["--repo"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--repo", "--plain"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--repo", ""])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--execute"])).toMatchObject({
+				ok: false,
+				message: "Unknown flag --execute.",
+			});
+		});
+	});
+}
 
 describe("skill-feedback parsePurgeArgs", () => {
 	test("parses preview and execute purge flags", () => {

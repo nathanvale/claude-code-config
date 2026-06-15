@@ -7,7 +7,7 @@ import type {
 	SkillRunIdProvenance,
 } from "./command-contract";
 import { SKILL_FEEDBACK_SCHEMA_VERSION } from "./command-contract";
-import { reduceReviewLedger } from "./review-ledger-reducer";
+import { reduceReviewLedger, trustedSkillRunId } from "./review-ledger-reducer";
 
 const GENERATED_TS = "2026-06-13T00:00:00.000Z";
 
@@ -50,6 +50,40 @@ function report(overrides: ReportOverrides): NormalizedSoftwareLearningReport {
 }
 
 describe("reduceReviewLedger review units (U2)", () => {
+	test("trustedSkillRunId accepts only writer-owned provenance", () => {
+		expect(
+			trustedSkillRunId(
+				report({
+					report_id: "r-runtime",
+					skill_run_id: "run-runtime",
+					skill_run_id_provenance: "runtime_owned",
+				}),
+			),
+		).toBe("run-runtime");
+		expect(
+			trustedSkillRunId(
+				report({
+					report_id: "r-correlation",
+					skill_run_id: "run-correlation",
+					skill_run_id_provenance: "correlation_owned",
+				}),
+			),
+		).toBe("run-correlation");
+		expect(
+			trustedSkillRunId(
+				report({
+					report_id: "r-report",
+					skill_run_id: "run-report",
+					skill_run_id_provenance: "report_authored",
+				}),
+			),
+		).toBeUndefined();
+		expect(
+			trustedSkillRunId(report({ report_id: "r-raw", skill_run_id: "run-raw" })),
+		).toBeUndefined();
+		expect(trustedSkillRunId(report({ report_id: "r-missing" }))).toBeUndefined();
+	});
+
 	test("same trusted skill_run_id coalesces into one review unit", () => {
 		const { review_units } = reduceReviewLedger([
 			report({

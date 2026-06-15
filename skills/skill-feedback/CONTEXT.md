@@ -84,6 +84,10 @@ _Avoid_: human signal, required feedback, satisfaction score, blocking prompt
 A read operation that summarizes inbox evidence without deleting, editing, or promoting files. Purge is a separate gated workflow.
 _Avoid_: cleanup, archive, review-and-delete
 
+**Health command**:
+The read-only `skill-feedback health` command that reports inbox operability, readiness, correlation, warnings, and one next action before deeper review. It never deletes, repairs, or exposes healthy repo paths.
+_Avoid_: review ledger, purge preview, cleanup, trust badge
+
 **Review decision surface**:
 A command-envelope-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
 _Avoid_: dashboard, raw dump, generic CLI output
@@ -107,6 +111,7 @@ _Avoid_: pattern cosplay, GoF by default, framework, decorative abstraction
 
 **ReviewResultData Facade**:
 The claim-safe review result Interface that hides reducer internals from JSON, plain output, docs, and future agents. It exposes contract-owned facts: review units, ledger entries with entry-local allowed claims, split readiness, and anchor-miss telemetry.
+It also carries minimal inbox status, warning, count, and next-action facts so direct review callers can spot false-empty and degraded-read states before ledger detail.
 _Avoid_: dashboard, renderer copy, generic API, bag of fields
 
 **Report ref**:
@@ -218,8 +223,12 @@ The logical inbox lane for valid capture reports that prove capture health but c
 _Avoid_: junk, discard, primary report, hidden failure
 
 **Inbox health**:
-The review summary for primary count, low-signal count, invalid artifacts, and skipped unsafe artifacts. It explains inbox state without mutating files.
+The read summary for primary count, low-signal count, invalid artifacts, and skipped unsafe artifacts. Review and health use it to explain inbox state without mutating files.
 _Avoid_: cleanup result, purge result, ledger evidence, report quality
+
+**Inbox status**:
+The inbox health field that classifies storage and readability state only. Readiness and correlation carry their own status fields.
+_Avoid_: global health, trust badge, report quality, correlation status
 
 **Purge workflow**:
 The explicit mutation command for inbox retention cleanup. It previews first, deletes only through an execute gate, and remains separate from review.

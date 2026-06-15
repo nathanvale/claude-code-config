@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Ideation: Deterministic CLI Branch Confidence</title>
+	<style>
+		:root {
+			--bg: #f7f8f5;
+			--paper: #ffffff;
+			--ink: #17201b;
+			--muted: #5a665f;
+			--line: #d9ded6;
+			--green: #27745b;
+			--green-soft: #e4f2eb;
+			--blue: #286a96;
+			--blue-soft: #e4eef6;
+			--amber: #8a6400;
+			--amber-soft: #fbf0cf;
+			--red: #9d3d32;
+			--red-soft: #fae8e4;
+			--violet: #6b5a9a;
+			--violet-soft: #ece8f7;
+			--shadow: 0 18px 50px rgba(23, 32, 27, 0.09);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--ink);
+			font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		}
+
+		a {
+			color: var(--blue);
+		}
+
+		code {
+			font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			font-size: 0.92em;
+			background: #eef1ed;
+			padding: 0.12rem 0.28rem;
+			border-radius: 4px;
+		}
+
+		.shell {
+			width: min(1100px, calc(100% - 32px));
+			margin: 0 auto;
+			padding: 36px 0 42px;
+		}
+
+		header.hero {
+			background: var(--paper);
+			border: 1px solid var(--line);
+			box-shadow: var(--shadow);
+			border-radius: 10px;
+			padding: 28px;
+		}
+
+		.kicker {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-bottom: 18px;
+		}
+
+		.pill {
+			border: 1px solid var(--line);
+			border-radius: 999px;
+			padding: 5px 10px;
+			background: #f9faf7;
+			color: var(--muted);
+			font-size: 0.84rem;
+		}
+
+		h1 {
+			margin: 0;
+			font-size: clamp(2rem, 4vw, 3.5rem);
+			line-height: 1.02;
+			letter-spacing: 0;
+		}
+
+		.lede {
+			max-width: 76ch;
+			margin: 18px 0 0;
+			color: var(--muted);
+			font-size: 1.05rem;
+		}
+
+		section {
+			margin-top: 28px;
+		}
+
+		.section-card {
+			background: var(--paper);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			padding: 24px;
+		}
+
+		h2 {
+			margin: 0 0 14px;
+			font-size: 1.35rem;
+			line-height: 1.2;
+		}
+
+		h3 {
+			margin: 0;
+			font-size: 1.08rem;
+			line-height: 1.25;
+		}
+
+		p {
+			max-width: 76ch;
+			margin: 0 0 12px;
+		}
+
+		.grid {
+			display: grid;
+			gap: 14px;
+		}
+
+		.grid.two {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.grid.three {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+
+		.fact {
+			border-left: 4px solid var(--green);
+			background: var(--green-soft);
+			padding: 14px;
+			border-radius: 8px;
+		}
+
+		.fact strong {
+			display: block;
+			margin-bottom: 4px;
+		}
+
+		.axis-list {
+			display: grid;
+			grid-template-columns: repeat(5, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.axis {
+			background: #f8faf8;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 12px;
+			min-height: 80px;
+		}
+
+		.axis b {
+			display: block;
+			margin-bottom: 6px;
+			color: var(--green);
+		}
+
+		.jump-list {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin: 0 0 18px;
+		}
+
+		.jump-list a {
+			text-decoration: none;
+			background: var(--blue-soft);
+			color: #174a6c;
+			border: 1px solid #cfe0ed;
+			border-radius: 999px;
+			padding: 6px 10px;
+			font-size: 0.86rem;
+		}
+
+		.idea {
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			background: var(--paper);
+			padding: 20px;
+			margin-top: 16px;
+		}
+
+		.idea-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 16px;
+			margin-bottom: 12px;
+		}
+
+		.idea-id {
+			color: var(--green);
+			font-weight: 800;
+			margin-right: 6px;
+		}
+
+		.badges {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+			justify-content: flex-end;
+			min-width: 240px;
+		}
+
+		.badge {
+			border-radius: 999px;
+			padding: 4px 8px;
+			font-size: 0.78rem;
+			border: 1px solid var(--line);
+			background: #f8faf8;
+			color: var(--muted);
+			white-space: nowrap;
+		}
+
+		.badge.conf {
+			background: var(--green-soft);
+			color: #1e5d49;
+			border-color: #cbe5d8;
+		}
+
+		.badge.cx {
+			background: var(--amber-soft);
+			color: #6e4e00;
+			border-color: #eadcaa;
+		}
+
+		.idea-body {
+			display: grid;
+			grid-template-columns: 1.2fr 0.8fr;
+			gap: 18px;
+		}
+
+		.idea dl {
+			margin: 0;
+			display: grid;
+			gap: 10px;
+		}
+
+		.idea dt {
+			font-weight: 800;
+			color: var(--ink);
+		}
+
+		.idea dd {
+			margin: 3px 0 0;
+			color: var(--muted);
+		}
+
+		.visual {
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			background: #fbfcfa;
+			padding: 14px;
+		}
+
+		.visual svg {
+			width: 100%;
+			height: auto;
+			display: block;
+		}
+
+		table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 0.92rem;
+		}
+
+		th,
+		td {
+			text-align: left;
+			vertical-align: top;
+			border-bottom: 1px solid var(--line);
+			padding: 10px 8px;
+		}
+
+		th {
+			color: var(--muted);
+			font-size: 0.78rem;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+		}
+
+		.callout {
+			background: var(--amber-soft);
+			border: 1px solid #eadcaa;
+			border-left: 5px solid var(--amber);
+			border-radius: 10px;
+			padding: 16px;
+			color: #5c4300;
+		}
+
+		.sources li {
+			margin-bottom: 8px;
+		}
+
+		.composition-signal {
+			margin-top: 28px;
+			color: var(--muted);
+			font-size: 0.88rem;
+		}
+
+		@media (max-width: 900px) {
+			.grid.two,
+			.grid.three,
+			.axis-list,
+			.idea-body {
+				grid-template-columns: 1fr;
+			}
+
+			.idea-head {
+				display: block;
+			}
+
+			.badges {
+				margin-top: 10px;
+				justify-content: flex-start;
+				min-width: 0;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="shell">
+		<header class="hero">
+			<div class="kicker" aria-label="Metadata">
+				<span class="pill">Date: <time datetime="2026-06-15">2026-06-15</time></span>
+				<span class="pill">Topic: deterministic-cli-branch-confidence</span>
+				<span class="pill">Focus: reusable CLI confidence pattern</span>
+				<span class="pill">Mode: repo-grounded</span>
+			</div>
+			<h1>Ideation: Deterministic CLI Branch Confidence</h1>
+			<p class="lede">How to make every CLI we build carry its own durable, testable map of commands, error branches, repair hints, and observability, so confidence comes from contracts and reproducible probes instead of repeated LLM review.</p>
+		</header>
+
+		<section class="section-card" aria-labelledby="context">
+			<h2 id="context">Codebase Context</h2>
+			<div class="grid two">
+				<div class="fact">
+					<strong>Existing deterministic spine</strong>
+					<code>skills/cli-execution-auditor/src/audit-engine.ts</code> already detects facade-backed CLIs, canonicalizes invocations, runs static checks, runs subprocess surface checks, and emits deterministic findings.
+				</div>
+				<div class="fact">
+					<strong>Existing contract vocabulary</strong>
+					<code>runtime/cli-command-facade</code> already owns command discovery, result contracts, exit-code floors, action affordances, structured runtime errors, runtime actions, continuations, and diagnostic trails.
+				</div>
+				<div class="fact">
+					<strong>Existing process-test pressure</strong>
+					<code>scripts/command-entrypoint.integration.test.ts</code> and <code>skills/skill-feedback/src/skill-feedback.test.ts</code> repeat subprocess capture, envelope parsing, failure annotation, and temp-root patterns.
+				</div>
+				<div class="fact">
+					<strong>Known honest limit</strong>
+					The current auditor proves advertised commands and flags are exercised once. It does not claim every semantic branch is covered. The missing object is a package-owned branch or station oracle.
+				</div>
+			</div>
+			<p>External grounding supports the split: broad end-to-end tests should stay high-signal rather than exhaustive, branch coverage observes runtime arcs rather than intent, and property-based testing is good at finding input bugs but still needs properties to assert. The repo already has the better starting point: CLI intent is partly declared.</p>
+		</section>
+
+		<section class="section-card" aria-labelledby="axes">
+			<h2 id="axes">Topic Axes</h2>
+			<div class="axis-list">
+				<div class="axis"><b>1.</b> Process-boundary test harness</div>
+				<div class="axis"><b>2.</b> Branch or station inventory</div>
+				<div class="axis"><b>3.</b> Matrix generation and coverage reconciliation</div>
+				<div class="axis"><b>4.</b> Error observability and repair semantics</div>
+				<div class="axis"><b>5.</b> Adoption path across repos</div>
+			</div>
+		</section>
+
+		<section aria-labelledby="ideas">
+			<div class="section-card">
+				<h2 id="ideas">Ranked Ideas</h2>
+				<nav class="jump-list" aria-label="Ranked ideas">
+					<a href="#i1">I1 Station Map</a>
+					<a href="#i2">I2 Branch Catalog</a>
+					<a href="#i3">I3 Process Harness</a>
+					<a href="#i4">I4 Matrix Reconciler</a>
+					<a href="#i5">I5 Gate Ladder</a>
+					<a href="#i6">I6 Evidence Recorder</a>
+					<a href="#i7">I7 Branch Workbench</a>
+				</nav>
+				<div class="callout">
+					Top pick: combine I1, I2, I3, and I4. That gives a thin shared process harness, a package-owned branch catalog, an auditor-owned station map, and package-local integration tests that prove coverage without centralizing every CLI scenario.
+				</div>
+			</div>
+
+			<article class="idea" id="i1">
+				<div class="idea-head">
+					<h3><span class="idea-id">I1.</span>Station Map Contract Layer</h3>
+					<div class="badges">
+						<span class="badge">Axis: branch inventory</span>
+						<span class="badge conf">Confidence 88%</span>
+						<span class="badge cx">Complexity Medium</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Extend the existing auditor with a station-map mode. The map is deterministic JSON describing every known command station: success stations, usage failures, runtime failures, diagnostic branches, recovery choices, continuation paths, and known untestable branches. It is assembled from facade discovery plus package-owned branch declarations.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>direct: the current auditor already has canonical invocation enumeration and deterministic findings; the facade already has runtime envelope fields for errors, actions, continuations, and diagnostics.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>This is the missing middle object between command contracts and tests. A station map lets agents ask "what branches exist?" before asking "which tests cover them?"</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>It needs careful language. It should claim declared branch coverage, not whole-program branch completeness.</dd>
+						</div>
+					</dl>
+					<div class="visual" aria-label="Station map flow">
+						<svg viewBox="0 0 620 330" role="img">
+							<rect x="12" y="18" width="150" height="72" rx="10" fill="#e4eef6" stroke="#bcd3e4"/>
+							<text x="87" y="48" text-anchor="middle" font-size="16" font-weight="700" fill="#174a6c">Facade</text>
+							<text x="87" y="70" text-anchor="middle" font-size="12" fill="#174a6c">commands, flags</text>
+							<rect x="12" y="124" width="150" height="72" rx="10" fill="#e4f2eb" stroke="#cbe5d8"/>
+							<text x="87" y="154" text-anchor="middle" font-size="16" font-weight="700" fill="#1e5d49">Branch Catalog</text>
+							<text x="87" y="176" text-anchor="middle" font-size="12" fill="#1e5d49">triggers, expected results</text>
+							<rect x="235" y="72" width="160" height="92" rx="10" fill="#fff" stroke="#d9ded6"/>
+							<text x="315" y="106" text-anchor="middle" font-size="16" font-weight="700" fill="#17201b">Station Map</text>
+							<text x="315" y="130" text-anchor="middle" font-size="12" fill="#5a665f">stable CLI branch inventory</text>
+							<rect x="462" y="18" width="146" height="72" rx="10" fill="#fbf0cf" stroke="#eadcaa"/>
+							<text x="535" y="48" text-anchor="middle" font-size="16" font-weight="700" fill="#6e4e00">Matrix</text>
+							<text x="535" y="70" text-anchor="middle" font-size="12" fill="#6e4e00">tests or gaps</text>
+							<rect x="462" y="124" width="146" height="72" rx="10" fill="#fae8e4" stroke="#efc9c1"/>
+							<text x="535" y="154" text-anchor="middle" font-size="16" font-weight="700" fill="#7a2f27">Findings</text>
+							<text x="535" y="176" text-anchor="middle" font-size="12" fill="#7a2f27">repairable misses</text>
+							<rect x="235" y="226" width="160" height="72" rx="10" fill="#ece8f7" stroke="#d8cfee"/>
+							<text x="315" y="256" text-anchor="middle" font-size="16" font-weight="700" fill="#53447e">Workbench</text>
+							<text x="315" y="278" text-anchor="middle" font-size="12" fill="#53447e">human map</text>
+							<path d="M162 54 L235 104" stroke="#5a665f" stroke-width="2" fill="none"/>
+							<path d="M162 160 L235 130" stroke="#5a665f" stroke-width="2" fill="none"/>
+							<path d="M395 103 L462 56" stroke="#5a665f" stroke-width="2" fill="none"/>
+							<path d="M395 132 L462 160" stroke="#5a665f" stroke-width="2" fill="none"/>
+							<path d="M315 164 L315 226" stroke="#5a665f" stroke-width="2" fill="none"/>
+						</svg>
+					</div>
+				</div>
+			</article>
+
+			<article class="idea" id="i2">
+				<div class="idea-head">
+					<h3><span class="idea-id">I2.</span>Package-Owned Branch Catalog</h3>
+					<div class="badges">
+						<span class="badge">Axis: repair semantics</span>
+						<span class="badge conf">Confidence 85%</span>
+						<span class="badge cx">Complexity Medium</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Give each CLI a typed branch catalog near its command contract. Each branch has an id, owning command, setup recipe, argv, expected exit code, expected envelope status, expected error code or action, expected recoverability, optional diagnostic trail, and coverage classification.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>direct: the facade contract deliberately keeps package result vocabulary package-owned. Branch semantics are the same kind of package vocabulary.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>The branch catalog supplies the intent oracle. Static analysis can see code paths, but only the package can say that <code>protected_branch</code> should expose a failure ref, recovery choice, and no destructive mutation.</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>Authors must keep catalog entries real. Mitigate with generated maps, auditor findings, and package-local integration tests.</dd>
+						</div>
+					</dl>
+					<div class="visual">
+						<table>
+							<thead><tr><th>Branch id</th><th>Trigger</th><th>Expected station</th></tr></thead>
+							<tbody>
+								<tr><td><code>delete.protected_branch</code></td><td><code>delete main --json</code></td><td>error, exit 1, repair_state blocked</td></tr>
+								<tr><td><code>review.low_coverage</code></td><td><code>review --json</code> with sparse inbox</td><td>ok, low_coverage true, action review</td></tr>
+								<tr><td><code>health.gitignore_missing</code></td><td><code>health --json</code></td><td>warning data, repair hint</td></tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</article>
+
+			<article class="idea" id="i3">
+				<div class="idea-head">
+					<h3><span class="idea-id">I3.</span>Shared CLI Process Test Harness</h3>
+					<div class="badges">
+						<span class="badge">Axis: process harness</span>
+						<span class="badge conf">Confidence 92%</span>
+						<span class="badge cx">Complexity Low</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Extract process testing helpers into <code>@side-quest/cli-command-facade/testing</code>: run a CLI subprocess with timeout, capture streams, annotate failures, parse JSON envelopes, assert ok/error status, preserve temp roots on failure, and run labeled surface cases.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>direct: the exact helper pattern now repeats between the root command-entrypoint integration test and skill-feedback's CLI process tests.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>This is the first implementation slice because it is already earned by two consumers and lowers the cost of every later station-map test.</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>Keep it generic. Temp git seeding and package-specific assertions stay with the owning tests.</dd>
+						</div>
+					</dl>
+					<div class="visual">
+						<table>
+							<thead><tr><th>Shared</th><th>Local</th></tr></thead>
+							<tbody>
+								<tr><td>spawn, timeout, stream capture</td><td>repo fixture setup</td></tr>
+								<tr><td>failure annotation</td><td>domain data assertions</td></tr>
+								<tr><td>JSON envelope parse</td><td>command-specific workflows</td></tr>
+								<tr><td>surface case runner</td><td>test matrix ownership</td></tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</article>
+
+			<article class="idea" id="i4">
+				<div class="idea-head">
+					<h3><span class="idea-id">I4.</span>Matrix Generator And Coverage Reconciler</h3>
+					<div class="badges">
+						<span class="badge">Axis: matrix reconciliation</span>
+						<span class="badge conf">Confidence 82%</span>
+						<span class="badge cx">Complexity Medium</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Use the station map to derive test rows. Package tests can import the generated row model or the auditor can compare observed test receipts against station ids. Missing required stations become deterministic findings.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>direct: the current auditor already turns clauses into findings; command-entrypoint tests already hand-build a runtime JSON command matrix.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>It turns "I think we tested the branches" into a mechanical statement: every required station is covered, intentionally skipped, or reported.</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>Generated test files can become awkward. Prefer generated data or reports first; write source tests by hand against the shared helper until the shape stabilizes.</dd>
+						</div>
+					</dl>
+					<div class="visual">
+						<table>
+							<thead><tr><th>Station state</th><th>Meaning</th><th>Action</th></tr></thead>
+							<tbody>
+								<tr><td>covered</td><td>Observed test receipt matches expectation</td><td>pass</td></tr>
+								<tr><td>missing</td><td>Required station has no receipt</td><td>finding</td></tr>
+								<tr><td>declared-unreachable</td><td>Package explains why not testable</td><td>reviewable note</td></tr>
+								<tr><td>drifted</td><td>Observed envelope no longer matches</td><td>finding</td></tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</article>
+
+			<article class="idea" id="i5">
+				<div class="idea-head">
+					<h3><span class="idea-id">I5.</span>Auditor-As-Gate Ladder</h3>
+					<div class="badges">
+						<span class="badge">Axis: adoption</span>
+						<span class="badge conf">Confidence 80%</span>
+						<span class="badge cx">Complexity Medium</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Promote confidence in stages: shared harness, package-local branch catalog, station-map report, missing-coverage findings, fixture oracle, then enforcement after repeated real catches across repos.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>direct: the existing CLI auditor plan already split opt-in v1 from a later mandatory gate and named a real-catch threshold.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>This keeps the pattern from becoming ceremony before it proves value. Each rung earns the next one with evidence.</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>Slower than making it mandatory immediately, but less likely to create noisy gates that people route around.</dd>
+						</div>
+					</dl>
+					<div class="visual">
+						<table>
+							<thead><tr><th>Rung</th><th>Gate</th><th>Promotion signal</th></tr></thead>
+							<tbody>
+								<tr><td>1</td><td>shared process helpers</td><td>two consumers use them</td></tr>
+								<tr><td>2</td><td>station-map report</td><td>first CLI branch catalog lands</td></tr>
+								<tr><td>3</td><td>coverage findings</td><td>missed branch caught</td></tr>
+								<tr><td>4</td><td>required check</td><td>three distinct real catches</td></tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</article>
+
+			<article class="idea" id="i6">
+				<div class="idea-head">
+					<h3><span class="idea-id">I6.</span>Runtime Evidence Recorder</h3>
+					<div class="badges">
+						<span class="badge">Axis: matrix reconciliation</span>
+						<span class="badge conf">Confidence 74%</span>
+						<span class="badge cx">Complexity Medium</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Let integration tests emit stable station receipts during execution: station id, argv, exit code, envelope status, error code, action id, and sanitized diagnostics. The auditor compares receipts to station-map requirements.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>external: coverage tools can record runtime branch arcs, but arcs alone do not encode domain meaning. Receipts add the semantic label that agents and humans need.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>This creates a bridge between "the test ran" and "the declared error station was observed." It is especially useful when one test covers several stations.</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>Receipt storage can become generated-output noise. Start with in-memory receipts inside a test run before writing durable files.</dd>
+						</div>
+					</dl>
+					<div class="visual">
+						<table>
+							<thead><tr><th>Receipt field</th><th>Example</th></tr></thead>
+							<tbody>
+								<tr><td><code>station_id</code></td><td><code>delete.protected_branch</code></td></tr>
+								<tr><td><code>argv</code></td><td><code>delete main --json</code></td></tr>
+								<tr><td><code>observed</code></td><td><code>status:error exit:1</code></td></tr>
+								<tr><td><code>repair</code></td><td><code>recoverability:repair_state</code></td></tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</article>
+
+			<article class="idea" id="i7">
+				<div class="idea-head">
+					<h3><span class="idea-id">I7.</span>Branch Workbench Report</h3>
+					<div class="badges">
+						<span class="badge">Axis: repair semantics</span>
+						<span class="badge conf">Confidence 72%</span>
+						<span class="badge cx">Complexity Low</span>
+					</div>
+				</div>
+				<div class="idea-body">
+					<dl>
+						<div>
+							<dt>Description</dt>
+							<dd>Render an HTML and JSON report showing every station grouped by command, with expected repair hints, observed test status, skipped rationale, drift findings, and next safe action.</dd>
+						</div>
+						<div>
+							<dt>Basis</dt>
+							<dd>reasoned: a station map is useful to machines, but the pattern spreads across repos only if maintainers can inspect and trust it quickly.</dd>
+						</div>
+						<div>
+							<dt>Rationale</dt>
+							<dd>The report turns invisible confidence work into an inspectable artifact. It is also the handoff surface when a coverage gap is intentional.</dd>
+						</div>
+						<div>
+							<dt>Downsides</dt>
+							<dd>Report polish can distract from the contract. Keep JSON canonical first, HTML as a reader view.</dd>
+						</div>
+					</dl>
+					<div class="visual">
+						<table>
+							<thead><tr><th>Command</th><th>Stations</th><th>Gaps</th><th>Next action</th></tr></thead>
+							<tbody>
+								<tr><td><code>delete</code></td><td>7</td><td>1</td><td>add protected-branch receipt</td></tr>
+								<tr><td><code>health</code></td><td>4</td><td>0</td><td>clean</td></tr>
+								<tr><td><code>review</code></td><td>5</td><td>2</td><td>declare or test low-signal cases</td></tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</article>
+		</section>
+
+		<section class="section-card" aria-labelledby="reject">
+			<h2 id="reject">Rejection Summary</h2>
+			<table>
+				<thead>
+					<tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr>
+				</thead>
+				<tbody>
+					<tr><td>1</td><td>Full Static AST Branch Enumerator</td><td>Cannot reliably infer domain intent, recoverability, or operator safety from TypeScript branches.</td></tr>
+					<tr><td>2</td><td>LLM Auditor Loop</td><td>Contradicts the deterministic confidence goal and repeats the current pain.</td></tr>
+					<tr><td>3</td><td>Root Mega Integration Suite</td><td>Ownership, runtime, and fixture setup get worse as repo count grows.</td></tr>
+					<tr><td>4</td><td>Snapshot Whole CLI Output</td><td>Brittle; catches text churn but misses semantic branch intent.</td></tr>
+					<tr><td>5</td><td>Standalone Tool Detached From Auditor</td><td>Duplicates the existing deterministic spine and splits findings vocabulary.</td></tr>
+					<tr><td>6</td><td>Error Dictionary Only</td><td>Useful but incomplete without triggers, expectations, and coverage reconciliation.</td></tr>
+					<tr><td>7</td><td>Branch Contract In Facade Core Only</td><td>Premature; branch vocabulary is package-owned and would bloat the shared facade.</td></tr>
+					<tr><td>8</td><td>YAML Matrix Only</td><td>Hand-authored rows drift unless tied to discovery and station contracts.</td></tr>
+					<tr><td>9</td><td>Property-Based Argv Probe Layer</td><td>Good later for unknown unknowns, not the first deterministic confidence layer.</td></tr>
+					<tr><td>10</td><td>Trace-Driven Branch Discovery As Primary</td><td>Runtime traces observe what happened, not what should have happened.</td></tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section class="section-card" aria-labelledby="sources">
+			<h2 id="sources">Sources And References</h2>
+			<ul class="sources">
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/skills/cli-execution-auditor/src/audit-engine.ts">skills/cli-execution-auditor/src/audit-engine.ts</a> - existing deterministic audit spine.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/skills/cli-execution-auditor/src/clause-catalog.ts">skills/cli-execution-auditor/src/clause-catalog.ts</a> - clause catalog and masking notes.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/runtime/cli-command-facade/src/command-contract.ts">runtime/cli-command-facade/src/command-contract.ts</a> - discovery, result contracts, exit floors, and action affordances.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/runtime/cli-command-facade/src/runtime-envelope.ts">runtime/cli-command-facade/src/runtime-envelope.ts</a> - structured errors, runtime actions, continuations, diagnostic trails.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/runtime/cli-command-facade/src/testing.ts">runtime/cli-command-facade/src/testing.ts</a> - current shared test-support subpath.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/scripts/command-entrypoint.integration.test.ts">scripts/command-entrypoint.integration.test.ts</a> - current process-boundary integration suite.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/src/skill-feedback.test.ts">skills/skill-feedback/src/skill-feedback.test.ts</a> - next CLI process-test consumer.</li>
+				<li><a href="https://github.com/nathanvale/claude-code-config/blob/main/docs/plans/2026-06-10-001-feat-cli-execution-auditor-plan.md">docs/plans/2026-06-10-001-feat-cli-execution-auditor-plan.md</a> - original deterministic auditor plan and v1 boundary.</li>
+				<li><a href="https://martinfowler.com/articles/practical-test-pyramid.html">Martin Fowler, The Practical Test Pyramid</a> - external prior art for balancing test granularity.</li>
+				<li><a href="https://coverage.readthedocs.io/en/latest/howitworks.html">Coverage.py, How coverage.py works</a> - branch coverage as observed line transitions.</li>
+				<li><a href="https://fast-check.dev/docs/introduction/what-is-property-based-testing/">fast-check, What is Property-Based Testing?</a> - external prior art for property-based input exploration.</li>
+			</ul>
+		</section>
+
+		<footer class="composition-signal">Composed 2026-06-15T04:51:29Z by ce-ideate from user prompt context and repo grounding. Scratch checkpoints: <code>/tmp/compound-engineering/ce-ideate/b2c47856/raw-candidates.md</code> and <code>/tmp/compound-engineering/ce-ideate/b2c47856/survivors.md</code>.</footer>
+	</div>
+</body>
+</html>

@@ -28,6 +28,7 @@
     "biome:format": "biome format --write .",
     "biome:lint": "biome lint --diagnostic-level=error .",
     "check:workspace-facade": "bun --filter browser-use-scripts build && bun run scripts/check-workspace-facade-invariants.ts",
+    "command-entrypoint:integration": "bun test scripts/command-entrypoint.integration.test.ts",
     "prove:workspace-portability": "bun run scripts/prove-workspace-portability.ts"
   },
   "devDependencies": {
@@ -36,6 +37,7 @@
   },
   "dependencies": {
     "@logtape/logtape": "^2.1.1",
+    "@side-quest/cli-command-facade": "workspace:*",
     "@puppeteer/replay": "4.0.2",
     "puppeteer-core": "25.1.0"
   }

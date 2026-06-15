@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Ideation: Agent-Native Multi-Agent CLI</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--bg: #f7f8f5;
+			--ink: #1b1f23;
+			--muted: #5c6670;
+			--panel: #ffffff;
+			--line: #d9ded6;
+			--accent: #0f766e;
+			--accent-soft: #d9f2ef;
+			--warn: #8a4b11;
+			--warn-soft: #f8e6c8;
+			--code: #263238;
+			--shadow: 0 10px 30px rgba(31, 41, 55, 0.08);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--ink);
+			font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		}
+
+		main {
+			width: min(960px, calc(100vw - 32px));
+			margin: 0 auto;
+			padding: 40px 0 56px;
+		}
+
+		header {
+			border-bottom: 1px solid var(--line);
+			padding-bottom: 24px;
+			margin-bottom: 28px;
+		}
+
+		.eyebrow {
+			font-size: 12px;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: var(--accent);
+			font-weight: 700;
+		}
+
+		h1 {
+			font-size: 34px;
+			line-height: 1.1;
+			margin: 8px 0 14px;
+		}
+
+		h2 {
+			font-size: 22px;
+			margin: 34px 0 14px;
+		}
+
+		h3 {
+			font-size: 18px;
+			margin: 0 0 10px;
+		}
+
+		p {
+			max-width: 76ch;
+		}
+
+		code {
+			color: var(--code);
+			background: #edf1ee;
+			border: 1px solid #dce3df;
+			border-radius: 5px;
+			padding: 1px 5px;
+			font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			font-size: 0.92em;
+		}
+
+		a {
+			color: var(--accent);
+			text-decoration-thickness: 1px;
+		}
+
+		.meta {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-top: 18px;
+		}
+
+		.chip {
+			display: inline-flex;
+			align-items: center;
+			border: 1px solid var(--line);
+			background: var(--panel);
+			border-radius: 999px;
+			padding: 4px 10px;
+			font-size: 13px;
+			color: var(--muted);
+		}
+
+		.summary-grid {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 12px;
+			margin: 22px 0;
+		}
+
+		.metric {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 14px;
+			box-shadow: var(--shadow);
+		}
+
+		.metric strong {
+			display: block;
+			font-size: 24px;
+			line-height: 1.1;
+		}
+
+		.metric span {
+			color: var(--muted);
+			font-size: 13px;
+		}
+
+		section {
+			margin-top: 28px;
+		}
+
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 18px;
+			box-shadow: var(--shadow);
+		}
+
+		.axes {
+			display: grid;
+			grid-template-columns: repeat(5, minmax(0, 1fr));
+			gap: 10px;
+			padding: 0;
+			list-style: none;
+		}
+
+		.axes li {
+			background: var(--accent-soft);
+			color: #0b4f4a;
+			border: 1px solid #b8dfda;
+			border-radius: 8px;
+			padding: 10px;
+			font-weight: 650;
+			font-size: 13px;
+		}
+
+		.jump-list {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 8px;
+			margin: 14px 0 18px;
+			padding: 0;
+			list-style: none;
+		}
+
+		.jump-list a {
+			display: block;
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 10px 12px;
+			text-decoration: none;
+		}
+
+		.idea {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 20px;
+			margin: 16px 0;
+			box-shadow: var(--shadow);
+		}
+
+		.idea-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 16px;
+			margin-bottom: 8px;
+		}
+
+		.rank {
+			background: var(--accent);
+			color: white;
+			border-radius: 999px;
+			padding: 3px 9px;
+			font-size: 13px;
+			font-weight: 700;
+			white-space: nowrap;
+		}
+
+		dl {
+			display: grid;
+			grid-template-columns: 110px 1fr;
+			gap: 8px 12px;
+			margin: 14px 0 0;
+		}
+
+		dt {
+			color: var(--muted);
+			font-weight: 700;
+		}
+
+		dd {
+			margin: 0;
+		}
+
+		.diagram {
+			margin: 16px 0;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: #fbfcfa;
+			padding: 12px;
+			overflow: auto;
+		}
+
+		table {
+			width: 100%;
+			border-collapse: collapse;
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			overflow: hidden;
+			box-shadow: var(--shadow);
+		}
+
+		th,
+		td {
+			border-bottom: 1px solid var(--line);
+			padding: 10px 12px;
+			text-align: left;
+			vertical-align: top;
+		}
+
+		th {
+			background: #eef3ef;
+			font-size: 13px;
+		}
+
+		tr:last-child td {
+			border-bottom: 0;
+		}
+
+		footer {
+			color: var(--muted);
+			border-top: 1px solid var(--line);
+			margin-top: 36px;
+			padding-top: 18px;
+			font-size: 13px;
+		}
+
+		@media (max-width: 760px) {
+			main {
+				width: min(100vw - 20px, 960px);
+				padding-top: 24px;
+			}
+
+			h1 {
+				font-size: 28px;
+			}
+
+			.summary-grid,
+			.axes,
+			.jump-list {
+				grid-template-columns: 1fr;
+			}
+
+			.idea-head {
+				display: block;
+			}
+
+			dl {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+<main>
+	<header>
+		<div class="eyebrow">ce-ideate artifact</div>
+		<h1>Ideation: Agent-Native Multi-Agent CLI</h1>
+		<p>A fresh product pass on a new CLI for multi-agent development in this repo. The premise: use SideQuest as source material, but build a proper agent-native command contract from the start, with <code>wt</code> as the front door.</p>
+		<div class="meta">
+			<span class="chip">Date: <time datetime="2026-06-14">2026-06-14</time></span>
+			<span class="chip">Topic: agent-native-multi-agent-cli</span>
+			<span class="chip">Mode: repo-grounded</span>
+			<span class="chip">Raw ideas: 47</span>
+			<span class="chip">Survivors: 7</span>
+		</div>
+	</header>
+
+	<section aria-labelledby="grounding">
+		<h2 id="grounding">Grounding Context</h2>
+		<div class="panel">
+			<p><strong>Repo doctrine:</strong> <code>AGENTS.md</code> says agent-native work should give maps, invariants, owners, next safe actions, inspectable state, mechanical CLI surfaces, continuations, repair hints, and failures that expose cause plus repair path.</p>
+			<p><strong>Existing front door:</strong> <code>skills/wt</code> already proves the pattern: a thin skill points to owner files, a facade-backed command contract owns discovery/help/runtime behavior, and the CLI delegates worktree CRUD instead of duplicating it.</p>
+			<p><strong>SideQuest carry-over:</strong> SideQuest has useful worktree lifecycle logic: create, list, check, delete, clean, recover, sync, status, orphan branch detection, dry-run cleanup, backup refs, and health metadata. Its product gap is not the logic. It was not born as a failure-designed multi-agent CLI.</p>
+			<p><strong>External signal:</strong> Public writing around AI coding workflows increasingly frames git worktrees as the practical substrate for parallel agents. CLI-Anything and adjacent agent-native CLI writing reinforce structured output as baseline, but the stronger opportunity here is recoverable orchestration state, not just <code>--json</code>.</p>
+			<p><strong>Prior local learning:</strong> The <code>create-cli</code> lane already separates Basic CLI, Agent-native CLI, and Facade-backed CLI. The new product should sit firmly in the Agent-native plus Facade-backed lane, with deterministic help, parser acceptance, runtime semantics, and proof that the surfaces cannot drift.</p>
+		</div>
+	</section>
+
+	<section aria-labelledby="axes">
+		<h2 id="axes">Topic Axes</h2>
+		<ul class="axes">
+			<li>Command contract</li>
+			<li>Failure and recovery</li>
+			<li>Multi-agent orchestration state</li>
+			<li>Worktree and workspace truth</li>
+			<li>SideQuest carry-over</li>
+		</ul>
+	</section>
+
+	<section aria-labelledby="ranked">
+		<h2 id="ranked">Ranked Ideas</h2>
+		<ul class="jump-list">
+			<li><a href="#idea-1">1. Repo Doctor As The First Command</a></li>
+			<li><a href="#idea-2">2. Failure Ledger And Continuation Tokens</a></li>
+			<li><a href="#idea-3">3. Handoff Packet For Every Work Unit</a></li>
+			<li><a href="#idea-4">4. Reconcile Desired Repo State</a></li>
+			<li><a href="#idea-5">5. SideQuest Logic As Compatibility Source</a></li>
+			<li><a href="#idea-6">6. Worktree Identity And Lease Model</a></li>
+			<li><a href="#idea-7">7. Contract Simulator And Smoke Corpus</a></li>
+		</ul>
+
+		<article class="idea" id="idea-1">
+			<div class="idea-head">
+				<h3>Repo Doctor As The First Command</h3>
+				<span class="rank">1</span>
+			</div>
+			<p><strong>Description:</strong> Make <code>doctor</code> the primary read command for the new CLI. It returns the repo's agent-operability map: git root, main worktree, linked worktrees, stale dirs, dirty branches, missing dependencies, contract health, available commands, blocked mutations, and next safe actions.</p>
+			<div class="diagram" aria-label="Doctor flow diagram">
+				<svg width="820" height="180" viewBox="0 0 820 180" role="img" aria-labelledby="doctor-title">
+					<title id="doctor-title">Doctor command gathers state and emits next safe actions</title>
+					<rect x="20" y="42" width="130" height="58" rx="8" fill="#d9f2ef" stroke="#7fc5bc"/>
+					<text x="85" y="67" text-anchor="middle" font-size="13" font-weight="700">Repo State</text>
+					<text x="85" y="86" text-anchor="middle" font-size="12">git, deps, config</text>
+					<rect x="190" y="42" width="130" height="58" rx="8" fill="#f8e6c8" stroke="#d6a65e"/>
+					<text x="255" y="67" text-anchor="middle" font-size="13" font-weight="700">Worktrees</text>
+					<text x="255" y="86" text-anchor="middle" font-size="12">main, linked, stale</text>
+					<rect x="360" y="42" width="130" height="58" rx="8" fill="#e6e8f8" stroke="#a7addb"/>
+					<text x="425" y="67" text-anchor="middle" font-size="13" font-weight="700">Contracts</text>
+					<text x="425" y="86" text-anchor="middle" font-size="12">help, parser, JSON</text>
+					<rect x="560" y="32" width="230" height="78" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="2"/>
+					<text x="675" y="61" text-anchor="middle" font-size="14" font-weight="700">Doctor Envelope</text>
+					<text x="675" y="83" text-anchor="middle" font-size="12">map + blockers + next actions</text>
+					<path d="M150 71 H190" stroke="#5c6670" stroke-width="2"/>
+					<path d="M320 71 H360" stroke="#5c6670" stroke-width="2"/>
+					<path d="M490 71 H560" stroke="#5c6670" stroke-width="2"/>
+					<rect x="560" y="132" width="230" height="28" rx="6" fill="#d9f2ef" stroke="#7fc5bc"/>
+					<text x="675" y="151" text-anchor="middle" font-size="12">safe commands and human handoffs</text>
+				</svg>
+			</div>
+			<dl>
+				<dt>Axis</dt><dd>Failure and recovery</dd>
+				<dt>Basis</dt><dd>direct: <code>AGENTS.md</code> requires maps, invariants, owners, next safe actions, inspectable state, and repair hints. SideQuest already has health-rich worktree reads but no single product-level operational map.</dd>
+				<dt>Rationale</dt><dd>Agents need orientation before mutation. A first-class doctor command turns "what state am I in?" into a deterministic contract instead of a chain of ad hoc shell reads.</dd>
+				<dt>Downsides</dt><dd>It can sprawl unless v1 names a closed set of checks and explicitly marks deferred checks.</dd>
+				<dt>Confidence</dt><dd>90%</dd>
+				<dt>Complexity</dt><dd>Medium</dd>
+			</dl>
+		</article>
+
+		<article class="idea" id="idea-2">
+			<div class="idea-head">
+				<h3>Failure Ledger And Continuation Tokens</h3>
+				<span class="rank">2</span>
+			</div>
+			<p><strong>Description:</strong> Every failed command writes a small JSONL event with <code>runId</code>, <code>failureId</code>, <code>errorFamily</code>, <code>recoverability</code>, <code>safeToRetrySameInput</code>, <code>idempotencyRisk</code>, and a continuation token. A later agent can run <code>resume &lt;token&gt;</code> or <code>inspect &lt;failureId&gt;</code> to recover the state without rereading the whole terminal transcript.</p>
+			<dl>
+				<dt>Axis</dt><dd>Failure and recovery</dd>
+				<dt>Basis</dt><dd>direct: <code>skills/agent-reliability-guardrails/references/error-envelope-schema.md</code> already names retry, resume, checkpoint, run correlation, safe retry, idempotency, and action metadata as desirable error fields.</dd>
+				<dt>Rationale</dt><dd>This makes failure resumable across context compaction, thread handoff, and side quests. It also turns repeated failures into product data for later hardening.</dd>
+				<dt>Downsides</dt><dd>Needs redaction and retention policy from day one. A bad ledger leaks context or becomes another stale truth store.</dd>
+				<dt>Confidence</dt><dd>88%</dd>
+				<dt>Complexity</dt><dd>Medium</dd>
+			</dl>
+		</article>
+
+		<article class="idea" id="idea-3">
+			<div class="idea-head">
+				<h3>Handoff Packet For Every Work Unit</h3>
+				<span class="rank">3</span>
+			</div>
+			<p><strong>Description:</strong> Add <code>handoff</code> as a product primitive, not just prose. It emits a compact packet containing current worktree, branch, dirty state, recent commands, unresolved failures, active docs, next safe actions, and verification status. The packet can be consumed by another agent, a new Codex thread, or a human.</p>
+			<dl>
+				<dt>Axis</dt><dd>Multi-agent orchestration state</dd>
+				<dt>Basis</dt><dd>reasoned: multi-agent development fails when state is trapped in a single agent's context. A structured packet lets work transfer between agents without trusting memory or chat scrollback.</dd>
+				<dt>Rationale</dt><dd>This is the clearest "multi-agent" feature beyond worktrees. It makes agents composable collaborators instead of isolated terminal sessions.</dd>
+				<dt>Downsides</dt><dd>Needs tight scope. If it tries to summarize everything, it becomes noisy and expensive.</dd>
+				<dt>Confidence</dt><dd>84%</dd>
+				<dt>Complexity</dt><dd>Medium</dd>
+			</dl>
+		</article>
+
+		<article class="idea" id="idea-4">
+			<div class="idea-head">
+				<h3>Reconcile Desired Repo State</h3>
+				<span class="rank">4</span>
+			</div>
+			<p><strong>Description:</strong> Model repo state declaratively: desired worktrees, workspace render, dependencies, copied config, ignored files, and known safe cleanup. A <code>reconcile</code> command previews drift and applies only safe repairs unless <code>--force</code> is supplied.</p>
+			<div class="diagram" aria-label="Reconcile loop diagram">
+				<svg width="820" height="150" viewBox="0 0 820 150" role="img" aria-labelledby="reconcile-title">
+					<title id="reconcile-title">Reconcile compares desired state to actual state</title>
+					<rect x="30" y="32" width="170" height="64" rx="8" fill="#d9f2ef" stroke="#7fc5bc"/>
+					<text x="115" y="61" text-anchor="middle" font-size="14" font-weight="700">Desired State</text>
+					<text x="115" y="82" text-anchor="middle" font-size="12">registry + contracts</text>
+					<rect x="320" y="32" width="170" height="64" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="2"/>
+					<text x="405" y="61" text-anchor="middle" font-size="14" font-weight="700">Reconcile</text>
+					<text x="405" y="82" text-anchor="middle" font-size="12">diff + safe repairs</text>
+					<rect x="620" y="32" width="170" height="64" rx="8" fill="#f8e6c8" stroke="#d6a65e"/>
+					<text x="705" y="61" text-anchor="middle" font-size="14" font-weight="700">Actual State</text>
+					<text x="705" y="82" text-anchor="middle" font-size="12">worktrees + files</text>
+					<path d="M200 64 H320" stroke="#5c6670" stroke-width="2"/>
+					<path d="M620 64 H490" stroke="#5c6670" stroke-width="2"/>
+					<path d="M405 96 V124 H705 V98" fill="none" stroke="#0f766e" stroke-width="2"/>
+					<text x="555" y="139" text-anchor="middle" font-size="12">apply safe subset, report blocked repairs</text>
+				</svg>
+			</div>
+			<dl>
+				<dt>Axis</dt><dd>Worktree and workspace truth</dd>
+				<dt>Basis</dt><dd>direct: <code>wt</code> already renders desired workspace output from a registry plus live worktree state and blocks drift. SideQuest already copies config, prunes worktrees, and checks deletion safety.</dd>
+				<dt>Rationale</dt><dd>Reconcile unifies scattered repair actions. It lets agents say "restore the repo to the expected operating shape" without manually chaining commands.</dd>
+				<dt>Downsides</dt><dd>Needs a careful preview contract so it does not become surprising automation.</dd>
+				<dt>Confidence</dt><dd>80%</dd>
+				<dt>Complexity</dt><dd>High</dd>
+			</dl>
+		</article>
+
+		<article class="idea" id="idea-5">
+			<div class="idea-head">
+				<h3>SideQuest Logic As Compatibility Source, Not Product Owner</h3>
+				<span class="rank">5</span>
+			</div>
+			<p><strong>Description:</strong> Treat SideQuest as a library/source migration pool. Bring across worktree create/list/check/delete/clean/recover/status, but wrap it in a new command contract with stable diagnostic families, explicit no-input behavior, discovery metadata, and repair actions. Keep compatibility shims only long enough to reduce migration risk.</p>
+			<dl>
+				<dt>Axis</dt><dd>SideQuest carry-over</dd>
+				<dt>Basis</dt><dd>direct: SideQuest command metadata exposes useful verbs, and its cleanup code includes safety checks and backup refs. But its README is stale, and orphan semantics are branch-centric rather than broader repo hygiene.</dd>
+				<dt>Rationale</dt><dd>This preserves proven logic without inheriting SideQuest's product ceiling. It also prevents the new CLI from being a renamed wrapper.</dd>
+				<dt>Downsides</dt><dd>Migration needs tests that prove old behavior still works where intentionally retained.</dd>
+				<dt>Confidence</dt><dd>86%</dd>
+				<dt>Complexity</dt><dd>Medium</dd>
+			</dl>
+		</article>
+
+		<article class="idea" id="idea-6">
+			<div class="idea-head">
+				<h3>Worktree Identity And Lease Model</h3>
+				<span class="rank">6</span>
+			</div>
+			<p><strong>Description:</strong> Treat each active worktree as an agent work unit with an owner, purpose, lease, dirty state, blockers, and stale-after timestamp. Commands can list leases, renew ownership, detect abandoned work, and refuse destructive cleanup when another agent appears active.</p>
+			<dl>
+				<dt>Axis</dt><dd>Multi-agent orchestration state</dd>
+				<dt>Basis</dt><dd>external: public AI-worktree workflow writing frames worktrees as the main substrate for parallel coding agents. reasoned: once more than one agent operates, branch/path alone is too weak as identity.</dd>
+				<dt>Rationale</dt><dd>Leases make "many agents in one repo" operationally visible. They reduce accidental deletion and give cleanup a principled stale-work signal.</dd>
+				<dt>Downsides</dt><dd>Needs to avoid pretending to be a distributed lock. Local leases are advisory unless backed by a shared store.</dd>
+				<dt>Confidence</dt><dd>74%</dd>
+				<dt>Complexity</dt><dd>High</dd>
+			</dl>
+		</article>
+
+		<article class="idea" id="idea-7">
+			<div class="idea-head">
+				<h3>Contract Simulator And Smoke Corpus</h3>
+				<span class="rank">7</span>
+			</div>
+			<p><strong>Description:</strong> Ship a simulator that runs each command through discovery metadata, rendered help, accepted/rejected argv, JSON success, JSON error, no-input behavior, and representative runtime semantics. Keep a smoke corpus of failure fixtures: missing dependency, dirty worktree, stale dir, bad registry, drift block, upstream CLI failure, interrupted run.</p>
+			<dl>
+				<dt>Axis</dt><dd>Command contract</dd>
+				<dt>Basis</dt><dd>direct: <code>create-cli</code> requires proving discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift for changed CLI surfaces. <code>agent-reliability-guardrails</code> supplies output and error invariant tests.</dd>
+				<dt>Rationale</dt><dd>This turns "agent-native" from aspiration into a regression suite. It also lets <code>wt</code> and future skills trust the CLI instead of restating its behavior.</dd>
+				<dt>Downsides</dt><dd>Less flashy than user-facing commands. Best paired with <code>doctor</code> so value is visible early.</dd>
+				<dt>Confidence</dt><dd>82%</dd>
+				<dt>Complexity</dt><dd>Medium</dd>
+			</dl>
+		</article>
+	</section>
+
+	<section aria-labelledby="rejections">
+		<h2 id="rejections">Rejection Summary</h2>
+		<table>
+			<thead>
+				<tr>
+					<th>#</th>
+					<th>Idea</th>
+					<th>Reason Rejected</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr><td>1</td><td>Generic <code>--json</code> everywhere</td><td>Already baseline in create-cli and facade guidance; too small to define this product.</td></tr>
+				<tr><td>2</td><td>Bigger SideQuest wrapper</td><td>Preserves the old product shape instead of building the failure-designed multi-agent CLI.</td></tr>
+				<tr><td>3</td><td>Full task tracker</td><td>Useful later, but too broad and risks duplicating issue trackers before repo state is solved.</td></tr>
+				<tr><td>4</td><td>Auto-merge queue first</td><td>High-risk mutation before doctor, leases, and failure recovery exist.</td></tr>
+				<tr><td>5</td><td>Human dashboard first</td><td>Nice surface, but not the agent-native core. The CLI contract should produce the state first.</td></tr>
+				<tr><td>6</td><td>Chat transcript summarizer</td><td>Adjacent to handoff, but weaker because it depends on unstructured context rather than command-owned state.</td></tr>
+				<tr><td>7</td><td>Plugin marketplace for repo tools</td><td>Subject expansion. Better as a future extension after the core state machine proves itself.</td></tr>
+				<tr><td>8</td><td>Visual kanban board</td><td>Useful projection, not the product spine. Build from command discovery and run ledger later.</td></tr>
+				<tr><td>9</td><td>Hidden automatic repair on every failure</td><td>Too surprising. Recovery choices should be explicit and safe to inspect.</td></tr>
+				<tr><td>10</td><td>Branch naming coach</td><td>Helpful but below ambition floor for this ideation.</td></tr>
+			</tbody>
+		</table>
+	</section>
+
+	<section aria-labelledby="sources">
+		<h2 id="sources">Reference Index</h2>
+		<div class="panel">
+			<p><strong>Repo:</strong> <code>AGENTS.md</code>, <code>skills/wt/SKILL.md</code>, <code>skills/wt/src/command-contract.ts</code>, <code>skills/wt/src/wt.ts</code>, <code>skills/create-cli/SKILL.md</code>, <code>skills/create-cli/references/cli-command-facade.md</code>, <code>skills/agent-reliability-guardrails/references/error-envelope-schema.md</code>, <code>docs/git/worktree.md</code>.</p>
+			<p><strong>SideQuest:</strong> <code>/Users/nathanvale/code/side-quest-git/src/worktree/cli/commands.ts</code>, <code>/Users/nathanvale/code/side-quest-git/src/worktree/clean.ts</code>, <code>/Users/nathanvale/code/side-quest-git/src/worktree/orphans.ts</code>.</p>
+			<p><strong>External:</strong> CLI-Anything agent-native CLI prior art, Upsun and Nx articles on git worktrees for parallel AI coding agents, and 2026 worktree workflow writing surfaced during the web pass.</p>
+		</div>
+	</section>
+
+	<footer class="composition-signal">
+		Composed 2026-06-14T00:00:00+10:00 by ce-ideate from the user prompt about a greenfield agent-native multi-agent CLI with <code>wt</code> as front door.
+	</footer>
+</main>
+</body>
+</html>

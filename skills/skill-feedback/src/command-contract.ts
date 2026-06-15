@@ -28,6 +28,12 @@ export const SKILL_FEEDBACK_REVIEW_CONTRACT_ID =
 	"skill-feedback.review" as const;
 
 /**
+ * Stable result contract identity for health envelopes.
+ */
+export const SKILL_FEEDBACK_HEALTH_CONTRACT_ID =
+	"skill-feedback.health" as const;
+
+/**
  * Stable result contract identity for inbox purge envelopes.
  */
 export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
@@ -46,7 +52,12 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "1" as const;
  * Review result semantics can advance independently from persisted report
  * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "3" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "4" as const;
+
+/**
+ * Schema version for health-specific read-only result envelopes.
+ */
+export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "1" as const;
 
 /**
  * Schema version for purge-specific result envelopes.
@@ -220,6 +231,46 @@ const REVIEW_CLAIM_READINESS_STATUSES = [
 	"ready",
 	"blocked",
 	"evidence_only",
+] as const;
+
+const SKILL_FEEDBACK_HEALTH_INBOX_STATUSES = [
+	"missing",
+	"empty",
+	"populated",
+	"partially_readable",
+	"unsafe",
+] as const;
+
+const SKILL_FEEDBACK_HEALTH_WARNING_REASON_IDS = [
+	"inbox_missing",
+	"inbox_empty",
+	"unsafe_inbox",
+	"partial_readability",
+	"unlinked_primary_reports",
+	"low_signal_threshold",
+	"retention_preview_recommended",
+] as const;
+
+const SKILL_FEEDBACK_HEALTH_READINESS_STATUSES = [
+	"ready",
+	"blocked",
+	"evidence_only",
+] as const;
+
+const SKILL_FEEDBACK_HEALTH_CORRELATION_STATUSES = [
+	"none",
+	"linked",
+	"partially_linked",
+	"all_unlinked",
+] as const;
+
+const SKILL_FEEDBACK_HEALTH_NEXT_ACTION_IDS = [
+	"confirm-capture-path",
+	"run-review",
+	"inspect-report-correlation",
+	"inspect-capture-identity",
+	"preview-purge",
+	"repair-inbox-state",
 ] as const;
 
 /**
@@ -569,6 +620,85 @@ export type ReviewInboxHealth = {
 	invalid_count: number;
 };
 
+/**
+ * Diagnostic read-target facts emitted only when path context changes review
+ * interpretation, such as an explicit `--repo` override.
+ */
+export type ReviewReadTarget = {
+	explicit: boolean;
+	repo_root: string;
+	inbox_path: string;
+	target_path?: string;
+};
+
+export type HealthInboxStatus =
+	(typeof SKILL_FEEDBACK_HEALTH_INBOX_STATUSES)[number];
+
+export type HealthWarningReasonId =
+	(typeof SKILL_FEEDBACK_HEALTH_WARNING_REASON_IDS)[number];
+
+export type HealthReadinessStatus =
+	(typeof SKILL_FEEDBACK_HEALTH_READINESS_STATUSES)[number];
+
+export type HealthCorrelationStatus =
+	(typeof SKILL_FEEDBACK_HEALTH_CORRELATION_STATUSES)[number];
+
+export type HealthNextActionId =
+	(typeof SKILL_FEEDBACK_HEALTH_NEXT_ACTION_IDS)[number];
+
+export type HealthCounts = {
+	primary: number;
+	low_signal: number;
+	invalid: number;
+	skipped_unsafe: number;
+	unlinked_primary: number;
+};
+
+export type HealthNewest = {
+	primary_generated_ts?: string;
+	low_signal_generated_ts?: string;
+};
+
+export type HealthWarning = {
+	reason_id: HealthWarningReasonId;
+	summary: string;
+};
+
+export type HealthReadinessFact = {
+	status: HealthReadinessStatus;
+	reason_ids: readonly string[];
+};
+
+export type HealthClaimReadiness = {
+	runtime_capture: HealthReadinessFact;
+	trusted_skill_identity: HealthReadinessFact;
+	daily_pilot: HealthReadinessFact;
+};
+
+export type HealthCorrelation = {
+	status: HealthCorrelationStatus;
+	linked_primary_count: number;
+	unlinked_primary_count: number;
+};
+
+export type HealthNextAction = {
+	action_id: HealthNextActionId;
+	summary: string;
+};
+
+export type HealthResultData = {
+	contract: typeof SKILL_FEEDBACK_HEALTH_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION;
+	inbox_status: HealthInboxStatus;
+	counts: HealthCounts;
+	newest: HealthNewest;
+	warnings: readonly HealthWarning[];
+	claim_readiness: HealthClaimReadiness;
+	correlation: HealthCorrelation;
+	next_action: HealthNextAction;
+	read_target?: ReviewReadTarget;
+};
+
 export type ReviewPilotCheckpoint = {
 	started_at: string;
 	age_days: number;
@@ -724,6 +854,11 @@ export type ReviewResultData = {
 	schema_version: typeof SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION;
 	coverage: ReviewCoverage;
 	inbox_health: ReviewInboxHealth;
+	inbox_status: HealthInboxStatus;
+	counts: HealthCounts;
+	warnings: readonly HealthWarning[];
+	next_action: HealthNextAction;
+	read_target?: ReviewReadTarget;
 	open_items: readonly ReviewOpenItem[];
 	open_actions: readonly ReviewOpenAction[];
 	no_action?: { rationale: string };
@@ -770,6 +905,10 @@ export type SkillFeedbackPurgeResultData = {
  */
 export type ParseReviewResultDataResult =
 	| { kind: "ok"; data: ReviewResultData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParseHealthResultDataResult =
+	| { kind: "ok"; data: HealthResultData }
 	| { kind: "invalid"; path: string; reason: string };
 
 export type ParsePurgeResultDataResult =
@@ -1193,6 +1332,11 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"schema_version",
 	"coverage",
 	"inbox_health",
+	"inbox_status",
+	"counts",
+	"warnings",
+	"next_action",
+	"read_target",
 	"open_items",
 	"open_actions",
 	"no_action",
@@ -1223,6 +1367,12 @@ const REVIEW_INBOX_HEALTH_FIELDS = [
 	"low_signal_reason_ids",
 	"skipped_unsafe_count",
 	"invalid_count",
+] as const;
+const REVIEW_READ_TARGET_FIELDS = [
+	"explicit",
+	"repo_root",
+	"inbox_path",
+	"target_path",
 ] as const;
 const REVIEW_OPEN_ITEM_FIELDS = [
 	"open_reason",
@@ -1294,6 +1444,42 @@ const REVIEW_CLAIM_READINESS_FACT_FIELDS = [
 	"reason_ids",
 	"evidence_refs",
 ] as const;
+const HEALTH_RESULT_FIELDS = [
+	"contract",
+	"schema_version",
+	"inbox_status",
+	"counts",
+	"newest",
+	"warnings",
+	"claim_readiness",
+	"correlation",
+	"next_action",
+	"read_target",
+] as const;
+const HEALTH_COUNTS_FIELDS = [
+	"primary",
+	"low_signal",
+	"invalid",
+	"skipped_unsafe",
+	"unlinked_primary",
+] as const;
+const HEALTH_NEWEST_FIELDS = [
+	"primary_generated_ts",
+	"low_signal_generated_ts",
+] as const;
+const HEALTH_WARNING_FIELDS = ["reason_id", "summary"] as const;
+const HEALTH_CLAIM_READINESS_FIELDS = [
+	"runtime_capture",
+	"trusted_skill_identity",
+	"daily_pilot",
+] as const;
+const HEALTH_READINESS_FACT_FIELDS = ["status", "reason_ids"] as const;
+const HEALTH_CORRELATION_FIELDS = [
+	"status",
+	"linked_primary_count",
+	"unlinked_primary_count",
+] as const;
+const HEALTH_NEXT_ACTION_FIELDS = ["action_id", "summary"] as const;
 const PURGE_RESULT_FIELDS = [
 	"contract",
 	"schema_version",
@@ -1461,50 +1647,82 @@ export function normalizeReport(raw: unknown): NormalizeReportResult {
 export function parseReviewResultData(
 	raw: unknown,
 ): ParseReviewResultDataResult {
-	if (!isRecord(raw)) {
-		return { kind: "invalid", path: "$", reason: "expected_object" };
-	}
-	const topLevel = validateAllowedKeys(raw, REVIEW_RESULT_V2_FIELD_SET);
-	if (topLevel) return topLevel;
-	if (raw.contract !== SKILL_FEEDBACK_REVIEW_CONTRACT_ID) {
-		return { kind: "invalid", path: "contract", reason: "unsupported" };
-	}
-	if (raw.schema_version !== SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION) {
-		return {
-			kind: "invalid",
-			path: "schema_version",
-			reason: "unsupported",
-		};
-	}
-	const coverage = validateReviewCoverage(raw.coverage);
-	if (coverage) return coverage;
-	const inboxHealth = validateReviewInboxHealth(raw.inbox_health);
-	if (inboxHealth) return inboxHealth;
-	const openItems = validateReviewOpenItems(raw.open_items);
-	if (openItems) return openItems;
-	const openActions = validateReviewOpenActions(raw.open_actions);
-	if (openActions) return openActions;
-	if ("no_action" in raw) {
-		const noAction = validateNoAction(raw.no_action);
-		if (noAction) return noAction;
-	}
-	const retention = validateReviewRetention(raw.retention);
-	if (retention) return retention;
-	if ("pilot_checkpoint" in raw) {
-		const pilotCheckpoint = validateReviewPilotCheckpoint(raw.pilot_checkpoint);
-		if (pilotCheckpoint) return pilotCheckpoint;
-	}
-	const reviewUnits = validateReviewUnits(raw.review_units);
-	if (reviewUnits) return reviewUnits;
-	const ledgerEntries = validateReviewLedgerEntries(raw.ledger_entries);
-	if (ledgerEntries) return ledgerEntries;
-	const anchorMissTelemetry = validateReviewAnchorMissTelemetry(
-		raw.anchor_miss_telemetry,
-	);
-	if (anchorMissTelemetry) return anchorMissTelemetry;
-	const claimReadiness = validateReviewClaimReadiness(raw.claim_readiness);
-	if (claimReadiness) return claimReadiness;
-	return { kind: "ok", data: raw as ReviewResultData };
+	const review = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(review)) return review;
+	const error = validateReviewResultDataShape(review);
+	if (error) return error;
+	return { kind: "ok", data: review as ReviewResultData };
+}
+
+function validateReviewResultDataShape(
+	review: Record<string, unknown>,
+): ReviewResultValidationError | undefined {
+	return [
+		validateAllowedKeys(review, REVIEW_RESULT_V2_FIELD_SET),
+		validateExpectedValue(
+			review.contract,
+			SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+		validateExpectedValue(
+			review.schema_version,
+			SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+			"schema_version",
+			"unsupported",
+		),
+		validateReviewCoverage(review.coverage),
+		validateReviewInboxHealth(review.inbox_health),
+		validateReviewHealthProjection(review),
+		"read_target" in review
+			? validateReviewReadTarget(review.read_target)
+			: undefined,
+		validateReviewOpenItems(review.open_items),
+		validateReviewOpenActions(review.open_actions),
+		"no_action" in review ? validateNoAction(review.no_action) : undefined,
+		validateReviewRetention(review.retention),
+		"pilot_checkpoint" in review
+			? validateReviewPilotCheckpoint(review.pilot_checkpoint)
+			: undefined,
+		validateReviewUnits(review.review_units),
+		validateReviewLedgerEntries(review.ledger_entries),
+		validateReviewAnchorMissTelemetry(review.anchor_miss_telemetry),
+		validateReviewClaimReadiness(review.claim_readiness),
+	].find(isReviewResultValidationError);
+}
+
+export function parseHealthResultData(
+	raw: unknown,
+): ParseHealthResultDataResult {
+	const health = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(health)) return health;
+	const error = [
+		validateAllowedKeys(health, new Set(HEALTH_RESULT_FIELDS)),
+		validateExpectedValue(
+			health.contract,
+			SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+			validateExpectedValue(
+				health.schema_version,
+				SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+				"schema_version",
+				"unsupported",
+			),
+			validateHealthInboxStatus(health.inbox_status),
+			validateHealthCounts(health.counts),
+			validateHealthNewest(health.newest),
+			validateHealthWarnings(health.warnings),
+			validateHealthClaimReadiness(health.claim_readiness),
+			validateHealthCorrelation(health.correlation),
+			validateHealthNextAction(health.next_action),
+			"read_target" in health
+				? validateHealthReadTarget(health.read_target)
+				: undefined,
+		].find(isReviewResultValidationError);
+	if (error) return error;
+	return { kind: "ok", data: health as HealthResultData };
 }
 
 export function parsePurgeResultData(
@@ -2163,6 +2381,15 @@ function validateReviewBoolean(
 	if (typeof raw !== "boolean") return reviewResultError(path, "expected_boolean");
 }
 
+function validateExpectedValue(
+	raw: unknown,
+	expected: unknown,
+	path: string,
+	reason: string,
+): ReviewResultValidationError | undefined {
+	if (raw !== expected) return reviewResultError(path, reason);
+}
+
 function validateReviewStringArray(
 	raw: unknown,
 	path: string,
@@ -2253,6 +2480,48 @@ function validateReviewInboxHealth(
 		health.low_signal_reason_ids,
 		"inbox_health.low_signal_reason_ids",
 	);
+}
+
+function validateReviewHealthProjection(
+	raw: Record<string, unknown>,
+): ReviewResultValidationError | undefined {
+	return [
+		validateHealthInboxStatus(raw.inbox_status),
+		validateHealthCounts(raw.counts),
+		validateHealthWarnings(raw.warnings),
+		validateHealthNextAction(raw.next_action),
+	].find(isReviewResultValidationError);
+}
+
+function validateReviewReadTarget(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const target = requireReviewRecord(raw, "read_target");
+	if (isReviewResultValidationError(target)) return target;
+	return validateReadTargetFields(target, "read_target");
+}
+
+function validateHealthReadTarget(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const target = requireReviewRecord(raw, "read_target");
+	if (isReviewResultValidationError(target)) return target;
+	return validateReadTargetFields(target, "read_target");
+}
+
+function validateReadTargetFields(
+	target: Record<string, unknown>,
+	path: string,
+): ReviewResultValidationError | undefined {
+	return [
+		validateAllowedKeys(target, new Set(REVIEW_READ_TARGET_FIELDS), path),
+		validateReviewBoolean(target.explicit, `${path}.explicit`),
+		validateReviewString(target.repo_root, `${path}.repo_root`),
+		validateReviewString(target.inbox_path, `${path}.inbox_path`),
+		"target_path" in target
+			? validateReviewString(target.target_path, `${path}.target_path`)
+			: undefined,
+	].find(isReviewResultValidationError);
 }
 
 function validatePurgeRetention(
@@ -2697,6 +2966,159 @@ function validateReviewClaimReadinessFact(
 	return validateReviewStringArray(fact.evidence_refs, `${path}.evidence_refs`);
 }
 
+function validateHealthInboxStatus(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	if (!isHealthInboxStatus(raw)) return reviewResultError("inbox_status", "invalid");
+}
+
+function validateHealthCounts(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const counts = requireReviewRecord(raw, "counts");
+	if (isReviewResultValidationError(counts)) return counts;
+	return [
+		validateAllowedKeys(counts, new Set(HEALTH_COUNTS_FIELDS), "counts"),
+		validateNumberFields(counts, HEALTH_COUNTS_FIELDS, "counts"),
+	].find(isReviewResultValidationError);
+}
+
+function validateHealthNewest(raw: unknown): ReviewResultValidationError | undefined {
+	const newest = requireReviewRecord(raw, "newest");
+	if (isReviewResultValidationError(newest)) return newest;
+	return [
+		validateAllowedKeys(newest, new Set(HEALTH_NEWEST_FIELDS), "newest"),
+		validateOptionalStringFields(newest, HEALTH_NEWEST_FIELDS, "newest"),
+	].find(isReviewResultValidationError);
+}
+
+function validateHealthWarnings(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError("warnings", "expected_array");
+	return raw
+		.map((warningRaw, index) =>
+			validateHealthWarning(warningRaw, `warnings[${index}]`),
+		)
+		.find(isReviewResultValidationError);
+}
+
+function validateHealthWarning(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const warning = requireReviewRecord(raw, path);
+	if (isReviewResultValidationError(warning)) return warning;
+	return [
+		validateAllowedKeys(warning, new Set(HEALTH_WARNING_FIELDS), path),
+		isHealthWarningReasonId(warning.reason_id)
+			? undefined
+			: reviewResultError(`${path}.reason_id`, "invalid_warning_reason"),
+		validateReviewString(warning.summary, `${path}.summary`),
+	].find(isReviewResultValidationError);
+}
+
+function validateHealthClaimReadiness(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const readiness = requireReviewRecord(raw, "claim_readiness");
+	if (isReviewResultValidationError(readiness)) return readiness;
+	return [
+		validateAllowedKeys(
+			readiness,
+			new Set(HEALTH_CLAIM_READINESS_FIELDS),
+			"claim_readiness",
+		),
+		...HEALTH_CLAIM_READINESS_FIELDS.map((field) =>
+			validateHealthReadinessFact(
+				readiness[field],
+				`claim_readiness.${field}`,
+			),
+		),
+	].find(isReviewResultValidationError);
+}
+
+function validateHealthReadinessFact(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const fact = requireReviewRecord(raw, path);
+	if (isReviewResultValidationError(fact)) return fact;
+	const unknown = validateAllowedKeys(
+		fact,
+		new Set(HEALTH_READINESS_FACT_FIELDS),
+		path,
+	);
+	if (unknown) return unknown;
+	if (!isHealthReadinessStatus(fact.status)) {
+		return reviewResultError(`${path}.status`, "invalid_readiness_status");
+	}
+	return validateReviewStringArray(fact.reason_ids, `${path}.reason_ids`);
+}
+
+function validateHealthCorrelation(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const correlation = requireReviewRecord(raw, "correlation");
+	if (isReviewResultValidationError(correlation)) return correlation;
+	return [
+		validateAllowedKeys(
+			correlation,
+			new Set(HEALTH_CORRELATION_FIELDS),
+			"correlation",
+		),
+		isHealthCorrelationStatus(correlation.status)
+			? undefined
+			: reviewResultError("correlation.status", "invalid_correlation_status"),
+		validateNumberFields(
+			correlation,
+			["linked_primary_count", "unlinked_primary_count"] as const,
+			"correlation",
+		),
+	].find(isReviewResultValidationError);
+}
+
+function validateHealthNextAction(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const nextAction = requireReviewRecord(raw, "next_action");
+	if (isReviewResultValidationError(nextAction)) return nextAction;
+	const unknown = validateAllowedKeys(
+		nextAction,
+		new Set(HEALTH_NEXT_ACTION_FIELDS),
+		"next_action",
+	);
+	if (unknown) return unknown;
+	if (!isHealthNextActionId(nextAction.action_id)) {
+		return reviewResultError("next_action.action_id", "invalid_action_id");
+	}
+	return validateReviewString(nextAction.summary, "next_action.summary");
+}
+
+function validateNumberFields<const Field extends readonly string[]>(
+	record: Record<string, unknown>,
+	fields: Field,
+	pathPrefix: string,
+): ReviewResultValidationError | undefined {
+	return fields
+		.map((field) => validateReviewNumber(record[field], `${pathPrefix}.${field}`))
+		.find(isReviewResultValidationError);
+}
+
+function validateOptionalStringFields<const Field extends readonly string[]>(
+	record: Record<string, unknown>,
+	fields: Field,
+	pathPrefix: string,
+): ReviewResultValidationError | undefined {
+	return fields
+		.map((field) =>
+			field in record
+				? validateReviewString(record[field], `${pathPrefix}.${field}`)
+				: undefined,
+		)
+		.find(isReviewResultValidationError);
+}
+
 function v0Gap(field: ReceiptField): EvidenceGap {
 	switch (field) {
 		case "skill":
@@ -2796,6 +3218,42 @@ function isReviewLedgerVerificationLevel(
 	return (REVIEW_LEDGER_VERIFICATION_LEVELS as readonly unknown[]).includes(
 		value,
 	);
+}
+
+function isHealthInboxStatus(value: unknown): value is HealthInboxStatus {
+	return (SKILL_FEEDBACK_HEALTH_INBOX_STATUSES as readonly unknown[]).includes(
+		value,
+	);
+}
+
+function isHealthWarningReasonId(
+	value: unknown,
+): value is HealthWarningReasonId {
+	return (
+		SKILL_FEEDBACK_HEALTH_WARNING_REASON_IDS as readonly unknown[]
+	).includes(value);
+}
+
+function isHealthReadinessStatus(
+	value: unknown,
+): value is HealthReadinessStatus {
+	return (
+		SKILL_FEEDBACK_HEALTH_READINESS_STATUSES as readonly unknown[]
+	).includes(value);
+}
+
+function isHealthCorrelationStatus(
+	value: unknown,
+): value is HealthCorrelationStatus {
+	return (
+		SKILL_FEEDBACK_HEALTH_CORRELATION_STATUSES as readonly unknown[]
+	).includes(value);
+}
+
+function isHealthNextActionId(value: unknown): value is HealthNextActionId {
+	return (
+		SKILL_FEEDBACK_HEALTH_NEXT_ACTION_IDS as readonly unknown[]
+	).includes(value);
 }
 
 export function isCaptureRuntime(value: unknown): value is CaptureRuntime {
@@ -2927,6 +3385,7 @@ const SKILL_FEEDBACK_COMMANDS = [
 	"record",
 	"closeout",
 	"review",
+	"health",
 	"purge",
 ] as const;
 
@@ -2936,7 +3395,12 @@ const SKILL_FEEDBACK_COMMANDS = [
 export type SkillFeedbackCommand = (typeof SKILL_FEEDBACK_COMMANDS)[number];
 
 type SkillFeedbackAudience = "agent";
-type SkillFeedbackMutation = "capture" | "closeout" | "review" | "purge";
+type SkillFeedbackMutation =
+	| "capture"
+	| "closeout"
+	| "review"
+	| "health"
+	| "purge";
 type SkillFeedbackCommandContract = CommandFacadeContract<
 	SkillFeedbackCommand,
 	SkillFeedbackAudience,
@@ -3009,6 +3473,14 @@ const reviewResultContract = {
 	SkillFeedbackCommandContract["resultContract"]
 >;
 
+const healthResultContract = {
+	id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+	kind: "Software Learning Report inbox health envelope.",
+	schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
 const purgeResultContract = {
 	id: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	kind: "Software Learning Report inbox purge envelope.",
@@ -3035,11 +3507,28 @@ const reviewExitCodes = {
 	"2": "Invalid review usage.",
 } as const satisfies SkillFeedbackCommandContract["exitCodes"];
 
+const healthExitCodes = {
+	"0": "Health check completed without mutating the inbox.",
+	"1": "Health check blocked by unsafe inbox state or target resolution failure.",
+	"2": "Invalid health usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
 const purgeExitCodes = {
 	"0": "Purge preview completed or selected safe reports were deleted.",
 	"1": "Purge blocked by unsafe inbox state or deletion failure.",
 	"2": "Invalid purge usage.",
 } as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const readOnlyFlags = {
+	"--plain": {
+		type: "boolean",
+		description: "Emit compact human-readable output.",
+	},
+	"--repo": {
+		type: "string",
+		description: "Resolve the read target from this path's repository root.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
 
 const purgeFlags = {
 	"--lane": {
@@ -3112,7 +3601,7 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 		review: {
 			script: "skill-feedback-runner",
 			summary: "Review inbox evidence without mutating reports.",
-			usage: ["review [--plain]"],
+			usage: ["review [--plain] [--repo <path>]"],
 			json: true,
 			audience: "agent",
 			mutation: "review",
@@ -3121,13 +3610,23 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			resultContract: reviewResultContract,
-			flags: {
-				"--plain": {
-					type: "boolean",
-					description: "Emit a compact human-readable review.",
-				},
-			},
+			flags: readOnlyFlags,
 			exitCodes: reviewExitCodes,
+		},
+		health: {
+			script: "skill-feedback-runner",
+			summary: "Check inbox health without mutating reports.",
+			usage: ["health [--plain] [--repo <path>]"],
+			json: true,
+			audience: "agent",
+			mutation: "health",
+			sideEffects: ["read"],
+			executionModes: ["normal"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			resultContract: healthResultContract,
+			flags: readOnlyFlags,
+			exitCodes: healthExitCodes,
 		},
 		purge: {
 			script: "skill-feedback-runner",
