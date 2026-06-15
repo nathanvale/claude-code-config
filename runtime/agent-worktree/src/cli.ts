@@ -88,6 +88,10 @@ export interface ParsedInvocation {
 	base?: string;
 	/** Output limit. */
 	limit?: number;
+	/** Projection field sets. */
+	fields?: readonly string[];
+	/** Projection selector. */
+	select?: string;
 	/** Parse error result. */
 	parseError?: CommandResult;
 }
@@ -229,6 +233,8 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let ref: string | undefined;
 	let base: string | undefined;
 	let limit: number | undefined;
+	let fields: readonly string[] | undefined;
+	let select: string | undefined;
 	let json = false;
 	let dryRun = false;
 	let preview = false;
@@ -247,6 +253,8 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		ref,
 		base,
 		limit,
+		fields,
+		select,
 		parseError: usageFailure(message),
 	});
 
@@ -267,7 +275,14 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		} else if (arg === "--delete-branch") {
 			deleteBranch = true;
 			usedFlags.add(arg);
-		} else if (arg === "--repo" || arg === "--ref" || arg === "--base" || arg === "--limit") {
+		} else if (
+			arg === "--repo" ||
+			arg === "--ref" ||
+			arg === "--base" ||
+			arg === "--limit" ||
+			arg === "--fields" ||
+			arg === "--select"
+		) {
 			usedFlags.add(arg);
 			const value = argv[index + 1];
 			if (!value || value.startsWith("--")) {
@@ -276,6 +291,13 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			if (arg === "--repo") repo = value;
 			if (arg === "--ref") ref = value;
 			if (arg === "--base") base = value;
+			if (arg === "--fields") {
+				fields = value
+					.split(",")
+					.map((field) => field.trim())
+					.filter(Boolean);
+			}
+			if (arg === "--select") select = value;
 			if (arg === "--limit") {
 				const parsedLimit = Number.parseInt(value, 10);
 				if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
@@ -314,6 +336,8 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		ref,
 		base,
 		limit,
+		fields,
+		select,
 	};
 }
 

@@ -7,6 +7,7 @@ import {
 	createGitEvidencePort,
 	type MergeEvidence,
 } from "../src/merge-intelligence.ts";
+import { fakeGitRunner } from "./support.ts";
 
 const cleanMergedEvidence = {
 	merged: true,
@@ -187,12 +188,3 @@ describe("merge intelligence architecture scaffold", () => {
 		).toBe("evidence_unreliable");
 	});
 });
-
-function fakeGitRunner(outputs: Record<string, string>) {
-	return async (args: readonly string[]) => {
-		const stdout = outputs[args.join(" ")];
-		return stdout === undefined
-			? { ok: false, stdout: "", stderr: "missing fake output", code: 1 }
-			: { ok: true, stdout, stderr: "", code: 0 };
-	};
-}
