@@ -10,6 +10,7 @@ This repo has multiple bounded contexts. Each owns the durable language for its 
 - [Prompt System Workflow](./skills/prompt-system-workflow/CONTEXT.md) — startup-instruction authoring shape, topology helper, setup CLI, install artifacts.
 - [Issue to PR](./runbooks/issue-to-pr-v2/CONTEXT.md) — helper contract, ledger lifecycle, workflow-learning scan, scaffold pointers.
 - [Create Skill](./skills/create-skill/CONTEXT.md) — portable skill authoring, cleanup, capability ownership, agent-native helper handoff.
+- [ADHD Helper](./skills/adhd-helper/CONTEXT.md) — ADHD-shaped executive-function support language for moments and support cards.
 - [Skill Self-Audit Loop](./skills/skill-self-audit-loop/CONTEXT.md) — proof methods, trust conditions, contradiction shapes for self-auditing a SKILL.md.
 - [Skill Feedback](./skills/skill-feedback/CONTEXT.md) — skill-observability capture loop: Receipt, CaptureAdapter, Software Learning Report, the gitignored inbox.
 - [wt](./skills/wt/CONTEXT.md) — workflow entry point for worktree-aware VS Code workspace rendering and its boundary with shared git/worktree runtime ownership.

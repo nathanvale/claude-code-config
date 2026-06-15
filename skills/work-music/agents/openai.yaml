@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work Music"
+  short_description: "Pick or play a work-mode soundtrack"
+  default_prompt: "Use $work-music to offer work-mode music choices for my next block."

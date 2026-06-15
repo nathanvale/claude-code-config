@@ -8,7 +8,32 @@ allowed-tools: Bash, Read, AskUserQuestion, Write
 
 # Classic Cinema
 
-Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a conversational booking flow, generates a ticket-style HTML email, and sends it via `gog`. Does NOT purchase tickets or reserve seats — Nathan buys at the box office.
+Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a
+conversational booking flow, generates a ticket-style HTML email, and sends it
+via `gog`. Does NOT purchase tickets or reserve seats — Nathan buys at the box
+office.
+
+## Run Card
+
+- Scope: browse movies, pick session, choose seats, generate + send reminder email.
+- Defaults: 1 adult ticket, zone picker for seats, Elsternwick venue.
+- First safe action: classify intent, then fetch listing or parse args.
+- Visible state: availability emoji on every session, seat count, email preview before send.
+- Verify: `heal-skill check` after any src/ change.
+- Publish: confirmation email sent via `gog`, booking-log entry appended.
+- Fallback: API down → report and stop. Email send fails → show the HTML and stop.
+
+## Next Safe Actions
+
+DX lens: present choices as a short numbered list so the user can reply by
+number. Bold the recommended default. Never present more than 4 options. When
+intent is clear from the request, classify and proceed without showing this menu.
+
+1. **Quick book** — `/classic-cinema <movie> <time> [tickets] [zone]` e.g.
+   `/classic-cinema faraway 10am 1+1 middle` → zero questions → confirm → send.
+2. What's on — browse today's listing, pick from there.
+3. Movie details — look up a specific movie (sessions, trailer, synopsis).
+4. Health check — `bun run skills/classic-cinema/src/heal-skill.ts check`.
 
 ## Owner
 
