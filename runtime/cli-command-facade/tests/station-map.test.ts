@@ -45,6 +45,20 @@ const station = {
 	mutationExpectation: "writes_report",
 } as const satisfies BranchStation;
 
+function expectDriftedStationMap(input: {
+	catalog?: readonly BranchStation[];
+	evidence: readonly BranchStationEvidence[];
+}): void {
+	const map = projectStationMap({
+		discovery,
+		catalog: input.catalog ?? [station],
+		evidence: input.evidence,
+	});
+
+	expect(map.stations[0]?.evidence.status).toBe("drifted");
+	expect(map.findings[0]?.finding_kind).toBe("drifted");
+}
+
 describe("Station Map projection", () => {
 	test("a catalog referencing an unknown command produces deterministic drift", () => {
 		const drift = findBranchStationCatalogDrift({
@@ -67,6 +81,55 @@ describe("Station Map projection", () => {
 		expect(drift.map((entry) => entry.category)).toEqual([
 			"branch-station-id-duplicate",
 		]);
+	});
+
+	test("station declaration structural drift is reported deterministically", () => {
+		const cases = [
+			{
+				name: "invalid station id",
+				catalog: [{ ...station, id: "record.Success" }],
+				categories: ["branch-station-id-invalid"],
+			},
+			{
+				name: "station id command prefix mismatch",
+				catalog: [{ ...station, id: "review.success" }],
+				categories: ["branch-station-id-command-mismatch"],
+			},
+			{
+				name: "invalid station classification",
+				catalog: [
+					{
+						...station,
+						classification: "future" as BranchStation["classification"],
+					},
+				],
+				categories: ["branch-station-classification-invalid"],
+			},
+			{
+				name: "multiple structural drifts sort by category",
+				catalog: [
+					{
+						...station,
+						id: "record.Success",
+						classification: "future" as BranchStation["classification"],
+					},
+				],
+				categories: [
+					"branch-station-classification-invalid",
+					"branch-station-id-invalid",
+				],
+			},
+		] as const satisfies readonly {
+			name: string;
+			catalog: readonly BranchStation[];
+			categories: readonly string[];
+		}[];
+
+		for (const { catalog, categories } of cases) {
+			const drift = findBranchStationCatalogDrift({ discovery, catalog });
+
+			expect(drift.map((entry) => entry.category)).toEqual(categories);
+		}
 	});
 
 	test("station ids sort canonically in the projected Station Map", () => {
@@ -109,6 +172,64 @@ describe("Station Map projection", () => {
 		expect(drift.map((entry) => entry.category)).toEqual([
 			"branch-station-trigger-unsafe-text",
 		]);
+	});
+
+	test("evidence declaration drift is reported deterministically", () => {
+		const cases = [
+			{
+				name: "duplicate evidence",
+				evidence: [
+					{ stationId: "record.success", status: "covered" },
+					{ stationId: "record.success", status: "covered" },
+				],
+				categories: ["branch-station-evidence-duplicate"],
+			},
+			{
+				name: "unknown evidence station",
+				evidence: [{ stationId: "review.success", status: "covered" }],
+				categories: ["branch-station-evidence-unknown"],
+			},
+			{
+				name: "invalid evidence status",
+				evidence: [
+					{
+						stationId: "record.success",
+						status: "pending" as BranchStationEvidence["status"],
+					},
+				],
+				categories: ["branch-station-evidence-status-invalid"],
+			},
+			{
+				name: "skipped evidence missing rationale",
+				evidence: [{ stationId: "record.success", status: "skipped" }],
+				categories: ["branch-station-evidence-rationale-missing"],
+			},
+			{
+				name: "unsafe evidence rationale",
+				evidence: [
+					{
+						stationId: "record.success",
+						status: "skipped",
+						rationale: "run bun test to inspect the branch",
+					},
+				],
+				categories: ["branch-station-evidence-rationale-unsafe-text"],
+			},
+		] as const satisfies readonly {
+			name: string;
+			evidence: readonly BranchStationEvidence[];
+			categories: readonly string[];
+		}[];
+
+		for (const { evidence, categories } of cases) {
+			const drift = findBranchStationCatalogDrift({
+				discovery,
+				catalog: [station],
+				evidence,
+			});
+
+			expect(drift.map((entry) => entry.category)).toEqual(categories);
+		}
 	});
 
 	test("a required station with no observed evidence projects as missing", () => {
@@ -169,10 +290,95 @@ describe("Station Map projection", () => {
 			},
 		] as const satisfies readonly BranchStationEvidence[];
 
-		const map = projectStationMap({ discovery, catalog: [station], evidence });
+		expectDriftedStationMap({ evidence });
+	});
 
-		expect(map.stations[0]?.evidence.status).toBe("drifted");
-		expect(map.findings[0]?.finding_kind).toBe("drifted");
+	test("covered evidence drifts on envelope mismatch when exit code matches", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "error",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		expectDriftedStationMap({ evidence });
+	});
+
+	test("covered evidence projects observed result fields without findings", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+				observedErrorCode: "none",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({
+			discovery,
+			catalog: [
+				{
+					...station,
+					expectedErrorCode: "none",
+				},
+			],
+			evidence,
+		});
+
+		expect(map.stations[0]?.evidence).toEqual({
+			status: "covered",
+			observed: {
+				exit_code: 0,
+				envelope_status: "ok",
+				result_contract_id: "skill-feedback.record",
+				error_code: "none",
+			},
+		});
+		expect(map.findings).toEqual([]);
+	});
+
+	test("covered evidence drifts on result contract or error code mismatch", () => {
+		const cases = [
+			{
+				name: "result contract mismatch",
+				catalog: [station],
+				evidence: [
+					{
+						stationId: "record.success",
+						status: "covered",
+						observedExitCode: 0,
+						observedEnvelopeStatus: "ok",
+						observedResultContractId: "different.result",
+					},
+				],
+			},
+			{
+				name: "error code mismatch",
+				catalog: [{ ...station, expectedErrorCode: "expected_error" }],
+				evidence: [
+					{
+						stationId: "record.success",
+						status: "covered",
+						observedExitCode: 0,
+						observedEnvelopeStatus: "ok",
+						observedResultContractId: "skill-feedback.record",
+						observedErrorCode: "actual_error",
+					},
+				],
+			},
+		] as const satisfies readonly {
+			name: string;
+			catalog: readonly BranchStation[];
+			evidence: readonly BranchStationEvidence[];
+		}[];
+
+		for (const { catalog, evidence } of cases) {
+			expectDriftedStationMap({ catalog, evidence });
+		}
 	});
 
 	test("projection represents Declared Branch Coverage only", () => {
@@ -189,15 +395,23 @@ describe("Station Map projection", () => {
 			catalog: [
 				{
 					...station,
+					expectedExitCode: 0,
+					expectedEnvelopeStatus: "ok",
 					expectedResultContractId: "package-owned.custom_result",
 					expectedErrorCode: "package_owned_error",
+					expectedActionId: "record_report",
+					expectedContinuationId: "review_next",
 				},
 			],
 		});
 
 		expect(map.stations[0]?.expected).toMatchObject({
+			exit_code: 0,
+			envelope_status: "ok",
 			result_contract_id: "package-owned.custom_result",
 			error_code: "package_owned_error",
+			action_id: "record_report",
+			continuation_id: "review_next",
 		});
 	});
 });

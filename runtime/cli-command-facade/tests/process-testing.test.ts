@@ -76,6 +76,21 @@ describe("CLI process testing helpers", () => {
 		expect(result.stderr).toContain("expected failure");
 	});
 
+	test("a subprocess spawn error is returned as stderr context", async () => {
+		const root = await makeRoot();
+		const missingExecutable = join(root, "missing-executable");
+
+		const result = await runCliProcess({
+			label: "spawn error fixture",
+			argv: [missingExecutable],
+			cwd: root,
+		});
+
+		expect(result.timedOut).toBe(false);
+		expect(result.stderr).toContain("spawnError=");
+		expect(result.stderr).toContain(missingExecutable);
+	});
+
 	test("a timed-out subprocess is killed and returned as data", async () => {
 		const root = await makeRoot();
 		const script = await writeFixture(
