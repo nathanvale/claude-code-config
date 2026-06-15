@@ -427,6 +427,18 @@ describe("shared lifecycle verbs", () => {
 		]);
 	});
 
+	test("lifecycle verbs require a branch", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand({ command: "new", positionals: [], force: false }, runtime);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("usage_error");
+			expect(result.exitCode).toBe(2);
+			expect(result.action).toBe("Rerun as: worktree new <branch>.");
+		}
+		expect(runtime.runCalls).toEqual([]);
+	});
+
 	test("clean previews candidates without destructive calls", async () => {
 		const runtime = fakeRuntime();
 		const result = await runCommand({ command: "clean", positionals: [], force: false }, runtime);
@@ -474,6 +486,18 @@ detached
 			expect(preview.registeredWorktrees.map((row) => row.worktree.path)).not.toContain(
 				"/tmp/fallow-audit-base-cache-abc-123",
 			);
+		}
+	});
+
+	test("clean reports malformed registry as repairable state", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set("/code/my-repo/worktree.config.json", "{not json");
+		const result = await runCommand({ command: "clean", positionals: [], force: false }, runtime);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("registry_unreadable");
+			expect(result.exitCode).toBe(1);
+			expect(result.recoverability).toBe("repair_state");
 		}
 	});
 
@@ -595,6 +619,21 @@ describe("open", () => {
 		}
 	});
 
+	test("malformed registry blocks opening with a repair hint", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set("/code/my-repo/worktree.config.json", "{not json");
+		const result = await runCommand(
+			{ command: "open", positionals: ["my-repo"], force: false },
+			runtime,
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("registry_unreadable");
+			expect(result.action).toBe("Repair the registry JSON, then retry.");
+		}
+		expect(runtime.launched).toEqual([]);
+	});
+
 	test("missing `code` binary yields code_not_found, exit 2", async () => {
 		const runtime = fakeRuntime({ launchCode: async () => false });
 		const result = await runCommand(
@@ -623,6 +662,18 @@ describe("open", () => {
 });
 
 describe("Command Surface Alignment Proof", () => {
+	test("commands returns the discovery contract", async () => {
+		const result = await runCommand(
+			{ command: "commands", positionals: [], force: false },
+			fakeRuntime(),
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.data.contract_id).toBe("worktree.workspace");
+			expect(JSON.stringify(result.data)).toContain("worktree.commands");
+		}
+	});
+
 	test("every advertised flag for each verb appears in its rendered help", () => {
 		for (const command of Object.keys(worktreeContracts) as (keyof typeof worktreeContracts)[]) {
 			const help = renderCommandUsage(worktreeContracts[command]);

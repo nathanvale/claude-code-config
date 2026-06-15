@@ -555,6 +555,224 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	return { command, positionals, force, forceRender, noInput, repoRoot };
 }
 
+async function runFocusCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [branch, subfolder] = invocation.positionals;
+	if (!branch || !subfolder) {
+		return usageFailure(
+			"usage_error",
+			"focus needs <branch> and <subfolder>.",
+			"Rerun as: worktree focus <branch> <subfolder>.",
+		);
+	}
+	return fromSync(
+		"focus",
+		await setPrefAndSync(runtime, branch, (prefs) => {
+			prefs.focus = subfolder;
+		}, invocation.force),
+	);
+}
+
+async function runColorCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [branch, color] = invocation.positionals;
+	if (!branch || !color) {
+		return usageFailure(
+			"usage_error",
+			"color needs <branch> and <color>.",
+			"Rerun as: worktree color <branch> <color>.",
+		);
+	}
+	const validated = validateColor(color);
+	if (validated === null) {
+		return usageFailure(
+			"unknown_color",
+			`Unknown color '${color}'. Allowed: ${WORKTREE_COLOR_PALETTE.join(", ")}.`,
+			"Rerun with a color from the allowed palette.",
+		);
+	}
+	return fromSync(
+		"color",
+		await setPrefAndSync(runtime, branch, (prefs) => {
+			prefs.color = validated;
+		}, invocation.force),
+	);
+}
+
+async function runLifecycleCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const { command, force } = invocation;
+	if (command === "rm" && !force && (invocation.noInput || !runtime.isInteractive())) {
+		return usageFailure(
+			"usage_error",
+			`${command} needs an explicit force flag in non-interactive runs.`,
+			"Retry with explicit confirmation, or run interactively.",
+		);
+	}
+	const [branch] = invocation.positionals;
+	if (!branch) {
+		return usageFailure(
+			"usage_error",
+			`${command} needs <branch>.`,
+			`Rerun as: worktree ${command} <branch>.`,
+		);
+	}
+	const lifecycleRuntime = await stableOwnerRuntime(runtime);
+	const lifecycle =
+		command === "new"
+			? await createWorktree({
+					cwd: lifecycleRuntime.repoRoot(),
+					run: adaptRunner(lifecycleRuntime.run),
+					branch,
+					dryRun: false,
+					runId: `worktree-${runtime.now()}`,
+				})
+			: await deleteWorktree({
+					cwd: lifecycleRuntime.repoRoot(),
+					run: adaptRunner(lifecycleRuntime.run),
+					branch,
+					dryRun: false,
+					force,
+					deleteBranch: false,
+					runId: `worktree-${runtime.now()}`,
+				});
+	if (lifecycle.changedState !== "complete") {
+		return fromLifecycleFailure(command, lifecycle);
+	}
+	const sync = await syncWorkspace(lifecycleRuntime, Boolean(invocation.forceRender));
+	if (sync.kind !== "written") {
+		return fromPostLifecycleSyncFailure(command, lifecycle, sync);
+	}
+	return { ok: true, data: renderSuccessData(command, sync.path) };
+}
+
+async function runCleanCommand(runtime: WorkTreeRuntime): Promise<CommandResult> {
+	let view: { ignoredWorktrees: readonly string[] };
+	try {
+		view = await worktreeViewForRuntime(runtime);
+	} catch (error) {
+		if (error instanceof WorkTreeDiscoveryError) {
+			return {
+				ok: false,
+				code: error.code,
+				message:
+					error.code === "registry_unreadable"
+						? "worktree.config.json exists but is not valid JSON."
+						: error.message,
+				action:
+					error.code === "registry_unreadable"
+						? "Repair the registry JSON, then retry."
+						: "Inspect git worktree state, then retry.",
+				exitCode: 1,
+				recoverability: "repair_state",
+			};
+		}
+		throw error;
+	}
+	const preview = await cleanPreview({
+		cwd: runtime.repoRoot(),
+		run: adaptRunner(runtime.run),
+		ignoredWorktreePathPatterns: view.ignoredWorktrees,
+	});
+	return {
+		ok: true,
+		data: {
+			contract_id: WORKTREE_CONTRACT_ID,
+			schema_version: WORKTREE_SCHEMA_VERSION,
+			action: "clean_preview",
+			changed_state: "none",
+			preview,
+			next_safe_action: "Review cleanup candidates before pruning.",
+		},
+	};
+}
+
+async function ownerRootForRuntime(runtime: WorkTreeRuntime): Promise<string> {
+	try {
+		const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+		return repoOwnerRootFor(worktrees, runtime.repoRoot());
+	} catch {
+		return runtime.repoRoot();
+	}
+}
+
+async function runOpenCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [name] = invocation.positionals;
+	const ownerRoot = await ownerRootForRuntime(runtime);
+	let registry: Registry;
+	try {
+		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+	} catch {
+		return {
+			ok: false,
+			code: "registry_unreadable",
+			message: "worktree.config.json exists but is not valid JSON.",
+			action: "Repair the registry JSON, then retry.",
+			exitCode: 1,
+			recoverability: "repair_state",
+		};
+	}
+	if (!name) {
+		return {
+			ok: true,
+			data: {
+				contract_id: WORKTREE_CONTRACT_ID,
+				schema_version: WORKTREE_SCHEMA_VERSION,
+				action: "list_workspaces",
+				workspace: workspacePathFor(ownerRoot),
+			},
+		};
+	}
+	const workspacePath = workspaceTargetFor(ownerRoot, name);
+	const launched = await runtime.launchCode(workspacePath, registry.defaults?.codeBin);
+	if (!launched) {
+		return usageFailure(
+			"code_not_found",
+			"Could not launch VS Code; `code` was not found on PATH.",
+			"Install the `code` shell command, or set defaults.codeBin in worktree.config.json.",
+		);
+	}
+	return {
+		ok: true,
+		data: {
+			contract_id: WORKTREE_CONTRACT_ID,
+			schema_version: WORKTREE_SCHEMA_VERSION,
+			action: "open_workspace",
+			launched: true,
+			workspace_path: workspacePath,
+		},
+	};
+}
+
+function runCommandsCommand(): CommandResult {
+	return {
+		ok: true,
+		data: {
+			contract_id: WORKTREE_CONTRACT_ID,
+			schema_version: WORKTREE_SCHEMA_VERSION,
+			...projectCommandDiscoveryTree([
+				["sync", worktreeContracts.sync],
+				["focus", worktreeContracts.focus],
+				["color", worktreeContracts.color],
+				["open", worktreeContracts.open],
+				["new", worktreeContracts.new],
+				["rm", worktreeContracts.rm],
+				["clean", worktreeContracts.clean],
+				["commands", worktreeContracts.commands],
+			]),
+		},
+	};
+}
+
 /**
  * Route a parsed invocation to its handler and return a pure CommandResult.
  *
@@ -570,216 +788,27 @@ export async function runCommand(
 	invocation: ParsedInvocation,
 	runtime: WorkTreeRuntime,
 ): Promise<CommandResult> {
-	const { command, positionals, force } = invocation;
+	const { command } = invocation;
 	if (invocation.parseError) {
 		return invocation.parseError;
 	}
 
 	switch (command) {
 		case "sync":
-			return fromSync("sync", await syncWorkspace(runtime, force));
-
-		case "focus": {
-			const [branch, subfolder] = positionals;
-			if (!branch || !subfolder) {
-				return usageFailure(
-					"usage_error",
-					"focus needs <branch> and <subfolder>.",
-					"Rerun as: worktree focus <branch> <subfolder>.",
-				);
-			}
-			return fromSync(
-				"focus",
-				await setPrefAndSync(runtime, branch, (prefs) => {
-					prefs.focus = subfolder;
-				}, force),
-			);
-		}
-
-		case "color": {
-			const [branch, color] = positionals;
-			if (!branch || !color) {
-				return usageFailure(
-					"usage_error",
-					"color needs <branch> and <color>.",
-					"Rerun as: worktree color <branch> <color>.",
-				);
-			}
-			const validated = validateColor(color);
-			if (validated === null) {
-				return usageFailure(
-					"unknown_color",
-					`Unknown color '${color}'. Allowed: ${WORKTREE_COLOR_PALETTE.join(", ")}.`,
-					"Rerun with a color from the allowed palette.",
-				);
-			}
-			return fromSync(
-				"color",
-				await setPrefAndSync(runtime, branch, (prefs) => {
-					prefs.color = validated;
-				}, force),
-			);
-		}
-
+			return fromSync("sync", await syncWorkspace(runtime, invocation.force));
+		case "focus":
+			return runFocusCommand(invocation, runtime);
+		case "color":
+			return runColorCommand(invocation, runtime);
 		case "new":
-		case "rm": {
-			if (command === "rm" && !force && (invocation.noInput || !runtime.isInteractive())) {
-				return usageFailure(
-					"usage_error",
-					`${command} needs an explicit force flag in non-interactive runs.`,
-					"Retry with explicit confirmation, or run interactively.",
-				);
-			}
-			const [branch] = positionals;
-			if (!branch) {
-				return usageFailure(
-					"usage_error",
-					`${command} needs <branch>.`,
-					`Rerun as: worktree ${command} <branch>.`,
-				);
-			}
-			const lifecycleRuntime = await stableOwnerRuntime(runtime);
-			const lifecycle =
-				command === "new"
-					? await createWorktree({
-							cwd: lifecycleRuntime.repoRoot(),
-							run: adaptRunner(lifecycleRuntime.run),
-							branch,
-							dryRun: false,
-							runId: `worktree-${runtime.now()}`,
-						})
-					: await deleteWorktree({
-							cwd: lifecycleRuntime.repoRoot(),
-							run: adaptRunner(lifecycleRuntime.run),
-							branch,
-							dryRun: false,
-							force,
-							deleteBranch: false,
-							runId: `worktree-${runtime.now()}`,
-			});
-			if (lifecycle.changedState !== "complete") {
-				return fromLifecycleFailure(command, lifecycle);
-			}
-			const sync = await syncWorkspace(lifecycleRuntime, Boolean(invocation.forceRender));
-			if (sync.kind !== "written") {
-				return fromPostLifecycleSyncFailure(command, lifecycle, sync);
-			}
-			return { ok: true, data: renderSuccessData(command, sync.path) };
-		}
-
-		case "clean": {
-			let view: { ignoredWorktrees: readonly string[] };
-			try {
-				view = await worktreeViewForRuntime(runtime);
-			} catch (error) {
-				if (error instanceof WorkTreeDiscoveryError) {
-					return {
-						ok: false,
-						code: error.code,
-						message:
-							error.code === "registry_unreadable"
-								? "worktree.config.json exists but is not valid JSON."
-								: error.message,
-						action:
-							error.code === "registry_unreadable"
-								? "Repair the registry JSON, then retry."
-								: "Inspect git worktree state, then retry.",
-						exitCode: 1,
-						recoverability: "repair_state",
-					};
-				}
-				throw error;
-			}
-			const preview = await cleanPreview({
-				cwd: runtime.repoRoot(),
-				run: adaptRunner(runtime.run),
-				ignoredWorktreePathPatterns: view.ignoredWorktrees,
-			});
-			return {
-				ok: true,
-				data: {
-					contract_id: WORKTREE_CONTRACT_ID,
-					schema_version: WORKTREE_SCHEMA_VERSION,
-					action: "clean_preview",
-					changed_state: "none",
-					preview,
-					next_safe_action: "Review cleanup candidates before pruning.",
-				},
-			};
-		}
-
-		case "open": {
-			const [name] = positionals;
-			let registry: Registry = { branches: {} };
-			let ownerRoot = runtime.repoRoot();
-			try {
-				const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
-				ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
-			} catch {
-				ownerRoot = runtime.repoRoot();
-			}
-			try {
-				registry = await loadRegistryFromRuntime(runtime, ownerRoot);
-			} catch {
-				return {
-					ok: false,
-					code: "registry_unreadable",
-					message: "worktree.config.json exists but is not valid JSON.",
-					action: "Repair the registry JSON, then retry.",
-					exitCode: 1,
-					recoverability: "repair_state",
-				};
-			}
-			if (!name) {
-				return {
-					ok: true,
-					data: {
-							contract_id: WORKTREE_CONTRACT_ID,
-							schema_version: WORKTREE_SCHEMA_VERSION,
-							action: "list_workspaces",
-							workspace: workspacePathFor(ownerRoot),
-						},
-					};
-				}
-			const workspacePath = workspaceTargetFor(ownerRoot, name);
-			const launched = await runtime.launchCode(workspacePath, registry.defaults?.codeBin);
-			if (!launched) {
-				return usageFailure(
-					"code_not_found",
-					"Could not launch VS Code; `code` was not found on PATH.",
-					"Install the `code` shell command, or set defaults.codeBin in worktree.config.json.",
-				);
-			}
-			return {
-				ok: true,
-				data: {
-					contract_id: WORKTREE_CONTRACT_ID,
-					schema_version: WORKTREE_SCHEMA_VERSION,
-					action: "open_workspace",
-					launched: true,
-					workspace_path: workspacePath,
-				},
-			};
-		}
-
+		case "rm":
+			return runLifecycleCommand(invocation, runtime);
+		case "clean":
+			return runCleanCommand(runtime);
+		case "open":
+			return runOpenCommand(invocation, runtime);
 		case "commands":
-			return {
-				ok: true,
-				data: {
-					contract_id: WORKTREE_CONTRACT_ID,
-					schema_version: WORKTREE_SCHEMA_VERSION,
-					...projectCommandDiscoveryTree([
-						["sync", worktreeContracts.sync],
-						["focus", worktreeContracts.focus],
-						["color", worktreeContracts.color],
-						["open", worktreeContracts.open],
-						["new", worktreeContracts.new],
-						["rm", worktreeContracts.rm],
-						["clean", worktreeContracts.clean],
-						["commands", worktreeContracts.commands],
-					]),
-				},
-			};
+			return runCommandsCommand();
 
 		default:
 			return usageFailure(
