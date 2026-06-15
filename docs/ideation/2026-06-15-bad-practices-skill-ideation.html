@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ideation: Bad Practices Skill</title>
+  <style>
+    :root {
+      --bg: #fbfaf7;
+      --ink: #1d252b;
+      --muted: #52616b;
+      --line: #d9d4c8;
+      --panel: #ffffff;
+      --soft-blue: #e8f1f8;
+      --blue: #235a7c;
+      --soft-green: #eaf4ed;
+      --green: #30613e;
+      --soft-amber: #f8efd9;
+      --amber: #755a1e;
+      --soft-rose: #f8e8e4;
+      --rose: #843d34;
+      --soft-violet: #eeeaf8;
+      --violet: #58448a;
+      --code-bg: #f0eee8;
+      --shadow: 0 18px 45px rgba(29, 37, 43, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.58;
+    }
+
+    a { color: var(--blue); text-decoration-thickness: 0.08em; }
+    a:hover { text-decoration-thickness: 0.14em; }
+
+    .page {
+      width: min(940px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 42px 0 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 22px;
+      margin-bottom: 26px;
+    }
+
+    .eyebrow {
+      color: var(--blue);
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+    }
+
+    h1 {
+      font-size: clamp(2rem, 4vw, 3.1rem);
+      line-height: 1.04;
+      letter-spacing: 0;
+      margin: 8px 0 12px;
+      max-width: 780px;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+      line-height: 1.2;
+      margin: 34px 0 14px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 1.05rem;
+      line-height: 1.25;
+      margin: 20px 0 8px;
+      letter-spacing: 0;
+    }
+
+    p, li { max-width: 72ch; }
+    p { margin: 0 0 12px; }
+
+    code {
+      background: var(--code-bg);
+      border-radius: 5px;
+      padding: 0.12rem 0.35rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    section {
+      margin-top: 26px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 16px 0 18px;
+    }
+
+    .note {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .note h3 { margin-top: 0; }
+    .note ul { margin: 8px 0 0 20px; padding: 0; }
+    .note li { margin: 7px 0; }
+
+    .strength { border-top: 5px solid var(--green); }
+    .weakness { border-top: 5px solid var(--rose); }
+    .research { border-top: 5px solid var(--blue); }
+
+    .axes {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .axis {
+      min-height: 84px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 12px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .axis span {
+      display: block;
+      margin-top: 6px;
+      font-weight: 500;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    .jump-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0;
+      margin: 12px 0 22px;
+      list-style: none;
+    }
+
+    .jump-list a {
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 10px 12px;
+      text-decoration: none;
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .idea {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+      box-shadow: var(--shadow);
+    }
+
+    .idea h3 {
+      margin-top: 0;
+      font-size: 1.18rem;
+    }
+
+    .idea-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 20px;
+      align-items: start;
+    }
+
+    .field {
+      margin: 11px 0;
+    }
+
+    .field strong {
+      color: var(--ink);
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 0.84rem;
+      font-weight: 700;
+    }
+
+    .tag.blue { background: var(--soft-blue); color: var(--blue); }
+    .tag.green { background: var(--soft-green); color: var(--green); }
+    .tag.amber { background: var(--soft-amber); color: var(--amber); }
+    .tag.rose { background: var(--soft-rose); color: var(--rose); }
+    .tag.violet { background: var(--soft-violet); color: var(--violet); }
+
+    .visual {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fdfcf9;
+      padding: 14px;
+      overflow: hidden;
+    }
+
+    .visual svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f4f0e7;
+      font-size: 0.9rem;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .composition-signal {
+      margin-top: 38px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 760px) {
+      .summary-grid,
+      .axes,
+      .jump-list,
+      .idea-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .page {
+        width: min(100% - 20px, 940px);
+        padding-top: 26px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div class="eyebrow">Ideation artifact</div>
+      <h1>Bad Practices Skill: Strengths, Weaknesses, Improvement Ideas</h1>
+      <p>
+        A repo-grounded critique of <code>skills/bad-practices</code>, with external research on AI-generated code smells,
+        agent coding guidelines, and test-suite health.
+      </p>
+      <div class="meta">
+        <span class="pill">date: <time datetime="2026-06-15">2026-06-15</time></span>
+        <span class="pill">topic: bad-practices-skill</span>
+        <span class="pill">focus: external-research skill improvement</span>
+        <span class="pill">mode: repo-grounded</span>
+      </div>
+    </header>
+
+    <section aria-labelledby="grounding-context">
+      <h2 id="grounding-context">Grounding Context</h2>
+      <p>
+        The current skill is a thin knowledge bank and translation layer. It routes architecture, testing, CLI, and agent-workflow smells toward existing owners instead of trying to become the owner. That is the right starting posture for a skill meant to reduce AI-slop without creating a second policy system.
+      </p>
+      <p>
+        External research supports the need for this kind of bank. A 2026 arXiv paper on AI-generated smells reports that functionally correct agent output can still accumulate structural and architectural debt, including long methods, god-class tendencies, unstable dependencies, and superficial modularity. Stack Overflow's 2026 guidance on agent coding standards argues for explicit repo conventions, correct and incorrect examples, gold-standard examples, and failure-driven updates to standards. Google Testing Blog and Fowler both reinforce the testing side: flaky and overly high-level suites erode trust, slow feedback, and need deterministic handling rather than hand-waving.
+      </p>
+
+      <div class="summary-grid">
+        <div class="note strength">
+          <h3>Strengths</h3>
+          <ul>
+            <li>Thin wrapper shape keeps ownership clear.</li>
+            <li>Architecture and testing references stay one level down.</li>
+            <li>Entry shape includes bad practice, failure mode, better substitute, evidence class, and downstream skill.</li>
+            <li>Owner paths point to ICA, seam-scaffold, GoF pressure, create-cli, and test-runner instead of copying their contracts.</li>
+            <li>Positive-substitute framing avoids pure complaint taxonomy.</li>
+          </ul>
+        </div>
+        <div class="note weakness">
+          <h3>Weaknesses</h3>
+          <ul>
+            <li>No lifecycle for candidate, observed, and promoted entries.</li>
+            <li>No promotion rule from skill-feedback or review findings into the catalog.</li>
+            <li>No dedicated agent-workflow or CLI/runtime bad-practice domain yet.</li>
+            <li>No packet template for seam-scaffold or future review skill handoff.</li>
+            <li>No catalog lint to catch missing fields, duplicate smells, or unowned owner-path labels.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="note research">
+        <h3>Source Signals</h3>
+        <ul>
+          <li><a href="https://arxiv.org/html/2605.02741v1">AI-Generated Smells</a>: functional correctness can hide maintainability debt; prompt detail alone does not remove architectural decay.</li>
+          <li><a href="https://stackoverflow.blog/2026/03/26/coding-guidelines-for-ai-agents-and-people-too/">Stack Overflow agent guidelines</a>: predictable standards, examples, and failure-fed updates improve agent output.</li>
+          <li><a href="https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html">Google Testing Blog on flaky tests</a>: flaky results create false alarms, delayed signal, quarantine tradeoffs, and ignored real failures.</li>
+          <li><a href="https://martinfowler.com/bliki/TestPyramid.html">Fowler test pyramid</a>: too many high-level tests create slow, brittle, non-deterministic suites; lower-level tests carry most coverage.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section aria-labelledby="topic-axes">
+      <h2 id="topic-axes">Topic Axes</h2>
+      <div class="axes">
+        <div class="axis">Evidence Lifecycle<span>How entries enter, mature, and move downstream.</span></div>
+        <div class="axis">Domain Coverage<span>Architecture, testing, agent workflow, and CLI/runtime gaps.</span></div>
+        <div class="axis">Handoff Shape<span>How the bank feeds scaffold, review, and plan work.</span></div>
+        <div class="axis">Mechanical Validation<span>How the catalog proves its own shape.</span></div>
+        <div class="axis">Agent Ergonomics<span>How examples and templates reduce misreadings.</span></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="ranked-ideas">
+      <h2 id="ranked-ideas">Ranked Ideas</h2>
+      <ul class="jump-list">
+        <li><a href="#idea-1">1. Evidence ladder and feedback intake</a></li>
+        <li><a href="#idea-2">2. Bad-practice handoff packet</a></li>
+        <li><a href="#idea-3">3. Agent-workflow domain</a></li>
+        <li><a href="#idea-4">4. Testing determinism lens</a></li>
+        <li><a href="#idea-5">5. CLI and runtime domain</a></li>
+        <li><a href="#idea-6">6. Catalog lint</a></li>
+        <li><a href="#idea-7">7. Example pairs and gold entry</a></li>
+      </ul>
+
+      <article class="idea" id="idea-1">
+        <div class="idea-grid">
+          <div>
+            <h3>1. Evidence Ladder and Feedback Intake</h3>
+            <p>
+              Add entry maturity labels such as <code>candidate</code>, <code>observed</code>, and <code>promoted</code>, plus a short intake rule: only add a catalog entry when there is a local failure, external evidence, or repeated review pattern. Connect material <code>skill-feedback</code> reports to this intake path.
+            </p>
+            <p class="field"><strong>Axis:</strong> Evidence Lifecycle</p>
+            <p class="field"><strong>Basis:</strong> external: Stack Overflow frames agent errors as feedback for standards; direct: the current catalog already has evidence classes but no lifecycle.</p>
+            <p class="field"><strong>Rationale:</strong> This prevents the catalog from becoming a grumble bucket. It also gives the future scaffold or review skill a clear threshold for promoting a smell into executable checks.</p>
+            <p class="field"><strong>Downsides:</strong> Adds small taxonomy overhead. Requires discipline when adding entries.</p>
+            <div class="tags">
+              <span class="tag green">confidence 88%</span>
+              <span class="tag amber">complexity Medium</span>
+            </div>
+          </div>
+          <div class="visual" aria-label="Evidence ladder from feedback to downstream owner">
+            <svg viewBox="0 0 360 230" role="img" aria-labelledby="ladder-title">
+              <title id="ladder-title">Evidence ladder</title>
+              <rect x="16" y="18" width="328" height="48" rx="8" fill="#e8f1f8" stroke="#9bbbd1"/>
+              <text x="180" y="47" text-anchor="middle" font-size="15" font-weight="700" fill="#235a7c">Observed failure or research signal</text>
+              <path d="M180 66 L180 88" stroke="#52616b" stroke-width="2"/>
+              <rect x="16" y="88" width="328" height="48" rx="8" fill="#f8efd9" stroke="#d9be75"/>
+              <text x="180" y="117" text-anchor="middle" font-size="15" font-weight="700" fill="#755a1e">Candidate catalog entry</text>
+              <path d="M180 136 L180 158" stroke="#52616b" stroke-width="2"/>
+              <rect x="16" y="158" width="152" height="48" rx="8" fill="#eaf4ed" stroke="#9fc7a7"/>
+              <text x="92" y="187" text-anchor="middle" font-size="14" font-weight="700" fill="#30613e">Promote owner</text>
+              <rect x="192" y="158" width="152" height="48" rx="8" fill="#eeeaf8" stroke="#b7a9dc"/>
+              <text x="268" y="187" text-anchor="middle" font-size="14" font-weight="700" fill="#58448a">Keep advisory</text>
+            </svg>
+          </div>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <h3>2. Bad-Practice Handoff Packet</h3>
+        <p>
+          Add a compact packet template for downstream use: smell, trigger, local evidence, external evidence, better substitute, owner path, candidate downstream skill, promotion threshold, and next safe action. Use it when the skill is asked to prepare seam-scaffold, review, or plan improvements.
+        </p>
+        <p class="field"><strong>Axis:</strong> Handoff Shape</p>
+        <p class="field"><strong>Basis:</strong> direct: current output shape is close but not packaged for downstream adoption; external: agent guidelines benefit from predictable, repeated shapes and examples.</p>
+        <p class="field"><strong>Rationale:</strong> The packet turns a passive knowledge bank into a clean feeder for future scaffolding and review work without making this skill the executor.</p>
+        <p class="field"><strong>Downsides:</strong> Slightly more ceremony for one-off lookups.</p>
+        <div class="tags">
+          <span class="tag green">confidence 84%</span>
+          <span class="tag green">complexity Low</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <h3>3. Agent-Workflow Bad-Practice Domain</h3>
+        <p>
+          Add <code>references/agent-workflow.md</code> for agent-specific slop patterns: instruction bloat, unowned contracts, prompt-only quality gates, broad refactors, silent fallback, skipped source reading, fake determinism, and over-patterned architecture.
+        </p>
+        <p class="field"><strong>Axis:</strong> Domain Coverage</p>
+        <p class="field"><strong>Basis:</strong> external: AI-generated smell research argues that agent output needs architectural foresight; direct: repo instructions already name agent-native principles, owner maps, next safe actions, and inspectable state.</p>
+        <p class="field"><strong>Rationale:</strong> This domain aims directly at the user's "minimum AI slop" goal. It also captures failure modes that are neither pure architecture nor pure testing.</p>
+        <p class="field"><strong>Downsides:</strong> High risk of vague taste-policing unless entries require evidence and a positive substitute.</p>
+        <div class="tags">
+          <span class="tag green">confidence 82%</span>
+          <span class="tag amber">complexity Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <div class="idea-grid">
+          <div>
+            <h3>4. Testing Determinism Lens</h3>
+            <p>
+              Expand testing entries with a determinism and pyramid lens: global state, time, randomness, external services, cwd mutation, retry masking, quarantine masking, over-broad UI/e2e tests, and missing low-level contract tests.
+            </p>
+            <p class="field"><strong>Axis:</strong> Domain Coverage</p>
+            <p class="field"><strong>Basis:</strong> external: Google reports flaky tests as same-code pass/fail signals with costly workflow impact; Fowler warns that too many UI-level tests are slow, brittle, and non-deterministic.</p>
+            <p class="field"><strong>Rationale:</strong> The current testing catalog is useful but mostly local-harness shaped. This lens gives it a larger quality model while preserving repo-local ownership.</p>
+            <p class="field"><strong>Downsides:</strong> Needs careful wording so it does not become "never write integration tests".</p>
+            <div class="tags">
+              <span class="tag green">confidence 80%</span>
+              <span class="tag amber">complexity Medium</span>
+            </div>
+          </div>
+          <div class="visual" aria-label="Testing lens from low-level contracts to high-level flows">
+            <svg viewBox="0 0 360 230" role="img" aria-labelledby="test-title">
+              <title id="test-title">Testing determinism lens</title>
+              <polygon points="180,20 318,198 42,198" fill="#eaf4ed" stroke="#9fc7a7" stroke-width="2"/>
+              <line x1="84" y1="144" x2="276" y2="144" stroke="#fdfcf9" stroke-width="5"/>
+              <line x1="116" y1="96" x2="244" y2="96" stroke="#fdfcf9" stroke-width="5"/>
+              <text x="180" y="184" text-anchor="middle" font-size="14" font-weight="700" fill="#30613e">Low-level contracts</text>
+              <text x="180" y="132" text-anchor="middle" font-size="14" font-weight="700" fill="#30613e">Integration seams</text>
+              <text x="180" y="82" text-anchor="middle" font-size="14" font-weight="700" fill="#30613e">Few end-to-end flows</text>
+              <text x="180" y="218" text-anchor="middle" font-size="13" fill="#52616b">Flag nondeterminism, do not normalize it.</text>
+            </svg>
+          </div>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <h3>5. CLI and Runtime Bad-Practice Domain</h3>
+        <p>
+          Add <code>references/cli-runtime.md</code> for command-surface smells: help/parser drift, prose-only schemas, stdout-as-contract without JSON, non-interactive command prompts, exit-code-only tests, wrapper-output assertions, and missing repair hints.
+        </p>
+        <p class="field"><strong>Axis:</strong> Domain Coverage</p>
+        <p class="field"><strong>Basis:</strong> direct: repo startup instructions route CLI contracts to <code>create-cli</code>; current testing entries already include wrapper-output and exit-code-only smells.</p>
+        <p class="field"><strong>Rationale:</strong> CLI/runtime surfaces are where agent workflows become mechanical. A bad-practice catalog that misses this layer leaves review and scaffold work underpowered.</p>
+        <p class="field"><strong>Downsides:</strong> Some entries may belong in <code>create-cli</code> instead; the skill needs owner-first wording.</p>
+        <div class="tags">
+          <span class="tag green">confidence 78%</span>
+          <span class="tag amber">complexity Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <h3>6. Catalog Lint</h3>
+        <p>
+          Add a small validation script later, after the entry shape stabilizes. It can check required fields, duplicate headings, malformed evidence classes, stale local paths, and owner labels that are not declared as local or external.
+        </p>
+        <p class="field"><strong>Axis:</strong> Mechanical Validation</p>
+        <p class="field"><strong>Basis:</strong> external: Stack Overflow's agent-guideline article still keeps linters and static analysis in the build pipeline; direct: the repo already uses checks for YAML and skill metadata.</p>
+        <p class="field"><strong>Rationale:</strong> A knowledge bank about bad practices should not quietly accumulate its own bad-practice shape. Mechanical checks let prose stay thin.</p>
+        <p class="field"><strong>Downsides:</strong> Premature if built before the catalog has 20-30 entries across domains.</p>
+        <div class="tags">
+          <span class="tag amber">confidence 74%</span>
+          <span class="tag amber">complexity Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-7">
+        <h3>7. Example Pairs and Gold Entry</h3>
+        <p>
+          Add one correct and incorrect mini-example per domain, plus a single "gold entry" that demonstrates the intended catalog shape. Keep examples short and local to the reference file that owns the domain.
+        </p>
+        <p class="field"><strong>Axis:</strong> Agent Ergonomics</p>
+        <p class="field"><strong>Basis:</strong> external: Stack Overflow recommends correct and incorrect examples, plus a gold-standard example, because agents follow patterns well.</p>
+        <p class="field"><strong>Rationale:</strong> The current entry shape is clear to a careful reader, but examples will make it harder for future agents to add vague or unowned entries.</p>
+        <p class="field"><strong>Downsides:</strong> Examples can rot. They need to remain tiny and tied to the same owner-map discipline.</p>
+        <div class="tags">
+          <span class="tag green">confidence 76%</span>
+          <span class="tag green">complexity Low</span>
+        </div>
+      </article>
+    </section>
+
+    <section aria-labelledby="rejection-summary">
+      <h2 id="rejection-summary">Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Idea</th>
+            <th>Reason Rejected</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>Turn <code>bad-practices</code> into a full review skill now</td>
+            <td>Premature. The bank needs observed entries, promotion rules, and packet shape before it can review reliably.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>Move bad-practice rules into startup instructions</td>
+            <td>Conflicts with repo guidance that skills own workflows and startup instructions stay hard rules and routes.</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>Copy ICA, DDD, GoF, create-cli, or test-runner contracts into this skill</td>
+            <td>Duplicates owner contracts and creates drift. The skill should link owners and translate smell packets.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>Import a universal code-smell taxonomy wholesale</td>
+            <td>Too broad for a repo-local skill. External terms help, but entries need local owner paths and positive substitutes.</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Ban high-level tests</td>
+            <td>Wrong lesson from the test pyramid. Prefer fewer, purposeful high-level tests and stronger lower-level contracts.</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>Auto-fix bad practices directly from the catalog</td>
+            <td>Too much agency before evidence maturity. Use the catalog for routing, scaffold packets, and review prompts first.</td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td>Rename the skill immediately</td>
+            <td>The user-named trigger is direct and memorable. Improve evidence and substitution discipline before revisiting naming.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-06-15T00:34Z by ce-ideate from the user request and local <code>skills/bad-practices</code> files.
+    </footer>
+  </main>
+</body>
+</html>

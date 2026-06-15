@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
-import type { GitRunner } from "../src/discovery.ts";
 import {
 	checkWorktree,
 	cleanPreview,
@@ -13,6 +12,7 @@ import {
 } from "../src/worktrees.ts";
 import { inspectRefFromRoot } from "../src/inspect.ts";
 import { createFileStore } from "../src/store.ts";
+import { fakeGitRunner, linkedRepoGitOutputs } from "./support.ts";
 
 describe("agent-worktree lifecycle reads", () => {
 	test("status does not treat cherry output as squash merge proof", async () => {
@@ -146,41 +146,22 @@ branch refs/heads/feat/x
 	});
 });
 
-describe("agent-worktree lifecycle writes", () => {
-	test("delete records partial failure with backup ref when branch deletion fails", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-delete-"));
-		const linked = join(root, ".worktrees", "feat-x");
-		await mkdir(linked, { recursive: true });
+	describe("agent-worktree lifecycle writes", () => {
+		test("delete records partial failure with backup ref when branch deletion fails", async () => {
+			const { root, linked } = await createLinkedWorktreeFixture("awt-delete-");
 
-		const result = await deleteWorktree({
-			cwd: root,
-			branch: "feat/x",
-			dryRun: false,
-			force: true,
-			deleteBranch: true,
-			runId: "facade/run",
-			run: fakeGitRunner({
-				["git rev-parse --show-toplevel"]: `${root}\n`,
-				["git worktree list --porcelain"]: `worktree ${root}
-HEAD abc
-branch refs/heads/main
-
-worktree ${linked}
-HEAD def
-branch refs/heads/feat/x
-`,
-				["git branch --show-current"]: "main\n",
-				["git symbolic-ref --short refs/remotes/origin/HEAD"]:
-					"origin/main\n",
-				["git status --porcelain"]: "",
-				["git rev-parse --is-shallow-repository"]: "false\n",
-				["git merge-base --is-ancestor feat/x main"]: "",
-				["git rev-list --left-right --count main...feat/x"]: "1 0\n",
-				[`git worktree remove ${linked}`]: "",
-				["git update-ref refs/agent-worktree/backups/feat-x/facade_run feat/x"]:
-					"",
-			}),
-		});
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(
+					root,
+					deleteFixtureRunner(root, linked, {
+						extra: {
+							[`git worktree remove ${linked}`]: "",
+							["git update-ref refs/agent-worktree/backups/feat-x/facade_run feat/x"]:
+								"",
+						},
+					}),
+				),
+			});
 
 		expect(result.changedState).toBe("partial");
 		expect(result.backupRef).toBe(
@@ -220,42 +201,21 @@ branch refs/heads/feat/x
 		);
 	});
 
-	test("delete stops before branch deletion when backup ref creation fails", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-backup-fail-"));
-		const linked = join(root, ".worktrees", "feat-x");
-		await mkdir(linked, { recursive: true });
-		const calls: string[] = [];
+		test("delete stops before branch deletion when backup ref creation fails", async () => {
+			const { root, linked } =
+				await createLinkedWorktreeFixture("awt-backup-fail-");
+			const calls: string[] = [];
 
-		const result = await deleteWorktree({
-			cwd: root,
-			branch: "feat/x",
-			dryRun: false,
-			force: true,
-			deleteBranch: true,
-			runId: "facade/run",
-			run: async (args, options) => {
-				calls.push(args.join(" "));
-				return fakeGitRunner({
-					["git rev-parse --show-toplevel"]: `${root}\n`,
-					["git worktree list --porcelain"]: `worktree ${root}
-HEAD abc
-branch refs/heads/main
-
-worktree ${linked}
-HEAD def
-branch refs/heads/feat/x
-`,
-					["git branch --show-current"]: "main\n",
-					["git symbolic-ref --short refs/remotes/origin/HEAD"]:
-						"origin/main\n",
-					["git status --porcelain"]: "",
-					["git rev-parse --is-shallow-repository"]: "false\n",
-					["git merge-base --is-ancestor feat/x main"]: "",
-					["git rev-list --left-right --count main...feat/x"]: "1 0\n",
-					[`git worktree remove ${linked}`]: "",
-				})(args, options);
-			},
-		});
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(root, async (args, options) => {
+					calls.push(args.join(" "));
+					return deleteFixtureRunner(root, linked, {
+						extra: {
+							[`git worktree remove ${linked}`]: "",
+						},
+					})(args, options);
+				}),
+			});
 
 		expect(result.changedState).toBe("partial");
 		expect(result.failureRef).toEqual({
@@ -266,37 +226,16 @@ branch refs/heads/feat/x
 		expect(calls.some((call) => call.includes("branch -D"))).toBe(false);
 	});
 
-	test("delete records dirty preflight blocks as durable failure evidence", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-dirty-block-"));
-		const linked = join(root, ".worktrees", "feat-x");
-		await mkdir(linked, { recursive: true });
+		test("delete records dirty preflight blocks as durable failure evidence", async () => {
+			const { root, linked } =
+				await createLinkedWorktreeFixture("awt-dirty-block-");
 
-		const result = await deleteWorktree({
-			cwd: root,
-			branch: "feat/x",
-			dryRun: false,
-			force: true,
-			deleteBranch: true,
-			runId: "facade/run",
-			run: fakeGitRunner({
-				["git rev-parse --show-toplevel"]: `${root}\n`,
-				["git worktree list --porcelain"]: `worktree ${root}
-HEAD abc
-branch refs/heads/main
-
-worktree ${linked}
-HEAD def
-branch refs/heads/feat/x
-`,
-				["git branch --show-current"]: "main\n",
-				["git symbolic-ref --short refs/remotes/origin/HEAD"]:
-					"origin/main\n",
-				["git status --porcelain"]: " M file.txt\n",
-				["git rev-parse --is-shallow-repository"]: "false\n",
-				["git merge-base --is-ancestor feat/x main"]: "",
-				["git rev-list --left-right --count main...feat/x"]: "1 0\n",
-			}),
-		});
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(
+					root,
+					deleteFixtureRunner(root, linked, { status: " M file.txt\n" }),
+				),
+			});
 
 		expect(result.changedState).toBe("none");
 		expect(result.reason).toBe("dirty");
@@ -359,11 +298,34 @@ detached
 	});
 });
 
-function fakeGitRunner(outputs: Record<string, string>): GitRunner {
-	return async (args) => {
-		const stdout = outputs[args.join(" ")];
-		return stdout === undefined
-			? { ok: false, stdout: "", stderr: "missing fake output", code: 1 }
-			: { ok: true, stdout, stderr: "", code: 0 };
+async function createLinkedWorktreeFixture(
+	prefix: string,
+): Promise<{ root: string; linked: string }> {
+	const root = await mkdtemp(join(tmpdir(), prefix));
+	const linked = join(root, ".worktrees", "feat-x");
+	await mkdir(linked, { recursive: true });
+	return { root, linked };
+}
+
+function deleteFixtureRunner(
+	root: string,
+	linked: string,
+	options?: Parameters<typeof linkedRepoGitOutputs>[2],
+): NonNullable<Parameters<typeof deleteWorktree>[0]["run"]> {
+	return fakeGitRunner(linkedRepoGitOutputs(root, linked, options));
+}
+
+function deleteFixtureOptions(
+	root: string,
+	run: NonNullable<Parameters<typeof deleteWorktree>[0]["run"]>,
+): Parameters<typeof deleteWorktree>[0] {
+	return {
+		cwd: root,
+		branch: "feat/x",
+		dryRun: false,
+		force: true,
+		deleteBranch: true,
+		runId: "facade/run",
+		run,
 	};
 }

@@ -2,7 +2,7 @@ import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
-import { WT_CONTRACT_ID, WT_SCHEMA_VERSION } from "./model.ts";
+import { WT_COLOR_PALETTE, WT_CONTRACT_ID, WT_SCHEMA_VERSION } from "./model.ts";
 
 /**
  * Public command ids for the wt front door.
@@ -73,6 +73,24 @@ const WT_DRIFT_FAILURE_ACTIONS = [
 			"Review the diff, port real edits into the registry, then rerun the render with force.",
 		sideEffects: ["read"],
 	},
+] as const;
+
+const WT_COLOR_FAILURE_SUMMARY = `Choose one of: ${WT_COLOR_PALETTE.join(", ")}.`;
+
+/**
+ * Discovery actions advertised when `wt color` fails.
+ *
+ * Unknown colors need a palette-selection continuation before the generic
+ * drift-repair fallback, so agents get a concrete next input instead of only a
+ * render recovery path.
+ */
+const WT_COLOR_FAILURE_ACTIONS = [
+	{
+		id: "choose_palette_color",
+		summary: WT_COLOR_FAILURE_SUMMARY,
+		sideEffects: ["read"],
+	},
+	...WT_DRIFT_FAILURE_ACTIONS,
 ] as const;
 
 /**
@@ -212,7 +230,7 @@ export const wtContracts = defineCommandFacadeContract(
 			resultContract: renderResultContract,
 			actionAffordances: {
 				success: WT_SYNC_SUCCESS_ACTIONS,
-				failure: WT_DRIFT_FAILURE_ACTIONS,
+				failure: WT_COLOR_FAILURE_ACTIONS,
 			},
 			previewExemption: {
 				reason: "Writes the registry then re-renders through the drift gate, which previews before overwrite.",

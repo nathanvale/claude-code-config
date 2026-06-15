@@ -299,6 +299,7 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
+		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("4");
 		expect(discoveryTree().commands.health?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
@@ -509,6 +510,20 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		expect(parsed.data.next_action.action_id).toBe("run-review");
 	});
 
+	test("accepts optional health read-target diagnostics", () => {
+		const parsed = parseHealthResultData({
+			...healthResultFixture(),
+			read_target: {
+				explicit: true,
+				repo_root: "/repo",
+				inbox_path: "/repo/.skill-feedback",
+				target_path: "/repo/package",
+			},
+		});
+
+		expect(parsed).toMatchObject({ kind: "ok" });
+	});
+
 	test("rejects malformed health result fields and enums", () => {
 		const cases: Array<{
 			name: string;
@@ -555,6 +570,19 @@ describe("skill-feedback U1 review result v2 contract", () => {
 				},
 				path: "next_action.action_id",
 				reason: "invalid_action_id",
+			},
+			{
+				name: "bad health read-target field",
+				mutate: (data) => {
+					data.read_target = {
+						explicit: true,
+						repo_root: "/repo",
+						inbox_path: "/repo/.skill-feedback",
+						git_exit_code: 128,
+					};
+				},
+				path: "read_target.git_exit_code",
+				reason: "unknown_field",
 			},
 		];
 
