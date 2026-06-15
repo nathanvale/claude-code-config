@@ -155,7 +155,7 @@ describe("agent-worktree CLI surface", () => {
 	});
 
 	test("delete target misses exit non-zero with lifecycle recovery data", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-cli-delete-missing-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-delete-missing-"));
 		const envelope = await expectRuntimeError(
 			["delete", "feat/missing", "--force", "--repo", root, "--json"],
 			repoRuntime(root, mainRepoGitOutputs(root)),
@@ -184,7 +184,7 @@ describe("agent-worktree CLI surface", () => {
 	});
 
 	test("recover resolves refs from the durable store before returning ok", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-cli-recover-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-recover-"));
 		const store = createFileStore(join(root, ".agent-worktree"));
 		await store.writeFailure({
 			ref: { kind: "failure", id: "run-1/delete_branch" },

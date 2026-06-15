@@ -5,9 +5,9 @@ import {
 	repoOwnerRootFor,
 	type RunResult,
 	type Runner,
-	WtDiscoveryError,
+	WorkTreeDiscoveryError,
 	workspacePathFor,
-} from "./wt-discovery.ts";
+} from "./worktree-discovery.ts";
 
 const fixture = `worktree /code/my-repo
 HEAD abc
@@ -31,15 +31,23 @@ detached
 `;
 
 describe("listWorktrees", () => {
-	test("reads shared discovery and filters out detached/temp entries", async () => {
+	test("reads shared discovery and filters out detached entries", async () => {
 		const worktrees = await listWorktrees("/code/my-repo", fakeDiscoveryRunner());
 		const branches = worktrees.map((w) => w.branch);
 
 		expect(branches).toContain("main");
 		expect(branches).toContain("codex/browser-use-refactor");
 		expect(branches).toContain("codex/harden-test-runner");
+		expect(branches).toContain("fallow-audit-temp");
 		expect(branches).not.toContain("(detached)");
-		expect(worktrees.every((w) => !w.path.includes("/fallow-audit-"))).toBe(true);
+	});
+
+	test("hides configured worktree path globs from the daily view", async () => {
+		const worktrees = await listWorktrees("/code/my-repo", fakeDiscoveryRunner(), [
+			"**/fallow-audit-*",
+		]);
+
+		expect(worktrees.map((w) => w.branch)).not.toContain("fallow-audit-temp");
 	});
 
 	test("throws worktree_list_failed on non-zero exit", async () => {
@@ -62,7 +70,7 @@ describe("listWorktrees", () => {
 					},
 				}),
 			),
-		).rejects.toBeInstanceOf(WtDiscoveryError);
+		).rejects.toBeInstanceOf(WorkTreeDiscoveryError);
 	});
 
 	test("runs shared discovery from the requested repo", async () => {
@@ -95,27 +103,28 @@ function fakeDiscoveryRunner(
 }
 
 describe("loadRegistry", () => {
-	test("absent wt.config.json yields an empty registry, not an error", async () => {
+	test("absent worktree.config.json yields an empty registry, not an error", async () => {
 		const registry = await loadRegistry("/code/definitely-not-a-real-repo-xyz");
 		expect(registry).toEqual({ branches: {} });
 	});
 
-	test("malformed wt.config.json throws registry_unreadable", async () => {
-		const dir = `${process.env.TMPDIR ?? "/tmp"}/wt-test-${Math.abs(fixture.length)}`;
-		await Bun.write(`${dir}/wt.config.json`, "{ not valid json");
+	test("malformed worktree.config.json throws registry_unreadable", async () => {
+		const dir = `${process.env.TMPDIR ?? "/tmp"}/worktree-test-${Math.abs(fixture.length)}`;
+		await Bun.write(`${dir}/worktree.config.json`, "{ not valid json");
 		await expect(loadRegistry(dir)).rejects.toMatchObject({ code: "registry_unreadable" });
 	});
 
-	test("valid wt.config.json round-trips branches and defaults", async () => {
-		const dir = `${process.env.TMPDIR ?? "/tmp"}/wt-test-valid-${Math.abs(fixture.length)}`;
+	test("valid worktree.config.json round-trips branches and defaults", async () => {
+		const dir = `${process.env.TMPDIR ?? "/tmp"}/worktree-test-valid-${Math.abs(fixture.length)}`;
 		await Bun.write(
-			`${dir}/wt.config.json`,
+			`${dir}/worktree.config.json`,
 			JSON.stringify({ branches: { "codex/x": { color: "blue" } }, defaults: { wip: "/w" } }),
 		);
 		const registry = await loadRegistry(dir);
 		expect(registry.branches["codex/x"]).toEqual({ color: "blue" });
 		expect(registry.defaults).toEqual({ wip: "/w" });
 	});
+
 });
 
 describe("workspacePathFor", () => {

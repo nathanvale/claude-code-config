@@ -1,6 +1,6 @@
-# wt
+# WorkTree
 
-This context defines durable language for the `wt` workflow and its boundary with shared git/worktree runtime ownership.
+This context defines durable language for the WorkTree workflow and its `worktree` command shorthand boundary with shared git/worktree runtime ownership.
 
 ## Language
 
@@ -53,7 +53,7 @@ A read-only context view for the next agent, assembled from current repo evidenc
 _Avoid_: handoff record, saved handoff, transcript summary
 
 **Shared Runtime Package**:
-The repo-local owner for git/worktree truth, hygiene, safety, and recovery language consumed by `wt` and future workflow entry points.
+The repo-local owner for git/worktree truth, hygiene, safety, and recovery language consumed by `worktree` and future workflow entry points.
 _Avoid_: external SideQuest dependency, skill-owned git logic, CLI wrapper
 
 **Agent-Recoverable Repo Product**:

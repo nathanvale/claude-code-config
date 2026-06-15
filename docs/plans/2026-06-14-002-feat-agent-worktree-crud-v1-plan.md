@@ -9,13 +9,13 @@ origin: docs/brainstorms/2026-06-14-agent-native-multi-agent-cli-requirements.md
 
 ## Summary
 
-Build `agent-worktree` as a repo-local shared runtime package at `runtime/agent-worktree`, with `doctor` as the primary read surface and CRUD lifecycle commands behind a facade-backed CLI. The package ports the useful SideQuest Git worktree mechanics into this repo, but reshapes them around agent recovery, merge evidence, typed refs, durable state, and `wt` as the workflow front door.
+Build `agent-worktree` as a repo-local shared runtime package at `runtime/agent-worktree`, with `doctor` as the primary read surface and CRUD lifecycle commands behind a facade-backed CLI. The package ports the useful SideQuest Git worktree mechanics into this repo, but reshapes them around agent recovery, merge evidence, typed refs, durable state, and `worktree` as the workflow front door.
 
 ---
 
 ## Problem Frame
 
-The current `wt` skill owns workspace rendering, but delegates git and worktree truth to `@side-quest/git`. SideQuest Git has useful mechanics, especially list/status/delete/clean/merge evidence, but it was not designed as an agent-native recovery product. V1 replaces that split with one local owner that agents can inspect before mutation and after partial failure.
+The current `worktree` skill owns workspace rendering, but delegates git and worktree truth to `@side-quest/git`. SideQuest Git has useful mechanics, especially list/status/delete/clean/merge evidence, but it was not designed as an agent-native recovery product. V1 replaces that split with one local owner that agents can inspect before mutation and after partial failure.
 
 ---
 
@@ -40,12 +40,12 @@ The current `wt` skill owns workspace rendering, but delegates git and worktree 
 - R9. Failure state uses typed refs (`worktree:<id>`, `run:<id>`, `failure:<id>`) and changed-state values `none`, `partial`, `complete`, `unknown`.
 - R9a. `delete` creates a per-run backup ref at `refs/agent-worktree/backups/<branch>/<run-id>` before attempting branch deletion.
 
-**Shared package and `wt` integration**
+**Shared package and `worktree` integration**
 
 - R10. The shared package owns git/worktree model vocabulary, discovery, cleanup policy, destructive safety, merge evidence, and recovery result vocabulary.
-- R11. `wt` keeps owning VS Code workspace rendering, focus/color preferences, drift gates, and open behavior.
-- R12. `wt` stops depending on `@side-quest/git` once the shared package exposes equivalent worktree lifecycle behavior.
-- R13. `wt` preserves upstream recovery classification when it wraps shared-package failures in its own facade envelope.
+- R11. `worktree` keeps owning VS Code workspace rendering, focus/color preferences, drift gates, and open behavior.
+- R12. `worktree` stops depending on `@side-quest/git` once the shared package exposes equivalent worktree lifecycle behavior.
+- R13. `worktree` preserves upstream recovery classification when it wraps shared-package failures in its own facade envelope.
 
 **Agent-native CLI contract**
 
@@ -65,11 +65,11 @@ The current `wt` skill owns workspace rendering, but delegates git and worktree 
 - KTD5. **Main-owner durable store:** `.agent-worktree/` lives at the main worktree owner root so recovery data survives linked worktree deletion. It is gitignored local operational state in v1; agents inspect it through `agent-worktree`, not Git review.
 - KTD6. **Merge intelligence is core evidence:** status, check, delete, and clean decisions preserve ancestor merge, squash merge, ahead/behind, shallow clone, and upstream-gone evidence.
 - KTD7. **`clean` stays preview-only in v1:** destructive batch cleanup waits until preview evidence, durable trails, and recovery semantics are proven. `clean` previews by default; `--preview` is an accepted alias for explicit safety.
-- KTD8. **`wt` consumes the library, not the new CLI:** `wt` remains the workflow entry point, while git/worktree mechanics move to the shared runtime owner.
+- KTD8. **`worktree` consumes the library, not the new CLI:** `worktree` remains the workflow entry point, while git/worktree mechanics move to the shared runtime owner.
 - KTD9. **Retention warns, never deletes in v1:** `doctor` warns when `.agent-worktree/` records or backup refs are older than 30 days. Automatic deletion and explicit pruning are deferred.
 - KTD10. **Doctor maps state, even when blocked:** `doctor` exits `0` when it can return a readable map. Blockers and unknowns live in JSON data, and `mutation_readiness: unknown` never permits mutation.
 - KTD11. **Destructive branch deletion is explicit:** `delete` removes the worktree by default. Branch deletion requires an explicit flag, a per-run backup ref, and `--force` for non-interactive destructive execution.
-- KTD12. **Migration is read-first:** `wt` migrates shared discovery reads before lifecycle commands so workspace rendering remains stable while the runtime owner changes.
+- KTD12. **Migration is read-first:** `worktree` migrates shared discovery reads before lifecycle commands so workspace rendering remains stable while the runtime owner changes.
 - KTD13. **Pattern labels stay pressure-owned:** architecture scaffolds use plain owner modules named by pressure, not GoF labels. Current earned scaffolds are doctor aggregation, merge evidence cascade, operation journal, typed ref resolution, recovery planning, and projection.
 
 ### Accepted V1 Operating Defaults
@@ -105,8 +105,8 @@ The current `wt` skill owns workspace rendering, but delegates git and worktree 
 - Diagnostics: stderr plus durable refs; stdout stays machine JSON.
 - Unknown git evidence: preserve `unknown` with reason and command failure metadata.
 - Timeouts: bound subprocess evidence checks.
-- `wt` error mapping: preserve upstream `failure_domain`, `changed_state`, and `next_safe_action`.
-- Adoption order: doctor, read commands, write commands, then `wt` migration.
+- `worktree` error mapping: preserve upstream `failure_domain`, `changed_state`, and `next_safe_action`.
+- Adoption order: doctor, read commands, write commands, then `worktree` migration.
 
 ---
 
@@ -125,7 +125,7 @@ flowchart TB
   Lifecycle --> Merge
   Lifecycle --> Store
   Inspect --> Store
-  WT["wt skill"] --> Runtime["agent-worktree library"]
+  WorkTree["WorkTree skill"] --> Runtime["agent-worktree library"]
   Runtime --> Discovery
   Runtime --> Lifecycle
 ```
@@ -184,7 +184,7 @@ runtime/agent-worktree/
 - **Dependencies:** None.
 - **Files:** `runtime/agent-worktree/package.json`, `runtime/agent-worktree/tsconfig.json`, `runtime/agent-worktree/src/index.ts`, `runtime/agent-worktree/src/model.ts`, `runtime/agent-worktree/src/command-contract.ts`, `runtime/agent-worktree/src/cli.ts`, `runtime/agent-worktree/tests/scaffold.test.ts`.
 - **Approach:** Keep a flat package. Define command ids, status vocabulary, changed-state vocabulary, typed ref vocabulary, package identity, bin aliases, result contract, and action affordances in package-owned code.
-- **Patterns to follow:** `skills/wt/src/command-contract.ts`, `skills/wt/src/wt.ts`, `runtime/cli-command-facade/src/command-contract.ts`.
+- **Patterns to follow:** `skills/worktree/src/command-contract.ts`, `skills/worktree/src/worktree.ts`, `runtime/cli-command-facade/src/command-contract.ts`.
 - **Test scenarios:** Verify `doctor`, lifecycle, recovery, inspect, handoff, and `commands` are present in discovery. Verify rendered help includes advertised flags. Verify `commands --json` emits a facade success envelope. Verify feature commands return scaffold-only structured failure until implemented.
 - **Verification:** Command contract construction throws no facade drift, tests pass, and package typecheck passes.
 
@@ -195,7 +195,7 @@ runtime/agent-worktree/
 - **Dependencies:** U1.
 - **Files:** `runtime/agent-worktree/src/discovery.ts`, `runtime/agent-worktree/src/doctor.ts`, `runtime/agent-worktree/src/store.ts`, `runtime/agent-worktree/tests/doctor.test.ts`, `runtime/agent-worktree/tests/discovery.test.ts`.
 - **Approach:** Port the SideQuest porcelain parser shape, then enrich it with active worktree, main owner root, linked worktrees, stale dirs, dependency readiness, command readiness, contract health, blocked mutations, retention warnings, and next safe actions. Public doctor JSON uses `summary`, `checks[]`, `mutation_readiness`, `blockers[]`, and `next_actions[]`; check aggregation uses worst severity, and `unknown` blocks mutation.
-- **Patterns to follow:** `skills/wt/src/wt-discovery.ts`, SideQuest Git `src/worktree/list.ts`, SideQuest Git `src/worktree/status.ts`.
+- **Patterns to follow:** `skills/worktree/src/worktree-discovery.ts`, SideQuest Git `src/worktree/list.ts`, SideQuest Git `src/worktree/status.ts`.
 - **Test scenarios:** Given a linked worktree, doctor identifies main owner, active worktree, linked worktrees, and next safe action. Given malformed or partial git data, doctor returns readable checks and marks failed checks as `blocked` or `unknown`. Given dirty state, doctor reports mutation blockers without failing the read. Given old records or backup refs, doctor reports retention warnings without deleting them.
 - **Verification:** Doctor output can be parsed from JSON stdout and does not require stderr or human prose for routing. A blocked or unknown map exits `0` when the map is readable.
 
@@ -250,20 +250,20 @@ runtime/agent-worktree/
 - **Dependencies:** U1 through U6.
 - **Files:** `runtime/agent-worktree/tests/cli-surface.test.ts`, `runtime/agent-worktree/tests/scaffold.test.ts`, `runtime/agent-worktree/tests/architecture-scaffold.test.ts`, `runtime/agent-worktree/src/cli.ts`, `runtime/agent-worktree/src/command-contract.ts`, `runtime/agent-worktree/src/projection.ts`.
 - **Approach:** Test through the public CLI entry point. Derive expected help and discovery from `agentWorktreeContracts`, then assert parser behavior and runtime results against the same command ids. Keep projection as the shared bounded-output contract for doctor, list, status, clean, and handoff so read commands do not invent separate context-budget controls. Public JSON uses object envelopes only; diagnostics go to stderr or durable refs, not stdout.
-- **Patterns to follow:** `skills/wt/src/wt.test.ts`, `runtime/cli-command-facade/tests/command-facade.test.ts`.
+- **Patterns to follow:** `skills/worktree/src/worktree.test.ts`, `runtime/cli-command-facade/tests/command-facade.test.ts`.
 - **Test scenarios:** Verify every advertised command supports `--help` and `--json` where declared. Verify invalid flags fail with exit code `2`. Verify mutation commands expose preview or destructive gates. Verify `commands` discovery matches the contract. Verify runtime envelopes carry run id and changed-state where relevant.
 - **Verification:** The workspace facade invariant check includes `runtime/agent-worktree/src/command-contract.ts`.
 
-### U8. Migrate `wt` To The Shared Runtime Owner
+### U8. Migrate `worktree` To The Shared Runtime Owner
 
-- **Goal:** Replace `@side-quest/git` delegation in `wt` with library calls into `agent-worktree`.
+- **Goal:** Replace `@side-quest/git` delegation in `worktree` with library calls into `agent-worktree`.
 - **Requirements:** R10, R11, R12, R13.
 - **Dependencies:** U2 through U7.
-- **Files:** `skills/wt/package.json`, `skills/wt/src/wt.ts`, `skills/wt/src/wt-discovery.ts`, `skills/wt/src/wt.test.ts`, `skills/wt/src/wt-discovery.test.ts`.
-- **Approach:** Keep `wt`'s public command contract stable while replacing delegate calls. Migrate shared discovery reads first, then lifecycle commands. Map upstream shared-package failures into `wt` envelopes without losing `failure_domain`, `changed_state`, or `next_safe_action`.
-- **Patterns to follow:** `skills/wt/src/wt.ts`, `skills/wt/src/wt-discovery.ts`, `skills/wt/src/command-contract.ts`.
-- **Test scenarios:** Given shared discovery succeeds, `wt sync` renders the same workspace shape before lifecycle commands migrate. Given shared discovery blocks on dirty state, `wt clean` preserves the upstream failure category. Given `wt new` creates through shared runtime, the workspace re-render still follows the drift gate. Given `@side-quest/git` is absent after lifecycle migration, `wt` no longer fails on that dependency.
-- **Verification:** `wt` tests pass, `wt` typecheck passes, and no `@side-quest/git worktree` delegation remains in `skills/wt/src`.
+- **Files:** `skills/worktree/package.json`, `skills/worktree/src/worktree.ts`, `skills/worktree/src/worktree-discovery.ts`, `skills/worktree/src/worktree.test.ts`, `skills/worktree/src/worktree-discovery.test.ts`.
+- **Approach:** Keep `worktree`'s public command contract stable while replacing delegate calls. Migrate shared discovery reads first, then lifecycle commands. Map upstream shared-package failures into `worktree` envelopes without losing `failure_domain`, `changed_state`, or `next_safe_action`.
+- **Patterns to follow:** `skills/worktree/src/worktree.ts`, `skills/worktree/src/worktree-discovery.ts`, `skills/worktree/src/command-contract.ts`.
+- **Test scenarios:** Given shared discovery succeeds, `worktree sync` renders the same workspace shape before lifecycle commands migrate. Given shared discovery blocks on dirty state, `worktree clean` preserves the upstream failure category. Given `worktree new` creates through shared runtime, the workspace re-render still follows the drift gate. Given `@side-quest/git` is absent after lifecycle migration, `worktree` no longer fails on that dependency.
+- **Verification:** `worktree` tests pass, `worktree` typecheck passes, and no `@side-quest/git worktree` delegation remains in `skills/worktree/src`.
 
 ---
 
@@ -277,7 +277,7 @@ runtime/agent-worktree/
 - Recover, inspect, and read-only handoff surfaces.
 - Durable store under main owner `.agent-worktree/`.
 - Merge intelligence as core evidence.
-- `wt` migration away from `@side-quest/git`.
+- `worktree` migration away from `@side-quest/git`.
 - Facade contract proof for the public CLI.
 
 ### Deferred To Follow-Up Work
@@ -302,7 +302,7 @@ runtime/agent-worktree/
 
 ## System-Wide Impact
 
-- `wt` becomes a consumer of a shared runtime package rather than the owner of git/worktree lifecycle mechanics.
+- `worktree` becomes a consumer of a shared runtime package rather than the owner of git/worktree lifecycle mechanics.
 - `@side-quest/git` stops being the runtime source of truth for repo worktree state.
 - `.agent-worktree/` becomes the gitignored durable recovery surface at the main owner root.
 - Command contracts become the deterministic home for CLI discovery, help, parser acceptance, and runtime proof.
@@ -316,7 +316,7 @@ runtime/agent-worktree/
 - **Store lifecycle uncertainty:** `.agent-worktree/` needs retention and ignore behavior. Mitigate by keeping store layout package-owned and testable before adding richer event trails.
 - **State growth:** v1 warns after 30 days but does not delete. Mitigate by adding `prune` only after warning output and inspect recovery are proven.
 - **Merge evidence cost:** ancestor/squash/ahead-behind checks can be slow or uncertain. Mitigate with bounded subprocess execution, shallow-clone `unknown`, and clear evidence fields.
-- **`wt` migration blast radius:** workspace rendering should not change while lifecycle owner changes. Mitigate with characterization tests around current `wt` output before delegation replacement.
+- **`worktree` migration blast radius:** workspace rendering should not change while lifecycle owner changes. Mitigate with characterization tests around current `worktree` output before delegation replacement.
 
 ---
 
@@ -326,7 +326,7 @@ runtime/agent-worktree/
 - AE2. Given the repo has dirty files and malformed worktree config, when `doctor` runs, then readable checks return and unreadable checks are marked blocked or unknown.
 - AE3. Given delete removes one worktree and fails on branch cleanup, when another agent inspects the failure ref, then it sees changed-state `partial`, `failure:<run-id>/<step-id>`, the per-run backup ref, what changed, what failed, and whether same-input retry is safe.
 - AE4. Given an orphan branch and stale worktree directory exist, when `clean` or `clean --preview` runs, then both are classified separately and neither is deleted.
-- AE5. Given `wt clean` calls the shared package and the shared package blocks on dirty state, when `wt` returns, then its envelope preserves the shared failure category and safe inspection path.
+- AE5. Given `worktree clean` calls the shared package and the shared package blocks on dirty state, when `worktree` returns, then its envelope preserves the shared failure category and safe inspection path.
 - AE6. Given any command runs with `--no-input --json`, when it succeeds or fails, then stdout contains parseable machine data and diagnostics stay out of stdout.
 - AE7. Given old run records or backup refs exist, when `doctor` runs, then it warns after 30 days and deletes nothing.
 - AE8. Given merge evidence is shallow or incomplete, when `check` runs, then mutation readiness is `unknown` and mutation is not permitted.
@@ -339,6 +339,6 @@ runtime/agent-worktree/
 - Accepted decisions: `docs/decisions/2026-06-14-001-agent-worktree-decision-log.md`.
 - CLI contract owner: `skills/create-cli/SKILL.md`, `skills/create-cli/references/agent-native-cli-design.md`, `skills/create-cli/references/cli-command-facade.md`.
 - Facade runtime owner: `runtime/cli-command-facade/src/command-contract.ts`, `runtime/cli-command-facade/src/command-metadata.ts`, `runtime/cli-command-facade/src/runtime-envelope.ts`.
-- Existing `wt` patterns: `skills/wt/src/command-contract.ts`, `skills/wt/src/wt.ts`, `skills/wt/src/wt-discovery.ts`.
+- Existing `worktree` patterns: `skills/worktree/src/command-contract.ts`, `skills/worktree/src/worktree.ts`, `skills/worktree/src/worktree-discovery.ts`.
 - Pattern gate: `context/code-style.md`.
 - SideQuest source material: SideQuest Git worktree list/status/create/delete/clean/orphans/backup/merge-status files inspected from the sibling repo.

@@ -37,15 +37,6 @@ export const AGENT_WORKTREE_PACKAGE_NAME = "agent-worktree" as const;
 export const AGENT_WORKTREE_CLI_NAME = "agent-worktree" as const;
 
 /**
- * Short CLI alias accepted for low-friction repeated use.
- *
- * The alias is distribution metadata, not a separate command vocabulary.
- *
- * @defaultValue "awt"
- */
-export const AGENT_WORKTREE_CLI_ALIAS = "awt" as const;
-
-/**
  * Public v1 command ids.
  *
  * Includes doctor, lifecycle CRUD, recovery, inspect, handoff, refresh, and
@@ -416,7 +407,7 @@ export const AGENT_WORKTREE_SCAFFOLD_SEAMS = [
 		ownerPath: "runtime/agent-worktree/src/worktrees.ts",
 		status: "earned",
 		deletionTest:
-			"Deleting it spreads lifecycle policy across the CLI and wt consumer.",
+			"Deleting it spreads lifecycle policy across the CLI and worktree consumer.",
 		nextUnit: "U3",
 	},
 	{

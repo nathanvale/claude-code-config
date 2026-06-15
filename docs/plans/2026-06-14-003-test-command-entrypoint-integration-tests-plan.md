@@ -9,7 +9,7 @@ origin: docs/brainstorms/2026-06-14-command-entrypoint-integration-tests-require
 
 ## Summary
 
-Add a root-level Command Entrypoint Integration Test suite that proves `wt`, `agent-worktree`, and `awt` through real repo-local process entrypoints. The suite covers package scripts, source-entry probes, workspace-filter version probes, command discovery, rendered help usage lines, stable JSON fields, sentinel real-git lifecycle flows, branch-deletion planning, and preflight failure recovery refs.
+Add a root-level Command Entrypoint Integration Test suite that proves `worktree`, `agent-worktree`, and `agent-worktree` through real repo-local process entrypoints. The suite covers package scripts, source-entry probes, workspace-filter version probes, command discovery, rendered help usage lines, stable JSON fields, sentinel real-git lifecycle flows, branch-deletion planning, and preflight failure recovery refs.
 
 ---
 
@@ -32,21 +32,21 @@ The ad hoc front-door run proved the command shape once, but it is not durable. 
 
 - R5. Cover invocation modes `package-cwd`, `workspace-filter`, and `source`.
 - R6. Run package-cwd mode for runtime JSON and lifecycle behavior.
-- R7. Limit workspace-filter mode to version probes for `wt`, `agent-worktree`, and `awt`.
-- R8. Limit source-entry mode to `--version` and top-level help for `wt` and `agent-worktree`.
+- R7. Limit workspace-filter mode to version probes for `worktree`, `agent-worktree`, and `agent-worktree`.
+- R8. Limit source-entry mode to `--version` and top-level help for `worktree` and `agent-worktree`.
 
 **Contract and discovery coverage**
 
 - R9. Derive command ids mechanically from package scripts and exported command contracts before behavior cases.
-- R10. Assert exact command id sets for `wt` and `agent-worktree`.
+- R10. Assert exact command id sets for `worktree` and `agent-worktree`.
 - R11. Run top-level help for every CLI entrypoint and per-command help for every discovered command.
-- R12. Assert help exit code `0` and rendered contract usage lines only; do not assert generic `Usage: wt <command>` or `Usage: agent-worktree <command>` strings.
+- R12. Assert help exit code `0` and rendered contract usage lines only; do not assert generic `Usage: worktree <command>` or `Usage: agent-worktree <command>` strings.
 
 **Runtime and lifecycle coverage**
 
 - R13. Assert stable JSON fields only: `status`, runtime `data.contract_id`, and command-owned behavior fields such as `action`, `preview`, `changed_state`, `run_ref`, and `failure_ref`.
 - R14. Use real temp git repositories for sentinel lifecycle and render flows, including real commits and real `git worktree add` / `git worktree remove`.
-- R15. Prove sentinel `wt` package-script flows: `sync`, `new`, and `rm`; defer `focus`, `color`, `clean`, and `open`.
+- R15. Prove sentinel `worktree` package-script flows: `sync`, `new`, and `rm`; defer `focus`, `color`, `clean`, and `open`.
 - R16. Prove sentinel `agent-worktree` package-script flows: create a worktree, inspect or check the created ref, branch-deletion dry-run planning, and preflight recovery refs.
 - R17. Prove branch-deletion planning with `delete --dry-run --delete-branch --json`, without executing branch deletion in v1; assert preview state and branch-deletion intent without snapshotting the full plan.
 - R18. Prove protected-branch preflight failure continuity through failure ref inspection and dry-run recovery.
@@ -70,7 +70,7 @@ The ad hoc front-door run proved the command shape once, but it is not durable. 
 - KTD7. **Source entries are compatibility probes:** source-entry tests use direct `bun run <source-path>` invocations for `--version` and top-level help only. Full JSON and lifecycle duplication through source entries is deferred to avoid slow and brittle duplicate matrices.
 - KTD8. **Contracts provide discovery truth:** expected command ids come from package scripts plus exported command contracts, not from copied arrays in the test body. The test may assert the exact resulting ids after deriving them.
 - KTD9. **Rendered usage, not generic usage:** help probes assert rendered contract usage lines. Current top-level help renders the default command's usage line, so the suite should not invent a generic catalog usage string.
-- KTD10. **Runtime envelope id wins for commands JSON:** `commands --json` assertions use the runtime envelope ids `wt.workspace` and `agent-worktree.lifecycle`; command metadata ids such as `wt.commands` remain package-local contract detail.
+- KTD10. **Runtime envelope id wins for commands JSON:** `commands --json` assertions use the runtime envelope ids `worktree.workspace` and `agent-worktree.lifecycle`; command metadata ids such as `worktree.commands` remain package-local contract detail.
 - KTD11. **Stable JSON, no snapshots:** assertions pin fields that are machine contracts and avoid full stdout snapshots, so the suite detects drift without becoming a formatting freeze.
 - KTD12. **Real git for sentinel lifecycle truth:** lifecycle tests create temp repos, commits, `origin/HEAD` evidence, linked worktrees, and local stores where those facts prove the process boundary.
 - KTD13. **Sentinel flows over full matrices:** v1 keeps high-signal process-boundary flows and demotes duplicate package-local behavior checks to follow-up.
@@ -139,16 +139,16 @@ flowchart TB
 - **Goal:** Derive command ids from package metadata and exported command contracts, then prove help usage lines for every public entrypoint and discovered command.
 - **Requirements:** R5, R8, R9, R10, R11, R12.
 - **Dependencies:** U1.
-- **Files:** `scripts/command-entrypoint.integration.test.ts`, `skills/wt/package.json`, `skills/wt/src/command-contract.ts`, `runtime/agent-worktree/package.json`, `runtime/agent-worktree/src/command-contract.ts`.
-- **Approach:** Read package scripts for command entrypoint names. Import `wtContracts`, `agentWorktreeContracts`, and `agentWorktreeContractEntries` as discovery sources. Assert the exact command id sets after derivation. For package-cwd mode, run top-level help and per-command help through package scripts. Assert rendered contract usage lines, not generic catalog placeholders. For source mode, run top-level help and version only.
-- **Patterns to follow:** `skills/wt/src/wt.test.ts` and `runtime/agent-worktree/tests/cli-surface.test.ts` for rendered usage expectations; `CONTEXT.md` Command Contract Locator vocabulary.
+- **Files:** `scripts/command-entrypoint.integration.test.ts`, `skills/worktree/package.json`, `skills/worktree/src/command-contract.ts`, `runtime/agent-worktree/package.json`, `runtime/agent-worktree/src/command-contract.ts`.
+- **Approach:** Read package scripts for command entrypoint names. Import `worktreeContracts`, `agentWorktreeContracts`, and `agentWorktreeContractEntries` as discovery sources. Assert the exact command id sets after derivation. For package-cwd mode, run top-level help and per-command help through package scripts. Assert rendered contract usage lines, not generic catalog placeholders. For source mode, run top-level help and version only.
+- **Patterns to follow:** `skills/worktree/src/worktree.test.ts` and `runtime/agent-worktree/tests/cli-surface.test.ts` for rendered usage expectations; `CONTEXT.md` Command Contract Locator vocabulary.
 - **Test scenarios:**
-  - Mechanical discovery returns `wt` command ids: `sync`, `focus`, `color`, `open`, `new`, `rm`, `clean`, `commands`.
+  - Mechanical discovery returns `worktree` command ids: `sync`, `focus`, `color`, `open`, `new`, `rm`, `clean`, `commands`.
   - Mechanical discovery returns `agent-worktree` command ids: `doctor`, `list`, `create`, `status`, `check`, `delete`, `clean`, `recover`, `refresh`, `inspect`, `handoff`, `commands`.
-  - `wt`, `agent-worktree`, and `awt` top-level help exits `0` and contains the current rendered top-level usage line.
-  - Every discovered `wt` command help exits `0` and contains that command contract's first rendered usage line.
+  - `worktree`, `agent-worktree`, and `agent-worktree` top-level help exits `0` and contains the current rendered top-level usage line.
+  - Every discovered `worktree` command help exits `0` and contains that command contract's first rendered usage line.
   - Every discovered `agent-worktree` command help exits `0` and contains that command contract's first rendered usage line.
-  - `wt` and `agent-worktree` source entries support `--version` and top-level help.
+  - `worktree` and `agent-worktree` source entries support `--version` and top-level help.
 - **Verification:** Discovery, help, and source compatibility probes fail if package scripts, source entries, or exported command contracts drift apart.
 
 ### U3. Prove Version, Commands JSON, And Stable Runtime JSON Fields
@@ -158,44 +158,44 @@ flowchart TB
 - **Dependencies:** U1, U2.
 - **Files:** `scripts/command-entrypoint.integration.test.ts`.
 - **Approach:** Use silent package-cwd mode for JSON assertions and workspace-filter mode for version probes only. Parse JSON envelopes from stdout, assert stable envelope fields, and keep assertions to command-owned behavior fields. Invalid command tests assert non-zero exits and structured error envelopes without full text snapshots.
-- **Patterns to follow:** `skills/wt/src/wt.ts` for `WT_CONTRACT_ID` envelope data; `runtime/agent-worktree/src/cli.ts` for `AGENT_WORKTREE_CONTRACT_ID` envelope data; `skills/create-cli/references/cli-command-facade.md` for wrapper limitations.
+- **Patterns to follow:** `skills/worktree/src/worktree.ts` for `WORKTREE_CONTRACT_ID` envelope data; `runtime/agent-worktree/src/cli.ts` for `AGENT_WORKTREE_CONTRACT_ID` envelope data; `skills/create-cli/references/cli-command-facade.md` for wrapper limitations.
 - **Test scenarios:**
-  - `wt --version`, `agent-worktree --version`, and `awt --version` work through package scripts.
-  - Workspace-filter version probes for `wt`, `agent-worktree`, and `awt` exit `0` and contain the expected version substring in combined output.
-  - `wt commands --json`, `agent-worktree commands --json`, and `awt commands --json` return status `ok` and the expected runtime `data.contract_id`.
-  - Invalid `wt` command returns non-zero status with a structured error envelope.
+  - `worktree --version`, `agent-worktree --version`, and `agent-worktree --version` work through package scripts.
+  - Workspace-filter version probes for `worktree`, `agent-worktree`, and `agent-worktree` exit `0` and contain the expected version substring in combined output.
+  - `worktree commands --json`, `agent-worktree commands --json`, and `agent-worktree commands --json` return status `ok` and the expected runtime `data.contract_id`.
+  - Invalid `worktree` command returns non-zero status with a structured error envelope.
   - Invalid `agent-worktree` command returns non-zero status with a structured error envelope.
   - JSON assertion failures include stdout and stderr excerpts.
 - **Verification:** JSON parsing and stable-field assertions prove the machine contract without depending on full stdout formatting.
 
-### U4. Prove `wt` Sentinel Real Repo Lifecycle
+### U4. Prove `worktree` Sentinel Real Repo Lifecycle
 
-- **Goal:** Exercise high-signal `wt` package-script behavior against real temp git repositories and real worktree operations.
+- **Goal:** Exercise high-signal `worktree` package-script behavior against real temp git repositories and real worktree operations.
 - **Requirements:** R6, R13, R14, R15, R20, R21.
 - **Dependencies:** U1, U2, U3.
-- **Files:** `scripts/command-entrypoint.integration.test.ts`, `skills/wt/src/wt.ts`, `skills/wt/src/wt-discovery.ts`.
-- **Approach:** Build temp git repositories with an initial commit, a seeded default-branch signal, and a predictable worktree root. Run `wt sync`, `new`, and `rm` through silent package-cwd mode. Use stable JSON fields plus filesystem and git evidence where those facts prove the process boundary.
-- **Patterns to follow:** `skills/wt/src/wt.test.ts` for lifecycle and render assertions; `skills/wt/src/wt-discovery.test.ts` for owner-root behavior.
+- **Files:** `scripts/command-entrypoint.integration.test.ts`, `skills/worktree/src/worktree.ts`, `skills/worktree/src/worktree-discovery.ts`.
+- **Approach:** Build temp git repositories with an initial commit, a seeded default-branch signal, and a predictable worktree root. Run `worktree sync`, `new`, and `rm` through silent package-cwd mode. Use stable JSON fields plus filesystem and git evidence where those facts prove the process boundary.
+- **Patterns to follow:** `skills/worktree/src/worktree.test.ts` for lifecycle and render assertions; `skills/worktree/src/worktree-discovery.test.ts` for owner-root behavior.
 - **Test scenarios:**
-  - `wt sync --json` writes the generated workspace and returns status `ok`, `data.contract_id`, `action`, and `changed_state`.
-  - `wt new <branch> --json` creates a real linked worktree and re-renders.
-  - `wt rm <branch> --force --json` removes a real linked worktree and re-renders.
+  - `worktree sync --json` writes the generated workspace and returns status `ok`, `data.contract_id`, `action`, and `changed_state`.
+  - `worktree new <branch> --json` creates a real linked worktree and re-renders.
+  - `worktree rm <branch> --force --json` removes a real linked worktree and re-renders.
   - Temp repo cleanup removes all roots on success and preserves the root when an assertion fails.
-- **Verification:** The suite proves `wt` render and real worktree mutation through package-script process entrypoints, not through imported functions.
+- **Verification:** The suite proves `worktree` render and real worktree mutation through package-script process entrypoints, not through imported functions.
 
-### U5. Prove `agent-worktree` Sentinel Lifecycle And `awt` Alias Probes
+### U5. Prove `agent-worktree` Sentinel Lifecycle And `agent-worktree` Alias Probes
 
-- **Goal:** Exercise high-signal `agent-worktree` lifecycle flows and the `awt` alias probes against real temp git repositories and durable store state.
+- **Goal:** Exercise high-signal `agent-worktree` lifecycle flows and the canonical `agent-worktree` command probes against real temp git repositories and durable store state.
 - **Requirements:** R6, R13, R14, R16, R17, R20, R21.
 - **Dependencies:** U1, U2, U3.
 - **Files:** `scripts/command-entrypoint.integration.test.ts`, `runtime/agent-worktree/src/cli.ts`, `runtime/agent-worktree/src/worktrees.ts`, `runtime/agent-worktree/src/store.ts`, `runtime/agent-worktree/src/inspect.ts`.
-- **Approach:** Use real temp repos with linked worktrees and local durable stores. Run sentinel canonical lifecycle flows through silent package-cwd mode. Assert stable JSON fields, durable refs, preview flags, changed-state values, and expected side effects. Use `awt` for alias parity on version, top-level help, and `commands --json`, then reserve lifecycle behavior for the canonical command.
+- **Approach:** Use real temp repos with linked worktrees and local durable stores. Run sentinel canonical lifecycle flows through silent package-cwd mode. Assert stable JSON fields, durable refs, preview flags, changed-state values, and expected side effects. Use `agent-worktree` for canonical parity on version, top-level help, and `commands --json`, then reserve lifecycle behavior for the canonical command.
 - **Patterns to follow:** `runtime/agent-worktree/tests/worktrees.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, and `runtime/agent-worktree/tests/store.test.ts`.
 - **Test scenarios:**
   - `agent-worktree create <branch> --json` creates a real linked worktree and returns `changed_state: complete` with a `run_ref`.
   - A separate spawned `agent-worktree inspect <run_ref> --json` or `agent-worktree check <branch> --json` can read state created by the prior spawned process.
   - `agent-worktree delete <branch> --dry-run --delete-branch --json` returns `preview: true`, `changed_state: none`, and includes branch-deletion intent for the target branch.
-  - `awt --version`, top-level help, and `awt commands --json` preserve alias parity.
+  - `agent-worktree --version`, top-level help, and `agent-worktree commands --json` preserve canonical parity.
 - **Verification:** A fresh spawned process can inspect or verify state created by an earlier spawned process.
 
 ### U6. Prove Preflight Failure Ref Continuity And Recovery Preview
@@ -237,7 +237,7 @@ flowchart TB
 - Root `command-entrypoint:integration` script.
 - One root integration test file.
 - Package-cwd, workspace-filter, and source invocation modes.
-- `wt`, `agent-worktree`, and `awt` process-boundary entrypoints.
+- `worktree`, `agent-worktree`, and `agent-worktree` process-boundary entrypoints.
 - Command id discovery, rendered help usage lines, version probes, stable JSON fields, sentinel lifecycle flows, branch-deletion dry-run preview, and preflight recovery refs.
 - Real temp git repos and cleanup discipline.
 
@@ -246,11 +246,11 @@ flowchart TB
 - Promotion into `scripts/prove-workspace-portability.ts` after three clean real runs and an explicit gate decision.
 - Full source-entry command matrix.
 - Full branch deletion execution.
-- GUI launch coverage for `wt open <name>`.
-- `wt open --json` coverage after `wt open` has a repo override or another safe temp-repo fixture.
-- Full `wt` behavior rows for `focus`, `color`, and `clean`; package-local tests own those semantics in v1.
+- GUI launch coverage for `worktree open <name>`.
+- `worktree open --json` coverage after `worktree open` has a repo override or another safe temp-repo fixture.
+- Full `worktree` behavior rows for `focus`, `color`, and `clean`; package-local tests own those semantics in v1.
 - Full `agent-worktree` behavior rows for `doctor`, `list`, `status`, `refresh --dry-run`, `handoff`, `clean --preview`, plain `delete --dry-run`, and `delete --force`; package-local tests own those semantics in v1.
-- `awt` invalid-command and lifecycle behavior; alias parity is covered by version, top-level help, and `commands --json`.
+- `agent-worktree` invalid-command and lifecycle behavior; canonical parity is covered by version, top-level help, and `commands --json`.
 - Artificial timeout self-tests for the private harness.
 - Post-mutation partial failure recovery continuity, unless a deterministic fault-injection seam already exists.
 - Helper extraction into shared harness modules.
@@ -280,7 +280,7 @@ This suite adds a slower root-owned verification lane for agent-native CLI surfa
 - **Workspace-filter wrapper drift:** `bun --filter` can prefix and elide child stdout. Mitigation: use workspace-filter mode only for version substring probes.
 - **Timeout cleanup cutoff:** Bun test timeouts are an outer guard and can interrupt cleanup. Mitigation: rely on `Bun.spawn` timeout and `killSignal` as the primary timeout path.
 - **Temp cleanup failure:** failed tests can leave temp repos behind. Mitigation: preserve roots only on failure and print paths for cleanup.
-- **Existing worktree edits:** the suite should run lifecycle cases in temp repos only. Mitigation: every lifecycle case receives an explicit temp repo cwd or package-cwd plus repo flag; `wt open --json` is deferred because it lacks a repo override.
+- **Existing worktree edits:** the suite should run lifecycle cases in temp repos only. Mitigation: every lifecycle case receives an explicit temp repo cwd or package-cwd plus repo flag; `worktree open --json` is deferred because it lacks a repo override.
 - **Recovery overclaim:** protected-branch delete proves preflight failure continuity, not post-mutation partial failure recovery. Mitigation: name the v1 proof precisely and defer post-mutation failure coverage.
 
 ---
@@ -296,10 +296,10 @@ This suite adds a slower root-owned verification lane for agent-native CLI surfa
 ## Sources And Research
 
 - Origin requirements: `docs/brainstorms/2026-06-14-command-entrypoint-integration-tests-requirements.md`.
-- CLI contracts: `skills/wt/src/command-contract.ts`, `runtime/agent-worktree/src/command-contract.ts`.
-- CLI front doors: `skills/wt/src/wt.ts`, `runtime/agent-worktree/src/cli.ts`.
+- CLI contracts: `skills/worktree/src/command-contract.ts`, `runtime/agent-worktree/src/command-contract.ts`.
+- CLI front doors: `skills/worktree/src/worktree.ts`, `runtime/agent-worktree/src/cli.ts`.
 - Lifecycle owners: `runtime/agent-worktree/src/worktrees.ts`, `runtime/agent-worktree/src/store.ts`, `runtime/agent-worktree/src/inspect.ts`.
-- Existing tests: `skills/wt/src/wt.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, `runtime/agent-worktree/tests/worktrees.test.ts`.
+- Existing tests: `skills/worktree/src/worktree.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, `runtime/agent-worktree/tests/worktrees.test.ts`.
 - Root process pattern: `scripts/prove-workspace-portability.ts`.
 - Origin external sources: Bun test docs, Bun writing-tests docs, Node test docs, and Bun issue discussions named in the origin research notes.
 - Firecrawl follow-up sources:

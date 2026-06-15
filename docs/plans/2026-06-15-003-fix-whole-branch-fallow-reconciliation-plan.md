@@ -59,10 +59,10 @@ The risk is workflow drift, not a single code defect. If the implementation chas
 
 - KTD1. **Done means zero introduced real findings, not zero raw findings:** Fallow is useful but noisy on integration-heavy CLI tests, public contract exports, and package-owned fixture helpers. A raw-zero target would invite unsafe refactors; the shippable target is introduced real findings resolved and justified noise ledgered.
 - KTD2. **Attribution is the first gate:** The Fallow audit owns the introduced/inherited split. Implementation should parse JSON and group by `introduced`, owner path, action, and source state before editing.
-- KTD3. **Owner batches preserve boundaries:** `skill-feedback`, `cli-execution-auditor`, `wt`, `agent-worktree`, facade, root scripts, and docs have different contracts and tests. Batching by owner reduces accidental cross-package abstractions.
+- KTD3. **Owner batches preserve boundaries:** `skill-feedback`, `cli-execution-auditor`, `worktree`, `agent-worktree`, facade, root scripts, and docs have different contracts and tests. Batching by owner reduces accidental cross-package abstractions.
 - KTD4. **Exports are contract surfaces until proven otherwise:** `remove-export` findings are candidates only when introduced, traceable, not public contract surface, and backed by resolver evidence plus local reachability checks.
 - KTD5. **The facade slice is a guardrail:** `runtime/cli-command-facade` already has a clean current-task Fallow result. Future batches must not regress its scoped audit, package tests, or typecheck.
-- KTD6. **Station Maps verify pilot coverage only:** Branch Station Maps claim Declared Branch Coverage and remain optional in this iteration. Missing `wt` or `agent-worktree` catalogs stay follow-up unless the branch explicitly introduced them.
+- KTD6. **Station Maps verify pilot coverage only:** Branch Station Maps claim Declared Branch Coverage and remain optional in this iteration. Missing `worktree` or `agent-worktree` catalogs stay follow-up unless the branch explicitly introduced them.
 
 ---
 
@@ -93,7 +93,7 @@ stateDiagram-v2
 | `skills/skill-feedback` inherited `add-tests` | 71 | Ledger inherited unless directly blocking new Branch Station pilot behavior. |
 | `skills/cli-execution-auditor` introduced `extract-shared` | 66 | Triage as owner batch; extract only when shared concept improves readability. |
 | `skills/skill-feedback` introduced `extract-shared` | 23 | Triage after catalog/integration ownership is clear. |
-| `skills/wt` introduced `extract-shared` | 18 | Keep package setup local; avoid shared abstractions for test fixture mechanics. |
+| `skills/worktree` introduced `extract-shared` | 18 | Keep package setup local; avoid shared abstractions for test fixture mechanics. |
 | `skills/browser-use` introduced `extract-shared` | 12 | Verify whether these are branch-owned or unrelated branch drift before edits. |
 | `skills/cli-execution-auditor` introduced `add-tests` | 12 | Intersect with existing fixture and CLI surface coverage. |
 | `skills/skill-feedback` introduced `remove-export` | 7 | Require resolver/reachability evidence before any export removal. |
@@ -138,7 +138,7 @@ stateDiagram-v2
 
 **Files:** `docs/reviews/2026-06-15-whole-branch-fallow-reconciliation.md`.
 
-**Approach:** Parse Fallow JSON and build a compact ledger with columns: owner batch, source state, finding action, path, symbol or line, disposition, evidence, and planned action. Dispositions are `real`, `noise`, `defer`, or `blocked`. Use owner batches in this order: facade guard, `skill-feedback`, `cli-execution-auditor`, `wt`, `agent-worktree`, root scripts, docs/new skills, unrelated branch drift.
+**Approach:** Parse Fallow JSON and build a compact ledger with columns: owner batch, source state, finding action, path, symbol or line, disposition, evidence, and planned action. Dispositions are `real`, `noise`, `defer`, or `blocked`. Use owner batches in this order: facade guard, `skill-feedback`, `cli-execution-auditor`, `worktree`, `agent-worktree`, root scripts, docs/new skills, unrelated branch drift.
 
 **Patterns to follow:** Fallow audit attribution workflow, coverage-intersect workflow for noisy CLI findings, and the repo rule to separate introduced findings from inherited context.
 
@@ -223,26 +223,26 @@ stateDiagram-v2
 
 ### U6. Resolve Worktree Owner Findings
 
-**Goal:** Triage `wt`, `agent-worktree`, and root sentinel findings without centralizing package-specific setup.
+**Goal:** Triage `worktree`, `agent-worktree`, and root sentinel findings without centralizing package-specific setup.
 
 **Requirements:** R4, R5, R6, R12, R16.
 
 **Dependencies:** U2, U3.
 
-**Files:** `skills/wt/src/wt.integration.test.ts`, `skills/wt/src/wt.ts`, `runtime/agent-worktree/tests/entrypoint.integration.test.ts`, `runtime/agent-worktree/tests/support.ts`, `runtime/agent-worktree/src/cli.ts`, `scripts/command-entrypoint.integration.test.ts`.
+**Files:** `skills/worktree/src/worktree.integration.test.ts`, `skills/worktree/src/worktree.ts`, `runtime/agent-worktree/tests/entrypoint.integration.test.ts`, `runtime/agent-worktree/tests/support.ts`, `runtime/agent-worktree/src/cli.ts`, `scripts/command-entrypoint.integration.test.ts`.
 
 **Approach:** Keep temp git repositories, command builders, and package assertions local. Extract only duplicated package-agnostic process mechanics to facade helpers when not already done. Prefer package-local tests for owner behavior and keep the root command-entrypoint suite as a cross-entrypoint sentinel. Update stale comments that still claim shared helpers are local.
 
-**Patterns to follow:** `skills/wt/src/wt.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, root `scripts/command-entrypoint.integration.test.ts`, and `runtime/cli-command-facade/src/process-testing.ts`.
+**Patterns to follow:** `skills/worktree/src/worktree.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, root `scripts/command-entrypoint.integration.test.ts`, and `runtime/cli-command-facade/src/process-testing.ts`.
 
 **Test scenarios:**
 
-- `wt` integration tests prove deterministic package behaviors without GUI-launch coverage.
+- `worktree` integration tests prove deterministic package behaviors without GUI-launch coverage.
 - `agent-worktree` integration tests prove deterministic entrypoint and alias parity.
 - Root command-entrypoint integration remains a smaller sentinel and still passes.
 - Test support exports survive when they are package-owned integration seams.
 
-**Verification:** `wt`, `agent-worktree`, and root sentinel tests pass; Fallow does not gain new introduced real findings for these owners.
+**Verification:** `worktree`, `agent-worktree`, and root sentinel tests pass; Fallow does not gain new introduced real findings for these owners.
 
 ### U7. Resolve Docs And New-Skill Findings
 
@@ -308,7 +308,7 @@ stateDiagram-v2
 - Spending down the `128` inherited findings.
 - Building a repo-level Fallow noise profile.
 - Making Station Maps mandatory gates.
-- Full `wt` and `agent-worktree` Branch Station Catalogs.
+- Full `worktree` and `agent-worktree` Branch Station Catalogs.
 - Broad style-only dedupe outside the changed branch surface.
 
 ### Out Of Scope

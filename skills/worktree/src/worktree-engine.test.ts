@@ -8,7 +8,7 @@ import {
 	readHeaderHash,
 	renderWorkspace,
 	stampHeader,
-} from "./wt-engine.ts";
+} from "./worktree-engine.ts";
 
 const twoWorktrees: Worktree[] = [
 	{ path: "/code/repo-a", branch: "codex/browser-use-refactor" },
@@ -105,7 +105,7 @@ describe("drift detection", () => {
 		expect(isDrift(edited)).toBe(true);
 	});
 
-	test("a file with no wt header is treated as drifted", () => {
+	test("a file with no WorkTree header is treated as drifted", () => {
 		expect(isDrift('{ "folders": [] }')).toBe(true);
 		expect(readHeaderHash('{ "folders": [] }')).toBeNull();
 	});

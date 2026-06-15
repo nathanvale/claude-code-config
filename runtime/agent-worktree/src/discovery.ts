@@ -402,7 +402,7 @@ async function findStaleWorktreeDirs(
  *
  * Status: earned.
  * Deletion test: deleting this seam duplicates git root, main-owner, active
- * worktree, and linked-worktree resolution across doctor, lifecycle, and `wt`.
+ * worktree, and linked-worktree resolution across doctor, lifecycle, and `worktree`.
  */
 export const DISCOVERY_SEAM = {
 	id: "discovery",

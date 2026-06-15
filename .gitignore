@@ -15,8 +15,8 @@ skills/fallow/scripts/.fallow/
 # TypeScript incremental build cache (generated)
 *.tsbuildinfo
 
-# wt: generated workspace + per-machine registry (rendered from wt.config.json; never commit)
-wt.config.json
+# WorkTree: generated workspace + per-machine registry (rendered from worktree.config.json; never commit)
+worktree.config.json
 *.code-workspace
 .agent-worktree/
 
