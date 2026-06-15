@@ -16,12 +16,14 @@
 
 import { spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -64,8 +66,9 @@ const KILL_SIGNAL = "SIGKILL";
  * - `workspace-filter`: `bun --filter <pkg> <script> --version` from the repo
  *   root. Substring version probes only -- filtered stdout is a display wrapper
  *   that prefixes and elides child output (KTD6).
- * - `source`: `bun run <source-path>` from the repo root. `--version` and
- *   top-level help compatibility probes only (KTD7).
+ * - `source`: `bun run <source-path>` from the repo root by default, or from
+ *   a temp repo when the command has no explicit `--repo` flag. Carries source
+ *   compatibility probes plus source-entry runtime parity rows.
  */
 type InvocationMode = "package-cwd" | "workspace-filter" | "source";
 
@@ -162,11 +165,12 @@ const runners = {
 		sourcePath: string;
 		args: readonly string[];
 		label: string;
+		cwd?: string;
 	}): RunnerCommand {
 		return {
 			mode: "source",
 			label: input.label,
-			cwd: repoRoot,
+			cwd: input.cwd ?? repoRoot,
 			cmd: ["bun", "run", input.sourcePath, ...input.args],
 		};
 	},
@@ -178,17 +182,22 @@ const runners = {
  * Uses an explicit per-command `timeout` and `killSignal` so a hung child is
  * killed before the outer test timeout can interrupt cleanup.
  */
-function runCommand(command: RunnerCommand): RunResult {
+function runCommand(
+	command: RunnerCommand,
+	timeoutMs = SPAWN_TIMEOUT_MS,
+): RunResult {
 	const spawned = spawnSync(command.cmd[0], command.cmd.slice(1), {
 		cwd: command.cwd,
 		env: process.env,
 		encoding: "utf8",
-		timeout: SPAWN_TIMEOUT_MS,
+		timeout: timeoutMs,
 		killSignal: KILL_SIGNAL,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 
-	const timedOut = spawned.signal === KILL_SIGNAL || spawned.error?.message.includes("ETIMEDOUT") === true;
+	const timedOut =
+		spawned.signal === KILL_SIGNAL ||
+		spawned.error?.message.includes("ETIMEDOUT") === true;
 
 	return {
 		...command,
@@ -279,6 +288,33 @@ function expectErrorEnvelope(result: RunResult, contractId: string): Record<stri
 	return data;
 }
 
+function expectUsageError(result: RunResult): void {
+	expect(result.exitCode, describeRun(result)).not.toBe(0);
+	const envelope = parseEnvelope(result);
+	expect(envelope.status, describeRun(result)).toBe("error");
+	expect(
+		(envelope.error as Record<string, unknown> | undefined)?.code,
+		describeRun(result),
+	).toBe("usage_error");
+}
+
+function expectOkAction(
+	result: RunResult,
+	contractId: string,
+	action: string,
+	options: { changedState?: string; preview?: boolean } = {},
+): Record<string, unknown> {
+	const data = expectOkEnvelope(result, contractId);
+	expect(data.action, describeRun(result)).toBe(action);
+	if (options.changedState !== undefined) {
+		expect(data.changed_state, describeRun(result)).toBe(options.changedState);
+	}
+	if (options.preview !== undefined) {
+		expect(data.preview, describeRun(result)).toBe(options.preview);
+	}
+	return data;
+}
+
 function expectRef(
 	result: RunResult,
 	value: unknown,
@@ -298,6 +334,32 @@ function refArg(ref: { kind: string; id: string }): string {
 	return `${ref.kind}:${ref.id}`;
 }
 
+function runWtPackage(args: readonly string[], label: string): RunResult {
+	return runCommand(
+		runners.packageCwd({
+			packageRoot: packageRoots.wt,
+			script: "wt",
+			args,
+			label,
+		}),
+	);
+}
+
+function runWtSource(
+	args: readonly string[],
+	label: string,
+	cwd?: string,
+): RunResult {
+	return runCommand(
+		runners.source({
+			sourcePath: sourceEntries.wt,
+			args,
+			label,
+			cwd,
+		}),
+	);
+}
+
 function runAgentWorktreePackage(
 	args: readonly string[],
 	label: string,
@@ -312,18 +374,92 @@ function runAgentWorktreePackage(
 	);
 }
 
+function runAwtPackage(args: readonly string[], label: string): RunResult {
+	return runCommand(
+		runners.packageCwd({
+			packageRoot: packageRoots.agentWorktree,
+			script: "awt",
+			args,
+			label,
+		}),
+	);
+}
+
+function runAgentWorktreeSource(
+	args: readonly string[],
+	label: string,
+): RunResult {
+	return runCommand(
+		runners.source({
+			sourcePath: sourceEntries.agentWorktree,
+			args,
+			label,
+		}),
+	);
+}
+
+function expectAgentWorktreeRefFound(
+	result: RunResult,
+	ref: { kind: string; id: string },
+): Record<string, unknown> {
+	const data = expectOkEnvelope(result, "agent-worktree.lifecycle");
+	expect(data.found, describeRun(result)).toBe(true);
+	expect(data.ref, describeRun(result)).toEqual(ref);
+	return data;
+}
+
+function expectInspectableAgentWorktreeRefUsing(
+	run: (args: readonly string[], label: string) => RunResult,
+	repo: string,
+	ref: { kind: string; id: string },
+	label: string,
+): void {
+	expectAgentWorktreeRefFound(
+		run(["inspect", refArg(ref), "--repo", repo, "--json"], label),
+		ref,
+	);
+}
+
 function expectInspectableAgentWorktreeRef(
 	repo: string,
 	ref: { kind: string; id: string },
 	label: string,
 ): void {
-	const result = runAgentWorktreePackage(
-		["inspect", refArg(ref), "--repo", repo, "--json"],
+	expectInspectableAgentWorktreeRefUsing(
+		runAgentWorktreePackage,
+		repo,
+		ref,
 		label,
 	);
-	const data = expectOkEnvelope(result, "agent-worktree.lifecycle");
-	expect(data.found, describeRun(result)).toBe(true);
-	expect(data.ref, describeRun(result)).toEqual(ref);
+}
+
+function expectAgentWorktreeCreateAndInspect(input: {
+	run: (args: readonly string[], label: string) => RunResult;
+	repo: string;
+	branch: string;
+	targetPath: string;
+	createLabel: string;
+	inspectLabel: string;
+}): { kind: string; id: string } {
+	const create = input.run(
+		["create", input.branch, "--repo", input.repo, "--json"],
+		input.createLabel,
+	);
+	const createData = expectOkAction(
+		create,
+		"agent-worktree.lifecycle",
+		"create",
+		{ changedState: "complete" },
+	);
+	const runRef = expectRef(create, createData.run_ref, "run");
+	expect(existsSync(input.targetPath), describeRun(create)).toBe(true);
+	expectInspectableAgentWorktreeRefUsing(
+		input.run,
+		input.repo,
+		runRef,
+		input.inspectLabel,
+	);
+	return runRef;
 }
 
 function expectStringArrayContaining(
@@ -371,6 +507,22 @@ function gitFailureMessage(
 	return `git ${args.join(" ")} failed:\ncwd=${cwd}\nexit=${status}\nstdout=${JSON.stringify(
 		excerpt(stdout),
 	)}\nstderr=${JSON.stringify(excerpt(stderr))}`;
+}
+
+function gitExitCode(cwd: string, args: readonly string[]): number | null {
+	const result = spawnSync("git", [...args], {
+		cwd,
+		env: process.env,
+		encoding: "utf8",
+		timeout: SPAWN_TIMEOUT_MS,
+		killSignal: KILL_SIGNAL,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	return result.status;
+}
+
+function gitRefExists(cwd: string, ref: string): boolean {
+	return gitExitCode(cwd, ["show-ref", "--verify", "--quiet", ref]) === 0;
 }
 
 /**
@@ -423,6 +575,12 @@ async function withTempRepo<T>(
 
 		return body(repo);
 	});
+}
+
+function createLinkedWorktree(repo: string, branch: string, dirname: string): string {
+	const targetPath = join(repo, ".worktrees", dirname);
+	gitOutput(repo, ["worktree", "add", "-b", branch, targetPath, "main"]);
+	return targetPath;
 }
 
 /**
@@ -647,6 +805,315 @@ describe("command entrypoint integration: help contracts", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+
+	test(
+		"wt source entry preserves the runtime JSON command matrix",
+		async () => {
+			const commands = runWtSource(
+				["commands", "--json"],
+				"wt source commands --json",
+			);
+			expectOkEnvelope(commands, "wt.workspace");
+
+			const invalid = runWtSource(
+				["definitely-not-a-command", "--json"],
+				"wt source invalid command",
+			);
+			expectUsageError(invalid);
+
+			await withTempRepo("wt-source-matrix", async (repo) => {
+				const sync = runWtSource(
+					["sync", "--repo", repo, "--json"],
+					"wt source sync --json real repo",
+				);
+				expectOkAction(sync, "wt.workspace", "sync", { changedState: "written" });
+
+				const focus = runWtSource(
+					["focus", "main", "skills/wt", "--repo", repo, "--json"],
+					"wt source focus --json real repo",
+				);
+				expectOkAction(focus, "wt.workspace", "focus", { changedState: "written" });
+
+				const color = runWtSource(
+					["color", "main", "amber", "--repo", repo, "--json"],
+					"wt source color --json real repo",
+				);
+				expectOkAction(color, "wt.workspace", "color", { changedState: "written" });
+
+				const staleDir = join(repo, ".worktrees", "stale-source");
+				mkdirSync(staleDir, { recursive: true });
+				gitOutput(repo, ["branch", "old/wt-source", "main"]);
+				const clean = runWtSource(
+					["clean", "--repo", repo, "--json"],
+					"wt source clean --json real repo",
+				);
+				expectOkAction(clean, "wt.workspace", "clean_preview", {
+					changedState: "none",
+				});
+
+				const branch = "feat/wt-source-entrypoint";
+				const targetPath = join(repo, ".worktrees", "feat-wt-source-entrypoint");
+				const create = runWtSource(
+					["new", branch, "--repo", repo, "--json"],
+					"wt source new --json real repo",
+				);
+				expectOkAction(create, "wt.workspace", "new", { changedState: "written" });
+				expect(existsSync(targetPath), describeRun(create)).toBe(true);
+
+				const remove = runWtSource(
+					["rm", branch, "--force", "--repo", repo, "--json"],
+					"wt source rm --json real repo",
+				);
+				expectOkAction(remove, "wt.workspace", "rm", { changedState: "written" });
+				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
+
+				const openList = runWtSource(
+					["open", "--json"],
+					"wt source open --json temp cwd",
+					repo,
+				);
+				const openListData = expectOkEnvelope(openList, "wt.workspace");
+				expect(openListData.action, describeRun(openList)).toBe("list_workspaces");
+				expect(openListData.workspace, describeRun(openList)).toBe(
+					workspacePathForRepo(repo),
+				);
+
+				const registryPath = join(repo, "wt.config.json");
+				const registry = JSON.parse(readFileSync(registryPath, "utf8")) as {
+					branches?: Record<string, unknown>;
+					defaults?: Record<string, unknown>;
+				};
+				writeFileSync(
+					registryPath,
+					`${JSON.stringify(
+						{
+							...registry,
+							defaults: { ...registry.defaults, codeBin: join(repo, "missing-code") },
+						},
+						null,
+						"\t",
+					)}\n`,
+				);
+				const openNamed = runWtSource(
+					["open", "other-repo", "--json"],
+					"wt source open named workspace missing code",
+					repo,
+				);
+				const openNamedData = expectErrorEnvelope(openNamed, "wt.workspace");
+				const openNamedEnvelope = parseEnvelope(openNamed);
+				expect(
+					(openNamedEnvelope.error as Record<string, unknown> | undefined)?.code,
+					describeRun(openNamed),
+				).toBe("code_not_found");
+				expect(openNamedData.changed_state, describeRun(openNamed)).toBe("none");
+
+				const fakeCode = join(repo, "fake-code");
+				const launchLog = join(repo, "opened-workspace.txt");
+				writeFileSync(
+					fakeCode,
+					`#!/bin/sh\nprintf '%s\\n' "$1" > ${JSON.stringify(launchLog)}\n`,
+				);
+				chmodSync(fakeCode, 0o755);
+				writeFileSync(
+					registryPath,
+					`${JSON.stringify(
+						{
+							...registry,
+							defaults: { ...registry.defaults, codeBin: fakeCode },
+						},
+						null,
+						"\t",
+					)}\n`,
+				);
+				const openNamedSuccess = runWtSource(
+					["open", "other-repo", "--json"],
+					"wt source open named workspace fake code",
+					repo,
+				);
+				const openNamedSuccessData = expectOkAction(
+					openNamedSuccess,
+					"wt.workspace",
+					"open_workspace",
+				);
+				const expectedWorkspacePath = join(
+					dirname(realpathSync(repo)),
+					"other-repo.code-workspace",
+				);
+				expect(openNamedSuccessData.launched, describeRun(openNamedSuccess)).toBe(true);
+				expect(
+					openNamedSuccessData.workspace_path,
+					describeRun(openNamedSuccess),
+				).toBe(expectedWorkspacePath);
+				expect(readFileSync(launchLog, "utf8").trim()).toBe(expectedWorkspacePath);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"agent-worktree source entry preserves the runtime JSON command matrix",
+		async () => {
+			const commands = runAgentWorktreeSource(
+				["commands", "--json"],
+				"agent-worktree source commands --json",
+			);
+			expectOkEnvelope(commands, "agent-worktree.lifecycle");
+
+			const invalid = runAgentWorktreeSource(
+				["definitely-not-a-command", "--json"],
+				"agent-worktree source invalid command",
+			);
+			expectUsageError(invalid);
+
+			await withTempRepo("agent-worktree-source-matrix", async (repo) => {
+				const branch = "feat/agent-worktree-source";
+				const targetPath = join(repo, ".worktrees", "feat-agent-worktree-source");
+
+				const createPreview = runAgentWorktreeSource(
+					["create", branch, "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree source create --dry-run",
+				);
+				expectOkAction(
+					createPreview,
+					"agent-worktree.lifecycle",
+					"create",
+					{ changedState: "none", preview: true },
+				);
+
+				expectAgentWorktreeCreateAndInspect({
+					run: runAgentWorktreeSource,
+					repo,
+					branch,
+					targetPath,
+					createLabel: "agent-worktree source create --json",
+					inspectLabel: "agent-worktree source inspect run ref",
+				});
+
+				const doctor = runAgentWorktreeSource(
+					["doctor", "--repo", repo, "--json"],
+					"agent-worktree source doctor --json",
+				);
+				const doctorData = expectOkEnvelope(doctor, "agent-worktree.lifecycle");
+				const doctorRepo = doctorData.repo as Record<string, unknown> | undefined;
+				expect(doctorRepo?.linkedWorktreeCount, describeRun(doctor)).toBe(1);
+
+				const list = runAgentWorktreeSource(
+					["list", "--repo", repo, "--json"],
+					"agent-worktree source list --json",
+				);
+				const listData = expectOkEnvelope(list, "agent-worktree.lifecycle");
+				expect(listData.total, describeRun(list)).toBe(2);
+
+				const status = runAgentWorktreeSource(
+					["status", "--repo", repo, "--json"],
+					"agent-worktree source status --json",
+				);
+				const statusData = expectOkEnvelope(status, "agent-worktree.lifecycle");
+				expect(statusData.total, describeRun(status)).toBe(2);
+
+				const check = runAgentWorktreeSource(
+					["check", branch, "--repo", repo, "--json"],
+					"agent-worktree source check --json",
+				);
+				const checkData = expectOkEnvelope(check, "agent-worktree.lifecycle");
+				expect(checkData.allowed, describeRun(check)).toBe(true);
+				expect(checkData.nextSafeAction, describeRun(check)).toBe("delete");
+
+				const refreshPreview = runAgentWorktreeSource(
+					["refresh", "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree source refresh --dry-run",
+				);
+				expectOkAction(
+					refreshPreview,
+					"agent-worktree.lifecycle",
+					"refresh",
+					{ preview: true },
+				);
+
+				const refresh = runAgentWorktreeSource(
+					["refresh", "--repo", repo, "--json"],
+					"agent-worktree source refresh --json",
+				);
+				expectOkAction(refresh, "agent-worktree.lifecycle", "refresh", {
+					changedState: "complete",
+				});
+
+				const handoff = runAgentWorktreeSource(
+					["handoff", "--repo", repo, "--json"],
+					"agent-worktree source handoff --json",
+				);
+				const handoffData = expectOkEnvelope(handoff, "agent-worktree.lifecycle");
+				expect(handoffData.total, describeRun(handoff)).toBeGreaterThan(0);
+
+				const staleDir = join(repo, ".worktrees", "stale-source-agent");
+				mkdirSync(staleDir, { recursive: true });
+				gitOutput(repo, ["branch", "old/agent-source", "main"]);
+				const clean = runAgentWorktreeSource(
+					["clean", "--preview", "--repo", repo, "--json"],
+					"agent-worktree source clean --preview",
+				);
+				const cleanData = expectOkEnvelope(clean, "agent-worktree.lifecycle");
+				expect(cleanData.previewOnly, describeRun(clean)).toBe(true);
+				expectStringArrayContaining(clean, cleanData.staleDirs, staleDir);
+
+				const deletePreview = runAgentWorktreeSource(
+					["delete", branch, "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree source delete --dry-run",
+				);
+				expectOkAction(
+					deletePreview,
+					"agent-worktree.lifecycle",
+					"delete",
+					{ preview: true },
+				);
+
+				const protectedDelete = runAgentWorktreeSource(
+					["delete", "main", "--force", "--repo", repo, "--json"],
+					"agent-worktree source delete protected branch",
+				);
+				const protectedData = expectErrorEnvelope(
+					protectedDelete,
+					"agent-worktree.lifecycle",
+				);
+				const failureRef = expectRef(
+					protectedDelete,
+					protectedData.failure_ref,
+					"failure",
+				);
+
+				const inspectFailure = runAgentWorktreeSource(
+					["inspect", refArg(failureRef), "--repo", repo, "--json"],
+					"agent-worktree source inspect failure ref",
+				);
+				const inspectFailureData = expectOkEnvelope(
+					inspectFailure,
+					"agent-worktree.lifecycle",
+				);
+				expect(inspectFailureData.found, describeRun(inspectFailure)).toBe(true);
+
+				const recover = runAgentWorktreeSource(
+					["recover", refArg(failureRef), "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree source recover failure ref",
+				);
+				expectOkAction(recover, "agent-worktree.lifecycle", "recover", {
+					preview: true,
+				});
+
+				const deleteRun = runAgentWorktreeSource(
+					["delete", branch, "--force", "--repo", repo, "--json"],
+					"agent-worktree source delete --force",
+				);
+				expectOkAction(
+					deleteRun,
+					"agent-worktree.lifecycle",
+					"delete",
+					{ changedState: "complete" },
+				);
+				expect(existsSync(targetPath), describeRun(deleteRun)).toBe(false);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
 
 describe("command entrypoint integration: runtime json", () => {
@@ -778,6 +1245,22 @@ describe("command entrypoint integration: runtime json", () => {
 	);
 
 	test(
+		"wt open --json preserves list-mode coverage without launching VS Code",
+		() => {
+			const result = runWtPackage(
+				["open", "--json"],
+				"wt open --json list mode (package-cwd)",
+			);
+			const data = expectOkEnvelope(result, "wt.workspace");
+
+			expect(data.action, describeRun(result)).toBe("list_workspaces");
+			expect(typeof data.workspace, describeRun(result)).toBe("string");
+			expect((data.workspace as string).endsWith(".code-workspace"), describeRun(result)).toBe(true);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"invalid commands return non-zero with a structured error envelope",
 		() => {
 			const invalidProbes = [
@@ -793,15 +1276,17 @@ describe("command entrypoint integration: runtime json", () => {
 					args: ["definitely-not-a-command", "--json"],
 					label: "agent-worktree invalid command (package-cwd)",
 				}),
+				runners.packageCwd({
+					packageRoot: packageRoots.agentWorktree,
+					script: "awt",
+					args: ["definitely-not-a-command", "--json"],
+					label: "awt invalid command (package-cwd)",
+				}),
 			];
 
 			for (const command of invalidProbes) {
 				const result = runCommand(command);
-				expect(result.exitCode, describeRun(result)).not.toBe(0);
-				const envelope = parseEnvelope(result);
-				expect(envelope.status, describeRun(result)).toBe("error");
-				const error = envelope.error as Record<string, unknown> | undefined;
-				expect(error?.code, describeRun(result)).toBe("usage_error");
+				expectUsageError(result);
 			}
 		},
 		TEST_TIMEOUT_MS,
@@ -825,6 +1310,21 @@ describe("command entrypoint integration: runtime json", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+
+	test("spawn timeout failures identify the timed-out command", () => {
+		const result = runCommand(
+			{
+				mode: "source",
+				label: "timeout self-test",
+				cwd: repoRoot,
+				cmd: ["bun", "-e", "setTimeout(() => {}, 1000)"],
+			},
+			100,
+		);
+
+		expect(result.timedOut, describeRun(result)).toBe(true);
+		expect(describeRun(result)).toContain("timedOut=true");
+	});
 });
 
 describe("command entrypoint integration: wt real-repo lifecycle", () => {
@@ -857,6 +1357,63 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 	);
 
 	test(
+		"wt focus and color update the package-script registry in a real temp repo",
+		async () => {
+			await withTempRepo("wt-focus-color", async (repo) => {
+				const focus = runWtPackage(
+					["focus", "main", "skills/wt", "--repo", repo, "--json"],
+					"wt focus --json real repo (package-cwd)",
+				);
+				expectOkAction(focus, "wt.workspace", "focus", { changedState: "written" });
+
+				const color = runWtPackage(
+					["color", "main", "teal", "--repo", repo, "--json"],
+					"wt color --json real repo (package-cwd)",
+				);
+				expectOkAction(color, "wt.workspace", "color", { changedState: "written" });
+
+				const registry = JSON.parse(
+					readFileSync(join(repo, "wt.config.json"), "utf8"),
+				) as {
+					branches?: Record<string, { focus?: string; color?: string }>;
+					};
+				expect(registry.branches?.main?.focus, describeRun(color)).toBe("skills/wt");
+				expect(registry.branches?.main?.color, describeRun(color)).toBe("teal");
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"wt clean previews stale dirs and orphan branches through package scripts",
+		async () => {
+			await withTempRepo("wt-clean", async (repo) => {
+				const staleDir = join(repo, ".worktrees", "stale-clean");
+				mkdirSync(staleDir, { recursive: true });
+				gitOutput(repo, ["branch", "old/wt-entrypoint", "main"]);
+
+				const clean = runWtPackage(
+					["clean", "--repo", repo, "--json"],
+					"wt clean --json real repo (package-cwd)",
+				);
+				const cleanData = expectOkAction(clean, "wt.workspace", "clean_preview", {
+					changedState: "none",
+				});
+
+				const preview = cleanData.preview as Record<string, unknown> | undefined;
+				expect(preview?.previewOnly, describeRun(clean)).toBe(true);
+				expectStringArrayContaining(
+					clean,
+					preview?.orphanBranches,
+					"old/wt-entrypoint",
+				);
+				expectStringArrayContaining(clean, preview?.staleDirs, staleDir);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"wt new and rm create, remove, and re-render a real linked worktree",
 		async () => {
 			await withTempRepo("wt-new-rm", async (repo) => {
@@ -871,9 +1428,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 						label: "wt new --json real repo (package-cwd)",
 					}),
 				);
-				const createData = expectOkEnvelope(create, "wt.workspace");
-				expect(createData.action, describeRun(create)).toBe("new");
-				expect(createData.changed_state, describeRun(create)).toBe("written");
+				expectOkAction(create, "wt.workspace", "new", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(create)).toBe(true);
 				expect(
 					gitOutput(repo, ["worktree", "list", "--porcelain"]),
@@ -888,9 +1443,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 						label: "wt rm --json real repo (package-cwd)",
 					}),
 				);
-				const removeData = expectOkEnvelope(remove, "wt.workspace");
-				expect(removeData.action, describeRun(remove)).toBe("rm");
-				expect(removeData.changed_state, describeRun(remove)).toBe("written");
+				expectOkAction(remove, "wt.workspace", "rm", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 				expect(
 					gitOutput(repo, ["worktree", "list", "--porcelain"]),
@@ -905,22 +1458,106 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 
 describe("command entrypoint integration: agent-worktree real-repo lifecycle", () => {
 	test(
-		"agent-worktree create persists a run ref and delete previews branch deletion",
+		"agent-worktree doctor, list, status, and check read a real linked worktree",
+		async () => {
+			await withTempRepo("agent-worktree-reads", async (repo) => {
+				const branch = "feat/agent-worktree-reads";
+				const targetPath = createLinkedWorktree(
+					repo,
+					branch,
+					"feat-agent-worktree-reads",
+				);
+
+				const doctor = runAgentWorktreePackage(
+					["doctor", "--repo", repo, "--json"],
+					"agent-worktree doctor --json real repo (package-cwd)",
+				);
+				const doctorData = expectOkEnvelope(doctor, "agent-worktree.lifecycle");
+				const doctorRepo = doctorData.repo as Record<string, unknown> | undefined;
+				expect(doctorRepo?.gitRoot, describeRun(doctor)).toBe(repo);
+				expect(doctorRepo?.linkedWorktreeCount, describeRun(doctor)).toBe(1);
+				expectStringArrayContaining(
+					doctor,
+					doctorData.availableCommands,
+					"delete",
+				);
+
+				const list = runAgentWorktreePackage(
+					["list", "--repo", repo, "--json"],
+					"agent-worktree list --json real repo (package-cwd)",
+				);
+				const listData = expectOkEnvelope(list, "agent-worktree.lifecycle");
+				expect(listData.total, describeRun(list)).toBe(2);
+				expect(listData.mainOwnerRoot, describeRun(list)).toBe(repo);
+				expect(listData.activeWorktree, describeRun(list)).toBe(repo);
+
+				const status = runAgentWorktreePackage(
+					["status", "--repo", repo, "--json"],
+					"agent-worktree status --json real repo (package-cwd)",
+				);
+				const statusData = expectOkEnvelope(status, "agent-worktree.lifecycle");
+				expect(statusData.total, describeRun(status)).toBe(2);
+				if (!Array.isArray(statusData.statuses)) {
+					throw new Error(`Expected status rows:\n${describeRun(status)}`);
+				}
+				expect(
+					statusData.statuses.some(
+						(row) =>
+							typeof row === "object" &&
+							row !== null &&
+							(row as { worktree?: { path?: string } }).worktree?.path === targetPath,
+					),
+					describeRun(status),
+				).toBe(true);
+
+				const check = runAgentWorktreePackage(
+					["check", branch, "--repo", repo, "--json"],
+					"agent-worktree check --json real repo (package-cwd)",
+				);
+				const checkData = expectOkEnvelope(check, "agent-worktree.lifecycle");
+				expect(checkData.branch, describeRun(check)).toBe(branch);
+				expect(checkData.allowed, describeRun(check)).toBe(true);
+				expect(checkData.nextSafeAction, describeRun(check)).toBe("delete");
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"agent-worktree package-script lifecycle matrix persists refs and previews deletes",
 		async () => {
 			await withTempRepo("agent-worktree-create", async (repo) => {
 				const branch = "feat/agent-worktree-entrypoint";
 				const targetPath = join(repo, ".worktrees", "feat-agent-worktree-entrypoint");
 
+				const createPreview = runAgentWorktreePackage(
+					["create", branch, "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree create --dry-run real repo (package-cwd)",
+				);
+				const createPreviewData = expectOkAction(
+					createPreview,
+					"agent-worktree.lifecycle",
+					"create",
+					{ changedState: "none", preview: true },
+				);
+				expectStringArrayContaining(
+					createPreview,
+					createPreviewData.changes,
+					targetPath,
+				);
+				expect(existsSync(targetPath), describeRun(createPreview)).toBe(false);
+
 				const create = runAgentWorktreePackage(
 					["create", branch, "--repo", repo, "--json"],
 					"agent-worktree create --json real repo (package-cwd)",
 				);
-				const createData = expectOkEnvelope(create, "agent-worktree.lifecycle");
+				const createData = expectOkAction(
+					create,
+					"agent-worktree.lifecycle",
+					"create",
+					{ changedState: "complete", preview: false },
+				);
 				const runRef = expectRef(create, createData.run_ref, "run");
-
-				expect(createData.action, describeRun(create)).toBe("create");
-				expect(createData.changed_state, describeRun(create)).toBe("complete");
-				expect(createData.preview, describeRun(create)).toBe(false);
 				expect(existsSync(targetPath), describeRun(create)).toBe(true);
 
 				expectInspectableAgentWorktreeRef(
@@ -928,6 +1565,71 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					runRef,
 					"agent-worktree inspect run ref real repo (package-cwd)",
 				);
+
+				const refreshPreview = runAgentWorktreePackage(
+					["refresh", "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree refresh --dry-run real repo (package-cwd)",
+				);
+				const refreshPreviewData = expectOkAction(
+					refreshPreview,
+					"agent-worktree.lifecycle",
+					"refresh",
+					{ changedState: "none", preview: true },
+				);
+				expectStringArrayContaining(
+					refreshPreview,
+					refreshPreviewData.changes,
+					`record ${branch}`,
+				);
+
+				const refresh = runAgentWorktreePackage(
+					["refresh", "--repo", repo, "--json"],
+					"agent-worktree refresh --json real repo (package-cwd)",
+				);
+				const refreshData = expectOkAction(
+					refresh,
+					"agent-worktree.lifecycle",
+					"refresh",
+					{ changedState: "complete", preview: false },
+				);
+				const refreshRunRef = expectRef(refresh, refreshData.run_ref, "run");
+				expectInspectableAgentWorktreeRef(
+					repo,
+					refreshRunRef,
+					"agent-worktree inspect refresh run ref (package-cwd)",
+				);
+
+				const handoff = runAgentWorktreePackage(
+					["handoff", "--repo", repo, "--json"],
+					"agent-worktree handoff --json real repo (package-cwd)",
+				);
+				const handoffData = expectOkEnvelope(handoff, "agent-worktree.lifecycle");
+				expect(handoffData.storeRoot, describeRun(handoff)).toBe(
+					join(repo, ".agent-worktree"),
+				);
+				expect(handoffData.total, describeRun(handoff)).toBeGreaterThan(0);
+				expectStringArrayContaining(
+					handoff,
+					handoffData.nextSafeActions,
+					"inspect",
+				);
+
+				const deleteDryRun = runAgentWorktreePackage(
+					["delete", branch, "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree delete --dry-run real repo (package-cwd)",
+				);
+				const deleteDryRunData = expectOkAction(
+					deleteDryRun,
+					"agent-worktree.lifecycle",
+					"delete",
+					{ changedState: "none", preview: true },
+				);
+				expectStringArrayContaining(
+					deleteDryRun,
+					deleteDryRunData.changes,
+					`remove worktree ${targetPath}`,
+				);
+				expect(existsSync(targetPath), describeRun(deleteDryRun)).toBe(true);
 
 				const deletePreview = runAgentWorktreePackage(
 					[
@@ -941,19 +1643,188 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					],
 					"agent-worktree delete --dry-run --delete-branch real repo (package-cwd)",
 				);
-				const previewData = expectOkEnvelope(
+				const previewData = expectOkAction(
 					deletePreview,
 					"agent-worktree.lifecycle",
+					"delete",
+					{ changedState: "none", preview: true },
 				);
-				expect(previewData.action, describeRun(deletePreview)).toBe("delete");
-				expect(previewData.preview, describeRun(deletePreview)).toBe(true);
-				expect(previewData.changed_state, describeRun(deletePreview)).toBe("none");
 				expectStringArrayContaining(
 					deletePreview,
 					previewData.changes,
 					`delete branch ${branch}`,
 				);
 				expect(existsSync(targetPath), describeRun(deletePreview)).toBe(true);
+
+				const deleteRun = runAgentWorktreePackage(
+					["delete", branch, "--force", "--repo", repo, "--json"],
+					"agent-worktree delete --force real repo (package-cwd)",
+				);
+				const deleteRunData = expectOkAction(
+					deleteRun,
+					"agent-worktree.lifecycle",
+					"delete",
+					{ changedState: "complete", preview: false },
+				);
+				const deleteRunRef = expectRef(deleteRun, deleteRunData.run_ref, "run");
+				expect(existsSync(targetPath), describeRun(deleteRun)).toBe(false);
+				expectInspectableAgentWorktreeRef(
+					repo,
+					deleteRunRef,
+					"agent-worktree inspect delete run ref (package-cwd)",
+				);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"agent-worktree clean --preview reports orphan branches and stale dirs",
+		async () => {
+			await withTempRepo("agent-worktree-clean", async (repo) => {
+				const staleDir = join(repo, ".worktrees", "stale-agent-worktree");
+				mkdirSync(staleDir, { recursive: true });
+				gitOutput(repo, ["branch", "old/agent-worktree-entrypoint", "main"]);
+
+				const clean = runAgentWorktreePackage(
+					["clean", "--preview", "--repo", repo, "--json"],
+					"agent-worktree clean --preview real repo (package-cwd)",
+				);
+				const cleanData = expectOkEnvelope(clean, "agent-worktree.lifecycle");
+				expect(cleanData.previewOnly, describeRun(clean)).toBe(true);
+				expectStringArrayContaining(
+					clean,
+					cleanData.orphanBranches,
+					"old/agent-worktree-entrypoint",
+				);
+				expectStringArrayContaining(clean, cleanData.staleDirs, staleDir);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"awt alias preserves lifecycle behavior through package scripts",
+		async () => {
+			await withTempRepo("awt-lifecycle", async (repo) => {
+				const branch = "feat/awt-entrypoint";
+				const targetPath = join(repo, ".worktrees", "feat-awt-entrypoint");
+
+				expectAgentWorktreeCreateAndInspect({
+					run: runAwtPackage,
+					repo,
+					branch,
+					targetPath,
+					createLabel: "awt create --json real repo (package-cwd)",
+					inspectLabel: "awt inspect run ref (package-cwd)",
+				});
+
+				const remove = runAwtPackage(
+					["delete", branch, "--force", "--repo", repo, "--json"],
+					"awt delete --force real repo (package-cwd)",
+				);
+				expectOkAction(remove, "agent-worktree.lifecycle", "delete", {
+					changedState: "complete",
+				});
+				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"agent-worktree delete --force --delete-branch removes the worktree and branch after backup",
+		async () => {
+			await withTempRepo("agent-worktree-delete-branch", async (repo) => {
+				const branch = "feat/delete-branch-entrypoint";
+				const targetPath = createLinkedWorktree(
+					repo,
+					branch,
+					"feat-delete-branch-entrypoint",
+				);
+				expect(gitRefExists(repo, `refs/heads/${branch}`)).toBe(true);
+
+				const remove = runAgentWorktreePackage(
+					["delete", branch, "--force", "--delete-branch", "--repo", repo, "--json"],
+					"agent-worktree delete --force --delete-branch real repo (package-cwd)",
+				);
+				const removeData = expectOkAction(
+					remove,
+					"agent-worktree.lifecycle",
+					"delete",
+					{ changedState: "complete", preview: false },
+				);
+				const runRef = expectRef(remove, removeData.run_ref, "run");
+				expect(typeof removeData.backup_ref, describeRun(remove)).toBe("string");
+				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
+				expect(gitRefExists(repo, `refs/heads/${branch}`)).toBe(false);
+				expect(gitRefExists(repo, removeData.backup_ref as string)).toBe(true);
+				expectInspectableAgentWorktreeRef(
+					repo,
+					runRef,
+					"agent-worktree inspect branch-delete run ref (package-cwd)",
+				);
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"post-mutation backup-ref failure preserves partial failure refs and recovery preview",
+		async () => {
+			await withTempRepo("agent-worktree-partial-failure", async (repo) => {
+				const branch = "feat/partial-failure";
+				const targetPath = createLinkedWorktree(
+					repo,
+					branch,
+					"feat-partial-failure",
+				);
+				gitOutput(repo, [
+					"update-ref",
+					"refs/agent-worktree/backups/feat-partial-failure",
+					"HEAD",
+				]);
+
+				const remove = runAgentWorktreePackage(
+					["delete", branch, "--force", "--delete-branch", "--repo", repo, "--json"],
+					"agent-worktree delete backup-ref conflict real repo (package-cwd)",
+				);
+				const failureData = expectErrorEnvelope(
+					remove,
+					"agent-worktree.lifecycle",
+				);
+				const failureRef = expectRef(remove, failureData.failure_ref, "failure");
+				const runRef = expectRef(remove, failureData.run_ref, "run");
+				const failureArg = refArg(failureRef);
+
+				expect(failureData.action, describeRun(remove)).toBe("delete");
+				expect(failureData.changed_state, describeRun(remove)).toBe("partial");
+				expect(failureData.next_safe_action, describeRun(remove)).toBe("inspect");
+				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
+				expect(gitRefExists(repo, `refs/heads/${branch}`)).toBe(true);
+
+				expectInspectableAgentWorktreeRef(
+					repo,
+					runRef,
+					"agent-worktree inspect partial run ref (package-cwd)",
+				);
+				expectInspectableAgentWorktreeRef(
+					repo,
+					failureRef,
+					"agent-worktree inspect partial failure ref (package-cwd)",
+				);
+
+				const recover = runAgentWorktreePackage(
+					["recover", failureArg, "--dry-run", "--repo", repo, "--json"],
+					"agent-worktree recover partial failure ref dry-run (package-cwd)",
+				);
+				const recoverData = expectOkAction(
+					recover,
+					"agent-worktree.lifecycle",
+					"recover",
+					{ changedState: "partial", preview: true },
+				);
+				expect(recoverData.failure_ref, describeRun(recover)).toEqual(failureRef);
 			});
 		},
 		TEST_TIMEOUT_MS,
@@ -991,10 +1862,12 @@ describe("command entrypoint integration: preflight recovery refs", () => {
 					["recover", failureArg, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree recover failure ref dry-run (package-cwd)",
 				);
-				const recoverData = expectOkEnvelope(recover, "agent-worktree.lifecycle");
-				expect(recoverData.action, describeRun(recover)).toBe("recover");
-				expect(recoverData.preview, describeRun(recover)).toBe(true);
-				expect(recoverData.changed_state, describeRun(recover)).toBe("none");
+				const recoverData = expectOkAction(
+					recover,
+					"agent-worktree.lifecycle",
+					"recover",
+					{ changedState: "none", preview: true },
+				);
 				expect(recoverData.failure_ref, describeRun(recover)).toEqual(failureRef);
 				expectStringArrayContaining(recover, recoverData.changes, `inspect ${failureArg}`);
 			});
