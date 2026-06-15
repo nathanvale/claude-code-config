@@ -162,18 +162,18 @@
   },
   "enabledPlugins": {
     "example-skills@anthropic-agent-skills": false,
-    "document-skills@anthropic-agent-skills": true,
+    "document-skills@anthropic-agent-skills": false,
     "frontend-design@claude-code-plugins": true,
     "imessage@side-quest-engineering": false,
     "unifi-admin@side-quest-engineering": false,
     "contacts-hygiene@side-quest-engineering": false,
-    "browser-automation@side-quest-engineering": true,
+    "browser-automation@side-quest-engineering": false,
     "compound-engineering@every-marketplace": true,
     "bitbucket-pr@side-quest-engineering": true,
     "memory-os@side-quest-engineering": false,
     "playground@claude-plugins-official": false,
     "explanatory-output-style@claude-code-plugins": false,
-    "microsoft-docs@claude-plugins-official": true,
+    "microsoft-docs@claude-plugins-official": false,
     "superwhisper@superwhisper": false
   },
   "extraKnownMarketplaces": {
