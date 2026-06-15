@@ -75,7 +75,10 @@ type V1CloseoutReportInput = {
 		| "report_authored";
 };
 
-type ReviewEnvelopeData = Pick<ReviewResultData, "coverage" | "read_target">;
+type ReviewEnvelopeData = Pick<
+	ReviewResultData,
+	"coverage" | "inbox_status" | "read_target"
+>;
 
 const BASE_RECEIPT: Receipt = {
 	skill: "create-skill",
@@ -206,6 +209,26 @@ async function writeLowSignalInboxReport(
 	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
 }
 
+async function writeLowSignalReportBatch(
+	root: string,
+	count: number,
+	reportIdPrefix: string,
+): Promise<void> {
+	for (let index = 0; index < count; index += 1) {
+		await writeLowSignalInboxReport(
+			root,
+			`low-${index}.json`,
+			v1CloseoutReport({
+				reportId: `${reportIdPrefix}-${index}`,
+				generatedTs: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+				skill: "unknown-skill",
+				evidenceSource: "hook_capture",
+				captureRuntime: "codex_stop",
+			}),
+		);
+	}
+}
+
 function v1CloseoutReport(input: V1CloseoutReportInput) {
 	return {
 		schema_version: "1",
@@ -293,6 +316,14 @@ function parseHealthEnvelopeData(
 	return parseEnvelope(result.stdout).data as HealthResultData;
 }
 
+async function runCliHealth(root: string): Promise<{
+	result: TestProcessResult;
+	data: HealthResultData;
+}> {
+	const result = await runCli(["health"], { cwd: root });
+	return { result, data: parseHealthEnvelopeData(result) };
+}
+
 function expectReviewTotalReports(
 	result: TestProcessResult,
 	totalReports: number,
@@ -324,11 +355,12 @@ function expectReadTargetResolutionFailure(
 		...(expected.schemaVersion
 			? { schema_version: expected.schemaVersion }
 			: {}),
-		read_target: {
+		read_target_failure: {
 			explicit: expected.explicit,
 			target_path: expected.targetPath,
 		},
 	});
+	expect((envelope.data as Record<string, unknown>).read_target).toBeUndefined();
 }
 
 async function run(
@@ -1063,9 +1095,11 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(1);
 		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("review_inbox_unsafe");
 		expect(envelope.data).toMatchObject({
 			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+			inbox_status: "unsafe",
 		});
 	});
 
@@ -1171,6 +1205,50 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.read_target).toBeUndefined();
 	});
 
+	test("review and health resolve the same containing root from nested cwd", async () => {
+		const root = await makeIgnoredGitRoot();
+		const packageCwd = join(root, "skills", "skill-feedback");
+		await mkdir(packageCwd, { recursive: true });
+		await writeV1CloseoutInboxReport(root, "root-report.json", {
+			reportId: "report-shared-root",
+			generatedTs: GENERATED_TS,
+			correlationStatus: "linked",
+			skillRunId: "run-shared-root",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const review = await runCli(["review"], { cwd: packageCwd });
+		const health = await runCli(["health"], { cwd: packageCwd });
+
+		expectReviewTotalReports(review, 1);
+		const healthData = parseHealthEnvelopeData(health);
+		expect(health.exitCode).toBe(0);
+		expect(healthData.counts.primary).toBe(1);
+		expect(healthData.read_target).toBeUndefined();
+	});
+
+	test("review --repo can point at an empty target repo without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+
+		const result = await runCli(["review", "--repo", nestedTarget], { cwd: caller });
+
+		expect(result.exitCode).toBe(0);
+		const data = parseReviewEnvelopeData(result);
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_status).toBe("missing");
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			target_path: nestedTarget,
+		});
+	});
+
 	test("health reports a missing inbox in a valid repo without exposing local paths", async () => {
 		const root = await makeIgnoredGitRoot();
 
@@ -1202,19 +1280,37 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stdout).not.toContain("inbox_path");
 	});
 
-	test("health reports an empty inbox as exit-zero ready state", async () => {
-		const root = await makeIgnoredGitRoot();
-		await mkdir(join(root, ".skill-feedback"));
+		test("health reports an empty inbox as exit-zero ready state", async () => {
+			const root = await makeIgnoredGitRoot();
+			await mkdir(join(root, ".skill-feedback"));
 
-		const result = await runCli(["health"], { cwd: root });
+			const { data, result } = await runCliHealth(root);
 
-		expect(result.exitCode).toBe(0);
-		const data = parseHealthEnvelopeData(result);
-		expect(data.inbox_status).toBe("empty");
-		expect(data.counts.primary).toBe(0);
-		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			expect(result.exitCode).toBe(0);
+			expect(data.inbox_status).toBe("empty");
+			expect(data.counts.primary).toBe(0);
+			expect(data.warnings.map((warning) => warning.reason_id)).toContain(
 			"inbox_empty",
 		);
+	});
+
+	test("health omits diagnostic target paths for healthy populated default reads", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(root, "healthy.json", {
+			reportId: "report-healthy",
+			generatedTs: GENERATED_TS,
+			correlationStatus: "linked",
+			skillRunId: "run-healthy",
+				skillRunIdProvenance: "correlation_owned",
+			});
+
+			const { data, result } = await runCliHealth(root);
+
+			expect(result.exitCode).toBe(0);
+			expect(data.inbox_status).toBe("populated");
+			expect(data.read_target).toBeUndefined();
+			expect(result.stdout).not.toContain("repo_root");
+		expect(result.stdout).not.toContain("inbox_path");
 	});
 
 	test("health --plain renders status, counts, warnings, readiness, correlation, and action", async () => {
@@ -1248,6 +1344,21 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 	});
 
+	test("health outside git returns a repair-state envelope", async () => {
+		const outsideGit = await makeRoot();
+		const realOutsideGit = await realpath(outsideGit);
+
+		const result = await runCli(["health"], { cwd: outsideGit });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: false,
+			targetPath: realOutsideGit,
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changedState: "none",
+		});
+	});
+
 	test("health --repo resolves the explicit target without reading caller cwd", async () => {
 		const caller = await makeIgnoredGitRoot();
 		await writeV1CloseoutInboxReport(caller, "caller.json", {
@@ -1255,6 +1366,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			generatedTs: GENERATED_TS,
 		});
 		const target = await makeIgnoredGitRoot();
+		const realTarget = await realpath(target);
 		const nestedTarget = join(target, "nested", "package");
 		await mkdir(nestedTarget, { recursive: true });
 
@@ -1266,8 +1378,13 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const data = parseHealthEnvelopeData(result);
 		expect(data.inbox_status).toBe("missing");
 		expect(data.counts.primary).toBe(0);
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: realTarget,
+			inbox_path: join(realTarget, ".skill-feedback"),
+			target_path: nestedTarget,
+		});
 		expect(result.stdout).not.toContain(caller);
-		expect(result.stdout).not.toContain(target);
 	});
 
 	test("health --repo failure does not fall back to caller cwd", async () => {
@@ -1321,6 +1438,48 @@ describe("skill-feedback U6 redaction and write gate", () => {
 				},
 			});
 		}
+	});
+
+	test("review and health map inbox permission errors to unsafe diagnostics", async () => {
+		const root = await makeRoot();
+		await mkdir(join(root, ".skill-feedback"));
+		const baseRuntime = stubRuntime(root);
+		const runtime = stubRuntime(root, {
+			realpathPath: async (path) => {
+				if (path === join(root, ".skill-feedback")) {
+					throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+				}
+				return baseRuntime.realpathPath(path);
+			},
+		});
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-permission-denied",
+		});
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-permission-denied",
+		});
+
+		expect(health.exitCode).toBe(1);
+		expect(review.exitCode).toBe(1);
+		const healthEnvelope = parseEnvelope(health.stdout);
+		const reviewEnvelope = parseEnvelope(review.stdout);
+		expect((healthEnvelope.error as { code: string }).code).toBe(
+			"health_inbox_unsafe",
+		);
+		expect((reviewEnvelope.error as { code: string }).code).toBe(
+			"review_inbox_unsafe",
+		);
+		expect(healthEnvelope.data).toMatchObject({
+			inbox_status: "unsafe",
+			counts: { skipped_unsafe: 1 },
+		});
+		expect(reviewEnvelope.data).toMatchObject({
+			inbox_status: "unsafe",
+			counts: { skipped_unsafe: 1 },
+		});
 	});
 
 	test("health reports partial readability while review remains allowed", async () => {
@@ -1426,6 +1585,33 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 	});
 
+	test("health chooses newest timestamps by time, not lexicographic order", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "early-offset.json", {
+			reportId: "report-early-offset",
+			generatedTs: "2026-06-13T09:30:00.000+11:00",
+			correlationStatus: "linked",
+			skillRunId: "run-early-offset",
+			skillRunIdProvenance: "correlation_owned",
+		});
+		await writeV1CloseoutInboxReport(root, "newer-utc.json", {
+			reportId: "report-newer-utc",
+			generatedTs: "2026-06-13T00:00:00.000Z",
+			correlationStatus: "linked",
+			skillRunId: "run-newer-utc",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-newest-chronological",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.newest.primary_generated_ts).toBe("2026-06-13T00:00:00.000Z");
+	});
+
 	test("health treats unknown-skill Codex Stop as runtime evidence while identity stays blocked", async () => {
 		const root = await makeRoot();
 		await writeLowSignalInboxReport(
@@ -1454,24 +1640,29 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
 	});
 
-	test("health warns on low-signal volume without deleting reports", async () => {
-		const root = await makeRoot();
-		for (let index = 0; index < 10; index += 1) {
-			await writeLowSignalInboxReport(
-				root,
-				`low-${index}.json`,
-				v1CloseoutReport({
-					reportId: `report-low-${index}`,
-					generatedTs: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
-					skill: "unknown-skill",
-					evidenceSource: "hook_capture",
-					captureRuntime: "codex_stop",
-				}),
-			);
-		}
+		test("health does not warn below the low-signal threshold", async () => {
+			const root = await makeRoot();
+			await writeLowSignalReportBatch(root, 9, "report-low-below");
 
-		const result = await healthSkillFeedbackInbox({
-			runtime: stubRuntime(root),
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+			runId: "health-low-signal-below-threshold",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.low_signal).toBe(9);
+		expect(data.warnings.map((warning) => warning.reason_id)).not.toContain(
+			"low_signal_threshold",
+		);
+	});
+
+		test("health warns on low-signal volume without deleting reports", async () => {
+			const root = await makeRoot();
+			await writeLowSignalReportBatch(root, 10, "report-low");
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
 			runId: "health-low-signal-volume",
 		});
 
@@ -3457,6 +3648,10 @@ for (const { command, parse } of [
 				message: "--repo requires a value.",
 			});
 			expect(parse(["--repo", "--plain"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--repo", ""])).toMatchObject({
 				ok: false,
 				message: "--repo requires a value.",
 			});

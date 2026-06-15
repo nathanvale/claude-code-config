@@ -52,7 +52,7 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "1" as const;
  * Review result semantics can advance independently from persisted report
  * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "3" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "4" as const;
 
 /**
  * Schema version for health-specific read-only result envelopes.
@@ -696,6 +696,7 @@ export type HealthResultData = {
 	claim_readiness: HealthClaimReadiness;
 	correlation: HealthCorrelation;
 	next_action: HealthNextAction;
+	read_target?: ReviewReadTarget;
 };
 
 export type ReviewPilotCheckpoint = {
@@ -1453,6 +1454,7 @@ const HEALTH_RESULT_FIELDS = [
 	"claim_readiness",
 	"correlation",
 	"next_action",
+	"read_target",
 ] as const;
 const HEALTH_COUNTS_FIELDS = [
 	"primary",
@@ -1702,20 +1704,23 @@ export function parseHealthResultData(
 			"contract",
 			"unsupported",
 		),
-		validateExpectedValue(
-			health.schema_version,
-			SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
-			"schema_version",
-			"unsupported",
-		),
-		validateHealthInboxStatus(health.inbox_status),
-		validateHealthCounts(health.counts),
-		validateHealthNewest(health.newest),
-		validateHealthWarnings(health.warnings),
-		validateHealthClaimReadiness(health.claim_readiness),
-		validateHealthCorrelation(health.correlation),
-		validateHealthNextAction(health.next_action),
-	].find(isReviewResultValidationError);
+			validateExpectedValue(
+				health.schema_version,
+				SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+				"schema_version",
+				"unsupported",
+			),
+			validateHealthInboxStatus(health.inbox_status),
+			validateHealthCounts(health.counts),
+			validateHealthNewest(health.newest),
+			validateHealthWarnings(health.warnings),
+			validateHealthClaimReadiness(health.claim_readiness),
+			validateHealthCorrelation(health.correlation),
+			validateHealthNextAction(health.next_action),
+			"read_target" in health
+				? validateHealthReadTarget(health.read_target)
+				: undefined,
+		].find(isReviewResultValidationError);
 	if (error) return error;
 	return { kind: "ok", data: health as HealthResultData };
 }
@@ -2493,13 +2498,28 @@ function validateReviewReadTarget(
 ): ReviewResultValidationError | undefined {
 	const target = requireReviewRecord(raw, "read_target");
 	if (isReviewResultValidationError(target)) return target;
+	return validateReadTargetFields(target, "read_target");
+}
+
+function validateHealthReadTarget(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const target = requireReviewRecord(raw, "read_target");
+	if (isReviewResultValidationError(target)) return target;
+	return validateReadTargetFields(target, "read_target");
+}
+
+function validateReadTargetFields(
+	target: Record<string, unknown>,
+	path: string,
+): ReviewResultValidationError | undefined {
 	return [
-		validateAllowedKeys(target, new Set(REVIEW_READ_TARGET_FIELDS), "read_target"),
-		validateReviewBoolean(target.explicit, "read_target.explicit"),
-		validateReviewString(target.repo_root, "read_target.repo_root"),
-		validateReviewString(target.inbox_path, "read_target.inbox_path"),
+		validateAllowedKeys(target, new Set(REVIEW_READ_TARGET_FIELDS), path),
+		validateReviewBoolean(target.explicit, `${path}.explicit`),
+		validateReviewString(target.repo_root, `${path}.repo_root`),
+		validateReviewString(target.inbox_path, `${path}.inbox_path`),
 		"target_path" in target
-			? validateReviewString(target.target_path, "read_target.target_path")
+			? validateReviewString(target.target_path, `${path}.target_path`)
 			: undefined,
 	].find(isReviewResultValidationError);
 }
