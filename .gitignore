@@ -16,7 +16,7 @@ skills/fallow/scripts/.fallow/
 *.tsbuildinfo
 
 # WorkTree: generated workspace + per-machine registry (rendered from worktree.config.json; never commit)
-worktree.config.json
+/worktree.config.json
 *.code-workspace
 .agent-worktree/
 

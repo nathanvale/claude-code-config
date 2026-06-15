@@ -18,7 +18,7 @@ The pattern starts with planning-stage station sets, package-owned branch catalo
 
 The repo already has strong pieces of CLI confidence, but they stop at different boundaries.
 
-`scripts/command-entrypoint.integration.test.ts` proves real `worktree`, `agent-worktree`, and `agent-worktree` entrypoints through process boundaries. `skills/skill-feedback/src/skill-feedback.test.ts` repeats process capture, JSON parsing, and failure annotation patterns. `skills/cli-execution-auditor/src/audit-engine.ts` already detects facade-backed CLIs, canonicalizes invocations, runs static checks, runs subprocess surface checks, and emits deterministic findings.
+`scripts/command-entrypoint.integration.test.ts` proves real `worktree` and `agent-worktree` entrypoints through process boundaries. `skills/skill-feedback/src/skill-feedback.test.ts` repeats process capture, JSON parsing, and failure annotation patterns. `skills/cli-execution-auditor/src/audit-engine.ts` already detects facade-backed CLIs, canonicalizes invocations, runs static checks, runs subprocess surface checks, and emits deterministic findings.
 
 The missing object is a package-owned branch oracle. Command contracts say what commands and flags exist; tests prove selected behavior; the auditor checks lane-level execution rules. None of those surfaces say which package-owned success, failure, diagnostic, observability, continuation, and repair branches are meant to exist.
 

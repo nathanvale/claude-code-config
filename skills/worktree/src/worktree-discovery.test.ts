@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	loadRegistry,
 	listWorktrees,
@@ -109,15 +112,15 @@ describe("loadRegistry", () => {
 	});
 
 	test("malformed worktree.config.json throws registry_unreadable", async () => {
-		const dir = `${process.env.TMPDIR ?? "/tmp"}/worktree-test-${Math.abs(fixture.length)}`;
-		await Bun.write(`${dir}/worktree.config.json`, "{ not valid json");
+		const dir = await mkdtemp(join(tmpdir(), "worktree-test-"));
+		await Bun.write(join(dir, "worktree.config.json"), "{ not valid json");
 		await expect(loadRegistry(dir)).rejects.toMatchObject({ code: "registry_unreadable" });
 	});
 
 	test("valid worktree.config.json round-trips branches and defaults", async () => {
-		const dir = `${process.env.TMPDIR ?? "/tmp"}/worktree-test-valid-${Math.abs(fixture.length)}`;
+		const dir = await mkdtemp(join(tmpdir(), "worktree-test-valid-"));
 		await Bun.write(
-			`${dir}/worktree.config.json`,
+			join(dir, "worktree.config.json"),
 			JSON.stringify({ branches: { "codex/x": { color: "blue" } }, defaults: { wip: "/w" } }),
 		);
 		const registry = await loadRegistry(dir);

@@ -39,11 +39,11 @@ Use this log for accepted decisions about the repo-local `agent-worktree` packag
 id: agent-worktree-001
 status: accepted
 decided_at: "2026-06-14"
-decision: Name the shared package agent-worktree with agent-worktree as the canonical command and agent-worktree as the alias
+decision: Name the shared package agent-worktree with agent-worktree as the canonical command
 owner: agent-worktree
 decision_mode:
   question: "What should the new shared package and CLI be called?"
-  option: "agent-worktree package, agent-worktree command, canonical agent-worktree command"
+  option: "agent-worktree package, agent-worktree command"
   confidence: strong
 source:
   - "chat: 2026-06-14 agent-worktree decision-mode"
@@ -53,19 +53,19 @@ Decision:
 
 - Name the package `agent-worktree`.
 - Use `agent-worktree` as the canonical CLI command.
-- Use `agent-worktree` as the short alias.
+- Do not accept a separate alias yet.
 
 Rationale:
 
 - The name says what the package owns without tying it to the old SideQuest implementation.
 - The canonical command is clear for docs, tests, and handoff.
-- The alias keeps repeated CLI use low-friction.
+- Alias decisions need real usage evidence before they add another supported surface.
 
 Consequences:
 
 - Future package, CLI, and decision references should use `agent-worktree`.
 - `worktree` remains a workflow entry point, not the new package identity.
-- The command contract must prove canonical and alias behavior cannot drift.
+- The command contract only needs to prove the accepted canonical command behavior.
 
 Next:
 

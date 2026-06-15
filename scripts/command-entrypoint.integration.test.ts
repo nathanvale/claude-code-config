@@ -1,7 +1,7 @@
 /**
  * Command Entrypoint Integration Test suite.
  *
- * Proves `worktree`, `agent-worktree`, and `agent-worktree` through real repo-local process
+ * Proves `worktree` and `agent-worktree` through real repo-local process
  * entrypoints: package scripts, workspace-filter version probes, and direct
  * source probes. Package-local tests own in-process command semantics; this
  * suite proves the process boundary those tests cannot reach.

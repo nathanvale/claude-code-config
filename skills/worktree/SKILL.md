@@ -17,21 +17,16 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 - Generated workspace: `<repo>.code-workspace` (rendered output — never hand-edit).
 - Source of truth: gitignored `worktree.config.json` at the main worktree root (branch-keyed prefs).
 - Daily view ignores: `defaults.ignoredWorktrees` path globs, e.g. `["**/fallow-audit-base-cache-*"]`.
-- Command contract: `skills/worktree/src/command-contract.ts`.
-- Model (types + constants): `skills/worktree/src/model.ts`.
-- Render engine (pure): `skills/worktree/src/worktree-engine.ts`.
-- Discovery (worktree list + registry): `skills/worktree/src/worktree-discovery.ts`.
-- Dispatcher (argv + IO + launch): `skills/worktree/src/worktree.ts`.
+- Contract, model, engine, discovery, and dispatcher: `skills/worktree/src/`.
 - Shared worktree runtime: `runtime/agent-worktree/src/index.ts`.
 - Package command recipe: `skills/worktree/package.json`.
-- Runtime tests + alignment proof: `skills/worktree/src/worktree.test.ts`, `skills/worktree/src/worktree-engine.test.ts`, `skills/worktree/src/worktree-discovery.test.ts`.
-- Plan: `docs/plans/2026-06-14-001-feat-worktree-worktree-workspace-renderer-plan.md`.
+- Runtime tests + alignment proof: `skills/worktree/src/`.
 
 ## Dependencies
 
 - `@side-quest/cli-command-facade`: hard dependency (facade-backed contract). Registered in root `package.json` workspaces.
 - `runtime/agent-worktree`: hard dependency for live worktree discovery, main-owner resolution, lifecycle verbs, cleanup preview, and recovery vocabulary.
-- `code` on PATH (or `defaults.codeBin`): needed only by `worktree open <name>`. Absent → `code_not_found`, other verbs unaffected.
+- `code` on PATH (or `defaults.codeBin`): needed only by `worktree open <name>`. Other verbs do not launch VS Code.
 - `create-cli`: hard dependency before changing the CLI contract surface.
 
 ## Workflow
