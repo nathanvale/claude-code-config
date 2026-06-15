@@ -1,6 +1,7 @@
 ---
 name: pick-an-issue
-description: Helps agents find, inspect, choose, claim, and start work from a ready issue in the project issue tracker. Use when the user asks to pick up an issue, find the next issue to work on, start a ready-for-agent ticket, choose work from the backlog, or begin work from a GitHub issue.
+description: "Helps agents find, inspect, choose, claim, and start work from a ready issue in the project issue tracker. Use when the user asks to pick up an issue, find the next issue to work on, start a ready-for-agent ticket, choose work from the backlog, or begin work from a GitHub issue."
+role: tool-workflow
 ---
 
 # Pick An Issue

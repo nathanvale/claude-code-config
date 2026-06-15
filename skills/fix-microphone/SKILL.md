@@ -1,6 +1,7 @@
 ---
 name: fix-microphone
-description: "Troubleshoot a Mac microphone that is selected but captures no sound, including Elgato Wave:3 with or without Wave Link. Use when the mic picks up nothing, input level bars do not move, an app cannot hear you, or the Wave mic stops working."
+description: "Troubleshoot a Mac microphone that is selected but captures no sound, or activates with a multi-second delay. Covers Elgato Wave:3 with or without Wave Link. Use when the mic picks up nothing, input level bars do not move, an app cannot hear you, the Wave mic stops working, or mic activation is janky/delayed."
+role: tool-workflow
 ---
 
 # Fix Microphone
@@ -12,6 +13,8 @@ Quick read-only triage for a Mac mic that is selected but silent. Fix the cheape
 - Mic picks up no sound when speaking into it.
 - Input level bars do not move in System Settings or an app.
 - Elgato Wave:3 selected but silent, with or without Wave Link running.
+- Mic activation is delayed/janky — menubar mic icon flashes for seconds before the app gets audio.
+- Voice app reports "no microphone available" then finds it seconds later.
 
 ## First Safe Action
 
@@ -61,3 +64,95 @@ ps aux | grep -i "WaveLink3VirtualAudio" | grep -v grep
 
 - Input volume silently sitting at ~24/100 reads as a dead mic; raising it to ~75 fixes it. (2026-06-12, observed failure)
 - Wave Link's virtual audio driver (`WaveLink3VirtualAudio.driver`) stays loaded after the app quits and can intercept the Wave:3; check for the driver even when no Wave Link process is running. (2026-06-12, observed failure)
+- Bluetooth mics (AirPods, AirPods Max) add 1–3s SCO negotiation delay on every activation + degraded audio quality. Pin superwhisper to a wired mic: `defaults write com.superduper.superwhisper selectedDeviceID "AppleUSBAudioEngine:Elgato Systems:Elgato Wave:3:A017A522103RY2:2,1"` + `useDefaultAudioDevice = 0`. Unplugging the Wave:3 can silently reset `selectedDeviceID` to `BuiltInMicrophoneDevice` — re-pin after replug. (2026-06-15, observed)
+- macOS powers down mic hardware when no app holds the input stream open (Apple Silicon M1–M4). Next activation takes 2–5s — superwhisper shows "no microphone available" then finds it. Fix: install [`macos-mic-keepwarm`](https://github.com/drewburchfield/macos-mic-keepwarm) — lightweight Swift binary holds AVCaptureSession open, mic stays instant. Runs as LaunchAgent, survives reboots. Trade-off: permanent orange mic dot in menubar. Uninstall: `curl -fsSL https://raw.githubusercontent.com/drewburchfield/macos-mic-keepwarm/master/uninstall.sh | bash`. (2026-06-15, observed failure + community-verified fix)
+
+## Troubleshooting Tree
+
+When the mic is delayed/janky (not silent), work through these branches in order. Stop as soon as the symptom resolves.
+
+### Branch 1: Audio device contention
+```bash
+# Who has audio handles open?
+lsof 2>/dev/null | grep -i "coreaudio\|AudioHAL" | awk '{print $1, $2}' | sort -u
+# Competing voice apps (superwhisper, dictation, Siri, Zoom, Teams, Discord, OBS)
+ps aux | grep -i -E "superwhisper|discord|zoom|teams|obs|krisp|whisper" | grep -v grep
+```
+Kill or quit competing apps one at a time and retest.
+
+### Branch 2: corespeechd / Siri / Dictation holding passive mic session
+```bash
+# corespeechd runs the "Hey Siri" hotword detector — holds mic open passively
+ps aux | grep corespeechd | grep -v grep
+# Check Siri/Dictation state
+defaults read com.apple.assistant.support "Assistant Enabled" 2>/dev/null
+defaults read com.apple.assistant.support "Dictation Enabled" 2>/dev/null
+```
+Disable Siri voice trigger in System Settings → Apple Intelligence & Siri → Listen for. Then `killall corespeechd` (macOS respawns it without passive mic hold).
+
+### Branch 3: macOS mic hardware sleep (Apple Silicon)
+macOS powers down mic hardware after ~30–60s of idle. Next activation takes 2–5s. This is the most common cause of push-to-talk delay on M1–M4 Macs.
+```bash
+# Check driver power state (0 = suspended/idle)
+ioreg -p IOUSB -l 2>/dev/null | grep -A20 "Wave:3" | grep -i "power"
+# DriverPowerState 0 = device asleep, needs wake before audio flows
+```
+Fix: install `macos-mic-keepwarm` to hold the mic awake permanently:
+```bash
+curl -fsSL https://raw.githubusercontent.com/drewburchfield/macos-mic-keepwarm/master/install.sh | bash
+# To stop: launchctl unload ~/Library/LaunchAgents/com.user.keep-mic-warm.plist
+# To restart: launchctl load ~/Library/LaunchAgents/com.user.keep-mic-warm.plist
+# To uninstall: curl -fsSL https://raw.githubusercontent.com/drewburchfield/macos-mic-keepwarm/master/uninstall.sh | bash
+```
+Trade-off: permanent orange mic dot in menubar. Binary at `~/.local/bin/mic-warm`.
+
+### Branch 4: Quick USB mic reset (without physical unplug)
+```bash
+sudo killall coreaudiod
+```
+Restarts Core Audio, re-enumerates all devices. ~2s audio blip. Equivalent to unplugging and replugging the mic. Use as a one-shot fix; if the delay recurs, use Branch 3 instead.
+
+Passwordless sudoers entry is installed at `/etc/sudoers.d/coreaudiod-reset` — Claude Code can run this directly without prompting. To reinstall if missing:
+```bash
+sudo sh -c 'echo "nathanvale ALL=(ALL) NOPASSWD: /usr/bin/killall coreaudiod" > /etc/sudoers.d/coreaudiod-reset && chmod 440 /etc/sudoers.d/coreaudiod-reset'
+```
+
+### Branch 5: App sound effects compounding with hardware sleep
+If the mic is already in hardware sleep (Branch 3) AND the voice app plays an activation chime through the same USB device, the delay worsens. Disabling sound effects may mask the symptom but doesn't fix root cause.
+```bash
+defaults read com.superduper.superwhisper enableSoundEffects
+# Disable as a test: defaults write com.superduper.superwhisper enableSoundEffects -bool false
+# Re-enable after fixing Branch 3: defaults write com.superduper.superwhisper enableSoundEffects -bool true
+```
+
+### Branch 5: macOS TCC mic permission cycling
+```bash
+# Check mic permissions — auth_value 2 = allowed
+sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
+  "SELECT client, auth_value FROM access WHERE service='kTCCServiceMicrophone';" 2>/dev/null
+```
+If the app's auth_value is not 2, re-grant in System Settings → Privacy & Security → Microphone.
+
+### Branch 6: Bluetooth audio device stealing default
+```bash
+# A BT device reconnecting can briefly claim default input
+system_profiler SPBluetoothDataType 2>/dev/null | grep -B2 -A5 -i "audio\|headphone\|airpod"
+# Check superwhisper's device selection history
+defaults read com.superduper.superwhisper selectedDeviceID
+defaults read com.superduper.superwhisper useDefaultAudioDevice
+```
+Pin superwhisper to the Wave:3 explicitly (`useDefaultAudioDevice = 0`, `selectedDeviceID` set to the Wave:3 USB engine string) so BT reconnection doesn't steal focus.
+
+## Future Exploration
+
+Ideation doc for superwhisper voice-to-text optimization:
+`experience-sdk/docs/ideation/2026-06-15-superwhisper-voice-optimization-ideation.md`
+
+Top opportunities (ranked by ROI):
+1. **Vocabulary corpus from codebase** — populate Parakeet V3's 1,000-term keyword recognition from git history, CONCEPTS.md, Jira keys
+2. **A/B model shootout** — build a ground-truth utterance corpus, score canary vs parakeet vs cloud on WER/latency/jargon
+3. **Dual-hotkey mode router** — right-Control for canary (fast commands), right-Option for parakeet+vocabulary (long dictation)
+4. **Post-transcription signal chain** — composable sed-map → casing normaliser → context-aware formatter
+5. **Shadow model jury on Mac Mini** — race mlx-whisper against superwhisper, log disagreements as training data
+6. **Ambient ring buffer** — CoreAudio tap with 30s pre-roll so you never lose the start of a sentence
+7. **Sourdough fine-tune loop** — monthly LoRA fine-tune on Mac Mini from daily correction pairs

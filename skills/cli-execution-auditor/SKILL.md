@@ -1,6 +1,7 @@
 ---
 name: cli-execution-auditor
-description: "Audit facade-backed CLI execution or Station Maps."
+description: "Audit facade-backed CLI execution, lane contracts, or Station Maps."
+role: quality-gate
 ---
 
 # CLI Execution Auditor

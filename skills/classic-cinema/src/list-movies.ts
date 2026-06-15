@@ -93,9 +93,10 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
+	const earliest = (slist: RawSession[]) =>
+		slist.reduce((min, s) => (s.date < min ? s.date : min), slist[0].date);
 	const sorted = [...todaySessions.entries()].sort((a, b) =>
-		// biome-ignore lint/style/noNonNullAssertion: keys came from movieMap above
-		movieMap.get(a[0])!.name.localeCompare(movieMap.get(b[0])!.name),
+		earliest(a[1]).localeCompare(earliest(b[1])),
 	);
 
 	let entries: MovieEntry[] = sorted.map(([mid, slist]) => {
