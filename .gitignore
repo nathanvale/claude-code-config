@@ -21,3 +21,6 @@ wt.config.json
 
 # Shared worktrees live here (gitignored; see docs/git/worktree.md)
 .worktrees
+
+# Agent worktree runtime state (generated)
+.agent-worktree/

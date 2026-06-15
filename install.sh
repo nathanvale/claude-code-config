@@ -31,6 +31,23 @@ symlinks=(
 	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
 
+prune_stale_codex_skill_links() {
+	local skills_dir="${CODEX_HOME}/skills"
+	local link
+	local target
+
+	[[ -d "$skills_dir" ]] || return 0
+
+	for link in "${skills_dir}"/*; do
+		[[ -L "$link" ]] || continue
+		target="$(readlink "$link")"
+		if [[ "$target" == "${SCRIPT_DIR}/skills/"* && ! -e "$target" ]]; then
+			rm "$link"
+			echo "  REMOVED STALE: $link -> $target"
+		fi
+	done
+}
+
 # Codex shares ~/.codex/skills/ across multiple sources (this repo, side-quest,
 # codex-native), so it cannot symlink the whole folder the way Claude does.
 # Instead, link each repo skill individually — but never disturb a name that is
@@ -54,6 +71,7 @@ done
 create_links() {
 	echo "Creating symlinks..."
 	mkdir -p "$CODEX_HOME"
+	prune_stale_codex_skill_links
 	local failures=0
 	for entry in "${symlinks[@]}"; do
 		local link="${entry%%|*}"
