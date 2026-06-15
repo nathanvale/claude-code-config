@@ -76,6 +76,22 @@ const WT_DRIFT_FAILURE_ACTIONS = [
 ] as const;
 
 /**
+ * Discovery actions advertised when `wt color` fails.
+ *
+ * Unknown colors need a palette-selection continuation before the generic
+ * drift-repair fallback, so agents get a concrete next input instead of only a
+ * render recovery path.
+ */
+const WT_COLOR_FAILURE_ACTIONS = [
+	{
+		id: "choose_palette_color",
+		summary: "Choose one of: blue, green, amber, purple, red, teal, pink, slate.",
+		sideEffects: ["read"],
+	},
+	...WT_DRIFT_FAILURE_ACTIONS,
+] as const;
+
+/**
  * Discovery action advertised when a shared worktree verb fails.
  */
 const WT_DELEGATE_FAILURE_ACTIONS = [
@@ -212,7 +228,7 @@ export const wtContracts = defineCommandFacadeContract(
 			resultContract: renderResultContract,
 			actionAffordances: {
 				success: WT_SYNC_SUCCESS_ACTIONS,
-				failure: WT_DRIFT_FAILURE_ACTIONS,
+				failure: WT_COLOR_FAILURE_ACTIONS,
 			},
 			previewExemption: {
 				reason: "Writes the registry then re-renders through the drift gate, which previews before overwrite.",
