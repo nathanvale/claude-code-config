@@ -1,10 +1,7 @@
 ---
 name: find-skills
-description:
-  Helps users discover and install agent skills when they ask questions like "how do I do
-  X", "find a skill for X", "is there a skill that can...", or express interest in
-  extending capabilities. This skill should be used when the user is looking for
-  functionality that might exist as an installable skill.
+description: "Find and install agent skills when users ask for existing skills, installable workflows, capability discovery, or skills.sh searches."
+role: tool-workflow
 ---
 
 # Find Skills
@@ -56,8 +53,8 @@ installs, surfacing the most popular and battle-tested options.
 
 For example, top skills for web development include:
 
-- `vercel-labs/agent-skills` — React, Next.js, web design (100K+ installs each)
-- `anthropics/skills` — Frontend design, document processing (100K+ installs)
+- `vercel-labs/agent-skills` - React, Next.js, web design (100K+ installs each)
+- `anthropics/skills` - Frontend design, document processing (100K+ installs)
 
 ### Step 3: Search for Skills
 
@@ -69,19 +66,19 @@ npx skills find [query]
 
 For example:
 
-- User asks "how do I make my React app faster?" → `npx skills find react performance`
-- User asks "can you help me with PR reviews?" → `npx skills find pr review`
-- User asks "I need to create a changelog" → `npx skills find changelog`
+- User asks "how do I make my React app faster?" -> `npx skills find react performance`
+- User asks "can you help me with PR reviews?" -> `npx skills find pr review`
+- User asks "I need to create a changelog" -> `npx skills find changelog`
 
 ### Step 4: Verify Quality Before Recommending
 
 **Do not recommend a skill based solely on search results.** Always verify:
 
-1. **Install count** — Prefer skills with 1K+ installs. Be cautious with anything
+1. **Install count** - Prefer skills with 1K+ installs. Be cautious with anything
    under 100.
-2. **Source reputation** — Official sources (`vercel-labs`, `anthropics`, `microsoft`) are
+2. **Source reputation** - Official sources (`vercel-labs`, `anthropics`, `microsoft`) are
    more trustworthy than unknown authors.
-3. **GitHub stars** — Check the source repository. A skill from a repo with <100 stars
+3. **GitHub stars** - Check the source repository. A skill from a repo with <100 stars
    should be treated with skepticism.
 
 ### Step 5: Present Options to the User

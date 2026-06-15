@@ -92,6 +92,7 @@ Use before create, fix, heal, repair, or patch edits.
 - Move repeated deterministic work into `scripts/`.
 - Use Markdown headings unless a host runtime requires another format.
 - Use `references/skill-io-shape-examples.md#heading-selection-matrix` when heading choice is unclear.
+- Use `references/adhd-friendly-dx.md` when choices, handoffs, recovery paths, or next actions need a low-load numbered menu.
 - Start heading choice from input/output shape, not `role`.
 - Reject pure XML skill-body structure.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
@@ -221,6 +222,7 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Make the first safe action obvious.
 - Make slow work visible before it starts.
 - Put defaults beside inputs.
+- Use `references/adhd-friendly-dx.md` for numbered choices, recommended defaults, and momentum-preserving next-action menus.
 - Put failure recovery beside the tool or step that can fail.
 - Name the working directory for every command recipe.
 - Separate user-facing output from internal process.

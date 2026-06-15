@@ -1,6 +1,7 @@
 ---
 name: cli-execution-auditor
 description: "Audit a facade-backed CLI's agent-execution experience against its lane contract. Use when verifying a facade CLI's exit codes, help-flag alignment, redaction, runner discipline, and --json-under-failure before shipping."
+role: quality-gate
 ---
 
 # CLI Execution Auditor

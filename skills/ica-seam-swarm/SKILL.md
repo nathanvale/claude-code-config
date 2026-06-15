@@ -1,6 +1,7 @@
 ---
 name: ica-seam-swarm
 description: "Run ICA seam swarm, seam assessment, candidate factory, adversary review, prompt pack, or resume/compress."
+role: tool-workflow
 ---
 
 # ICA Seam Swarm

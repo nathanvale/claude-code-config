@@ -100,6 +100,13 @@ Fill what matters; drop irrelevant sections:
 - Respect `NO_COLOR` and `TERM=dumb`; provide `--no-color` when color exists.
 - Handle Ctrl-C with fast exit and bounded cleanup.
 
+## Next Safe Action
+
+- Lane unclear → re-run the numbered router in Do This First.
+- Design complete → hand the Output Skeleton to the implementer.
+- Facade-backed → run the Command Surface Alignment Proof before shipping.
+- Skill edit → run `references/behavior-regression-checklist.md` before and after.
+
 ## Notes
 
 - Prefer language-agnostic design unless the user asks for implementation.

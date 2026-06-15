@@ -9,17 +9,21 @@ skills/create-skill/
   SKILL.md
   CONTEXT.md
   references/
+    adhd-friendly-dx.md
+    agent-native-skill-design.md
     archive-cleanup.md
+    community-skill-research-sources.md
     consolidation-map.md
     research-portability.md
+    run-card-template.md
     runtime-portability.md
-    agent-native-skill-design.md
     skill-dependency-rules.md
     skill-design-decision-runbook.md
     skill-io-shape-examples.md
     skill-roles.md
-    community-skill-research-sources.md
   scripts/
+    check-gotcha-decision.ts
+    check-owner-paths.ts
     skill-description-audit.ts
     skill-role-audit.ts
 ```

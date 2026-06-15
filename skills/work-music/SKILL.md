@@ -1,6 +1,7 @@
 ---
 name: work-music
 description: "Use when the user wants music to lock in, enter a work mode, start a focus/admin/writing/debugging/reset/shutdown playlist, or turn Apple Music into a daily work ritual."
+role: tool-workflow
 ---
 
 # Work Music

@@ -1,6 +1,7 @@
 ---
 name: vocab-refresh
 description: "Mine superwhisper recording history for misrecognition pairs, show candidates, and patch settings.json. Use when voice transcription mangles domain terms, after onboarding a new project, or periodically to catch new manglings."
+role: tool-workflow
 ---
 
 # Vocab Refresh

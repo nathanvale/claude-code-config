@@ -125,6 +125,10 @@ _Avoid_: self-improving AI, auto-update, autonomous mutation, prompt tweaking
 The task-family-specific standard used to decide whether a skill refinement improves the skill without adding avoidable carrying cost.
 _Avoid_: generic quality, vibes, preference, universal rubric, prose polish
 
+**ADHD-friendly DX**:
+Low-load skill interaction pattern that uses short numbered choices, one recommended default, visible momentum, and owner-named next safe actions.
+_Avoid_: exhaustive menu, vague empathy note, hidden recommendation, style-only preference
+
 **Run Card**:
 A compact workflow scaffold for complex skills that names scope, defaults, first safe action, visible state, verification, fallback, and expected final shape.
 _Avoid_: mandatory checklist, body-heading schema, exhaustive runbook, hidden process
