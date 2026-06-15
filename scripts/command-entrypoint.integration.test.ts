@@ -29,6 +29,12 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
+import {
+	describeCliProcessRun,
+	parseCliProcessJson,
+	runCliProcess,
+	type CliProcessResult,
+} from "../runtime/cli-command-facade/src/testing.ts";
 
 import { wtContracts } from "../skills/wt/src/command-contract.ts";
 import {
@@ -85,12 +91,7 @@ interface RunnerCommand {
 /**
  * Captured result of one spawned command.
  */
-interface RunResult extends RunnerCommand {
-	exitCode: number | null;
-	stdout: string;
-	stderr: string;
-	timedOut: boolean;
-}
+interface RunResult extends RunnerCommand, CliProcessResult {}
 
 /**
  * Package roots that own the entrypoint scripts under test.
@@ -176,35 +177,20 @@ const runners = {
 	},
 } as const;
 
-/**
- * Spawn a built command, capturing exit code, stdout, stderr, and timeout state.
- *
- * Uses an explicit per-command `timeout` and `killSignal` so a hung child is
- * killed before the outer test timeout can interrupt cleanup.
- */
-function runCommand(
+async function runCommand(
 	command: RunnerCommand,
 	timeoutMs = SPAWN_TIMEOUT_MS,
-): RunResult {
-	const spawned = spawnSync(command.cmd[0], command.cmd.slice(1), {
+): Promise<RunResult> {
+	const result = await runCliProcess({
+		label: command.label,
+		argv: command.cmd,
 		cwd: command.cwd,
-		env: process.env,
-		encoding: "utf8",
-		timeout: timeoutMs,
+		timeoutMs,
 		killSignal: KILL_SIGNAL,
-		stdio: ["ignore", "pipe", "pipe"],
 	});
-
-	const timedOut =
-		spawned.signal === KILL_SIGNAL ||
-		spawned.error?.message.includes("ETIMEDOUT") === true;
-
 	return {
 		...command,
-		exitCode: spawned.status,
-		stdout: spawned.stdout ?? "",
-		stderr: spawned.stderr ?? "",
-		timedOut,
+		...result,
 	};
 }
 
@@ -226,18 +212,7 @@ function excerpt(value: string, limit = 600): string {
  * working directory, and captured stdout/stderr without a full snapshot.
  */
 function describeRun(result: RunResult): string {
-	return [
-		`mode=${result.mode}`,
-		`label=${result.label}`,
-		`cwd=${result.cwd}`,
-		`argv=${JSON.stringify(result.cmd)}`,
-		`exit=${result.exitCode}`,
-		result.timedOut ? "timedOut=true" : null,
-		`stdout=${JSON.stringify(excerpt(result.stdout))}`,
-		`stderr=${JSON.stringify(excerpt(result.stderr))}`,
-	]
-		.filter(Boolean)
-		.join("\n");
+	return [`mode=${result.mode}`, describeCliProcessRun(result)].join("\n");
 }
 
 /**
@@ -249,12 +224,13 @@ function describeRun(result: RunResult): string {
  */
 function parseEnvelope(result: RunResult): Record<string, unknown> {
 	try {
-		return JSON.parse(result.stdout) as Record<string, unknown>;
+		return parseCliProcessJson<Record<string, unknown>>(result);
 	} catch (error) {
 		throw new Error(
-			`Failed to parse JSON envelope:\n${describeRun(result)}\nparseError=${
-				error instanceof Error ? error.message : String(error)
-			}`,
+			`Failed to parse JSON envelope:\n${describeRun(result)}\n${errorMessage(
+				error,
+			)}`,
+			{ cause: error },
 		);
 	}
 }
@@ -334,7 +310,10 @@ function refArg(ref: { kind: string; id: string }): string {
 	return `${ref.kind}:${ref.id}`;
 }
 
-function runWtPackage(args: readonly string[], label: string): RunResult {
+function runWtPackage(
+	args: readonly string[],
+	label: string,
+): Promise<RunResult> {
 	return runCommand(
 		runners.packageCwd({
 			packageRoot: packageRoots.wt,
@@ -349,7 +328,7 @@ function runWtSource(
 	args: readonly string[],
 	label: string,
 	cwd?: string,
-): RunResult {
+): Promise<RunResult> {
 	return runCommand(
 		runners.source({
 			sourcePath: sourceEntries.wt,
@@ -363,7 +342,7 @@ function runWtSource(
 function runAgentWorktreePackage(
 	args: readonly string[],
 	label: string,
-): RunResult {
+): Promise<RunResult> {
 	return runCommand(
 		runners.packageCwd({
 			packageRoot: packageRoots.agentWorktree,
@@ -374,7 +353,10 @@ function runAgentWorktreePackage(
 	);
 }
 
-function runAwtPackage(args: readonly string[], label: string): RunResult {
+function runAwtPackage(
+	args: readonly string[],
+	label: string,
+): Promise<RunResult> {
 	return runCommand(
 		runners.packageCwd({
 			packageRoot: packageRoots.agentWorktree,
@@ -388,7 +370,7 @@ function runAwtPackage(args: readonly string[], label: string): RunResult {
 function runAgentWorktreeSource(
 	args: readonly string[],
 	label: string,
-): RunResult {
+): Promise<RunResult> {
 	return runCommand(
 		runners.source({
 			sourcePath: sourceEntries.agentWorktree,
@@ -409,23 +391,24 @@ function expectAgentWorktreeRefFound(
 }
 
 function expectInspectableAgentWorktreeRefUsing(
-	run: (args: readonly string[], label: string) => RunResult,
+	run: (args: readonly string[], label: string) => Promise<RunResult>,
 	repo: string,
 	ref: { kind: string; id: string },
 	label: string,
-): void {
-	expectAgentWorktreeRefFound(
-		run(["inspect", refArg(ref), "--repo", repo, "--json"], label),
-		ref,
+): Promise<void> {
+	return run(["inspect", refArg(ref), "--repo", repo, "--json"], label).then(
+		(result) => {
+			expectAgentWorktreeRefFound(result, ref);
+		},
 	);
 }
 
-function expectInspectableAgentWorktreeRef(
+async function expectInspectableAgentWorktreeRef(
 	repo: string,
 	ref: { kind: string; id: string },
 	label: string,
-): void {
-	expectInspectableAgentWorktreeRefUsing(
+): Promise<void> {
+	await expectInspectableAgentWorktreeRefUsing(
 		runAgentWorktreePackage,
 		repo,
 		ref,
@@ -433,15 +416,15 @@ function expectInspectableAgentWorktreeRef(
 	);
 }
 
-function expectAgentWorktreeCreateAndInspect(input: {
-	run: (args: readonly string[], label: string) => RunResult;
+async function expectAgentWorktreeCreateAndInspect(input: {
+	run: (args: readonly string[], label: string) => Promise<RunResult>;
 	repo: string;
 	branch: string;
 	targetPath: string;
 	createLabel: string;
 	inspectLabel: string;
-}): { kind: string; id: string } {
-	const create = input.run(
+}): Promise<{ kind: string; id: string }> {
+	const create = await input.run(
 		["create", input.branch, "--repo", input.repo, "--json"],
 		input.createLabel,
 	);
@@ -453,7 +436,7 @@ function expectAgentWorktreeCreateAndInspect(input: {
 	);
 	const runRef = expectRef(create, createData.run_ref, "run");
 	expect(existsSync(input.targetPath), describeRun(create)).toBe(true);
-	expectInspectableAgentWorktreeRefUsing(
+	await expectInspectableAgentWorktreeRefUsing(
 		input.run,
 		input.repo,
 		runRef,
@@ -634,16 +617,16 @@ function firstUsageLine(contract: { usage: readonly string[] }): string {
 	return `Usage: ${usage}`;
 }
 
-function expectDiscoveredCommandHelp(input: {
+async function expectDiscoveredCommandHelp(input: {
 	commandIds: readonly string[];
 	contracts: Record<string, { usage: readonly string[] }>;
 	packageRoot: string;
 	script: string;
-}): void {
+}): Promise<void> {
 	for (const command of input.commandIds) {
 		const contract = input.contracts[command];
 		if (!contract) throw new Error(`Missing contract for ${command}`);
-		const result = runCommand(
+		const result = await runCommand(
 			runners.packageCwd({
 				packageRoot: input.packageRoot,
 				script: input.script,
@@ -656,17 +639,21 @@ function expectDiscoveredCommandHelp(input: {
 	}
 }
 
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 const wtTopLevelUsageLine = firstUsageLine(wtContracts.sync);
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
 
 describe("command entrypoint integration: mechanical discovery", () => {
-	test("derives the exact wt command id set from exported contracts", () => {
+	test("derives the exact wt command id set from exported contracts", async () => {
 		expect(discoveredWtCommandIds).toEqual(
 			["clean", "color", "commands", "focus", "new", "open", "rm", "sync"],
 		);
 	});
 
-	test("derives the exact agent-worktree command id set from exported contracts", () => {
+	test("derives the exact agent-worktree command id set from exported contracts", async () => {
 		expect(discoveredAgentWorktreeCommandIds).toEqual(
 			[
 				"check",
@@ -685,7 +672,7 @@ describe("command entrypoint integration: mechanical discovery", () => {
 		);
 	});
 
-	test("package scripts expose the wt and agent-worktree entrypoint scripts", () => {
+	test("package scripts expose the wt and agent-worktree entrypoint scripts", async () => {
 		expect(Object.keys(wtPackageScripts)).toContain("wt");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("awt");
@@ -695,7 +682,7 @@ describe("command entrypoint integration: mechanical discovery", () => {
 describe("command entrypoint integration: help contracts", () => {
 	test(
 		"wt, agent-worktree, and awt top-level help renders the contract usage line",
-		() => {
+		async () => {
 			const topLevelHelp = [
 				{
 					command: runners.packageCwd({
@@ -727,7 +714,7 @@ describe("command entrypoint integration: help contracts", () => {
 			];
 
 			for (const { command, usageLine } of topLevelHelp) {
-				const result = runCommand(command);
+				const result = await runCommand(command);
 				expect(result.exitCode, describeRun(result)).toBe(0);
 				expect(result.stdout, describeRun(result)).toContain(usageLine);
 			}
@@ -737,8 +724,8 @@ describe("command entrypoint integration: help contracts", () => {
 
 	test(
 		"every discovered wt command help renders its first contract usage line",
-		() => {
-			expectDiscoveredCommandHelp({
+		async () => {
+			await expectDiscoveredCommandHelp({
 				commandIds: discoveredWtCommandIds,
 				contracts: wtContracts,
 				packageRoot: packageRoots.wt,
@@ -750,8 +737,8 @@ describe("command entrypoint integration: help contracts", () => {
 
 	test(
 		"every discovered agent-worktree command help renders its first contract usage line",
-		() => {
-			expectDiscoveredCommandHelp({
+		async () => {
+			await expectDiscoveredCommandHelp({
 				commandIds: discoveredAgentWorktreeCommandIds,
 				contracts: agentWorktreeContracts,
 				packageRoot: packageRoots.agentWorktree,
@@ -763,7 +750,7 @@ describe("command entrypoint integration: help contracts", () => {
 
 	test(
 		"wt and agent-worktree source entries support --version and top-level help",
-		() => {
+		async () => {
 			const sourceProbes = [
 				{
 					sourcePath: sourceEntries.wt,
@@ -780,7 +767,7 @@ describe("command entrypoint integration: help contracts", () => {
 			];
 
 			for (const probe of sourceProbes) {
-				const version = runCommand(
+				const version = await runCommand(
 					runners.source({
 						sourcePath: probe.sourcePath,
 						args: ["--version"],
@@ -792,7 +779,7 @@ describe("command entrypoint integration: help contracts", () => {
 					probe.versionSubstring,
 				);
 
-				const help = runCommand(
+				const help = await runCommand(
 					runners.source({
 						sourcePath: probe.sourcePath,
 						args: ["--help"],
@@ -809,32 +796,32 @@ describe("command entrypoint integration: help contracts", () => {
 	test(
 		"wt source entry preserves the runtime JSON command matrix",
 		async () => {
-			const commands = runWtSource(
+			const commands = await runWtSource(
 				["commands", "--json"],
 				"wt source commands --json",
 			);
 			expectOkEnvelope(commands, "wt.workspace");
 
-			const invalid = runWtSource(
+			const invalid = await runWtSource(
 				["definitely-not-a-command", "--json"],
 				"wt source invalid command",
 			);
 			expectUsageError(invalid);
 
 			await withTempRepo("wt-source-matrix", async (repo) => {
-				const sync = runWtSource(
+				const sync = await runWtSource(
 					["sync", "--repo", repo, "--json"],
 					"wt source sync --json real repo",
 				);
 				expectOkAction(sync, "wt.workspace", "sync", { changedState: "written" });
 
-				const focus = runWtSource(
+				const focus = await runWtSource(
 					["focus", "main", "skills/wt", "--repo", repo, "--json"],
 					"wt source focus --json real repo",
 				);
 				expectOkAction(focus, "wt.workspace", "focus", { changedState: "written" });
 
-				const color = runWtSource(
+				const color = await runWtSource(
 					["color", "main", "amber", "--repo", repo, "--json"],
 					"wt source color --json real repo",
 				);
@@ -843,7 +830,7 @@ describe("command entrypoint integration: help contracts", () => {
 				const staleDir = join(repo, ".worktrees", "stale-source");
 				mkdirSync(staleDir, { recursive: true });
 				gitOutput(repo, ["branch", "old/wt-source", "main"]);
-				const clean = runWtSource(
+				const clean = await runWtSource(
 					["clean", "--repo", repo, "--json"],
 					"wt source clean --json real repo",
 				);
@@ -853,21 +840,21 @@ describe("command entrypoint integration: help contracts", () => {
 
 				const branch = "feat/wt-source-entrypoint";
 				const targetPath = join(repo, ".worktrees", "feat-wt-source-entrypoint");
-				const create = runWtSource(
+				const create = await runWtSource(
 					["new", branch, "--repo", repo, "--json"],
 					"wt source new --json real repo",
 				);
 				expectOkAction(create, "wt.workspace", "new", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(create)).toBe(true);
 
-				const remove = runWtSource(
+				const remove = await runWtSource(
 					["rm", branch, "--force", "--repo", repo, "--json"],
 					"wt source rm --json real repo",
 				);
 				expectOkAction(remove, "wt.workspace", "rm", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 
-				const openList = runWtSource(
+				const openList = await runWtSource(
 					["open", "--json"],
 					"wt source open --json temp cwd",
 					repo,
@@ -894,7 +881,7 @@ describe("command entrypoint integration: help contracts", () => {
 						"\t",
 					)}\n`,
 				);
-				const openNamed = runWtSource(
+				const openNamed = await runWtSource(
 					["open", "other-repo", "--json"],
 					"wt source open named workspace missing code",
 					repo,
@@ -925,7 +912,7 @@ describe("command entrypoint integration: help contracts", () => {
 						"\t",
 					)}\n`,
 				);
-				const openNamedSuccess = runWtSource(
+				const openNamedSuccess = await runWtSource(
 					["open", "other-repo", "--json"],
 					"wt source open named workspace fake code",
 					repo,
@@ -953,13 +940,13 @@ describe("command entrypoint integration: help contracts", () => {
 	test(
 		"agent-worktree source entry preserves the runtime JSON command matrix",
 		async () => {
-			const commands = runAgentWorktreeSource(
+			const commands = await runAgentWorktreeSource(
 				["commands", "--json"],
 				"agent-worktree source commands --json",
 			);
 			expectOkEnvelope(commands, "agent-worktree.lifecycle");
 
-			const invalid = runAgentWorktreeSource(
+			const invalid = await runAgentWorktreeSource(
 				["definitely-not-a-command", "--json"],
 				"agent-worktree source invalid command",
 			);
@@ -969,7 +956,7 @@ describe("command entrypoint integration: help contracts", () => {
 				const branch = "feat/agent-worktree-source";
 				const targetPath = join(repo, ".worktrees", "feat-agent-worktree-source");
 
-				const createPreview = runAgentWorktreeSource(
+				const createPreview = await runAgentWorktreeSource(
 					["create", branch, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree source create --dry-run",
 				);
@@ -980,7 +967,7 @@ describe("command entrypoint integration: help contracts", () => {
 					{ changedState: "none", preview: true },
 				);
 
-				expectAgentWorktreeCreateAndInspect({
+				await expectAgentWorktreeCreateAndInspect({
 					run: runAgentWorktreeSource,
 					repo,
 					branch,
@@ -989,7 +976,7 @@ describe("command entrypoint integration: help contracts", () => {
 					inspectLabel: "agent-worktree source inspect run ref",
 				});
 
-				const doctor = runAgentWorktreeSource(
+				const doctor = await runAgentWorktreeSource(
 					["doctor", "--repo", repo, "--json"],
 					"agent-worktree source doctor --json",
 				);
@@ -997,21 +984,21 @@ describe("command entrypoint integration: help contracts", () => {
 				const doctorRepo = doctorData.repo as Record<string, unknown> | undefined;
 				expect(doctorRepo?.linkedWorktreeCount, describeRun(doctor)).toBe(1);
 
-				const list = runAgentWorktreeSource(
+				const list = await runAgentWorktreeSource(
 					["list", "--repo", repo, "--json"],
 					"agent-worktree source list --json",
 				);
 				const listData = expectOkEnvelope(list, "agent-worktree.lifecycle");
 				expect(listData.total, describeRun(list)).toBe(2);
 
-				const status = runAgentWorktreeSource(
+				const status = await runAgentWorktreeSource(
 					["status", "--repo", repo, "--json"],
 					"agent-worktree source status --json",
 				);
 				const statusData = expectOkEnvelope(status, "agent-worktree.lifecycle");
 				expect(statusData.total, describeRun(status)).toBe(2);
 
-				const check = runAgentWorktreeSource(
+				const check = await runAgentWorktreeSource(
 					["check", branch, "--repo", repo, "--json"],
 					"agent-worktree source check --json",
 				);
@@ -1019,7 +1006,7 @@ describe("command entrypoint integration: help contracts", () => {
 				expect(checkData.allowed, describeRun(check)).toBe(true);
 				expect(checkData.nextSafeAction, describeRun(check)).toBe("delete");
 
-				const refreshPreview = runAgentWorktreeSource(
+				const refreshPreview = await runAgentWorktreeSource(
 					["refresh", "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree source refresh --dry-run",
 				);
@@ -1030,7 +1017,7 @@ describe("command entrypoint integration: help contracts", () => {
 					{ preview: true },
 				);
 
-				const refresh = runAgentWorktreeSource(
+				const refresh = await runAgentWorktreeSource(
 					["refresh", "--repo", repo, "--json"],
 					"agent-worktree source refresh --json",
 				);
@@ -1038,7 +1025,7 @@ describe("command entrypoint integration: help contracts", () => {
 					changedState: "complete",
 				});
 
-				const handoff = runAgentWorktreeSource(
+				const handoff = await runAgentWorktreeSource(
 					["handoff", "--repo", repo, "--json"],
 					"agent-worktree source handoff --json",
 				);
@@ -1048,7 +1035,7 @@ describe("command entrypoint integration: help contracts", () => {
 				const staleDir = join(repo, ".worktrees", "stale-source-agent");
 				mkdirSync(staleDir, { recursive: true });
 				gitOutput(repo, ["branch", "old/agent-source", "main"]);
-				const clean = runAgentWorktreeSource(
+				const clean = await runAgentWorktreeSource(
 					["clean", "--preview", "--repo", repo, "--json"],
 					"agent-worktree source clean --preview",
 				);
@@ -1056,7 +1043,7 @@ describe("command entrypoint integration: help contracts", () => {
 				expect(cleanData.previewOnly, describeRun(clean)).toBe(true);
 				expectStringArrayContaining(clean, cleanData.staleDirs, staleDir);
 
-				const deletePreview = runAgentWorktreeSource(
+				const deletePreview = await runAgentWorktreeSource(
 					["delete", branch, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree source delete --dry-run",
 				);
@@ -1067,7 +1054,7 @@ describe("command entrypoint integration: help contracts", () => {
 					{ preview: true },
 				);
 
-				const protectedDelete = runAgentWorktreeSource(
+				const protectedDelete = await runAgentWorktreeSource(
 					["delete", "main", "--force", "--repo", repo, "--json"],
 					"agent-worktree source delete protected branch",
 				);
@@ -1081,7 +1068,7 @@ describe("command entrypoint integration: help contracts", () => {
 					"failure",
 				);
 
-				const inspectFailure = runAgentWorktreeSource(
+				const inspectFailure = await runAgentWorktreeSource(
 					["inspect", refArg(failureRef), "--repo", repo, "--json"],
 					"agent-worktree source inspect failure ref",
 				);
@@ -1091,7 +1078,7 @@ describe("command entrypoint integration: help contracts", () => {
 				);
 				expect(inspectFailureData.found, describeRun(inspectFailure)).toBe(true);
 
-				const recover = runAgentWorktreeSource(
+				const recover = await runAgentWorktreeSource(
 					["recover", refArg(failureRef), "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree source recover failure ref",
 				);
@@ -1099,7 +1086,7 @@ describe("command entrypoint integration: help contracts", () => {
 					preview: true,
 				});
 
-				const deleteRun = runAgentWorktreeSource(
+				const deleteRun = await runAgentWorktreeSource(
 					["delete", branch, "--force", "--repo", repo, "--json"],
 					"agent-worktree source delete --force",
 				);
@@ -1119,7 +1106,7 @@ describe("command entrypoint integration: help contracts", () => {
 describe("command entrypoint integration: runtime json", () => {
 	test(
 		"wt, agent-worktree, and awt --version work through package scripts",
-		() => {
+		async () => {
 			const versionProbes = [
 				{
 					command: runners.packageCwd({
@@ -1151,7 +1138,7 @@ describe("command entrypoint integration: runtime json", () => {
 			];
 
 			for (const { command, substring } of versionProbes) {
-				const result = runCommand(command);
+				const result = await runCommand(command);
 				expect(result.exitCode, describeRun(result)).toBe(0);
 				expect(result.stdout, describeRun(result)).toContain(substring);
 			}
@@ -1161,7 +1148,7 @@ describe("command entrypoint integration: runtime json", () => {
 
 	test(
 		"workspace-filter version probes exit 0 with the expected version substring",
-		() => {
+		async () => {
 			const filterProbes = [
 				{
 					command: runners.workspaceFilter({
@@ -1190,7 +1177,7 @@ describe("command entrypoint integration: runtime json", () => {
 			];
 
 			for (const { command, substring } of filterProbes) {
-				const result = runCommand(command);
+				const result = await runCommand(command);
 				expect(result.exitCode, describeRun(result)).toBe(0);
 				const combined = `${result.stdout}${result.stderr}`;
 				expect(combined, describeRun(result)).toContain(substring);
@@ -1201,7 +1188,7 @@ describe("command entrypoint integration: runtime json", () => {
 
 	test(
 		"commands --json returns status ok and the runtime contract id",
-		() => {
+		async () => {
 			const commandsProbes = [
 				{
 					command: runners.packageCwd({
@@ -1233,7 +1220,7 @@ describe("command entrypoint integration: runtime json", () => {
 			];
 
 			for (const { command, contractId } of commandsProbes) {
-				const result = runCommand(command);
+				const result = await runCommand(command);
 				expect(result.exitCode, describeRun(result)).toBe(0);
 				const envelope = parseEnvelope(result);
 				expect(envelope.status, describeRun(result)).toBe("ok");
@@ -1246,8 +1233,8 @@ describe("command entrypoint integration: runtime json", () => {
 
 	test(
 		"wt open --json preserves list-mode coverage without launching VS Code",
-		() => {
-			const result = runWtPackage(
+		async () => {
+			const result = await runWtPackage(
 				["open", "--json"],
 				"wt open --json list mode (package-cwd)",
 			);
@@ -1262,7 +1249,7 @@ describe("command entrypoint integration: runtime json", () => {
 
 	test(
 		"invalid commands return non-zero with a structured error envelope",
-		() => {
+		async () => {
 			const invalidProbes = [
 				runners.packageCwd({
 					packageRoot: packageRoots.wt,
@@ -1285,7 +1272,7 @@ describe("command entrypoint integration: runtime json", () => {
 			];
 
 			for (const command of invalidProbes) {
-				const result = runCommand(command);
+				const result = await runCommand(command);
 				expectUsageError(result);
 			}
 		},
@@ -1294,8 +1281,8 @@ describe("command entrypoint integration: runtime json", () => {
 
 	test(
 		"json parse failures surface stdout and stderr excerpts",
-		() => {
-			const result = runCommand(
+		async () => {
+			const result = await runCommand(
 				runners.packageCwd({
 					packageRoot: packageRoots.wt,
 					script: "wt",
@@ -1311,8 +1298,8 @@ describe("command entrypoint integration: runtime json", () => {
 		TEST_TIMEOUT_MS,
 	);
 
-	test("spawn timeout failures identify the timed-out command", () => {
-		const result = runCommand(
+	test("spawn timeout failures identify the timed-out command", async () => {
+		const result = await runCommand(
 			{
 				mode: "source",
 				label: "timeout self-test",
@@ -1332,7 +1319,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 		"wt sync --json writes a generated workspace in a real temp repo",
 		async () => {
 			await withTempRepo("wt-sync", async (repo) => {
-				const result = runCommand(
+				const result = await runCommand(
 					runners.packageCwd({
 						packageRoot: packageRoots.wt,
 						script: "wt",
@@ -1360,13 +1347,13 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 		"wt focus and color update the package-script registry in a real temp repo",
 		async () => {
 			await withTempRepo("wt-focus-color", async (repo) => {
-				const focus = runWtPackage(
+				const focus = await runWtPackage(
 					["focus", "main", "skills/wt", "--repo", repo, "--json"],
 					"wt focus --json real repo (package-cwd)",
 				);
 				expectOkAction(focus, "wt.workspace", "focus", { changedState: "written" });
 
-				const color = runWtPackage(
+				const color = await runWtPackage(
 					["color", "main", "teal", "--repo", repo, "--json"],
 					"wt color --json real repo (package-cwd)",
 				);
@@ -1392,7 +1379,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 				mkdirSync(staleDir, { recursive: true });
 				gitOutput(repo, ["branch", "old/wt-entrypoint", "main"]);
 
-				const clean = runWtPackage(
+				const clean = await runWtPackage(
 					["clean", "--repo", repo, "--json"],
 					"wt clean --json real repo (package-cwd)",
 				);
@@ -1420,7 +1407,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 				const branch = "feat/command-entrypoint";
 				const targetPath = join(repo, ".worktrees", "feat-command-entrypoint");
 
-				const create = runCommand(
+				const create = await runCommand(
 					runners.packageCwd({
 						packageRoot: packageRoots.wt,
 						script: "wt",
@@ -1435,7 +1422,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 					describeRun(create),
 				).toContain(`branch refs/heads/${branch}`);
 
-				const remove = runCommand(
+				const remove = await runCommand(
 					runners.packageCwd({
 						packageRoot: packageRoots.wt,
 						script: "wt",
@@ -1468,7 +1455,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					"feat-agent-worktree-reads",
 				);
 
-				const doctor = runAgentWorktreePackage(
+				const doctor = await runAgentWorktreePackage(
 					["doctor", "--repo", repo, "--json"],
 					"agent-worktree doctor --json real repo (package-cwd)",
 				);
@@ -1482,7 +1469,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					"delete",
 				);
 
-				const list = runAgentWorktreePackage(
+				const list = await runAgentWorktreePackage(
 					["list", "--repo", repo, "--json"],
 					"agent-worktree list --json real repo (package-cwd)",
 				);
@@ -1491,7 +1478,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				expect(listData.mainOwnerRoot, describeRun(list)).toBe(repo);
 				expect(listData.activeWorktree, describeRun(list)).toBe(repo);
 
-				const status = runAgentWorktreePackage(
+				const status = await runAgentWorktreePackage(
 					["status", "--repo", repo, "--json"],
 					"agent-worktree status --json real repo (package-cwd)",
 				);
@@ -1510,7 +1497,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					describeRun(status),
 				).toBe(true);
 
-				const check = runAgentWorktreePackage(
+				const check = await runAgentWorktreePackage(
 					["check", branch, "--repo", repo, "--json"],
 					"agent-worktree check --json real repo (package-cwd)",
 				);
@@ -1530,7 +1517,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				const branch = "feat/agent-worktree-entrypoint";
 				const targetPath = join(repo, ".worktrees", "feat-agent-worktree-entrypoint");
 
-				const createPreview = runAgentWorktreePackage(
+				const createPreview = await runAgentWorktreePackage(
 					["create", branch, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree create --dry-run real repo (package-cwd)",
 				);
@@ -1547,7 +1534,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				);
 				expect(existsSync(targetPath), describeRun(createPreview)).toBe(false);
 
-				const create = runAgentWorktreePackage(
+				const create = await runAgentWorktreePackage(
 					["create", branch, "--repo", repo, "--json"],
 					"agent-worktree create --json real repo (package-cwd)",
 				);
@@ -1560,13 +1547,13 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				const runRef = expectRef(create, createData.run_ref, "run");
 				expect(existsSync(targetPath), describeRun(create)).toBe(true);
 
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					runRef,
 					"agent-worktree inspect run ref real repo (package-cwd)",
 				);
 
-				const refreshPreview = runAgentWorktreePackage(
+				const refreshPreview = await runAgentWorktreePackage(
 					["refresh", "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree refresh --dry-run real repo (package-cwd)",
 				);
@@ -1582,7 +1569,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					`record ${branch}`,
 				);
 
-				const refresh = runAgentWorktreePackage(
+				const refresh = await runAgentWorktreePackage(
 					["refresh", "--repo", repo, "--json"],
 					"agent-worktree refresh --json real repo (package-cwd)",
 				);
@@ -1593,13 +1580,13 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					{ changedState: "complete", preview: false },
 				);
 				const refreshRunRef = expectRef(refresh, refreshData.run_ref, "run");
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					refreshRunRef,
 					"agent-worktree inspect refresh run ref (package-cwd)",
 				);
 
-				const handoff = runAgentWorktreePackage(
+				const handoff = await runAgentWorktreePackage(
 					["handoff", "--repo", repo, "--json"],
 					"agent-worktree handoff --json real repo (package-cwd)",
 				);
@@ -1614,7 +1601,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					"inspect",
 				);
 
-				const deleteDryRun = runAgentWorktreePackage(
+				const deleteDryRun = await runAgentWorktreePackage(
 					["delete", branch, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree delete --dry-run real repo (package-cwd)",
 				);
@@ -1631,7 +1618,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				);
 				expect(existsSync(targetPath), describeRun(deleteDryRun)).toBe(true);
 
-				const deletePreview = runAgentWorktreePackage(
+				const deletePreview = await runAgentWorktreePackage(
 					[
 						"delete",
 						branch,
@@ -1656,7 +1643,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				);
 				expect(existsSync(targetPath), describeRun(deletePreview)).toBe(true);
 
-				const deleteRun = runAgentWorktreePackage(
+				const deleteRun = await runAgentWorktreePackage(
 					["delete", branch, "--force", "--repo", repo, "--json"],
 					"agent-worktree delete --force real repo (package-cwd)",
 				);
@@ -1668,7 +1655,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				);
 				const deleteRunRef = expectRef(deleteRun, deleteRunData.run_ref, "run");
 				expect(existsSync(targetPath), describeRun(deleteRun)).toBe(false);
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					deleteRunRef,
 					"agent-worktree inspect delete run ref (package-cwd)",
@@ -1686,7 +1673,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				mkdirSync(staleDir, { recursive: true });
 				gitOutput(repo, ["branch", "old/agent-worktree-entrypoint", "main"]);
 
-				const clean = runAgentWorktreePackage(
+				const clean = await runAgentWorktreePackage(
 					["clean", "--preview", "--repo", repo, "--json"],
 					"agent-worktree clean --preview real repo (package-cwd)",
 				);
@@ -1710,7 +1697,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				const branch = "feat/awt-entrypoint";
 				const targetPath = join(repo, ".worktrees", "feat-awt-entrypoint");
 
-				expectAgentWorktreeCreateAndInspect({
+				await expectAgentWorktreeCreateAndInspect({
 					run: runAwtPackage,
 					repo,
 					branch,
@@ -1719,7 +1706,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					inspectLabel: "awt inspect run ref (package-cwd)",
 				});
 
-				const remove = runAwtPackage(
+				const remove = await runAwtPackage(
 					["delete", branch, "--force", "--repo", repo, "--json"],
 					"awt delete --force real repo (package-cwd)",
 				);
@@ -1744,7 +1731,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				);
 				expect(gitRefExists(repo, `refs/heads/${branch}`)).toBe(true);
 
-				const remove = runAgentWorktreePackage(
+				const remove = await runAgentWorktreePackage(
 					["delete", branch, "--force", "--delete-branch", "--repo", repo, "--json"],
 					"agent-worktree delete --force --delete-branch real repo (package-cwd)",
 				);
@@ -1759,7 +1746,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 				expect(gitRefExists(repo, `refs/heads/${branch}`)).toBe(false);
 				expect(gitRefExists(repo, removeData.backup_ref as string)).toBe(true);
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					runRef,
 					"agent-worktree inspect branch-delete run ref (package-cwd)",
@@ -1785,7 +1772,7 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					"HEAD",
 				]);
 
-				const remove = runAgentWorktreePackage(
+				const remove = await runAgentWorktreePackage(
 					["delete", branch, "--force", "--delete-branch", "--repo", repo, "--json"],
 					"agent-worktree delete backup-ref conflict real repo (package-cwd)",
 				);
@@ -1803,18 +1790,18 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 				expect(gitRefExists(repo, `refs/heads/${branch}`)).toBe(true);
 
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					runRef,
 					"agent-worktree inspect partial run ref (package-cwd)",
 				);
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					failureRef,
 					"agent-worktree inspect partial failure ref (package-cwd)",
 				);
 
-				const recover = runAgentWorktreePackage(
+				const recover = await runAgentWorktreePackage(
 					["recover", failureArg, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree recover partial failure ref dry-run (package-cwd)",
 				);
@@ -1836,7 +1823,7 @@ describe("command entrypoint integration: preflight recovery refs", () => {
 		"protected branch delete failure ref survives inspect and recover process boundaries",
 		async () => {
 			await withTempRepo("agent-worktree-recovery", async (repo) => {
-				const deleteMain = runAgentWorktreePackage(
+				const deleteMain = await runAgentWorktreePackage(
 					["delete", "main", "--force", "--repo", repo, "--json"],
 					"agent-worktree delete main protected branch (package-cwd)",
 				);
@@ -1852,13 +1839,13 @@ describe("command entrypoint integration: preflight recovery refs", () => {
 				expect(failureData.reason, describeRun(deleteMain)).toBe("protected_branch");
 				expect(failureData.next_safe_action, describeRun(deleteMain)).toBe("inspect");
 
-				expectInspectableAgentWorktreeRef(
+				await expectInspectableAgentWorktreeRef(
 					repo,
 					failureRef,
 					"agent-worktree inspect failure ref (package-cwd)",
 				);
 
-				const recover = runAgentWorktreePackage(
+				const recover = await runAgentWorktreePackage(
 					["recover", failureArg, "--dry-run", "--repo", repo, "--json"],
 					"agent-worktree recover failure ref dry-run (package-cwd)",
 				);
@@ -1877,7 +1864,7 @@ describe("command entrypoint integration: preflight recovery refs", () => {
 });
 
 describe("command entrypoint integration: promotion boundary", () => {
-	test("root default gates do not run the explicit integration suite", () => {
+	test("root default gates do not run the explicit integration suite", async () => {
 		const rootScripts = readPackageScripts(repoRoot);
 		const portabilityProof = readFileSync(
 			join(repoRoot, "scripts/prove-workspace-portability.ts"),
