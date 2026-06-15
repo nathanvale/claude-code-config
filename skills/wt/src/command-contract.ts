@@ -2,7 +2,7 @@ import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
 } from "@side-quest/cli-command-facade";
-import { WT_CONTRACT_ID, WT_SCHEMA_VERSION } from "./model.ts";
+import { WT_COLOR_PALETTE, WT_CONTRACT_ID, WT_SCHEMA_VERSION } from "./model.ts";
 
 /**
  * Public command ids for the wt front door.
@@ -75,6 +75,8 @@ const WT_DRIFT_FAILURE_ACTIONS = [
 	},
 ] as const;
 
+const WT_COLOR_FAILURE_SUMMARY = `Choose one of: ${WT_COLOR_PALETTE.join(", ")}.`;
+
 /**
  * Discovery actions advertised when `wt color` fails.
  *
@@ -85,7 +87,7 @@ const WT_DRIFT_FAILURE_ACTIONS = [
 const WT_COLOR_FAILURE_ACTIONS = [
 	{
 		id: "choose_palette_color",
-		summary: "Choose one of: blue, green, amber, purple, red, teal, pink, slate.",
+		summary: WT_COLOR_FAILURE_SUMMARY,
 		sideEffects: ["read"],
 	},
 	...WT_DRIFT_FAILURE_ACTIONS,

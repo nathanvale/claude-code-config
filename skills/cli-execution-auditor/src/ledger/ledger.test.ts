@@ -67,12 +67,34 @@ describe("ledger — upsert + dedupe", () => {
 		upsertFinding(ledger, {
 			...stationInput,
 			summary: "refreshed station summary",
-			argv: ["local", "noise"],
 		});
 		const open = openFindings(ledger);
 		expect(open).toHaveLength(1);
 		expect(open[0].summary).toBe("refreshed station summary");
+		if (!("station" in open[0].recheck)) throw new Error("expected station recheck");
 		expect(open[0].recheck.station).toEqual(stationInput.station);
+	});
+
+	test("rejects invalid kind and recheck anchor combinations at runtime", () => {
+		const ledger = createLedger("classic-cinema");
+		expect(() =>
+			upsertFinding(ledger, {
+				...stationInput,
+				argv: ["local", "noise"],
+			} as unknown as FindingInput),
+		).toThrow("station finding cannot include argv");
+		expect(() =>
+			upsertFinding(ledger, {
+				...surfaceInput,
+				station: stationInput.station,
+			} as unknown as FindingInput),
+		).toThrow("clause finding cannot include a station anchor");
+		expect(() =>
+			upsertFinding(ledger, {
+				...surfaceInput,
+				kind: "unknown",
+			} as unknown as FindingInput),
+		).toThrow("finding kind must be static, surface, or station");
 	});
 });
 
@@ -187,7 +209,33 @@ describe("ledger — Markdown round-trip + format compatibility (R6)", () => {
 		const open = openFindings(reparsed);
 		expect(open).toHaveLength(1);
 		expect(open[0].kind).toBe("station");
+		if (!("station" in open[0].recheck)) throw new Error("expected station recheck");
 		expect(open[0].recheck.station).toEqual(stationInput.station);
+	});
+
+	test("station recheck anchors with spaces round-trip through markdown", () => {
+		const input: FindingInput = {
+			clauseId: "station-map",
+			kind: "station",
+			summary: "interactive review success is missing.",
+			station: {
+				stationId: "review success",
+				command: "review command",
+				findingKind: "declared unreachable",
+			},
+		};
+		const ledger = createLedger("classic-cinema");
+		upsertFinding(ledger, input);
+
+		const md = renderLedger(ledger);
+		expect(md).toContain(
+			"recheck: station=review%20success command=review%20command finding=declared%20unreachable",
+		);
+
+		const reparsed = parseLedger("classic-cinema", md);
+		const [finding] = openFindings(reparsed);
+		if (!("station" in finding.recheck)) throw new Error("expected station recheck");
+		expect(finding.recheck.station).toEqual(input.station);
 	});
 
 	test("renders the findings-table sections the audit-loop template documents", () => {

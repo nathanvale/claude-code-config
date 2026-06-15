@@ -49,6 +49,27 @@ export const AUDITOR_SUCCESS_ACTIONS = [
 	},
 ] as const;
 
+const STATION_MAP_FAILURE_ACTIONS = [
+	{
+		id: "inspect_station_findings",
+		summary: "Read the ledger written at --ledger to see each station finding and re-check anchor.",
+		sideEffects: ["read"],
+	},
+	{
+		id: "fix_station_map_inputs",
+		summary: "Human handoff: fix the Branch Station Catalog, station evidence, or runner behavior, then rerun station-map.",
+		sideEffects: ["write"],
+	},
+] as const;
+
+const STATION_MAP_SUCCESS_ACTIONS = [
+	{
+		id: "declared_branch_coverage_clean",
+		summary: "Declared Branch Coverage reconciles; no action needed.",
+		sideEffects: ["check"],
+	},
+] as const;
+
 const resultContract = {
 	id: AUDITOR_CONTRACT_ID,
 	kind: "facade-lane CLI execution audit report.",
@@ -124,8 +145,8 @@ export const auditorContracts = defineCommandFacadeContract(
 			interactivity: "none",
 			resultContract: stationMapResultContract,
 			actionAffordances: {
-				success: AUDITOR_SUCCESS_ACTIONS,
-				failure: AUDITOR_FAILURE_ACTIONS,
+				success: STATION_MAP_SUCCESS_ACTIONS,
+				failure: STATION_MAP_FAILURE_ACTIONS,
 			},
 			previewExemption: {
 				reason: "station-map writes only its own findings ledger; the target CLI source is never mutated.",

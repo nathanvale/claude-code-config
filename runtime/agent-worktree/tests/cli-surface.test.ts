@@ -54,6 +54,69 @@ describe("agent-worktree CLI surface", () => {
 		}
 	});
 
+	test("projection flags shape read command output", async () => {
+		const outputs = {
+			...mainRepoGitOutputs("/repo"),
+			["git status --porcelain"]: "",
+			["git rev-parse --is-shallow-repository"]: "false\n",
+			["git merge-base --is-ancestor main main"]: "",
+			["git rev-list --left-right --count main...main"]: "0 0\n",
+		};
+		const { exitCode, envelope } = await runJsonCli(
+			[
+				"doctor",
+				"--fields",
+				"actions",
+				"--select",
+				"mutation_readiness",
+				"--repo",
+				"/repo",
+				"--json",
+			],
+			{ runtime: repoRuntime("/repo", outputs) },
+		);
+
+		expect(exitCode).toBe(0);
+		expect(envelope.data).toMatchObject({
+			contract_id: "agent-worktree.lifecycle",
+			mutation_readiness: "ready",
+			blockers: [],
+			next_actions: [],
+		});
+		expect(envelope.data?.checks).toBeUndefined();
+		expect(envelope.data?.summary).toBeUndefined();
+	});
+
+	test("unknown projection fields fail instead of acting inertly", async () => {
+		const envelope = await expectUsageError([
+			"doctor",
+			"--fields",
+			"unknown",
+			"--json",
+		]);
+
+		expect(envelope.error?.message).toContain("Unsupported --fields value");
+	});
+
+	test("unknown projection selectors fail instead of acting inertly", async () => {
+		const { exitCode, envelope } = await runJsonCli(
+			["doctor", "--select", "missing", "--repo", "/repo", "--json"],
+			{
+				runtime: repoRuntime("/repo", {
+					...mainRepoGitOutputs("/repo"),
+					["git status --porcelain"]: "",
+					["git rev-parse --is-shallow-repository"]: "false\n",
+					["git merge-base --is-ancestor main main"]: "",
+					["git rev-list --left-right --count main...main"]: "0 0\n",
+				}),
+			},
+		);
+
+		expect(exitCode).toBe(2);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error?.message).toContain("--select field 'missing'");
+	});
+
 	test("foreign flags fail with exit code 2 and JSON stdout", async () => {
 		await expectUsageError([
 			"list",

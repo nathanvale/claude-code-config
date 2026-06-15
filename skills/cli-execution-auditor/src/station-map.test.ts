@@ -193,6 +193,23 @@ describe("Station Map engine", () => {
 			reason: "ambiguous Branch Station evidence manifest: 2 shape-matching exports",
 		});
 	});
+
+	test("station asset worker times out when an imported module hangs", async () => {
+		const root = await makeTempRoot();
+		const catalogPath = join(root, "branch-station-catalog.ts");
+		await writeFile(catalogPath, "await new Promise(() => {});\n");
+
+		const acquisition = await acquireStationMapAssets({
+			catalogPath,
+			evidencePath: null,
+			timeoutMs: 50,
+		});
+
+		expect(acquisition).toEqual({
+			ok: false,
+			reason: "station asset worker timed out after 50ms",
+		});
+	});
 });
 
 async function makeTempRoot(): Promise<string> {

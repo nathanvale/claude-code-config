@@ -37,7 +37,7 @@ the owner paths for the command or runtime being tested.
 - Smell: every branch uses real git, filesystem, network, or process fixtures.
 - Why it fails: tests become slow, flaky, and hard to diagnose.
 - Better substitute: use fake runners for semantic branches; keep one real production-path regression.
-- Owner path: `runtime/agent-worktree/src/discovery.ts`.
+- Owner path: `skills/test-runner/SKILL.md`.
 - Evidence class: observed failure.
 - Downstream candidate: `test-runner`, `seam-scaffold`.
 
@@ -46,7 +46,7 @@ the owner paths for the command or runtime being tested.
 - Smell: fake runtime returns canned results but does not record argv, cwd, writes, or launches.
 - Why it fails: tests prove output but miss wrong authority or wrong target behavior.
 - Better substitute: fake runtimes record calls and assert cwd, argv, side effects, and skipped destructive calls.
-- Owner path: `skills/wt/src/wt.test.ts`.
+- Owner path: `skills/test-runner/SKILL.md`.
 - Evidence class: observed failure.
 - Downstream candidate: review skill, `test-runner`.
 

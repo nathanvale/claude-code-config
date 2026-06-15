@@ -34,7 +34,7 @@ import {
 	parseCliProcessJson,
 	runCliProcess,
 	type CliProcessResult,
-} from "../runtime/cli-command-facade/src/testing.ts";
+} from "@side-quest/cli-command-facade/testing";
 
 import { wtContracts } from "../skills/wt/src/command-contract.ts";
 import {
@@ -607,10 +607,7 @@ const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktre
  * `Usage: <usage[0]>` (see cli-command-facade usage.ts), and top-level help
  * renders the default command's usage. Deriving from the same `usage[0]` the
  * CLI renders from keeps the assertion coupled to the contract, not to a copied
- * string, so a usage rename fails here too. (The contract type is not imported
- * directly because `@side-quest/cli-command-facade` does not resolve from the
- * repo-root script dir; the transitive import through the contract modules
- * does.)
+ * string, so a usage rename fails here too.
  */
 function firstUsageLine(contract: { usage: readonly string[] }): string {
 	const [usage] = contract.usage;
@@ -981,8 +978,13 @@ describe("command entrypoint integration: help contracts", () => {
 					"agent-worktree source doctor --json",
 				);
 				const doctorData = expectOkEnvelope(doctor, "agent-worktree.lifecycle");
-				const doctorRepo = doctorData.repo as Record<string, unknown> | undefined;
-				expect(doctorRepo?.linkedWorktreeCount, describeRun(doctor)).toBe(1);
+				const doctorSummary = doctorData.summary as
+					| Record<string, unknown>
+					| undefined;
+				expect(
+					doctorSummary?.linked_worktree_count,
+					describeRun(doctor),
+				).toBe(1);
 
 				const list = await runAgentWorktreeSource(
 					["list", "--repo", repo, "--json"],
@@ -1460,12 +1462,17 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					"agent-worktree doctor --json real repo (package-cwd)",
 				);
 				const doctorData = expectOkEnvelope(doctor, "agent-worktree.lifecycle");
-				const doctorRepo = doctorData.repo as Record<string, unknown> | undefined;
-				expect(doctorRepo?.gitRoot, describeRun(doctor)).toBe(repo);
-				expect(doctorRepo?.linkedWorktreeCount, describeRun(doctor)).toBe(1);
+				const doctorSummary = doctorData.summary as
+					| Record<string, unknown>
+					| undefined;
+				expect(doctorSummary?.repo_root, describeRun(doctor)).toBe(repo);
+				expect(
+					doctorSummary?.linked_worktree_count,
+					describeRun(doctor),
+				).toBe(1);
 				expectStringArrayContaining(
 					doctor,
-					doctorData.availableCommands,
+					doctorSummary?.available_commands,
 					"delete",
 				);
 

@@ -16,6 +16,7 @@ const ACQUIRE_STATION_MAP_WORKER = join(
 	dirname(Bun.fileURLToPath(import.meta.url)),
 	"acquire-station-map-worker.ts",
 );
+const STATION_MAP_ASSET_WORKER_TIMEOUT_MS = 10_000;
 
 export type StationMapAssetAcquisition =
 	| {
@@ -132,7 +133,9 @@ export async function runStationMapAudit(input: {
 export async function acquireStationMapAssets(input: {
 	catalogPath: string;
 	evidencePath: string | null;
+	timeoutMs?: number;
 }): Promise<StationMapAssetAcquisition> {
+	const timeoutMs = input.timeoutMs ?? STATION_MAP_ASSET_WORKER_TIMEOUT_MS;
 	const proc = Bun.spawn(
 		[
 			"bun",
@@ -146,11 +149,23 @@ export async function acquireStationMapAssets(input: {
 			stderr: "pipe",
 		},
 	);
+	let timedOut = false;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		proc.kill("SIGKILL");
+	}, timeoutMs);
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
 		proc.exited,
-	]);
+	]).finally(() => clearTimeout(timeout));
+
+	if (timedOut) {
+		return {
+			ok: false,
+			reason: `station asset worker timed out after ${timeoutMs}ms`,
+		};
+	}
 
 	if (exitCode !== 0) {
 		return {

@@ -513,8 +513,17 @@ export async function recordSkillFeedbackReceipt(
 
 	const envelope = createCliRuntimeSuccessEnvelope({
 		run_id: runId,
-		data: redacted,
-	}) satisfies CliRuntimeSuccessEnvelope<SoftwareLearningReport>;
+		data: {
+			contract: SKILL_FEEDBACK_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			...redacted,
+		},
+	}) satisfies CliRuntimeSuccessEnvelope<
+		SoftwareLearningReport & {
+			contract: typeof SKILL_FEEDBACK_CONTRACT_ID;
+			schema_version: typeof SKILL_FEEDBACK_SCHEMA_VERSION;
+		}
+	>;
 	return {
 		exitCode: 0,
 		stdout: `${JSON.stringify(envelope)}\n`,

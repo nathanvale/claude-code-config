@@ -187,8 +187,14 @@ describe("agent-worktree scaffold", () => {
 
 		expect(exitCode).toBe(0);
 		expect(envelope.status).toBe("ok");
-		expect(envelope.data?.status).toBe("ok");
-		expect(envelope.data?.mutationReadiness).toBe("ready");
+		expect(envelope.data?.summary).toMatchObject({
+			status: "ok",
+			repo_root: "/repo",
+		});
+		expect(envelope.data?.mutation_readiness).toBe("ready");
+		expect(envelope.data?.blockers).toEqual([]);
+		expect(envelope.data?.next_actions).toEqual([]);
+		expect(Array.isArray(envelope.data?.checks)).toBe(true);
 	});
 
 	test("scaffold inventory covers each planned owner seam", () => {

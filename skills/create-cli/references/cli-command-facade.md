@@ -38,6 +38,8 @@ as the enforcement backend.
   `runtime/cli-command-facade/tests/command-facade.test.ts`
 - Cross-package Station Map report:
   `skills/cli-execution-auditor/src/station-map.ts`
+  This path appears here because the facade owns the generic Station Map model;
+  the auditor owns the cross-package report that applies it to target CLIs.
 
 ## Workflow
 

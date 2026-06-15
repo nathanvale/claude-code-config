@@ -158,6 +158,39 @@ function stubRuntime(
 	});
 }
 
+function stubInboxLstatPermissionDeniedRuntime(
+	root: string,
+	code: "EACCES" | "EPERM",
+): SkillFeedbackRuntime {
+	const baseRuntime = stubRuntime(root);
+	return stubRuntime(root, {
+		lstatPath: async (path) => {
+			if (path === join(root, ".skill-feedback")) {
+				throw Object.assign(new Error("permission denied"), { code });
+			}
+			return baseRuntime.lstatPath(path);
+		},
+	});
+}
+
+function expectPermissionDeniedEnvelope(
+	result: Pick<TestProcessResult, "exitCode" | "stdout">,
+	expected: {
+		errorCode: string;
+		contract: string;
+		schemaVersion: string;
+	},
+): void {
+	expect(result.exitCode).toBe(1);
+	const envelope = parseEnvelope(result.stdout);
+	expect((envelope.error as { code: string }).code).toBe(expected.errorCode);
+	expect(envelope.data).toMatchObject({
+		contract: expected.contract,
+		schema_version: expected.schemaVersion,
+		changed_state: "none",
+	});
+}
+
 async function writeRecord(
 	receipt: Partial<Receipt>,
 	runtimeOverrides: Partial<SkillFeedbackRuntime> = {},
@@ -1479,6 +1512,34 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(reviewEnvelope.data).toMatchObject({
 			inbox_status: "unsafe",
 			counts: { skipped_unsafe: 1 },
+		});
+	});
+
+	test("health maps inbox lstat EACCES to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EACCES"),
+			runId: "health-inbox-lstat-permission-denied",
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "health_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+		});
+	});
+
+	test("review maps inbox lstat EPERM to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EPERM"),
+			runId: "review-inbox-lstat-permission-denied",
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "review_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
 	});
 

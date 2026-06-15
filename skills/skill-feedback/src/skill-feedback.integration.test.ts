@@ -28,7 +28,6 @@ import {
 	type CloseoutReceipt,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-	skillFeedbackContracts,
 } from "./command-contract";
 
 const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
@@ -334,7 +333,7 @@ function expectStationEnvelope(
 	expect(envelope.status, describeCliProcessRun(result)).toBe(
 		station.expectedEnvelopeStatus,
 	);
-	const observedContract = observedResultContractId(station, envelope);
+	const observedContract = observedResultContractId(envelope);
 	expect(observedContract, describeCliProcessRun(result)).toBe(
 		station.expectedResultContractId,
 	);
@@ -358,18 +357,17 @@ function evidenceFor(
 		status: "covered",
 		observedExitCode: result.exitCode ?? undefined,
 		observedEnvelopeStatus: envelope.status,
-		observedResultContractId: observedResultContractId(station, envelope),
+		observedResultContractId: observedResultContractId(envelope),
 		...(envelope.error?.code ? { observedErrorCode: envelope.error.code } : {}),
 	};
 }
 
 function observedResultContractId(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
 	envelope: RuntimeEnvelope,
 ): string | undefined {
 	const dataContract = envelope.data?.contract ?? envelope.data?.contract_id;
 	if (typeof dataContract === "string") return dataContract;
-	return skillFeedbackContracts[station.command].resultContract?.id;
+	return undefined;
 }
 
 async function makeRoot(): Promise<string> {
