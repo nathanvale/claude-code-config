@@ -1,12 +1,12 @@
 #!/bin/bash
-# install-git-hooks.sh — install tracked git hooks from scripts/hooks/ into .git/hooks/
+# install-git-hooks.sh - install tracked git hooks from scripts/hooks/ into Git's hook path
 # Idempotent: safe to re-run. Backs up any existing hook before replacing.
 
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 SRC_DIR="${REPO_ROOT}/scripts/hooks"
-DEST_DIR="${REPO_ROOT}/.git/hooks"
+DEST_DIR="$(git rev-parse --git-path hooks)"
 
 if [[ ! -d "${SRC_DIR}" ]]; then
   echo "No scripts/hooks/ directory found. Nothing to install."
