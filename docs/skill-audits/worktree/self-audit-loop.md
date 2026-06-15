@@ -1,12 +1,12 @@
 ---
-target_skill: skills/wt/SKILL.md
+target_skill: skills/worktree/SKILL.md
 status: active
 passes: 0
 last_pass: null
 convergence: not_started
 ---
 
-# Skill Self-Audit Loop: wt
+# Skill Self-Audit Loop: worktree
 
 ## Truth Stance
 
@@ -22,26 +22,26 @@ convergence: not_started
 Short path:
 
 ```text
-/goal Read docs/skill-audits/wt/self-audit-loop.md and audit the target SKILL.md for instruction contradictions. Update only the audit loop file. Stop when a fresh pass adds zero new accepted contradictions.
+/goal Read docs/skill-audits/worktree/self-audit-loop.md and audit the target SKILL.md for instruction contradictions. Update only the audit loop file. Stop when a fresh pass adds zero new accepted contradictions.
 ```
 
 Full path:
 
 ```text
-/goal Resume the skill self-audit loop from docs/skill-audits/wt/self-audit-loop.md. Read the loop file first, then the target SKILL.md, then the owner paths named there. Audit only authority, scope, lifecycle, and safety contradictions. Update only the audit loop file. Do not edit skill source. Continue fresh passes until one pass adds zero new accepted contradictions, or mark blocked when evidence, authority, loop state, privacy, or a human decision prevents honest convergence.
+/goal Resume the skill self-audit loop from docs/skill-audits/worktree/self-audit-loop.md. Read the loop file first, then the target SKILL.md, then the owner paths named there. Audit only authority, scope, lifecycle, and safety contradictions. Update only the audit loop file. Do not edit skill source. Continue fresh passes until one pass adds zero new accepted contradictions, or mark blocked when evidence, authority, loop state, privacy, or a human decision prevents honest convergence.
 ```
 
 One-pass fallback:
 
 ```text
-/loop Read docs/skill-audits/wt/self-audit-loop.md first. Run the next numbered audit pass only. Update only the audit loop file. Stop after recording the pass result, next safe action, and file status.
+/loop Read docs/skill-audits/worktree/self-audit-loop.md first. Run the next numbered audit pass only. Update only the audit loop file. Stop after recording the pass result, next safe action, and file status.
 ```
 
 ## Target
 
-- Skill: `wt`.
-- Target path: `skills/wt/SKILL.md`.
-- Audit file: `docs/skill-audits/wt/self-audit-loop.md`.
+- Skill: `worktree`.
+- Target path: `skills/worktree/SKILL.md`.
+- Audit file: `docs/skill-audits/worktree/self-audit-loop.md`.
 
 ## Scope
 
@@ -57,23 +57,23 @@ One-pass fallback:
 - `skills/context-advisor/references/storage-routing.md`.
 - `skills/create-skill/SKILL.md`.
 - `skills/create-cli/SKILL.md`.
-- `skills/wt/SKILL.md`.
-- `skills/wt/src/command-contract.ts`.
-- `skills/wt/src/model.ts`.
-- `skills/wt/src/wt-engine.ts`.
-- `skills/wt/src/wt-discovery.ts`.
-- `skills/wt/src/wt.ts`.
-- `skills/wt/src/wt.test.ts`.
+- `skills/worktree/SKILL.md`.
+- `skills/worktree/src/command-contract.ts`.
+- `skills/worktree/src/model.ts`.
+- `skills/worktree/src/worktree-engine.ts`.
+- `skills/worktree/src/worktree-discovery.ts`.
+- `skills/worktree/src/worktree.ts`.
+- `skills/worktree/src/worktree.test.ts`.
 - `docs/git/worktree.md`.
-- `docs/plans/2026-06-14-001-feat-wt-worktree-workspace-renderer-plan.md`.
-- `docs/brainstorms/2026-06-14-wt-worktree-workspace-renderer-requirements.md`.
+- `docs/plans/2026-06-14-001-feat-worktree-worktree-workspace-renderer-plan.md`.
+- `docs/brainstorms/2026-06-14-worktree-worktree-workspace-renderer-requirements.md`.
 
 ## Skipped Owner Paths
 
-- `wt.config.json`: absent in this checkout; gitignored local registry. Load it before accepting a registry-source contradiction.
-- `<repo>.code-workspace`: generated output. Present artifacts `claude-code-config.code-workspace` and `skills/wt.code-workspace` were not loaded; source owners are `skills/wt/src/wt-engine.ts`, `skills/wt/src/wt-discovery.ts`, and `wt.config.json`.
+- `worktree.config.json`: absent in this checkout; gitignored local registry. Load it before accepting a registry-source contradiction.
+- `<repo>.code-workspace`: generated output. Present artifacts `claude-code-config.code-workspace` and `skills/worktree.code-workspace` were not loaded; source owners are `skills/worktree/src/worktree-engine.ts`, `skills/worktree/src/worktree-discovery.ts`, and `worktree.config.json`.
 - `skills/skill-self-audit-loop/references/loop-proof-methods.md`: no loop helper or shape promotion being changed or proven.
-- `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md`: research anchor for loop design; not needed for creating the `wt` loop file.
+- `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md`: research anchor for loop design; not needed for creating the `worktree` loop file.
 - `skills/create-cli/references/cli-guidelines.md`: no CLI surface change in this setup pass.
 - `skills/create-cli/references/agent-native-cli-design.md`: no CLI surface change in this setup pass.
 - `skills/create-cli/references/cli-command-facade.md`: no CLI surface change in this setup pass.

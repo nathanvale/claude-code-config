@@ -9,7 +9,7 @@ type: requirements
 
 ## Summary
 
-Add a durable **Command Entrypoint Integration Test** suite for `wt` and
+Add a durable **Command Entrypoint Integration Test** suite for `worktree` and
 `agent-worktree`.
 
 The suite proves real command entrypoints across process boundaries:
@@ -30,7 +30,7 @@ as separate processes.
 
 The gap:
 
-- `wt`, `agent-worktree`, and `awt` can drift from package scripts.
+- `worktree`, `agent-worktree`, and `agent-worktree` can drift from package scripts.
 - Source entrypoints can drift from packaged command behavior.
 - Help, discovery, parser acceptance, and runtime JSON can drift independently.
 - Lifecycle commands can pass imported tests while failing in real temp repos.
@@ -68,8 +68,8 @@ Root script owner:
 
 Contract owners:
 
-- `skills/wt/src/command-contract.ts`
-- `skills/wt/src/wt.ts`
+- `skills/worktree/src/command-contract.ts`
+- `skills/worktree/src/worktree.ts`
 - `runtime/agent-worktree/src/cli.ts`
 - `runtime/agent-worktree/src/index.ts`
 
@@ -105,15 +105,15 @@ Durable vocabulary owner:
 
 ### Entrypoint Coverage
 
-- Cover `wt` package script.
-- Cover `wt` source entry.
+- Cover `worktree` package script.
+- Cover `worktree` source entry.
 - Cover `agent-worktree` package script.
 - Cover `agent-worktree` source entry.
-- Cover `awt` alias script.
+- Cover canonical `agent-worktree` command script.
 - Cover workspace-filter version probes for:
-  - `wt`
+  - `worktree`
   - `agent-worktree`
-  - `awt`
+  - `agent-worktree`
 
 Source-entry probes are intentionally small:
 
@@ -133,7 +133,7 @@ entries.
 
 Required command id surfaces:
 
-- `wt`: `sync`, `focus`, `color`, `open`, `new`, `rm`, `clean`, `commands`
+- `worktree`: `sync`, `focus`, `color`, `open`, `new`, `rm`, `clean`, `commands`
 - `agent-worktree`: `doctor`, `list`, `create`, `status`, `check`, `delete`,
   `clean`, `recover`, `refresh`, `inspect`, `handoff`, `commands`
 
@@ -147,7 +147,7 @@ Required command id surfaces:
 
 Expected usage assertion shape:
 
-- `Usage: wt <command>`
+- `Usage: worktree <command>`
 - `Usage: agent-worktree <command>`
 
 ### Runtime JSON Coverage
@@ -174,25 +174,25 @@ Expected usage assertion shape:
 - Exercise real `git worktree remove`.
 - Do not mutate the repo under test outside temp directories.
 
-### `wt` Required Behavior
+### `worktree` Required Behavior
 
 Preserve the proven package-script matrix:
 
-- `wt --version`
-- `wt` top-level help
-- `wt commands --json`
+- `worktree --version`
+- `worktree` top-level help
+- `worktree commands --json`
 - invalid command failure
-- `wt sync`
-- `wt focus`
-- `wt color`
-- `wt clean`
-- `wt new`
-- `wt rm`
-- `wt open --json`
+- `worktree sync`
+- `worktree focus`
+- `worktree color`
+- `worktree clean`
+- `worktree new`
+- `worktree rm`
+- `worktree open --json`
 
-`wt open` coverage is list mode only.
+`worktree open` coverage is list mode only.
 
-Do not run `wt open <name>` in this suite because GUI launch is outside the
+Do not run `worktree open <name>` in this suite because GUI launch is outside the
 integration boundary.
 
 ### `agent-worktree` Required Behavior
@@ -200,11 +200,11 @@ integration boundary.
 Preserve the proven package-script matrix:
 
 - `agent-worktree --version`
-- `awt --version`
+- `agent-worktree --version`
 - `agent-worktree` top-level help
-- `awt` top-level help
+- `agent-worktree` top-level help
 - `agent-worktree commands --json`
-- `awt commands --json`
+- `agent-worktree commands --json`
 - invalid command failure
 - `agent-worktree doctor`
 - `agent-worktree list`
@@ -265,13 +265,13 @@ Do not add duplicate assertions for confidence theater.
 ## Acceptance Criteria
 
 - `bun run command-entrypoint:integration` passes from the repo root.
-- The suite runs `wt`, `agent-worktree`, and `awt` through process entrypoints.
+- The suite runs `worktree`, `agent-worktree`, and `agent-worktree` through process entrypoints.
 - The suite covers source-entry `--version` and top-level help.
 - The suite covers exact command ids for both CLIs.
 - The suite covers per-command help usage lines.
 - The suite covers stable JSON behavior for lifecycle commands.
 - The suite uses real temp git repositories for lifecycle flows.
-- The suite proves `wt new` and `wt rm` through real worktree operations.
+- The suite proves `worktree new` and `worktree rm` through real worktree operations.
 - The suite proves `agent-worktree create`, `check`, `refresh`, `delete`,
   `inspect`, `handoff`, and `clean` through process calls.
 - The suite proves protected-branch failure refs are inspectable and recoverable.
@@ -285,7 +285,7 @@ Do not add duplicate assertions for confidence theater.
 
 - Full source-entry command matrix.
 - Full branch deletion execution.
-- GUI launch coverage for `wt open <name>`.
+- GUI launch coverage for `worktree open <name>`.
 - Full JSON snapshots.
 - Full help snapshots.
 - Replacing package-local unit or contract tests.

@@ -19,7 +19,6 @@ import {
 
 import { agentWorktreeContracts } from "../src/command-contract.ts";
 import {
-	AGENT_WORKTREE_CLI_ALIAS,
 	AGENT_WORKTREE_CLI_NAME,
 	AGENT_WORKTREE_CONTRACT_ID,
 } from "../src/model.ts";
@@ -30,7 +29,7 @@ const TEST_TIMEOUT_MS = 30_000;
 const KILL_SIGNAL = "SIGKILL";
 
 function runPackageScript(
-	script: typeof AGENT_WORKTREE_CLI_NAME | typeof AGENT_WORKTREE_CLI_ALIAS,
+	script: typeof AGENT_WORKTREE_CLI_NAME,
 	args: readonly string[],
 	label: string,
 ): Promise<CliProcessResult> {
@@ -48,13 +47,6 @@ function runAgentWorktreePackage(
 	label: string,
 ): Promise<CliProcessResult> {
 	return runPackageScript(AGENT_WORKTREE_CLI_NAME, args, label);
-}
-
-function runAwtPackage(
-	args: readonly string[],
-	label: string,
-): Promise<CliProcessResult> {
-	return runPackageScript(AGENT_WORKTREE_CLI_ALIAS, args, label);
 }
 
 function envelopeData(
@@ -336,47 +328,4 @@ describe("agent-worktree package entrypoint integration", () => {
 		TEST_TIMEOUT_MS,
 	);
 
-	test(
-		"awt alias matches version, help, and commands discovery",
-		async () => {
-			const [
-				canonicalVersion,
-				aliasVersion,
-				canonicalHelp,
-				aliasHelp,
-				canonicalCommands,
-				aliasCommands,
-			] = await Promise.all([
-				runAgentWorktreePackage(["--version"], "agent-worktree --version"),
-				runAwtPackage(["--version"], "awt --version"),
-				runAgentWorktreePackage(["--help"], "agent-worktree --help"),
-				runAwtPackage(["--help"], "awt --help"),
-				runAgentWorktreePackage(
-					["commands", "--json"],
-					"agent-worktree commands --json",
-				),
-				runAwtPackage(["commands", "--json"], "awt commands --json"),
-			]);
-
-			expect(aliasVersion.exitCode, describeCliProcessRun(aliasVersion)).toBe(0);
-			expect(aliasVersion.stdout, describeCliProcessRun(aliasVersion)).toBe(
-				canonicalVersion.stdout,
-			);
-
-			expect(aliasHelp.exitCode, describeCliProcessRun(aliasHelp)).toBe(0);
-			expect(aliasHelp.stdout, describeCliProcessRun(aliasHelp)).toContain(
-				`Usage: ${agentWorktreeContracts.doctor.usage[0]}`,
-			);
-			expect(aliasHelp.stdout, describeCliProcessRun(aliasHelp)).toBe(
-				canonicalHelp.stdout,
-			);
-
-			const canonicalData = expectOkEnvelope(canonicalCommands);
-			const aliasData = expectOkEnvelope(aliasCommands);
-			expect(aliasData.commands, describeCliProcessRun(aliasCommands)).toEqual(
-				canonicalData.commands,
-			);
-		},
-		TEST_TIMEOUT_MS,
-	);
 });

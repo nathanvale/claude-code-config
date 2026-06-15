@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Report active Claude/Codex LLM routing for the current repo.
+# Report active Claude/Codex account switching state for the current repo.
 # Reads env resolved through direnv; never prints secret values (shape only).
 set -uo pipefail
 

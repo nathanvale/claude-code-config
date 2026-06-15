@@ -9,7 +9,7 @@ import { createFileStore, type AgentWorktreeStore } from "../src/store.ts";
 
 describe("agent-worktree inspect", () => {
 	test("fresh process inspects run, failure, worktree refs, event trail, and handoff snapshot", async () => {
-		const storeRoot = await mkdtemp(join(tmpdir(), "awt-inspect-"));
+		const storeRoot = await mkdtemp(join(tmpdir(), "agent-worktree-inspect-"));
 		await writeInspectFixture(createFileStore(storeRoot));
 
 		const inspected = await inspectFromFreshProcess(storeRoot);
@@ -72,7 +72,7 @@ describe("agent-worktree inspect", () => {
 	});
 
 	test("handoff against a missing store root remains read-only", async () => {
-		const tempRoot = await mkdtemp(join(tmpdir(), "awt-handoff-missing-"));
+		const tempRoot = await mkdtemp(join(tmpdir(), "agent-worktree-handoff-missing-"));
 		const storeRoot = join(tempRoot, ".agent-worktree");
 
 		const snapshot = await buildHandoffSnapshot(storeRoot);
@@ -171,8 +171,8 @@ async function inspectFromFreshProcess(
 		import { join } from "node:path";
 		import { buildHandoffSnapshot, inspectRefFromRoot } from "./src/inspect.ts";
 
-		const storeRoot = process.env.AWT_STORE_ROOT;
-		if (!storeRoot) throw new Error("missing AWT_STORE_ROOT");
+		const storeRoot = process.env.AGENT_WORKTREE_STORE_ROOT;
+		if (!storeRoot) throw new Error("missing AGENT_WORKTREE_STORE_ROOT");
 		const eventsText = await readFile(join(storeRoot, "runs", "run-1.jsonl"), "utf8");
 		const result = {
 			failure: await inspectRefFromRoot(storeRoot, "failure:run-1/delete_branch"),
@@ -185,7 +185,7 @@ async function inspectFromFreshProcess(
 	`;
 	const proc = Bun.spawnSync(["bun", "-e", script], {
 		cwd: dirname(import.meta.dir),
-		env: { ...process.env, AWT_STORE_ROOT: storeRoot },
+		env: { ...process.env, AGENT_WORKTREE_STORE_ROOT: storeRoot },
 		stdout: "pipe",
 		stderr: "pipe",
 	});

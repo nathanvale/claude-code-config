@@ -1,11 +1,11 @@
 {
-	"name": "wt-scripts",
+	"name": "worktree-scripts",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Bun package for the wt skill. Renders per-repo VS Code workspaces from a branch-keyed registry and calls the shared agent-worktree runtime through a facade-backed agent-native CLI.",
+	"description": "Bun package for the WorkTree skill. Renders per-repo VS Code workspaces from a branch-keyed registry and calls the shared agent-worktree runtime through a facade-backed agent-native CLI.",
 	"scripts": {
-		"wt": "bun run src/wt.ts",
+		"worktree": "bun run src/worktree.ts",
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

@@ -18,7 +18,7 @@ The pattern starts with planning-stage station sets, package-owned branch catalo
 
 The repo already has strong pieces of CLI confidence, but they stop at different boundaries.
 
-`scripts/command-entrypoint.integration.test.ts` proves real `wt`, `agent-worktree`, and `awt` entrypoints through process boundaries. `skills/skill-feedback/src/skill-feedback.test.ts` repeats process capture, JSON parsing, and failure annotation patterns. `skills/cli-execution-auditor/src/audit-engine.ts` already detects facade-backed CLIs, canonicalizes invocations, runs static checks, runs subprocess surface checks, and emits deterministic findings.
+`scripts/command-entrypoint.integration.test.ts` proves real `worktree` and `agent-worktree` entrypoints through process boundaries. `skills/skill-feedback/src/skill-feedback.test.ts` repeats process capture, JSON parsing, and failure annotation patterns. `skills/cli-execution-auditor/src/audit-engine.ts` already detects facade-backed CLIs, canonicalizes invocations, runs static checks, runs subprocess surface checks, and emits deterministic findings.
 
 The missing object is a package-owned branch oracle. Command contracts say what commands and flags exist; tests prove selected behavior; the auditor checks lane-level execution rules. None of those surfaces say which package-owned success, failure, diagnostic, observability, continuation, and repair branches are meant to exist.
 
@@ -32,7 +32,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 - **Package catalogs own branch meaning:** Shared runtime code can validate generic station shape, but package vocabularies such as `protected_branch`, `invalid_closeout_receipt`, and `read_target_resolution_failed` stay with the package that emits them.
 - **The auditor reconciles, it does not own intent:** `cli-execution-auditor` is the deterministic station-map and findings owner. It compares declared stations, discovery, and evidence; it does not define package semantics.
 - **Shared process helpers are earned now:** `scripts/command-entrypoint.integration.test.ts` and `skills/skill-feedback/src/skill-feedback.test.ts` already repeat enough subprocess mechanics to justify extraction into `@side-quest/cli-command-facade/testing`.
-- **V1 pilots on `skill-feedback`:** `skill-feedback` has write, stdin, read, health, review, retention, and failure branches without the full git-worktree setup complexity of `wt` and `agent-worktree`.
+- **V1 pilots on `skill-feedback`:** `skill-feedback` has write, stdin, read, health, review, retention, and failure branches without the full git-worktree setup complexity of `worktree` and `agent-worktree`.
 - **Gates are earned by real catches:** Station-map checks stay opt-in until the pattern catches distinct real misses across multiple CLIs. Mandatory gates before proof would create ceremony people route around.
 
 ---
@@ -107,7 +107,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 
 **Future Requirements**
 
-- R34. Full `wt` and `agent-worktree` station catalogs are added after the `skill-feedback` pilot stabilizes.
+- R34. Full `worktree` and `agent-worktree` station catalogs are added after the `skill-feedback` pilot stabilizes.
 - R35. Runtime station evidence can be recorded as stable receipts after in-memory evidence proves useful.
 - R36. Trace-driven branch discovery can suggest undeclared branches, but declared stations remain the source of truth.
 - R37. Property-based argv and input probing can explore unknown input spaces around declared station contracts.
@@ -206,14 +206,14 @@ The product outcome is not "all possible code branches are tested." The outcome 
 - Shared CLI process-boundary test helpers.
 - `skill-feedback` planning-stage station seed and package-owned branch catalog.
 - `skill-feedback` package-local integration tests derived from the catalog.
-- Owner-local integration tests for `wt` and `agent-worktree`.
+- Owner-local integration tests for `worktree` and `agent-worktree`.
 - Generic station-map model and projection helpers.
 - `cli-execution-auditor` station-map JSON and station findings.
 - Documentation that makes the pattern reusable for future facade-backed CLIs.
 
 ### Deferred For Later
 
-- Full station catalogs for `wt` and `agent-worktree`.
+- Full station catalogs for `worktree` and `agent-worktree`.
 - Durable station receipt files written by tests.
 - Trace-driven suggestions for undeclared branches.
 - Property-based argv and input probing.
@@ -224,7 +224,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 - Persisted per-CLI lane markers.
 - Hand-rolled CLI station-map support beyond static best-effort checks.
 - Safe auto-fixes for stable station findings.
-- `wt open <name>` GUI-launch integration coverage.
+- `worktree open <name>` GUI-launch integration coverage.
 - Post-mutation partial failure fault injection for `agent-worktree`.
 
 ### Outside This Product Identity

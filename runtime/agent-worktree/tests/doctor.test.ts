@@ -131,7 +131,7 @@ branch refs/heads/feat/x
 	});
 
 	test("warns when durable records exceed retention threshold", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-retention-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-retention-"));
 		const store = createFileStore(join(root, ".agent-worktree"));
 		await store.writeRun({
 			runId: "old-run",

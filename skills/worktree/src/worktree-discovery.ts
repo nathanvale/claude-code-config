@@ -3,8 +3,11 @@ import {
 	defaultGitRunner,
 	discoverRepo,
 	type GitRunner,
+	matchesWorktreePathPattern,
 } from "../../../runtime/agent-worktree/src/index.ts";
 import type { Registry, Worktree } from "./model.ts";
+
+export const WORKTREE_REGISTRY_FILE = "worktree.config.json";
 
 /**
  * Result of running a subprocess: captured stdout plus success flag.
@@ -46,13 +49,13 @@ export type Runner = (args: readonly string[], options?: RunOptions) => Promise<
  * Carries a package-owned diagnostic code so the dispatcher maps it to the
  * right envelope without string matching.
  */
-export class WtDiscoveryError extends Error {
+export class WorkTreeDiscoveryError extends Error {
 	constructor(
 		readonly code: "worktree_list_failed" | "registry_unreadable",
 		message: string,
 	) {
 		super(message);
-		this.name = "WtDiscoveryError";
+		this.name = "WorkTreeDiscoveryError";
 	}
 }
 
@@ -67,10 +70,11 @@ const defaultRunner: Runner = (args, options = {}) =>
 	defaultGitRunner(args, { cwd: options.cwd ?? process.cwd() });
 
 /**
- * True when a worktree entry is a real, named worktree (not a throwaway temp).
+ * True when a worktree entry is a real, named branch worktree.
  *
- * Detached-HEAD entries and `fallow-audit-*` cache worktrees pollute
- * `git worktree list` and must never reach the renderer.
+ * Detached-HEAD entries pollute `git worktree list` and must never reach the
+ * renderer. Tool-owned cache worktrees are filtered by registry-configured path
+ * globs instead of hardcoded names.
  *
  * @param entry - One raw worktree entry
  * @returns True to keep, false to drop
@@ -84,21 +88,19 @@ function isRealWorktree(entry: { branch?: string; path: string }): entry is {
 	if (!entry.branch || entry.branch === "(detached)" || entry.branch.trim() === "") {
 		return false;
 	}
-	if (entry.path.includes("/fallow-audit-")) {
-		return false;
-	}
 	return true;
 }
 
 /**
  * List real worktrees for a repo via the shared `agent-worktree` runtime.
  *
- * Filters out detached-HEAD and `fallow-audit-*` temp entries so only named
- * work reaches the engine.
+ * Filters out detached-HEAD entries and caller-configured ignore path globs so
+ * only named daily work reaches the engine.
  *
  * @param run - Subprocess runner (defaults to a real `bunx` spawn)
+ * @param ignoredWorktreePathPatterns - Worktree path globs hidden from the view
  * @returns Real worktrees in upstream order
- * @throws {WtDiscoveryError} code `worktree_list_failed` when the CLI fails or
+ * @throws {WorkTreeDiscoveryError} code `worktree_list_failed` when the CLI fails or
  *   emits unparseable output
  *
  * @example
@@ -106,16 +108,23 @@ function isRealWorktree(entry: { branch?: string; path: string }): entry is {
  * const worktrees = await listWorktrees()
  * ```
  */
-export async function listWorktrees(repoRoot: string, run: Runner = defaultRunner): Promise<Worktree[]> {
+export async function listWorktrees(
+	repoRoot: string,
+	run: Runner = defaultRunner,
+	ignoredWorktreePathPatterns: readonly string[] = [],
+): Promise<Worktree[]> {
 	const discovery = await discoverRepo({ cwd: repoRoot, run: adaptRunner(run) });
 	if (!discovery.gitRoot || discovery.issues.some((issue) => issue.code === "worktree_list_failed")) {
-		throw new WtDiscoveryError(
+		throw new WorkTreeDiscoveryError(
 			"worktree_list_failed",
 			"agent-worktree discovery could not read git worktrees.",
 		);
 	}
 	return discovery.worktrees.flatMap((entry) =>
-		isRealWorktree(entry)
+		isRealWorktree(entry) &&
+		!ignoredWorktreePathPatterns.some((pattern) =>
+			matchesWorktreePathPattern(entry.path, pattern),
+		)
 			? [{ path: entry.path, branch: entry.branch, isMain: entry.isMain }]
 			: [],
 	);
@@ -145,13 +154,13 @@ export function repoOwnerRootFor(worktrees: readonly Worktree[], fallbackRoot: s
 /**
  * Load the branch-keyed registry for a repo, tolerating absence.
  *
- * An absent `wt.config.json` is a normal first-run state, not an error: it
+ * An absent `worktree.config.json` is a normal first-run state, not an error: it
  * yields an empty registry so a bare repo still renders. Malformed JSON is an
  * error the user must fix.
  *
  * @param repoRoot - Absolute path to the repo root
  * @returns The parsed registry, or an empty one when the file is absent
- * @throws {WtDiscoveryError} code `registry_unreadable` when the file exists
+ * @throws {WorkTreeDiscoveryError} code `registry_unreadable` when the file exists
  *   but is not valid JSON
  *
  * @example
@@ -160,7 +169,7 @@ export function repoOwnerRootFor(worktrees: readonly Worktree[], fallbackRoot: s
  * ```
  */
 export async function loadRegistry(repoRoot: string): Promise<Registry> {
-	const file = Bun.file(join(repoRoot, "wt.config.json"));
+	const file = Bun.file(join(repoRoot, WORKTREE_REGISTRY_FILE));
 	if (!(await file.exists())) {
 		return { branches: {} };
 	}
@@ -175,9 +184,9 @@ export function parseRegistryText(existing: string | null): Registry {
 		const parsed = JSON.parse(existing) as Registry;
 		return { branches: parsed.branches ?? {}, defaults: parsed.defaults };
 	} catch {
-		throw new WtDiscoveryError(
+		throw new WorkTreeDiscoveryError(
 			"registry_unreadable",
-			"wt.config.json exists but is not valid JSON",
+			"worktree.config.json exists but is not valid JSON",
 		);
 	}
 }

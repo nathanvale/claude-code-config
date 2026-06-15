@@ -19,7 +19,7 @@ This plan ships the boring core first and pilots Branch Stations on `skill-feedb
 
 The repo now has two converging pressures.
 
-First, `scripts/command-entrypoint.integration.test.ts` proved `wt`, `agent-worktree`, and `awt` through real process entrypoints, but its helpers were deliberately kept private until a second consumer existed. `skills/skill-feedback/src/skill-feedback.test.ts` is now that second consumer: it repeats subprocess capture, JSON envelope parsing, failure annotation, and temp-root setup.
+First, `scripts/command-entrypoint.integration.test.ts` proved `worktree`, `agent-worktree`, and `agent-worktree` through real process entrypoints, but its helpers were deliberately kept private until a second consumer existed. `skills/skill-feedback/src/skill-feedback.test.ts` is now that second consumer: it repeats subprocess capture, JSON envelope parsing, failure annotation, and temp-root setup.
 
 Second, `skills/cli-execution-auditor` already provides a deterministic facade-lane audit spine, but it stops at advertised command and flag exercise. It does not answer the next question: which package-owned success, error, observability, and repair branches are meant to exist, and which integration tests prove them?
 
@@ -39,7 +39,7 @@ The staff-engineer call is to add a declared branch oracle. The package owns Bra
 **Owner-Local Integration Tests**
 
 - R5. Refactor the root Command Entrypoint Integration Test to consume shared helpers without changing its sentinel coverage.
-- R6. Split owner-specific process-boundary behavior into package-local integration tests for `wt` and `agent-worktree`.
+- R6. Split owner-specific process-boundary behavior into package-local integration tests for `worktree` and `agent-worktree`.
 - R7. Add `skill-feedback` process-boundary integration tests through the public runner, including stdin-fed closeout behavior.
 - R8. Keep the root command-entrypoint suite as orchestration and cross-entrypoint parity, not as the long-term owner of every package behavior row.
 
@@ -80,7 +80,7 @@ The staff-engineer call is to add a declared branch oracle. The package owns Bra
 - KTD2. **Branch meaning stays package-owned:** The facade may own generic Branch Station shapes and validators, but `protected_branch`, `low_coverage`, `read_target_resolution_failed`, and recovery meaning belong to the package that emits them.
 - KTD3. **Planning declares the first Branch Station set:** For new or expanded facade-backed CLIs, the plan names the initial Branch Station ids per command before code exists. The first implementation step turns that planning set into a package-owned Branch Station Catalog beside the command contract, then runner code and integration rows work toward it.
 - KTD4. **Station Map completeness is Declared Branch Coverage:** The plan must not claim "all possible branches." It proves that every required Branch Station the package declares is covered, skipped with a reason, declared unreachable with a reason, or reported as missing or drifted.
-- KTD5. **Pilot on `skill-feedback`, not all CLIs at once:** `skill-feedback` exercises the most varied branch shapes without adding git-worktree setup complexity. `wt` and `agent-worktree` package-local integration split and full Branch Station Catalogs move to follow-up.
+- KTD5. **Pilot on `skill-feedback`, not all CLIs at once:** `skill-feedback` exercises the most varied branch shapes without adding git-worktree setup complexity. `worktree` and `agent-worktree` package-local integration split and full Branch Station Catalogs move to follow-up.
 - KTD6. **Generate data, not source, in v1:** Station Maps and matrix rows can be derived as data. Test files stay maintainer-owned until the catalog shape stabilizes.
 - KTD7. **Extend the existing auditor, do not create a sibling tool:** `cli-execution-auditor` already owns lane detection, deterministic findings, canonical sorting, and ledger writing. A separate Station Map tool would split the deterministic spine.
 - KTD8. **No mandatory gate until repeated real catches:** The Station Map path remains opt-in until it catches distinct real coverage or branch drift across multiple CLIs.
@@ -100,7 +100,7 @@ These decisions came from the `grill-with-docs` review on 2026-06-15 and update 
 - Add Station Map helpers to the facade production root. Keep process-boundary test helpers under `@side-quest/cli-command-facade/testing`.
 - Make shared process helpers async, stdin-capable, timeout-as-data, and package-agnostic. Packages keep command builders, fixtures, repo setup, labels, and assertions local.
 - Implement one vertical slice first: shared process helpers, Station Map model, `skill-feedback` Branch Station Catalog, `skill-feedback` integration rows, auditor Station Map command, and docs.
-- Defer broad `wt` and `agent-worktree` package-local integration migration until after the `skill-feedback` pilot proves the model; keep the root Command Entrypoint Integration Test refactor helper-only.
+- Defer broad `worktree` and `agent-worktree` package-local integration migration until after the `skill-feedback` pilot proves the model; keep the root Command Entrypoint Integration Test refactor helper-only.
 - Add `cli-execution-auditor station-map <target> [--json] [--ledger <path>]` as the Station Map surface. Do not overload `audit --only`.
 - Treat a target with no Branch Station Catalog as informational in v1, not a finding.
 - Represent auditor findings as a discriminated union: lane clause findings and station findings. Sign station findings by `station_id + command + finding_kind`, not argv or local paths.
@@ -117,7 +117,7 @@ These decisions came from the `grill-with-docs` review on 2026-06-15 and update 
 flowchart TB
   Facade["cli-command-facade<br/>generic contracts + testing helpers"] --> Process["process testing helpers"]
   Facade --> StationShape["station model + projection helpers"]
-  Packages["CLI packages<br/>wt, agent-worktree, skill-feedback"] --> Catalogs["package-owned Branch Station Catalogs"]
+  Packages["CLI packages<br/>worktree, agent-worktree, skill-feedback"] --> Catalogs["package-owned Branch Station Catalogs"]
   Packages --> LocalTests["owner-local integration tests"]
   Process --> LocalTests
   StationShape --> Catalogs
@@ -201,7 +201,7 @@ This plan implements the active first-iteration requirements from `docs/brainsto
 
 | Deferred origin requirement | Plan handling |
 | --- | --- |
-| `R34` Full `wt` and `agent-worktree` Branch Station Catalogs | Deferred to follow-up after the `skill-feedback` pilot stabilizes. |
+| `R34` Full `worktree` and `agent-worktree` Branch Station Catalogs | Deferred to follow-up after the `skill-feedback` pilot stabilizes. |
 | `R35` Runtime station evidence receipts | Deferred beyond the v1 station evidence manifest. |
 | `R36` Trace-driven undeclared-branch suggestions | Deferred until declared Branch Stations prove useful. |
 | `R37` Property-based argv and input probing | Deferred until station contracts stabilize. |
@@ -233,9 +233,9 @@ skills/skill-feedback/
     skill-feedback.integration.test.ts
     skill-feedback.test.ts
 
-skills/wt/
+skills/worktree/
   src/
-    wt.integration.test.ts
+    worktree.integration.test.ts
 
 runtime/agent-worktree/
   tests/
@@ -310,7 +310,7 @@ scripts/
 
 **Test scenarios:**
 
-- Root suite still derives `wt` and `agent-worktree` command ids from live contracts.
+- Root suite still derives `worktree` and `agent-worktree` command ids from live contracts.
 - Root suite still proves package-cwd JSON behavior for current sentinel flows.
 - Root suite still proves workspace-filter version probes only.
 - Root suite still proves source-entry compatibility probes.
@@ -319,7 +319,7 @@ scripts/
 
 **Verification:** `command-entrypoint:integration` preserves current behavior and no longer defines package-agnostic process helper implementations locally.
 
-### U3. Optional Hardening: Split Owner-Local `wt` And `agent-worktree` Integration Tests
+### U3. Optional Hardening: Split Owner-Local `worktree` And `agent-worktree` Integration Tests
 
 **Goal:** Move package-specific process-boundary behavior toward the packages that own the CLI semantics after the `skill-feedback` pilot proves the shared model.
 
@@ -329,18 +329,18 @@ scripts/
 
 **Dependencies:** U1, U2, U4, U5, U6, U7.
 
-**Files:** `skills/wt/src/wt.integration.test.ts`, `runtime/agent-worktree/tests/entrypoint.integration.test.ts`, `scripts/command-entrypoint.integration.test.ts`, `skills/wt/package.json`, `runtime/agent-worktree/package.json`.
+**Files:** `skills/worktree/src/worktree.integration.test.ts`, `runtime/agent-worktree/tests/entrypoint.integration.test.ts`, `scripts/command-entrypoint.integration.test.ts`, `skills/worktree/package.json`, `runtime/agent-worktree/package.json`.
 
 **Approach:** Treat this as follow-up hardening, not part of the first vertical slice. Add package-local integration tests that use the shared process helpers and local fixture setup only after `skill-feedback` has proven the Branch Station model, evidence manifest, and auditor Station Map flow. Keep the root suite as a cross-entrypoint sentinel and drift detector. Move or duplicate only the behavior rows that belong to a package owner; avoid broad root-suite churn until both package-local suites are green.
 
-**Patterns to follow:** `skills/wt/src/wt.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, and the current root integration suite.
+**Patterns to follow:** `skills/worktree/src/worktree.test.ts`, `runtime/agent-worktree/tests/cli-surface.test.ts`, and the current root integration suite.
 
 **Test scenarios:**
 
-- `wt` package-local integration proves `sync`, `new`, `rm`, `focus`, `color`, and `clean` through the package script where deterministic temp-repo setup exists.
-- `wt` package-local integration keeps `open <name>` GUI launch out of scope and covers only safe list/JSON behavior.
+- `worktree` package-local integration proves `sync`, `new`, `rm`, `focus`, `color`, and `clean` through the package script where deterministic temp-repo setup exists.
+- `worktree` package-local integration keeps `open <name>` GUI launch out of scope and covers only safe list/JSON behavior.
 - `agent-worktree` package-local integration proves create, inspect/check, delete dry-run, protected-branch failure ref, and recover dry-run through the package script.
-- `agent-worktree` package-local integration proves `awt` alias parity for version, help, and commands JSON.
+- `agent-worktree` package-local integration proves canonical `agent-worktree` command parity for version, help, and commands JSON.
 - Root command-entrypoint integration remains green after package-local split.
 - Package test scripts include the new integration tests where their package test command already runs matching test globs; otherwise the plan updates package scripts intentionally.
 
@@ -524,8 +524,8 @@ scripts/
 ### Deferred To Follow-Up Work
 
 - Origin future requirements `R34`-`R43`.
-- Owner-local integration split for `wt` and `agent-worktree`.
-- Full Branch Station Catalogs for `wt` and `agent-worktree`.
+- Owner-local integration split for `worktree` and `agent-worktree`.
+- Full Branch Station Catalogs for `worktree` and `agent-worktree`.
 - Trace-driven branch discovery from runtime instrumentation.
 - Property-based argv and input probing around Branch Station contracts.
 - Branch coverage instrumentation with c8/Istanbul as a secondary completeness signal.
@@ -536,7 +536,7 @@ scripts/
 - Persisted per-CLI lane markers for non-facade and hand-rolled CLI lanes.
 - Hand-rolled CLI Station Map support beyond static best-effort checks.
 - Auto-fixing safe station findings.
-- `wt open <name>` GUI-launch integration coverage.
+- `worktree open <name>` GUI-launch integration coverage.
 - Post-mutation partial failure fault-injection for `agent-worktree`.
 
 ### Out Of Scope

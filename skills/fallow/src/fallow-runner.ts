@@ -82,6 +82,7 @@ type ParsedCommand = {
 	maxOutputBytes: number;
 	outputMode: OutputMode;
 	baseRef?: string;
+	noCache: boolean;
 	applyAuthorized: boolean;
 	file?: string;
 	exportName?: string;
@@ -1805,6 +1806,7 @@ function parseCommandOptions(
 		includeRawOutput: false,
 		maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
 		outputMode: "json",
+		noCache: false,
 		applyAuthorized: false,
 	};
 	const allowedFlags = new Set(Object.keys(fallowRunnerContracts[command].flags));
@@ -1848,6 +1850,13 @@ function parseCommandOptions(
 				throw usageError(`${name} does not accept a value`);
 			}
 			parsed.applyAuthorized = true;
+			continue;
+		}
+		if (name === "--no-cache") {
+			if (inlineValue !== undefined) {
+				throw usageError(`${name} does not accept a value`);
+			}
+			parsed.noCache = true;
 			continue;
 		}
 
@@ -1928,6 +1937,9 @@ function fallowArgsFor(parsed: ParsedCommand): string[] {
 	const args = [parsed.command] as string[];
 	if (parsed.command === "audit" && parsed.baseRef) {
 		args.push("--base", parsed.baseRef);
+	}
+	if (parsed.command === "audit" && parsed.noCache) {
+		args.push("--no-cache");
 	}
 	args.push("--format", "json", "--quiet");
 	return args;
@@ -2222,6 +2234,7 @@ function emitUsageError(
 				includeRawOutput: false,
 				maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
 				outputMode: "json",
+				noCache: false,
 				applyAuthorized: false,
 			}
 		: undefined;

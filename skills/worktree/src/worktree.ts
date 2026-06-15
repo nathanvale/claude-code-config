@@ -18,24 +18,25 @@ import {
 	deleteWorktree,
 	type LifecycleResult,
 } from "../../../runtime/agent-worktree/src/index.ts";
-import { type WtDiagnosticCode, wtContracts } from "./command-contract.ts";
+import { type WorkTreeDiagnosticCode, worktreeContracts } from "./command-contract.ts";
 import {
-	WT_COLOR_PALETTE,
-	WT_CONTRACT_ID,
-	WT_SCHEMA_VERSION,
+	WORKTREE_COLOR_PALETTE,
+	WORKTREE_CONTRACT_ID,
+	WORKTREE_SCHEMA_VERSION,
 	type Registry,
-	type WtColor,
+	type WorkTreeColor,
 } from "./model.ts";
-import { isDrift, renderWorkspace, stampHeader } from "./wt-engine.ts";
+import { isDrift, renderWorkspace, stampHeader } from "./worktree-engine.ts";
 import {
 	listWorktrees,
 	repoOwnerRootFor,
 	type Runner,
-	WtDiscoveryError,
+	WorkTreeDiscoveryError,
 	adaptRunner,
 	parseRegistryText,
+	WORKTREE_REGISTRY_FILE,
 	workspacePathFor,
-} from "./wt-discovery.ts";
+} from "./worktree-discovery.ts";
 
 const VERSION = "0.1.0";
 
@@ -45,7 +46,7 @@ const VERSION = "0.1.0";
  * Injected so the dispatcher's handlers run under test without touching real
  * files, spawning processes, or launching VS Code.
  */
-export interface WtRuntime {
+export interface WorkTreeRuntime {
 	/** Repo root the command operates on. */
 	repoRoot: () => string;
 	/** Read a UTF-8 file, or null when it does not exist. */
@@ -77,7 +78,7 @@ export interface WtRuntime {
  * const runtime = createDefaultRuntime({ repoRoot: () => "/code/my-repo" })
  * ```
  */
-export function createDefaultRuntime(overrides: Partial<WtRuntime> = {}): WtRuntime {
+export function createDefaultRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime {
 	return {
 		repoRoot: () => process.cwd(),
 		readTextFile: async (path) => {
@@ -131,12 +132,12 @@ export function createDefaultRuntime(overrides: Partial<WtRuntime> = {}): WtRunt
  * @returns A discriminated result: written, drift-blocked, or a discovery error
  */
 export async function syncWorkspace(
-	runtime: WtRuntime,
+	runtime: WorkTreeRuntime,
 	force: boolean,
 ): Promise<
 	| { kind: "written"; path: string }
 	| { kind: "drift_blocked"; path: string }
-	| { kind: "error"; code: WtDiagnosticCode; message: string }
+	| { kind: "error"; code: WorkTreeDiagnosticCode; message: string }
 > {
 	const repoRoot = runtime.repoRoot();
 	let ownerRoot = repoRoot;
@@ -146,8 +147,14 @@ export async function syncWorkspace(
 		worktrees = await listWorktrees(repoRoot, runtime.run);
 		ownerRoot = repoOwnerRootFor(worktrees, repoRoot);
 		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+		// First pass finds the owner root; second pass applies registry ignored-worktree globs.
+		worktrees = await listWorktrees(
+			repoRoot,
+			runtime.run,
+			registry.defaults?.ignoredWorktrees ?? [],
+		);
 	} catch (error) {
-		if (error instanceof WtDiscoveryError) {
+		if (error instanceof WorkTreeDiscoveryError) {
 			return { kind: "error", code: error.code, message: error.message };
 		}
 		throw error;
@@ -220,7 +227,7 @@ export async function syncWorkspace(
  * Persist a single branch preference into the registry, then re-render.
  *
  * Parse and write failures are caught and returned as structured `error`
- * results so a malformed `wt.config.json` or an I/O failure surfaces as a
+ * results so a malformed `worktree.config.json` or an I/O failure surfaces as a
  * facade envelope instead of an uncaught exception escaping `runCommand`.
  *
  * @param runtime - Injected I/O adapter
@@ -231,7 +238,7 @@ export async function syncWorkspace(
  *   the registry is unreadable or the write fails
  */
 export async function setPrefAndSync(
-	runtime: WtRuntime,
+	runtime: WorkTreeRuntime,
 	branch: string,
 	mutate: (prefs: Record<string, unknown>) => void,
 	force: boolean,
@@ -242,12 +249,12 @@ export async function setPrefAndSync(
 		const worktrees = await listWorktrees(repoRoot, runtime.run);
 		ownerRoot = repoOwnerRootFor(worktrees, repoRoot);
 	} catch (error) {
-		if (error instanceof WtDiscoveryError) {
+		if (error instanceof WorkTreeDiscoveryError) {
 			return { kind: "error", code: error.code, message: error.message };
 		}
 		throw error;
 	}
-	const registryPath = `${ownerRoot}/wt.config.json`;
+	const registryPath = `${ownerRoot}/${WORKTREE_REGISTRY_FILE}`;
 	const existing = await runtime.readTextFile(registryPath);
 	let registry: Registry;
 	try {
@@ -256,7 +263,7 @@ export async function setPrefAndSync(
 		return {
 			kind: "error",
 			code: "registry_unreadable",
-			message: "wt.config.json is not valid JSON.",
+			message: "worktree.config.json is not valid JSON.",
 		};
 	}
 	const prefs = (registry.branches[branch] ?? {}) as Record<string, unknown>;
@@ -280,8 +287,8 @@ export async function setPrefAndSync(
  * @param value - User-supplied color token
  * @returns The validated color, or null when unknown
  */
-export function validateColor(value: string): WtColor | null {
-	return (WT_COLOR_PALETTE as readonly string[]).includes(value) ? (value as WtColor) : null;
+export function validateColor(value: string): WorkTreeColor | null {
+	return (WORKTREE_COLOR_PALETTE as readonly string[]).includes(value) ? (value as WorkTreeColor) : null;
 }
 
 /**
@@ -295,7 +302,7 @@ export type CommandResult =
 	| { ok: true; data: Record<string, unknown> }
 	| {
 			ok: false;
-			code: WtDiagnosticCode;
+			code: WorkTreeDiagnosticCode;
 			message: string;
 			action: string;
 			exitCode: number;
@@ -313,8 +320,8 @@ export type CommandResult =
  */
 function renderSuccessData(action: string, workspacePath: string): Record<string, unknown> {
 	return {
-		contract_id: WT_CONTRACT_ID,
-		schema_version: WT_SCHEMA_VERSION,
+		contract_id: WORKTREE_CONTRACT_ID,
+		schema_version: WORKTREE_SCHEMA_VERSION,
 		action,
 		workspace_path: workspacePath,
 		changed_state: "written",
@@ -346,7 +353,7 @@ function fromSync(
 			ok: false,
 			code: "drift_blocked",
 			message: "The workspace was edited since the last render; refusing to overwrite.",
-			action: "Review the diff, port real edits into wt.config.json, then rerun with --force.",
+			action: "Review the diff, port real edits into worktree.config.json, then rerun with --force.",
 			exitCode: 3,
 			recoverability: "repair_state",
 		};
@@ -370,7 +377,7 @@ function fromSync(
  * @returns A failing command result
  * @internal
  */
-function usageFailure(code: WtDiagnosticCode, message: string, action: string): CommandResult {
+function usageFailure(code: WorkTreeDiagnosticCode, message: string, action: string): CommandResult {
 	return { ok: false, code, message, action, exitCode: 2, recoverability: "change_input" };
 }
 
@@ -379,8 +386,8 @@ function lifecycleEnvelopeData(
 	lifecycle: LifecycleResult,
 ): Record<string, unknown> {
 	return {
-		contract_id: WT_CONTRACT_ID,
-		schema_version: WT_SCHEMA_VERSION,
+		contract_id: WORKTREE_CONTRACT_ID,
+		schema_version: WORKTREE_SCHEMA_VERSION,
 		action: command,
 		lifecycle_action: lifecycle.action,
 		changed_state: lifecycle.changedState,
@@ -431,7 +438,7 @@ function fromPostLifecycleSyncFailure(
 			message:
 				"The worktree lifecycle completed, but the workspace was edited since the last render.",
 			action:
-				"Review the diff, port real edits into wt.config.json, then rerun render with force.",
+				"Review the diff, port real edits into worktree.config.json, then rerun render with force.",
 			exitCode: 3,
 			recoverability: "repair_state",
 			data,
@@ -448,7 +455,7 @@ function fromPostLifecycleSyncFailure(
 	};
 }
 
-async function stableOwnerRuntime(runtime: WtRuntime): Promise<WtRuntime> {
+async function stableOwnerRuntime(runtime: WorkTreeRuntime): Promise<WorkTreeRuntime> {
 	try {
 		const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
 		return createRepoRuntime(runtime, repoOwnerRootFor(worktrees, runtime.repoRoot()));
@@ -457,8 +464,17 @@ async function stableOwnerRuntime(runtime: WtRuntime): Promise<WtRuntime> {
 	}
 }
 
+async function worktreeViewForRuntime(
+	runtime: WorkTreeRuntime,
+): Promise<{ ignoredWorktrees: readonly string[] }> {
+	const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+	const ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
+	const registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+	return { ignoredWorktrees: registry.defaults?.ignoredWorktrees ?? [] };
+}
+
 /**
- * Parsed wt invocation: the verb plus its positional arguments and flags.
+ * Parsed worktree invocation: the verb plus its positional arguments and flags.
  */
 export interface ParsedInvocation {
 	command: string;
@@ -511,7 +527,7 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			noInput = true;
 			usedFlags.add(arg);
 		} else if (arg === "--json") {
-			// --json selects output mode; wt always emits JSON envelopes.
+			// --json selects output mode; WorkTree always emits JSON envelopes.
 			usedFlags.add(arg);
 		} else if (arg === "--repo") {
 			usedFlags.add(arg);
@@ -529,15 +545,233 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			positionals.push(arg);
 		}
 	}
-	if (command in wtContracts) {
-		const allowed = new Set(Object.keys(wtContracts[command as keyof typeof wtContracts].flags));
+	if (command in worktreeContracts) {
+		const allowed = new Set(Object.keys(worktreeContracts[command as keyof typeof worktreeContracts].flags));
 		for (const flag of usedFlags) {
 			if (!allowed.has(flag)) {
-				return fail(`Flag '${flag}' is not accepted by wt ${command}.`);
+				return fail(`Flag '${flag}' is not accepted by worktree ${command}.`);
 			}
 		}
 	}
 	return { command, positionals, force, forceRender, noInput, repoRoot };
+}
+
+async function runFocusCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [branch, subfolder] = invocation.positionals;
+	if (!branch || !subfolder) {
+		return usageFailure(
+			"usage_error",
+			"focus needs <branch> and <subfolder>.",
+			"Rerun as: worktree focus <branch> <subfolder>.",
+		);
+	}
+	return fromSync(
+		"focus",
+		await setPrefAndSync(runtime, branch, (prefs) => {
+			prefs.focus = subfolder;
+		}, invocation.force),
+	);
+}
+
+async function runColorCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [branch, color] = invocation.positionals;
+	if (!branch || !color) {
+		return usageFailure(
+			"usage_error",
+			"color needs <branch> and <color>.",
+			"Rerun as: worktree color <branch> <color>.",
+		);
+	}
+	const validated = validateColor(color);
+	if (validated === null) {
+		return usageFailure(
+			"unknown_color",
+			`Unknown color '${color}'. Allowed: ${WORKTREE_COLOR_PALETTE.join(", ")}.`,
+			"Rerun with a color from the allowed palette.",
+		);
+	}
+	return fromSync(
+		"color",
+		await setPrefAndSync(runtime, branch, (prefs) => {
+			prefs.color = validated;
+		}, invocation.force),
+	);
+}
+
+async function runLifecycleCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const { command, force } = invocation;
+	if (command === "rm" && !force && (invocation.noInput || !runtime.isInteractive())) {
+		return usageFailure(
+			"usage_error",
+			`${command} needs an explicit force flag in non-interactive runs.`,
+			"Retry with explicit confirmation, or run interactively.",
+		);
+	}
+	const [branch] = invocation.positionals;
+	if (!branch) {
+		return usageFailure(
+			"usage_error",
+			`${command} needs <branch>.`,
+			`Rerun as: worktree ${command} <branch>.`,
+		);
+	}
+	const lifecycleRuntime = await stableOwnerRuntime(runtime);
+	const lifecycle =
+		command === "new"
+			? await createWorktree({
+					cwd: lifecycleRuntime.repoRoot(),
+					run: adaptRunner(lifecycleRuntime.run),
+					branch,
+					dryRun: false,
+					runId: `worktree-${runtime.now()}`,
+				})
+			: await deleteWorktree({
+					cwd: lifecycleRuntime.repoRoot(),
+					run: adaptRunner(lifecycleRuntime.run),
+					branch,
+					dryRun: false,
+					force,
+					deleteBranch: false,
+					runId: `worktree-${runtime.now()}`,
+				});
+	if (lifecycle.changedState !== "complete") {
+		return fromLifecycleFailure(command, lifecycle);
+	}
+	const sync = await syncWorkspace(lifecycleRuntime, Boolean(invocation.forceRender));
+	if (sync.kind !== "written") {
+		return fromPostLifecycleSyncFailure(command, lifecycle, sync);
+	}
+	return { ok: true, data: renderSuccessData(command, sync.path) };
+}
+
+async function runCleanCommand(runtime: WorkTreeRuntime): Promise<CommandResult> {
+	let view: { ignoredWorktrees: readonly string[] };
+	try {
+		view = await worktreeViewForRuntime(runtime);
+	} catch (error) {
+		if (error instanceof WorkTreeDiscoveryError) {
+			return {
+				ok: false,
+				code: error.code,
+				message:
+					error.code === "registry_unreadable"
+						? "worktree.config.json exists but is not valid JSON."
+						: error.message,
+				action:
+					error.code === "registry_unreadable"
+						? "Repair the registry JSON, then retry."
+						: "Inspect git worktree state, then retry.",
+				exitCode: 1,
+				recoverability: "repair_state",
+			};
+		}
+		throw error;
+	}
+	const preview = await cleanPreview({
+		cwd: runtime.repoRoot(),
+		run: adaptRunner(runtime.run),
+		ignoredWorktreePathPatterns: view.ignoredWorktrees,
+	});
+	return {
+		ok: true,
+		data: {
+			contract_id: WORKTREE_CONTRACT_ID,
+			schema_version: WORKTREE_SCHEMA_VERSION,
+			action: "clean_preview",
+			changed_state: "none",
+			preview,
+			next_safe_action: "Review cleanup candidates before pruning.",
+		},
+	};
+}
+
+async function ownerRootForRuntime(runtime: WorkTreeRuntime): Promise<string> {
+	try {
+		const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+		return repoOwnerRootFor(worktrees, runtime.repoRoot());
+	} catch {
+		return runtime.repoRoot();
+	}
+}
+
+async function runOpenCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [name] = invocation.positionals;
+	const ownerRoot = await ownerRootForRuntime(runtime);
+	let registry: Registry;
+	try {
+		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+	} catch {
+		return {
+			ok: false,
+			code: "registry_unreadable",
+			message: "worktree.config.json exists but is not valid JSON.",
+			action: "Repair the registry JSON, then retry.",
+			exitCode: 1,
+			recoverability: "repair_state",
+		};
+	}
+	if (!name) {
+		return {
+			ok: true,
+			data: {
+				contract_id: WORKTREE_CONTRACT_ID,
+				schema_version: WORKTREE_SCHEMA_VERSION,
+				action: "list_workspaces",
+				workspace: workspacePathFor(ownerRoot),
+			},
+		};
+	}
+	const workspacePath = workspaceTargetFor(ownerRoot, name);
+	const launched = await runtime.launchCode(workspacePath, registry.defaults?.codeBin);
+	if (!launched) {
+		return usageFailure(
+			"code_not_found",
+			"Could not launch VS Code; `code` was not found on PATH.",
+			"Install the `code` shell command, or set defaults.codeBin in worktree.config.json.",
+		);
+	}
+	return {
+		ok: true,
+		data: {
+			contract_id: WORKTREE_CONTRACT_ID,
+			schema_version: WORKTREE_SCHEMA_VERSION,
+			action: "open_workspace",
+			launched: true,
+			workspace_path: workspacePath,
+		},
+	};
+}
+
+function runCommandsCommand(): CommandResult {
+	return {
+		ok: true,
+		data: {
+			contract_id: WORKTREE_CONTRACT_ID,
+			schema_version: WORKTREE_SCHEMA_VERSION,
+			...projectCommandDiscoveryTree([
+				["sync", worktreeContracts.sync],
+				["focus", worktreeContracts.focus],
+				["color", worktreeContracts.color],
+				["open", worktreeContracts.open],
+				["new", worktreeContracts.new],
+				["rm", worktreeContracts.rm],
+				["clean", worktreeContracts.clean],
+				["commands", worktreeContracts.commands],
+			]),
+		},
+	};
 }
 
 /**
@@ -553,195 +787,29 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
  */
 export async function runCommand(
 	invocation: ParsedInvocation,
-	runtime: WtRuntime,
+	runtime: WorkTreeRuntime,
 ): Promise<CommandResult> {
-	const { command, positionals, force } = invocation;
+	const { command } = invocation;
 	if (invocation.parseError) {
 		return invocation.parseError;
 	}
 
 	switch (command) {
 		case "sync":
-			return fromSync("sync", await syncWorkspace(runtime, force));
-
-		case "focus": {
-			const [branch, subfolder] = positionals;
-			if (!branch || !subfolder) {
-				return usageFailure(
-					"usage_error",
-					"focus needs <branch> and <subfolder>.",
-					"Rerun as: wt focus <branch> <subfolder>.",
-				);
-			}
-			return fromSync(
-				"focus",
-				await setPrefAndSync(runtime, branch, (prefs) => {
-					prefs.focus = subfolder;
-				}, force),
-			);
-		}
-
-		case "color": {
-			const [branch, color] = positionals;
-			if (!branch || !color) {
-				return usageFailure(
-					"usage_error",
-					"color needs <branch> and <color>.",
-					"Rerun as: wt color <branch> <color>.",
-				);
-			}
-			const validated = validateColor(color);
-			if (validated === null) {
-				return usageFailure(
-					"unknown_color",
-					`Unknown color '${color}'. Allowed: ${WT_COLOR_PALETTE.join(", ")}.`,
-					"Rerun with a color from the allowed palette.",
-				);
-			}
-			return fromSync(
-				"color",
-				await setPrefAndSync(runtime, branch, (prefs) => {
-					prefs.color = validated;
-				}, force),
-			);
-		}
-
+			return fromSync("sync", await syncWorkspace(runtime, invocation.force));
+		case "focus":
+			return runFocusCommand(invocation, runtime);
+		case "color":
+			return runColorCommand(invocation, runtime);
 		case "new":
-		case "rm": {
-			if (command === "rm" && !force && (invocation.noInput || !runtime.isInteractive())) {
-				return usageFailure(
-					"usage_error",
-					`${command} needs an explicit force flag in non-interactive runs.`,
-					"Retry with explicit confirmation, or run interactively.",
-				);
-			}
-			const [branch] = positionals;
-			if (!branch) {
-				return usageFailure(
-					"usage_error",
-					`${command} needs <branch>.`,
-					`Rerun as: wt ${command} <branch>.`,
-				);
-			}
-			const lifecycleRuntime = await stableOwnerRuntime(runtime);
-			const lifecycle =
-				command === "new"
-					? await createWorktree({
-							cwd: lifecycleRuntime.repoRoot(),
-							run: adaptRunner(lifecycleRuntime.run),
-							branch,
-							dryRun: false,
-							runId: `wt-${runtime.now()}`,
-						})
-					: await deleteWorktree({
-							cwd: lifecycleRuntime.repoRoot(),
-							run: adaptRunner(lifecycleRuntime.run),
-							branch,
-							dryRun: false,
-							force,
-							deleteBranch: false,
-							runId: `wt-${runtime.now()}`,
-			});
-			if (lifecycle.changedState !== "complete") {
-				return fromLifecycleFailure(command, lifecycle);
-			}
-			const sync = await syncWorkspace(lifecycleRuntime, Boolean(invocation.forceRender));
-			if (sync.kind !== "written") {
-				return fromPostLifecycleSyncFailure(command, lifecycle, sync);
-			}
-			return { ok: true, data: renderSuccessData(command, sync.path) };
-		}
-
-		case "clean": {
-			const preview = await cleanPreview({
-				cwd: runtime.repoRoot(),
-				run: adaptRunner(runtime.run),
-			});
-			return {
-				ok: true,
-				data: {
-					contract_id: WT_CONTRACT_ID,
-					schema_version: WT_SCHEMA_VERSION,
-					action: "clean_preview",
-					changed_state: "none",
-					preview,
-					next_safe_action: "Review cleanup candidates before pruning.",
-				},
-			};
-		}
-
-		case "open": {
-			const [name] = positionals;
-			let registry: Registry = { branches: {} };
-			let ownerRoot = runtime.repoRoot();
-			try {
-				const worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
-				ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
-			} catch {
-				ownerRoot = runtime.repoRoot();
-			}
-			try {
-				registry = await loadRegistryFromRuntime(runtime, ownerRoot);
-			} catch {
-				return {
-					ok: false,
-					code: "registry_unreadable",
-					message: "wt.config.json exists but is not valid JSON.",
-					action: "Repair the registry JSON, then retry.",
-					exitCode: 1,
-					recoverability: "repair_state",
-				};
-			}
-			if (!name) {
-				return {
-					ok: true,
-					data: {
-							contract_id: WT_CONTRACT_ID,
-							schema_version: WT_SCHEMA_VERSION,
-							action: "list_workspaces",
-							workspace: workspacePathFor(ownerRoot),
-						},
-					};
-				}
-			const workspacePath = workspaceTargetFor(ownerRoot, name);
-			const launched = await runtime.launchCode(workspacePath, registry.defaults?.codeBin);
-			if (!launched) {
-				return usageFailure(
-					"code_not_found",
-					"Could not launch VS Code; `code` was not found on PATH.",
-					"Install the `code` shell command, or set defaults.codeBin in wt.config.json.",
-				);
-			}
-			return {
-				ok: true,
-				data: {
-					contract_id: WT_CONTRACT_ID,
-					schema_version: WT_SCHEMA_VERSION,
-					action: "open_workspace",
-					launched: true,
-					workspace_path: workspacePath,
-				},
-			};
-		}
-
+		case "rm":
+			return runLifecycleCommand(invocation, runtime);
+		case "clean":
+			return runCleanCommand(runtime);
+		case "open":
+			return runOpenCommand(invocation, runtime);
 		case "commands":
-			return {
-				ok: true,
-				data: {
-					contract_id: WT_CONTRACT_ID,
-					schema_version: WT_SCHEMA_VERSION,
-					...projectCommandDiscoveryTree([
-						["sync", wtContracts.sync],
-						["focus", wtContracts.focus],
-						["color", wtContracts.color],
-						["open", wtContracts.open],
-						["new", wtContracts.new],
-						["rm", wtContracts.rm],
-						["clean", wtContracts.clean],
-						["commands", wtContracts.commands],
-					]),
-				},
-			};
+			return runCommandsCommand();
 
 		default:
 			return usageFailure(
@@ -766,18 +834,18 @@ export async function runCommand(
  */
 export async function main(
 	argv: readonly string[],
-	options: { runtime?: WtRuntime; stdout?: CliWriter; stderr?: CliWriter } = {},
+	options: { runtime?: WorkTreeRuntime; stdout?: CliWriter; stderr?: CliWriter } = {},
 ): Promise<number> {
 	const runtime = options.runtime ?? createDefaultRuntime();
 	const stdout = options.stdout ?? process.stdout;
 
 	if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-		const command = argv.find((a) => a in wtContracts) as keyof typeof wtContracts | undefined;
-		stdout.write(renderCommandUsage(wtContracts[command ?? "sync"]));
+		const command = argv.find((a) => a in worktreeContracts) as keyof typeof worktreeContracts | undefined;
+		stdout.write(renderCommandUsage(worktreeContracts[command ?? "sync"]));
 		return 0;
 	}
 	if (argv.includes("--version")) {
-		stdout.write(`wt ${VERSION}\n`);
+		stdout.write(`worktree ${VERSION}\n`);
 		return 0;
 	}
 
@@ -816,8 +884,8 @@ export async function main(
 				hint: { action: result.recoverability, summary: result.action },
 			},
 			data: {
-				contract_id: WT_CONTRACT_ID,
-				schema_version: WT_SCHEMA_VERSION,
+				contract_id: WORKTREE_CONTRACT_ID,
+				schema_version: WORKTREE_SCHEMA_VERSION,
 				changed_state: "none",
 				next_safe_action: result.action,
 				...result.data,
@@ -828,15 +896,15 @@ export async function main(
 	return result.exitCode;
 }
 
-function createRepoRuntime(runtime: WtRuntime, repoRoot: string): WtRuntime {
+function createRepoRuntime(runtime: WorkTreeRuntime, repoRoot: string): WorkTreeRuntime {
 	return {
 		...runtime,
 		repoRoot: () => repoRoot,
 	};
 }
 
-async function loadRegistryFromRuntime(runtime: WtRuntime, repoRoot = runtime.repoRoot()): Promise<Registry> {
-	return parseRegistryText(await runtime.readTextFile(`${repoRoot}/wt.config.json`));
+async function loadRegistryFromRuntime(runtime: WorkTreeRuntime, repoRoot = runtime.repoRoot()): Promise<Registry> {
+	return parseRegistryText(await runtime.readTextFile(`${repoRoot}/${WORKTREE_REGISTRY_FILE}`));
 }
 
 function workspaceTargetFor(currentRepoRoot: string, name: string): string {

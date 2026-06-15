@@ -41,7 +41,7 @@ branch refs/heads/feat/x
 	});
 
 	test("discovers main owner, active linked worktree, stale dirs, and default branch", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-discovery-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-discovery-"));
 		const linked = join(root, ".worktrees", "feat-x");
 		const stale = join(root, ".worktrees", "stale");
 		await mkdir(linked, { recursive: true });

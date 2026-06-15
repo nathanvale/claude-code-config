@@ -128,9 +128,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-failures=()
-warnings=()
-passes=()
+declare -a failures=()
+declare -a warnings=()
+declare -a passes=()
 
 add_pass() {
 	passes+=("$1")
@@ -388,31 +388,31 @@ json_array() {
 
 print_report() {
 	local status="ok"
-	if (( ${#failures[@]} > 0 )); then
+	if (( ${#failures[*]} > 0 )); then
 		status="fail"
-	elif (( ${#warnings[@]} > 0 )); then
+	elif (( ${#warnings[*]} > 0 )); then
 		status="warn"
 	fi
 
 	if [[ "$FORMAT" == "json" ]]; then
 		printf '{"status":"%s",' "$status"
-		json_array "passes" "${passes[@]}"
+		json_array "passes" ${passes[@]+"${passes[@]}"}
 		printf ','
-		json_array "warnings" "${warnings[@]}"
+		json_array "warnings" ${warnings[@]+"${warnings[@]}"}
 		printf ','
-		json_array "failures" "${failures[@]}"
+		json_array "failures" ${failures[@]+"${failures[@]}"}
 		printf '}\n'
 		return
 	fi
 
 	echo "Agent instruction health: $status"
-	for item in "${failures[@]}"; do
+	for item in ${failures[@]+"${failures[@]}"}; do
 		echo "FAIL: $item"
 	done
-	for item in "${warnings[@]}"; do
+	for item in ${warnings[@]+"${warnings[@]}"}; do
 		echo "WARN: $item"
 	done
-	for item in "${passes[@]}"; do
+	for item in ${passes[@]+"${passes[@]}"}; do
 		echo "OK: $item"
 	done
 }
@@ -461,13 +461,13 @@ case "$COMMAND" in
 check)
 	run_checks
 	print_report
-	if (( ${#failures[@]} > 0 )); then
+	if (( ${#failures[*]} > 0 )); then
 		exit 1
 	fi
 	;;
 status)
 	print_status
-	if (( ${#failures[@]} > 0 )); then
+	if (( ${#failures[*]} > 0 )); then
 		exit 1
 	fi
 	;;

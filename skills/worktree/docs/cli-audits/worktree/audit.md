@@ -1,9 +1,9 @@
 ---
-target_cli: wt
+target_cli: worktree
 status: converged
 ---
 
-# CLI Execution Audit: wt
+# CLI Execution Audit: worktree
 
 ## Truth Stance
 

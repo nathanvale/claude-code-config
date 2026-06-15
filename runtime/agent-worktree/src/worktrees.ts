@@ -96,6 +96,14 @@ export interface WorktreeListResult {
 }
 
 /**
+ * Options for projecting the daily worktree view.
+ */
+export interface WorktreeViewOptions {
+	/** Path globs hidden from list/status/clean projections. */
+	ignoredWorktreePathPatterns?: readonly string[];
+}
+
+/**
  * Worktree status row.
  */
 export interface WorktreeStatus {
@@ -190,6 +198,52 @@ export interface CleanPreviewResult {
 }
 
 /**
+ * Match a worktree path against a simple glob pattern.
+ *
+ * Supports `*` for one path segment fragment and `**` for any path depth.
+ * This is intentionally small: enough for local view filters such as
+ * `DOUBLE_STAR/fallow-audit-base-cache-*`, without importing a glob engine.
+ *
+ * @param path - Worktree path to test
+ * @param pattern - Glob pattern from the caller's view config
+ * @returns True when the path should match that pattern
+ *
+ * @example
+ * ```typescript
+ * matchesWorktreePathPattern("/tmp/fallow-audit-base-cache-x", "DOUBLE_STAR/fallow-audit-base-cache-*")
+ * ```
+ */
+export function matchesWorktreePathPattern(path: string, pattern: string): boolean {
+	let source = "";
+	for (let index = 0; index < pattern.length; index += 1) {
+		const char = pattern[index];
+		const next = pattern[index + 1];
+		if (char === "*" && next === "*") {
+			source += ".*";
+			index += 1;
+		} else if (char === "*") {
+			source += "[^/]*";
+		} else {
+			source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+		}
+	}
+	return new RegExp(`^${source}$`).test(path);
+}
+
+function viewWorktrees(
+	discovery: RepoDiscovery,
+	options: WorktreeViewOptions = {},
+): readonly DiscoveredWorktree[] {
+	const patterns = options.ignoredWorktreePathPatterns ?? [];
+	return discovery.worktrees.filter(
+		(worktree) =>
+			!patterns.some((pattern) =>
+				matchesWorktreePathPattern(worktree.path, pattern),
+			),
+	);
+}
+
+/**
  * Build the default recovery plan for a changed-state result.
  *
  * @param input - Changed-state and optional failure ref
@@ -274,17 +328,18 @@ export function buildRecoveryPlan(input: {
  * const list = await listWorktrees({ cwd: process.cwd() })
  * ```
  */
-export async function listWorktrees(options: DiscoverRepoOptions & {
+export async function listWorktrees(options: DiscoverRepoOptions & WorktreeViewOptions & {
 	limit?: number;
 }): Promise<WorktreeListResult> {
 	const discovery = await discoverRepo(options);
+	const worktrees = viewWorktrees(discovery, options);
 	const projection = normalizeProjectionOptions({ limit: options.limit });
 	const projectionSummary = summarizeProjection(
-		discovery.worktrees.length,
+		worktrees.length,
 		projection.limit,
 	);
 	return {
-		worktrees: discovery.worktrees.slice(0, projection.limit),
+		worktrees: worktrees.slice(0, projection.limit),
 		total: projectionSummary.total,
 		truncated: projectionSummary.truncated,
 		mainOwnerRoot: discovery.mainOwnerRoot,
@@ -303,7 +358,7 @@ export async function listWorktrees(options: DiscoverRepoOptions & {
  * const rows = await statusWorktrees({ cwd: process.cwd() })
  * ```
  */
-export async function statusWorktrees(options: DiscoverRepoOptions & {
+export async function statusWorktrees(options: DiscoverRepoOptions & WorktreeViewOptions & {
 	limit?: number;
 }): Promise<readonly WorktreeStatus[]> {
 	return (await statusWorktreeResult(options)).statuses;
@@ -320,15 +375,16 @@ export async function statusWorktrees(options: DiscoverRepoOptions & {
  * const result = await statusWorktreeResult({ cwd: process.cwd(), limit: 10 })
  * ```
  */
-export async function statusWorktreeResult(options: DiscoverRepoOptions & {
+export async function statusWorktreeResult(options: DiscoverRepoOptions & WorktreeViewOptions & {
 	limit?: number;
 }): Promise<WorktreeStatusResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
 	const statuses = await statusWorktreesForDiscovery(discovery, { ...options, run });
+	const worktrees = viewWorktrees(discovery, options);
 	const projection = normalizeProjectionOptions({ limit: options.limit });
 	const projectionSummary = summarizeProjection(
-		discovery.worktrees.length,
+		worktrees.length,
 		projection.limit,
 	);
 	return {
@@ -352,13 +408,14 @@ export async function statusWorktreeResult(options: DiscoverRepoOptions & {
  */
 export async function statusWorktreesForDiscovery(
 	discovery: RepoDiscovery,
-	options: DiscoverRepoOptions & { limit?: number; run: GitRunner },
+	options: DiscoverRepoOptions & WorktreeViewOptions & { limit?: number; run: GitRunner },
 ): Promise<readonly WorktreeStatus[]> {
 	const run = options.run;
 	const evidencePort = createGitEvidencePort(run, discovery.gitRoot ?? options.cwd);
 	const projection = normalizeProjectionOptions({ limit: options.limit });
+	const worktrees = viewWorktrees(discovery, options);
 	return Promise.all(
-		discovery.worktrees.slice(0, projection.limit).map(async (worktree) => {
+		worktrees.slice(0, projection.limit).map(async (worktree) => {
 			const dirtyPromise = isWorktreeDirty(run, worktree.path);
 			const mergeEvidencePromise =
 				worktree.branch && discovery.defaultBranch
@@ -797,14 +854,15 @@ export async function refreshWorktrees(options: DiscoverRepoOptions & {
  * @param options - Clean options
  * @returns Preview-only cleanup classification
  */
-export async function cleanPreview(options: DiscoverRepoOptions & {
+export async function cleanPreview(options: DiscoverRepoOptions & WorktreeViewOptions & {
 	limit?: number;
 }): Promise<CleanPreviewResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
 	const projection = normalizeProjectionOptions({ limit: options.limit });
+	const worktrees = viewWorktrees(discovery, options);
 	const checkedOutBranches = new Set(
-		discovery.worktrees.flatMap((worktree) => (worktree.branch ? [worktree.branch] : [])),
+		worktrees.flatMap((worktree) => (worktree.branch ? [worktree.branch] : [])),
 	);
 	const [statuses, branches] = await Promise.all([
 		statusWorktreesForDiscovery(discovery, { ...options, run }),
@@ -837,7 +895,7 @@ export async function cleanPreview(options: DiscoverRepoOptions & {
 		})),
 	);
 	const registeredSummary = summarizeProjection(
-		discovery.worktrees.length,
+		worktrees.length,
 		projection.limit,
 	);
 	const orphanSummary = summarizeProjection(
@@ -1141,13 +1199,13 @@ function sanitizeBranchPath(branch: string): string {
  *
  * Status: earned.
  * Deletion test: deleting this seam spreads create, list, status, check,
- * delete, clean, recover, and refresh policy across the CLI and `wt` consumer.
+ * delete, clean, recover, and refresh policy across the CLI and `worktree` consumer.
  */
 export const WORKTREES_SEAM = {
 	id: "worktrees",
 	ownerPath: "runtime/agent-worktree/src/worktrees.ts",
 	status: "earned",
 	deletionTest:
-		"Deleting worktrees spreads lifecycle policy across the CLI and wt consumer.",
+		"Deleting worktrees spreads lifecycle policy across the CLI and worktree consumer.",
 	nextUnit: "U3",
 } as const satisfies AgentWorktreeSeam;

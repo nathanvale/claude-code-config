@@ -1,7 +1,7 @@
 /**
  * Command Entrypoint Integration Test suite.
  *
- * Proves `wt`, `agent-worktree`, and `awt` through real repo-local process
+ * Proves `worktree` and `agent-worktree` through real repo-local process
  * entrypoints: package scripts, workspace-filter version probes, and direct
  * source probes. Package-local tests own in-process command semantics; this
  * suite proves the process boundary those tests cannot reach.
@@ -36,7 +36,7 @@ import {
 	type CliProcessResult,
 } from "@side-quest/cli-command-facade/testing";
 
-import { wtContracts } from "../skills/wt/src/command-contract.ts";
+import { worktreeContracts } from "../skills/worktree/src/command-contract.ts";
 import {
 	agentWorktreeContractEntries,
 	agentWorktreeContracts,
@@ -97,7 +97,7 @@ interface RunResult extends RunnerCommand, CliProcessResult {}
  * Package roots that own the entrypoint scripts under test.
  */
 const packageRoots = {
-	wt: join(repoRoot, "skills/wt"),
+	worktree: join(repoRoot, "skills/worktree"),
 	agentWorktree: join(repoRoot, "runtime/agent-worktree"),
 } as const;
 
@@ -105,7 +105,7 @@ const packageRoots = {
  * Source entry paths for direct `bun run <source>` compatibility probes.
  */
 const sourceEntries = {
-	wt: join(repoRoot, "skills/wt/src/wt.ts"),
+	worktree: join(repoRoot, "skills/worktree/src/worktree.ts"),
 	agentWorktree: join(repoRoot, "runtime/agent-worktree/src/cli.ts"),
 } as const;
 
@@ -113,7 +113,7 @@ const sourceEntries = {
  * Workspace package names for `bun --filter` version probes.
  */
 const filterPackageNames = {
-	wt: "wt-scripts",
+	worktree: "worktree-scripts",
 	agentWorktree: "agent-worktree",
 } as const;
 
@@ -316,8 +316,8 @@ function runWtPackage(
 ): Promise<RunResult> {
 	return runCommand(
 		runners.packageCwd({
-			packageRoot: packageRoots.wt,
-			script: "wt",
+			packageRoot: packageRoots.worktree,
+			script: "worktree",
 			args,
 			label,
 		}),
@@ -331,7 +331,7 @@ function runWtSource(
 ): Promise<RunResult> {
 	return runCommand(
 		runners.source({
-			sourcePath: sourceEntries.wt,
+			sourcePath: sourceEntries.worktree,
 			args,
 			label,
 			cwd,
@@ -347,20 +347,6 @@ function runAgentWorktreePackage(
 		runners.packageCwd({
 			packageRoot: packageRoots.agentWorktree,
 			script: "agent-worktree",
-			args,
-			label,
-		}),
-	);
-}
-
-function runAwtPackage(
-	args: readonly string[],
-	label: string,
-): Promise<RunResult> {
-	return runCommand(
-		runners.packageCwd({
-			packageRoot: packageRoots.agentWorktree,
-			script: "awt",
 			args,
 			label,
 		}),
@@ -585,7 +571,7 @@ function readPackageScripts(packageRoot: string): Record<string, string> {
  * contract objects, not from a copied list in the test body. The suite then
  * asserts the resulting set against the plan's frozen expectation.
  */
-const discoveredWtCommandIds = Object.keys(wtContracts).sort();
+const discoveredWtCommandIds = Object.keys(worktreeContracts).sort();
 const discoveredAgentWorktreeCommandIds = agentWorktreeContractEntries
 	.map(([command]) => command)
 	.sort();
@@ -593,10 +579,9 @@ const discoveredAgentWorktreeCommandIds = agentWorktreeContractEntries
 /**
  * Entrypoint scripts derived from the owning package metadata.
  *
- * `wt` ships one script; `agent-worktree` ships the canonical script plus the
- * `awt` alias. Drift between these scripts and the source entries fails U2.
+	 * Drift between package scripts and source entries fails U2.
  */
-const wtPackageScripts = readPackageScripts(packageRoots.wt);
+const wtPackageScripts = readPackageScripts(packageRoots.worktree);
 const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktree);
 
 /**
@@ -640,11 +625,11 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-const wtTopLevelUsageLine = firstUsageLine(wtContracts.sync);
+const wtTopLevelUsageLine = firstUsageLine(worktreeContracts.sync);
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
 
 describe("command entrypoint integration: mechanical discovery", () => {
-	test("derives the exact wt command id set from exported contracts", async () => {
+	test("derives the exact WorkTree command id set from exported contracts", async () => {
 		expect(discoveredWtCommandIds).toEqual(
 			["clean", "color", "commands", "focus", "new", "open", "rm", "sync"],
 		);
@@ -669,24 +654,23 @@ describe("command entrypoint integration: mechanical discovery", () => {
 		);
 	});
 
-	test("package scripts expose the wt and agent-worktree entrypoint scripts", async () => {
-		expect(Object.keys(wtPackageScripts)).toContain("wt");
-		expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
-		expect(Object.keys(agentWorktreePackageScripts)).toContain("awt");
-	});
+		test("package scripts expose the worktree and agent-worktree entrypoint scripts", async () => {
+			expect(Object.keys(wtPackageScripts)).toContain("worktree");
+			expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
+		});
 });
 
 describe("command entrypoint integration: help contracts", () => {
 	test(
-		"wt, agent-worktree, and awt top-level help renders the contract usage line",
+			"worktree and agent-worktree top-level help renders the contract usage line",
 		async () => {
 			const topLevelHelp = [
 				{
 					command: runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
+						packageRoot: packageRoots.worktree,
+						script: "worktree",
 						args: ["--help"],
-						label: "wt --help (package-cwd)",
+						label: "worktree --help (package-cwd)",
 					}),
 					usageLine: wtTopLevelUsageLine,
 				},
@@ -699,16 +683,7 @@ describe("command entrypoint integration: help contracts", () => {
 					}),
 					usageLine: agentWorktreeTopLevelUsageLine,
 				},
-				{
-					command: runners.packageCwd({
-						packageRoot: packageRoots.agentWorktree,
-						script: "awt",
-						args: ["--help"],
-						label: "awt --help (package-cwd)",
-					}),
-					usageLine: agentWorktreeTopLevelUsageLine,
-				},
-			];
+				];
 
 			for (const { command, usageLine } of topLevelHelp) {
 				const result = await runCommand(command);
@@ -720,13 +695,13 @@ describe("command entrypoint integration: help contracts", () => {
 	);
 
 	test(
-		"every discovered wt command help renders its first contract usage line",
+		"every discovered WorkTree command help renders its first contract usage line",
 		async () => {
 			await expectDiscoveredCommandHelp({
 				commandIds: discoveredWtCommandIds,
-				contracts: wtContracts,
-				packageRoot: packageRoots.wt,
-				script: "wt",
+				contracts: worktreeContracts,
+				packageRoot: packageRoots.worktree,
+				script: "worktree",
 			});
 		},
 		TEST_TIMEOUT_MS,
@@ -746,13 +721,13 @@ describe("command entrypoint integration: help contracts", () => {
 	);
 
 	test(
-		"wt and agent-worktree source entries support --version and top-level help",
+		"worktree and agent-worktree source entries support --version and top-level help",
 		async () => {
 			const sourceProbes = [
 				{
-					sourcePath: sourceEntries.wt,
-					label: "wt source",
-					versionSubstring: "wt 0.1.0",
+					sourcePath: sourceEntries.worktree,
+					label: "WorkTree source",
+					versionSubstring: "worktree 0.1.0",
 					usageLine: wtTopLevelUsageLine,
 				},
 				{
@@ -791,78 +766,78 @@ describe("command entrypoint integration: help contracts", () => {
 	);
 
 	test(
-		"wt source entry preserves the runtime JSON command matrix",
+		"WorkTree source entry preserves the runtime JSON command matrix",
 		async () => {
 			const commands = await runWtSource(
 				["commands", "--json"],
-				"wt source commands --json",
+				"WorkTree source commands --json",
 			);
-			expectOkEnvelope(commands, "wt.workspace");
+			expectOkEnvelope(commands, "worktree.workspace");
 
 			const invalid = await runWtSource(
 				["definitely-not-a-command", "--json"],
-				"wt source invalid command",
+				"WorkTree source invalid command",
 			);
 			expectUsageError(invalid);
 
-			await withTempRepo("wt-source-matrix", async (repo) => {
+			await withTempRepo("worktree-source-matrix", async (repo) => {
 				const sync = await runWtSource(
 					["sync", "--repo", repo, "--json"],
-					"wt source sync --json real repo",
+					"WorkTree source sync --json real repo",
 				);
-				expectOkAction(sync, "wt.workspace", "sync", { changedState: "written" });
+				expectOkAction(sync, "worktree.workspace", "sync", { changedState: "written" });
 
 				const focus = await runWtSource(
-					["focus", "main", "skills/wt", "--repo", repo, "--json"],
-					"wt source focus --json real repo",
+					["focus", "main", "skills/worktree", "--repo", repo, "--json"],
+					"WorkTree source focus --json real repo",
 				);
-				expectOkAction(focus, "wt.workspace", "focus", { changedState: "written" });
+				expectOkAction(focus, "worktree.workspace", "focus", { changedState: "written" });
 
 				const color = await runWtSource(
 					["color", "main", "amber", "--repo", repo, "--json"],
-					"wt source color --json real repo",
+					"WorkTree source color --json real repo",
 				);
-				expectOkAction(color, "wt.workspace", "color", { changedState: "written" });
+				expectOkAction(color, "worktree.workspace", "color", { changedState: "written" });
 
 				const staleDir = join(repo, ".worktrees", "stale-source");
 				mkdirSync(staleDir, { recursive: true });
-				gitOutput(repo, ["branch", "old/wt-source", "main"]);
+				gitOutput(repo, ["branch", "old/worktree-source", "main"]);
 				const clean = await runWtSource(
 					["clean", "--repo", repo, "--json"],
-					"wt source clean --json real repo",
+					"WorkTree source clean --json real repo",
 				);
-				expectOkAction(clean, "wt.workspace", "clean_preview", {
+				expectOkAction(clean, "worktree.workspace", "clean_preview", {
 					changedState: "none",
 				});
 
-				const branch = "feat/wt-source-entrypoint";
-				const targetPath = join(repo, ".worktrees", "feat-wt-source-entrypoint");
+				const branch = "feat/worktree-source-entrypoint";
+				const targetPath = join(repo, ".worktrees", "feat-worktree-source-entrypoint");
 				const create = await runWtSource(
 					["new", branch, "--repo", repo, "--json"],
-					"wt source new --json real repo",
+					"WorkTree source new --json real repo",
 				);
-				expectOkAction(create, "wt.workspace", "new", { changedState: "written" });
+				expectOkAction(create, "worktree.workspace", "new", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(create)).toBe(true);
 
 				const remove = await runWtSource(
 					["rm", branch, "--force", "--repo", repo, "--json"],
-					"wt source rm --json real repo",
+					"WorkTree source rm --json real repo",
 				);
-				expectOkAction(remove, "wt.workspace", "rm", { changedState: "written" });
+				expectOkAction(remove, "worktree.workspace", "rm", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 
 				const openList = await runWtSource(
 					["open", "--json"],
-					"wt source open --json temp cwd",
+					"WorkTree source open --json temp cwd",
 					repo,
 				);
-				const openListData = expectOkEnvelope(openList, "wt.workspace");
+				const openListData = expectOkEnvelope(openList, "worktree.workspace");
 				expect(openListData.action, describeRun(openList)).toBe("list_workspaces");
 				expect(openListData.workspace, describeRun(openList)).toBe(
 					workspacePathForRepo(repo),
 				);
 
-				const registryPath = join(repo, "wt.config.json");
+				const registryPath = join(repo, "worktree.config.json");
 				const registry = JSON.parse(readFileSync(registryPath, "utf8")) as {
 					branches?: Record<string, unknown>;
 					defaults?: Record<string, unknown>;
@@ -880,10 +855,10 @@ describe("command entrypoint integration: help contracts", () => {
 				);
 				const openNamed = await runWtSource(
 					["open", "other-repo", "--json"],
-					"wt source open named workspace missing code",
+					"WorkTree source open named workspace missing code",
 					repo,
 				);
-				const openNamedData = expectErrorEnvelope(openNamed, "wt.workspace");
+				const openNamedData = expectErrorEnvelope(openNamed, "worktree.workspace");
 				const openNamedEnvelope = parseEnvelope(openNamed);
 				expect(
 					(openNamedEnvelope.error as Record<string, unknown> | undefined)?.code,
@@ -911,12 +886,12 @@ describe("command entrypoint integration: help contracts", () => {
 				);
 				const openNamedSuccess = await runWtSource(
 					["open", "other-repo", "--json"],
-					"wt source open named workspace fake code",
+					"WorkTree source open named workspace fake code",
 					repo,
 				);
 				const openNamedSuccessData = expectOkAction(
 					openNamedSuccess,
-					"wt.workspace",
+					"worktree.workspace",
 					"open_workspace",
 				);
 				const expectedWorkspacePath = join(
@@ -1107,17 +1082,17 @@ describe("command entrypoint integration: help contracts", () => {
 
 describe("command entrypoint integration: runtime json", () => {
 	test(
-		"wt, agent-worktree, and awt --version work through package scripts",
+			"worktree and agent-worktree --version work through package scripts",
 		async () => {
 			const versionProbes = [
 				{
 					command: runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
+						packageRoot: packageRoots.worktree,
+						script: "worktree",
 						args: ["--version"],
-						label: "wt --version (package-cwd)",
+						label: "worktree --version (package-cwd)",
 					}),
-					substring: "wt 0.1.0",
+					substring: "worktree 0.1.0",
 				},
 				{
 					command: runners.packageCwd({
@@ -1125,15 +1100,6 @@ describe("command entrypoint integration: runtime json", () => {
 						script: "agent-worktree",
 						args: ["--version"],
 						label: "agent-worktree --version (package-cwd)",
-					}),
-					substring: "agent-worktree 0.1.0",
-				},
-				{
-					command: runners.packageCwd({
-						packageRoot: packageRoots.agentWorktree,
-						script: "awt",
-						args: ["--version"],
-						label: "awt --version (package-cwd)",
 					}),
 					substring: "agent-worktree 0.1.0",
 				},
@@ -1154,9 +1120,9 @@ describe("command entrypoint integration: runtime json", () => {
 			const filterProbes = [
 				{
 					command: runners.workspaceFilter({
-						packageName: filterPackageNames.wt,
-						script: "wt",
-						label: "wt --version (workspace-filter)",
+						packageName: filterPackageNames.worktree,
+						script: "worktree",
+						label: "worktree --version (workspace-filter)",
 					}),
 					substring: "0.1.0",
 				},
@@ -1165,14 +1131,6 @@ describe("command entrypoint integration: runtime json", () => {
 						packageName: filterPackageNames.agentWorktree,
 						script: "agent-worktree",
 						label: "agent-worktree --version (workspace-filter)",
-					}),
-					substring: "0.1.0",
-				},
-				{
-					command: runners.workspaceFilter({
-						packageName: filterPackageNames.agentWorktree,
-						script: "awt",
-						label: "awt --version (workspace-filter)",
 					}),
 					substring: "0.1.0",
 				},
@@ -1194,12 +1152,12 @@ describe("command entrypoint integration: runtime json", () => {
 			const commandsProbes = [
 				{
 					command: runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
+						packageRoot: packageRoots.worktree,
+						script: "worktree",
 						args: ["commands", "--json"],
-						label: "wt commands --json (package-cwd)",
+						label: "worktree commands --json (package-cwd)",
 					}),
-					contractId: "wt.workspace",
+					contractId: "worktree.workspace",
 				},
 				{
 					command: runners.packageCwd({
@@ -1207,15 +1165,6 @@ describe("command entrypoint integration: runtime json", () => {
 						script: "agent-worktree",
 						args: ["commands", "--json"],
 						label: "agent-worktree commands --json (package-cwd)",
-					}),
-					contractId: "agent-worktree.lifecycle",
-				},
-				{
-					command: runners.packageCwd({
-						packageRoot: packageRoots.agentWorktree,
-						script: "awt",
-						args: ["commands", "--json"],
-						label: "awt commands --json (package-cwd)",
 					}),
 					contractId: "agent-worktree.lifecycle",
 				},
@@ -1234,13 +1183,13 @@ describe("command entrypoint integration: runtime json", () => {
 	);
 
 	test(
-		"wt open --json preserves list-mode coverage without launching VS Code",
+		"worktree open --json preserves list-mode coverage without launching VS Code",
 		async () => {
 			const result = await runWtPackage(
 				["open", "--json"],
-				"wt open --json list mode (package-cwd)",
+				"worktree open --json list mode (package-cwd)",
 			);
-			const data = expectOkEnvelope(result, "wt.workspace");
+			const data = expectOkEnvelope(result, "worktree.workspace");
 
 			expect(data.action, describeRun(result)).toBe("list_workspaces");
 			expect(typeof data.workspace, describeRun(result)).toBe("string");
@@ -1254,10 +1203,10 @@ describe("command entrypoint integration: runtime json", () => {
 		async () => {
 			const invalidProbes = [
 				runners.packageCwd({
-					packageRoot: packageRoots.wt,
-					script: "wt",
+					packageRoot: packageRoots.worktree,
+					script: "worktree",
 					args: ["definitely-not-a-command", "--json"],
-					label: "wt invalid command (package-cwd)",
+					label: "worktree invalid command (package-cwd)",
 				}),
 				runners.packageCwd({
 					packageRoot: packageRoots.agentWorktree,
@@ -1265,13 +1214,7 @@ describe("command entrypoint integration: runtime json", () => {
 					args: ["definitely-not-a-command", "--json"],
 					label: "agent-worktree invalid command (package-cwd)",
 				}),
-				runners.packageCwd({
-					packageRoot: packageRoots.agentWorktree,
-					script: "awt",
-					args: ["definitely-not-a-command", "--json"],
-					label: "awt invalid command (package-cwd)",
-				}),
-			];
+				];
 
 			for (const command of invalidProbes) {
 				const result = await runCommand(command);
@@ -1286,10 +1229,10 @@ describe("command entrypoint integration: runtime json", () => {
 		async () => {
 			const result = await runCommand(
 				runners.packageCwd({
-					packageRoot: packageRoots.wt,
-					script: "wt",
+					packageRoot: packageRoots.worktree,
+					script: "worktree",
 					args: ["--help"],
-					label: "wt --help (non-json output for parse failure)",
+					label: "worktree --help (non-json output for parse failure)",
 				}),
 			);
 
@@ -1316,20 +1259,20 @@ describe("command entrypoint integration: runtime json", () => {
 	});
 });
 
-describe("command entrypoint integration: wt real-repo lifecycle", () => {
+describe("command entrypoint integration: worktree real-repo lifecycle", () => {
 	test(
-		"wt sync --json writes a generated workspace in a real temp repo",
+		"worktree sync --json writes a generated workspace in a real temp repo",
 		async () => {
-			await withTempRepo("wt-sync", async (repo) => {
+			await withTempRepo("worktree-sync", async (repo) => {
 				const result = await runCommand(
 					runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
+						packageRoot: packageRoots.worktree,
+						script: "worktree",
 						args: ["sync", "--repo", repo, "--json"],
-						label: "wt sync --json real repo (package-cwd)",
+						label: "worktree sync --json real repo (package-cwd)",
 					}),
 				);
-				const data = expectOkEnvelope(result, "wt.workspace");
+				const data = expectOkEnvelope(result, "worktree.workspace");
 				const workspacePath = workspacePathForRepo(repo);
 
 				expect(data.action, describeRun(result)).toBe("sync");
@@ -1337,7 +1280,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 				expect(data.workspace_path, describeRun(result)).toBe(workspacePath);
 				expect(existsSync(workspacePath), describeRun(result)).toBe(true);
 				expect(
-					readFileSync(workspacePath, "utf8").startsWith("// GENERATED by wt"),
+					readFileSync(workspacePath, "utf8").startsWith("// GENERATED by worktree"),
 					describeRun(result),
 				).toBe(true);
 			});
@@ -1346,27 +1289,27 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 	);
 
 	test(
-		"wt focus and color update the package-script registry in a real temp repo",
+		"worktree focus and color update the package-script registry in a real temp repo",
 		async () => {
-			await withTempRepo("wt-focus-color", async (repo) => {
+			await withTempRepo("worktree-focus-color", async (repo) => {
 				const focus = await runWtPackage(
-					["focus", "main", "skills/wt", "--repo", repo, "--json"],
-					"wt focus --json real repo (package-cwd)",
+					["focus", "main", "skills/worktree", "--repo", repo, "--json"],
+					"worktree focus --json real repo (package-cwd)",
 				);
-				expectOkAction(focus, "wt.workspace", "focus", { changedState: "written" });
+				expectOkAction(focus, "worktree.workspace", "focus", { changedState: "written" });
 
 				const color = await runWtPackage(
 					["color", "main", "teal", "--repo", repo, "--json"],
-					"wt color --json real repo (package-cwd)",
+					"worktree color --json real repo (package-cwd)",
 				);
-				expectOkAction(color, "wt.workspace", "color", { changedState: "written" });
+				expectOkAction(color, "worktree.workspace", "color", { changedState: "written" });
 
 				const registry = JSON.parse(
-					readFileSync(join(repo, "wt.config.json"), "utf8"),
+					readFileSync(join(repo, "worktree.config.json"), "utf8"),
 				) as {
 					branches?: Record<string, { focus?: string; color?: string }>;
 					};
-				expect(registry.branches?.main?.focus, describeRun(color)).toBe("skills/wt");
+				expect(registry.branches?.main?.focus, describeRun(color)).toBe("skills/worktree");
 				expect(registry.branches?.main?.color, describeRun(color)).toBe("teal");
 			});
 		},
@@ -1374,18 +1317,18 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 	);
 
 	test(
-		"wt clean previews stale dirs and orphan branches through package scripts",
+		"worktree clean previews stale dirs and orphan branches through package scripts",
 		async () => {
-			await withTempRepo("wt-clean", async (repo) => {
+			await withTempRepo("worktree-clean", async (repo) => {
 				const staleDir = join(repo, ".worktrees", "stale-clean");
 				mkdirSync(staleDir, { recursive: true });
-				gitOutput(repo, ["branch", "old/wt-entrypoint", "main"]);
+				gitOutput(repo, ["branch", "old/worktree-entrypoint", "main"]);
 
 				const clean = await runWtPackage(
 					["clean", "--repo", repo, "--json"],
-					"wt clean --json real repo (package-cwd)",
+					"worktree clean --json real repo (package-cwd)",
 				);
-				const cleanData = expectOkAction(clean, "wt.workspace", "clean_preview", {
+				const cleanData = expectOkAction(clean, "worktree.workspace", "clean_preview", {
 					changedState: "none",
 				});
 
@@ -1394,7 +1337,7 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 				expectStringArrayContaining(
 					clean,
 					preview?.orphanBranches,
-					"old/wt-entrypoint",
+					"old/worktree-entrypoint",
 				);
 				expectStringArrayContaining(clean, preview?.staleDirs, staleDir);
 			});
@@ -1403,21 +1346,21 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 	);
 
 	test(
-		"wt new and rm create, remove, and re-render a real linked worktree",
+		"worktree new and rm create, remove, and re-render a real linked worktree",
 		async () => {
-			await withTempRepo("wt-new-rm", async (repo) => {
+			await withTempRepo("worktree-new-rm", async (repo) => {
 				const branch = "feat/command-entrypoint";
 				const targetPath = join(repo, ".worktrees", "feat-command-entrypoint");
 
 				const create = await runCommand(
 					runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
+						packageRoot: packageRoots.worktree,
+						script: "worktree",
 						args: ["new", branch, "--repo", repo, "--json"],
-						label: "wt new --json real repo (package-cwd)",
+						label: "worktree new --json real repo (package-cwd)",
 					}),
 				);
-				expectOkAction(create, "wt.workspace", "new", { changedState: "written" });
+				expectOkAction(create, "worktree.workspace", "new", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(create)).toBe(true);
 				expect(
 					gitOutput(repo, ["worktree", "list", "--porcelain"]),
@@ -1426,13 +1369,13 @@ describe("command entrypoint integration: wt real-repo lifecycle", () => {
 
 				const remove = await runCommand(
 					runners.packageCwd({
-						packageRoot: packageRoots.wt,
-						script: "wt",
+						packageRoot: packageRoots.worktree,
+						script: "worktree",
 						args: ["rm", branch, "--force", "--repo", repo, "--json"],
-						label: "wt rm --json real repo (package-cwd)",
+						label: "worktree rm --json real repo (package-cwd)",
 					}),
 				);
-				expectOkAction(remove, "wt.workspace", "rm", { changedState: "written" });
+				expectOkAction(remove, "worktree.workspace", "rm", { changedState: "written" });
 				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 				expect(
 					gitOutput(repo, ["worktree", "list", "--porcelain"]),
@@ -1692,35 +1635,6 @@ describe("command entrypoint integration: agent-worktree real-repo lifecycle", (
 					"old/agent-worktree-entrypoint",
 				);
 				expectStringArrayContaining(clean, cleanData.staleDirs, staleDir);
-			});
-		},
-		TEST_TIMEOUT_MS,
-	);
-
-	test(
-		"awt alias preserves lifecycle behavior through package scripts",
-		async () => {
-			await withTempRepo("awt-lifecycle", async (repo) => {
-				const branch = "feat/awt-entrypoint";
-				const targetPath = join(repo, ".worktrees", "feat-awt-entrypoint");
-
-				await expectAgentWorktreeCreateAndInspect({
-					run: runAwtPackage,
-					repo,
-					branch,
-					targetPath,
-					createLabel: "awt create --json real repo (package-cwd)",
-					inspectLabel: "awt inspect run ref (package-cwd)",
-				});
-
-				const remove = await runAwtPackage(
-					["delete", branch, "--force", "--repo", repo, "--json"],
-					"awt delete --force real repo (package-cwd)",
-				);
-				expectOkAction(remove, "agent-worktree.lifecycle", "delete", {
-					changedState: "complete",
-				});
-				expect(existsSync(targetPath), describeRun(remove)).toBe(false);
 			});
 		},
 		TEST_TIMEOUT_MS,

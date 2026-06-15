@@ -10,7 +10,6 @@
 	},
 	"scripts": {
 		"agent-worktree": "bun run src/cli.ts",
-		"awt": "bun run src/cli.ts",
 		"test": "bun test ./tests/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
