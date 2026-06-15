@@ -660,6 +660,13 @@ describe("Command Surface Alignment Proof", () => {
 		}
 	});
 
+	test("color advertises a palette-selection failure continuation", () => {
+		expect(wtContracts.color.actionAffordances).toBeDefined();
+		expect(
+			wtContracts.color.actionAffordances?.failure.map((action) => action.id),
+		).toContain("choose_palette_color");
+	});
+
 	test("an unknown verb is a usage error, exit 2", async () => {
 		const runtime = fakeRuntime();
 		const result = await runCommand({ command: "frobnicate", positionals: [], force: false }, runtime);

@@ -6,8 +6,8 @@ role: tool-workflow
 
 # wt
 
-Use when the user asks to render, sync, focus, color, or open a VS Code workspace across git worktrees.
-Use when creating, removing, or pruning worktrees through the `wt` workflow entry point.
+Triggers: render/sync/focus/color/open VS Code workspaces across git worktrees.
+Triggers: create/remove/prune worktrees through the `wt` workflow entry point.
 
 Do not hand-edit the generated `.code-workspace`. Edit the registry; let `wt` render.
 Do not shell out to old worktree wrappers. `wt` calls the shared `runtime/agent-worktree` library.

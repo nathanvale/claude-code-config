@@ -33,6 +33,10 @@ import {
 	type AgentWorktreeCommand,
 } from "./model.ts";
 import {
+	PROJECTION_FIELD_SETS,
+	type ProjectionFieldSet,
+} from "./projection.ts";
+import {
 	checkWorktree,
 	cleanPreview,
 	createWorktree,
@@ -88,6 +92,10 @@ export interface ParsedInvocation {
 	base?: string;
 	/** Output limit. */
 	limit?: number;
+	/** Projection field sets. */
+	fields?: readonly ProjectionFieldSet[];
+	/** Projection selector. */
+	select?: readonly string[];
 	/** Parse error result. */
 	parseError?: CommandResult;
 }
@@ -129,6 +137,70 @@ type CommandResult =
 			changedState: AgentWorktreeChangedState;
 			data?: Record<string, unknown>;
 	  };
+
+type ContextHeavyReadCommand = Extract<
+	AgentWorktreeCommand,
+	"doctor" | "list" | "status" | "clean" | "handoff"
+>;
+
+const PROJECTION_FIELD_SET_VALUES = new Set<string>(PROJECTION_FIELD_SETS);
+
+const PROJECTION_METADATA_KEYS = ["contract_id", "schema_version"] as const;
+
+const READ_PROJECTION_KEYS = {
+	doctor: {
+		default: ["summary", "mutation_readiness", "blockers", "next_actions"],
+		refs: ["summary"],
+		evidence: ["checks", "blockers"],
+		actions: ["mutation_readiness", "blockers", "next_actions"],
+	},
+	list: {
+		default: ["worktrees", "total", "truncated"],
+		refs: ["worktrees"],
+		evidence: ["worktrees", "total", "truncated"],
+		actions: ["truncated"],
+	},
+	status: {
+		default: ["statuses", "total", "truncated"],
+		refs: ["statuses"],
+		evidence: ["statuses", "total", "truncated"],
+		actions: ["statuses"],
+	},
+	clean: {
+		default: [
+			"registeredWorktrees",
+			"orphanBranches",
+			"staleDirs",
+			"blockers",
+			"totalRegisteredWorktrees",
+			"totalOrphanBranches",
+			"totalStaleDirs",
+			"truncated",
+			"previewOnly",
+		],
+		refs: ["registeredWorktrees", "orphanBranches"],
+		evidence: [
+			"registeredWorktrees",
+			"orphanBranches",
+			"staleDirs",
+			"blockers",
+			"totalRegisteredWorktrees",
+			"totalOrphanBranches",
+			"totalStaleDirs",
+			"truncated",
+		],
+		actions: ["blockers", "previewOnly"],
+	},
+	handoff: {
+		default: ["storeRoot", "latest", "total", "truncated", "nextSafeActions"],
+		refs: ["storeRoot", "latest"],
+		evidence: ["latest", "total", "truncated"],
+		actions: ["nextSafeActions"],
+	},
+} as const satisfies Record<
+	ContextHeavyReadCommand,
+	Record<ProjectionFieldSet, readonly string[]>
+>;
 
 /**
  * CLI entry point: parse argv, route public commands, and emit facade envelopes.
@@ -229,6 +301,8 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 	let ref: string | undefined;
 	let base: string | undefined;
 	let limit: number | undefined;
+	let fields: readonly ProjectionFieldSet[] | undefined;
+	let select: readonly string[] | undefined;
 	let json = false;
 	let dryRun = false;
 	let preview = false;
@@ -247,6 +321,8 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		ref,
 		base,
 		limit,
+		fields,
+		select,
 		parseError: usageFailure(message),
 	});
 
@@ -267,7 +343,14 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		} else if (arg === "--delete-branch") {
 			deleteBranch = true;
 			usedFlags.add(arg);
-		} else if (arg === "--repo" || arg === "--ref" || arg === "--base" || arg === "--limit") {
+		} else if (
+			arg === "--repo" ||
+			arg === "--ref" ||
+			arg === "--base" ||
+			arg === "--limit" ||
+			arg === "--fields" ||
+			arg === "--select"
+		) {
 			usedFlags.add(arg);
 			const value = argv[index + 1];
 			if (!value || value.startsWith("--")) {
@@ -276,6 +359,16 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 			if (arg === "--repo") repo = value;
 			if (arg === "--ref") ref = value;
 			if (arg === "--base") base = value;
+			if (arg === "--fields") {
+				const parsedFields = parseProjectionFields(value);
+				if (!parsedFields.ok) return fail(parsedFields.message);
+				fields = parsedFields.fields;
+			}
+			if (arg === "--select") {
+				const parsedSelect = parseProjectionSelect(value);
+				if (!parsedSelect.ok) return fail(parsedSelect.message);
+				select = parsedSelect.select;
+			}
 			if (arg === "--limit") {
 				const parsedLimit = Number.parseInt(value, 10);
 				if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
@@ -314,6 +407,8 @@ export function parseInvocation(argv: readonly string[]): ParsedInvocation {
 		ref,
 		base,
 		limit,
+		fields,
+		select,
 	};
 }
 
@@ -348,28 +443,27 @@ export async function runCommand(
 					data: baseData(projectCommandDiscoveryTree(agentWorktreeContractEntries)),
 				};
 			case "doctor":
-				return {
-					ok: true,
-					data: baseData(await runDoctor({ cwd, run: runtime.run })),
-				};
+				return readCommandResult(
+					"doctor",
+					doctorData(await runDoctor({ cwd, run: runtime.run })),
+					invocation,
+				);
 			case "list":
-				return {
-					ok: true,
-					data: baseData(
-						await listWorktrees({ cwd, run: runtime.run, limit: invocation.limit }),
-					),
-				};
+				return readCommandResult(
+					"list",
+					await listWorktrees({ cwd, run: runtime.run, limit: invocation.limit }),
+					invocation,
+				);
 			case "status":
-				return {
-					ok: true,
-					data: baseData(
-						await statusWorktreeResult({
-							cwd,
-							run: runtime.run,
-							limit: invocation.limit,
-						}),
-					),
-				};
+				return readCommandResult(
+					"status",
+					await statusWorktreeResult({
+						cwd,
+						run: runtime.run,
+						limit: invocation.limit,
+					}),
+					invocation,
+				);
 			case "check": {
 				const branch = invocation.positionals[0];
 				if (!branch) return usageFailure("check needs <branch>.");
@@ -421,16 +515,15 @@ export async function runCommand(
 				return lifecycleCommandResult(result, invocation.dryRun);
 			}
 			case "clean":
-				return {
-					ok: true,
-					data: baseData(
-						await cleanPreview({
-							cwd,
-							run: runtime.run,
-							limit: invocation.limit,
-						}),
-					),
-				};
+				return readCommandResult(
+					"clean",
+					await cleanPreview({
+						cwd,
+						run: runtime.run,
+						limit: invocation.limit,
+					}),
+					invocation,
+				);
 			case "recover": {
 				const ref = invocation.ref ?? invocation.positionals[0];
 				const parsedRef = ref ? parseAgentWorktreeRef(ref) : null;
@@ -499,15 +592,14 @@ export async function runCommand(
 						"none",
 					);
 				}
-				return {
-					ok: true,
-					data: baseData(
-						await buildHandoffSnapshot(
-							discovery.storeRoot,
-							{ limit: invocation.limit },
-						),
+				return readCommandResult(
+					"handoff",
+					await buildHandoffSnapshot(
+						discovery.storeRoot,
+						{ limit: invocation.limit },
 					),
-				};
+					invocation,
+				);
 			}
 		}
 	} catch (error) {
@@ -570,6 +662,159 @@ function lifecycleCommandResult(
 		result.changedState,
 		data,
 	);
+}
+
+function readCommandResult(
+	command: ContextHeavyReadCommand,
+	data: object,
+	invocation: ParsedInvocation,
+): CommandResult {
+	const projected = projectReadData(command, baseData(data), invocation);
+	if (!projected.ok) return usageFailure(projected.message);
+	return { ok: true, data: projected.data };
+}
+
+function projectReadData(
+	command: ContextHeavyReadCommand,
+	data: Record<string, unknown>,
+	invocation: ParsedInvocation,
+):
+	| { ok: true; data: Record<string, unknown> }
+	| { ok: false; message: string } {
+	if (!invocation.fields && !invocation.select) return { ok: true, data };
+
+	const keys = new Set<string>(PROJECTION_METADATA_KEYS);
+	for (const fieldSet of invocation.fields ?? []) {
+		for (const key of READ_PROJECTION_KEYS[command][fieldSet]) {
+			keys.add(key);
+		}
+	}
+
+	for (const key of invocation.select ?? []) {
+		if (!(key in data)) {
+			return {
+				ok: false,
+				message: `--select field '${key}' is not present in agent-worktree ${command} output.`,
+			};
+		}
+		keys.add(key);
+	}
+
+	return {
+		ok: true,
+		data: pickExistingKeys(data, keys),
+	};
+}
+
+function pickExistingKeys(
+	data: Record<string, unknown>,
+	keys: Iterable<string>,
+): Record<string, unknown> {
+	const output: Record<string, unknown> = {};
+	for (const key of keys) {
+		if (key in data) output[key] = data[key];
+	}
+	return output;
+}
+
+function parseProjectionFields(
+	value: string,
+):
+	| { ok: true; fields: readonly ProjectionFieldSet[] }
+	| { ok: false; message: string } {
+	const fields = value
+		.split(",")
+		.map((field) => field.trim())
+		.filter(Boolean);
+	if (fields.length === 0) {
+		return { ok: false, message: "--fields needs at least one field set." };
+	}
+	const invalid = fields.find((field) => !PROJECTION_FIELD_SET_VALUES.has(field));
+	if (invalid) {
+		return {
+			ok: false,
+			message: `Unsupported --fields value '${invalid}'. Use ${PROJECTION_FIELD_SETS.join(", ")}.`,
+		};
+	}
+	return {
+		ok: true,
+		fields: [...new Set(fields)] as readonly ProjectionFieldSet[],
+	};
+}
+
+function parseProjectionSelect(
+	value: string,
+):
+	| { ok: true; select: readonly string[] }
+	| { ok: false; message: string } {
+	const select = value
+		.split(",")
+		.map((field) => field.trim())
+		.filter(Boolean);
+	if (select.length === 0) {
+		return { ok: false, message: "--select needs at least one field." };
+	}
+	const invalid = select.find((field) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(field));
+	if (invalid) {
+		return {
+			ok: false,
+			message:
+				"--select accepts comma-separated top-level JSON field names.",
+		};
+	}
+	return { ok: true, select: [...new Set(select)] };
+}
+
+function doctorData(data: {
+	status: unknown;
+	mutationReadiness: unknown;
+	checks: readonly {
+		id: unknown;
+		owner: unknown;
+		status: unknown;
+		summary: unknown;
+		blockers: readonly string[];
+		nextActions: readonly string[];
+	}[];
+	nextActions: readonly string[];
+	repo: {
+		gitRoot?: string;
+		mainOwnerRoot?: string;
+		activeWorktree?: string;
+		currentBranch?: string;
+		defaultBranch?: string;
+		storeRoot?: string;
+		linkedWorktreeCount: number;
+		staleDirCount: number;
+	};
+	availableCommands: readonly string[];
+}): Record<string, unknown> {
+	const blockers = [...new Set(data.checks.flatMap((check) => check.blockers))];
+	return {
+		summary: {
+			status: data.status,
+			repo_root: data.repo.gitRoot,
+			main_owner_root: data.repo.mainOwnerRoot,
+			active_worktree: data.repo.activeWorktree,
+			current_branch: data.repo.currentBranch,
+			default_branch: data.repo.defaultBranch,
+			store_root: data.repo.storeRoot,
+			linked_worktree_count: data.repo.linkedWorktreeCount,
+			stale_dir_count: data.repo.staleDirCount,
+			available_commands: data.availableCommands,
+		},
+		checks: data.checks.map((check) => ({
+			id: check.id,
+			owner: check.owner,
+			status: check.status,
+			summary: check.summary,
+			blockers: check.blockers,
+			next_actions: check.nextActions,
+		})),
+		mutation_readiness: data.mutationReadiness,
+		blockers,
+		next_actions: [...new Set(data.nextActions)],
+	};
 }
 
 function baseData(data: object): Record<string, unknown> {

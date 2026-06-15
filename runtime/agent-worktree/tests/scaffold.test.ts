@@ -9,20 +9,26 @@ import {
 	agentWorktreeContractEntries,
 	agentWorktreeContracts,
 } from "../src/command-contract.ts";
-import { main } from "../src/cli.ts";
 import {
 	AGENT_WORKTREE_BACKUP_REF_POLICY,
 	AGENT_WORKTREE_BACKUP_REF_TEMPLATE,
 	AGENT_WORKTREE_COMMANDS,
 	AGENT_WORKTREE_CONTRACT_ID,
+	AGENT_WORKTREE_DIAGNOSTIC_OUTPUT_POLICY,
+	AGENT_WORKTREE_DOCTOR_JSON_FIELDS,
 	AGENT_WORKTREE_DOCTOR_EXIT_POLICY,
 	AGENT_WORKTREE_EVENT_TRAIL_FORMAT,
+	AGENT_WORKTREE_FAILURE_RECORD_FIELDS,
 	AGENT_WORKTREE_FAILURE_REF_TEMPLATE,
+	AGENT_WORKTREE_JSON_OUTPUT_POLICY,
+	AGENT_WORKTREE_LOOKUP_INPUTS,
 	AGENT_WORKTREE_REF_KINDS,
 	AGENT_WORKTREE_RETENTION_WARN_AFTER_DAYS,
+	AGENT_WORKTREE_SAME_INPUT_RETRY,
 	AGENT_WORKTREE_SCAFFOLD_SEAMS,
 	AGENT_WORKTREE_STORE_DIRS,
 } from "../src/model.ts";
+import { fakeGitRunner, runJsonCli, runTextCli } from "./support.ts";
 
 describe("agent-worktree scaffold", () => {
 	test("projects the v1 command catalog without discovery drift", () => {
@@ -91,58 +97,76 @@ describe("agent-worktree scaffold", () => {
 		expect(AGENT_WORKTREE_DOCTOR_EXIT_POLICY).toBe(
 			"exit_zero_with_readable_map",
 		);
+		expect(AGENT_WORKTREE_DOCTOR_JSON_FIELDS).toEqual([
+			"summary",
+			"checks",
+			"mutation_readiness",
+			"blockers",
+			"next_actions",
+		]);
 		expect(agentWorktreeContracts.doctor.mutation).toBe("check");
 	});
 
+	test("captures v1 recovery and output contract defaults", () => {
+		expect(AGENT_WORKTREE_SAME_INPUT_RETRY).toEqual([
+			"safe",
+			"unsafe",
+			"unknown",
+		]);
+		expect(AGENT_WORKTREE_FAILURE_RECORD_FIELDS).toEqual([
+			"what_happened",
+			"changed_state",
+			"changed",
+			"same_input_retry",
+			"next_actions",
+			"diagnostics",
+		]);
+		expect(AGENT_WORKTREE_LOOKUP_INPUTS).toEqual(["id", "branch", "path"]);
+		expect(AGENT_WORKTREE_JSON_OUTPUT_POLICY).toBe("object_envelopes_only");
+		expect(AGENT_WORKTREE_DIAGNOSTIC_OUTPUT_POLICY).toBe(
+			"stderr_or_durable_refs",
+		);
+	});
+
 	test("emits command discovery through the public CLI", async () => {
-		const stdout = createMemoryWriter();
-		const exitCode = await main(["commands", "--json"], {
-			stdout,
+		const { exitCode, envelope } = await runJsonCli(["commands", "--json"], {
 			runtime: { now: () => Date.now() },
 		});
 
-		const envelope = JSON.parse(stdout.output);
-
 		expect(exitCode).toBe(0);
 		expect(envelope.status).toBe("ok");
-		expect(envelope.data.contract_id).toBe(AGENT_WORKTREE_CONTRACT_ID);
-		expect(Object.keys(envelope.data.commands).sort()).toEqual(
+		expect(envelope.data?.contract_id).toBe(AGENT_WORKTREE_CONTRACT_ID);
+		expect(
+			Object.keys(envelope.data?.commands as Record<string, unknown>).sort(),
+		).toEqual(
 			[...AGENT_WORKTREE_COMMANDS].sort(),
 		);
 	});
 
 	test("renders top-level help and version through the public CLI", async () => {
-		const helpStdout = createMemoryWriter();
-		const helpExitCode = await main([], { stdout: helpStdout });
-		const versionStdout = createMemoryWriter();
-		const versionExitCode = await main(["--version"], { stdout: versionStdout });
+		const help = await runTextCli([]);
+		const version = await runTextCli(["--version"]);
 
-		expect(helpExitCode).toBe(0);
-		expect(helpStdout.output).toContain("Usage: agent-worktree doctor --json");
-		expect(versionExitCode).toBe(0);
-		expect(versionStdout.output).toBe("agent-worktree 0.1.0\n");
+		expect(help.exitCode).toBe(0);
+		expect(help.output).toContain("Usage: agent-worktree doctor --json");
+		expect(version.exitCode).toBe(0);
+		expect(version.output).toBe("agent-worktree 0.1.0\n");
 	});
 
 	test("returns usage failure for unknown public commands", async () => {
-		const stdout = createMemoryWriter();
-		const exitCode = await main(["missing", "--json"], {
-			stdout,
+		const { exitCode, envelope } = await runJsonCli(["missing", "--json"], {
 			runtime: { now: () => Date.now() },
 		});
 
-		const envelope = JSON.parse(stdout.output);
-
 		expect(exitCode).toBe(2);
 		expect(envelope.status).toBe("error");
-		expect(envelope.error.code).toBe("usage_error");
-		expect(envelope.error.recoverability).toBe("change_input");
-		expect(envelope.data.changed_state).toBe("none");
+		expect(envelope.error?.code).toBe("usage_error");
+		expect(envelope.error?.recoverability).toBe("change_input");
+		expect(envelope.data?.changed_state).toBe("none");
 	});
 
 	test("doctor emits a readable map through the public CLI", async () => {
-		const stdout = createMemoryWriter();
-		const exitCode = await main(["doctor", "--json"], {
-			stdout,
+		const { exitCode, envelope } = await runJsonCli(["doctor", "--json"], {
 			runtime: {
 				now: () => Date.now(),
 				cwd: () => "/repo",
@@ -161,12 +185,16 @@ describe("agent-worktree scaffold", () => {
 			},
 		});
 
-		const envelope = JSON.parse(stdout.output);
-
 		expect(exitCode).toBe(0);
 		expect(envelope.status).toBe("ok");
-		expect(envelope.data.status).toBe("ok");
-		expect(envelope.data.mutationReadiness).toBe("ready");
+		expect(envelope.data?.summary).toMatchObject({
+			status: "ok",
+			repo_root: "/repo",
+		});
+		expect(envelope.data?.mutation_readiness).toBe("ready");
+		expect(envelope.data?.blockers).toEqual([]);
+		expect(envelope.data?.next_actions).toEqual([]);
+		expect(Array.isArray(envelope.data?.checks)).toBe(true);
 	});
 
 	test("scaffold inventory covers each planned owner seam", () => {
@@ -184,22 +212,3 @@ describe("agent-worktree scaffold", () => {
 		expect(ownerPaths).toContain("runtime/agent-worktree/src/inspect.ts");
 	});
 });
-
-function createMemoryWriter(): { output: string; write(chunk: string): void } {
-	return {
-		output: "",
-		write(chunk: string) {
-			this.output += chunk;
-		},
-	};
-}
-
-function fakeGitRunner(outputs: Record<string, string>) {
-	return async (args: readonly string[]) => {
-		const key = args.join(" ");
-		const stdout = outputs[key];
-		return stdout === undefined
-			? { ok: false, stdout: "", stderr: "missing fake output", code: 1 }
-			: { ok: true, stdout, stderr: "", code: 0 };
-	};
-}

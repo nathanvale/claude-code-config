@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@logtape/logtape": "^2.1.1",
+    "@side-quest/cli-command-facade": "workspace:*",
     "@puppeteer/replay": "4.0.2",
     "puppeteer-core": "25.1.0"
   }

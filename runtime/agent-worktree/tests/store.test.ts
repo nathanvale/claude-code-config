@@ -4,19 +4,17 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import { buildHandoffSnapshot } from "../src/inspect.ts";
-import { createFileStore } from "../src/store.ts";
+import { type AgentWorktreeStore, createFileStore } from "../src/store.ts";
 
 describe("agent-worktree store", () => {
 	test("writes and reads run, failure, and worktree records", async () => {
 		const root = await mkdtemp(join(tmpdir(), "awt-store-"));
 		const store = createFileStore(root);
 
-		await store.writeRun({
-			runId: "run-1",
+		await writeStoreFixture(store, {
 			command: "delete",
 			status: "failed",
 			changedState: "partial",
-			steps: [],
 			events: [
 				{
 					kind: "run_started",
@@ -24,22 +22,6 @@ describe("agent-worktree store", () => {
 					changedState: "none",
 				},
 			],
-		});
-		await store.writeFailure({
-			ref: { kind: "failure", id: "run-1/delete_branch" },
-			runId: "run-1",
-			stepId: "delete_branch",
-			changedState: "partial",
-			retrySafety: "inspect_first",
-			whatHappened: "Branch deletion failed.",
-			whatChanged: ["Worktree removed."],
-			nextSafeActions: ["inspect"],
-		});
-		await store.writeWorktree({
-			ref: { kind: "worktree", id: "feat-x" },
-			branch: "feat/x",
-			path: "/repo/.worktrees/feat-x",
-			observedAtMs: 1,
 		});
 
 		expect((await store.readRun("run-1"))?.changedState).toBe("partial");
@@ -61,30 +43,13 @@ describe("agent-worktree store", () => {
 	test("handoff surfaces latest durable context from the store", async () => {
 		const root = await mkdtemp(join(tmpdir(), "awt-handoff-"));
 		const store = createFileStore(root);
-		await store.writeRun({
-			runId: "run-1",
+		await writeStoreFixture(store, {
 			command: "refresh",
 			status: "completed",
 			changedState: "complete",
-			steps: [],
 			events: [],
 			createdAtMs: 10,
-		});
-		await store.writeFailure({
-			ref: { kind: "failure", id: "run-1/delete_branch" },
-			runId: "run-1",
-			stepId: "delete_branch",
-			changedState: "partial",
-			retrySafety: "inspect_first",
-			whatHappened: "Branch deletion failed.",
-			whatChanged: ["Worktree removed."],
-			nextSafeActions: ["inspect"],
-		});
-		await store.writeWorktree({
-			ref: { kind: "worktree", id: "feat-x" },
-			branch: "feat/x",
-			path: "/repo/.worktrees/feat-x",
-			observedAtMs: 5,
+			worktreeObservedAtMs: 5,
 		});
 
 		const snapshot = await buildHandoffSnapshot(root, { limit: 2 });
@@ -97,3 +62,41 @@ describe("agent-worktree store", () => {
 		).toContain("failure");
 	});
 });
+
+async function writeStoreFixture(
+	store: AgentWorktreeStore,
+	input: {
+		command: "delete" | "refresh";
+		status: "completed" | "failed";
+		changedState: "complete" | "partial";
+		events: Parameters<AgentWorktreeStore["writeRun"]>[0]["events"];
+		createdAtMs?: number;
+		worktreeObservedAtMs?: number;
+	},
+): Promise<void> {
+	await store.writeRun({
+		runId: "run-1",
+		command: input.command,
+		status: input.status,
+		changedState: input.changedState,
+		steps: [],
+		events: input.events,
+		createdAtMs: input.createdAtMs,
+	});
+	await store.writeFailure({
+		ref: { kind: "failure", id: "run-1/delete_branch" },
+		runId: "run-1",
+		stepId: "delete_branch",
+		changedState: "partial",
+		retrySafety: "inspect_first",
+		whatHappened: "Branch deletion failed.",
+		whatChanged: ["Worktree removed."],
+		nextSafeActions: ["inspect"],
+	});
+	await store.writeWorktree({
+		ref: { kind: "worktree", id: "feat-x" },
+		branch: "feat/x",
+		path: "/repo/.worktrees/feat-x",
+		observedAtMs: input.worktreeObservedAtMs ?? 1,
+	});
+}
