@@ -147,6 +147,7 @@ export async function syncWorkspace(
 		worktrees = await listWorktrees(repoRoot, runtime.run);
 		ownerRoot = repoOwnerRootFor(worktrees, repoRoot);
 		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+		// First pass finds the owner root; second pass applies registry ignored-worktree globs.
 		worktrees = await listWorktrees(
 			repoRoot,
 			runtime.run,

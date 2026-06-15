@@ -1,6 +1,6 @@
 ---
 name: lll-account-switch
-description: "Switch Claude/Codex LLM accounts with lll-account-switch; check active provider, auth health, secret loading, shell snapshots, repo tool overrides, or Foundry/personal routing."
+description: "Switch lll-account-switch personal/foundry Claude/Codex routing for local development."
 role: tool-workflow
 ---
 
