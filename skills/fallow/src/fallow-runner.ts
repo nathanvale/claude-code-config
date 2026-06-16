@@ -10,6 +10,7 @@ import { delimiter, join, resolve } from "node:path";
 import {
 	type CliWriter,
 	CliUsageError,
+	createCommandResultData,
 	renderCommandUsage,
 	usageError,
 } from "@side-quest/cli-command-facade";
@@ -37,6 +38,7 @@ import {
 	type FallowStderrCategory,
 	type FallowWriteEffect,
 	fallowRunnerContracts,
+	fallowRunnerResultContract,
 } from "./command-contract";
 import {
 	type TraceFailureReason,
@@ -999,9 +1001,7 @@ function envelopeByteLength(envelope: FallowRunnerEnvelope): number {
 }
 
 function makeEnvelope(input: FallowEnvelopeInput): FallowRunnerEnvelope {
-	return {
-		contract_id: FALLOW_RUNNER_CONTRACT_ID,
-		schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
+	return createCommandResultData({ resultContract: fallowRunnerResultContract }, {
 		status: input.status,
 		mode: input.mode,
 		run_id: input.runId,
@@ -1024,7 +1024,7 @@ function makeEnvelope(input: FallowEnvelopeInput): FallowRunnerEnvelope {
 		},
 		summary: input.summary ?? emptySummary(),
 		repair_hints: input.repairHints ?? [],
-	};
+		});
 }
 
 function emptySummary(): FallowRunnerSummary {

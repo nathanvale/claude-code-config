@@ -11,6 +11,7 @@
 import {
 	type CliWriter,
 	type RuntimeActionGuidance,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	writeJsonEnvelope,
@@ -790,7 +791,7 @@ function emitTargetDiscoveryFailure(input: {
 			data: { command: "targets-list", result_kind: "browser_targets" },
 			runtime_actions: [targetDiscoveryAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: failure.code,
 				message: redactUnsafeText(failure.message),
@@ -799,7 +800,7 @@ function emitTargetDiscoveryFailure(input: {
 				recoverability: failure.recoverability,
 				retryable: failure.recoverability === "retry",
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -828,4 +829,3 @@ function parseAdapterCapabilities(
 	}
 	return capabilities;
 }
-

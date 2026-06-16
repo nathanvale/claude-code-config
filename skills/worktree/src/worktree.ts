@@ -5,8 +5,13 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
 	type CliWriter,
+	type CommandFacadeResultContract,
+	type CommandResultPayload,
+	createCliRuntimeError,
+	createCliRepairStateRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	createCommandResultData,
 	parseCliDiagnosticArgv,
 	projectCommandDiscoveryTree,
 	renderCommandUsage,
@@ -18,11 +23,14 @@ import {
 	deleteWorktree,
 	type LifecycleResult,
 } from "../../../runtime/agent-worktree/src/index.ts";
-import { type WorkTreeDiagnosticCode, worktreeContracts } from "./command-contract.ts";
+import {
+	type WorkTreeCommand,
+	type WorkTreeDiagnosticCode,
+	worktreeRenderResultContract,
+	worktreeContracts,
+} from "./command-contract.ts";
 import {
 	WORKTREE_COLOR_PALETTE,
-	WORKTREE_CONTRACT_ID,
-	WORKTREE_SCHEMA_VERSION,
 	type Registry,
 	type WorkTreeColor,
 } from "./model.ts";
@@ -66,6 +74,23 @@ export interface WorkTreeRuntime {
 	/** Current epoch millis; injected so envelope durations are deterministic in tests. */
 	now: () => number;
 }
+
+type WorkTreeLifecyclePayload = {
+	action: string;
+	lifecycle_action: LifecycleResult["action"];
+	changed_state: LifecycleResult["changedState"];
+	preview: LifecycleResult["preview"];
+	run_ref: LifecycleResult["runRef"] | undefined;
+	failure_ref: LifecycleResult["failureRef"] | undefined;
+	changes: LifecycleResult["changes"];
+	next_safe_action: LifecycleResult["nextSafeAction"];
+	reason: LifecycleResult["reason"] | undefined;
+	recovery: LifecycleResult["recovery"] | undefined;
+	retry_safety:
+		| NonNullable<LifecycleResult["recovery"]>["choices"][number]["retrySafety"]
+		| undefined;
+	backup_ref: LifecycleResult["backupRef"] | undefined;
+};
 
 /**
  * Build the default runtime adapter backed by Bun's filesystem and spawn APIs.
@@ -319,14 +344,12 @@ export type CommandResult =
  * @internal
  */
 function renderSuccessData(action: string, workspacePath: string): Record<string, unknown> {
-	return {
-		contract_id: WORKTREE_CONTRACT_ID,
-		schema_version: WORKTREE_SCHEMA_VERSION,
+	return lifecycleResultData({
 		action,
 		workspace_path: workspacePath,
 		changed_state: "written",
 		next_safe_action: "Reload the VS Code window to pick up the rendered workspace.",
-	};
+	});
 }
 
 /**
@@ -385,9 +408,14 @@ function lifecycleEnvelopeData(
 	command: string,
 	lifecycle: LifecycleResult,
 ): Record<string, unknown> {
+	return lifecycleResultData(lifecyclePayload(command, lifecycle));
+}
+
+function lifecyclePayload(
+	command: string,
+	lifecycle: LifecycleResult,
+): WorkTreeLifecyclePayload {
 	return {
-		contract_id: WORKTREE_CONTRACT_ID,
-		schema_version: WORKTREE_SCHEMA_VERSION,
 		action: command,
 		lifecycle_action: lifecycle.action,
 		changed_state: lifecycle.changedState,
@@ -416,7 +444,7 @@ function fromLifecycleFailure(command: string, lifecycle: LifecycleResult): Comm
 		exitCode: 1,
 		recoverability:
 			lifecycle.reason === "target_not_found" ? "change_input" : "repair_state",
-		data: lifecycleEnvelopeData(command, lifecycle),
+		data: lifecyclePayload(command, lifecycle),
 	};
 }
 
@@ -426,7 +454,7 @@ function fromPostLifecycleSyncFailure(
 	sync: Exclude<Awaited<ReturnType<typeof syncWorkspace>>, { kind: "written" }>,
 ): CommandResult {
 	const data = {
-		...lifecycleEnvelopeData(command, lifecycle),
+		...lifecyclePayload(command, lifecycle),
 		render_status: sync.kind,
 		render_workspace_path: "path" in sync ? sync.path : undefined,
 		render_error_code: "code" in sync ? sync.code : undefined,
@@ -683,14 +711,12 @@ async function runCleanCommand(runtime: WorkTreeRuntime): Promise<CommandResult>
 	});
 	return {
 		ok: true,
-		data: {
-			contract_id: WORKTREE_CONTRACT_ID,
-			schema_version: WORKTREE_SCHEMA_VERSION,
+		data: resultData("clean", {
 			action: "clean_preview",
 			changed_state: "none",
 			preview,
 			next_safe_action: "Review cleanup candidates before pruning.",
-		},
+		}),
 	};
 }
 
@@ -725,12 +751,10 @@ async function runOpenCommand(
 	if (!name) {
 		return {
 			ok: true,
-			data: {
-				contract_id: WORKTREE_CONTRACT_ID,
-				schema_version: WORKTREE_SCHEMA_VERSION,
+			data: resultData("open", {
 				action: "list_workspaces",
 				workspace: workspacePathFor(ownerRoot),
-			},
+			}),
 		};
 	}
 	const workspacePath = workspaceTargetFor(ownerRoot, name);
@@ -744,22 +768,18 @@ async function runOpenCommand(
 	}
 	return {
 		ok: true,
-		data: {
-			contract_id: WORKTREE_CONTRACT_ID,
-			schema_version: WORKTREE_SCHEMA_VERSION,
+		data: resultData("open", {
 			action: "open_workspace",
 			launched: true,
 			workspace_path: workspacePath,
-		},
+		}),
 	};
 }
 
 function runCommandsCommand(): CommandResult {
 	return {
 		ok: true,
-		data: {
-			contract_id: WORKTREE_CONTRACT_ID,
-			schema_version: WORKTREE_SCHEMA_VERSION,
+		data: resultData("commands", {
 			...projectCommandDiscoveryTree([
 				["sync", worktreeContracts.sync],
 				["focus", worktreeContracts.focus],
@@ -770,7 +790,7 @@ function runCommandsCommand(): CommandResult {
 				["clean", worktreeContracts.clean],
 				["commands", worktreeContracts.commands],
 			]),
-		},
+		}),
 	};
 }
 
@@ -873,27 +893,52 @@ export async function main(
 		createCliRuntimeErrorEnvelope({
 			run_id: runId,
 			process_exit_code: result.exitCode,
-			error: {
-				run_id: runId,
-				code: result.code,
-				message: result.message,
-				exit_code: result.exitCode,
-				severity: "error",
-				recoverability: result.recoverability,
-				retryable: false,
-				hint: { action: result.recoverability, summary: result.action },
-			},
-			data: {
-				contract_id: WORKTREE_CONTRACT_ID,
-				schema_version: WORKTREE_SCHEMA_VERSION,
+			error:
+				result.recoverability === "change_input"
+					? createCliRuntimeError({
+							run_id: runId,
+							code: result.code,
+							message: result.message,
+							exit_code: result.exitCode,
+							recoverability: "change_input",
+							retryable: false,
+							hint: { action: result.recoverability, summary: result.action },
+						})
+					: createCliRepairStateRuntimeError({
+							run_id: runId,
+							code: result.code,
+							message: result.message,
+							exit_code: result.exitCode,
+							hint: { action: result.recoverability, summary: result.action },
+						}),
+			data: lifecycleResultData({
 				changed_state: "none",
 				next_safe_action: result.action,
 				...result.data,
-			},
+			}),
 		}),
 		{ runId, durationMs },
 	);
 	return result.exitCode;
+}
+
+function resultData<TData extends object>(
+	command: WorkTreeCommand,
+	data: CommandResultPayload<TData>,
+): Record<string, unknown> {
+	return createCommandResultData(
+		worktreeContracts[command] as { resultContract?: CommandFacadeResultContract },
+		data,
+	);
+}
+
+function lifecycleResultData<TData extends object>(
+	data: CommandResultPayload<TData>,
+): Record<string, unknown> {
+	return createCommandResultData(
+		{ resultContract: worktreeRenderResultContract },
+		data,
+	);
 }
 
 function createRepoRuntime(runtime: WorkTreeRuntime, repoRoot: string): WorkTreeRuntime {

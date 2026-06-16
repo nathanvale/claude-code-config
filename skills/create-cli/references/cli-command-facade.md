@@ -58,9 +58,23 @@ as the enforcement backend.
   in the plan before implementation writes code.
 - Scaffold a package-owned Branch Station Catalog beside `command-contract.ts`
   before runner behavior or process integration rows.
+- Use the facade result-data helper when a command result declares
+  `resultContract`.
+- Keep package result payloads as named structured object types. Do not force
+  interface-shaped payloads through `Record<string, unknown>`.
+- Do not use a bare `object` payload type without the facade's plain-object
+  runtime guard.
+- Keep facade metadata keys owned by the helper; payload types block
+  `contract_id` and `schema_version`, and runtime guards reject collisions.
+- For generic error payloads, use a lifecycle or error-owned result contract.
+  Do not stamp generic error data with a command-specific success
+  `resultContract`.
 - Validate at construction with the facade runtime.
 - Use the no-throw parse path when an autonomous loop needs repair hints.
 - Stop and hand off when validation returns an issue with no known correction.
+- For broad CLI migrations, settle the facade helper API first, prove it with
+  fake facade tests, update one consuming CLI, run the Command Surface Alignment
+  Proof, then fan out.
 
 ## Proof Expectations
 
@@ -93,6 +107,34 @@ judgment for:
 - Deprecation and migration posture.
 - Package-owned safety policy.
 - Package-owned recovery meaning.
+
+## Result Data Helper
+
+- Use the package-root facade helper to attach `resultContract` metadata to
+  successful command data.
+- Keep exact helper signatures in the facade package, not in this reference.
+- Treat `contract_id` and `schema_version` as reserved helper-owned keys.
+- Runtime guard expectations:
+  - Reject null.
+  - Reject arrays.
+  - Reject functions.
+  - Reject reserved metadata collisions.
+- Payload type stance:
+  - Prefer named structured object payloads for package result data.
+  - Avoid `Record<string, unknown>` when the payload is an interface-shaped
+    object without an index signature.
+  - Avoid bare `object` unless the runtime guard proves a plain object before
+    spreading or writing.
+- Error payload stance:
+  - Use lifecycle or error-owned contracts for generic failure data.
+  - Use command-specific result contracts only for that command's success shape
+    or failure shape when the package explicitly owns that shape.
+- Structured error stance:
+  - Build structured runtime errors through facade helper constructors.
+  - Use typed convenience helpers for usage, repair-state, and retry failures.
+  - Use the generic structured error builder when the package owns
+    recoverability directly.
+  - Do not hand-build structured runtime error literals in CLI front doors.
 
 ## Gotchas
 

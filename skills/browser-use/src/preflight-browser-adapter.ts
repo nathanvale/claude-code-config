@@ -11,6 +11,7 @@ import {
 	type RuntimeContinuationGuidance,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	emitCliDiagnostic,
@@ -1632,7 +1633,7 @@ function emitWarmChromeFailure(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: input.warmChrome.exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code:
 					typeof error.code === "string"
@@ -1662,7 +1663,7 @@ function emitWarmChromeFailure(input: {
 						? error.failure_domain
 						: "browser_entry_handoff",
 				hint: normalizeWarmChromeHint(error.hint),
-			},
+			}),
 			runtime_actions: Array.isArray(input.warmChrome.envelope.runtime_actions)
 				? input.warmChrome.envelope.runtime_actions
 				: [runtimeAction("inspect_adapter_config")],
@@ -1709,7 +1710,7 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: error.exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: error.code,
 				message: error.message,
@@ -1726,7 +1727,7 @@ function emitCliError(input: {
 						? { docs_url: error.hintDocsUrl }
 						: {}),
 				},
-			},
+			}),
 			runtime_actions: guidance.runtimeActions,
 			continuation: guidance.continuation,
 		}),

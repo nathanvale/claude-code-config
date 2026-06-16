@@ -15,8 +15,11 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+	type AgentHintActionForRecoverability,
+	type AgentHintForRecoverability,
 	type CliRuntimeSuccessEnvelope,
-	type AgentHint,
+	createCliRuntimeError,
+	createCliRepairStateRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	renderCommandUsage,
@@ -211,12 +214,32 @@ const HEALTH_NEXT_ACTION_RULES: readonly HealthNextActionRule[] = [
 		},
 	},
 ];
-type SkillFeedbackErrorHint =
+type SkillFeedbackErrorRecoverability = "change_input" | "repair_state";
+
+type SkillFeedbackErrorHint<
+	TRecoverability extends SkillFeedbackErrorRecoverability = SkillFeedbackErrorRecoverability,
+> =
 	| string
 	| {
 			summary: string;
-			action?: AgentHint["action"];
+			action?: AgentHintActionForRecoverability<TRecoverability>;
 			docs_url?: string;
+	  };
+
+type SkillFeedbackErrorOptions =
+	| {
+			recoverability: "change_input";
+			hint: SkillFeedbackErrorHint<"change_input">;
+			contract?: SkillFeedbackResultContractId;
+			changedState?: "none" | "partial";
+			data?: Record<string, unknown>;
+	  }
+	| {
+			recoverability: "repair_state";
+			hint: SkillFeedbackErrorHint<"repair_state">;
+			contract?: SkillFeedbackResultContractId;
+			changedState?: "none" | "partial";
+			data?: Record<string, unknown>;
 	  };
 type SkillFeedbackReadCommand = "review" | "health";
 type SkillFeedbackCliOptions = {
@@ -3113,40 +3136,33 @@ function errorResult(
 	exitCode: number,
 	code: string,
 	message: string,
-	options: {
-		recoverability: "change_input" | "repair_state";
-		hint: SkillFeedbackErrorHint;
-		contract?: SkillFeedbackResultContractId;
-		changedState?: "none" | "partial";
-		data?: Record<string, unknown>;
-	},
+	options: SkillFeedbackErrorOptions,
 ): SkillFeedbackProcessResult {
-	const hintAction: AgentHint["action"] =
-		options.recoverability === "repair_state" ? "repair_state" : "change_input";
-	const hint: AgentHint =
-		typeof options.hint === "string"
-			? { summary: options.hint, action: hintAction }
-			: {
-					summary: options.hint.summary,
-					action: options.hint.action ?? hintAction,
-					...(options.hint.docs_url
-						? { docs_url: options.hint.docs_url }
-						: {}),
-				};
 	const envelope = createCliRuntimeErrorEnvelope({
 		run_id: runId,
 		process_exit_code: exitCode,
-		error: {
-			run_id: runId,
-			code,
-			message,
-			exit_code: exitCode,
-			severity: exitCode === USAGE_EXIT_CODE ? "error" : "fatal",
-			recoverability: options.recoverability,
-			retryable: false,
-			failure_domain: "skill_feedback",
-			hint,
-		},
+			error:
+				options.recoverability === "change_input"
+					? createCliRuntimeError({
+							run_id: runId,
+							code,
+							message,
+							exit_code: exitCode,
+							severity: exitCode === USAGE_EXIT_CODE ? "error" : "fatal",
+							recoverability: "change_input",
+							retryable: false,
+							failure_domain: "skill_feedback",
+							hint: skillFeedbackAgentHint("change_input", options.hint),
+						})
+				: createCliRepairStateRuntimeError({
+						run_id: runId,
+						code,
+						message,
+						exit_code: exitCode,
+						severity: exitCode === USAGE_EXIT_CODE ? "error" : "fatal",
+						failure_domain: "skill_feedback",
+						hint: skillFeedbackAgentHint("repair_state", options.hint),
+					}),
 		data: {
 			...options.data,
 			changed_state: options.changedState ?? "none",
@@ -3155,6 +3171,28 @@ function errorResult(
 		},
 	});
 	return { exitCode, stdout: `${JSON.stringify(envelope)}\n`, stderr: "" };
+}
+
+function skillFeedbackAgentHint(
+	recoverability: "change_input",
+	hint: SkillFeedbackErrorHint<"change_input">,
+): AgentHintForRecoverability<"change_input">;
+function skillFeedbackAgentHint(
+	recoverability: "repair_state",
+	hint: SkillFeedbackErrorHint<"repair_state">,
+): AgentHintForRecoverability<"repair_state">;
+function skillFeedbackAgentHint(
+	recoverability: SkillFeedbackErrorRecoverability,
+	hint: SkillFeedbackErrorHint<SkillFeedbackErrorRecoverability>,
+): AgentHintForRecoverability<SkillFeedbackErrorRecoverability> {
+	if (typeof hint === "string") {
+		return { summary: hint, action: recoverability };
+	}
+	return {
+		summary: hint.summary,
+		action: hint.action ?? recoverability,
+		...(hint.docs_url ? { docs_url: hint.docs_url } : {}),
+	};
 }
 
 function schemaVersionForContract(
@@ -3616,7 +3654,12 @@ function parseCloseoutStdin(
 	raw: string,
 ):
 	| { ok: true; receipt: unknown }
-	| { ok: false; code: string; message: string; hint: SkillFeedbackErrorHint }
+	| {
+			ok: false;
+			code: string;
+			message: string;
+			hint: SkillFeedbackErrorHint<"change_input">;
+	  }
 {
 	const bytes = new TextEncoder().encode(raw).byteLength;
 	if (bytes > MAX_CLOSEOUT_STDIN_BYTES) {

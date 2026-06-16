@@ -669,7 +669,7 @@ describe("Command Surface Alignment Proof", () => {
 		);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
-			expect(result.data.contract_id).toBe("worktree.workspace");
+			expect(result.data.contract_id).toBe("worktree.commands");
 			expect(JSON.stringify(result.data)).toContain("worktree.commands");
 		}
 	});
