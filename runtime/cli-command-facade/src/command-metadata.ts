@@ -54,7 +54,7 @@ function throwIfRuntimeContractIssues(issues: readonly string[]): void {
 
 export function findCommandFacadeMetadataDrift<
 	TCommand extends string,
-	TContract extends CommandFacadeContract<TCommand, string, string>,
+	TContract extends CommandFacadeContract<string, string, string>,
 >(
 	contracts: Record<TCommand, TContract>,
 	options: CommandFacadeContractValidationOptions = {},
@@ -318,10 +318,10 @@ export function findCommandFacadeMetadataDrift<
 					discovery: false,
 				}),
 			);
-		}
-		if (contract.alias) {
-			const target = contracts[contract.alias.command];
-			if (!target) {
+			}
+			if (contract.alias) {
+				const target = contracts[contract.alias.command as TCommand];
+				if (!target) {
 				drift.push({
 					category: "command-alias-target-missing",
 					path,
@@ -404,7 +404,7 @@ export type CommandFacadeContractValidationOptions = {
 
 export type ParseCommandFacadeContractResult<
 	TCommand extends string,
-	TContract extends CommandFacadeContract<TCommand, string, string>,
+	TContract extends CommandFacadeContract<string, string, string>,
 > =
 	| { ok: true; contracts: Record<TCommand, TContract> }
 	| { ok: false; issues: CommandFacadeMetadataDrift[] };
@@ -419,7 +419,7 @@ export type ParseCommandFacadeContractResult<
  */
 export function parseCommandFacadeContract<
 	TCommand extends string,
-	TContract extends CommandFacadeContract<TCommand, string, string>,
+	TContract extends CommandFacadeContract<string, string, string>,
 >(
 	contracts: Record<TCommand, TContract>,
 	options: CommandFacadeContractValidationOptions = {},
@@ -442,7 +442,7 @@ export function parseCommandFacadeContract<
  */
 export function defineCommandFacadeContract<
 	TCommand extends string,
-	TContract extends CommandFacadeContract<TCommand, string, string>,
+	TContract extends CommandFacadeContract<string, string, string>,
 >(
 	contracts: Record<TCommand, TContract>,
 	options: CommandFacadeContractValidationOptions = {},

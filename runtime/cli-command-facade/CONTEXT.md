@@ -85,6 +85,18 @@ diagnostics prose
 result contract metadata and safe action affordance shape.
 _Avoid_: schema registry, global result envelope, package action policy
 
+**Result Data Helper** is the package-root facade helper category that attaches
+`resultContract` metadata to package-owned object-shaped command data while
+reserving facade metadata keys.
+_Avoid_: schema validator, generic data envelope, command router, package
+result vocabulary owner
+
+**Result Payload** is the package-owned structured object passed to the
+**Result Data Helper** before facade metadata is attached. It is not a generic
+dictionary and not an array or function.
+_Avoid_: `Record<string, unknown>` default, bare `object` without runtime guard,
+facade-owned result schema
+
 **Action Affordance** is generic discovery metadata for a possible next action:
 id, summary, and facade side-effect classes.
 _Avoid_: executable command template, repair semantics, browser policy
@@ -248,6 +260,20 @@ _Avoid_: every package script as a public route
 - Agent-facing payload schema/version meaning belongs in **Result Contract
   Discovery** when discovery is needed, not as mandatory runtime envelope
   metadata.
+- Consuming packages that declare **Result Contract Discovery** use the
+  **Result Data Helper** for command result metadata attachment. The helper owns
+  `contract_id` and `schema_version` placement; package payloads own the
+  remaining result vocabulary.
+- Name **Result Payload** types as structured object types. Do not force
+  interface-shaped payloads through `Record<string, unknown>`, because that
+  turns ordinary object interfaces into dictionary contracts.
+- A broad `object` payload constraint is acceptable only with a runtime
+  plain-object guard. The guard rejects null, arrays, functions, and reserved
+  metadata collisions before helper output is spread or written.
+- Use lifecycle or error-owned result contracts for generic failure data
+  when result metadata is needed. Do not stamp generic error payloads with a
+  command-specific success `resultContract`; that misreports the payload shape
+  to agents and alignment tests.
 - Runtime-contract adopters must provide structured runtime errors; failures
   are the highest-value agent path and must not be left as prose-only output.
 - Runtime-contract adopters must provide redaction fixtures proving sensitive
@@ -262,6 +288,11 @@ _Avoid_: every package script as a public route
   message, exit code, **Runtime Error Severity**, recoverability,
   retryability, and optional agent hint while keeping domain error families and
   recovery meaning package-owned.
+- Construct **Structured Runtime Error** values through facade helper
+  constructors so recoverability, retryability, hint, failure-domain, and unsafe
+  text gates stay centralized. Typed convenience helpers cover common usage,
+  repair-state, and retry failures; the generic structured error builder covers
+  package-owned recovery choices such as `none` or `authenticate`.
 - **Structured Runtime Error** fields use canonical snake_case spelling in the
   facade runtime-contract projection.
 - **Failure Domain** values are package-owned labels. CLI Command Facade

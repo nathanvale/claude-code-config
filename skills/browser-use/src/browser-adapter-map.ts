@@ -6,6 +6,7 @@ import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
 	CliUsageError,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	parseCliDiagnosticArgv,
@@ -349,7 +350,7 @@ function writeResult(
 		createCliRuntimeErrorEnvelope({
 			run_id: runtime.runId,
 			process_exit_code: MAP_INVALID_EXIT_CODE,
-			error: {
+			error: createCliRuntimeError({
 				run_id: runtime.runId,
 				code: "browser_adapter_map_invalid",
 				message: "Browser Adapter Map validation failed.",
@@ -363,7 +364,7 @@ function writeResult(
 						"Update Browser Adapter Map sections or remove copied Recovery Map keys.",
 					action: "change_input",
 				},
-			},
+			}),
 			runtime_actions: [
 				{
 					id: "update_browser_adapter_map",
@@ -404,7 +405,7 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: isUsage ? "usage_error" : "runtime_error",
 				message,
@@ -413,7 +414,7 @@ function emitCliError(input: {
 				recoverability: isUsage ? "change_input" : "none",
 				retryable: false,
 				failure_domain: isUsage ? "input" : "runtime_diagnostics",
-			},
+			}),
 			...(isUsage
 				? {
 						runtime_actions: [

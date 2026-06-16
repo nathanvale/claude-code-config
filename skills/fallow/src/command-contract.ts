@@ -336,11 +336,13 @@ const whyFlags = {
 	},
 } as const satisfies FallowRunnerCommandContract["flags"];
 
-const resultContract = {
+export const fallowRunnerResultContract = {
 	id: FALLOW_RUNNER_CONTRACT_ID,
 	kind: "Fallow runner evidence envelope.",
 	schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
 } as const satisfies NonNullable<FallowRunnerCommandContract["resultContract"]>;
+
+const resultContract = fallowRunnerResultContract;
 
 const exitCodes = {
 	"0": "Fallow runner produced usable evidence.",

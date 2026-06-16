@@ -19,8 +19,10 @@
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
+	createCliRepairStateRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	createCliUsageRuntimeError,
 	parseCliDiagnosticArgv,
 	parseCliDiagnosticFallbackArgv,
 	renderCommandUsage,
@@ -411,7 +413,7 @@ function writeResult(
 				createCliRuntimeErrorEnvelope({
 					run_id: result.run_id,
 					process_exit_code: result.exit_code,
-					error: {
+					error: createCliRepairStateRuntimeError({
 						run_id: result.run_id,
 						code: "findings_present",
 					message:
@@ -420,9 +422,7 @@ function writeResult(
 							: "Station Map findings present; see findings[] and the ledger.",
 						exit_code: result.exit_code,
 						severity: "warning",
-						recoverability: "repair_state",
-					retryable: false,
-				},
+				}),
 				data: result,
 			}),
 			{ runId: result.run_id, durationMs: result.duration_ms },
@@ -460,15 +460,12 @@ function emitUsageError(input: {
 			createCliRuntimeErrorEnvelope({
 				run_id: input.runId,
 				process_exit_code: 2,
-				error: {
+				error: createCliUsageRuntimeError({
 					run_id: input.runId,
 					code: "usage_error",
 					message,
 					exit_code: 2,
-					severity: "error",
-					recoverability: "change_input",
-					retryable: false,
-				},
+				}),
 			}),
 			{ runId: input.runId, durationMs: input.durationMs },
 		);

@@ -98,11 +98,17 @@ Use before and after meaningful edits to `create-cli`.
   - Names contract, model, engine, discovery, CLI, and test owners.
   - Includes validation loop and Command Surface Alignment Proof.
   - Points to owner paths for exact contract shape.
+  - Keeps result metadata attachment on the facade result-data helper path.
+  - Keeps structured runtime errors on facade helper constructors.
+  - Avoids `Record<string, unknown>` as the default for interface-shaped result
+    payloads.
 - **Observed route:**
   Facade-backed CLI.
 - **Observed markers:**
   Agent-native first, facade path map, owner paths, validation loop, Command
-  Surface Alignment Proof.
+  Surface Alignment Proof, result-data helper path, structured runtime-error
+  helper path, no `Record<string, unknown>` default for interface-shaped result
+  payloads.
 - **Notes:**
   Static route check from `SKILL.md` and `cli-command-facade.md`.
 
@@ -114,4 +120,6 @@ Use before and after meaningful edits to `create-cli`.
 - Multi-command agent-native prompt preserves implementation-shape guidance.
 - Facade-backed prompt follows facade path only when explicitly requested.
 - References point to owner paths for deterministic contract shape.
+- Facade-backed prompt preserves result-data helper and structured-error helper
+  guardrails without copying helper signatures.
 - `SKILL.md` stays route-oriented.

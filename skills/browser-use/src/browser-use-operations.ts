@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:pa
 import {
 	type CliWriter,
 	type RuntimeActionGuidance,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	writeJsonEnvelope,
@@ -1022,7 +1023,7 @@ function emitOperationFailure(input: {
 			},
 			runtime_actions: [operationAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: failure.code,
 				message: redactUnsafeText(failure.message),
@@ -1031,7 +1032,7 @@ function emitOperationFailure(input: {
 				recoverability: failure.recoverability,
 				retryable: failure.recoverability === "retry",
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1215,5 +1216,4 @@ function boundSnapshotText(text: string): {
 		truncated,
 	};
 }
-
 

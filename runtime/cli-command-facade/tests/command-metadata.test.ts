@@ -199,12 +199,12 @@ describe("command metadata", () => {
 					command: "absent",
 					defaultArgs: [],
 				},
-			},
-			missing: {
-				...contracts.inspect,
-				audience: undefined,
-			},
-		});
+				},
+				missing: {
+					...contracts.inspect,
+					audience: undefined as never,
+				},
+			});
 
 		// Exact emitted order pins the canonical per-command loop sequence:
 		// audience -> side_effect -> execution_mode -> output_mode ->
@@ -902,7 +902,12 @@ describe("command metadata", () => {
 			},
 		};
 
-		const drift = findCommandFacadeMetadataDrift(benignContracts);
+			const drift = findCommandFacadeMetadataDrift(
+				benignContracts satisfies Record<
+					"inspect",
+					CommandFacadeContract<string, string, string>
+				>,
+			);
 		expect(
 			drift.filter((finding) => finding.category.endsWith("-unsafe-text")),
 		).toEqual([]);

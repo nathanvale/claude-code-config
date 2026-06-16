@@ -14,7 +14,7 @@
 		"noFallthroughCasesInSwitch": true,
 		"noImplicitOverride": true,
 		"resolveJsonModule": true,
-		"ignoreDeprecations": "5.0"
+		"ignoreDeprecations": "6.0"
 	},
 	"include": ["src/**/*.ts", "tests/**/*.ts"]
 }

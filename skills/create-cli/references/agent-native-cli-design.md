@@ -15,6 +15,20 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 - Do not create a parallel agent-only skill.
 - Do not require the facade path unless the user asks for it.
 
+## Facade Relationship
+
+- Agent-native is the design goal: discovery, parseable output, recovery, run
+  correlation, and side-effect clarity.
+- Facade-backed is one enforcement path for that goal, not a competing design
+  lane.
+- Use `cli-command-facade.md` when the user asks for facade-backed work, a
+  package already depends on `@side-quest/cli-command-facade`, or reusable
+  runtime validation is the point.
+- Keep this reference language-agnostic for agent-native CLIs in Python, shell,
+  Node, Bun, or another runtime.
+- The facade can enforce machine-checkable contracts; this reference still owns
+  design judgment, user mental model, side-effect posture, and recovery intent.
+
 ## Runtime-Contract Minimum
 
 - Provide discoverable command purpose and useful help.
@@ -56,7 +70,7 @@ Add recipes when they change driver behavior or reduce real risk.
 - Discovery owns runtime lookup, provenance, freshness, and capability reports.
 - CLI owns argv parsing, IO, rendering, diagnostics, and test harnesses.
 - Package-owned result vocabulary owns stable package-specific literals; see
-  `../../../CONTEXT.md`.
+  `../../CONTEXT.md`.
 - Private implementation detail stays out of create-cli prose.
 
 ## CLI Front Door Shape
@@ -156,5 +170,5 @@ shared validation, or structured envelopes.
 
 - CLI baseline: `references/cli-guidelines.md`.
 - Facade-backed path: `references/cli-command-facade.md`.
-- Vocabulary: `../../../CONTEXT.md`.
-- Extension decision: `../../../docs/adr/0009-create-cli-uses-bounded-local-extension.md`.
+- Vocabulary: `../../CONTEXT.md`.
+- Extension decision: `../../docs/adr/0009-create-cli-uses-bounded-local-extension.md`.

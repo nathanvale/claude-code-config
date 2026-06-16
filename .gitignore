@@ -25,3 +25,5 @@ skills/fallow/scripts/.fallow/
 
 # Agent worktree runtime state (generated)
 .agent-worktree/
+
+.envrc

@@ -35,11 +35,13 @@ export type AgentWorktreeCommandContract = CommandFacadeContract<
 	AgentWorktreeMutation
 >;
 
-const resultContract = {
+export const agentWorktreeLifecycleResultContract = {
 	id: AGENT_WORKTREE_CONTRACT_ID,
 	kind: "agent worktree lifecycle result.",
 	schema_version: AGENT_WORKTREE_SCHEMA_VERSION,
 } as const satisfies NonNullable<AgentWorktreeCommandContract["resultContract"]>;
+
+const resultContract = agentWorktreeLifecycleResultContract;
 
 const commandsResultContract = {
 	id: "agent-worktree.commands",

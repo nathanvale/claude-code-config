@@ -104,11 +104,13 @@ const WORKTREE_DELEGATE_FAILURE_ACTIONS = [
 	},
 ] as const;
 
-const renderResultContract = {
+export const worktreeRenderResultContract = {
 	id: WORKTREE_CONTRACT_ID,
 	kind: "worktree workspace render or shared worktree lifecycle result.",
 	schema_version: WORKTREE_SCHEMA_VERSION,
 } as const satisfies NonNullable<WorkTreeCommandContract["resultContract"]>;
+
+const renderResultContract = worktreeRenderResultContract;
 
 /**
  * Exit-code contract shared across worktree commands.
