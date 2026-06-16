@@ -18,7 +18,8 @@
 	},
 	"scripts": {
 		"test": "bun test ./tests/*.test.ts",
-		"typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.type-tests.json && tsc --noEmit -p tsconfig.type-tests.loose.json"
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"typecheck:contracts": "tsc --noEmit -p tsconfig.type-tests.json && tsc --noEmit -p tsconfig.type-tests.loose.json"
 	},
 	"dependencies": {
 		"@logtape/logtape": "^2.0.2"
