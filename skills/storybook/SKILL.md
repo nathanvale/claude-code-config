@@ -25,7 +25,10 @@ Default path: use the local ad-hoc endpoint. Do not persist MCP config.
 
 1. Start or find Storybook.
 2. Export `STORYBOOK_URL`.
-3. List tools with `mcporter list --http-url "$STORYBOOK_URL/mcp" --allow-http --schema`.
+3. List tools — run `export STORYBOOK_URL=http://localhost:6006` first, then
+   `mcporter list --http-url "$STORYBOOK_URL/mcp" --allow-http --schema`.
+   Do NOT use inline assignment (`VAR=val cmd "$VAR/..."`) — shell expands `$VAR`
+   before the assignment takes effect, so `$STORYBOOK_URL` resolves to empty.
 4. Stop when the schema shows Storybook tools, then call only the tool needed.
 
 ## Research Notes
