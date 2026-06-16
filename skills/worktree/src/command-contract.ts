@@ -7,19 +7,25 @@ import { WORKTREE_COLOR_PALETTE, WORKTREE_CONTRACT_ID, WORKTREE_SCHEMA_VERSION }
 /**
  * Public command ids for the WorkTree command.
  *
- * Owned render verbs (`sync`/`focus`/`color`/`open`) plus shared-runtime
- * worktree verbs (`new`/`rm`/`clean`) powered by `agent-worktree`.
- * `commands` emits machine-readable discovery metadata.
+ * `status` is the low-load front door. Owned render verbs
+ * (`sync`/`focus`/`color`/`open`/`app`) plus shared-runtime worktree verbs
+ * (`new`/`rm`/`clean`) are powered by `agent-worktree`. `commands` emits
+ * machine-readable discovery metadata.
  */
-export type WorkTreeCommand =
-	| "sync"
-	| "focus"
-	| "color"
-	| "open"
-	| "new"
-	| "rm"
-	| "clean"
-	| "commands";
+export const WORKTREE_COMMAND_ORDER = [
+	"status",
+	"app",
+	"new",
+	"rm",
+	"clean",
+	"sync",
+	"focus",
+	"color",
+	"open",
+	"commands",
+] as const;
+
+export type WorkTreeCommand = (typeof WORKTREE_COMMAND_ORDER)[number];
 
 type WorkTreeAudience = "agent" | "operator";
 type WorkTreeMutation = "check" | "write" | "destructive";
@@ -41,6 +47,8 @@ export const WORKTREE_DIAGNOSTIC_CODES = [
 	"agent_worktree_failed",
 	"unknown_color",
 	"code_not_found",
+	"codex_app_not_found",
+	"worktree_not_found",
 	"write_failed",
 ] as const;
 
@@ -57,6 +65,27 @@ const WORKTREE_SYNC_SUCCESS_ACTIONS = [
 		id: "open_workspace",
 		summary: "Open the rendered workspace to review the focus pairs and colors.",
 		sideEffects: ["read"],
+	},
+] as const;
+
+/**
+ * Discovery actions advertised after the status front door.
+ */
+const WORKTREE_STATUS_SUCCESS_ACTIONS = [
+	{
+		id: "open_codex_app",
+		summary: "Open an existing linked worktree in Codex Desktop.",
+		sideEffects: ["read", "browser"],
+	},
+	{
+		id: "create_worktree",
+		summary: "Create a repo-local worktree before opening it in an app.",
+		sideEffects: ["read", "write"],
+	},
+	{
+		id: "render_workspace",
+		summary: "Render the VS Code workspace from current worktree state.",
+		sideEffects: ["read", "write"],
 	},
 ] as const;
 
@@ -100,6 +129,22 @@ const WORKTREE_DELEGATE_FAILURE_ACTIONS = [
 	{
 		id: "inspect_worktrees",
 		summary: "Inspect worktree state, resolve the upstream failure, then retry.",
+		sideEffects: ["read"],
+	},
+] as const;
+
+/**
+ * Discovery action advertised when a Codex App launch target is not available.
+ */
+const WORKTREE_CODEX_APP_FAILURE_ACTIONS = [
+	{
+		id: "inspect_worktrees",
+		summary: "Inspect repo-local worktrees, create or choose a branch, then retry.",
+		sideEffects: ["read"],
+	},
+	{
+		id: "check_codex_launcher",
+		summary: "Check that the Codex Desktop launcher is installed and reachable, then retry.",
 		sideEffects: ["read"],
 	},
 ] as const;
@@ -174,6 +219,25 @@ const repoFlag = {
  */
 export const worktreeContracts = defineCommandFacadeContract(
 	{
+		status: {
+			script: "worktree",
+			summary: "Show VS Code workspace, worktree CRUD, and next-action status.",
+			usage: ["worktree status --json", "worktree status --repo <path> --json"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["read", "check"],
+			executionModes: ["check"],
+			outputModes: ["json"],
+			interactivity: "none",
+			resultContract: renderResultContract,
+			actionAffordances: {
+				success: WORKTREE_STATUS_SUCCESS_ACTIONS,
+				failure: WORKTREE_DELEGATE_FAILURE_ACTIONS,
+			},
+			flags: { ...repoFlag, ...jsonFlag },
+			exitCodes,
+		},
 		sync: {
 			script: "worktree",
 			summary: "Render the repo's .code-workspace from the registry and live worktrees.",
@@ -255,6 +319,24 @@ export const worktreeContracts = defineCommandFacadeContract(
 			flags: { ...jsonFlag },
 			exitCodes,
 		},
+		app: {
+			script: "worktree",
+			summary: "Open a linked worktree in Codex Desktop as an app project.",
+			usage: ["worktree app <branch> --json", "worktree app --repo <path> <branch> --json"],
+			json: true,
+			audience: "operator",
+			mutation: "check",
+			sideEffects: ["read", "browser"],
+			executionModes: ["check"],
+			outputModes: ["json"],
+			interactivity: "optional",
+			resultContract: renderResultContract,
+			actionAffordances: {
+				failure: WORKTREE_CODEX_APP_FAILURE_ACTIONS,
+			},
+			flags: { ...repoFlag, ...jsonFlag },
+			exitCodes,
+		},
 		new: {
 			script: "worktree",
 			summary: "Create a worktree through agent-worktree, then re-render.",
@@ -279,7 +361,7 @@ export const worktreeContracts = defineCommandFacadeContract(
 		},
 		rm: {
 			script: "worktree",
-			summary: "Remove a worktree through agent-worktree, then re-render.",
+			summary: "Remove a worktree, clean Codex app project state, then re-render.",
 			usage: ["worktree rm <branch> --force --json", "worktree rm <branch> --force --force-render --json"],
 			json: true,
 			audience: "agent",
@@ -294,7 +376,7 @@ export const worktreeContracts = defineCommandFacadeContract(
 				failure: WORKTREE_DELEGATE_FAILURE_ACTIONS,
 			},
 			previewExemption: {
-				reason: "Worktree removal is owned and confirmed by agent-worktree; worktree re-renders through the drift gate after.",
+				reason: "Worktree removal is owned and confirmed by agent-worktree; WorkTree cleans matching Codex app project state, then re-renders through the drift gate.",
 			},
 			flags: { ...repoFlag, ...destructiveForceFlag, ...forceRenderFlag, ...noInputFlag, ...jsonFlag },
 			exitCodes,

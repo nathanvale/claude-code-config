@@ -141,8 +141,10 @@ bunx @side-quest/git worktree orphans [--delete]
 One worktree location serves every tool. Worktrees live in `<repo>/.worktrees/<branch>/` (gitignored). A git worktree is just a directory — no tool owns it, so all of them open the same one.
 
 - **Create** worktrees here yourself (or via the worktree CLI / `ce-worktree`), not by letting a tool auto-create its own.
+- **Front door:** run `worktree status --json` to inspect the owner root, VS Code workspace state, linked worktrees, CRUD actions, and next safe action. Running `worktree` with no args explains VS Code sync and worktree CRUD in plain language.
 - **Claude / shell:** `cd <repo>/.worktrees/<branch>`.
-- **Codex:** open the worktree by pointing the thread's working directory at that path (`cwd` / `workingDirectory`). Do not rely on Codex auto-creating worktrees under `~/.codex/worktrees/<hash>/` — those are invisible to the shared convention. (Codex resolves project hooks/trust from the root checkout, so a linked worktree under `.worktrees/` is fully supported.)
+- **Codex App:** run `worktree app <branch>` from the repo to open the repo-local worktree as a Codex App project. Fallback: open the worktree by pointing the thread's working directory at that path (`cwd` / `workingDirectory`). Do not rely on Codex auto-creating worktrees under `~/.codex/worktrees/<hash>/` — those are invisible to the shared convention. (Codex resolves project hooks/trust from the root checkout, so a linked worktree under `.worktrees/` is fully supported.)
+- **Codex cleanup:** `worktree rm <branch> --force` removes the deleted worktree path from Codex Desktop project state, archives matching non-current Codex threads when the local Codex index is readable, then re-renders the workspace. `worktree clean` is still preview-only; do not expect app state mutation from a preview.
 - **Never** scatter worktrees across `~/.codex/worktrees/`, `<repo>/.claude/worktrees/`, and `<repo>/.worktrees/` — that split is what makes a worktree invisible to one tool or the other.
 
 ## Important Notes

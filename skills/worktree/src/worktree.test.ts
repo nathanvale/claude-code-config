@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { renderCommandUsage } from "@side-quest/cli-command-facade";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { WORKTREE_DIAGNOSTIC_CODES, worktreeContracts } from "./command-contract.ts";
 import { WORKTREE_COLOR_PALETTE } from "./model.ts";
 import type { RunResult } from "./worktree-discovery.ts";
 import {
+	archiveCodexThreadsForCwd,
+	cleanupCodexAppProject,
 	createDefaultRuntime,
 	main,
 	parseInvocation,
+	removeCodexSidebarState,
 	runCommand,
 	validateColor,
 	type CommandResult,
@@ -38,11 +42,13 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 	writes: Map<string, string>;
 	runCalls: string[][];
 	launched: Array<{ workspacePath: string; codeBin?: string }>;
+	launchedCodex: Array<{ worktreePath: string; codexBin?: string }>;
 	ensuredDirs: string[];
 } {
 	const writes = new Map<string, string>();
 	const runCalls: string[][] = [];
 	const launched: Array<{ workspacePath: string; codeBin?: string }> = [];
+	const launchedCodex: Array<{ worktreePath: string; codexBin?: string }> = [];
 	const ensuredDirs: string[] = [];
 	const base = createDefaultRuntime({
 		repoRoot: () => "/code/my-repo",
@@ -57,6 +63,10 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 		isInteractive: () => false,
 		launchCode: async (workspacePath, codeBin) => {
 			launched.push({ workspacePath, codeBin });
+			return true;
+		},
+		launchCodexApp: async (worktreePath, codexBin) => {
+			launchedCodex.push({ worktreePath, codexBin });
 			return true;
 		},
 		now: () => 1000,
@@ -89,7 +99,7 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 		},
 		...overrides,
 	});
-	return Object.assign(base, { writes, runCalls, launched, ensuredDirs });
+	return Object.assign(base, { writes, runCalls, launched, launchedCodex, ensuredDirs });
 }
 
 function expectLifecycleErrorData(
@@ -100,6 +110,77 @@ function expectLifecycleErrorData(
 	if (!result.ok) {
 		expect(result.data).toMatchObject(expected);
 	}
+}
+
+function expectOkData(result: CommandResult): Record<string, unknown> {
+	expect(result.ok).toBe(true);
+	if (!result.ok) {
+		throw new Error(`Expected ok result, got ${result.code}`);
+	}
+	return result.data;
+}
+
+function expectAgentWorktreeFailed(result: CommandResult): void {
+	expect(result.ok).toBe(false);
+	if (!result.ok) {
+		expect(result.code).toBe("agent_worktree_failed");
+		expect(result.exitCode).toBe(1);
+	}
+}
+
+function runtimeWithRemoveFailure(): ReturnType<typeof fakeRuntime> {
+	return fakeRuntime({
+		run: async (args, options) => {
+			if (args.join(" ") === "git worktree remove /code/my-repo/.worktrees/browser-use-refactor") {
+				return { ok: false, stdout: "", stderr: "remove failed", code: 1 };
+			}
+			return fakeRuntime().run(args, options);
+		},
+	});
+}
+
+function stubCodexThreadArchive(
+	runtime: ReturnType<typeof fakeRuntime>,
+	threadIds: readonly string[],
+	failedIds: readonly string[] = [],
+): void {
+	const originalRun = runtime.run;
+	const failed = new Set(failedIds);
+	runtime.run = async (args, options) => {
+		if (args[0] === "sqlite3") {
+			runtime.runCalls.push([...args]);
+			return {
+				ok: true,
+				stdout: args[2].includes("/sqlite/") ? `${threadIds.join("\n")}\n` : "",
+				stderr: "",
+				code: 0,
+			};
+		}
+		if (args[0] === "codex" && args[1] === "archive") {
+			runtime.runCalls.push([...args]);
+			const id = args[2];
+			return failed.has(id)
+				? { ok: false, stdout: "", stderr: "archive failed", code: 1 }
+				: { ok: true, stdout: "", stderr: "", code: 0 };
+		}
+		return originalRun(args, options);
+	};
+}
+
+async function runBrowserUseRm(runtime: WorkTreeRuntime): Promise<CommandResult> {
+	return runCommand(
+		{ command: "rm", positionals: ["codex/browser-use-refactor"], force: true, noInput: false },
+		runtime,
+	);
+}
+
+async function runBrowserUseRmWithCodexThreads(
+	threadIds: readonly string[],
+	failedIds: readonly string[] = [],
+): Promise<{ runtime: ReturnType<typeof fakeRuntime>; result: CommandResult }> {
+	const runtime = fakeRuntime();
+	stubCodexThreadArchive(runtime, threadIds, failedIds);
+	return { runtime, result: await runBrowserUseRm(runtime) };
 }
 
 describe("parseInvocation", () => {
@@ -156,6 +237,71 @@ describe("validateColor", () => {
 	test("accepts a palette color and rejects an unknown one", () => {
 		expect(validateColor("blue")).toBe("blue");
 		expect(validateColor("chartreuse")).toBeNull();
+	});
+});
+
+describe("status front door", () => {
+	test("summarizes repo, workspace, linked worktrees, and next action", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set(
+			"/code/my-repo/worktree.config.json",
+			JSON.stringify({
+				branches: {
+					"codex/browser-use-refactor": { focus: "skills/browser-use", color: "teal" },
+				},
+			}),
+		);
+		const result = await runCommand({ command: "status", positionals: [], force: false }, runtime);
+		const data = expectOkData(result);
+
+		expect(data).toMatchObject({
+			action: "status",
+			changed_state: "none",
+			owner_root: "/code/my-repo",
+			workspace_path: "/code/my-repo.code-workspace",
+			workspace_state: "missing",
+			worktree_count: 3,
+			linked_worktree_count: 2,
+			next_safe_action: "Choose a linked branch to open in Codex App, or render the workspace.",
+		});
+		expect(data.front_door).toMatchObject({
+			summary: expect.stringContaining("VS Code workspace"),
+			vscode_sync: {
+				check: "status",
+				rebuild_workspace: "sync",
+				open_workspace: "open",
+			},
+			worktree_crud: ["new", "status", "sync", "rm"],
+		});
+		expect(data.crud).toMatchObject({
+			create: { label: expect.stringContaining("new repo-local worktree"), action: "new" },
+			read: { label: expect.stringContaining("current worktrees"), action: "status" },
+			update: { label: expect.stringContaining("Rebuild the VS Code workspace"), action: "sync" },
+			delete: { label: expect.stringContaining("explicit confirmation"), action: "rm" },
+		});
+		expect(data.worktrees).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					branch: "codex/browser-use-refactor",
+					focus: "skills/browser-use",
+					color: "teal",
+					is_main: false,
+				}),
+			]),
+		);
+	});
+
+	test("points at drift recovery when the workspace is hand-edited", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set("/code/my-repo.code-workspace", "{ hand edited }");
+		const result = await runCommand({ command: "status", positionals: [], force: false }, runtime);
+		const data = expectOkData(result);
+
+		expect(data).toMatchObject({
+			workspace_state: "drifted",
+			start_here: ["status", "app", "sync"],
+		});
+		expect(String(data.next_safe_action)).toContain("Review workspace drift");
 	});
 });
 
@@ -302,6 +448,58 @@ describe("focus + color", () => {
 	});
 });
 
+describe("Codex app project cleanup helpers", () => {
+	test("removeCodexSidebarState reports missing app state without writing", async () => {
+		const runtime = fakeRuntime();
+		const result = await removeCodexSidebarState(
+			runtime,
+			"/code/my-repo/.worktrees/browser-use-refactor",
+		);
+
+		expect(result).toMatchObject({
+			status: "state_missing",
+			removed_keys: [],
+		});
+		expect(runtime.writes.has(`${homedir()}/.codex/.codex-global-state.json`)).toBe(false);
+	});
+
+	test("archiveCodexThreadsForCwd reports none when the index is readable and empty", async () => {
+		const runtime = fakeRuntime();
+		stubCodexThreadArchive(runtime, []);
+		const result = await archiveCodexThreadsForCwd(
+			runtime,
+			"/code/my-repo/.worktrees/browser-use-refactor",
+		);
+
+		expect(result).toMatchObject({
+			status: "none",
+			archived_thread_ids: [],
+			failed_thread_ids: [],
+			skipped_thread_ids: [],
+		});
+		expect(runtime.runCalls.some((call) => call[0] === "codex")).toBe(false);
+	});
+
+	test("cleanupCodexAppProject reports no-op state when nothing is registered", async () => {
+		const runtime = fakeRuntime();
+		stubCodexThreadArchive(runtime, []);
+		const result = await cleanupCodexAppProject(
+			runtime,
+			"/code/my-repo/.worktrees/browser-use-refactor",
+		);
+
+		expect(result).toMatchObject({
+			changed_state: "none",
+			sidebar_state: {
+				status: "state_missing",
+			},
+			thread_archive: {
+				status: "none",
+			},
+		});
+	});
+});
+
 describe("shared lifecycle verbs", () => {
 	test("new creates through agent-worktree then re-renders", async () => {
 		const runtime = fakeRuntime();
@@ -330,6 +528,146 @@ describe("shared lifecycle verbs", () => {
 			"remove",
 			"/code/my-repo/.worktrees/browser-use-refactor",
 		]);
+	});
+
+	test("rm removes the deleted worktree from Codex app project state", async () => {
+		const runtime = fakeRuntime();
+		const statePath = `${homedir()}/.codex/.codex-global-state.json`;
+		const worktreePath = "/code/my-repo/.worktrees/browser-use-refactor";
+		runtime.writes.set(
+			statePath,
+			JSON.stringify({
+				"electron-saved-workspace-roots": [worktreePath, "/code/my-repo"],
+				"project-order": [worktreePath],
+				"pinned-project-ids": [worktreePath],
+				"active-workspace-roots": [worktreePath],
+				"electron-workspace-root-labels": {
+					[worktreePath]: "browser-use-refactor",
+				},
+				"electron-persisted-atom-state": {
+					"sidebar-collapsed-groups": {
+						[worktreePath]: true,
+					},
+					"local-env-selections-by-workspace": {
+						[`local:${worktreePath}`]: "/code/my-repo/.codex/environments/environment.toml",
+					},
+				},
+			}),
+		);
+
+		const result = await runCommand(
+			{ command: "rm", positionals: ["codex/browser-use-refactor"], force: true, noInput: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(true);
+		const state = JSON.parse(runtime.writes.get(statePath) ?? "{}");
+		expect(state["electron-saved-workspace-roots"]).toEqual(["/code/my-repo"]);
+		expect(state["project-order"]).toEqual([]);
+		expect(state["pinned-project-ids"]).toEqual([]);
+		expect(state["active-workspace-roots"]).toEqual([]);
+		expect(state["electron-workspace-root-labels"]).toEqual({});
+		expect(state["electron-persisted-atom-state"]["sidebar-collapsed-groups"]).toEqual({});
+		expect(
+			state["electron-persisted-atom-state"]["local-env-selections-by-workspace"],
+		).toEqual({});
+		if (result.ok) {
+			expect(result.data.codex_app_project_cleanup).toMatchObject({
+				worktree_path: worktreePath,
+				sidebar_state: {
+					status: "removed",
+				},
+			});
+		}
+	});
+
+	test("rm archives non-current Codex threads for the deleted worktree", async () => {
+		const { runtime, result } = await runBrowserUseRmWithCodexThreads([
+			"thread-one",
+			"thread-two",
+		]);
+
+		expect(result.ok).toBe(true);
+		expect(runtime.runCalls).toContainEqual(["codex", "archive", "thread-one"]);
+		expect(runtime.runCalls).toContainEqual(["codex", "archive", "thread-two"]);
+		if (result.ok) {
+			expect(result.data.codex_app_project_cleanup).toMatchObject({
+				thread_archive: {
+					status: "archived",
+					archived_thread_ids: ["thread-one", "thread-two"],
+				},
+			});
+		}
+	});
+
+	test("rm does not archive the current Codex thread", async () => {
+		const previousThreadId = process.env.CODEX_THREAD_ID;
+		process.env.CODEX_THREAD_ID = "thread-current";
+		try {
+			const { runtime, result } = await runBrowserUseRmWithCodexThreads([
+				"thread-current",
+				"thread-other",
+			]);
+
+			expect(result.ok).toBe(true);
+			expect(runtime.runCalls).not.toContainEqual(["codex", "archive", "thread-current"]);
+			expect(runtime.runCalls).toContainEqual(["codex", "archive", "thread-other"]);
+			if (result.ok) {
+				expect(result.data.codex_app_project_cleanup).toMatchObject({
+					thread_archive: {
+						archived_thread_ids: ["thread-other"],
+						skipped_thread_ids: ["thread-current"],
+					},
+				});
+			}
+		} finally {
+			if (previousThreadId === undefined) {
+				delete process.env.CODEX_THREAD_ID;
+			} else {
+				process.env.CODEX_THREAD_ID = previousThreadId;
+			}
+		}
+	});
+
+	test("rm reports partial Codex cleanup when a thread archive fails", async () => {
+		const { runtime, result } = await runBrowserUseRmWithCodexThreads(
+			["thread-ok", "thread-fail"],
+			["thread-fail"],
+		);
+
+		expect(result.ok).toBe(true);
+		expect(runtime.runCalls).toContainEqual(["codex", "archive", "thread-ok"]);
+		expect(runtime.runCalls).toContainEqual(["codex", "archive", "thread-fail"]);
+		if (result.ok) {
+			expect(result.data.codex_app_project_cleanup).toMatchObject({
+				changed_state: "partial",
+				thread_archive: {
+					status: "partial",
+					archived_thread_ids: ["thread-ok"],
+					failed_thread_ids: ["thread-fail"],
+				},
+			});
+		}
+	});
+
+	test("rm reports partial Codex cleanup when app state is unreadable", async () => {
+		const runtime = fakeRuntime();
+		runtime.writes.set(`${homedir()}/.codex/.codex-global-state.json`, "{ bad json");
+
+		const result = await runCommand(
+			{ command: "rm", positionals: ["codex/browser-use-refactor"], force: true, noInput: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.data.codex_app_project_cleanup).toMatchObject({
+				changed_state: "partial",
+				sidebar_state: {
+					status: "state_unreadable",
+				},
+			});
+		}
 	});
 
 	test("rm force confirms deletion but does not force workspace drift overwrite", async () => {
@@ -502,20 +840,9 @@ detached
 	});
 
 	test("shared runtime failure surfaces agent_worktree_failed, exit 1, no re-render", async () => {
-		const runtime = fakeRuntime({
-			run: async (args, options) => {
-				if (args.join(" ") === "git worktree remove /code/my-repo/.worktrees/browser-use-refactor") {
-					return { ok: false, stdout: "", stderr: "remove failed", code: 1 };
-				}
-				return fakeRuntime().run(args, options);
-			},
-		});
+		const runtime = runtimeWithRemoveFailure();
 		const result = await runCommand({ command: "rm", positionals: ["codex/browser-use-refactor"], force: true }, runtime);
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.code).toBe("agent_worktree_failed");
-			expect(result.exitCode).toBe(1);
-		}
+		expectAgentWorktreeFailed(result);
 		expectLifecycleErrorData(result, {
 			changed_state: "none",
 			failure_ref: {
@@ -661,6 +988,59 @@ describe("open", () => {
 	});
 });
 
+describe("app", () => {
+	test("opens the branch worktree in Codex Desktop", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{ command: "app", positionals: ["codex/browser-use-refactor"], force: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.data).toMatchObject({
+				action: "open_codex_app",
+				branch: "codex/browser-use-refactor",
+				worktree_path: "/code/my-repo/.worktrees/browser-use-refactor",
+				launched: true,
+			});
+		}
+		expect(runtime.launchedCodex).toEqual([
+			{ worktreePath: "/code/my-repo/.worktrees/browser-use-refactor", codexBin: undefined },
+		]);
+	});
+
+	test("missing branch yields worktree_not_found, exit 2", async () => {
+		const runtime = fakeRuntime();
+		const result = await runCommand(
+			{ command: "app", positionals: ["codex/missing"], force: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("worktree_not_found");
+			expect(result.exitCode).toBe(2);
+			expect(result.recoverability).toBe("change_input");
+		}
+		expect(runtime.launchedCodex).toEqual([]);
+	});
+
+	test("missing Codex Desktop launcher yields codex_app_not_found, exit 2", async () => {
+		const runtime = fakeRuntime({ launchCodexApp: async () => false });
+		const result = await runCommand(
+			{ command: "app", positionals: ["codex/browser-use-refactor"], force: false },
+			runtime,
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.code).toBe("codex_app_not_found");
+			expect(result.exitCode).toBe(2);
+		}
+	});
+});
+
 describe("Command Surface Alignment Proof", () => {
 	test("commands returns the discovery contract", async () => {
 		const result = await runCommand(
@@ -671,6 +1051,13 @@ describe("Command Surface Alignment Proof", () => {
 		if (result.ok) {
 			expect(result.data.contract_id).toBe("worktree.commands");
 			expect(JSON.stringify(result.data)).toContain("worktree.commands");
+			const commands = result.data.commands as Record<string, unknown>;
+			expect(Object.keys(commands)[0]).toBe("status");
+			expect(commands.status).toMatchObject({
+				summary: worktreeContracts.status.summary,
+				mutation: "check",
+				interactivity: "none",
+			});
 		}
 	});
 
@@ -694,10 +1081,54 @@ describe("Command Surface Alignment Proof", () => {
 			absentFlags: ["--force"],
 		});
 		expect(Object.keys(worktreeContracts.open.flags)).not.toContain("--force");
+		const appHelp = renderCommandUsage(worktreeContracts.app);
+		assertCommandHelpFlagSurface({
+			command: "app",
+			contract: worktreeContracts.app,
+			help: appHelp,
+			absentFlags: ["--force"],
+		});
+		expect(Object.keys(worktreeContracts.app.flags)).not.toContain("--force");
 	});
 
 	test("the drift-blocked exit code 3 is declared in the contract", () => {
 		expect(worktreeContracts.sync.exitCodes["3"]).toBeDefined();
+	});
+
+	test("no-args help renders the front door menu, not a single subcommand", async () => {
+		let output = "";
+		const exitCode = await main([], {
+			runtime: fakeRuntime(),
+			stdout: { write: (chunk) => { output += chunk; } },
+		});
+
+		expect(exitCode).toBe(0);
+		expect(output).toContain("Usage: worktree <command> --json");
+		expect(output).toContain("WorkTree keeps VS Code's workspace file in sync");
+		expect(output).toContain("VS Code sync:");
+		expect(output).toContain("Check what VS Code will see      worktree status --json");
+		expect(output).toContain("Rebuild the VS Code workspace    worktree sync --json");
+		expect(output).toContain("Find the VS Code workspace path  worktree open --json");
+		expect(output).toContain("Worktree CRUD:");
+		expect(output).toContain("Create a worktree                worktree new <branch> --json");
+		expect(output).toContain("Read/list current worktrees      worktree status --json");
+		expect(output).toContain("Update the VS Code view          worktree sync --json");
+		expect(output).toContain("Delete a worktree                worktree rm <branch> --force --json");
+		expect(output).toContain("Commands:");
+		expect(output).not.toBe(renderCommandUsage(worktreeContracts.sync));
+	});
+
+	test("help subcommand renders command-specific help", async () => {
+		let output = "";
+		const exitCode = await main(["help", "app"], {
+			runtime: fakeRuntime(),
+			stdout: { write: (chunk) => { output += chunk; } },
+		});
+
+		expect(exitCode).toBe(0);
+		expect(output).toContain("Usage: worktree app <branch> --json");
+		expect(output).toContain(worktreeContracts.app.summary);
+		expect(output).not.toContain("Worktree CRUD:");
 	});
 
 	test("emitted diagnostic codes stay inside the exported contract tuple", async () => {
@@ -733,6 +1164,8 @@ describe("Command Surface Alignment Proof", () => {
 			runCommand({ command: "sync", positionals: [], force: false }, worktreeListFailure),
 			runCommand({ command: "color", positionals: ["codex/x", "chartreuse"], force: false }, fakeRuntime()),
 			runCommand({ command: "open", positionals: ["my-repo"], force: false }, fakeRuntime({ launchCode: async () => false })),
+			runCommand({ command: "app", positionals: ["codex/missing"], force: false }, fakeRuntime()),
+			runCommand({ command: "app", positionals: ["codex/browser-use-refactor"], force: false }, fakeRuntime({ launchCodexApp: async () => false })),
 			runCommand({ command: "sync", positionals: [], force: true }, writeFailure),
 			runCommand({ command: "rm", positionals: ["codex/missing"], force: true }, fakeRuntime()),
 			runCommand({ command: "rm", positionals: ["codex/browser-use-refactor"], force: true }, lifecycleFailure),
@@ -776,6 +1209,43 @@ describe("Command Surface Alignment Proof", () => {
 		});
 		expect(exitCode).toBe(0);
 		expect([...runtime.writes.keys()]).toContain("/code/other-repo.code-workspace");
+		expect(output).toContain("\"status\": \"ok\"");
+	});
+
+	test("public argv emits status for the requested repo", async () => {
+		const runtime = fakeRuntime();
+		let output = "";
+		const exitCode = await main(["status", "--repo", "/code/other-repo", "--json"], {
+			runtime,
+			stdout: { write: (chunk) => { output += chunk; } },
+		});
+		const envelope = JSON.parse(output);
+
+		expect(exitCode).toBe(0);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({
+			action: "status",
+			owner_root: "/code/other-repo",
+			workspace_path: "/code/other-repo.code-workspace",
+			linked_worktree_count: 2,
+		});
+	});
+
+	test("public argv opens the requested repo worktree in Codex Desktop", async () => {
+		const runtime = fakeRuntime();
+		let output = "";
+		const exitCode = await main(
+			["app", "codex/browser-use-refactor", "--repo", "/code/other-repo", "--json"],
+			{
+				runtime,
+				stdout: { write: (chunk) => { output += chunk; } },
+			},
+		);
+
+		expect(exitCode).toBe(0);
+		expect(runtime.launchedCodex).toEqual([
+			{ worktreePath: "/code/other-repo/.worktrees/browser-use-refactor", codexBin: undefined },
+		]);
 		expect(output).toContain("\"status\": \"ok\"");
 	});
 

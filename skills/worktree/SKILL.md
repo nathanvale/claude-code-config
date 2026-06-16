@@ -1,13 +1,15 @@
 ---
 name: worktree
-description: "WorkTree: render VS Code workspaces and manage git worktrees from branch-keyed prefs."
+description: "WorkTree: inspect, render, and open shared git worktree projects."
 role: tool-workflow
 ---
 
 # WorkTree
 
 Triggers: render/sync/focus/color/open VS Code workspaces across git worktrees.
+Triggers: open Codex App projects from shared repo-local worktrees.
 Triggers: create/remove/prune worktrees through the `worktree` workflow entry point.
+Triggers: inspect current WorkTree state or choose the next worktree action.
 
 Do not hand-edit the generated `.code-workspace`. Edit the registry; let `worktree` render.
 Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/agent-worktree` library.
@@ -27,16 +29,19 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 - `@side-quest/cli-command-facade`: hard dependency (facade-backed contract). Registered in root `package.json` workspaces.
 - `runtime/agent-worktree`: hard dependency for live worktree discovery, main-owner resolution, lifecycle verbs, cleanup preview, and recovery vocabulary.
 - `code` on PATH (or `defaults.codeBin`): needed only by `worktree open <name>`. Other verbs do not launch VS Code.
+- `codex` on PATH: needed by `worktree app <branch>` and best-effort thread archival during `worktree rm`. App launch absence → `codex_app_not_found`; removal still completes with partial cleanup metadata.
 - `create-cli`: hard dependency before changing the CLI contract surface.
 
 ## Workflow
 
 1. Work from repo root; run `cd skills/worktree && bun run --silent worktree <verb> ...`.
-2. Choose the verb: render (`sync`), set a pref (`focus`/`color`), launch (`open`), or worktree CRUD (`new`/`rm`/`clean`).
-3. For owned render verbs, let the engine read worktree state, use the main worktree as the durable owner, and guard manual edits through the drift gate.
-4. For lifecycle verbs, let `worktree` call `runtime/agent-worktree`, then re-render when state changes.
-5. On `drift_blocked`, review the diff; port real changes into `worktree.config.json`, then rerun with `--force`.
-6. Report the verb, the workspace path, and the next safe action.
+2. Start with `status` when state is fuzzy; use `worktree` with no args for the layman front door.
+3. Treat the front door as two jobs: VS Code sync (`status`/`sync`/`open`) and worktree CRUD (`new`/`status`/`sync`/`rm`).
+4. Choose the verb: create (`new`), read (`status`), update (`sync`/`focus`/`color`), delete (`rm`), launch (`open`/`app`), or preview cleanup (`clean`).
+5. For owned render verbs, let the engine read worktree state, use the main worktree as the durable owner, and guard manual edits through the drift gate.
+6. For lifecycle verbs, let `worktree` call `runtime/agent-worktree`, clean Codex app project state after `rm`, then re-render when state changes.
+7. On `drift_blocked`, review the diff; port real changes into `worktree.config.json`, then rerun with `--force`.
+8. Report the verb, the workspace or worktree path, Codex cleanup metadata when present, and the next safe action.
 
 ## Verification
 

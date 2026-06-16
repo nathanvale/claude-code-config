@@ -24,6 +24,7 @@ import {
 	type LifecycleResult,
 } from "../../../runtime/agent-worktree/src/index.ts";
 import {
+	WORKTREE_COMMAND_ORDER,
 	type WorkTreeCommand,
 	type WorkTreeDiagnosticCode,
 	worktreeRenderResultContract,
@@ -33,6 +34,7 @@ import {
 	WORKTREE_COLOR_PALETTE,
 	type Registry,
 	type WorkTreeColor,
+	type Worktree,
 } from "./model.ts";
 import { isDrift, renderWorkspace, stampHeader } from "./worktree-engine.ts";
 import {
@@ -48,11 +50,33 @@ import {
 
 const VERSION = "0.1.0";
 
+export interface CodexAppProjectCleanupResult {
+	worktree_path: string;
+	changed_state: "complete" | "none" | "partial";
+	sidebar_state: {
+		status:
+			| "removed"
+			| "already_absent"
+			| "state_missing"
+			| "state_unreadable"
+			| "write_failed";
+		path: string;
+		removed_keys: readonly string[];
+	};
+	thread_archive: {
+		status: "archived" | "none" | "unavailable" | "partial";
+		archived_thread_ids: readonly string[];
+		failed_thread_ids: readonly string[];
+		skipped_thread_ids: readonly string[];
+	};
+	next_safe_action: string;
+}
+
 /**
  * Runtime adapter for the filesystem, subprocess, and existence checks.
  *
  * Injected so the dispatcher's handlers run under test without touching real
- * files, spawning processes, or launching VS Code.
+ * files, spawning processes, or launching editor/app front doors.
  */
 export interface WorkTreeRuntime {
 	/** Repo root the command operates on. */
@@ -71,6 +95,8 @@ export interface WorkTreeRuntime {
 	run: Runner;
 	/** Launch VS Code on a workspace path; resolves false when the binary is absent. */
 	launchCode: (workspacePath: string, codeBin?: string) => Promise<boolean>;
+	/** Launch Codex Desktop on a worktree path; resolves false when the launcher is absent. */
+	launchCodexApp: (worktreePath: string, codexBin?: string) => Promise<boolean>;
 	/** Current epoch millis; injected so envelope durations are deterministic in tests. */
 	now: () => number;
 }
@@ -134,6 +160,17 @@ export function createDefaultRuntime(overrides: Partial<WorkTreeRuntime> = {}): 
 		launchCode: async (workspacePath, codeBin = "code") => {
 			try {
 				const proc = Bun.spawn([codeBin, workspacePath], { stdout: "ignore", stderr: "ignore" });
+				return (await proc.exited) === 0;
+			} catch {
+				return false;
+			}
+		},
+		launchCodexApp: async (worktreePath, codexBin = "codex") => {
+			try {
+				const proc = Bun.spawn([codexBin, "app", worktreePath], {
+					stdout: "ignore",
+					stderr: "ignore",
+				});
 				return (await proc.exited) === 0;
 			} catch {
 				return false;
@@ -343,13 +380,160 @@ export type CommandResult =
  * @returns A success data object
  * @internal
  */
-function renderSuccessData(action: string, workspacePath: string): Record<string, unknown> {
+function renderSuccessData(
+	action: string,
+	workspacePath: string,
+	extra: Record<string, unknown> = {},
+): Record<string, unknown> {
 	return lifecycleResultData({
 		action,
 		workspace_path: workspacePath,
 		changed_state: "written",
 		next_safe_action: "Reload the VS Code window to pick up the rendered workspace.",
+		...extra,
 	});
+}
+
+function codexAppSuccessData(branch: string, worktreePath: string): Record<string, unknown> {
+	return resultData("app", {
+		action: "open_codex_app",
+		branch,
+		worktree_path: worktreePath,
+		changed_state: "none",
+		launched: true,
+		next_safe_action: "Use the Codex App project for that worktree.",
+	});
+}
+
+function workspaceStateFor(contents: string | null): "missing" | "ready" | "drifted" {
+	if (contents === null) return "missing";
+	return isDrift(contents) ? "drifted" : "ready";
+}
+
+function statusNextSafeAction(
+	workspaceState: "missing" | "ready" | "drifted",
+	linkedWorktreeCount: number,
+): string {
+	if (workspaceState === "drifted") {
+		return "Review workspace drift before rendering; force only after preserving real edits.";
+	}
+	if (linkedWorktreeCount === 0) {
+		return "Create a repo-local worktree, then open it in Codex App.";
+	}
+	return "Choose a linked branch to open in Codex App, or render the workspace.";
+}
+
+async function statusSuccessData(runtime: WorkTreeRuntime): Promise<CommandResult> {
+	let worktrees: Worktree[];
+	let ownerRoot = runtime.repoRoot();
+	try {
+		worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+		ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
+	} catch (error) {
+		if (error instanceof WorkTreeDiscoveryError) {
+			return {
+				ok: false,
+				code: error.code,
+				message: error.message,
+				action: "Inspect worktree state, resolve the failure, then retry.",
+				exitCode: 1,
+				recoverability: "repair_state",
+			};
+		}
+		throw error;
+	}
+
+	let registry: Registry;
+	try {
+		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+		worktrees = await listWorktrees(
+			runtime.repoRoot(),
+			runtime.run,
+			registry.defaults?.ignoredWorktrees ?? [],
+		);
+		ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
+	} catch (error) {
+		if (error instanceof WorkTreeDiscoveryError) {
+			return {
+				ok: false,
+				code: error.code,
+				message:
+					error.code === "registry_unreadable"
+						? "worktree.config.json exists but is not valid JSON."
+						: error.message,
+				action:
+					error.code === "registry_unreadable"
+						? "Repair the registry JSON, then retry."
+						: "Inspect worktree state, resolve the failure, then retry.",
+				exitCode: 1,
+				recoverability: "repair_state",
+			};
+		}
+		throw error;
+	}
+
+	const workspacePath = workspacePathFor(ownerRoot);
+	const state = workspaceStateFor(await runtime.readTextFile(workspacePath));
+	const linked = worktrees.filter((worktree) => !worktree.isMain);
+	return {
+		ok: true,
+		data: resultData("status", {
+			action: "status",
+			changed_state: "none",
+			repo_root: runtime.repoRoot(),
+			owner_root: ownerRoot,
+			workspace_path: workspacePath,
+			workspace_state: state,
+			worktree_count: worktrees.length,
+			linked_worktree_count: linked.length,
+			worktrees: worktrees.map((worktree) => {
+				const prefs = registry.branches[worktree.branch] ?? {};
+				return {
+					branch: worktree.branch,
+					path: worktree.path,
+					is_main: Boolean(worktree.isMain),
+					...(prefs.focus ? { focus: prefs.focus } : {}),
+					...(prefs.color ? { color: prefs.color } : {}),
+				};
+			}),
+			start_here: ["status", linked.length > 0 ? "app" : "new", "sync"],
+			front_door: {
+				summary: "Keep the VS Code workspace in sync with repo-local git worktrees.",
+				vscode_sync: {
+					check: "status",
+					rebuild_workspace: "sync",
+					open_workspace: "open",
+				},
+				worktree_crud: ["new", "status", "sync", "rm"],
+			},
+			crud: {
+				create: {
+					label: "Make a new repo-local worktree.",
+					action: "new",
+					mutation: "write",
+					target: "branch",
+				},
+				read: {
+					label: "See current worktrees and VS Code workspace state.",
+					action: "status",
+					mutation: "check",
+				},
+				update: {
+					label: "Rebuild the VS Code workspace, or tweak focus and color.",
+					action: "sync",
+					mutation: "write",
+					alternates: ["focus", "color"],
+				},
+				delete: {
+					label: "Remove a worktree after explicit confirmation.",
+					action: "rm",
+					mutation: "destructive",
+					confirmation: "force_required",
+				},
+			},
+			next_safe_action: statusNextSafeAction(state, linked.length),
+		}),
+	};
 }
 
 /**
@@ -452,9 +636,11 @@ function fromPostLifecycleSyncFailure(
 	command: string,
 	lifecycle: LifecycleResult,
 	sync: Exclude<Awaited<ReturnType<typeof syncWorkspace>>, { kind: "written" }>,
+	extra: Record<string, unknown> = {},
 ): CommandResult {
 	const data = {
 		...lifecyclePayload(command, lifecycle),
+		...extra,
 		render_status: sync.kind,
 		render_workspace_path: "path" in sync ? sync.path : undefined,
 		render_error_code: "code" in sync ? sync.code : undefined,
@@ -499,6 +685,210 @@ async function worktreeViewForRuntime(
 	const ownerRoot = repoOwnerRootFor(worktrees, runtime.repoRoot());
 	const registry = await loadRegistryFromRuntime(runtime, ownerRoot);
 	return { ignoredWorktrees: registry.defaults?.ignoredWorktrees ?? [] };
+}
+
+async function resolveCodexAppWorktree(
+	runtime: WorkTreeRuntime,
+	branch: string,
+): Promise<
+	| { kind: "target"; worktree: Worktree }
+	| { kind: "error"; code: WorkTreeDiagnosticCode; message: string }
+> {
+	let worktrees: Worktree[];
+	try {
+		worktrees = await listWorktrees(runtime.repoRoot(), runtime.run);
+	} catch (error) {
+		if (error instanceof WorkTreeDiscoveryError) {
+			return { kind: "error", code: error.code, message: error.message };
+		}
+		throw error;
+	}
+	const worktree = worktrees.find((entry) => entry.branch === branch);
+	if (!worktree) {
+		return {
+			kind: "error",
+			code: "worktree_not_found",
+			message: "No repo-local worktree was found for that branch.",
+		};
+	}
+	return { kind: "target", worktree };
+}
+
+/**
+ * @internal exported for focused tests; `worktree rm` is the public cleanup entrypoint.
+ */
+export async function cleanupCodexAppProject(
+	runtime: WorkTreeRuntime,
+	worktreePath: string,
+): Promise<CodexAppProjectCleanupResult> {
+	const sidebarState = await removeCodexSidebarState(runtime, worktreePath);
+	const threadArchive = await archiveCodexThreadsForCwd(runtime, worktreePath);
+	const failed =
+		sidebarState.status === "state_unreadable" ||
+		sidebarState.status === "write_failed" ||
+		threadArchive.status === "partial";
+	const changed =
+		sidebarState.status === "removed" || threadArchive.status === "archived";
+	return {
+		worktree_path: worktreePath,
+		changed_state: failed ? "partial" : changed ? "complete" : "none",
+		sidebar_state: sidebarState,
+		thread_archive: threadArchive,
+		next_safe_action: "Restart Codex if the removed project still appears in the sidebar.",
+	};
+}
+
+/**
+ * @internal exported for focused tests; not a public Codex state API.
+ */
+export async function removeCodexSidebarState(
+	runtime: Pick<WorkTreeRuntime, "readTextFile" | "writeTextFile">,
+	worktreePath: string,
+): Promise<CodexAppProjectCleanupResult["sidebar_state"]> {
+	const statePath = join(homedir(), ".codex", ".codex-global-state.json");
+	const existing = await runtime.readTextFile(statePath);
+	if (existing === null) {
+		return { status: "state_missing", path: statePath, removed_keys: [] };
+	}
+	let state: Record<string, unknown>;
+	try {
+		const parsed = JSON.parse(existing);
+		state = asRecord(parsed) ?? {};
+	} catch {
+		return { status: "state_unreadable", path: statePath, removed_keys: [] };
+	}
+	const removedKeys: string[] = [];
+	removeFromStringArray(state, "electron-saved-workspace-roots", worktreePath, removedKeys);
+	removeFromStringArray(state, "project-order", worktreePath, removedKeys);
+	removeFromStringArray(state, "pinned-project-ids", worktreePath, removedKeys);
+	removeFromStringArray(state, "active-workspace-roots", worktreePath, removedKeys);
+	removeRecordEntry(state, "electron-workspace-root-labels", worktreePath, removedKeys);
+
+	const atomState = asRecord(state["electron-persisted-atom-state"]);
+	if (atomState) {
+		removeRecordEntry(atomState, "sidebar-collapsed-groups", worktreePath, removedKeys);
+		removeRecordEntry(
+			atomState,
+			"local-env-selections-by-workspace",
+			`local:${worktreePath}`,
+			removedKeys,
+		);
+	}
+	if (removedKeys.length === 0) {
+		return { status: "already_absent", path: statePath, removed_keys: [] };
+	}
+	try {
+		await runtime.writeTextFile(statePath, `${JSON.stringify(state)}\n`);
+	} catch {
+		return { status: "write_failed", path: statePath, removed_keys: removedKeys };
+	}
+	return { status: "removed", path: statePath, removed_keys: removedKeys };
+}
+
+/**
+ * @internal exported for focused tests; `worktree rm` owns the operator-facing path.
+ */
+export async function archiveCodexThreadsForCwd(
+	runtime: Pick<WorkTreeRuntime, "run">,
+	worktreePath: string,
+): Promise<CodexAppProjectCleanupResult["thread_archive"]> {
+	const ids = new Set<string>();
+	let readableDb = false;
+	for (const stateDbPath of codexStateDbPaths()) {
+		const result = await runtime.run([
+			"sqlite3",
+			"-readonly",
+			stateDbPath,
+			`select id from threads where cwd = '${escapeSqlString(worktreePath)}' and archived = 0;`,
+		]);
+		if (!result.ok) continue;
+		readableDb = true;
+		for (const line of result.stdout.split(/\r?\n/)) {
+			const id = line.trim();
+			if (id) ids.add(id);
+		}
+	}
+	if (!readableDb) {
+		return {
+			status: "unavailable",
+			archived_thread_ids: [],
+			failed_thread_ids: [],
+			skipped_thread_ids: [],
+		};
+	}
+	const currentThreadId = process.env.CODEX_THREAD_ID;
+	const archivedThreadIds: string[] = [];
+	const failedThreadIds: string[] = [];
+	const skippedThreadIds: string[] = [];
+	for (const id of ids) {
+		if (currentThreadId && id === currentThreadId) {
+			skippedThreadIds.push(id);
+			continue;
+		}
+		const result = await runtime.run(["codex", "archive", id]);
+		if (result.ok) {
+			archivedThreadIds.push(id);
+		} else {
+			failedThreadIds.push(id);
+		}
+	}
+	return {
+		status:
+			failedThreadIds.length > 0
+				? "partial"
+				: archivedThreadIds.length > 0
+					? "archived"
+					: "none",
+		archived_thread_ids: archivedThreadIds,
+		failed_thread_ids: failedThreadIds,
+		skipped_thread_ids: skippedThreadIds,
+	};
+}
+
+function codexStateDbPaths(): readonly string[] {
+	const sqliteHome = process.env.CODEX_SQLITE_HOME ?? join(homedir(), ".codex", "sqlite");
+	return Array.from(
+		new Set([
+			join(sqliteHome, "state_5.sqlite"),
+			join(homedir(), ".codex", "state_5.sqlite"),
+		]),
+	);
+}
+
+function escapeSqlString(value: string): string {
+	return value.replaceAll("'", "''");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function removeFromStringArray(
+	record: Record<string, unknown>,
+	key: string,
+	value: string,
+	removedKeys: string[],
+): void {
+	const existing = record[key];
+	if (!Array.isArray(existing)) return;
+	const next = existing.filter((entry) => entry !== value);
+	if (next.length === existing.length) return;
+	record[key] = next;
+	removedKeys.push(key);
+}
+
+function removeRecordEntry(
+	record: Record<string, unknown>,
+	key: string,
+	entryKey: string,
+	removedKeys: string[],
+): void {
+	const nested = asRecord(record[key]);
+	if (!nested || !(entryKey in nested)) return;
+	delete nested[entryKey];
+	removedKeys.push(`${key}.${entryKey}`);
 }
 
 /**
@@ -653,6 +1043,13 @@ async function runLifecycleCommand(
 		);
 	}
 	const lifecycleRuntime = await stableOwnerRuntime(runtime);
+	let removedWorktreePath: string | undefined;
+	if (command === "rm") {
+		const target = await resolveCodexAppWorktree(lifecycleRuntime, branch);
+		if (target.kind === "target") {
+			removedWorktreePath = target.worktree.path;
+		}
+	}
 	const lifecycle =
 		command === "new"
 			? await createWorktree({
@@ -674,11 +1071,16 @@ async function runLifecycleCommand(
 	if (lifecycle.changedState !== "complete") {
 		return fromLifecycleFailure(command, lifecycle);
 	}
+	const codexCleanup =
+		command === "rm" && removedWorktreePath
+			? await cleanupCodexAppProject(lifecycleRuntime, removedWorktreePath)
+			: undefined;
+	const extra = codexCleanup ? { codex_app_project_cleanup: codexCleanup } : {};
 	const sync = await syncWorkspace(lifecycleRuntime, Boolean(invocation.forceRender));
 	if (sync.kind !== "written") {
-		return fromPostLifecycleSyncFailure(command, lifecycle, sync);
+		return fromPostLifecycleSyncFailure(command, lifecycle, sync, extra);
 	}
-	return { ok: true, data: renderSuccessData(command, sync.path) };
+	return { ok: true, data: renderSuccessData(command, sync.path, extra) };
 }
 
 async function runCleanCommand(runtime: WorkTreeRuntime): Promise<CommandResult> {
@@ -776,20 +1178,54 @@ async function runOpenCommand(
 	};
 }
 
+async function runAppCommand(
+	invocation: ParsedInvocation,
+	runtime: WorkTreeRuntime,
+): Promise<CommandResult> {
+	const [branch] = invocation.positionals;
+	if (!branch) {
+		return usageFailure(
+			"usage_error",
+			"app needs <branch>.",
+			"Rerun as: worktree app <branch>.",
+		);
+	}
+	const target = await resolveCodexAppWorktree(runtime, branch);
+	if (target.kind === "error") {
+		return {
+			ok: false,
+			code: target.code,
+			message: target.message,
+			action:
+				target.code === "worktree_not_found"
+					? "Create or choose an existing repo-local worktree branch, then retry."
+					: "Inspect worktree state, resolve the failure, then retry.",
+			exitCode: target.code === "worktree_not_found" ? 2 : 1,
+			recoverability:
+				target.code === "worktree_not_found" ? "change_input" : "repair_state",
+		};
+	}
+	const launched = await runtime.launchCodexApp(target.worktree.path);
+	if (!launched) {
+		return usageFailure(
+			"codex_app_not_found",
+			"Could not launch Codex Desktop.",
+			"Install or expose the Codex Desktop launcher, then retry.",
+		);
+	}
+	return {
+		ok: true,
+		data: codexAppSuccessData(target.worktree.branch, target.worktree.path),
+	};
+}
+
 function runCommandsCommand(): CommandResult {
 	return {
 		ok: true,
 		data: resultData("commands", {
-			...projectCommandDiscoveryTree([
-				["sync", worktreeContracts.sync],
-				["focus", worktreeContracts.focus],
-				["color", worktreeContracts.color],
-				["open", worktreeContracts.open],
-				["new", worktreeContracts.new],
-				["rm", worktreeContracts.rm],
-				["clean", worktreeContracts.clean],
-				["commands", worktreeContracts.commands],
-			]),
+			...projectCommandDiscoveryTree(
+				WORKTREE_COMMAND_ORDER.map((commandId) => [commandId, worktreeContracts[commandId]] as const),
+			),
 		}),
 	};
 }
@@ -815,6 +1251,8 @@ export async function runCommand(
 	}
 
 	switch (command) {
+		case "status":
+			return statusSuccessData(runtime);
 		case "sync":
 			return fromSync("sync", await syncWorkspace(runtime, invocation.force));
 		case "focus":
@@ -828,6 +1266,8 @@ export async function runCommand(
 			return runCleanCommand(runtime);
 		case "open":
 			return runOpenCommand(invocation, runtime);
+		case "app":
+			return runAppCommand(invocation, runtime);
 		case "commands":
 			return runCommandsCommand();
 
@@ -838,6 +1278,58 @@ export async function runCommand(
 				"Run with --help to see available commands.",
 			);
 	}
+}
+
+function renderFrontDoorUsage(): string {
+	const commandLines = WORKTREE_COMMAND_ORDER.map((command) =>
+		`  ${command.padEnd(8)} ${worktreeContracts[command].summary}`,
+	);
+	return `${[
+		"Usage: worktree <command> --json",
+		"       worktree <command> --help",
+		"       worktree help <command>",
+		"",
+		"WorkTree keeps VS Code's workspace file in sync with repo-local git worktrees.",
+		"",
+		"VS Code sync:",
+		"  Check what VS Code will see      worktree status --json",
+		"  Rebuild the VS Code workspace    worktree sync --json",
+		"  Find the VS Code workspace path  worktree open --json",
+		"",
+		"Worktree CRUD:",
+		"  Create a worktree                worktree new <branch> --json",
+		"  Read/list current worktrees      worktree status --json",
+		"  Update the VS Code view          worktree sync --json",
+		"  Update focus or color            worktree focus <branch> <subfolder> --json | worktree color <branch> <color> --json",
+		"  Delete a worktree                worktree rm <branch> --force --json",
+		"",
+		"Codex App:",
+		"  Add/open a project in sidebar    worktree app <branch> --json",
+		"  Remove sidebar state on delete   worktree rm <branch> --force --json",
+		"",
+		"Fast path:",
+		"  worktree status --json",
+		"  worktree sync --json",
+		"  worktree app <branch> --json",
+		"  worktree new <branch> --json",
+		"  worktree rm <branch> --force --json",
+		"",
+		"Commands:",
+		...commandLines,
+		"",
+		"Use worktree commands --json for machine-readable discovery metadata.",
+	].join("\n")}\n`;
+}
+
+function renderHelpForArgv(argv: readonly string[]): string {
+	const helpTopic = argv[0] === "help" ? argv[1] : undefined;
+	const command = (helpTopic ?? argv.find((arg) => arg in worktreeContracts)) as
+		| keyof typeof worktreeContracts
+		| undefined;
+	if (command && command in worktreeContracts) {
+		return renderCommandUsage(worktreeContracts[command]);
+	}
+	return renderFrontDoorUsage();
 }
 
 /**
@@ -859,9 +1351,13 @@ export async function main(
 	const runtime = options.runtime ?? createDefaultRuntime();
 	const stdout = options.stdout ?? process.stdout;
 
-	if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-		const command = argv.find((a) => a in worktreeContracts) as keyof typeof worktreeContracts | undefined;
-		stdout.write(renderCommandUsage(worktreeContracts[command ?? "sync"]));
+	if (
+		argv.includes("--help") ||
+		argv.includes("-h") ||
+		argv[0] === "help" ||
+		argv.length === 0
+	) {
+		stdout.write(renderHelpForArgv(argv));
 		return 0;
 	}
 	if (argv.includes("--version")) {

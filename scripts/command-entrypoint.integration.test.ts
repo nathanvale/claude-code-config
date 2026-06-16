@@ -625,13 +625,13 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-const wtTopLevelUsageLine = firstUsageLine(worktreeContracts.sync);
+const wtTopLevelUsageLine = "Usage: worktree <command> --json";
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
 
 describe("command entrypoint integration: mechanical discovery", () => {
 	test("derives the exact WorkTree command id set from exported contracts", async () => {
 		expect(discoveredWtCommandIds).toEqual(
-			["clean", "color", "commands", "focus", "new", "open", "rm", "sync"],
+			["app", "clean", "color", "commands", "focus", "new", "open", "rm", "status", "sync"],
 		);
 	});
 
@@ -772,7 +772,7 @@ describe("command entrypoint integration: help contracts", () => {
 				["commands", "--json"],
 				"WorkTree source commands --json",
 			);
-			expectOkEnvelope(commands, "worktree.workspace");
+			expectOkEnvelope(commands, "worktree.commands");
 
 			const invalid = await runWtSource(
 				["definitely-not-a-command", "--json"],
@@ -916,7 +916,7 @@ describe("command entrypoint integration: help contracts", () => {
 				["commands", "--json"],
 				"agent-worktree source commands --json",
 			);
-			expectOkEnvelope(commands, "agent-worktree.lifecycle");
+			expectOkEnvelope(commands, "agent-worktree.commands");
 
 			const invalid = await runAgentWorktreeSource(
 				["definitely-not-a-command", "--json"],
@@ -1157,7 +1157,7 @@ describe("command entrypoint integration: runtime json", () => {
 						args: ["commands", "--json"],
 						label: "worktree commands --json (package-cwd)",
 					}),
-					contractId: "worktree.workspace",
+					contractId: "worktree.commands",
 				},
 				{
 					command: runners.packageCwd({
@@ -1166,7 +1166,7 @@ describe("command entrypoint integration: runtime json", () => {
 						args: ["commands", "--json"],
 						label: "agent-worktree commands --json (package-cwd)",
 					}),
-					contractId: "agent-worktree.lifecycle",
+					contractId: "agent-worktree.commands",
 				},
 			];
 
