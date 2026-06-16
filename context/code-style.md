@@ -66,6 +66,15 @@ Timing: this decision lives at planning time, where the fan-out is visible — s
 - Surface the working slice for review before fanning out; course-correction is cheapest there.
 - Planning-time counterpart: `to-issues` "tracer-bullet vertical slices" splits a plan into slices; this applies the same shape at implementation time.
 
+### Agent-Native CLI Helper Shape
+
+- For facade-backed CLI front doors, centralize result metadata and structured runtime errors in facade helpers instead of hand-built literals.
+- Use named structured result payload types; avoid `Record<string, unknown>` when the payload is an interface-shaped object without an index signature.
+- Keep `contract_id` and `schema_version` helper-owned; package payloads own the remaining result vocabulary.
+- Use lifecycle or error-owned result contracts for generic failure data; do not stamp generic error payloads with a command-specific success contract.
+- Settle the facade helper API and prove one consumer before fanning out across similar CLIs.
+- Keep exact helper signatures, envelope fields, parser rules, and validator categories in runtime code, CLI help, generated docs, or tests; prose only points at owner paths.
+
 ## Style
 
 - TypeScript strict mode always

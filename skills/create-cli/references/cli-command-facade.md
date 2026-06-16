@@ -7,6 +7,11 @@ facade-owned surface.
 Facade-backed means: apply Agent-native CLI design, then use the facade runtime
 as the enforcement backend.
 
+Every facade-backed CLI is agent-native by construction, but not every
+agent-native CLI needs the facade. Use `agent-native-cli-design.md` for the
+language-agnostic design goal; use this reference when the facade is the chosen
+runtime owner for machine-checkable contracts.
+
 ## Boundary
 
 - Keep `create-cli` as the design front door.
@@ -25,9 +30,23 @@ as the enforcement backend.
   `runtime/cli-command-facade/CONTEXT.md`
 - Public production interface:
   `runtime/cli-command-facade/src/index.ts`
-- Contract grammar, drift checks, usage helpers, discovery projection, and JSON
-  writer mechanics:
+- Root export barrel:
   `runtime/cli-command-facade/src/command-facade.ts`
+- Command and result contract types:
+  `runtime/cli-command-facade/src/command-contract.ts`
+- Contract validation and no-throw parse path:
+  `runtime/cli-command-facade/src/command-metadata.ts`
+- Discovery projection and drift checks:
+  `runtime/cli-command-facade/src/command-discovery.ts`
+- Usage and help helpers:
+  `runtime/cli-command-facade/src/usage.ts`
+- JSON writer mechanics:
+  `runtime/cli-command-facade/src/cli-writer.ts`
+- Runtime envelopes, structured errors, hints, actions, continuations, and
+  diagnostic-trail shape:
+  `runtime/cli-command-facade/src/runtime-envelope.ts`
+- Projected text safety:
+  `runtime/cli-command-facade/src/runtime-text-safety.ts`
 - Branch Station model and Station Map projection:
   `runtime/cli-command-facade/src/station-map.ts`
 - Diagnostics mechanics:
@@ -40,6 +59,32 @@ as the enforcement backend.
   `skills/cli-execution-auditor/src/station-map.ts`
   This path appears here because the facade owns the generic Station Map model;
   the auditor owns the cross-package report that applies it to target CLIs.
+
+## Capability Map
+
+- Command contracts: declare package-owned route metadata, flags, exits,
+  side-effect stance, output modes, result contracts, diagnostics capability,
+  and action affordances.
+- Construction-time validation: reject drift before a CLI ships or writes
+  machine-facing output.
+- Discovery: project an agent-facing command catalog without package-specific
+  route policy.
+- Usage helpers: render help, parse common enum/value flags, compose aliases,
+  and keep parser acceptance aligned with rendered help.
+- JSON output: write stdout data and runtime envelopes without hand-built
+  envelope literals.
+- Result data: attach result-contract metadata through the Result Data Helper
+  while keeping package result vocabulary package-owned.
+- Runtime errors: construct structured errors, recoverability, retryability,
+  hints, failure domains, runtime actions, continuations, and diagnostic trails.
+- Diagnostics: parse facade diagnostic flags, manage run correlation, redact
+  diagnostics, and keep diagnostic output separate from primary stdout data.
+- Text safety: reject unsafe projected text before it reaches agent catalogs or
+  runtime envelopes.
+- Station Map: publish declared branch-coverage evidence for agent-visible
+  command paths from package-owned Branch Station catalogs.
+- Testing helpers: assert rendered help, public argv behavior, result contract
+  metadata, error envelopes, process output, and runtime semantics.
 
 ## Workflow
 
@@ -170,7 +215,10 @@ judgment for:
 - Was Facade-backed explicitly requested, or is the surface already
   facade-owned?
 - Did Agent-native design happen before facade implementation?
+- Does the facade-backed surface still satisfy the runtime-contract minimum in
+  `agent-native-cli-design.md`?
 - Are exact contract details read from owner paths?
 - Are package-owned literals kept near the package command contract?
 - Does validation run against the runtime rather than prose?
+- Are coach-filled gaps still designed outside the facade?
 - Does the Command Surface Alignment Proof cover the four drift surfaces?
