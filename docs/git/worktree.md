@@ -145,6 +145,16 @@ One worktree location serves every tool. Worktrees live in `<repo>/.worktrees/<b
 - **Codex:** open the worktree by pointing the thread's working directory at that path (`cwd` / `workingDirectory`). Do not rely on Codex auto-creating worktrees under `~/.codex/worktrees/<hash>/` — those are invisible to the shared convention. (Codex resolves project hooks/trust from the root checkout, so a linked worktree under `.worktrees/` is fully supported.)
 - **Never** scatter worktrees across `~/.codex/worktrees/`, `<repo>/.claude/worktrees/`, and `<repo>/.worktrees/` — that split is what makes a worktree invisible to one tool or the other.
 
+## Repo-local skills
+
+Use `agent-skills` to project visible catalog skills into each worktree.
+
+- Human check: `agent-skills status`.
+- Agent/CI gate: `agent-skills sync --check --json`.
+- Repair: `agent-skills sync`.
+- Generated state: `.agents/skills/`, `.claude/skills/`, `.agents/agent-skills-snapshot.json`.
+- Source of truth: `skills/` plus `.agent-skills.yml`.
+
 ## Important Notes
 
 - Worktrees are created in the `directory` specified in config (default: `.worktrees/`)

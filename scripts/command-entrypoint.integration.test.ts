@@ -41,6 +41,10 @@ import {
 	agentWorktreeContractEntries,
 	agentWorktreeContracts,
 } from "../runtime/agent-worktree/src/command-contract.ts";
+import {
+	agentSkillsContractEntries,
+	agentSkillsContracts,
+} from "../runtime/agent-skills/src/command-contract.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -99,6 +103,7 @@ interface RunResult extends RunnerCommand, CliProcessResult {}
 const packageRoots = {
 	wt: join(repoRoot, "skills/wt"),
 	agentWorktree: join(repoRoot, "runtime/agent-worktree"),
+	agentSkills: join(repoRoot, "runtime/agent-skills"),
 } as const;
 
 /**
@@ -107,6 +112,7 @@ const packageRoots = {
 const sourceEntries = {
 	wt: join(repoRoot, "skills/wt/src/wt.ts"),
 	agentWorktree: join(repoRoot, "runtime/agent-worktree/src/cli.ts"),
+	agentSkills: join(repoRoot, "runtime/agent-skills/src/cli.ts"),
 } as const;
 
 /**
@@ -115,6 +121,7 @@ const sourceEntries = {
 const filterPackageNames = {
 	wt: "wt-scripts",
 	agentWorktree: "agent-worktree",
+	agentSkills: "agent-skills",
 } as const;
 
 /**
@@ -380,6 +387,35 @@ function runAgentWorktreeSource(
 	);
 }
 
+function runAgentSkillsPackage(
+	args: readonly string[],
+	label: string,
+): Promise<RunResult> {
+	return runCommand(
+		runners.packageCwd({
+			packageRoot: packageRoots.agentSkills,
+			script: "agent-skills",
+			args,
+			label,
+		}),
+	);
+}
+
+function runAgentSkillsSource(
+	args: readonly string[],
+	label: string,
+	cwd?: string,
+): Promise<RunResult> {
+	return runCommand(
+		runners.source({
+			sourcePath: sourceEntries.agentSkills,
+			args,
+			label,
+			cwd,
+		}),
+	);
+}
+
 function expectAgentWorktreeRefFound(
 	result: RunResult,
 	ref: { kind: string; id: string },
@@ -589,6 +625,9 @@ const discoveredWtCommandIds = Object.keys(wtContracts).sort();
 const discoveredAgentWorktreeCommandIds = agentWorktreeContractEntries
 	.map(([command]) => command)
 	.sort();
+const discoveredAgentSkillsCommandIds = agentSkillsContractEntries
+	.map(([command]) => command)
+	.sort();
 
 /**
  * Entrypoint scripts derived from the owning package metadata.
@@ -598,6 +637,7 @@ const discoveredAgentWorktreeCommandIds = agentWorktreeContractEntries
  */
 const wtPackageScripts = readPackageScripts(packageRoots.wt);
 const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktree);
+const agentSkillsPackageScripts = readPackageScripts(packageRoots.agentSkills);
 
 /**
  * First rendered usage line for a contract.
@@ -642,6 +682,7 @@ function errorMessage(error: unknown): string {
 
 const wtTopLevelUsageLine = firstUsageLine(wtContracts.sync);
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
+const agentSkillsTopLevelUsageLine = firstUsageLine(agentSkillsContracts.status);
 
 describe("command entrypoint integration: mechanical discovery", () => {
 	test("derives the exact wt command id set from exported contracts", async () => {
@@ -669,16 +710,23 @@ describe("command entrypoint integration: mechanical discovery", () => {
 		);
 	});
 
-	test("package scripts expose the wt and agent-worktree entrypoint scripts", async () => {
+	test("derives the exact agent-skills command id set from exported contracts", async () => {
+		expect(discoveredAgentSkillsCommandIds).toEqual(
+			["commands", "ignore", "list", "status", "sync", "unlink"],
+		);
+	});
+
+	test("package scripts expose the wt, agent-worktree, and agent-skills entrypoint scripts", async () => {
 		expect(Object.keys(wtPackageScripts)).toContain("wt");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
 		expect(Object.keys(agentWorktreePackageScripts)).toContain("awt");
+		expect(Object.keys(agentSkillsPackageScripts)).toContain("agent-skills");
 	});
 });
 
 describe("command entrypoint integration: help contracts", () => {
 	test(
-		"wt, agent-worktree, and awt top-level help renders the contract usage line",
+		"wt, agent-worktree, awt, and agent-skills top-level help renders the contract usage line",
 		async () => {
 			const topLevelHelp = [
 				{
@@ -707,6 +755,15 @@ describe("command entrypoint integration: help contracts", () => {
 						label: "awt --help (package-cwd)",
 					}),
 					usageLine: agentWorktreeTopLevelUsageLine,
+				},
+				{
+					command: runners.packageCwd({
+						packageRoot: packageRoots.agentSkills,
+						script: "agent-skills",
+						args: ["--help"],
+						label: "agent-skills --help (package-cwd)",
+					}),
+					usageLine: agentSkillsTopLevelUsageLine,
 				},
 			];
 
@@ -746,7 +803,20 @@ describe("command entrypoint integration: help contracts", () => {
 	);
 
 	test(
-		"wt and agent-worktree source entries support --version and top-level help",
+		"every discovered agent-skills command help renders its first contract usage line",
+		async () => {
+			await expectDiscoveredCommandHelp({
+				commandIds: discoveredAgentSkillsCommandIds,
+				contracts: agentSkillsContracts,
+				packageRoot: packageRoots.agentSkills,
+				script: "agent-skills",
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"wt, agent-worktree, and agent-skills source entries support --version and top-level help",
 		async () => {
 			const sourceProbes = [
 				{
@@ -760,6 +830,12 @@ describe("command entrypoint integration: help contracts", () => {
 					label: "agent-worktree source",
 					versionSubstring: "agent-worktree 0.1.0",
 					usageLine: agentWorktreeTopLevelUsageLine,
+				},
+				{
+					sourcePath: sourceEntries.agentSkills,
+					label: "agent-skills source",
+					versionSubstring: "agent-skills 0.1.0",
+					usageLine: agentSkillsTopLevelUsageLine,
 				},
 			];
 
@@ -1103,11 +1179,67 @@ describe("command entrypoint integration: help contracts", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+	test(
+		"agent-skills source entry preserves the runtime JSON command matrix",
+		async () => {
+			const commands = await runAgentSkillsSource(
+				["commands", "--json"],
+				"agent-skills source commands --json",
+			);
+			expectOkEnvelope(commands, "agent-skills.projection");
+
+			const invalid = await runAgentSkillsSource(
+				["definitely-not-a-command", "--json"],
+				"agent-skills source invalid command",
+			);
+			expectUsageError(invalid);
+
+			await withTempRoot("agent-skills-source-matrix", async (root) => {
+				const skillsRoot = join(root, "skills");
+				mkdirSync(join(skillsRoot, "fallow"), { recursive: true });
+				writeFileSync(
+					join(skillsRoot, "fallow", "SKILL.md"),
+					`---\nname: fallow\ndescription: "Test skill."\n---\n\n# fallow\n`,
+				);
+
+				const check = await runAgentSkillsSource(
+					["sync", "--check", "--json"],
+					"agent-skills source sync --check",
+					root,
+				);
+				expect(check.exitCode, describeRun(check)).toBe(1);
+				const checkEnvelope = parseEnvelope(check);
+				expect(checkEnvelope.status, describeRun(check)).toBe("ok");
+				const checkData = envelopeData(checkEnvelope, check);
+				expect(checkData.contract_id, describeRun(check)).toBe(
+					"agent-skills.projection",
+				);
+				expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(false);
+
+				const sync = await runAgentSkillsSource(
+					["sync", "--json"],
+					"agent-skills source sync",
+					root,
+				);
+				expectOkEnvelope(sync, "agent-skills.projection");
+				expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(true);
+
+				const status = await runAgentSkillsSource(
+					["status", "--json"],
+					"agent-skills source status",
+					root,
+				);
+				const statusData = expectOkEnvelope(status, "agent-skills.projection");
+				expect(statusData.health, describeRun(status)).toBe("clean");
+			});
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
 
 describe("command entrypoint integration: runtime json", () => {
 	test(
-		"wt, agent-worktree, and awt --version work through package scripts",
+		"wt, agent-worktree, awt, and agent-skills --version work through package scripts",
 		async () => {
 			const versionProbes = [
 				{
@@ -1136,6 +1268,15 @@ describe("command entrypoint integration: runtime json", () => {
 						label: "awt --version (package-cwd)",
 					}),
 					substring: "agent-worktree 0.1.0",
+				},
+				{
+					command: runners.packageCwd({
+						packageRoot: packageRoots.agentSkills,
+						script: "agent-skills",
+						args: ["--version"],
+						label: "agent-skills --version (package-cwd)",
+					}),
+					substring: "agent-skills 0.1.0",
 				},
 			];
 
@@ -1173,6 +1314,14 @@ describe("command entrypoint integration: runtime json", () => {
 						packageName: filterPackageNames.agentWorktree,
 						script: "awt",
 						label: "awt --version (workspace-filter)",
+					}),
+					substring: "0.1.0",
+				},
+				{
+					command: runners.workspaceFilter({
+						packageName: filterPackageNames.agentSkills,
+						script: "agent-skills",
+						label: "agent-skills --version (workspace-filter)",
 					}),
 					substring: "0.1.0",
 				},
@@ -1218,6 +1367,15 @@ describe("command entrypoint integration: runtime json", () => {
 						label: "awt commands --json (package-cwd)",
 					}),
 					contractId: "agent-worktree.lifecycle",
+				},
+				{
+					command: runners.packageCwd({
+						packageRoot: packageRoots.agentSkills,
+						script: "agent-skills",
+						args: ["commands", "--json"],
+						label: "agent-skills commands --json (package-cwd)",
+					}),
+					contractId: "agent-skills.projection",
 				},
 			];
 
@@ -1270,6 +1428,12 @@ describe("command entrypoint integration: runtime json", () => {
 					script: "awt",
 					args: ["definitely-not-a-command", "--json"],
 					label: "awt invalid command (package-cwd)",
+				}),
+				runners.packageCwd({
+					packageRoot: packageRoots.agentSkills,
+					script: "agent-skills",
+					args: ["definitely-not-a-command", "--json"],
+					label: "agent-skills invalid command (package-cwd)",
 				}),
 			];
 

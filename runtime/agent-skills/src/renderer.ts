@@ -1,0 +1,163 @@
+import type { SkillVisibility } from "./model.ts";
+import type { AgentSkillsProjectionPlan } from "./projection.ts";
+
+/**
+ * Result from a list command.
+ */
+export interface AgentSkillsListResult {
+	/** Listed entries after filters. */
+	entries: readonly SkillVisibility[];
+	/** Whether explanations are included. */
+	why: boolean;
+	/** List mode used for rendering. */
+	mode: "all" | "visible" | "ignored" | "new";
+	/** One concise next action summary. */
+	next_action_summary: string;
+}
+
+/**
+ * Result from an ignore command.
+ */
+export interface AgentSkillsIgnoreResult {
+	/** Ignore subcommand. */
+	action: "add" | "remove" | "list" | "suggest";
+	/** Configured or suggested patterns. */
+	patterns: readonly string[];
+	/** Changed pattern for add/remove. */
+	changed_pattern?: string;
+	/** One concise next action summary. */
+	next_action_summary: string;
+}
+
+/**
+ * Result from unlink command.
+ */
+export interface AgentSkillsUnlinkResult {
+	/** True when running as preview. */
+	check: boolean;
+	/** Links removed or planned for removal. */
+	links: readonly string[];
+	/** One concise next action summary. */
+	next_action_summary: string;
+}
+
+/**
+ * Render compact human status output.
+ *
+ * @param plan - Projection plan from the engine
+ * @returns Human-readable status dashboard
+ *
+ * @example
+ * ```typescript
+ * const text = renderStatus(plan)
+ * ```
+ */
+export function renderStatus(plan: AgentSkillsProjectionPlan): string {
+	const status = plan.status;
+	const lines = [
+		"agent-skills status",
+		`repo: ${status.repo_root}`,
+		`catalog: ${status.catalog_root}`,
+		`visible: ${status.visible_count}`,
+		`ignored: ${status.ignored_count}`,
+		`invalid: ${status.invalid_count}`,
+		`health: ${status.health}`,
+		`last projected: ${status.last_projected_at ?? "none"}`,
+		`changes: +${status.newly_visible.length} -${status.removed_since_snapshot.length} write:${status.changes.create_or_update.length + status.changes.remove.length + status.changes.broken.length}`,
+		`roots: ${status.checked_roots.join(", ")}`,
+		`next: ${status.next_action_summary}`,
+	];
+	if (status.blockers.length > 0) {
+		lines.push(`blockers: ${status.blockers.length}`);
+	}
+	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Render sync or sync check output.
+ *
+ * @param plan - Projection plan from the engine
+ * @param check - Whether writes were previewed only
+ * @returns Human-readable sync summary
+ *
+ * @example
+ * ```typescript
+ * renderSync(plan, true)
+ * ```
+ */
+export function renderSync(plan: AgentSkillsProjectionPlan, check: boolean): string {
+	const prefix = check ? "sync check" : "sync";
+	const changes = plan.status.changes;
+	return [
+		`agent-skills ${prefix}`,
+		`health: ${plan.status.health}`,
+		`create/update: ${changes.create_or_update.length}`,
+		`remove: ${changes.remove.length}`,
+		`broken: ${changes.broken.length}`,
+		`blockers: ${plan.status.blockers.length}`,
+		`next: ${plan.status.next_action_summary}`,
+		"",
+	].join("\n");
+}
+
+/**
+ * Render list output.
+ *
+ * @param result - Filtered list model
+ * @returns Human-readable skill list
+ *
+ * @example
+ * ```typescript
+ * renderList({ entries, why: true, mode: "all", next_action_summary: "Projection clean." })
+ * ```
+ */
+export function renderList(result: AgentSkillsListResult): string {
+	const lines = [`agent-skills list ${result.mode}`];
+	for (const entry of result.entries) {
+		lines.push(
+			result.why
+				? `${entry.id}\t${entry.state}\t${entry.reason}`
+				: `${entry.id}\t${entry.state}`,
+		);
+	}
+	lines.push(`next: ${result.next_action_summary}`);
+	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Render ignore command output.
+ *
+ * @param result - Ignore command model
+ * @returns Human-readable ignore summary
+ *
+ * @example
+ * ```typescript
+ * renderIgnore({ action: "list", patterns: [], next_action_summary: "No rules." })
+ * ```
+ */
+export function renderIgnore(result: AgentSkillsIgnoreResult): string {
+	const lines = [`agent-skills ignore ${result.action}`];
+	if (result.changed_pattern) lines.push(`changed: ${result.changed_pattern}`);
+	for (const pattern of result.patterns) lines.push(pattern);
+	lines.push(`next: ${result.next_action_summary}`);
+	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Render unlink output.
+ *
+ * @param result - Unlink command model
+ * @returns Human-readable unlink summary
+ *
+ * @example
+ * ```typescript
+ * renderUnlink({ check: true, links: [], next_action_summary: "No links." })
+ * ```
+ */
+export function renderUnlink(result: AgentSkillsUnlinkResult): string {
+	const lines = [`agent-skills unlink${result.check ? " check" : ""}`];
+	lines.push(`links: ${result.links.length}`);
+	for (const link of result.links) lines.push(link);
+	lines.push(`next: ${result.next_action_summary}`);
+	return `${lines.join("\n")}\n`;
+}
