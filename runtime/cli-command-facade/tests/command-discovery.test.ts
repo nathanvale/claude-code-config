@@ -446,11 +446,11 @@ describe("CLI command facade discovery", () => {
 				commands: {
 					inspect: {
 						...inspect,
-						result_contract: { id: "" },
-						action_affordances: {
-							blocked: [
-								null,
-								"not an action",
+							result_contract: { id: "" },
+							action_affordances: {
+								blocked: [
+									null as never,
+									"not an action" as never,
 								{
 									id: "example.repair",
 									summary: "Repair the blocker.",

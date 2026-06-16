@@ -13,7 +13,6 @@ import {
 	AGENT_WORKTREE_BACKUP_REF_POLICY,
 	AGENT_WORKTREE_BACKUP_REF_TEMPLATE,
 	AGENT_WORKTREE_COMMANDS,
-	AGENT_WORKTREE_CONTRACT_ID,
 	AGENT_WORKTREE_DIAGNOSTIC_OUTPUT_POLICY,
 	AGENT_WORKTREE_DOCTOR_JSON_FIELDS,
 	AGENT_WORKTREE_DOCTOR_EXIT_POLICY,
@@ -135,7 +134,7 @@ describe("agent-worktree scaffold", () => {
 
 		expect(exitCode).toBe(0);
 		expect(envelope.status).toBe("ok");
-		expect(envelope.data?.contract_id).toBe(AGENT_WORKTREE_CONTRACT_ID);
+		expect(envelope.data?.contract_id).toBe("agent-worktree.commands");
 		expect(
 			Object.keys(envelope.data?.commands as Record<string, unknown>).sort(),
 		).toEqual(

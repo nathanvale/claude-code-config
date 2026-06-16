@@ -589,12 +589,12 @@ describe("CLI command facade", () => {
 			envVars: [{ name: "API_TOKEN" }] as const,
 		};
 
-		let tree: ReturnType<typeof projectCommandDiscoveryTree> | undefined;
-		expect(() => {
-			tree = projectCommandDiscoveryTree([["x", sensitiveContract]]);
-		}).not.toThrow();
-		expect(tree?.commands.x?.env_vars).toEqual([{ name: "API_TOKEN" }]);
-	});
+			expect(() => {
+				projectCommandDiscoveryTree([["x", sensitiveContract]]);
+			}).not.toThrow();
+			const tree = projectCommandDiscoveryTree([["x", sensitiveContract]]);
+			expect(tree?.commands.x?.env_vars).toEqual([{ name: "API_TOKEN" }]);
+		});
 
 	test("discovery drift backstops a sensitive env-var name", () => {
 		const tree = projectCommandDiscoveryTree([["inspect", contracts.inspect]]);

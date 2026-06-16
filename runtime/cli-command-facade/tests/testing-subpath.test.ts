@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type CommandFacadeContract,
+	type CommandResultData,
+	type CommandResultPayload,
+	createCommandResultData,
 	renderCommandUsage,
 } from "@side-quest/cli-command-facade";
 import {
+	assertCommandResultContract,
 	assertCommandHelpFlagSurface,
+	assertJsonErrorEnvelope,
 	runCommandSurfaceCases,
 } from "@side-quest/cli-command-facade/testing";
 
@@ -35,6 +40,10 @@ describe("CLI command facade testing subpath", () => {
 			"0": "report emitted",
 			"1": "report failed",
 			"2": "usage error",
+		},
+		resultContract: {
+			id: "example.report",
+			schema_version: 1,
 		},
 	} satisfies CommandFacadeContract<"report">;
 
@@ -116,15 +125,506 @@ describe("CLI command facade testing subpath", () => {
 	});
 
 	test("reads flags from continued usage lines", () => {
+		const contractWithContinuedUsage = {
+			...jsonContract,
+			usage: ["report", "report [--json=<mode>]"],
+		};
 		expect(() =>
 			assertCommandHelpFlagSurface({
 				command: "report",
-				contract: {
-					...jsonContract,
-					usage: ["report", "report [--json=<mode>]"],
-				},
+				contract: contractWithContinuedUsage,
 				help: "Usage: report\n       report [--json=<mode>]\n",
 			}),
+		).not.toThrow();
+	});
+
+	test("wraps command data with the command result contract", () => {
+		type ReportPayload = CommandResultPayload<{ total: number }>;
+		type ReportResult = CommandResultData<ReportPayload>;
+		const typedPayload: ReportPayload = { total: 1 };
+		const typedResult: ReportResult = {
+			contract_id: "example.report",
+			schema_version: 1,
+			total: 1,
+		};
+		// @ts-expect-error reserved facade metadata belongs to the helper
+		const reservedPayload: ReportPayload = { contract_id: "other", total: 1 };
+		expect(reservedPayload as unknown).toEqual({
+			contract_id: "other",
+			total: 1,
+		});
+		expect(typedResult.total).toBe(1);
+		expect(typedResult.contract_id).toBe("example.report");
+
+		const literalResultContract = {
+			resultContract: {
+				id: "example.report",
+				schema_version: 1,
+			},
+		} as const;
+		const resultData = createCommandResultData(literalResultContract, {
+			total: 1,
+		});
+		const _literalContractId: "example.report" = resultData.contract_id;
+		const _literalSchemaVersion: 1 = resultData.schema_version;
+		expect(_literalContractId).toBe("example.report");
+		expect(_literalSchemaVersion).toBe(1);
+		expect(resultData).toEqual({
+			contract_id: "example.report",
+			schema_version: 1,
+			total: 1,
+		});
+		expect(createCommandResultData(reportContract, typedPayload)).toEqual({
+			contract_id: "example.report",
+			schema_version: 1,
+			total: 1,
+		});
+		expect(() =>
+			createCommandResultData(reportContract, { contract_id: "other" } as never),
+		).toThrow(/must not define contract_id/);
+		expect(() =>
+			createCommandResultData({ ...reportContract, resultContract: undefined }, {
+				total: 1,
+			}),
+		).toThrow(/result contract is required/);
+		expect(() =>
+			createCommandResultData(
+				{ ...reportContract, resultContract: { id: "   " } },
+				{ total: 1 },
+			),
+		).toThrow(/id must be a non-empty string/);
+		expect(() =>
+			createCommandResultData(reportContract, { schema_version: 1 } as never),
+		).toThrow(/must not define schema_version/);
+		expect(
+			createCommandResultData(
+				{
+					...reportContract,
+					resultContract: { id: "example.no_schema" },
+				},
+				{ total: 1 },
+			),
+		).toEqual({
+			contract_id: "example.no_schema",
+			total: 1,
+		});
+		expect(() =>
+			createCommandResultData(
+				{
+					...reportContract,
+					resultContract: {
+						id: "example.report",
+						schema_version: { major: 1 } as never,
+					},
+				},
+				{ total: 1 },
+			),
+		).toThrow(/schema_version must be a string or number/);
+		expect(() =>
+			createCommandResultData(
+				{
+					...reportContract,
+					resultContract: {
+						id: "example.report",
+						schema_version: "",
+					},
+				},
+				{ total: 1 },
+			),
+		).toThrow(/schema_version must be a non-empty string/);
+		expect(() =>
+			createCommandResultData(
+				{
+					...reportContract,
+					resultContract: {
+						id: "example.report",
+						schema_version: Number.NaN,
+					},
+				},
+				{ total: 1 },
+			),
+		).toThrow(/schema_version must be a finite number/);
+		expect(() =>
+			createCommandResultData(reportContract, null as never),
+		).toThrow(/plain object/);
+		expect(() =>
+			createCommandResultData(reportContract, ["bad"] as never),
+		).toThrow(/plain object/);
+		expect(() =>
+			createCommandResultData(reportContract, (() => ({ total: 1 })) as never),
+		).toThrow(/plain object/);
+		expect(
+			createCommandResultData(
+				reportContract,
+				Object.assign(Object.create(null), { total: 1 }),
+			),
+		).toEqual({
+			contract_id: "example.report",
+			schema_version: 1,
+			total: 1,
+		});
+	});
+
+	test("asserts command result contract ids from JSON envelopes", () => {
+		const envelope = {
+			status: "ok",
+			run_id: "run-test-1",
+			duration_ms: 42,
+			data: createCommandResultData(reportContract, { total: 1 }),
+		};
+
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope,
+			}),
+		).not.toThrow();
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					data: { contract_id: "example.other" },
+				},
+			}),
+		).toThrow(
+			/command=report expected=example\.report actual=example\.other/,
+		);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					data: { contract_id: "example.report" },
+				},
+			}),
+		).toThrow(
+			/command=report schema_version expected=1 actual=undefined/,
+		);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					data: { contract_id: "example.report", schema_version: 2 },
+				},
+			}),
+		).toThrow(/command=report schema_version expected=1 actual=2/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: { ...reportContract, resultContract: undefined },
+				envelope,
+			}),
+		).toThrow(/command=report classification=missing-contract/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: { ...reportContract, json: false, outputModes: ["plain"] },
+				envelope,
+			}),
+		).toThrow(/command=report classification=non-json-result-contract/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: { status: "ok", run_id: "run-test-1" },
+			}),
+		).toThrow(/command=report classification=missing-data/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					duration_ms: -1,
+				},
+			}),
+		).toThrow(/duration_ms must be a non-negative number/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: "not-json",
+			}),
+		).toThrow(/classification=missing-envelope/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					run_id: " ",
+				},
+			}),
+		).toThrow(/classification=missing-run-id/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					extra: true,
+				},
+			}),
+		).toThrow(/classification=unsupported-field fields=extra/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					runtime_actions: [
+						{
+							id: "inspect-report",
+							summary: "Inspect report output.",
+							side_effects: ["check"],
+						},
+					],
+				},
+			}),
+		).toThrow(/classification=invalid-success-envelope/);
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					...envelope,
+					runtime_actions: [
+						{
+							id: "inspect-report",
+							summary: "Inspect report output.",
+							side_effects: ["check"],
+						},
+					],
+					continuation: { next_action_id: "inspect-report" },
+					diagnostic_trail: {
+						run_id: "run-test-1",
+						summary: "Report diagnostics captured.",
+						surface: { kind: "diagnostic_capability", id: "report" },
+					},
+				},
+			}),
+		).not.toThrow();
+		expect(() =>
+			assertCommandResultContract({
+				command: "report",
+				contract: reportContract,
+				envelope: {
+					status: "error",
+					run_id: "run-test-1",
+					data: createCommandResultData(reportContract, { total: 1 }),
+				},
+			}),
+		).toThrow(/command=report classification=not-success-envelope/);
+	});
+
+	test("asserts JSON error envelopes against the runtime contract", () => {
+		const envelope = {
+			status: "error",
+			run_id: "run-test-1",
+			error: {
+				run_id: "run-test-1",
+				code: "config_missing",
+				message: "Config is missing.",
+				exit_code: 1,
+				severity: "error",
+				recoverability: "repair_state",
+				retryable: false,
+				failure_domain: "workspace_config",
+			},
+			duration_ms: 42,
+		} as const;
+
+		const writtenEnvelope = assertJsonErrorEnvelope(envelope, {
+			code: "config_missing",
+			recoverability: "repair_state",
+			processExitCode: 1,
+			runId: "run-test-1",
+			failureDomain: "workspace_config",
+		});
+		const _durationMs: number | undefined = writtenEnvelope.duration_ms;
+		expect(_durationMs).toBe(42);
+		expect(writtenEnvelope).toBe(envelope);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{
+					...envelope,
+					duration_ms: Number.NaN,
+				},
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+				},
+			),
+		).toThrow(/duration_ms must be a non-negative number/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{
+					...envelope,
+					error: { ...envelope.error, retryable: true },
+				},
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+				},
+			),
+		).toThrow(/retryable true requires recoverability retry/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{ ...envelope, status: "ok" },
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+				},
+			),
+		).toThrow(/status=error/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{ ...envelope, runtime_actions: [] },
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+				},
+			),
+		).toThrow(/runtime_actions must be omitted/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{ ...envelope, unsupported_field: true },
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+				},
+			),
+		).toThrow(/unsupported field/);
+		expect(() =>
+			assertJsonErrorEnvelope(envelope, {
+				code: "usage_error",
+				recoverability: "repair_state",
+				processExitCode: 1,
+			}),
+		).toThrow(/code mismatch: expected=usage_error actual=config_missing/);
+		expect(() =>
+			assertJsonErrorEnvelope(envelope, {
+				code: "config_missing",
+				recoverability: "repair_state",
+				runId: "run-other",
+				processExitCode: 1,
+			}),
+		).toThrow(/run_id mismatch: expected=run-other actual=run-test-1/);
+		expect(() =>
+			assertJsonErrorEnvelope(envelope, {
+				code: "config_missing",
+				recoverability: "repair_state",
+				processExitCode: 2,
+			}),
+		).toThrow(/error.exit_code must match process_exit_code/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{ ...envelope, data: { note: "missing contract metadata" } },
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+					errorResultContract: {
+						id: "example.error",
+						schema_version: 1,
+					},
+				},
+			),
+		).toThrow(/metadata missing/);
+		expect(() =>
+			assertJsonErrorEnvelope(envelope, {
+				code: "config_missing",
+				recoverability: "repair_state",
+				processExitCode: 1,
+				errorResultContract: {
+					id: "example.error",
+					schema_version: 1,
+				},
+			}),
+		).toThrow(/missing data/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{
+					...envelope,
+					data: { contract_id: "example.report", schema_version: 1 },
+				},
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+				},
+			),
+		).toThrow(/requires errorResultContract/);
+		expect(
+			assertJsonErrorEnvelope(
+				{
+					...envelope,
+					data: { contract_id: "example.error", schema_version: 1 },
+				},
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+					errorResultContract: {
+						id: "example.error",
+						schema_version: 1,
+					},
+				},
+			).data,
+		).toEqual({ contract_id: "example.error", schema_version: 1 });
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{
+					...envelope,
+					data: { contract_id: "example.error", schema_version: 2 },
+				},
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+					errorResultContract: {
+						id: "example.error",
+						schema_version: 1,
+					},
+				},
+			),
+		).toThrow(/schema_version mismatch/);
+		expect(() =>
+			assertJsonErrorEnvelope(
+				{
+					...envelope,
+					runtime_actions: [
+						{
+							id: "repair-config",
+							summary: "Repair config file.",
+							side_effects: ["write"],
+						},
+					],
+					continuation: { next_action_id: "repair-config" },
+					diagnostic_trail: {
+						run_id: "run-test-1",
+						summary: "Config diagnostics captured.",
+						surface: { kind: "diagnostic_capability", id: "report" },
+					},
+				},
+				{
+					code: "config_missing",
+					recoverability: "repair_state",
+					processExitCode: 1,
+					failureDomain: "workspace_config",
+				},
+			),
 		).not.toThrow();
 	});
 

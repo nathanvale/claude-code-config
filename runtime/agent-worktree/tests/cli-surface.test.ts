@@ -7,6 +7,7 @@ import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/tes
 
 import type { AgentWorktreeCliRuntime } from "../src/cli.ts";
 import { agentWorktreeContracts } from "../src/command-contract.ts";
+import { AGENT_WORKTREE_CONTRACT_ID } from "../src/model.ts";
 import { createFileStore } from "../src/store.ts";
 import {
 	mainRepoGitOutputs,
@@ -131,6 +132,17 @@ describe("agent-worktree CLI surface", () => {
 			"--delete-branch",
 			"--json",
 		]);
+	});
+
+	test("command discovery usage errors keep lifecycle result metadata", async () => {
+		const envelope = await expectUsageError([
+			"commands",
+			"--repo",
+			"/repo",
+			"--json",
+		]);
+
+		expect(envelope.data?.contract_id).toBe(AGENT_WORKTREE_CONTRACT_ID);
 	});
 
 	test("removed no-input flag is rejected instead of advertised inertly", async () => {
