@@ -32,12 +32,12 @@ Storybook taxonomy/title organization.
 
 ## Prerequisites
 
-Before any Storybook MCP work, run `storybook-doctor check --json` from the
-target repo root. It emits a readiness proof with `ready`, `degraded`, or
-`blocked` status, structured findings, and a next safe action.
+Before any Storybook MCP work, run `storybook-doctor check` against the target
+project. It emits a readiness proof with `ready`, `degraded`, or `blocked`
+status, structured findings, and a next safe action.
 
 ```bash
-bun run --filter storybook-doctor-scripts storybook-doctor -- check --json
+bun run --filter storybook-doctor-scripts storybook-doctor -- check --json --repo <path/to/project>
 ```
 
 - `ready` → proceed to Quick Start.
@@ -47,14 +47,14 @@ bun run --filter storybook-doctor-scripts storybook-doctor -- check --json
 For deeper diagnostics (local Storybook doctor evidence), run:
 
 ```bash
-bun run --filter storybook-doctor-scripts storybook-doctor -- deep --json
+bun run --filter storybook-doctor-scripts storybook-doctor -- deep --json --repo <path/to/project>
 ```
 
 ## Quick Start
 
 Default path: use the local ad-hoc endpoint. Do not persist MCP config.
 
-1. Run `storybook-doctor check --json` to verify readiness.
+1. Run `storybook-doctor check --json --repo <path/to/project>` to verify readiness.
 2. Export `STORYBOOK_URL`, for example
    `export STORYBOOK_URL=http://localhost:6006`.
 3. If Storybook is not running, start it using the target repo's dev script.
@@ -79,10 +79,10 @@ Default path: use the local ad-hoc endpoint. Do not persist MCP config.
   `references/accessibility-source-route.md`, then route claims to official
   sources before library docs or community examples.
 - Need to repair a hung, stuck, or noisy Storybook process: run
-  `storybook-doctor deep --json` first, then read
+  `storybook-doctor deep --json --repo <path/to/project>` first, then read
   `references/tips-and-tricks.md#hanging-or-stuck-process-triage` to classify
   server, builder, MCP, or test-runner failure before restarting.
-- Need setup or repair: run `storybook-doctor check --json`, follow the
+- Need setup or repair: run `storybook-doctor check --json --repo <path/to/project>`, follow the
   `next_safe_action`, then read `references/tips-and-tricks.md` for common
   failures.
 
@@ -229,14 +229,14 @@ mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http \
 DX lens: present choices as a short numbered list only when user choice changes
 target, risk, or next action. Bold the recommended default.
 
-1. Unknown readiness -> **run `storybook-doctor check --json`**; follow the
+1. Unknown readiness -> **run `storybook-doctor check --json --repo <path/to/project>`**; follow the
    `next_safe_action`.
-2. Deeper diagnosis needed -> run `storybook-doctor deep --json`.
+2. Deeper diagnosis needed -> run `storybook-doctor deep --json --repo <path/to/project>`.
 3. Need a Storybook URL -> call `preview-stories`, then return the preview URL.
 4. Need confidence -> call `run-story-tests` for focused stories first.
 5. Need taxonomy cleanup -> read `STORYBOOK_TAXONOMY.md`, audit titles, then
    run focused Storybook checks.
-6. Storybook appears hung -> **run `storybook-doctor deep --json`**, then read
+6. Storybook appears hung -> **run `storybook-doctor deep --json --repo <path/to/project>`**, then read
    `references/tips-and-tricks.md#hanging-or-stuck-process-triage`; classify
    before restart.
 7. Want persistent setup -> ask before adding or changing `mcporter` config.
