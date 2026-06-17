@@ -10,9 +10,7 @@ Use when the user asks to fetch Figma designs, set up Figma MCP, sync Code
 Connect, generate Figma designs, compare Figma source to implementation, or
 search a Figma design system.
 
-Do not use for generic design work without Figma, Storybook-only work, or
-direct Figma plugin skill operations (`/figma-use`, `/figma-generate-design`)
-that are already working.
+Do not use for generic design work without Figma or Storybook-only work.
 
 ## Owner Paths
 
@@ -23,19 +21,19 @@ that are already working.
 - Design-to-code workflow: `references/design-to-code-workflow.md`.
 - Code Connect workflow: `references/code-connect-workflow.md`.
 - Tips and troubleshooting: `references/tips-and-tricks.md`.
-- Figma plugin skills: `/figma-use`, `/figma-generate-design`,
-  `/figma-generate-library`, `/figma-code-connect` (owned by Figma plugin, not
-  this skill).
+- Figma plugin skills (optional): `/figma-use`, `/figma-generate-design`,
+  `/figma-generate-library`, `/figma-code-connect` (owned by Figma plugin;
+  used when installed, not a hard dependency).
 - Provenance: `PROVENANCE.md`.
 
 ## Quick Start
 
-Determine Figma MCP state before doing any Figma work. Read
+Determine Figma MCP state and lane before doing any Figma work. Read
 `references/figma-mcp-state-machine.md` for the full decision tree.
 
 1. Check if `mcp__figma__*` tools are available in the current session with
    ToolSearch query `mcp__figma`.
-2. If tools found → state is **ready**; proceed to Pick One.
+2. If tools found → state is **ready**.
 3. If no tools → check config shape (no secrets):
    - Codex: `codex mcp get figma`
    - Claude: `jq '.mcpServers.figma | {type, url}' ~/.claude.json`
@@ -46,13 +44,33 @@ Determine Figma MCP state before doing any Figma work. Read
 6. If mcporter OAuth hangs → state is **mcporter-blocked**; cap at one attempt,
    report the config source being used.
 
+### Lane Detection
+
+When state is **ready**, detect which lane to use:
+
+- **Plugin lane:** Check if Figma plugin skills are available (look for
+  `/figma-use` in the available skills list). If present, route canvas writes
+  and design generation through plugin skills.
+- **Direct lane:** If plugin skills are not installed, this skill owns the full
+  workflow using `mcp__figma__*` tools directly (or mcporter).
+
+Both lanes share the same MCP tools underneath. The plugin lane adds
+higher-level orchestration for canvas writes; the direct lane uses tool recipes
+from this skill instead.
+
 ## Pick One
 
 - Need to read a Figma design for implementation → read
   `references/design-to-code-workflow.md`, then call `get_design_context`.
-- Need to write to Figma canvas → use `/figma-use` or `/figma-generate-design`
-  plugin skills.
-- Need to set up Code Connect → read `references/code-connect-workflow.md`.
+- Need to write to Figma canvas:
+  - Plugin lane → use `/figma-use` or `/figma-generate-design`.
+  - Direct lane → call `use_figma` or `generate_figma_design` via ToolSearch.
+- Need to generate a design system in Figma:
+  - Plugin lane → use `/figma-generate-library`.
+  - Direct lane → call `use_figma` with design system intent.
+- Need to set up Code Connect:
+  - Plugin lane → use `/figma-code-connect`.
+  - Direct lane → read `references/code-connect-workflow.md`.
 - Need to search design system → call `search_design_system` or
   `get_libraries`.
 - Need to fix MCP setup → run Quick Start states, then hand off to
@@ -76,9 +94,10 @@ Determine Figma MCP state before doing any Figma work. Read
   MCP tools.
 - Community alternative: Framelink (`figma-developer-mcp`) — read-only, lower
   token usage, no Dev Mode license required.
-- The Figma plugin ships its own skills (`/figma-use`, `/figma-generate-design`,
-  `/figma-generate-library`, `/figma-code-connect`). This skill complements
-  those by owning setup, routing, and troubleshooting.
+- The Figma plugin optionally ships its own skills (`/figma-use`,
+  `/figma-generate-design`, `/figma-generate-library`, `/figma-code-connect`).
+  When installed, this skill routes canvas writes through them (plugin lane).
+  When absent, this skill drives the same MCP tools directly (direct lane).
 
 ## Workflow
 
@@ -89,11 +108,15 @@ Determine Figma MCP state before doing any Figma work. Read
    `references/figma-mcp-state-machine.md`.
 4. Identify available runtime: native session tools (`mcp__figma__*`) first,
    mcporter second.
-5. Route to the appropriate Pick One workflow.
-6. For design-to-code reads, the standard tool combo is:
+5. Detect lane: check available skills list for `/figma-use`. Present →
+   plugin lane. Absent → direct lane.
+6. Route to the appropriate Pick One workflow using the detected lane.
+7. For design-to-code reads (both lanes), the standard tool combo is:
    `get_design_context` + `get_screenshot` + `get_variable_defs` +
    `get_code_connect_map`.
-7. Return terse status line + next action.
+8. For canvas writes: plugin lane uses `/figma-use`; direct lane calls
+   `use_figma` or `generate_figma_design` via ToolSearch.
+9. Return terse status line + next action.
 
 ## Tool Recipes
 
@@ -114,9 +137,14 @@ mcporter call figma.get_design_context --args '{"figma_url":"<url>"}'
 mcporter call figma.get_screenshot --args '{"figma_url":"<url>"}'
 ```
 
-For native session tools, use ToolSearch to load schemas then call directly:
+For native session tools (both lanes), use ToolSearch to load schemas then call
+directly:
 ```
-ToolSearch query "select:mcp__figma__get_design_context,mcp__figma__get_screenshot"
+# Read tools (both lanes)
+ToolSearch query "select:mcp__figma__get_design_context,mcp__figma__get_screenshot,mcp__figma__get_variable_defs,mcp__figma__get_code_connect_map"
+
+# Write tools (direct lane only — plugin lane uses /figma-use instead)
+ToolSearch query "select:mcp__figma__use_figma,mcp__figma__generate_figma_design,mcp__figma__create_new_file"
 ```
 
 ## Output Shape
@@ -148,8 +176,8 @@ Figma MCP state: ready
 - Do not kill mcporter daemon processes unless the workflow owns them or user
   approves.
 - Hand off MCP diagnosis to `mcp-doctor`; do not reinvent diagnosis logic.
-- Hand off canvas operations to Figma plugin skills; do not duplicate their
-  workflows.
+- Plugin lane: hand off canvas operations to Figma plugin skills.
+- Direct lane: call `mcp__figma__*` write tools directly when plugin is absent.
 - Do not guess component mappings; inspect Code Connect data first.
 - Do not expose Figma access tokens or OAuth state in any output.
 
