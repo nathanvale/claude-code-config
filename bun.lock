@@ -130,6 +130,17 @@
         "typescript": "catalog:",
       },
     },
+    "skills/storybook": {
+      "name": "storybook-doctor-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "skills/test-runner": {
       "name": "test-runner-scripts",
       "dependencies": {
@@ -239,6 +250,8 @@
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
 
     "skill-feedback-scripts": ["skill-feedback-scripts@workspace:skills/skill-feedback"],
+
+    "storybook-doctor-scripts": ["storybook-doctor-scripts@workspace:skills/storybook"],
 
     "string-width": ["string-width@4.2.3", "", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g=="],
 

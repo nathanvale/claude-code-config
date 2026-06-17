@@ -15,6 +15,8 @@ Storybook taxonomy/title organization.
 
 ## Owner Paths
 
+- Readiness proof and diagnostics: `storybook-doctor` CLI (`src/`).
+- Vocabulary: `CONTEXT.md`.
 - Target repo Storybook config: nearest Storybook main config.
 - Target repo package scripts and deps: nearest package manifest.
 - Target repo Storybook test config: nearest Vitest, Playwright, or Storybook
@@ -28,18 +30,37 @@ Storybook taxonomy/title organization.
 - Accessibility source route: `references/accessibility-source-route.md`.
 - Provenance: `PROVENANCE.md`.
 
+## Prerequisites
+
+Before any Storybook MCP work, run `storybook-doctor check --json` from the
+target repo root. It emits a readiness proof with `ready`, `degraded`, or
+`blocked` status, structured findings, and a next safe action.
+
+```bash
+bun run --filter storybook-doctor-scripts storybook-doctor -- check --json
+```
+
+- `ready` → proceed to Quick Start.
+- `degraded` → proceed; follow the `next_safe_action` for optional improvements.
+- `blocked` → follow the `next_safe_action` to resolve; do not start MCP work.
+
+For deeper diagnostics (local Storybook doctor evidence), run:
+
+```bash
+bun run --filter storybook-doctor-scripts storybook-doctor -- deep --json
+```
+
 ## Quick Start
 
 Default path: use the local ad-hoc endpoint. Do not persist MCP config.
 
-1. Export `STORYBOOK_URL`, for example
+1. Run `storybook-doctor check --json` to verify readiness.
+2. Export `STORYBOOK_URL`, for example
    `export STORYBOOK_URL=http://localhost:6006`.
-2. Check whether Storybook is already running at that URL. If it responds,
-   reuse it and verify `/mcp`. Start Storybook only when no healthy server is
-   running.
-3. List tools with
+3. If Storybook is not running, start it using the target repo's dev script.
+4. List tools with
    `mcporter list --http-url "$STORYBOOK_URL/mcp" --allow-http --schema`.
-4. Stop when the schema shows Storybook tools, then call only the tool needed.
+5. Stop when the schema shows Storybook tools, then call only the tool needed.
 
 ## Pick One
 
@@ -57,8 +78,13 @@ Default path: use the local ad-hoc endpoint. Do not persist MCP config.
 - Need to interpret or fix accessibility findings: read
   `references/accessibility-source-route.md`, then route claims to official
   sources before library docs or community examples.
-- Need setup or repair: use the Workflow below, then read
-  `references/tips-and-tricks.md` for common failures.
+- Need to repair a hung, stuck, or noisy Storybook process: run
+  `storybook-doctor deep --json` first, then read
+  `references/tips-and-tricks.md#hanging-or-stuck-process-triage` to classify
+  server, builder, MCP, or test-runner failure before restarting.
+- Need setup or repair: run `storybook-doctor check --json`, follow the
+  `next_safe_action`, then read `references/tips-and-tricks.md` for common
+  failures.
 
 ## Research Notes
 
@@ -101,26 +127,29 @@ Run commands from the target repo root.
    `tmux` only when available; it improves process reliability, not Storybook
    performance. If no detached process owner exists, keep the attached command
    running and tell the user that closing it will stop Storybook.
-8. Set `STORYBOOK_URL` to the running local Storybook origin, for example
+8. If Storybook appears hung, read
+   `references/tips-and-tricks.md#hanging-or-stuck-process-triage` before
+   starting another server.
+9. Set `STORYBOOK_URL` to the running local Storybook origin, for example
    `export STORYBOOK_URL=http://localhost:6006`.
    Export it first, or replace `$STORYBOOK_URL` with the literal origin in each
    command.
-9. Prove the raw MCP endpoint before debugging `mcporter`:
+10. Prove the raw MCP endpoint before debugging `mcporter`:
    `curl -sS -X POST "$STORYBOOK_URL/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`.
-10. Inspect an ad-hoc local MCP endpoint with
+11. Inspect an ad-hoc local MCP endpoint with
    `mcporter list --http-url "$STORYBOOK_URL/mcp" --allow-http --schema`.
-11. Check configured MCP servers with `mcporter list`; treat that output as the
+12. Check configured MCP servers with `mcporter list`; treat that output as the
    discovery source of truth.
-12. For ad-hoc local calls, prefer `mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http --tool <tool> --args '<json>'`.
-13. For configured calls, run `mcporter list <server> --schema` before calling
+13. For ad-hoc local calls, prefer `mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http --tool <tool> --args '<json>'`.
+14. For configured calls, run `mcporter list <server> --schema` before calling
     `<server>.<tool>`.
-14. Before editing story files, call `get-storybook-story-instructions`.
-15. Before using a design-system component prop, call `get-documentation` for
+15. Before editing story files, call `get-storybook-story-instructions`.
+16. Before using a design-system component prop, call `get-documentation` for
     that component.
-16. Before adding a matrix story, read `references/matrix-story-pattern.md`.
-17. Before making non-obvious accessibility claims or trade-offs, read
+17. Before adding a matrix story, read `references/matrix-story-pattern.md`.
+18. Before making non-obvious accessibility claims or trade-offs, read
     `references/accessibility-source-route.md`.
-18. Use `preview-stories` for preview URLs, docs tools for documentation lookup,
+19. Use `preview-stories` for preview URLs, docs tools for documentation lookup,
     and `run-story-tests` for focused story checks.
 
 ## Taxonomy Workflow
@@ -180,6 +209,9 @@ mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http \
 - If `mcporter` is broken, use the `mcp-doctor` skill when available; otherwise
   run `mcporter list --status --json`.
 - If the project is not React, report the preview-support gap before proceeding.
+- Do not kill Storybook, Vite, Webpack, Playwright, or browser processes unless
+  the process was started for this task or the user approves the named PID and
+  command.
 
 ## Verification
 
@@ -197,10 +229,14 @@ mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http \
 DX lens: present choices as a short numbered list only when user choice changes
 target, risk, or next action. Bold the recommended default.
 
-1. No MCP config or unclear state -> **prove local endpoint** with ad-hoc
-   `mcporter`; no config writes.
-2. Need a Storybook URL -> call `preview-stories`, then return the preview URL.
-3. Need confidence -> call `run-story-tests` for focused stories first.
-4. Need taxonomy cleanup -> read `STORYBOOK_TAXONOMY.md`, audit titles, then
+1. Unknown readiness -> **run `storybook-doctor check --json`**; follow the
+   `next_safe_action`.
+2. Deeper diagnosis needed -> run `storybook-doctor deep --json`.
+3. Need a Storybook URL -> call `preview-stories`, then return the preview URL.
+4. Need confidence -> call `run-story-tests` for focused stories first.
+5. Need taxonomy cleanup -> read `STORYBOOK_TAXONOMY.md`, audit titles, then
    run focused Storybook checks.
-5. Want persistent setup -> ask before adding or changing `mcporter` config.
+6. Storybook appears hung -> **run `storybook-doctor deep --json`**, then read
+   `references/tips-and-tricks.md#hanging-or-stuck-process-triage`; classify
+   before restart.
+7. Want persistent setup -> ask before adding or changing `mcporter` config.

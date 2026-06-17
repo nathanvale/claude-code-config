@@ -4,6 +4,7 @@
   "type": "module",
   "workspaces": {
     "packages": [
+      "runners/*",
       "runtime/*",
       "skills/browser-use",
       "skills/classic-cinema",
@@ -13,6 +14,7 @@
       "skills/fallow",
       "skills/record-decision",
       "skills/skill-feedback",
+      "skills/storybook",
       "skills/test-runner",
       "skills/worktree"
     ],

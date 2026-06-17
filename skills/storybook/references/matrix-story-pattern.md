@@ -22,9 +22,38 @@ stories only unless the user asks for component implementation changes.
 2. Identify review axes: variant, size, state, density, intent, or content
    shape.
 3. Check existing matrix patterns, such as
-   `packages/portal-ui/src/ui/Button/Button.stories.tsx`.
+   `packages/portal-ui/src/ui/Snackbar/Snackbar.stories.tsx`.
 4. Call `get-storybook-story-instructions` when Storybook MCP is available.
 5. Use `get-documentation` before relying on design-system component props.
+
+## Canonical Story File Structure
+
+Follow this ordering in every portal-ui story file with a matrix:
+
+```
+// 1. Matrix helpers (MatrixShell, MatrixRow, inline render helpers)
+// 2. Meta (with docs.description.component = inline docs example text + Figma node ref)
+// export default meta
+// type Story = StoryObj<typeof meta>
+// 3. Matrix story FIRST — comment: "appears just under docs"
+// 4. Individual stories
+```
+
+The `Matrix` export must:
+- Be the **first named export** after `export default meta`.
+- Set `parameters.layout: 'fullscreen'`.
+- Set `parameters.docs.description.story` with a brief description and a full Figma URL
+  (e.g. `Figma: https://www.figma.com/design/<fileKey>/...?node-id=<nodeId>.`).
+- Set `args` with safe placeholder values (required fields must be present to satisfy the
+  meta type — use `variant: 'info', children: ''` or similar).
+- Use `render: () => <ComponentMatrix />` pointing at a local render helper.
+
+The meta must:
+- Set `tags: ['autodocs']`.
+- Set `parameters.docs.description.component` with a one-sentence description and a full
+  Figma URL (e.g. `Figma: https://www.figma.com/design/<fileKey>/...?node-id=<nodeId>.`).
+
+Individual stories must each set `parameters.docs.description.story`.
 
 ## Matrix Shape
 
@@ -38,6 +67,44 @@ stories only unless the user asks for component implementation changes.
 - Sizing: do not shrink controls below their designed size.
 - Helpers: keep matrix helpers story-local until a second component repeats the
   same shape.
+
+## MatrixShell / MatrixRow Helpers
+
+Use this exact layout structure for the portal-ui table-style matrix shell:
+
+```tsx
+function MatrixShell({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="border-border-default bg-surface-raised w-full overflow-x-auto rounded-lg border">
+      <div className="min-w-[480px]">
+        <div className="border-border-default bg-table-header-bg grid grid-cols-[140px_1fr] border-b">
+          <h3 className="text-table-header text-text-default px-4 py-3 font-semibold">
+            {title}
+          </h3>
+          <div className="text-table-header text-text-secondary px-4 py-3 font-semibold">
+            Preview
+          </div>
+        </div>
+        {children}
+      </div>
+    </section>
+  )
+}
+
+function MatrixRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="border-border-subtle grid grid-cols-[140px_1fr] border-b last:border-b-0">
+      <div className="text-table-body text-text-default flex items-center p-4 font-medium">
+        {label}
+      </div>
+      <div className="flex items-center p-4">{children}</div>
+    </div>
+  )
+}
+```
+
+Wrap in `<div className="flex w-full max-w-screen-sm flex-col gap-8 p-2">` at the
+render root. Source of truth: `packages/portal-ui/src/ui/Snackbar/Snackbar.stories.tsx`.
 
 ## State Specimens
 
