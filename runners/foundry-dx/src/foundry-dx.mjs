@@ -606,7 +606,12 @@ function checkClaudeAutoCompact() {
 		path.join(os.homedir(), ".claude", "settings.local.json"),
 	];
 	for (const candidate of candidates) {
-		const data = readJsonFile(candidate);
+		let data = null;
+		try {
+			data = readJsonFile(candidate);
+		} catch {
+			continue;
+		}
 		if (data && typeof data.autoCompactEnabled === "boolean") {
 			return { path: candidate, enabled: data.autoCompactEnabled };
 		}

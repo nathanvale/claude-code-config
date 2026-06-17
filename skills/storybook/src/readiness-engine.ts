@@ -374,6 +374,12 @@ export function nextActionForFinding(finding: ReadinessFinding): NextSafeAction 
 				id: "fix_storybook_doctor_issues",
 				summary: "Review and fix issues reported by local Storybook doctor.",
 			};
+		case "storybook_doctor_exec_failed":
+			return {
+				id: "fix_storybook_doctor_issues",
+				summary:
+					"Retry local Storybook doctor execution and resolve the reported runtime issues.",
+			};
 		default:
 			return { id: "none", summary: "No specific action required." };
 	}

@@ -126,22 +126,22 @@ A helper does NOT belong here when:
 > **Domain expert:** "No. Fixture servers are process-boundary test
 > infrastructure, not facade contract assertions. They belong in
 > cli-test-fixtures."
-
+>
 > **Dev:** "Should we add a git repo scaffolder here?"
 > **Domain expert:** "No. Git scaffolding varies too much per test — each test
 > needs its own commit structure and branch layout. Only extract when 3+ tests
 > share identical git setup, and that hasn't happened."
-
+>
 > **Dev:** "Should domain-specific config writers (storybook, tsconfig) go here?"
 > **Domain expert:** "No. Those are domain fixture shapes owned by the consuming
 > test. This package provides writePackageJson and writeFakeToolBinary — generic
 > shapes that cross package boundaries."
-
+>
 > **Dev:** "Should we add a `makeFullSetupDir` helper here?"
 > **Domain expert:** "No. Full-setup dirs compose domain-specific fixtures —
 > each CLI has different deps, config files, and scripts that constitute 'fully
 > set up.' The consuming test owns that composition."
-
+>
 > **Dev:** "What's the difference between this package and the facade testing
 > subpath?"
 > **Domain expert:** "Facade testing owns the contract layer: station evidence

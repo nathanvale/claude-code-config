@@ -23,7 +23,9 @@ export async function runDeep(
 	const deepEvidence = await collectDeepEvidence(runtime, checkResult);
 
 	const findings: ReadinessFinding[] = [...checkResult.findings];
-	applyDeepFindings(findings, deepEvidence);
+	if (checkResult.status !== "blocked") {
+		applyDeepFindings(findings, deepEvidence);
+	}
 
 	const status = aggregateStatus(findings);
 

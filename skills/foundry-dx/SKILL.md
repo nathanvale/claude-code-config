@@ -21,7 +21,7 @@ Use `lll-account-switch` for switching accounts or editing routing state.
 
 ## Workflow
 
-1. Work from `/Users/nathanvale/code/claude-code-config`.
+1. Work from the repo root.
 2. Run the CLI help before changing command usage:
    `bun run foundry-dx -- --help`.
 3. Run `status --repo <path>` for routing, health, hooks, and handoff state.
@@ -52,12 +52,12 @@ Use `lll-account-switch` for switching accounts or editing routing state.
 
 ## Verification
 
-Run from `/Users/nathanvale/code/claude-code-config`:
+Run from the repo root:
 
 ```bash
 bun run --filter @side-quest/foundry-dx typecheck
 bun run --filter @side-quest/foundry-dx test
-bun run foundry-dx -- hooks install --dry-run --force --tool both --block-auto --repo /Users/nathanvale/code/experience-sdk
+bun run foundry-dx -- hooks install --dry-run --force --tool both --block-auto --repo <target-repo-path>
 ```
 
 ## Next Safe Action

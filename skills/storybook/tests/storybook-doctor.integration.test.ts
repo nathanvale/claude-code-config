@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	assertStationEnvelope,
 	buildSkippedStationEvidence,
@@ -26,9 +27,13 @@ import {
 	projectStorybookDoctorStationMap,
 } from "../src/branch-station-catalog.ts";
 
-const RUNNER_PATH = new URL("../src/storybook-doctor.ts", import.meta.url)
-	.pathname;
-const PACKAGE_ROOT = new URL("..", import.meta.url).pathname;
+const RUNNER_PATH = fileURLToPath(
+	new URL("../src/storybook-doctor.ts", import.meta.url),
+);
+const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url)).replace(
+	/\/tests$/,
+	"",
+);
 
 type StationId =
 	(typeof storybookDoctorBranchStationCatalog)[number]["id"];
