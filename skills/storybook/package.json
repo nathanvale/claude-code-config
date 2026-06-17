@@ -13,6 +13,7 @@
 		"@side-quest/cli-command-facade": "workspace:*"
 	},
 	"devDependencies": {
+		"@side-quest/cli-test-fixtures": "workspace:*",
 		"@types/bun": "catalog:",
 		"typescript": "catalog:"
 	}

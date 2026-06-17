@@ -43,6 +43,14 @@
         "typescript": "catalog:",
       },
     },
+    "runtime/cli-test-fixtures": {
+      "name": "@side-quest/cli-test-fixtures",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "skills/browser-use": {
       "name": "browser-use-scripts",
       "version": "0.1.0",
@@ -137,6 +145,7 @@
         "@side-quest/cli-command-facade": "workspace:*",
       },
       "devDependencies": {
+        "@side-quest/cli-test-fixtures": "workspace:*",
         "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
@@ -194,6 +203,8 @@
     "@puppeteer/replay": ["@puppeteer/replay@4.0.2", "", { "peerDependencies": { "lighthouse": ">=13.0.0", "puppeteer": ">=25.0.0" }, "optionalPeers": ["lighthouse", "puppeteer"], "bin": { "replay-extension-test": "lib/extension-test.js", "replay": "lib/cli.js" } }, "sha512-EeE0THQFSTsI2RGxWI07PURCutx9JBM8QbwlFjdykfDu0MMiBrdSmXX9eXZf5Wvo9DmtvGAimWTCZnty44NYqQ=="],
 
     "@side-quest/cli-command-facade": ["@side-quest/cli-command-facade@workspace:runtime/cli-command-facade"],
+
+    "@side-quest/cli-test-fixtures": ["@side-quest/cli-test-fixtures@workspace:runtime/cli-test-fixtures"],
 
     "@side-quest/foundry-dx": ["@side-quest/foundry-dx@workspace:runners/foundry-dx"],
 
