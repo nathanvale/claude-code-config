@@ -152,6 +152,23 @@ function fullEvidence(): BranchStationEvidence[] {
 			status: "covered",
 			exitCode: 0,
 		},
+		{
+			stationId: "check.test_tools_missing",
+			status: "skipped",
+			rationale: "check not yet implemented in readiness-engine.ts",
+		},
+		{
+			stationId: "check.a11y_missing",
+			status: "skipped",
+			rationale: "check not yet implemented in readiness-engine.ts",
+		},
+		{
+			stationId: "check.invalid_repo",
+			status: "covered",
+			exitCode: 0,
+			envelopeStatus: "ok",
+			resultContractId: STORYBOOK_DOCTOR_CONTRACT_ID,
+		},
 	];
 	return collectStorybookDoctorEvidence(results);
 }

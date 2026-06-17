@@ -6,7 +6,7 @@ import type {
 	ReadinessFinding,
 	ReadinessResult,
 } from "./readiness-model.ts";
-import { type CheckOptions, runCheck } from "./readiness-engine.ts";
+import { aggregateStatus, type CheckOptions, pickNextSafeAction, runCheck } from "./readiness-engine.ts";
 
 const DEEP_OUTPUT_BUDGET_BYTES = 8_192;
 const DOCTOR_TIMEOUT_MS = 30_000;
@@ -25,19 +25,14 @@ export async function runDeep(
 	const findings: ReadinessFinding[] = [...checkResult.findings];
 	applyDeepFindings(findings, deepEvidence);
 
-	const status =
-		checkResult.status === "blocked"
-			? "blocked"
-			: findings.some((f) => f.severity === "blocked")
-				? "blocked"
-				: findings.some((f) => f.severity === "degraded")
-					? "degraded"
-					: "ready";
+	const status = aggregateStatus(findings);
+
+	const nextAction = pickNextSafeAction(findings);
 
 	return {
 		status,
 		findings,
-		next_safe_action: checkResult.next_safe_action,
+		next_safe_action: nextAction,
 		target: checkResult.target,
 		session: checkResult.session,
 		deep: deepEvidence,
@@ -49,6 +44,15 @@ async function collectDeepEvidence(
 	checkResult: ReadinessResult,
 ): Promise<DeepEvidence> {
 	const localBinary = findLocalStorybookBinary(runtime, checkResult);
+	if (checkResult.status === "blocked") {
+		return {
+			local_binary_found: localBinary !== null,
+			doctor_exit_code: null,
+			doctor_summary: [],
+			truncated: false,
+			redacted_count: 0,
+		};
+	}
 	if (!localBinary) {
 		return {
 			local_binary_found: false,
@@ -79,11 +83,11 @@ async function collectDeepEvidence(
 			truncated,
 			redacted_count: redactedCount,
 		};
-	} catch {
+	} catch (error) {
 		return {
 			local_binary_found: true,
 			doctor_exit_code: null,
-			doctor_summary: ["Failed to execute local Storybook doctor."],
+			doctor_summary: ["Storybook doctor execution failed: " + (error instanceof Error ? error.message : "unknown error")],
 			truncated: false,
 			redacted_count: 0,
 		};
@@ -116,6 +120,17 @@ function applyDeepFindings(
 			severity: "degraded",
 			message:
 				"No local Storybook binary found in node_modules/.bin. Install storybook in the target project.",
+		});
+		return;
+	}
+
+	if (evidence.doctor_exit_code === null) {
+		findings.push({
+			id: "storybook_doctor_exec_failed",
+			category: "doctor_finding",
+			severity: "degraded",
+			message: "Local Storybook doctor failed to execute (timeout or spawn error).",
+			detail: evidence.doctor_summary.slice(0, 3).join("\n"),
 		});
 		return;
 	}
@@ -158,7 +173,8 @@ function sanitizeOutput(raw: string): {
 	let text = raw;
 
 	if (Buffer.byteLength(text) > DEEP_OUTPUT_BUDGET_BYTES) {
-		text = text.slice(0, DEEP_OUTPUT_BUDGET_BYTES);
+		const buf = Buffer.from(text);
+		text = buf.subarray(0, DEEP_OUTPUT_BUDGET_BYTES).toString("utf8");
 		truncated = true;
 	}
 

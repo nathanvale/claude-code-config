@@ -37,6 +37,9 @@ export const STORYBOOK_DOCTOR_PLANNING_BRANCH_STATION_IDS = [
 	"commands.discovery_json",
 	"check.help_top_level",
 	"check.version_stdout",
+	"check.test_tools_missing",
+	"check.a11y_missing",
+	"check.invalid_repo",
 ] as const;
 
 export const storybookDoctorBranchStationCatalog = [
@@ -254,6 +257,36 @@ export const storybookDoctorBranchStationCatalog = [
 		intent: "version",
 		trigger: "--version writes only version text to stdout",
 		expectedExitCode: 0,
+		mutationExpectation: "none",
+	},
+	{
+		id: "check.test_tools_missing",
+		command: "check",
+		classification: "optional",
+		intent: "degraded_test",
+		trigger: "missing test tooling produces degraded hint",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		mutationExpectation: "none",
+	},
+	{
+		id: "check.a11y_missing",
+		command: "check",
+		classification: "optional",
+		intent: "degraded_a11y",
+		trigger: "missing a11y tooling produces degraded hint",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		mutationExpectation: "none",
+	},
+	{
+		id: "check.invalid_repo",
+		command: "check",
+		classification: "required",
+		intent: "usage_failure",
+		trigger: "invalid or unresolvable repo path produces blocked target finding",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
 		mutationExpectation: "none",
 	},
 ] as const satisfies readonly BranchStation[];

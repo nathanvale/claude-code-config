@@ -4,7 +4,7 @@ export type StorybookDoctorRuntime = {
 	readonly cwd: () => string;
 	readonly fileExists: (path: string) => boolean;
 	readonly readTextFile: (path: string) => string;
-	readonly fetch: (url: string, options?: { signal?: AbortSignal }) => Promise<Response>;
+	readonly fetch: (url: string, options?: RequestInit) => Promise<Response>;
 	readonly lookupPortOwner: (port: number) => PortOwnerInfo | null;
 	readonly commandExists: (name: string) => boolean;
 	readonly execCommand: (
@@ -13,6 +13,7 @@ export type StorybookDoctorRuntime = {
 		options?: { cwd?: string; timeout?: number },
 	) => Promise<ExecResult>;
 	readonly now: () => number;
+	readonly getEnv: (name: string) => string | undefined;
 };
 
 export type PortOwnerInfo = {
@@ -39,6 +40,7 @@ export function createDefaultStorybookDoctorRuntime(
 		execCommand: (cmd, args, options) =>
 			execCommandDefault(cmd, args, options),
 		now: () => Date.now(),
+		getEnv: (name) => process.env[name],
 		...overrides,
 	};
 }
