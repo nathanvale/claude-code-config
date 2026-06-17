@@ -26,6 +26,22 @@ Do not use for generic design work without Figma or Storybook-only work.
   used when installed, not a hard dependency).
 - Provenance: `PROVENANCE.md`.
 
+## Prerequisites
+
+Before any Figma MCP work, verify `mcporter` is available. It is the MCP
+discovery engine and the only way to call Figma tools when native session
+tools are absent (e.g., in Codex).
+
+```bash
+command -v mcporter && mcporter --version
+```
+
+- If `mcporter` is on PATH → proceed to Quick Start.
+- If missing → install: `npm install -g mcporter` (or `bunx mcporter` for
+  one-shot use). Then re-check.
+- If install is blocked → report **mcporter-missing** state and stop. Without
+  mcporter and without native session tools, no Figma MCP work is possible.
+
 ## Quick Start
 
 Determine Figma MCP state and lane before doing any Figma work. Read
@@ -103,7 +119,8 @@ from this skill instead.
 
 1. Parse intent: design read, canvas write, setup/repair, Code Connect, design
    system search, or design parity.
-2. Run Quick Start to determine Figma MCP state.
+2. Run Prerequisites to verify mcporter is available.
+3. Run Quick Start to determine Figma MCP state.
 3. If state is not **ready**, stop with the state and next action from
    `references/figma-mcp-state-machine.md`.
 4. Identify available runtime: native session tools (`mcp__figma__*`) first,
@@ -186,7 +203,7 @@ Figma MCP state: ready
 - ToolSearch for `mcp__figma` returns tools (when available).
 - `codex mcp get figma` or Claude config shows expected shape.
 - `mcporter list figma --schema` returns Figma tools (when auth is valid).
-- Quick Start produces one of the 6 acceptance states within 60 seconds.
+- Quick Start produces one of the 7 acceptance states within 60 seconds.
 - Changed skill docs pass YAML parse and owner-path checks.
 
 ## Next Safe Actions

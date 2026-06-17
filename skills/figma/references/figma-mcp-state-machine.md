@@ -1,9 +1,19 @@
 # Figma MCP State Machine
 
-Six deterministic states. Detect in order; stop at the first match; return the
-state and next action.
+Seven deterministic states. Detect in order; stop at the first match; return
+the state and next action.
 
 ## Detection Order
+
+### 0. `mcporter-missing`
+
+**Detection:** `command -v mcporter` fails — mcporter is not on PATH.
+
+**Prerequisite check.** Run this before any other state detection.
+
+**Next action:** Install mcporter: `npm install -g mcporter` (or `bunx
+mcporter` for one-shot use). If install is blocked, no Figma MCP work is
+possible without native session tools. Report the blocked state.
 
 ### 1. `ready`
 
