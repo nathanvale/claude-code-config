@@ -109,6 +109,7 @@ function fakeRuntime(
 		commandExists: () => true,
 		execCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
 		now: () => 1_000_000,
+		getEnv: () => undefined,
 		...overrides,
 	};
 }
@@ -120,7 +121,7 @@ function fakeRuntimeWithMcp(
 		fetch: async (url) => {
 			if (typeof url === "string" && url.endsWith("/mcp")) {
 				return new Response(
-					JSON.stringify({ tools: [{ name: "tool1" }, { name: "tool2" }] }),
+					JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [{ name: "tool1" }, { name: "tool2" }] } }),
 					{ status: 200, headers: { "content-type": "application/json" } },
 				);
 			}

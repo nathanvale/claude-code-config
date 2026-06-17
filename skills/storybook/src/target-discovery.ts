@@ -190,7 +190,10 @@ function configListsAddon(
 ): boolean {
 	try {
 		const content = runtime.readTextFile(configPath);
-		return content.includes(addonName);
+		const pattern = new RegExp(
+			"['\"]" + addonName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "['\"]",
+		);
+		return pattern.test(content);
 	} catch {
 		return false;
 	}

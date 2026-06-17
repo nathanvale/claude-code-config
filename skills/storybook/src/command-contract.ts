@@ -26,7 +26,7 @@ const CHECK_SUCCESS_ACTIONS = [
 	},
 ] as const;
 
-const CHECK_FAILURE_ACTIONS = [
+const SHARED_FAILURE_ACTIONS = [
 	{
 		id: "follow_next_action",
 		summary:
@@ -40,15 +40,6 @@ const DEEP_SUCCESS_ACTIONS = [
 		id: "review_deep_evidence",
 		summary:
 			"Review deep diagnostic evidence for additional Storybook health details.",
-		sideEffects: ["read"],
-	},
-] as const;
-
-const DEEP_FAILURE_ACTIONS = [
-	{
-		id: "follow_next_action",
-		summary:
-			"Follow the next_safe_action in the result to resolve the readiness issue.",
 		sideEffects: ["read"],
 	},
 ] as const;
@@ -77,21 +68,7 @@ const exitCodes = {
 	"2": "Usage error.",
 } as const satisfies StorybookDoctorCommandContract["exitCodes"];
 
-const checkFlags = {
-	"--json": { type: "boolean", description: "Emit JSON envelope." },
-	"--url": {
-		type: "string",
-		description:
-			"Storybook session URL. Falls back to STORYBOOK_URL then http://localhost:6006.",
-	},
-	"--repo": {
-		type: "path",
-		description:
-			"Target repo path. Falls back to cwd, then walks upward to nearest package.json.",
-	},
-} as const;
-
-const deepFlags = {
+const sharedCheckDeepFlags = {
 	"--json": { type: "boolean", description: "Emit JSON envelope." },
 	"--url": {
 		type: "string",
@@ -126,9 +103,9 @@ export const storybookDoctorContracts = defineCommandFacadeContract(
 			resultContract: checkResultContract,
 			actionAffordances: {
 				success: CHECK_SUCCESS_ACTIONS,
-				failure: CHECK_FAILURE_ACTIONS,
+				failure: SHARED_FAILURE_ACTIONS,
 			},
-			flags: checkFlags,
+			flags: sharedCheckDeepFlags,
 			exitCodes,
 			envVars: [
 				{
@@ -157,9 +134,9 @@ export const storybookDoctorContracts = defineCommandFacadeContract(
 			resultContract: deepResultContract,
 			actionAffordances: {
 				success: DEEP_SUCCESS_ACTIONS,
-				failure: DEEP_FAILURE_ACTIONS,
+				failure: SHARED_FAILURE_ACTIONS,
 			},
-			flags: deepFlags,
+			flags: sharedCheckDeepFlags,
 			exitCodes,
 			envVars: [
 				{

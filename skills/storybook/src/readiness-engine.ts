@@ -9,7 +9,7 @@ import type {
 import { type ResolvedTarget, resolveTarget } from "./target-discovery.ts";
 
 const DEFAULT_STORYBOOK_URL = "http://localhost:6006";
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const MCP_PROBE_TIMEOUT_MS = 5_000;
 
 export type CheckOptions = {
@@ -30,7 +30,7 @@ export async function runCheck(
 		return buildResult(target, findings, null);
 	}
 
-	const sessionUrl = resolveSessionUrl(options.url);
+	const sessionUrl = resolveSessionUrl(runtime, options.url);
 	if (!isLoopbackUrl(sessionUrl)) {
 		findings.push({
 			id: "non_loopback_url",
@@ -112,9 +112,9 @@ function collectStaticFindings(
 	}
 }
 
-function resolveSessionUrl(urlOverride?: string): string {
+function resolveSessionUrl(runtime: StorybookDoctorRuntime, urlOverride?: string): string {
 	if (urlOverride) return urlOverride;
-	return process.env.STORYBOOK_URL ?? DEFAULT_STORYBOOK_URL;
+	return runtime.getEnv("STORYBOOK_URL") ?? DEFAULT_STORYBOOK_URL;
 }
 
 function isLoopbackUrl(url: string): boolean {
@@ -132,7 +132,8 @@ async function probeSession(
 	findings: ReadinessFinding[],
 ): Promise<SessionInfo> {
 	const url = new URL(sessionUrl);
-	const port = Number.parseInt(url.port || "80", 10);
+	const defaultPort = url.protocol === "https:" ? "443" : "80";
+	const port = Number.parseInt(url.port || defaultPort, 10);
 	const portOwner = runtime.lookupPortOwner(port);
 
 	const managerReachable = await probeManager(runtime, sessionUrl);
@@ -221,14 +222,17 @@ async function probeMcp(
 		);
 		try {
 			const response = await runtime.fetch(mcpUrl, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
 				signal: controller.signal,
 			});
 			if (!response.ok) return { reachable: false, toolsCount: null };
 			const body = await response.text();
 			try {
 				const parsed = JSON.parse(body);
-				const toolsCount = Array.isArray(parsed.tools)
-					? parsed.tools.length
+				const toolsCount = Array.isArray(parsed.result?.tools)
+					? parsed.result.tools.length
 					: null;
 				return { reachable: true, toolsCount };
 			} catch {
@@ -276,7 +280,7 @@ function hasBlocker(findings: readonly ReadinessFinding[]): boolean {
 	return findings.some((f) => f.severity === "blocked");
 }
 
-function aggregateStatus(
+export function aggregateStatus(
 	findings: readonly ReadinessFinding[],
 ): ReadinessStatus {
 	if (findings.some((f) => f.severity === "blocked")) return "blocked";
@@ -284,7 +288,7 @@ function aggregateStatus(
 	return "ready";
 }
 
-function pickNextSafeAction(
+export function pickNextSafeAction(
 	findings: readonly ReadinessFinding[],
 ): NextSafeAction {
 	const firstBlocker = findings.find((f) => f.severity === "blocked");
@@ -298,7 +302,7 @@ function pickNextSafeAction(
 	return { id: "none", summary: "Storybook is ready for MCP use." };
 }
 
-function nextActionForFinding(finding: ReadinessFinding): NextSafeAction {
+export function nextActionForFinding(finding: ReadinessFinding): NextSafeAction {
 	switch (finding.id) {
 		case "no_package_json":
 			return {
@@ -359,6 +363,16 @@ function nextActionForFinding(finding: ReadinessFinding): NextSafeAction {
 			return {
 				id: "install_tmux",
 				summary: "Install tmux for persistent Storybook sessions.",
+			};
+		case "local_storybook_binary_missing":
+			return {
+				id: "install_local_storybook",
+				summary: "Install storybook in the target project to enable deep diagnostics.",
+			};
+		case "storybook_doctor_nonzero":
+			return {
+				id: "fix_storybook_doctor_issues",
+				summary: "Review and fix issues reported by local Storybook doctor.",
 			};
 		default:
 			return { id: "none", summary: "No specific action required." };

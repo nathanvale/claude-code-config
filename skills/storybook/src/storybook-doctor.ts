@@ -3,6 +3,7 @@
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
+	CliUsageError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	createCliUsageRuntimeError,
@@ -233,18 +234,20 @@ function normalizeError(error: unknown): {
 	exitCode: number;
 	nextSafeAction: string;
 } {
-	if (error instanceof Error) {
-		const isUsage =
-			error.message.includes("usage") ||
-			error.message.includes("requires") ||
-			error.message.includes("unknown");
+	if (error instanceof CliUsageError) {
 		return {
-			code: isUsage ? "usage_error" : "runtime_failure",
+			code: "usage_error",
 			message: error.message,
-			exitCode: isUsage ? 2 : 1,
-			nextSafeAction: isUsage
-				? "Fix command input and rerun."
-				: "Check runtime environment and rerun.",
+			exitCode: 2,
+			nextSafeAction: "Fix command input and rerun.",
+		};
+	}
+	if (error instanceof Error) {
+		return {
+			code: "runtime_failure",
+			message: error.message,
+			exitCode: 1,
+			nextSafeAction: "Check runtime environment and rerun.",
 		};
 	}
 	return {
