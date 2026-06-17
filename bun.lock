@@ -14,6 +14,13 @@
         "@types/bun": "1.3.14",
       },
     },
+    "runners/foundry-dx": {
+      "name": "@side-quest/foundry-dx",
+      "version": "0.1.0",
+      "bin": {
+        "foundry-dx": "./src/foundry-dx.mjs",
+      },
+    },
     "runtime/agent-worktree": {
       "name": "agent-worktree",
       "version": "0.1.0",
@@ -32,7 +39,7 @@
         "@logtape/logtape": "^2.0.2",
       },
       "devDependencies": {
-        "@types/node": "catalog:",
+        "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -176,6 +183,8 @@
     "@puppeteer/replay": ["@puppeteer/replay@4.0.2", "", { "peerDependencies": { "lighthouse": ">=13.0.0", "puppeteer": ">=25.0.0" }, "optionalPeers": ["lighthouse", "puppeteer"], "bin": { "replay-extension-test": "lib/extension-test.js", "replay": "lib/cli.js" } }, "sha512-EeE0THQFSTsI2RGxWI07PURCutx9JBM8QbwlFjdykfDu0MMiBrdSmXX9eXZf5Wvo9DmtvGAimWTCZnty44NYqQ=="],
 
     "@side-quest/cli-command-facade": ["@side-quest/cli-command-facade@workspace:runtime/cli-command-facade"],
+
+    "@side-quest/foundry-dx": ["@side-quest/foundry-dx@workspace:runners/foundry-dx"],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
