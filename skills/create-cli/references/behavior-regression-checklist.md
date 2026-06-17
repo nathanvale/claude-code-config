@@ -102,13 +102,15 @@ Use before and after meaningful edits to `create-cli`.
   - Keeps structured runtime errors on facade helper constructors.
   - Avoids `Record<string, unknown>` as the default for interface-shaped result
     payloads.
+  - Includes all three test layers: unit tests, Branch Station catalog tests,
+    and catalog-driven integration tests.
 - **Observed route:**
   Facade-backed CLI.
 - **Observed markers:**
   Agent-native first, facade path map, owner paths, validation loop, Command
   Surface Alignment Proof, result-data helper path, structured runtime-error
   helper path, no `Record<string, unknown>` default for interface-shaped result
-  payloads.
+  payloads, three test layers.
 - **Notes:**
   Static route check from `SKILL.md` and `cli-command-facade.md`.
 
@@ -122,4 +124,5 @@ Use before and after meaningful edits to `create-cli`.
 - References point to owner paths for deterministic contract shape.
 - Facade-backed prompt preserves result-data helper and structured-error helper
   guardrails without copying helper signatures.
+- Facade-backed prompt includes three test layers (unit, catalog, integration).
 - `SKILL.md` stays route-oriented.

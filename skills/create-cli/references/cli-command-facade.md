@@ -136,6 +136,218 @@ runtime owner for machine-checkable contracts.
   Coverage and reports missing, drifted, skipped, or declared-unreachable
   stations mechanically.
 
+## Testing Strategy
+
+Every facade-backed CLI needs three test layers. Missing a layer leaves a
+category of drift undetectable.
+
+| Layer | What it proves | Owner pattern |
+|-------|---------------|---------------|
+| **Unit tests** | In-process command semantics, readiness engine logic, contract validation | `<package>/tests/*.test.ts` using `runForTest()` or equivalent in-process harness |
+| **Branch Station catalog tests** | Catalog validates against live command discovery; synthetic evidence covers required stations; station map projects declared branch coverage | `<package>/tests/branch-station-catalog.test.ts` |
+| **Catalog-driven integration tests** | Real `bun run` process spawns prove exit codes, stdout/stderr separation, JSON envelope integrity, and station coverage through the process boundary | `<package>/tests/<name>.integration.test.ts` |
+
+### Catalog-driven integration test pattern
+
+The integration test iterates every station in the Branch Station catalog
+through real process spawns. This is the pattern that catches broken shebangs,
+missing exports, package script typos, and stdout/stderr encoding issues that
+unit tests cannot reach.
+
+Required structure:
+
+1. **Station scenario map** — `Record<StationId, StationScenario>` keyed by
+   every station ID in the catalog. Compile-time type safety ensures a new
+   catalog station forces a new scenario row. Use `StationScenario<T>` from
+   `@side-quest/cli-command-facade/testing`.
+2. **Scenario rows** — each row spawns a real process with filesystem fixtures
+   (temp dirs, `package.json` files, config files), asserts exit code and
+   envelope shape against the catalog's expectations using
+   `assertStationEnvelope()`, and returns `BranchStationEvidence` via
+   `buildStationEvidence()`.
+3. **Skipped stations** — stations needing infrastructure (live server, network,
+   specific runtime environment) use `buildSkippedStationEvidence()` with a
+   rationale string.
+4. **Evidence collection** — after all scenarios run, feed the
+   `BranchStationEvidence[]` directly to the package-owned station map
+   projector. Assert no drift and that every station is covered or skipped.
+5. **Catalog alignment** — a standalone test asserts the scenario map keys equal
+   the catalog station IDs, catching additions or removals.
+
+### Shared testing helpers
+
+`@side-quest/cli-command-facade/testing` exports station integration helpers.
+Use these instead of writing package-local equivalents.
+
+| Helper | Purpose |
+|--------|---------|
+| `StationScenario<T>` | Generic scenario type: `{ run: (station: T) => Promise<BranchStationEvidence> }` |
+| `StationRuntimeEnvelope` | Shared envelope type: `{ status?, data?, error? }` |
+| `assertStationEnvelope(station, result)` | Validates exit code, envelope status, contract ID, and error code against catalog expectations. Throws on mismatch with process context. |
+| `buildStationEvidence(station, result, envelope)` | Constructs covered `BranchStationEvidence` from process result and envelope. |
+| `buildSkippedStationEvidence(station, rationale)` | Constructs skipped evidence with rationale. |
+| `extractEnvelopeContractId(envelope)` | Reads `contract_id` or `contract` from envelope data. |
+
+Reference implementations:
+- `skills/skill-feedback/src/skill-feedback.integration.test.ts` — full
+  coverage, no skipped stations (uses package-local helpers, predates shared
+  extraction).
+- `skills/storybook/tests/storybook-doctor.integration.test.ts` — partial
+  coverage with skipped stations, uses shared helpers from the facade testing
+  subpath.
+
+### Shared test fixture package
+
+`@side-quest/cli-test-fixtures` provides process-boundary test infrastructure
+shared across facade-backed CLI integration tests: temp dirs, fake binaries,
+fixture servers, and cleanup.
+
+- Context and vocabulary: `runtime/cli-test-fixtures/CONTEXT.md`
+
+| Helper | Purpose |
+|--------|---------|
+| `createCleanupRegistry()` | Creates a registry for tracking temp dirs and servers for `afterEach` drain |
+| `drainCleanup(registry)` | Stops servers then deletes temp dirs in correct order |
+| `makeTempDir(registry, prefix)` | Creates an isolated temp dir registered for cleanup |
+| `writePackageJson(dir, content)` | Writes a fixture `package.json` with formatted JSON |
+| `writeFakeToolBinary(dir, toolName, script)` | Writes an executable shell script to `node_modules/.bin/<tool>` |
+| `startFixtureServer(registry, handler)` | Starts `Bun.serve` on random port with caller-owned route handler, returns `{ url, port, server }` |
+
+Use `@side-quest/cli-test-fixtures` for fixture setup, and
+`@side-quest/cli-command-facade/testing` for process spawning and station
+evidence.
+
+### Fixture server pattern
+
+When a CLI probes network endpoints (HTTP health checks, MCP endpoints, API
+calls), use a fixture server on a random port. Pass the URL via `--url` or
+equivalent flag.
+
+`startFixtureServer` from `@side-quest/cli-test-fixtures` handles lifecycle
+(random port, cleanup registration, server handle). The consuming test provides
+the route handler with canned responses per route.
+
+- Return canned responses per route (e.g. `/` returns 200, `/mcp` returns
+  tools list or 404).
+- Stop the server before probing to test unreachable-endpoint stations.
+- Never hardcode ports.
+
+### Fake binary pattern
+
+When a CLI shells out to a local tool (e.g. `npx storybook doctor`), write a
+fake tool binary to `node_modules/.bin/<tool>` in the temp dir fixture.
+
+`writeFakeToolBinary` from `@side-quest/cli-test-fixtures` handles the
+mkdir + write + chmod dance. The consuming test provides the script body and
+tool name.
+
+- Control exit code, stdout, and stderr via the script body.
+- `#!/bin/sh` works on macOS and Linux; note this in portability constraints
+  if the test suite must run on Windows.
+
+### When to scaffold each layer
+
+- **Unit tests**: always. Scaffold alongside `command-contract.ts`.
+- **Branch Station catalog + catalog test**: when the CLI has 2+ commands or
+  any command with multiple outcome branches. Scaffold alongside
+  `branch-station-catalog.ts`.
+- **Catalog-driven integration test**: when the Branch Station catalog exists.
+  The integration test is the proof that the catalog's declared coverage is
+  real. Without it, the catalog is an assertion about tests that don't exist.
+
+### Repair guide for partially-aligned packages
+
+Use this when a facade-backed CLI has integration tests but lacks the
+catalog-driven pattern. Signs of partial alignment:
+
+- Integration test exists but has no `branch-station-catalog.ts`.
+- Tests spawn real processes but don't iterate the catalog.
+- No `Record<StationId, StationScenario>` exhaustiveness check.
+- No `BranchStationEvidence` collection or station map projection.
+
+Repair steps:
+
+1. Identify all command outcome branches from the existing integration test
+   scenarios and the command contract.
+2. Create `branch-station-catalog.ts` with a `BranchStation` entry per branch.
+   Set `expectedExitCode`, `expectedEnvelopeStatus`, and
+   `expectedResultContractId` from the existing test assertions.
+3. Create `branch-station-catalog.test.ts` that validates the catalog against
+   live command discovery and projects a station map with synthetic evidence.
+4. Create or refactor the integration test to use the catalog-driven pattern:
+   station scenario map keyed by `StationId`, shared helpers from
+   `@side-quest/cli-command-facade/testing`, evidence fed to the station map
+   projector.
+5. Mark infrastructure-dependent stations as skipped with rationale.
+
+Current repo alignment:
+
+| Package | Unit | Catalog | Integration | Status |
+|---------|------|---------|-------------|--------|
+| `skills/storybook` | Yes | Yes | Yes (shared helpers) | Fully aligned |
+| `skills/skill-feedback` | Yes | Yes | Yes (local helpers) | Aligned, could adopt shared helpers |
+| `skills/worktree` | Yes | No | Yes (no catalog) | Needs catalog + refactor |
+| `runtime/agent-worktree` | Yes | No | Yes (no catalog) | Needs catalog + refactor |
+
+### Growing the test fixture library
+
+When implementing a process-boundary test pattern that 3+ integration tests
+would share, add it to `@side-quest/cli-test-fixtures` instead of keeping it
+test-local.
+
+Follow the admission criteria in `runtime/cli-test-fixtures/CONTEXT.md`:
+- Must be process-boundary infrastructure (not facade contract logic).
+- Must not encode domain-specific fixture content.
+- Must be used by 3+ test files.
+
+Update this testing strategy when new helpers are added so future CLIs discover
+them.
+
+### Migrating existing tests to shared helpers
+
+Use this when an integration test already works but uses local duplicates of
+the shared helpers. Signs: local `cleanupPaths`/`cleanupServers` arrays, local
+`makeTempDir`, local `writePackageJson`, local `writeFakeXBinary`, local
+`startFixtureServer`.
+
+**Fixture infrastructure migration** (to `@side-quest/cli-test-fixtures`):
+
+1. Add `"@side-quest/cli-test-fixtures": "workspace:*"` to the package's
+   `devDependencies`. Run `bun install`.
+2. Replace local cleanup arrays and `afterEach` drain with
+   `createCleanupRegistry()` and `drainCleanup(registry)`.
+3. Replace local `makeTempDir(prefix)` with `makeTempDir(registry, prefix)`.
+4. Replace local `writePackageJson` with the imported version (same signature).
+5. Replace local fake binary writers with
+   `writeFakeToolBinary(dir, toolName, script)`.
+6. Replace local fixture server helpers with
+   `startFixtureServer(registry, handler)`. Extract the route handler into a
+   named function in the test file — the handler owns domain-specific canned
+   responses.
+7. Delete the replaced local helpers. Keep domain-specific helpers (config
+   writers, full-setup-dir composers) test-local.
+8. Run the tests. Behavior must not change.
+
+**Station evidence migration** (to `@side-quest/cli-command-facade/testing`):
+
+1. Replace local `RuntimeEnvelope` type with `StationRuntimeEnvelope`.
+2. Replace local `StationScenario` type with `StationScenario<T>`.
+3. Replace local `expectStationEnvelope` with `assertStationEnvelope`.
+4. Replace local `evidenceFor` with `buildStationEvidence`.
+5. Replace local `skipStation` with `buildSkippedStationEvidence`.
+6. Replace local `observedResultContractId` with `extractEnvelopeContractId`.
+7. If the test used a package-specific evidence type (e.g.
+   `StationTestResult`), switch scenarios to return `BranchStationEvidence`
+   directly and feed the array to the station map projector without a mapping
+   step.
+8. Delete the replaced local helpers and unused imports.
+9. Run the tests. Behavior must not change.
+
+Reference migration:
+- `skills/storybook/tests/storybook-doctor.integration.test.ts` — migrated to
+  both shared packages. Domain-specific helpers (`writeStorybookConfig`,
+  `makeFullSetupDir`, route handlers) stayed test-local.
+
 ## Coach-Filled Gaps
 
 The facade validates machine-checkable runtime shape. The CLI coach still owns
