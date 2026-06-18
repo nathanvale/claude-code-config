@@ -14,7 +14,7 @@ This keeps the package boundary clear and avoids a future cleanup tax.
 2, Soft Pick. The evidence suggests reuse, but I would confirm one more caller.
 
 **Next**
-Reply `1`, `2`, `riff | r`, `visualise | v`, or `why?`.
+Reply `1`, `2`, `riff | r`, `mermaid | m`, or `why?`.
 ```
 
 ## Product Tradeoff
@@ -32,7 +32,7 @@ This chooses what the user feels first: speed or confidence.
 3, Strong Pick. It keeps the happy path light and protects high-cost mistakes.
 
 **Next**
-Reply `1`, `2`, `3`, `riff | r`, `visualise | v`, or `why?`.
+Reply `1`, `2`, `3`, `riff | r`, `mermaid | m`, or `why?`.
 ```
 
 ## Voice-Calibrated Decision
@@ -54,7 +54,7 @@ Let's park it where it can mature without calcifying. Tiny win, no concrete
 shoes.
 
 **Next**
-Reply `1`, `2`, `3`, `riff | r`, `visualise | v`, or `why?`.
+Reply `1`, `2`, `3`, `riff | r`, `mermaid | m`, or `why?`.
 ```
 
 ## No Real Choice Skip
@@ -84,5 +84,5 @@ If we skip the owner, future agents may rediscover the same debate and encode a
 different boundary.
 
 **Next**
-Reply `1`, `2`, `3`, `riff | r`, `visualise | v`, or `why?`.
+Reply `1`, `2`, `3`, `riff | r`, `mermaid | m`, or `why?`.
 ```

@@ -265,13 +265,13 @@ unless their behavior cannot be observed through the CLI.
 Candidate command tree for planning:
 
 ```text
-skillport source list <source> --json
-skillport targets list --json
-skillport status --target <agent-id> --json
-skillport plan add --source <source> --skill <name> --agent <id> --json
-skillport plan remove --source <source> --skill <name> --agent <id> --json
-skillport apply --plan <plan-id-or-file> --execute --json
-skillport doctor --json
+skillporter source list <source> --json
+skillporter targets list --json
+skillporter status --target <agent-id> --json
+skillporter plan add --source <source> --skill <name> --agent <id> --json
+skillporter plan remove --source <source> --skill <name> --agent <id> --json
+skillporter apply --plan <plan-id-or-file> --execute --json
+skillporter doctor --json
 ```
 
 Planning should validate whether `apply` consumes a persisted plan file, an
@@ -288,15 +288,46 @@ execute after preview, not a specific storage mechanism.
 | Human output scraping | Agents make brittle decisions | Require JSON/facade output for agent path |
 | Over-copying provider target rules | Skillport becomes stale provider fork | Target Projection validates ids but leaves path rules provider-owned |
 
+## Resolved Planning Decisions
+
+- **Source location:** `runtime/skill-porter/` in this repo, workspace-linked to
+  `@side-quest/cli-command-facade`. See ADR-0015.
+- **Naming:** package `@side-quest/skill-porter`; CLI bin `skillporter` (no
+  alias); `@side-quest/skill-port@0.0.0` retired. See ADR-0015.
+- **Ownership Ledger storage:** separate Skillporter-owned ledger file is the
+  authority for Skillport-managed ownership. `skills-lock.json` is read-only
+  provider input, reconciled on read, never written by Skillporter. See ADR-0016.
+- **Ledger record grain:** keyed by `(target, skillName)`; `source`,
+  `providerId`, `computedHash`, `managedAt` as fields; presence of a record IS
+  the "Skillport manages this" fact. Schema is a code-owned type + validator in
+  `runtime/skill-porter/`, not a prose contract. See ADR-0016.
+- **Pre-add read:** hybrid — provider `list --agent <id> --json` for occupancy
+  and per-target view, plus a tolerant `skills-lock.json` read for `source`
+  (the public `list` omits it). Both behind the Skills Provider adapter. See
+  ADR-0016.
+- **Provider adapter `add`/`remove`:** singular `(skill, source, target)`; the
+  executor loops over targets and writes one ledger row per successful op (R9).
+  The provider's own `--agent` repetition stays an internal optimization, not
+  the contract shape.
+- **Target exposure:** no `--agent` defaults to `codex` + `claude-code` (R14);
+  `--agent <id>` allows any provider-validated id through Target Projection
+  (R15). The default set and validation live in Target Projection code validated
+  against the provider's live list, not a hard-forked prose catalog (R17).
+- **Plan/apply lifecycle:** plan is a disposable artifact in `$XDG_STATE_HOME`
+  (`~/.local/state/skillporter/plans/<id>.json`); `apply` re-validates gates
+  against live state. See ADR-0017.
+- **Result vocabulary:** two layers — facade-owned envelope
+  (`status` ok/error, recoverability, hint, continuation) named not redefined;
+  Skillporter-owned operation enum `add|remove|noop|blocked` (R6) in `data`.
+  `plan` with blocked items returns `ok`; `apply` on a blocked plan returns
+  `error` (R7). See ADR-0018.
+- **First command:** ship order `doctor` → `source list` → `plan add` (facade
+  spine first, no mutation; then adapter read; then full safety loop).
+
 ## Open Planning Questions
 
-- Where should real Skillport source live in this repo or a Side Quest package
-  repo?
-- Should plans be persisted as files, run-scoped data, or both?
-- How should Skillport read and reconcile existing provider lock files?
-- What is the first package-owned result vocabulary?
 - What Branch Stations prove MVP behavior without overfitting the prototype?
-- Which command ships first: `doctor`, `source list`, or `plan add`?
+  (Command Surface Alignment Proof scope for `doctor` first.)
 
 ## Next Safe Action
 
