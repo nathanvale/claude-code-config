@@ -32,6 +32,19 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 - `codex` on PATH: needed by `worktree app <branch>` and best-effort thread archival during `worktree rm`. App launch absence → `codex_app_not_found`; removal still completes with partial cleanup metadata.
 - `create-cli`: hard dependency before changing the CLI contract surface.
 
+## Safety
+
+- Never force-remove a dirty worktree. Uncommitted work is potentially
+  important regardless of branch merge status.
+- On `clean` with dirty worktrees: preserve first. Commit uncommitted changes
+  to a new branch, stash them, or ask the user. Only remove after the work is
+  explicitly saved or the user confirms it is throwaway.
+- On `rm` with dirty worktrees: the runtime blocks with `reason: "dirty"`.
+  Do not bypass with `--force` unless the user has reviewed the dirty files and
+  explicitly approved loss.
+- On orphan branch deletion: check `git log main..<branch>` first. If commits
+  exist that were never PR'd or merged, ask before deleting.
+
 ## Workflow
 
 1. Work from repo root; run `cd skills/worktree && bun run --silent worktree <verb> ...`.
@@ -41,7 +54,9 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 5. For owned render verbs, let the engine read worktree state, use the main worktree as the durable owner, and guard manual edits through the drift gate.
 6. For lifecycle verbs, let `worktree` call `runtime/agent-worktree`, clean Codex app project state after `rm`, then re-render when state changes.
 7. On `drift_blocked`, review the diff; port real changes into `worktree.config.json`, then rerun with `--force`.
-8. Report the verb, the workspace or worktree path, Codex cleanup metadata when present, and the next safe action.
+8. On `clean` with dirty worktrees, follow the Safety rules above — preserve
+   uncommitted work before removal.
+9. Report the verb, the workspace or worktree path, Codex cleanup metadata when present, and the next safe action.
 
 ## Verification
 
