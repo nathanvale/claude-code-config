@@ -1,0 +1,20 @@
+{
+	"name": "storybook-doctor-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Bun package for the storybook skill. Read-only CLI that emits Storybook readiness proof, structured repair hints, and declared branch coverage.",
+	"scripts": {
+		"storybook-doctor": "bun run src/storybook-doctor.ts",
+		"test": "bun test src",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@side-quest/cli-test-fixtures": "workspace:*",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

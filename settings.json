@@ -195,6 +195,6 @@
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
-  "autoCompactEnabled": false,
+  "autoCompactEnabled": true,
   "skipAutoPermissionPrompt": true
 }

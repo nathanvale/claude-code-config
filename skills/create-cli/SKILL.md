@@ -65,6 +65,9 @@ Capture this before lane-specific depth:
     surface is facade-owned.
   - Name contract, model, engine, discovery, CLI, and test owners.
   - Include a Command Surface Alignment Proof.
+  - Include all three test layers: unit tests, Branch Station catalog tests,
+    and catalog-driven integration tests. See Testing Strategy in
+    `references/cli-command-facade.md`.
 
 ## Output Skeleton
 
@@ -105,6 +108,8 @@ Fill what matters; drop irrelevant sections:
 - Lane unclear → re-run the numbered router in Do This First.
 - Design complete → hand the Output Skeleton to the implementer.
 - Facade-backed → run the Command Surface Alignment Proof before shipping.
+- Facade-backed → scaffold catalog-driven integration test alongside Branch
+  Station catalog.
 - Skill edit → run `references/behavior-regression-checklist.md` before and after.
 
 ## Notes
