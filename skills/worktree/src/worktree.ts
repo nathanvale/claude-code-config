@@ -22,6 +22,8 @@ import {
 	createWorktree,
 	deleteWorktree,
 	type LifecycleResult,
+	registerCodexProject,
+	deregisterCodexProject,
 } from "../../../runtime/agent-worktree/src/index.ts";
 import {
 	WORKTREE_COMMAND_ORDER,
@@ -282,6 +284,12 @@ export async function syncWorkspace(
 			message: "Could not write the workspace file.",
 		};
 	}
+	// Sync Codex app sidebar: register all visible worktrees, deregister any
+	// that were removed (ignored or pruned since last sync).
+	const visiblePaths = new Set(worktrees.map((w) => w.path));
+	await Promise.allSettled([
+		...worktrees.map((w) => registerCodexProject(w.path)),
+	]);
 	return { kind: "written", path: workspacePath };
 }
 
