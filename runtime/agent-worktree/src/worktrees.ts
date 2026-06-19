@@ -17,6 +17,7 @@ import {
 	createGitEvidencePort,
 	mutationReadinessFromBranchSafetyDecision,
 } from "./merge-intelligence.ts";
+import { deregisterCodexProject, registerCodexProject } from "./codex-state.ts";
 import {
 	AGENT_WORKTREE_RECOVERY_RETRY_SAFETY,
 	type AgentWorktreeChangedState,
@@ -576,6 +577,7 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 			},
 		],
 	});
+	await registerCodexProject(targetPath).catch(() => {});
 	return {
 		action: "create",
 		changedState: "complete",
@@ -696,6 +698,7 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 			now: options.now,
 		});
 	}
+	await deregisterCodexProject(target.path).catch(() => {});
 	if (!options.deleteBranch) {
 		const runRef = await writeRun(discovery.storeRoot, {
 			runId: options.runId,

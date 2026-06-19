@@ -22,6 +22,7 @@ import {
 	createWorktree,
 	deleteWorktree,
 	type LifecycleResult,
+	registerCodexProject,
 } from "../../../runtime/agent-worktree/src/index.ts";
 import {
 	WORKTREE_COMMAND_ORDER,
@@ -281,6 +282,9 @@ export async function syncWorkspace(
 			code: "write_failed",
 			message: "Could not write the workspace file.",
 		};
+	}
+	for (const w of worktrees) {
+		await registerCodexProject(w.path).catch(() => {});
 	}
 	return { kind: "written", path: workspacePath };
 }
