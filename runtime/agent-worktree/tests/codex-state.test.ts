@@ -69,4 +69,17 @@ describe("codex-state", () => {
 	test("deregisterCodexProject handles missing state file", async () => {
 		await deregisterCodexProject("/whatever");
 	});
+
+	test("registerCodexProject creates parent directory when absent", async () => {
+		const nested = join(tempDir, "nested", "deep");
+		process.env.CODEX_HOME = nested;
+		await registerCodexProject("/worktree");
+		const state = JSON.parse(await readFile(join(nested, ".codex-global-state.json"), "utf-8"));
+		expect(state["electron-saved-workspace-roots"]).toEqual(["/worktree"]);
+	});
+
+	test("readState propagates non-ENOENT errors", async () => {
+		await writeFile(statePath(), "not valid json");
+		await expect(registerCodexProject("/worktree")).rejects.toThrow();
+	});
 });

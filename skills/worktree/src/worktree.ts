@@ -283,7 +283,9 @@ export async function syncWorkspace(
 			message: "Could not write the workspace file.",
 		};
 	}
-	await Promise.allSettled(worktrees.map((w) => registerCodexProject(w.path)));
+	for (const w of worktrees) {
+		await registerCodexProject(w.path).catch(() => {});
+	}
 	return { kind: "written", path: workspacePath };
 }
 
