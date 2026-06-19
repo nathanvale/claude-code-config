@@ -1,4 +1,5 @@
 export * from "./cli.ts";
+export * from "./codex-state.ts";
 export * from "./command-contract.ts";
 export * from "./discovery.ts";
 export * from "./doctor.ts";
