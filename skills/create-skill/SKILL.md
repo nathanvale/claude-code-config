@@ -40,6 +40,7 @@ Present only when intent classification cannot pick a route:
 - Defaults: review returns findings; create, fix, heal, repair, or patch edits source.
 - First safe action: classify intent from args, open only the references on that route.
 - Input/output gate: before create, fix, heal, repair, or patch edits, name the shape owned by `references/skill-design-decision-runbook.md#inputoutput-gate`.
+- DX gate: every new or healed skill must have a no-args front door. Before handing off, check the new `SKILL.md` has an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. If the skill has multiple launch paths, the no-args route must show a numbered menu (max 4 choices, one bolded default, defaults stated as readable values). If the menu is missing, patch it before reporting done — do not leave it for a follow-up. Read `references/adhd-friendly-dx.md` for the pattern. Skills with choices but no menu fail this gate; skills with no front door at all also fail.
 - Visible state: report edited paths, new references, untracked files, skipped checks, and owner-path results.
 - Slow path: warn before repo-wide audits, external research, browser work, task-tracker writes, or multi-pass verification.
 - Verify: run the checks owned by `references/skill-design-decision-runbook.md#verification`.

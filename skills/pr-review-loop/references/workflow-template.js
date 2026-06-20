@@ -95,6 +95,11 @@ function findingKey(f) {
   return [f.lens, f.file, f.title.trim().toLowerCase().replace(/\s+/g, " ")].join("::");
 }
 
+// ── Model tiers ──────────────────────────────────────────────────────────────
+// haiku:     scout, snapshot writers, file writers (shell commands + paste output)
+// sonnet:    review lenses, synthesize (structured code review + counting)
+// inherited: verify/refute (hardest — must read code and reason about false positives)
+
 // ── Scout phase ───────────────────────────────────────────────────────────────
 phase("Scout");
 
@@ -110,7 +115,7 @@ Run these commands and return a structured summary:
 2. \`git diff --name-only ${DIFF_RANGE} -- {{PKG}}/src/ | head -60\`
 
 Return a prose summary (under 400 words): what changed, which files were added/removed/modified.`,
-    { label: "scout:diff", phase: "Scout" },
+    { label: "scout:diff", phase: "Scout", model: "haiku" },
   ),
 
   () => agent(
@@ -121,7 +126,7 @@ Run: \`find {{PKG}}/src -name "index.ts" | xargs grep -l "export" | head -5\`
 Then: \`cat {{PKG}}/src/ui/index.ts 2>/dev/null || cat {{PKG}}/src/index.ts 2>/dev/null | head -80\`
 
 Return a summary of the export surface.`,
-    { label: "scout:exports", phase: "Scout" },
+    { label: "scout:exports", phase: "Scout", model: "haiku" },
   ),
 
   () => agent(
@@ -131,7 +136,7 @@ Working dir: ${REPO}
 Run: \`git diff --name-only ${DIFF_RANGE} -- {{PKG}}/\`
 
 Return the full list as newline-separated paths, nothing else.`,
-    { label: "scout:changed-files", phase: "Scout" },
+    { label: "scout:changed-files", phase: "Scout", model: "haiku" },
   ),
 ]);
 
@@ -305,7 +310,7 @@ async function writeSnapshot(stage, summary) {
   );
   await agent(
     `Run these shell commands exactly:\nmkdir -p ${ARTIFACT_DIR}\ncat > ${FINDINGS_PATH} << 'JSONEOF'\n${content}\nJSONEOF\nReturn "written" when done.`,
-    { label: `snapshot:${stage}`, phase: "Triage", effort: "low" },
+    { label: `snapshot:${stage}`, phase: "Triage", effort: "low", model: "haiku" },
   );
 }
 
@@ -324,6 +329,7 @@ while (dry < 2 && round < MAX_ROUNDS) {
         label: `review:${lens.key}:r${round}`,
         phase: "Review",
         schema: FINDING_SCHEMA,
+        model: "sonnet",
       });
     }),
   );
@@ -393,7 +399,7 @@ ${JSON.stringify(allFindings, null, 2)}
 
 Produce counts by severity and lens. Write a narrative paragraph.
 State: is this PR ready to merge (blocking = 0 AND major = 0)?`,
-  { label: "synthesize", phase: "Synthesize", schema: SUMMARY_SCHEMA },
+  { label: "synthesize", phase: "Synthesize", schema: SUMMARY_SCHEMA, model: "sonnet" },
 );
 
 const output = {
@@ -404,7 +410,7 @@ const output = {
 
 await agent(
   `Run these shell commands exactly:\nmkdir -p ${ARTIFACT_DIR}\ncat > ${FINDINGS_PATH} << 'JSONEOF'\n${JSON.stringify(output, null, 2)}\nJSONEOF\nReturn "written" when done.`,
-  { label: "write-final", phase: "Synthesize", effort: "low" },
+  { label: "write-final", phase: "Synthesize", effort: "low", model: "haiku" },
 );
 
 log(`Done. ${allFindings.length} findings. Blocking: ${summary.blocking}. File: ${FINDINGS_PATH}`);

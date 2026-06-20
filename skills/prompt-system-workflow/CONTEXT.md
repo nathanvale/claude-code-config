@@ -13,8 +13,8 @@ A CLI-shaped control surface that projects, checks, and diagnoses Startup Surfac
 _Avoid_: prompt generator, render script, install helper, startup authoring tool
 
 **Agent setup CLI**:
-Broader install/control surface for wiring agent runtimes across user-scope or repo-scope locations. Use as a separate track from Startup Surface health unless instruction delivery cannot proceed without it.
-_Avoid_: instruction topology helper, prompt renderer, repo `AGENTS.md` editor, broad Codex runtime setup by default
+Single CLI that replaces `install.sh` for wiring agent runtimes across user-scope locations. Owns symlink topology, git hook installation, and agent-instructions health reporting. Does not own skill projection (that is an external tool concern) or instruction authoring.
+_Avoid_: instruction topology helper, prompt renderer, install.sh, skill projector, package manager
 
 **User-scope instruction source**:
 Canonical instruction file this repo owns for Nathan's user-scope agent-runtime setup. In this repo, root `AGENTS.md` fills that role while also acting as the repo-local startup file.

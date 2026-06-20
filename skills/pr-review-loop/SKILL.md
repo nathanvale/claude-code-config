@@ -82,6 +82,21 @@ Pass `lenses: null` to use the 4 built-in lenses from the template unchanged.
 5. **Launch** via `Workflow({ script: <generated>, args: { runId } })`.
 6. **Report** run ID, artifact dir, and watch instruction (`/workflows`).
 
+## Model Tiers
+
+The template assigns models by phase to match agent capability to task difficulty:
+
+| Phase | Model | Why |
+|-------|-------|-----|
+| Scout (diff, exports, changed-files) | `haiku` | Shell commands + paste output |
+| Review (lens prompts) | `sonnet` | Structured code review with judgement |
+| Verify/refute | inherited (Opus) | Hardest — must read code and reason about false positives |
+| Snapshot writers | `haiku` | `mkdir -p && cat >` |
+| Synthesize | `sonnet` | Counting + narrative |
+| Write-final | `haiku` | `mkdir -p && cat >` |
+
+When generating scripts, preserve these tiers from the template. Custom lenses inherit `model: "sonnet"` from the review loop unless explicitly overridden.
+
 ## Constraints (enforce in generated script)
 
 - `export const meta` must be a pure literal — no variables, spreads, or calls.
