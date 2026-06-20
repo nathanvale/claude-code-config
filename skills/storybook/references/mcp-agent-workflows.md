@@ -15,6 +15,16 @@ Use this when Storybook MCP should guide UI work, not just return a link.
 
 ## Discovery
 
+For portal-ui or any Storybook with AI manifests enabled, start with the registry shape:
+
+1. Use `list-all-documentation` to find candidate components by purpose.
+2. Use `get-documentation` before using props, variants, or examples.
+3. Prefer components whose manifest entry has a clear purpose sentence and realistic
+   examples.
+4. Treat visual audit Matrix stories as human review aids, not usage examples.
+5. If a component lacks a useful purpose sentence, inspect source or ask for the registry
+   to be repaired before broad rollout work.
+
 Use `list-all-documentation` when the component ID is unknown.
 
 Use `withStoryIds: true` when the next call needs story IDs for preview or
@@ -63,6 +73,22 @@ local source read or user confirmation.
 
 When a component has no docs entry, fall back to source inspection and say MCP
 docs were unavailable for that component.
+
+## Registry Health
+
+For portal-ui, run this before relying on Storybook as an agent component registry:
+
+```bash
+pnpm --filter @packages/portal-ui check:agent-registry
+```
+
+The gate expects:
+
+- exported runtime components have component-level `@summary` metadata.
+- manifest stories exist for each component.
+- public import snippets contain runtime components only.
+- Matrix/story-helper imports do not leak into agent-facing snippets.
+- intentional non-component docs entries live in the package allowlist.
 
 ## Remote And Composed Storybooks
 

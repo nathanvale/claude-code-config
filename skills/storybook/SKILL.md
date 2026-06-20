@@ -26,6 +26,11 @@ Storybook taxonomy/title organization.
 - Agent workflow guide: `references/mcp-agent-workflows.md`.
 - Tips and troubleshooting: `references/tips-and-tricks.md`.
 - Story authoring loop: `references/story-authoring-loop.md`.
+- Docs pattern: `references/docs-pattern.md`.
+- Component docs rollout: `references/component-docs-rollout.md`.
+- Docs workflow completion checklist:
+  `references/docs-workflow-checklist.md`.
+- UX guidance pattern: `references/ux-guidance.md`.
 - Matrix story pattern: `references/matrix-story-pattern.md`.
 - Accessibility source route: `references/accessibility-source-route.md`.
 - Provenance: `PROVENANCE.md`.
@@ -68,6 +73,16 @@ Default path: use the local ad-hoc endpoint. Do not persist MCP config.
   then call `list-all-documentation` and `get-documentation`.
 - Need to edit or create stories: read `references/story-authoring-loop.md`,
   then call `get-storybook-story-instructions`.
+- Need a complete top-to-bottom component Docs page pattern: read
+  `references/docs-pattern.md` and
+  `references/docs-workflow-checklist.md`, then use the Story Authoring Loop.
+- Need to apply the hardened Autodocs pattern across one or more component
+  stories: read `references/component-docs-rollout.md` and
+  `references/docs-workflow-checklist.md`, then use the Story Authoring Loop.
+- Need a polished docs page UX best-practice tips story, or guidance with matrix:
+  read
+  `references/ux-guidance.md` and
+  `references/docs-workflow-checklist.md`, then use the Story Authoring Loop.
 - Need a one-page visual review matrix: read
   `references/matrix-story-pattern.md`, then use the Story Authoring Loop.
 - Need a review link: call `preview-stories` and return every preview URL.
@@ -146,10 +161,19 @@ Run commands from the target repo root.
 15. Before editing story files, call `get-storybook-story-instructions`.
 16. Before using a design-system component prop, call `get-documentation` for
     that component.
-17. Before adding a matrix story, read `references/matrix-story-pattern.md`.
-18. Before making non-obvious accessibility claims or trade-offs, read
+17. Before structuring a complete component Docs page, read
+    `references/docs-pattern.md`.
+18. Before migrating the hardened Autodocs pattern across components, read
+    `references/component-docs-rollout.md`.
+19. Before adding a docs-page UX best-practice tips story, or guidance plus matrix, read
+    `references/ux-guidance.md`.
+20. Before adding a standalone matrix story, read `references/matrix-story-pattern.md`.
+21. Before making non-obvious accessibility claims or trade-offs, read
     `references/accessibility-source-route.md`.
-19. Use `preview-stories` for preview URLs, docs tools for documentation lookup,
+22. For component Docs workflows, read
+    `references/docs-workflow-checklist.md` before final and return the completed
+    checklist.
+23. Use `preview-stories` for preview URLs, docs tools for documentation lookup,
     and `run-story-tests` for focused story checks.
 
 ## Taxonomy Workflow
@@ -223,6 +247,8 @@ mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http \
 - Taxonomy edits leave no stale legacy title namespace for the changed tree.
 - Target repo Storybook build passes after setup changes.
 - Changed skill docs pass YAML parse and owner-path checks.
+- Component Docs work includes a completed
+  `references/docs-workflow-checklist.md` checklist in the final handoff.
 
 ## Next Safe Actions
 
