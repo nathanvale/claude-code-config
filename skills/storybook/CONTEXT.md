@@ -55,3 +55,26 @@ _Avoid_: full test suite, unit test, visual approval
 The target repo's sidebar and story-title organization language, owned by its
 nearest `STORYBOOK_TAXONOMY.md`.
 _Avoid_: component folder structure, category guess, skill-owned taxonomy
+
+**Docs loop**:
+A durable, resumable CLI workflow for batch Storybook docs cleanup across a
+component library. Tracks inventory, verification receipts, and batch cursor in
+XDG state so agents can resume across sessions.
+_Avoid_: docs migration script, one-shot audit, manual checklist
+
+**Verification ledger**:
+The per-component record of which docs-workflow-checklist fields have been
+completed, marked N/A, or blocked. The CLI derives item status from ledger
+state; agents write receipts via `mark`, not status directly.
+_Avoid_: agent-set status, completion flag, manual tracking
+
+**Run card**:
+The structured output from `single`, `resume`, or `batch` that tells an agent
+which cluster files to read, which story-set decisions to make, which
+verification receipts to fill, and the next safe action.
+_Avoid_: task description, prompt, instruction set
+
+**Component cluster**:
+The set of files discovered by inventory for one component: main story, matrix
+story, focused stories, nearby specs, README/MDX, and evidence files.
+_Avoid_: component folder, story file, single source file

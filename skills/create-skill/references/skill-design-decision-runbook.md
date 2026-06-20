@@ -96,6 +96,7 @@ Use before create, fix, heal, repair, or patch edits.
 - Start heading choice from input/output shape, not `role`.
 - Reject pure XML skill-body structure.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
+- **Every new skill must have a no-args front door.** Add an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. A skill with no front door stalls on first run. Use `references/adhd-friendly-dx.md` for the pattern. Enforce during create and during the Skill Review Checklist DX/UX step.
 
 ## Owner Paths
 
@@ -232,6 +233,7 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Prefer checklists for review workflows.
 - Prefer examples for judgment-heavy workflows.
 - Move rare branches and deep context to one-level `references/`.
+- **No-args front door (mandatory):** every skill must handle invocation with no args. Check that an `## Intent Classification` or `## Next Safe Actions` block exists with a clear default action. If absent, add it before considering the skill shippable.
 
 #### Run Card Pattern
 
