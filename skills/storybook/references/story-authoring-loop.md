@@ -10,10 +10,19 @@ component.
 3. Identify the review axes: variant, size, state, density, content shape, or
    interaction.
 4. Keep isolated stories for permalinkable states.
-5. Add a matrix only when side-by-side review reduces visual ambiguity.
-6. Read `references/matrix-story-pattern.md` before adding a matrix story.
-7. Read `references/accessibility-source-route.md` when accessibility behavior,
-   source authority, or checklist coverage affects the story.
+5. Read `references/docs-pattern.md` when the component needs a complete Docs
+   page structure or story-set decision.
+6. Read `references/component-docs-rollout.md` when applying the hardened
+   Autodocs pattern across one or more component story files.
+7. Read `references/ux-guidance.md` when the Docs page needs UX guidance or
+   guidance with a matrix underneath.
+8. Add a matrix only when side-by-side review reduces visual ambiguity.
+9. Read `references/matrix-story-pattern.md` before adding a standalone matrix
+   story.
+10. Read `references/accessibility-source-route.md` when accessibility behavior,
+    source authority, or checklist coverage affects the story.
+11. Read `references/docs-workflow-checklist.md` when the task changes a
+    component Docs page or story order.
 
 ## Story Shape
 
@@ -39,11 +48,15 @@ Type stories with `StoryObj<typeof meta>` when adding `play` functions.
 1. Format the touched story file.
 2. Call `preview-stories` for affected stories.
 3. Call `run-story-tests` with focused story IDs and `a11y: true`.
-4. Route accessibility findings through
+4. Screenshot the actual Docs page when story order, guidance placement, or matrix
+   clipping/margins matter.
+5. Route accessibility findings through
    `references/accessibility-source-route.md`.
-5. Fix semantic failures.
-6. Ask before visual changes from a11y output.
-7. Return links and the test result.
+6. Fix semantic failures.
+7. Ask before visual changes from a11y output.
+8. For Docs work, complete `references/docs-workflow-checklist.md` and include
+   it in the final handoff.
+9. Return links and the test result.
 
 ## Good Focused Test Targets
 

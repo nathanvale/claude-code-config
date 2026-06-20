@@ -6,14 +6,20 @@ design-system audit, or Figma-style variant comparison.
 Do not use matrix work as permission to change component runtime behavior. Edit
 stories only unless the user asks for component implementation changes.
 
+Use `references/docs-pattern.md#matrix-decision` before adding a matrix to a
+component Docs page.
+
 ## When To Add One
 
 - Add a matrix when side-by-side review catches drift faster than isolated
   stories.
+- Skip a matrix when the component has only one meaningful appearance or the
+  value is better shown through UX guidance or an interaction story.
 - Keep isolated stories for permalinks, focused tests, and docs examples.
 - If no story exists, create the smallest useful `Matrix` story first.
 - If stories exist, add `Matrix` without deleting existing stories.
-- Tag every `Matrix` story with `tags: ['!autodocs']` — see Autodocs below.
+- Tag standalone audit matrices with `tags: ['!autodocs']` — see Autodocs
+  below.
 
 ## Before Editing
 
@@ -25,16 +31,17 @@ stories only unless the user asks for component implementation changes.
 4. Call `get-storybook-story-instructions` when Storybook MCP is available.
 5. Use `get-documentation` before relying on design-system component props.
 
-## Autodocs And The Hero Problem
+## Autodocs And The Primary Playground
 
-Storybook Autodocs renders the **first export by source order** as the hero canvas above
-the props/controls table. Putting `Matrix` first causes two problems:
+Storybook Autodocs renders the **first export by source order** in the Primary
+doc block above the props/controls table. Putting `Matrix` first causes two
+problems:
 
 1. The hero canvas shows a full-bleed multi-state grid — not an interactive single-instance
    demo. The Controls table below it is useless.
 2. The matrix appears twice: once as hero and again in the STORIES section.
 
-**Fix: tag every Matrix story with `tags: ['!autodocs']`.**
+For standalone audit matrices, tag `Matrix` with `tags: ['!autodocs']`.
 
 ```ts
 export const Matrix: Story = {
@@ -46,11 +53,15 @@ export const Matrix: Story = {
 
 - `!autodocs` removes the story from the Docs tab entirely.
 - The story remains accessible in the sidebar and at `iframe.html?id=<story-id>--matrix&viewMode=story`.
-- The `Default` story (first export) becomes the hero — an interactive single component
-  above the props table.
+- The `Default` story (first export) becomes the Primary docs sample: an
+  interactive single component above the props table.
 
 There is no `primary: true` prop or name-based override. Position is the only lever; tag
 out `Matrix` rather than fighting ordering.
+
+For Docs pages with UX guidance, do not tag `Matrix` out when the matrix belongs
+in the learning path. Use `references/ux-guidance.md`: put `Default` first,
+then render `Matrix`, then `UxTips` or equivalent guidance underneath.
 
 ## Canonical Story File Structure
 
@@ -61,21 +72,28 @@ Follow this ordering in every portal-ui story file with a matrix:
 // 2. Meta (with docs.description.component = inline docs example text + Figma node ref)
 // export default meta
 // type Story = StoryObj<typeof meta>
-// 3. Default story FIRST — becomes the Autodocs hero above the props table
+// 3. Default story FIRST — becomes the Autodocs Primary sample above the props table
 // 4. Other individual stories
-// 5. Matrix story LAST — tagged !autodocs; accessible via sidebar + direct URL
+// 5. Matrix story LAST — tag !autodocs only when it should stay out of Docs
 ```
 
 The `Matrix` export must:
-- Set `tags: ['!autodocs']` — prevents hero collision on the Docs page.
+
+- Set `tags: ['!autodocs']` only for standalone audit matrices that should stay
+  out of the Docs page.
+- Prefer the export name `Matrix` as the visible Storybook title. The component
+  name is already present in the sidebar and docs hierarchy, so avoid names like
+  `Button state matrix` that repeat the parent component.
 - Set `parameters.layout: 'fullscreen'`.
-- Set `parameters.docs.description.story` with a brief description and a full Figma URL
-  (e.g. `Figma: https://www.figma.com/design/<fileKey>/...?node-id=<nodeId>.`).
+- Set `parameters.docs.description.story` with the matrix explanation. Storybook
+  owns the visible story heading and description; do not render another matrix
+  title or description inside the canvas.
 - Set `args` with safe placeholder values (required fields must be present to satisfy the
   meta type — use `variant: 'info', children: ''` or similar).
 - Use `render: () => <ComponentMatrix />` pointing at a local render helper.
 
 The meta must:
+
 - Set `tags: ['autodocs']`.
 - Set `parameters.docs.description.component` with a one-sentence description and a full
   Figma URL (e.g. `Figma: https://www.figma.com/design/<fileKey>/...?node-id=<nodeId>.`).
@@ -101,35 +119,106 @@ Projects often co-locate reusable matrix primitives as shared story helpers. Bef
 new inline helpers, check whether the project already has them:
 
 ```bash
-grep -r "MatrixRow" packages/ --include="*.tsx" -l
+rg "DocsMatrixShell|MatrixRow" packages/ --glob "*.tsx"
 ```
 
 If the project exposes shared primitives (e.g. `src/story-helpers/matrix.tsx`), import from
 there instead of inlining. The file must **not** be exported from the package's public
 `index.ts` — it is story infrastructure only.
 
+For portal-ui docs matrices, treat
+`packages/portal-ui/src/story-helpers/matrix.tsx` as the visual contract. Use
+`DocsMatrixShell` for the outer framed section and `DocsMatrixTable`,
+`DocsMatrixRow`, and `DocsMatrixCell` for the table sections. The helper owns
+the matrix canvas wrapper, horizontal scrolling, and table rhythm; stories own
+only the Storybook story name, description, and component specimens inside each
+cell.
+Do not put a custom matrix title, description, eyebrow, or source link inside
+the matrix canvas. Storybook already renders the story heading and description
+above the canvas.
+
+Call `DocsMatrixShell` around only the table sections:
+
+```tsx
+<DocsMatrixShell>
+  <DocsMatrixTable title="Variant" columns={["Default", "Hover", "Focus"]}>
+    <DocsMatrixRow label="Primary" columns={3}>
+      <DocsMatrixCell>{/* real component specimen */}</DocsMatrixCell>
+    </DocsMatrixRow>
+  </DocsMatrixTable>
+</DocsMatrixShell>
+```
+
+Put that fixed copy on the story instead:
+
+```tsx
+export const Matrix: Story = {
+  parameters: {
+    layout: "fullscreen",
+    docs: {
+      description: {
+        story:
+          "Review intent, state, size, and content variants in one compact grid.",
+      },
+    },
+  },
+  render: () => <ButtonMatrix />,
+};
+```
+
+Keep each table header and specimen row on the same optical horizontal gutter;
+preserve row vertical padding for the component specimens instead of forcing it
+to match Storybook heading rhythm.
+Apply that gutter to the first column cells, not to the scrollable grid wrapper;
+wrapper padding becomes visible as blank space when the user scrolls right.
+
+When a specimen is wider than the default comparison cells, widen that table
+instead of letting content overflow:
+
+```tsx
+<DocsMatrixTable
+  title="Example"
+  columns={["Icon", "Loading", "Long label"]}
+  columnMinWidth={360}
+>
+  {/* rows */}
+</DocsMatrixTable>
+```
+
+Use this for long-label, icon-plus-label, loading, or composed examples where
+the component's natural width matters. The header and every row share the same
+column width through the helper, so horizontal scroll reaches the full content
+instead of clipping the table grid early.
+
 ### TypeScript contract
 
 ```tsx
 // MatrixPage — outer flex column wrapper
-function MatrixPage({ children }: { children: ReactNode }): JSX.Element
+function MatrixPage({ children }: { children: ReactNode }): JSX.Element;
 
 // MatrixRow — domain card: title header + horizontal scroll body
-function MatrixRow({ title, children }: { title: string; children: ReactNode }): JSX.Element
+function MatrixRow({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}): JSX.Element;
 
 // Col — labeled state column; width defaults to 200px, pass narrower/wider as needed
 function Col({
   label,
-  width,      // optional number, default 200; applied as inline minWidth
+  width, // optional number, default 200; applied as inline minWidth
   children,
 }: {
-  label: string
-  width?: number
-  children: ReactNode
-}): JSX.Element
+  label: string;
+  width?: number;
+  children: ReactNode;
+}): JSX.Element;
 ```
 
 Width guidance by component type:
+
 - Select / SelectField: `width={240}`
 - TextArea / TextField: `width={280}`
 - RadioGroup: `width={220}`
@@ -160,14 +249,20 @@ Radix `RadioGroup` primitive defaults to `grid gap-3` (vertical stack). When pla
 </RadioGroup>
 ```
 
-## MatrixShell / MatrixRow Helpers
+## Legacy MatrixShell / MatrixRow Helpers
 
-Use this exact layout structure for the portal-ui **table-style** matrix shell (rows =
-states, right column = preview). This is a different pattern from the horizontal-scroll
-`MatrixRow` above — use it for checkbox-type atoms where the label column is meaningful:
+Use the shared `DocsMatrix*` helpers above for new portal-ui table-style docs
+matrices. Only inline the older shape below when the project does not yet have
+the helper and the matrix has a simple rows-to-preview layout:
 
 ```tsx
-function MatrixShell({ title, children }: { title: string; children: ReactNode }) {
+function MatrixShell({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <section className="border-border-default bg-surface-raised w-full overflow-x-auto rounded-lg border">
       <div className="min-w-[480px]">
@@ -182,10 +277,16 @@ function MatrixShell({ title, children }: { title: string; children: ReactNode }
         {children}
       </div>
     </section>
-  )
+  );
 }
 
-function MatrixRow({ label, children }: { label: string; children: ReactNode }) {
+function MatrixRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <div className="border-border-subtle grid grid-cols-[140px_1fr] border-b last:border-b-0">
       <div className="text-table-body text-text-default flex items-center p-4 font-medium">
@@ -193,7 +294,7 @@ function MatrixRow({ label, children }: { label: string; children: ReactNode }) 
       </div>
       <div className="flex items-center p-4">{children}</div>
     </div>
-  )
+  );
 }
 ```
 
