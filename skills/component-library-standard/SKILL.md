@@ -13,6 +13,8 @@ Works as a standalone audit or as a lens inside a workflow.
 | Signal | Route |
 |--------|-------|
 | No args | **Show audit menu** (see below) |
+| "summary" / "JSDoc cleanup" / "registry" / "agent manifest" | JSDoc-only cleanup mode |
+| "inline comments" / "comment cleanup" / "remove dividers" | Inline-comment cleanup mode |
 | File path or component name | Audit that component against the 5 practices |
 | "scaffold" / "new component" / "template" | Generate a new component from the template |
 | "fix" / "heal" + file path | Fix violations in-place |
@@ -23,9 +25,10 @@ Works as a standalone audit or as a lens inside a workflow.
 > **Component Library Standard — pick an action:**
 >
 > 1. **Audit a component** — name a file or component to check against the 5 practices.
-> 2. Scaffold a new component — generate from the template.
-> 3. Audit a directory — check all components, return a findings table.
-> 4. Show the 5 practices — print the rules for reference.
+> 2. Clean JSDoc summaries — use JSDoc-only cleanup mode.
+> 3. Clean inline comments — keep current invariants, remove history and divider rails.
+> 4. Scaffold a new component — generate from the template.
+> 5. Audit a directory — check all components, return a findings table.
 
 ## The 5 Core Practices
 
@@ -33,7 +36,7 @@ Works as a standalone audit or as a lens inside a workflow.
 
 - Use `export interface` (not `type`) — extends HTML attrs with `extends React.XHTMLAttributes<...>`
 - Same file as the component, above it
-- Every property gets a one-line JSDoc comment explaining *intent*, not restating the type
+- Every property gets a strict intent JSDoc comment; see Props Comment Standard
 - `@defaultValue` on optional props with defaults
 - `@see` for bidirectional cross-refs between related props (e.g. `sortable` ↔ `sortDirection`)
 - `@deprecated` with migration path on sunset props
@@ -70,22 +73,135 @@ Works as a standalone audit or as a lens inside a workflow.
 | Export | Required JSDoc | Required Tags |
 |--------|---------------|---------------|
 | Component | `@summary` (one line) + optional `@example` (golden path usage) | `@summary` |
-| Props interface | Plain one-line summary, usually `Props for {@link ComponentName}.` | — |
+| Props interface | **Exactly** `/** Props for {@link ComponentName}. */` — nothing else | — |
 | Every props property | One-line intent comment | `@defaultValue`, `@see`, `@deprecated` where applicable |
 | Exported hook | Summary + `@example` | `@param`, `@returns` |
 | Exported type/constant | Summary (one line) | — |
 | Internal helper | None unless *why* is non-obvious | — |
 
-`@summary` is required on every exported component — it survives Storybook manifest truncation and powers MCP/agent queries via `experimentalComponentsManifest`. Without it, the component is invisible to agent tooling even when stories exist.
+**Props interface:** must be exactly this form — no other content.
 
-Keep the manifest-facing `@summary` on the public runtime component export. Do not duplicate it on the matching props interface; props interfaces get plain JSDoc plus property intent comments.
+```ts
+/** Props for {@link ComponentName}. */
+export interface ComponentNameProps {
+```
 
-Anti-patterns:
-- `/** The label string */` on `label: string` — restates the type
-- `{@type}` annotations — TypeScript handles types
-- Missing useful `@example` on stable public components — highest-value tag when it shows real usage
-- Missing `@summary` on component — invisible to Storybook manifest and MCP
-- Duplicate `@summary` on both `ComponentNameProps` and `ComponentName` — unclear owner, noisy docs
+**Component export:** must have `@summary`. Optional `@example`.
+
+```ts
+/**
+ * @summary Renders the primary action users should take on a screen or form.
+ *
+ * @example
+ * ```tsx
+ * <Button variant="primary">Save</Button>
+ * ```
+ */
+export const ComponentName = React.forwardRef<HTMLDivElement, ComponentNameProps>(
+```
+
+All metadata lives on the component. Props is only a link.
+
+## Props Comment Standard
+
+Prop comments are strict because they feed generated docs, registry context,
+and agent understanding.
+
+Use this shape:
+
+- Start with what the prop does for the consumer.
+- Keep the first sentence short and intent-focused.
+- Put defaults in `@defaultValue`, not prose.
+- Put linked-prop relationships in `@see`.
+- Use `@deprecated` only with the migration path.
+- Explain allowed values only when the names are not self-explanatory.
+- For controlled props, name the ownership contract and link the change handler.
+- For initial/default props, say they seed uncontrolled state and link the
+  controlled prop that overrides them.
+- For callback props, state the event or next value they emit and link the prop
+  they round-trip.
+
+Avoid:
+
+- restating the TypeScript type;
+- leading with "Optional" when the `?` already says that;
+- implementation history, Figma node ids, ledger rows, or old deltas;
+- internal class names, DOM mechanics, or layout archaeology;
+- multi-line essays when one sentence plus a tag is enough.
+
+Good:
+
+```ts
+/** Horizontal alignment of the header content. @defaultValue 'left' */
+align?: 'left' | 'right' | 'center'
+
+/** Padding owner for this content wrapper. @defaultValue 'cell' */
+padding?: 'cell' | 'none'
+
+/** Controlled selected row ids owned by the caller.
+ * @see onSelectedRowIdsChange
+ * @see initialSelectedRowIds */
+selectedRowIds?: readonly string[]
+
+/** Initial uncontrolled selected row ids.
+ * @defaultValue []
+ * @see selectedRowIds */
+initialSelectedRowIds?: readonly string[]
+
+/** Emits normalised selected row ids after a selection change.
+ * @see selectedRowIds */
+onSelectedRowIdsChange?: TableSelectionChangeHandler
+```
+
+Bad:
+
+```ts
+/** Optional padding policy. `cell` is correct for `<th>` layouts where each
+ * cell owns its own padding. `none` is correct for list layouts where padding
+ * lives on the row wrapper. @defaultValue 'cell' */
+padding?: 'cell' | 'none'
+```
+
+## Inline Comment Standard
+
+Inline comments are guidance, not the strict public-doc contract. Use them only
+when the next maintainer or agent needs the reason behind a non-obvious
+implementation choice. Comments should reduce future
+inspection time, not narrate the code.
+
+Keep comments that explain:
+
+- current accessibility, focus, keyboard, layout, or state-machine invariants;
+- why an otherwise surprising class, branch, effect, ref merge, or guard exists;
+- a fragile integration contract with another local component, hook, test, or
+  platform primitive;
+- a fallback path that would be easy to simplify incorrectly.
+
+Remove or compress comments that:
+
+- restate the code, prop type, class name, or obvious JSX structure;
+- preserve Figma node IDs, audit history, old deltas, ledger rows, or named
+  reviewer notes without naming a current invariant;
+- use decorative divider rails such as `// ----- Types -----`,
+  `// ---------------------------------------------------------------------`,
+  or boxed comment banners;
+- duplicate the public JSDoc, Storybook description, or registry summary;
+- explain a temporary migration after the migration is complete.
+
+Preferred shape:
+
+```ts
+// Opaque fill masks scrolled rows beneath sticky cells.
+```
+
+Avoid:
+
+```ts
+// Figma node 1:61024 used #f8fafc; DELTA from old white header, ledger adv-003.
+```
+
+If evidence still matters, move it to the owning story, test, design audit, or
+decision document and keep the source comment focused on the current contract.
 
 ### Practice 5: Barrel Export
 
@@ -99,6 +215,160 @@ export type { ComponentNameProps } from './ComponentName'
 - Props types MUST be in the barrel — consumers need them for typed wrappers
 - Internal helpers, constants, sub-components stay unexported unless documented
 - Never re-export from sibling component directories
+
+## JSDoc-Only Cleanup Mode
+
+Use this mode for directory-wide or registry-facing summary cleanup. It narrows
+the skill to comments and summary quality so broad loops do not accidentally
+refactor component APIs.
+
+Allowed edits:
+
+- Move `@summary` from props/interface JSDoc to the public runtime component
+  export.
+- Rewrite component `@summary` text for clarity and registry discovery.
+- Replace props/interface `@summary` with plain JSDoc such as
+  `Props for {@link ComponentName}.`
+- Preserve prop member intent comments and useful `@defaultValue`, `@see`,
+  `@deprecated`, and `@internal` tags.
+- Add or keep `@example` only when it helps a UI builder choose or compose the
+  component.
+
+Out of scope unless the user explicitly asks:
+
+- `forwardRef` conversions.
+- Props-interface reshaping.
+- Barrel export changes.
+- Story layout, Matrix, UxTips, or docs-card changes.
+- Runtime behavior changes.
+
+For directory-wide cleanup, stop before editing if the request is not explicitly
+JSDoc-only or if owner-path verification fails.
+
+## Inline-Comment Cleanup Mode
+
+Use this mode for comment-only passes where the user asks to clean large inline
+notes, old Figma/audit commentary, or decorative separators.
+
+Allowed edits:
+
+- Remove decorative divider rails.
+- Compress multi-line history notes into one current invariant.
+- Preserve comments that explain non-obvious accessibility, layout, focus,
+  state, data, or integration contracts.
+- Move no contracts between files unless the user explicitly asks for a docs or
+  decision-record pass.
+
+Out of scope unless the user explicitly asks:
+
+- Runtime behavior changes.
+- Public API changes.
+- Story layout changes.
+- New docs, ADRs, tests, or registry metadata.
+
+Verification:
+
+- Run focused lint on touched files.
+- Run focused tests when comments sit beside brittle contracts or when nearby
+  code was also changed.
+- Search touched scope for decorative divider rails before finishing.
+
+## Summary Audience And Research
+
+Write summaries for UI builders and agent builders. The summary should help a
+builder decide whether this component is the right Lego brick for a screen,
+Figma design, screenshot, or product requirement.
+
+Good summaries answer:
+
+- What UI job does this component perform?
+- When would a builder choose it?
+- What screen pattern does it support?
+
+Avoid:
+
+- implementation details;
+- prop lists;
+- marketing copy;
+- vague words such as "flexible", "powerful", or "simple";
+- summaries that only restate the component name.
+
+Research order:
+
+1. Read local source, props, barrel exports, stories, tests, README/MDX, and
+   nearby usage.
+2. Use Storybook docs or matrix/UX stories as evidence for consumer-facing
+   purpose.
+3. Use external research only when local evidence does not make the component
+   purpose clear.
+4. Prefer official or authoritative sources: WAI-ARIA APG, WCAG, MDN, platform
+   design docs, Radix, shadcn/ui, MUI, Carbon, GOV.UK, Apple HIG, or similar.
+5. Extract principles; do not copy external wording.
+
+Good summary examples:
+
+- `@summary Renders the primary action users should take on a screen or form.`
+- `@summary Displays a status message that confirms success, warns about risk, or explains an error.`
+- `@summary Groups form fields into a single-page layout with section navigation.`
+- `@summary Renders a horizontally scrollable data table with a custom visible scrollbar.`
+- `@summary Lets users choose one option from a labelled set of radio choices.`
+
+Bad summary examples:
+
+- `@summary Button component.`
+- `@summary A flexible and reusable button.`
+- `@summary Uses class variance authority to render variants.`
+- `@summary Props for Button.`
+- `@summary Renders children with className support.`
+
+## Storybook Registry Rules
+
+Use these rules when the cleanup feeds Storybook MCP, AI manifests, or a
+component registry.
+
+- Public runtime component exports own exactly one `@summary`.
+- Props interfaces never own `@summary` when paired with a component summary.
+- Do not add fake summaries to stories, recipes, product examples, Matrix
+  stories, UX guidance stories, or docs-only helpers.
+- Allow multiple summaries in one file only when each belongs to a distinct
+  public runtime export that should appear in registry documentation.
+- Treat shadcn/Radix primitive files separately; multi-export primitive files
+  can legitimately need multiple component summaries.
+- If a docs-only entry must stay in the registry, use the package allowlist or
+  registry checker owner instead of inventing a runtime component summary.
+
+## Batch Loop Helper
+
+For large portal-ui cleanup runs, generate a compact next-batch prompt instead
+of reading the whole component library into context:
+
+```bash
+node /Users/nathanvale/code/claude-code-config/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \
+  --repo /Users/nathanvale/code/experience-sdk \
+  --pkg packages/portal-ui \
+  --batch-size 8 \
+  --reset
+```
+
+After a batch is edited and verified, advance the cursor:
+
+```bash
+node /Users/nathanvale/code/claude-code-config/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \
+  --repo /Users/nathanvale/code/experience-sdk \
+  --pkg packages/portal-ui \
+  --batch-size 8 \
+  --next
+```
+
+The helper writes loop state under `/tmp` and prints:
+
+- current cursor;
+- candidate component files;
+- local evidence files to inspect;
+- a copyable coordinator prompt for read-only explorer agents and one editor.
+
+The helper is an inventory and prompt generator, not an edit engine. Agents must
+still inspect files and apply this skill's JSDoc rules before changing code.
 
 ## Gotchas (builder safety rules)
 
@@ -114,8 +384,6 @@ export type { ComponentNameProps } from './ComponentName'
 import { cn } from '@packages/utils'
 import React from 'react'
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 /** Props for {@link ComponentName}. */
 export interface ComponentNameProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Visual treatment applied to the container. @defaultValue 'primary' */
@@ -126,8 +394,6 @@ export interface ComponentNameProps extends React.HTMLAttributes<HTMLDivElement>
   children?: React.ReactNode
 }
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
 const variantClass = {
   primary: 'bg-action-primary text-on-primary',
   secondary: 'border-2 border-action-primary bg-white text-action-primary',
@@ -137,8 +403,6 @@ const sizeClass = {
   medium: 'min-h-10 px-5 py-2 text-base',
   small: 'min-h-9 px-4 py-1.5 text-sm',
 } satisfies Record<NonNullable<ComponentNameProps['size']>, string>
-
-// ── Component ────────────────────────────────────────────────────────────────
 
 /**
  * @summary Renders ... (one sentence explaining what and why — survives manifest truncation).
@@ -195,7 +459,8 @@ When auditing, return a findings table:
 ## Owner Paths
 
 - JSDoc standard: `/Users/nathanvale/code/claude-code-config/context/code-style.md` §JSDoc
-- Pattern: `references/skill-design-decision-runbook.md#write-something-skill-io-example`
+- Loop helper: `scripts/jsdoc-summary-loop.mjs`
+- Pattern: `skills/create-skill/references/skill-design-decision-runbook.md#write-something-skill-io-example`
 
 ## Next Safe Action
 
