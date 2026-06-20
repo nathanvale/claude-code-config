@@ -4,6 +4,19 @@
 import { existsSync, lstatSync, readlinkSync, realpathSync } from "fs";
 import { basename, resolve, join } from "path";
 import { homedir } from "os";
+import { randomUUID } from "crypto";
+
+// ── Agent envelope (lightweight — mirrors facade shape without the dep) ─
+
+function emitEnvelope(data: Record<string, unknown>, startMs: number): void {
+  const envelope = {
+    status: "ok",
+    run_id: randomUUID(),
+    data,
+    duration_ms: Math.round(performance.now() - startMs),
+  };
+  console.log(JSON.stringify(envelope, null, 2));
+}
 
 // ── Colors (respects NO_COLOR) ──────────────────────────────────────────
 
@@ -141,13 +154,13 @@ function groupLabel(g: "claude" | "codex" | "config"): string {
 
 // ── Commands ────────────────────────────────────────────────────────────
 
-function cmdStatus(json: boolean) {
+function cmdStatus(json: boolean, startMs: number) {
   const results = inspectAll();
   const ok = results.filter(r => r.health === "ok").length;
   const problems = results.filter(r => r.health !== "ok");
 
   if (json) {
-    const output = {
+    emitEnvelope({
       healthy: ok,
       total: results.length,
       problems: problems.map(p => ({
@@ -157,9 +170,9 @@ function cmdStatus(json: boolean) {
         detail: p.detail,
         repair: repairCommand(p),
       })),
-      next_action: problems.length > 0 ? "setup sync" : null,
-    };
-    console.log(JSON.stringify(output, null, 2));
+      next_safe_action: problems.length > 0 ? "setup sync" : null,
+      changed_state: null,
+    }, startMs);
     process.exit(problems.length > 0 ? 1 : 0);
     return;
   }
@@ -212,12 +225,12 @@ function cmdStatus(json: boolean) {
   process.exit(problems.length > 0 ? 1 : 0);
 }
 
-function cmdDoctor(json: boolean) {
+function cmdDoctor(json: boolean, startMs: number) {
   const results = inspectAll();
   const problems = results.filter(r => r.health !== "ok");
 
   if (json) {
-    const output = {
+    emitEnvelope({
       findings: problems.map(p => ({
         link: shortPath(p.spec.link),
         target: shortPath(p.spec.target),
@@ -227,11 +240,11 @@ function cmdDoctor(json: boolean) {
         repair: repairCommand(p),
       })),
       summary: problems.length === 0 ? "healthy" : `${problems.length} issue${problems.length > 1 ? "s" : ""} found`,
-      next_action: problems.length > 0
+      next_safe_action: problems.length > 0
         ? problems.some(p => p.health === "conflict") ? "resolve conflicts manually, then run setup sync" : "setup sync"
         : null,
-    };
-    console.log(JSON.stringify(output, null, 2));
+      changed_state: null,
+    }, startMs);
     process.exit(problems.length > 0 ? 1 : 0);
     return;
   }
@@ -271,13 +284,13 @@ function cmdDoctor(json: boolean) {
   process.exit(1);
 }
 
-function cmdSyncCheck(json: boolean) {
+function cmdSyncCheck(json: boolean, startMs: number) {
   const results = inspectAll();
   const changes = results.filter(r => r.health !== "ok");
 
   if (json) {
-    const output = {
-      status: changes.length === 0 ? "clean" : "needs_sync",
+    emitEnvelope({
+      sync_status: changes.length === 0 ? "clean" : "needs_sync",
       changes: changes.map(ch => ({
         action: ch.health === "missing" ? "create" : ch.health === "broken" ? "recreate" : ch.health === "wrong" ? "relink" : "blocked",
         link: shortPath(ch.spec.link),
@@ -287,11 +300,11 @@ function cmdSyncCheck(json: boolean) {
         detail: ch.detail,
       })),
       blocked: changes.some(ch => ch.health === "conflict"),
-      next_action: changes.length === 0 ? null
+      next_safe_action: changes.length === 0 ? null
         : changes.some(ch => ch.health === "conflict") ? "resolve conflicts, then setup sync"
         : "setup sync",
-    };
-    console.log(JSON.stringify(output, null, 2));
+      changed_state: null,
+    }, startMs);
     process.exit(changes.length > 0 ? 1 : 0);
     return;
   }
@@ -353,6 +366,7 @@ function cmdHelp() {
   console.log(`  ${c.bold}Flags${c.reset}`);
   console.log();
   console.log(`    ${c.cyan}--json${c.reset}             ${c.dim}Structured output for scripts and agents${c.reset}`);
+  console.log(`    ${c.cyan}--verbose${c.reset}          ${c.dim}Show additional detail${c.reset}`);
   console.log(`    ${c.cyan}--no-color${c.reset}         ${c.dim}Plain text (also: NO_COLOR=1)${c.reset}`);
   console.log();
   console.log(`  ${c.bold}What this manages${c.reset}`);
@@ -417,8 +431,10 @@ function whyItMatters(s: LinkStatus): string {
 
 const args = process.argv.slice(2);
 const jsonFlag = args.includes("--json");
-const filteredArgs = args.filter(a => a !== "--json" && a !== "--no-color");
+const verboseFlag = args.includes("--verbose");
+const filteredArgs = args.filter(a => a !== "--json" && a !== "--no-color" && a !== "--verbose");
 const command = filteredArgs[0] ?? "";
+const startMs = performance.now();
 
 if (args.includes("--no-color")) {
   for (const k of Object.keys(c)) {
@@ -428,14 +444,14 @@ if (args.includes("--no-color")) {
 
 switch (command) {
   case "":
-    cmdStatus(jsonFlag);
+    cmdStatus(jsonFlag, startMs);
     break;
   case "doctor":
-    cmdDoctor(jsonFlag);
+    cmdDoctor(jsonFlag, startMs);
     break;
   case "sync":
     if (filteredArgs.includes("--check")) {
-      cmdSyncCheck(jsonFlag);
+      cmdSyncCheck(jsonFlag, startMs);
     } else {
       // sync write path — not implemented in prototype
       console.log(`${c.yellow}sync write not implemented in prototype — use sync --check to preview${c.reset}`);

@@ -2,6 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
 
 const DEFAULT_PKG = "packages/portal-ui";
 const DEFAULT_BATCH_SIZE = 8;
@@ -138,7 +141,7 @@ function componentEntries(repoRoot, filePath) {
 	const summaryCount = countMatches(source, /@summary/g);
 	const propsSummary = hasPropsSummary(source);
 	const category = categoryFor(relativePath);
-	const action = propsSummary || summaryCount === 0 || summaryCount > exports.length
+	const action = propsSummary || summaryCount !== exports.length
 		? "edit"
 		: "verify";
 
@@ -176,8 +179,9 @@ function hasPropsSummary(source) {
 }
 
 function categoryFor(relativePath) {
-	if (relativePath.includes("/src/components/ui/")) return "shadcn-public-check";
-	if (relativePath.includes("/src/ui/data-table/")) return "data-table";
+	const normalized = relativePath.split(path.sep).join("/");
+	if (normalized.includes("/src/components/ui/")) return "shadcn-public-check";
+	if (normalized.includes("/src/ui/data-table/")) return "data-table";
 	return "core-ui";
 }
 
@@ -254,7 +258,7 @@ pnpm --filter @packages/portal-ui check:agent-registry
 
 Advance when green:
 \`\`\`bash
-node /Users/nathanvale/code/claude-code-config/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \\
+node ${__filename} \\
   --repo ${state.repo} \\
   --pkg ${state.pkg} \\
   --batch-size ${state.batchSize} \\

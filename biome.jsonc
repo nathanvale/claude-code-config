@@ -23,11 +23,7 @@
 			// Biome's parser treats as syntax errors. Not runnable JS.
 			"!skills/pr-review-loop/references/workflow-template.js",
 			"!**/dist",
-			"!**/coverage",
-			// Exclude files from other repos that agents may edit. This biome
-			// config only governs claude-code-config; sibling repos own their
-			// own lint setup.
-			"!/Users/nathanvale/code/experience-sdk/**"
+			"!**/coverage"
 		]
 	},
 	"formatter": {

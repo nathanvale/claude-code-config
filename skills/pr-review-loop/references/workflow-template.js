@@ -24,7 +24,7 @@ const MAX_FINDINGS_PER_LENS = positiveInt(
   (args && args.maxFindingsPerLens) ? String(args.maxFindingsPerLens) : null,
   {{MAX_FINDINGS_PER_LENS}},
 );
-const RUN_ID = (args && args.runId) ? String(args.runId) : "default";
+const RUN_ID = safeRunId((args && args.runId) ? String(args.runId) : "default");
 const ARTIFACT_DIR = `/tmp/pr-review-loop/${RUN_ID}`;
 const FINDINGS_PATH = `${ARTIFACT_DIR}/findings.json`;
 
@@ -36,6 +36,13 @@ function positiveInt(value, fallback) {
 function safeGitRef(value, fallback) {
   if (!value) return fallback;
   return /^[A-Za-z0-9._/@-]+$/.test(value) ? value : fallback;
+}
+
+function safeRunId(value) {
+  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error(`Invalid runId: "${value}" — must match ^[A-Za-z0-9._-]+$`);
+  }
+  return value;
 }
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
@@ -397,8 +404,14 @@ Rounds: ${round}. Total findings: ${allFindings.length}.
 FINDINGS:
 ${JSON.stringify(allFindings, null, 2)}
 
-Produce counts by severity and lens. Write a narrative paragraph.
-State: is this PR ready to merge (blocking = 0 AND major = 0)?`,
+Return JSON with these required fields:
+- round: current round number (${round})
+- totalOpen: count of open (unresolved) findings
+- blocking / major / minor / suggestion: counts by severity
+- newThisRound: findings added in the final round
+- resolvedThisRound: findings resolved in the final round
+- done: true if blocking = 0 AND major = 0
+- narrative: prose paragraph summarising the review`,
   { label: "synthesize", phase: "Synthesize", schema: SUMMARY_SCHEMA, model: "sonnet" },
 );
 

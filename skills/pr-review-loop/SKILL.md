@@ -1,6 +1,6 @@
 ---
 name: pr-review-loop
-description: "Generate and launch a parametric multi-lens PR review workflow when the user wants to review a package diff for blocking issues before creating a PR."
+description: "Launch a multi-lens PR review workflow for blocking issues."
 ---
 
 # PR Review Loop
@@ -15,8 +15,8 @@ Classify from args and **stop at the first matching row**. Do NOT launch a workf
 | Signal | Route |
 |--------|-------|
 | No args, empty args, or unrecognized args | **STOP — show pre-launch DX menu** (see below); do not launch |
-| `mode: fast` or "fast" in args | Skip menu — launch with defaults immediately |
 | Lens names or lens customisation request (e.g. "new reviewers", "use X instead of Y") | **STOP — show pre-launch DX menu** with proposed lenses listed; wait for user confirmation before launching |
+| `mode: fast` or "fast" in args | Skip menu — launch with defaults immediately |
 | Package name or path supplied | Launch with `pkg` override |
 | `baseRef` / branch name supplied | Launch with `baseRef` override |
 | `resume` / run ID supplied | Resume paused run via `resumeFromRunId` |

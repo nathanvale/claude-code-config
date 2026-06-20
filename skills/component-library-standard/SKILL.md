@@ -57,7 +57,7 @@ Works as a standalone audit or as a lens inside a workflow.
 
 ### Practice 3: File Ordering
 
-```
+```text
 1. Imports (React, external deps, internal deps, utils)
 2. Exported types (variant unions, prop interfaces)
 3. Internal types (not exported)
@@ -343,8 +343,8 @@ For large portal-ui cleanup runs, generate a compact next-batch prompt instead
 of reading the whole component library into context:
 
 ```bash
-node /Users/nathanvale/code/claude-code-config/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \
-  --repo /Users/nathanvale/code/experience-sdk \
+node <repo-root>/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \
+  --repo <target-repo> \
   --pkg packages/portal-ui \
   --batch-size 8 \
   --reset
@@ -353,8 +353,8 @@ node /Users/nathanvale/code/claude-code-config/skills/component-library-standard
 After a batch is edited and verified, advance the cursor:
 
 ```bash
-node /Users/nathanvale/code/claude-code-config/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \
-  --repo /Users/nathanvale/code/experience-sdk \
+node <repo-root>/skills/component-library-standard/scripts/jsdoc-summary-loop.mjs \
+  --repo <target-repo> \
   --pkg packages/portal-ui \
   --batch-size 8 \
   --next
@@ -458,8 +458,8 @@ When auditing, return a findings table:
 
 ## Owner Paths
 
-- JSDoc standard: `/Users/nathanvale/code/claude-code-config/context/code-style.md` §JSDoc
-- Loop helper: `scripts/jsdoc-summary-loop.mjs`
+- JSDoc standard: `context/code-style.md` §JSDoc
+- Loop helper: `skills/component-library-standard/scripts/jsdoc-summary-loop.mjs`
 - Pattern: `skills/create-skill/references/skill-design-decision-runbook.md#write-something-skill-io-example`
 
 ## Next Safe Action
