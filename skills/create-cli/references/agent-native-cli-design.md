@@ -76,20 +76,111 @@ Add recipes when they change driver behavior or reduce real risk.
 ## CLI Front Door Shape
 
 - Keep simple single-CLI packages flat.
-- Use `src/front-doors/<cli-name>/` only when a package has multiple CLI Front
-  Doors or one CLI Front Door needs an owner folder.
-- Keep package-level `src/command-contract.ts` when command vocabulary, result
-  literals, actions, or facade contract fragments are shared.
-- Put a front-door-local `command-contract.ts` under
-  `src/front-doors/<cli-name>/` only when that CLI Front Door owns distinct
-  public Interface vocabulary.
+- Use `src/front-doors/<cli-name>/` when a package has multiple CLIs with
+  distinct domains, or when one CLI needs an owner folder.
+- Stay flat when multiple CLIs share vocabulary heavily.
 - Keep one package-root `package.json` unless distribution, dependency, or
   runtime ownership needs an independent package.
-- Let the Command Contract Locator find `src/command-contract.ts` and
-  `src/front-doors/**/command-contract.ts`.
-- Treat Command Contract Locator discovery behavior as owned by
-  `cli-execution-auditor` and `scripts/check-workspace-facade-invariants.ts`.
-- Keep consumer folder topology out of `runtime/cli-command-facade`.
+- Name the entry point `cli.ts` inside front-door folders — the folder carries
+  identity, the filename carries role.
+- Separate entry-point code from application code — the CLI dispatcher owns
+  arg parsing, I/O, and exit codes; core logic lives in domain modules.
+- For facade-backed contract discovery, locator behavior, and auditor
+  invariants, see `references/cli-front-door-layouts.md`.
+
+### Layouts
+
+Three layouts, from simplest to most separated:
+
+**Single CLI, flat.** Most packages. One CLI, all source at `src/` root.
+
+```text
+my-package/
+  package.json
+  src/
+    cli.ts
+    model.ts
+    engine.ts
+  tests/
+    cli.test.ts
+```
+
+**Multiple CLIs, flat contracts.** Multiple CLIs share vocabulary heavily.
+All contracts and entry points at `src/` root.
+
+```text
+my-package/
+  package.json
+  src/
+    alpha-cli.ts
+    beta-cli.ts
+    contracts.ts
+    shared-model.ts
+  tests/
+    alpha.test.ts
+    beta.test.ts
+```
+
+**Multiple CLIs, front-door folders.** CLIs have distinct domains. Each
+front door owns its entry point and domain modules under
+`src/front-doors/<cli-name>/`. Tests stay at `tests/` root. Entry point is
+`cli.ts` — the folder carries identity, the filename carries role.
+
+```text
+my-package/
+  package.json
+  src/
+    front-doors/
+      alpha/
+        cli.ts
+        contracts.ts
+        model.ts
+        engine.ts
+      beta/
+        cli.ts
+        contracts.ts
+        model.ts
+        runtime.ts
+  tests/
+    alpha.test.ts
+    beta.test.ts
+```
+
+### Choosing a layout
+
+| Signal | Layout |
+|--------|--------|
+| One CLI | Single flat |
+| Multiple CLIs, shared vocabulary (result literals, exit codes, actions) | Multi flat |
+| Multiple CLIs, distinct command types and result contracts | Front-door folders |
+| Not sure yet | Start flat; move to front-doors when seams are clear |
+
+**Pros of front-door folders:**
+- Seams visible in the filesystem — open a folder, see exactly what that CLI
+  owns.
+- Ownership is unambiguous when files grow past ~10 in `src/`.
+- Analogous to Go's `cmd/<app>/main.go` pattern (proven at scale).
+- Entry point naming is clean: `cli.ts` in every folder, no stuttering.
+
+**Cons of front-door folders:**
+- Deeper import paths.
+- Migration churn when splitting an existing flat layout.
+- Every file reference (tests, docs, owner paths) must update during migration.
+- Overkill for two small CLIs that share most of their code.
+
+### Migrating from single to front-doors
+
+- Move existing `src/*.ts` files into
+  `src/front-doors/<existing-cli-name>/`.
+- Rename the CLI entry point to `cli.ts` inside the front-door folder.
+- Update the package script path.
+- Update all import paths in source and test files.
+- Verify all existing tests pass with zero behavior change before adding
+  the second front door.
+
+For facade-backed implementation details (contract `path` field, Command
+Contract Locator, auditor fixture references, branch station catalog
+placement), see `references/cli-front-door-layouts.md`.
 
 ## Implementation Shape
 
