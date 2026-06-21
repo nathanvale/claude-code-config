@@ -53,7 +53,7 @@ export function frontDoorLabelForPath(root: string, path: string): string {
 	const frontDoorsDir = join(root, "src", "front-doors");
 	const rel = relative(frontDoorsDir, path);
 	if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return ROOT_FRONT_DOOR;
-	const parts = rel.split("/");
+	const parts = rel.split(/[\\/]/);
 	parts.pop();
 	return parts.length === 0 ? ROOT_FRONT_DOOR : parts.join("/");
 }

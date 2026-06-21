@@ -211,6 +211,7 @@ async function writeAuditLedger(input: {
 			kind: finding.kind,
 			summary: finding.summary,
 			argv: finding.argv,
+			frontDoor: finding.frontDoor,
 		});
 	}
 	await writeLedgerFile(input.ledgerPath, ledgerState);

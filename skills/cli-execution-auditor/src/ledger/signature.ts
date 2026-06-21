@@ -24,6 +24,8 @@ export interface FindingSignatureInput {
 	clauseId: string;
 	/** The invocation argv, or [] for a static (zero-invocation) clause. */
 	argv?: readonly string[];
+	/** Optional CLI Front Door owner for clause findings. */
+	frontDoor?: string;
 	station?: StationFindingSignatureInput;
 }
 
@@ -50,7 +52,11 @@ export function signature(input: FindingSignatureInput): string {
 				input.station.stationId,
 				input.station.findingKind,
 			]
-		: [input.clauseId, ...canonicalizeArgv(input.argv ?? [])];
+		: [
+				...(input.frontDoor ? ["frontDoor", input.frontDoor] : []),
+				input.clauseId,
+				...canonicalizeArgv(input.argv ?? []),
+			];
 	// NUL separator: cannot appear in a clause id or argv token, so the join is
 	// unambiguous (["a","b"] never collides with ["ab"]).
 	const material = canonical.join("\0");

@@ -70,6 +70,12 @@ describe("Station Map engine", () => {
 				join(root, "src", "front-doors", "admin", "users", "branch-station-catalog.ts"),
 			),
 		).toBe("admin/users");
+		expect(
+			frontDoorLabelForPath(
+				root,
+				`${root}/src/front-doors/admin\\users\\branch-station-catalog.ts`,
+			),
+		).toBe("admin/users");
 	});
 
 	test("non-facade target is skipped before catalog lookup", async () => {
@@ -94,6 +100,8 @@ describe("Station Map engine", () => {
 		});
 
 		expect(outcome.catalogDetected).toBe(true);
+		expect(outcome.catalogPath).toBe("src/branch-station-catalog.ts");
+		expect(outcome.evidencePath).toBe("src/branch-station-evidence.ts");
 		expect(outcome.stationMap?.completeness_claim).toBe("declared_branch_coverage");
 		expect(outcome.stationMap?.stations.map((station) => station.station_id)).toEqual([
 			"check.alpha",

@@ -169,6 +169,9 @@ export async function runStationMapAudit(input: {
 		laneDetected: true,
 		catalogDetected: true,
 		...(catalogPaths.length === 1 ? { catalogPath: relative(layout.root, catalogPaths[0]) } : {}),
+		...(maps.length === 1 && maps[0].evidencePath
+			? { evidencePath: relative(layout.root, maps[0].evidencePath) }
+			: {}),
 		catalogPaths: catalogPaths.map((path) => relative(layout.root, path)),
 		evidencePaths: maps
 			.flatMap((map) => (map.evidencePath ? [relative(layout.root, map.evidencePath)] : []))

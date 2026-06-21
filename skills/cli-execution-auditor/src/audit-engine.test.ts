@@ -97,6 +97,10 @@ describe("contract acquisition (KTD6)", () => {
 		});
 		expect(outcome.findings).toEqual([]);
 		expect(Object.keys(outcome.contracts ?? {}).sort()).toEqual(["admin", "app"]);
+		expect(outcome.commandFrontDoors).toEqual({
+			admin: "admin",
+			app: "app",
+		});
 		expect(
 			outcome.contractSurfaces?.map((surface) => ({
 				frontDoor: surface.frontDoor,
@@ -448,12 +452,12 @@ describe("surface audit — each clause fires", () => {
 			only: null,
 		});
 		expect(outcome.laneDetected).toBe(true);
-		const finding = outcome.findings.find(
-			(f) => f.clauseId === "runnable-resolves" && f.summary.includes("legacy"),
-		);
-		expect(finding).toBeDefined();
-		expect(finding?.summary).toContain("goes unaudited");
-		expect(finding?.frontDoor).toBe("legacy");
+		const findings = outcome.findings.filter((f) => f.clauseId === "runnable-resolves");
+		expect(findings.map((finding) => finding.frontDoor).sort()).toEqual([
+			"legacy",
+			"legacy/users",
+		]);
+		expect(findings.map((finding) => finding.summary).join("\n")).toContain("goes unaudited");
 	});
 
 	test("a broken --json failure envelope fires json-valid-under-failure", async () => {

@@ -613,10 +613,8 @@ async function checkFrontDoorCoverage(
 	// Map each front-door dir to whether a discovered contract lives under it.
 	const coveredDirs = new Set<string>();
 	for (const contractPath of layout.contractPaths) {
-		const rel = contractPath.startsWith(frontDoorsDir)
-			? contractPath.slice(frontDoorsDir.length + 1)
-			: null;
-		if (rel) coveredDirs.add(rel.split("/")[0]);
+		const frontDoor = frontDoorLabelForPath(layout.root, contractPath);
+		if (frontDoor !== "root") coveredDirs.add(frontDoor);
 	}
 
 	// A front-door dir is a "shippable surface" when a package.json script resolves
@@ -633,10 +631,8 @@ async function checkFrontDoorCoverage(
 	for (const value of Object.values(scripts)) {
 		const file = resolveScriptEntryFile(layout.root, value);
 		if (!file) continue;
-		const frontDoorPrefix = `${frontDoorsDir}/`;
-		if (file.startsWith(frontDoorPrefix)) {
-			scriptedDirs.add(file.slice(frontDoorPrefix.length).split("/")[0]);
-		}
+		const frontDoor = frontDoorLabelForPath(layout.root, file);
+		if (frontDoor !== "root") scriptedDirs.add(frontDoor);
 	}
 
 	const findings: EngineFinding[] = [];
