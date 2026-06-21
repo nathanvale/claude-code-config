@@ -6,16 +6,16 @@ import {
 import {
 	type StorybookDoctorCommand,
 	storybookDoctorContracts,
-} from "../src/command-contract.ts";
+} from "../src/front-doors/storybook-doctor/command-contract.ts";
 import {
 	STORYBOOK_DOCTOR_COMMANDS_CONTRACT_ID,
 	STORYBOOK_DOCTOR_CONTRACT_ID,
 	STORYBOOK_DOCTOR_DEEP_CONTRACT_ID,
-} from "../src/readiness-model.ts";
-import { runCheck } from "../src/readiness-engine.ts";
-import { runDeep } from "../src/deep-doctor.ts";
-import { runForTest } from "../src/storybook-doctor.ts";
-import type { StorybookDoctorRuntime } from "../src/storybook-doctor-runtime.ts";
+} from "../src/front-doors/storybook-doctor/readiness-model.ts";
+import { runCheck } from "../src/front-doors/storybook-doctor/readiness-engine.ts";
+import { runDeep } from "../src/front-doors/storybook-doctor/deep-doctor.ts";
+import { runForTest } from "../src/front-doors/storybook-doctor/cli.ts";
+import type { StorybookDoctorRuntime } from "../src/front-doors/storybook-doctor/runtime.ts";
 
 const contractEntries = Object.entries(storybookDoctorContracts) as Array<
 	[
@@ -27,7 +27,7 @@ const contractEntries = Object.entries(storybookDoctorContracts) as Array<
 describe("command contract", () => {
 	test("declares valid facade contracts", () => {
 		const parsed = parseCommandFacadeContract(storybookDoctorContracts, {
-			path: "skills/storybook/src/command-contract.ts",
+			path: "skills/storybook/src/front-doors/storybook-doctor/command-contract.ts",
 			writeImplyingMutations: new Set(["write", "destructive"]),
 		});
 		expect(parsed.ok).toBe(true);

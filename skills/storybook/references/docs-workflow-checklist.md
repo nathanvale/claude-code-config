@@ -4,6 +4,8 @@ Use this at the end of any Storybook component documentation workflow.
 
 This checklist owns completion proof for docs-page work. `docs-pattern.md` owns
 the docs composition rules. `story-authoring-loop.md` owns edit-loop mechanics.
+`storybook-docs-loop` may track receipts across sessions, but this checklist
+remains the handoff proof.
 
 ## Rule
 

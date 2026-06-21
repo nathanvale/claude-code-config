@@ -208,9 +208,9 @@ The implementer may collapse tiny modules within a front-door folder if implemen
 | `purge.preview_required` | `purge` | force gate usage error |
 | `purge.force_run` | `purge` | targeted run cleanup |
 | `purge.force_old_state` | `purge` | age-based sweep cleanup |
-| `commands.discovery_json` | `commands` | discovery success |
-| `help.top_level` | help path | help success |
-| `version.stdout` | version path | version success |
+| `commands.docs_loop_discovery_json` | `commands` | discovery success |
+| `single.help_top_level` | `single` | help success |
+| `single.version_stdout` | `single` | version success |
 
 ---
 

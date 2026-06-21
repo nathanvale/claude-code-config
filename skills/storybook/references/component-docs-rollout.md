@@ -60,6 +60,10 @@ Do not migrate the whole library in one edit. Move in small batches:
 
 After each batch, run focused story tests and screenshot at least one Docs page.
 
+For long sessions, use `storybook-docs-loop` as the durable run-card and receipt
+owner. Use the CLI discovery/help for exact command behavior; keep this
+reference focused on docs judgment and completion proof.
+
 ## Component Audit
 
 Before editing a component story, gather:
@@ -182,6 +186,10 @@ Each migrated component handoff should report:
 - Verification commands and results.
 - Screenshot path or preview URL when visual docs changed.
 - Completed docs workflow checklist.
+
+When using `storybook-docs-loop`, write verification receipts as work completes
+and resume from the emitted run card. The checklist in
+`references/docs-workflow-checklist.md` remains the completion proof.
 
 ## Verification
 
