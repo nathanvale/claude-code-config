@@ -87,8 +87,7 @@ function walkUpToPackageJson(
 	startDir: string,
 ): string | null {
 	let dir = resolve(startDir);
-	const root = resolve("/");
-	while (dir !== root) {
+	while (true) {
 		if (runtime.fileExists(join(dir, "package.json"))) return dir;
 		const parent = dirname(dir);
 		if (parent === dir) break;
@@ -135,8 +134,7 @@ function findWorkspaceRootPackageJson(
 	targetPkgPath?: string,
 ): PackageJsonData | null {
 	let dir = dirname(targetPath);
-	const root = resolve("/");
-	while (dir !== root) {
+	while (true) {
 		const candidate = join(dir, "package.json");
 		if (candidate !== targetPkgPath && runtime.fileExists(candidate)) {
 			try {

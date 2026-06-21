@@ -69,7 +69,7 @@ async function makeTempRoot(prefix: string): Promise<string> {
 describe("docs-loop command contract", () => {
 	test("declares valid facade contracts", () => {
 		const parsed = parseCommandFacadeContract(storybookDocsLoopContracts, {
-			path: "skills/storybook/src/front-doors/storybook-docs-loop/command-contract.ts",
+			path: "skills/use-storybook/src/front-doors/storybook-docs-loop/command-contract.ts",
 			writeImplyingMutations: new Set(["state_write", "cache_destroy"]),
 		});
 		expect(parsed.ok).toBe(true);

@@ -11,7 +11,7 @@ should stay a simple `Default` story wired to Controls. Use this pattern lower
 in Docs for a compact best-practice summary that teaches how the component
 behaves in context after the reader has a controllable default specimen.
 
-Use `references/docs-pattern.md` for the full page order and required/optional
+Use `references/docs-pattern.md` for the full page order and required-and-optional
 story set. Use `references/docs-workflow-checklist.md` for final completion
 proof after adding or changing UX guidance.
 

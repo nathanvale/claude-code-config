@@ -80,7 +80,7 @@ then render `Matrix`, then `UxTips` or equivalent guidance underneath.
 
 Follow this ordering in every portal-ui story file with a matrix:
 
-```
+```ts
 // 1. Matrix helpers (manifest-safe only; do not leak story-only helper imports)
 // 2. Meta (with docs.description.component = inline docs example text + Figma node ref)
 // export default meta

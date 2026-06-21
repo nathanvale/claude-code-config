@@ -437,7 +437,7 @@ export const storybookDocsLoopContracts = defineCommandFacadeContract(
 		DocsLoopCommandContract
 	>,
 	{
-		path: "skills/storybook/src/front-doors/storybook-docs-loop/command-contract.ts",
+		path: "skills/use-storybook/src/front-doors/storybook-docs-loop/command-contract.ts",
 		writeImplyingMutations: new Set(["state_write", "cache_destroy"]),
 	},
 );

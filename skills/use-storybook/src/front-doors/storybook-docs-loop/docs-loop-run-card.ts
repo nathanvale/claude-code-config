@@ -122,7 +122,7 @@ export interface DocsLoopReceiptProjection {
 	readonly reason?: string;
 }
 
-const CHECKLIST_PATH = "skills/storybook/references/docs-workflow-checklist.md";
+const CHECKLIST_PATH = "skills/use-storybook/references/docs-workflow-checklist.md";
 
 /**
  * Create durable run state from inventory clusters.
@@ -283,8 +283,9 @@ export function createLedgerSkeleton(): Partial<
 /**
  * Coerce JSON state into the docs-loop run state shape after structural checks.
  *
- * Validates the required top-level fields and `batch_size` range so a partial
- * write, hand-edited file, or schema drift surfaces a repairable
+ * Validates the required top-level fields, each item's shape (including a
+ * `cluster.main_story`), and the `batch_size` range so a partial write,
+ * hand-edited file, or schema drift surfaces a repairable
  * {@link DocsLoopStateError} instead of crashing a downstream property access.
  *
  * @param state - Parsed JSON state object
@@ -317,6 +318,23 @@ export function assertDocsLoopRunStateShape(
 	};
 	if (typeof state.run !== "string") fail("run must be a string");
 	if (!Array.isArray(state.items)) fail("items must be an array");
+	for (const item of state.items as readonly unknown[]) {
+		if (item === null || typeof item !== "object") {
+			fail("each item must be an object");
+		}
+		const candidate = item as Record<string, unknown>;
+		if (typeof candidate.component !== "string") {
+			fail("each item.component must be a string");
+		}
+		const cluster = candidate.cluster;
+		if (
+			cluster === null ||
+			typeof cluster !== "object" ||
+			typeof (cluster as Record<string, unknown>).main_story === "undefined"
+		) {
+			fail("each item.cluster must be an object with a main_story");
+		}
+	}
 	if (typeof state.cursor !== "number" || !Number.isInteger(state.cursor)) {
 		fail("cursor must be an integer");
 	}

@@ -27,7 +27,7 @@ const contractEntries = Object.entries(storybookDoctorContracts) as Array<
 describe("command contract", () => {
 	test("declares valid facade contracts", () => {
 		const parsed = parseCommandFacadeContract(storybookDoctorContracts, {
-			path: "skills/storybook/src/front-doors/storybook-doctor/command-contract.ts",
+			path: "skills/use-storybook/src/front-doors/storybook-doctor/command-contract.ts",
 			writeImplyingMutations: new Set(["write", "destructive"]),
 		});
 		expect(parsed.ok).toBe(true);

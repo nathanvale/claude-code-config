@@ -159,11 +159,11 @@ Goal:
 Migrate this component story to the hardened portal-ui Autodocs pattern.
 
 Required reading before edits:
-- skills/storybook/references/docs-pattern.md
-- skills/storybook/references/component-docs-rollout.md
-- skills/storybook/references/docs-workflow-checklist.md
-- skills/storybook/references/matrix-story-pattern.md when Matrix is present or likely
-- skills/storybook/references/ux-guidance.md when UX tips are present or likely
+- skills/use-storybook/references/docs-pattern.md
+- skills/use-storybook/references/component-docs-rollout.md
+- skills/use-storybook/references/docs-workflow-checklist.md
+- skills/use-storybook/references/matrix-story-pattern.md when Matrix is present or likely
+- skills/use-storybook/references/ux-guidance.md when UX tips are present or likely
 
 Rules:
 - Preserve runtime component behavior.

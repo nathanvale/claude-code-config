@@ -93,7 +93,7 @@ export function findStorybookDocsLoopBranchStationCatalogDrift(
 		discovery: projectStorybookDocsLoopStationDiscovery(),
 		catalog: storybookDocsLoopBranchStationCatalog,
 		evidence,
-		path: "skills/storybook/src/front-doors/storybook-docs-loop/branch-station-catalog.ts",
+		path: "skills/use-storybook/src/front-doors/storybook-docs-loop/branch-station-catalog.ts",
 	});
 }
 
@@ -105,7 +105,7 @@ export function projectStorybookDocsLoopStationMap(
 		discovery: projectStorybookDocsLoopStationDiscovery(),
 		catalog: storybookDocsLoopBranchStationCatalog,
 		evidence,
-		path: "skills/storybook/src/front-doors/storybook-docs-loop/branch-station-catalog.ts",
+		path: "skills/use-storybook/src/front-doors/storybook-docs-loop/branch-station-catalog.ts",
 	});
 }
 
