@@ -33,6 +33,7 @@ import { resolve } from "node:path";
 import { runFullAudit } from "./audit-engine.ts";
 import { AUDIT_CLAUSE_IDS, getClause } from "./clause-catalog.ts";
 import { auditorContracts } from "./command-contract.ts";
+import { ROOT_FRONT_DOOR } from "./command-contract-discovery.ts";
 import { readLedgerFile, upsertFinding, writeLedgerFile } from "./ledger/index.ts";
 import {
 	runStationMapAudit,
@@ -155,6 +156,8 @@ export interface AuditFinding {
 	summary: string;
 	/** Invocation that surfaced it; [] for a static clause. */
 	argv: readonly string[];
+	/** CLI Front Door that owns this finding. */
+	frontDoor?: string;
 }
 
 /** The engine's result for one target. */
@@ -164,6 +167,7 @@ export interface AuditOutcome {
 	skipReason?: string;
 	findings: AuditFinding[];
 	ledgerPath?: string;
+	ledgerPaths?: string[];
 }
 
 export type AuditorRuntime = {
@@ -172,9 +176,65 @@ export type AuditorRuntime = {
 	stationMap: (input: { target: string; ledger: string | null }) => Promise<StationMapOutcome>;
 };
 
-/** Default ledger path for a target: docs/cli-audits/<cli-name>/audit.md. */
-function defaultLedgerPath(targetRoot: string, cliName: string): string {
-	return resolve(targetRoot, "docs", "cli-audits", cliName, "audit.md");
+/** Default ledger path for one target front door. */
+function defaultLedgerPath(targetRoot: string, cliName: string, frontDoor: string): string {
+	return resolve(targetRoot, "docs", "cli-audits", cliName, ...frontDoor.split("/"), "audit.md");
+}
+
+function frontDoorLedgerName(cliName: string, frontDoor: string): string {
+	return frontDoor === ROOT_FRONT_DOOR ? `${cliName}/${ROOT_FRONT_DOOR}` : `${cliName}/${frontDoor}`;
+}
+
+function groupByFrontDoor<T extends { frontDoor?: string }>(
+	items: readonly T[],
+	frontDoors: readonly string[],
+): Map<string, T[]> {
+	const grouped = new Map<string, T[]>();
+	for (const frontDoor of frontDoors) grouped.set(frontDoor, []);
+	for (const item of items) {
+		const frontDoor = item.frontDoor ?? ROOT_FRONT_DOOR;
+		grouped.set(frontDoor, [...(grouped.get(frontDoor) ?? []), item]);
+	}
+	if (grouped.size === 0) grouped.set(ROOT_FRONT_DOOR, []);
+	return new Map([...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+async function writeAuditLedger(input: {
+	ledgerPath: string;
+	ledgerName: string;
+	findings: readonly AuditFinding[];
+}): Promise<void> {
+	const ledgerState = await readLedgerFile(input.ledgerPath, input.ledgerName);
+	for (const finding of input.findings) {
+		upsertFinding(ledgerState, {
+			clauseId: finding.clauseId,
+			kind: finding.kind,
+			summary: finding.summary,
+			argv: finding.argv,
+		});
+	}
+	await writeLedgerFile(input.ledgerPath, ledgerState);
+}
+
+async function writeStationLedger(input: {
+	ledgerPath: string;
+	ledgerName: string;
+	findings: readonly StationFinding[];
+}): Promise<void> {
+	const ledgerState = await readLedgerFile(input.ledgerPath, input.ledgerName);
+	for (const finding of input.findings) {
+		upsertFinding(ledgerState, {
+			clauseId: "station-map",
+			kind: "station",
+			summary: finding.summary,
+			station: {
+				stationId: finding.stationId,
+				command: finding.command,
+				findingKind: finding.findingKind,
+			},
+		});
+	}
+	await writeLedgerFile(input.ledgerPath, ledgerState);
 }
 
 /**
@@ -206,24 +266,49 @@ export function createDefaultAuditorRuntime(
 			// preserve finding history across runs (never-delete, R6) — then upsert
 			// this run's findings and persist. Writing fresh would lose prior
 			// history and make cross-run dedupe a no-op.
-			const ledgerPath = ledger ?? defaultLedgerPath(targetRoot, outcome.target);
-			const ledgerState = await readLedgerFile(ledgerPath, outcome.target);
-			for (const finding of outcome.findings) {
-				upsertFinding(ledgerState, {
-					clauseId: finding.clauseId,
-					kind: finding.kind,
-					summary: finding.summary,
-					argv: finding.argv,
+			const commandFrontDoors = outcome.commandFrontDoors ?? {};
+			const attributedFindings = outcome.findings.map((finding) => ({
+				...finding,
+				frontDoor:
+					finding.frontDoor ??
+					(finding.argv[0] ? commandFrontDoors[finding.argv[0]] : undefined) ??
+					ROOT_FRONT_DOOR,
+			}));
+			if (ledger) {
+				await writeAuditLedger({
+					ledgerPath: ledger,
+					ledgerName: outcome.target,
+					findings: attributedFindings,
 				});
+				return {
+					target: outcome.target,
+					laneDetected: true,
+					skipReason: outcome.skipReason,
+					findings: attributedFindings,
+					ledgerPath: ledger,
+				};
 			}
-			await writeLedgerFile(ledgerPath, ledgerState);
+			const frontDoors = [
+				...new Set([...Object.values(commandFrontDoors), ...attributedFindings.map((f) => f.frontDoor)]),
+			].sort();
+			const ledgerPaths: string[] = [];
+			for (const [frontDoor, findings] of groupByFrontDoor(attributedFindings, frontDoors)) {
+				const ledgerPath = defaultLedgerPath(targetRoot, outcome.target, frontDoor);
+				await writeAuditLedger({
+					ledgerPath,
+					ledgerName: frontDoorLedgerName(outcome.target, frontDoor),
+					findings,
+				});
+				ledgerPaths.push(ledgerPath);
+			}
 
 			return {
 				target: outcome.target,
 				laneDetected: true,
 				skipReason: outcome.skipReason,
-				findings: outcome.findings,
-				ledgerPath,
+				findings: attributedFindings,
+				...(ledgerPaths.length === 1 ? { ledgerPath: ledgerPaths[0] } : {}),
+				ledgerPaths,
 			};
 		},
 		stationMap: async ({ target, ledger }) => {
@@ -231,23 +316,33 @@ export function createDefaultAuditorRuntime(
 			const outcome = await runStationMapAudit({ targetRoot });
 			if (!outcome.catalogDetected) return outcome;
 
-			const ledgerPath = ledger ?? defaultLedgerPath(targetRoot, outcome.target);
-			const ledgerState = await readLedgerFile(ledgerPath, outcome.target);
-			for (const finding of outcome.findings) {
-				upsertFinding(ledgerState, {
-					clauseId: "station-map",
-					kind: "station",
-					summary: finding.summary,
-					station: {
-						stationId: finding.stationId,
-						command: finding.command,
-						findingKind: finding.findingKind,
-					},
+			if (ledger) {
+				await writeStationLedger({
+					ledgerPath: ledger,
+					ledgerName: outcome.target,
+					findings: outcome.findings,
 				});
+				return { ...outcome, ledgerPath: ledger };
 			}
-			await writeLedgerFile(ledgerPath, ledgerState);
+			const frontDoors = outcome.frontDoors ?? [
+				...new Set(outcome.findings.map((finding) => finding.frontDoor ?? ROOT_FRONT_DOOR)),
+			];
+			const ledgerPaths: string[] = [];
+			for (const [frontDoor, findings] of groupByFrontDoor(outcome.findings, frontDoors)) {
+				const ledgerPath = defaultLedgerPath(targetRoot, outcome.target, frontDoor);
+				await writeStationLedger({
+					ledgerPath,
+					ledgerName: frontDoorLedgerName(outcome.target, frontDoor),
+					findings,
+				});
+				ledgerPaths.push(ledgerPath);
+			}
 
-			return { ...outcome, ledgerPath };
+			return {
+				...outcome,
+				...(ledgerPaths.length === 1 ? { ledgerPath: ledgerPaths[0] } : {}),
+				ledgerPaths,
+			};
 		},
 		...overrides,
 	};
@@ -266,6 +361,7 @@ interface AuditResult {
 	skip_reason?: string;
 	findings: AuditFinding[];
 	ledger_path?: string;
+	ledger_paths?: string[];
 }
 
 interface StationMapResult {
@@ -284,6 +380,7 @@ interface StationMapResult {
 	station_map?: StationMapOutcome["stationMap"];
 	findings: StationFinding[];
 	ledger_path?: string;
+	ledger_paths?: string[];
 }
 
 async function runAudit(input: {
@@ -313,6 +410,7 @@ async function runAudit(input: {
 		skip_reason: outcome.skipReason,
 		findings: outcome.findings,
 		ledger_path: outcome.ledgerPath,
+		ledger_paths: outcome.ledgerPaths,
 	};
 }
 
@@ -347,6 +445,7 @@ async function runStationMapCommand(input: {
 		station_map: outcome.stationMap,
 		findings: outcome.findings,
 		ledger_path: outcome.ledgerPath,
+		ledger_paths: outcome.ledgerPaths,
 	};
 }
 
@@ -367,7 +466,9 @@ function renderPlainAudit(result: AuditResult): string {
 	for (const f of result.findings) {
 		lines.push(`  [${clauseKindLabel(f.clauseId)}] ${f.clauseId}: ${f.summary}`);
 	}
-	if (result.ledger_path) lines.push(`  ledger: ${result.ledger_path}`);
+	for (const ledgerPath of result.ledger_paths ?? (result.ledger_path ? [result.ledger_path] : [])) {
+		lines.push(`  ledger: ${ledgerPath}`);
+	}
 	return `${lines.join("\n")}\n`;
 }
 
@@ -382,7 +483,9 @@ function renderPlainStationMap(result: StationMapResult): string {
 	for (const finding of result.findings) {
 		lines.push(`  [${finding.findingKind}] ${finding.stationId}: ${finding.summary}`);
 	}
-	if (result.ledger_path) lines.push(`  ledger: ${result.ledger_path}`);
+	for (const ledgerPath of result.ledger_paths ?? (result.ledger_path ? [result.ledger_path] : [])) {
+		lines.push(`  ledger: ${ledgerPath}`);
+	}
 	return `${lines.join("\n")}\n`;
 }
 

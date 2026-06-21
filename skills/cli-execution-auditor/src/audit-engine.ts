@@ -18,7 +18,10 @@ import {
 } from "@side-quest/cli-command-facade";
 import { RUNTIME_CONTRACT_REDACTION_FIXTURES } from "@side-quest/cli-command-facade/testing";
 import { DRIFT_CODE_DISPOSITIONS } from "./clause-catalog.ts";
-import { discoverCommandContractPaths } from "./command-contract-discovery.ts";
+import {
+	discoverCommandContractPaths,
+	frontDoorLabelForPath,
+} from "./command-contract-discovery.ts";
 import {
 	type AcquiredCommandContract,
 	acquireTargetContract,
@@ -35,6 +38,8 @@ export interface EngineFinding {
 	summary: string;
 	/** Invocation that surfaced it; [] for a static clause. */
 	argv: readonly string[];
+	/** CLI Front Door that owns this finding, when known at engine time. */
+	frontDoor?: string;
 }
 
 export interface EngineOutcome {
@@ -44,6 +49,10 @@ export interface EngineOutcome {
 	findings: EngineFinding[];
 	/** The acquired contract, when lane detection + acquisition succeeded. */
 	contracts?: Record<string, AcquiredCommandContract>;
+	/** Front-door ownership for each acquired command. */
+	commandFrontDoors?: Record<string, string>;
+	/** Independently audited command contracts for each CLI Front Door. */
+	contractSurfaces?: ContractSurface[];
 }
 
 /** Resolved layout of a target facade skill. */
@@ -58,6 +67,13 @@ export interface TargetLayout {
 	packageJsonPath: string | null;
 	/** Absolute paths of source files (src/*.ts), for source-grep clauses. */
 	sourceFiles: string[];
+}
+
+/** One command-contract.ts surface scoped to its CLI Front Door. */
+export interface ContractSurface {
+	frontDoor: string;
+	contracts: Record<string, AcquiredCommandContract>;
+	driftCodes: string[];
 }
 
 // --- lane detection (R5) ---
@@ -100,15 +116,21 @@ async function anySourceImportsFacade(sourceFiles: readonly string[]): Promise<b
 	return false;
 }
 
+type TargetContractsAcquisition =
+	| (Extract<ContractAcquisition, { ok: true }> & {
+			commandFrontDoors: Record<string, string>;
+			contractSurfaces: ContractSurface[];
+	  })
+	| Extract<ContractAcquisition, { ok: false }>;
+
 async function acquireTargetContracts(
 	contractPaths: readonly string[],
 	root: string,
-): Promise<ContractAcquisition> {
+): Promise<TargetContractsAcquisition> {
 	const contracts: Record<string, AcquiredCommandContract> = {};
 	const driftCodes: string[] = [];
-	// Track which contract file declared each command so a collision can name BOTH
-	// files, not just the command — the repair hint needs to point at the two files.
-	const commandSource: Record<string, string> = {};
+	const commandFrontDoors: Record<string, string> = {};
+	const contractSurfaces: ContractSurface[] = [];
 	const rel = (path: string) => (path.startsWith(root) ? path.slice(root.length + 1) : path);
 	for (const contractPath of contractPaths) {
 		const acquisition = await acquireTargetContract(contractPath);
@@ -117,19 +139,19 @@ async function acquireTargetContracts(
 			// discovered contracts drifted, leaving no repair target.
 			return { ...acquisition, reason: `${rel(contractPath)}: ${acquisition.reason}` };
 		}
+		const frontDoor = frontDoorLabelForPath(root, contractPath);
 		for (const [command, contract] of Object.entries(acquisition.contracts)) {
-			if (contracts[command]) {
-				return {
-					ok: false,
-					reason: `duplicate command contract for ${command}: declared in both ${commandSource[command]} and ${rel(contractPath)}`,
-				};
-			}
-			contracts[command] = contract;
-			commandSource[command] = rel(contractPath);
+			if (!contracts[command]) contracts[command] = contract;
+			if (!commandFrontDoors[command]) commandFrontDoors[command] = frontDoor;
 		}
 		driftCodes.push(...acquisition.driftCodes);
+		contractSurfaces.push({
+			frontDoor,
+			contracts: acquisition.contracts,
+			driftCodes: acquisition.driftCodes,
+		});
 	}
-	return { ok: true, contracts, driftCodes };
+	return { ok: true, contracts, driftCodes, commandFrontDoors, contractSurfaces };
 }
 
 // --- target layout resolution ---
@@ -394,13 +416,25 @@ export async function runStaticAudit(input: {
 		};
 	}
 
-	const { contracts, driftCodes } = acquisition;
+	const { contracts, commandFrontDoors, contractSurfaces } = acquisition;
 	const wanted = (clauseId: string) => input.only === null || input.only === clauseId;
 
 	const findings: EngineFinding[] = [];
-	if (wanted("exit-floor")) findings.push(...checkExitFloor(contracts, driftCodes));
-	if (wanted("help-flag-alignment")) findings.push(...checkHelpFlagAlignment(contracts));
-	if (wanted("redaction-discipline")) findings.push(...checkRedactionDiscipline(contracts));
+	for (const surface of contractSurfaces) {
+		const withFrontDoor = (finding: EngineFinding): EngineFinding => ({
+			...finding,
+			frontDoor: surface.frontDoor,
+		});
+		if (wanted("exit-floor")) {
+			findings.push(...checkExitFloor(surface.contracts, surface.driftCodes).map(withFrontDoor));
+		}
+		if (wanted("help-flag-alignment")) {
+			findings.push(...checkHelpFlagAlignment(surface.contracts).map(withFrontDoor));
+		}
+		if (wanted("redaction-discipline")) {
+			findings.push(...checkRedactionDiscipline(surface.contracts).map(withFrontDoor));
+		}
+	}
 	if (wanted("no-raw-runner")) findings.push(...(await checkNoRawRunner(layout)));
 	if (wanted("vacuous-match")) findings.push(...(await checkVacuousMatch(layout)));
 
@@ -409,6 +443,8 @@ export async function runStaticAudit(input: {
 		laneDetected: true,
 		findings: sortFindings(findings),
 		contracts,
+		commandFrontDoors,
+		contractSurfaces,
 	};
 }
 
@@ -611,6 +647,7 @@ async function checkFrontDoorCoverage(
 				kind: "surface",
 				summary: `front-door directory src/front-doors/${dir} ships a package.json script but has no discoverable command-contract.ts — its CLI surface goes unaudited`,
 				argv: [],
+				frontDoor: dir,
 			});
 		}
 	}
@@ -730,6 +767,8 @@ export async function runSurfaceAudit(input: {
 	layout: TargetLayout;
 	contracts: Record<string, AcquiredCommandContract>;
 	only: string | null;
+	frontDoor?: string;
+	includeFrontDoorCoverage?: boolean;
 }): Promise<EngineFinding[]> {
 	const invocations = enumerateInvocations(input.contracts);
 	if (invocations.length === 0) {
@@ -739,6 +778,7 @@ export async function runSurfaceAudit(input: {
 	}
 
 	const wanted = (clauseId: string) => input.only === null || input.only === clauseId;
+	const frontDoor = input.frontDoor ?? "root";
 
 	const findings: EngineFinding[] = [];
 	const runners = new Map<string, (argv: readonly string[]) => Promise<InvocationRun>>();
@@ -746,7 +786,7 @@ export async function runSurfaceAudit(input: {
 	// Front-door coverage reconciliation (runnable-resolves): a front-door dir with
 	// a package.json script but no discovered contract is an unaudited surface. Run
 	// once, not per-invocation, and gate on the owning clause.
-	if (wanted("runnable-resolves")) {
+	if (input.includeFrontDoorCoverage !== false && wanted("runnable-resolves")) {
 		findings.push(...(await checkFrontDoorCoverage(input.layout, input.contracts)));
 	}
 
@@ -764,6 +804,7 @@ export async function runSurfaceAudit(input: {
 					kind: "surface",
 					summary: `contract command ${invocation.command} has no script field — cannot resolve a runnable to exercise`,
 					argv: invocation.argv,
+					frontDoor,
 				});
 			}
 			continue;
@@ -778,6 +819,7 @@ export async function runSurfaceAudit(input: {
 						kind: "surface",
 						summary: `contract command ${invocation.command} ${describeUnresolvedScript(contract.script, resolution.reason)}`,
 						argv: invocation.argv,
+						frontDoor,
 					});
 				}
 				continue;
@@ -790,15 +832,15 @@ export async function runSurfaceAudit(input: {
 
 		if (wanted("json-valid-under-failure")) {
 			const jsonFinding = assertJsonValidUnderFailure(invocation, run);
-			if (jsonFinding) findings.push(jsonFinding);
+			if (jsonFinding) findings.push({ ...jsonFinding, frontDoor });
 		}
 		if (wanted("exit-code-matches-declared")) {
 			const exitFinding = assertExitCodeDeclared(invocation, run, declaredExitCodes);
-			if (exitFinding) findings.push(exitFinding);
+			if (exitFinding) findings.push({ ...exitFinding, frontDoor });
 		}
 		if (wanted("declared-coverage-runs")) {
 			const coverageFinding = assertDeclaredCoverageRuns(invocation, run);
-			if (coverageFinding) findings.push(coverageFinding);
+			if (coverageFinding) findings.push({ ...coverageFinding, frontDoor });
 		}
 	}
 	return findings;
@@ -820,11 +862,21 @@ export async function runFullAudit(input: {
 		return staticOutcome;
 	}
 	const layout = await resolveTargetLayout(input.targetRoot);
-	const surfaceFindings = await runSurfaceAudit({
-		layout,
-		contracts: staticOutcome.contracts,
-		only: input.only,
-	});
+	const contractSurfaces = staticOutcome.contractSurfaces ?? [
+		{ frontDoor: "root", contracts: staticOutcome.contracts, driftCodes: [] },
+	];
+	const surfaceFindings: EngineFinding[] = [];
+	for (const [index, surface] of contractSurfaces.entries()) {
+		surfaceFindings.push(
+			...(await runSurfaceAudit({
+				layout,
+				contracts: surface.contracts,
+				only: input.only,
+				frontDoor: surface.frontDoor,
+				includeFrontDoorCoverage: index === 0,
+			})),
+		);
+	}
 	return {
 		...staticOutcome,
 		findings: sortFindings([...staticOutcome.findings, ...surfaceFindings]),
