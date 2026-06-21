@@ -7,7 +7,6 @@
 	"scripts": {
 		"storybook-doctor": "bun run src/front-doors/storybook-doctor/cli.ts",
 		"storybook-docs-loop": "bun run src/front-doors/storybook-docs-loop/cli.ts",
-		"prototype:station-help": "bun run prototypes/prototype-station-help-artifact.ts",
 		"test": "bun test tests",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
