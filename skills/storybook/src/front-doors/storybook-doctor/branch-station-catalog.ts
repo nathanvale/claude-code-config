@@ -309,7 +309,7 @@ export function findStorybookDoctorBranchStationCatalogDrift(
 		discovery: projectStorybookDoctorStationDiscovery(),
 		catalog: storybookDoctorBranchStationCatalog,
 		evidence,
-		path: "skills/storybook/src/branch-station-catalog.ts",
+		path: "skills/storybook/src/front-doors/storybook-doctor/branch-station-catalog.ts",
 	});
 }
 
@@ -320,6 +320,6 @@ export function projectStorybookDoctorStationMap(
 		discovery: projectStorybookDoctorStationDiscovery(),
 		catalog: storybookDoctorBranchStationCatalog,
 		evidence,
-		path: "skills/storybook/src/branch-station-catalog.ts",
+		path: "skills/storybook/src/front-doors/storybook-doctor/branch-station-catalog.ts",
 	});
 }

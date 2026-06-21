@@ -5,14 +5,20 @@ import {
 	findStorybookDoctorBranchStationCatalogDrift,
 	projectStorybookDoctorStationMap,
 	storybookDoctorBranchStationCatalog,
-} from "../src/branch-station-catalog.ts";
+} from "../src/front-doors/storybook-doctor/branch-station-catalog.ts";
 import {
 	STORYBOOK_DOCTOR_CONTRACT_ID,
 	STORYBOOK_DOCTOR_DEEP_CONTRACT_ID,
 	STORYBOOK_DOCTOR_COMMANDS_CONTRACT_ID,
-} from "../src/readiness-model.ts";
-import { collectStorybookDoctorEvidence } from "../src/branch-station-evidence.ts";
-import type { StationTestResult } from "../src/branch-station-evidence.ts";
+} from "../src/front-doors/storybook-doctor/readiness-model.ts";
+import { collectStorybookDoctorEvidence } from "../src/front-doors/storybook-doctor/branch-station-evidence.ts";
+import type { StationTestResult } from "../src/front-doors/storybook-doctor/branch-station-evidence.ts";
+import {
+	STORYBOOK_DOCS_LOOP_PLANNING_BRANCH_STATION_IDS,
+	findStorybookDocsLoopBranchStationCatalogDrift,
+	projectStorybookDocsLoopStationMap,
+	storybookDocsLoopBranchStationCatalog,
+} from "../src/front-doors/storybook-docs-loop/branch-station-catalog.ts";
 
 function fullEvidence(): BranchStationEvidence[] {
 	const results: StationTestResult[] = [
@@ -173,13 +179,26 @@ function fullEvidence(): BranchStationEvidence[] {
 	return collectStorybookDoctorEvidence(results);
 }
 
+function fullDocsLoopEvidence(): BranchStationEvidence[] {
+	return storybookDocsLoopBranchStationCatalog.map((station) => ({
+		stationId: station.id,
+		status: "covered" as const,
+		...(station.expectedExitCode !== undefined
+			? { observedExitCode: station.expectedExitCode }
+			: {}),
+		...(station.expectedEnvelopeStatus !== undefined
+			? { observedEnvelopeStatus: station.expectedEnvelopeStatus }
+			: {}),
+		...(station.expectedResultContractId !== undefined
+			? { observedResultContractId: station.expectedResultContractId }
+			: {}),
+	}));
+}
+
 describe("branch station catalog", () => {
 	test("catalog validates against live storybook doctor command discovery", () => {
 		const drift = findStorybookDoctorBranchStationCatalogDrift();
-		const commandDrift = drift.filter(
-			(d) => d.category === "station_references_unknown_command",
-		);
-		expect(commandDrift).toEqual([]);
+		expect(drift).toEqual([]);
 	});
 
 	test("every planning-stage station id is present in catalog", () => {
@@ -215,6 +234,41 @@ describe("branch station catalog", () => {
 
 	test("station map claims declared branch coverage", () => {
 		const map = projectStorybookDoctorStationMap(fullEvidence());
+		expect(map.completeness_claim).toBe("declared_branch_coverage");
+	});
+
+	test("docs-loop catalog validates against live command discovery", () => {
+		const drift = findStorybookDocsLoopBranchStationCatalogDrift();
+		expect(drift).toEqual([]);
+	});
+
+	test("every docs-loop planning-stage station id is present in catalog", () => {
+		const catalogIds = new Set(
+			storybookDocsLoopBranchStationCatalog.map((s) => s.id),
+		);
+		for (const id of STORYBOOK_DOCS_LOOP_PLANNING_BRANCH_STATION_IDS) {
+			expect(catalogIds.has(id)).toBe(true);
+		}
+	});
+
+	test("doctor and docs-loop station ids do not collide", () => {
+		const doctorIds = new Set<string>(
+			storybookDoctorBranchStationCatalog.map((s) => s.id),
+		);
+		const collisions = storybookDocsLoopBranchStationCatalog
+			.map((s) => s.id)
+			.filter((id) => doctorIds.has(id));
+		expect(collisions).toEqual([]);
+	});
+
+	test("docs-loop station map claims declared branch coverage", () => {
+		const map = projectStorybookDocsLoopStationMap(fullDocsLoopEvidence());
+		const missingRequired = map.stations.filter(
+			(s) =>
+				s.classification === "required" &&
+				s.evidence.status === "missing",
+		);
+		expect(missingRequired).toEqual([]);
 		expect(map.completeness_claim).toBe("declared_branch_coverage");
 	});
 });

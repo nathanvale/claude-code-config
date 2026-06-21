@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { StorybookDoctorRuntime } from "./storybook-doctor-runtime.ts";
+import type { StorybookDoctorRuntime } from "./runtime.ts";
 import type {
 	DeepEvidence,
 	DeepResult,

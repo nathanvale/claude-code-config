@@ -3,10 +3,12 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Bun package for the storybook skill. Read-only CLI that emits Storybook readiness proof, structured repair hints, and declared branch coverage.",
+	"description": "Bun package for the storybook skill. CLIs for Storybook readiness proof and durable docs cleanup loops.",
 	"scripts": {
-		"storybook-doctor": "bun run src/storybook-doctor.ts",
-		"test": "bun test src",
+		"storybook-doctor": "bun run src/front-doors/storybook-doctor/cli.ts",
+		"storybook-docs-loop": "bun run src/front-doors/storybook-docs-loop/cli.ts",
+		"prototype:station-help": "bun run prototypes/prototype-station-help-artifact.ts",
+		"test": "bun test tests",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {

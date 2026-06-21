@@ -1,4 +1,4 @@
-import type { StorybookDoctorRuntime } from "./storybook-doctor-runtime.ts";
+import type { StorybookDoctorRuntime } from "./runtime.ts";
 import type {
 	NextSafeAction,
 	ReadinessFinding,

@@ -12,13 +12,14 @@ work.
 _Avoid_: warm-up gate, manual checklist, server smoke test
 
 **Storybook Doctor**:
-The skill-owned CLI Front Door (`storybook-doctor` in `src/`) that emits
+The skill-owned CLI Front Door (`storybook-doctor` in
+`src/front-doors/storybook-doctor/`) that emits
 Storybook readiness proof, structured repair hints, and recovery actions via
 `check --json` and `deep --json`. It diagnoses and recommends; it does not
 install tools, kill processes, start Storybook, or mutate MCP config. Status,
 finding categories, next-action ids, and exit code semantics live in
-`src/readiness-model.ts`; the command surface contract lives in
-`src/command-contract.ts`.
+`src/front-doors/storybook-doctor/readiness-model.ts`; the command surface
+contract lives in `src/front-doors/storybook-doctor/command-contract.ts`.
 _Avoid_: Storybook process manager, setup script, tmux installer, MCP server
 
 **Storybook session**:
@@ -57,9 +58,10 @@ nearest `STORYBOOK_TAXONOMY.md`.
 _Avoid_: component folder structure, category guess, skill-owned taxonomy
 
 **Docs loop**:
-A durable, resumable CLI workflow for batch Storybook docs cleanup across a
-component library. Tracks inventory, verification receipts, and batch cursor in
-XDG state so agents can resume across sessions.
+A durable, resumable CLI Front Door (`storybook-docs-loop` in
+`src/front-doors/storybook-docs-loop/`) for batch Storybook docs cleanup across
+a component library. Tracks inventory, verification receipts, and batch cursor
+in XDG state so agents can resume across sessions.
 _Avoid_: docs migration script, one-shot audit, manual checklist
 
 **Verification ledger**:

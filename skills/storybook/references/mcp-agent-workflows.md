@@ -13,6 +13,16 @@ Use this when Storybook MCP should guide UI work, not just return a link.
 7. Fix semantic failures and rerun.
 8. Return preview URLs and test summary.
 
+## Durable Docs Loop
+
+Use `storybook-docs-loop` when component docs cleanup spans multiple batches or
+sessions. Treat it as the state owner for inventory, current batch, receipts,
+diagnostics, and cleanup. Treat Storybook MCP as the preview, instruction, docs,
+and story-test owner.
+
+Read the run card, edit component/story files outside the CLI, fill receipts as
+proof accumulates, then resume or advance through the CLI.
+
 ## Discovery
 
 For portal-ui or any Storybook with AI manifests enabled, start with the registry shape:

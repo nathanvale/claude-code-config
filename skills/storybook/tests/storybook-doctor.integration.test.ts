@@ -25,10 +25,10 @@ import {
 	storybookDoctorBranchStationCatalog,
 	findStorybookDoctorBranchStationCatalogDrift,
 	projectStorybookDoctorStationMap,
-} from "../src/branch-station-catalog.ts";
+} from "../src/front-doors/storybook-doctor/branch-station-catalog.ts";
 
 const RUNNER_PATH = fileURLToPath(
-	new URL("../src/storybook-doctor.ts", import.meta.url),
+	new URL("../src/front-doors/storybook-doctor/cli.ts", import.meta.url),
 );
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url)).replace(
 	/\/tests$/,

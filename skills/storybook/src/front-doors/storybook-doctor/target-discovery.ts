@@ -1,5 +1,5 @@
 import { dirname, join, resolve } from "node:path";
-import type { StorybookDoctorRuntime } from "./storybook-doctor-runtime.ts";
+import type { StorybookDoctorRuntime } from "./runtime.ts";
 import type { TargetInfo } from "./readiness-model.ts";
 
 const STORYBOOK_CONFIG_EXTENSIONS = [

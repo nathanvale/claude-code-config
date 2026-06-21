@@ -15,7 +15,10 @@ Storybook taxonomy/title organization.
 
 ## Owner Paths
 
-- Readiness proof and diagnostics: `storybook-doctor` CLI (`src/`).
+- Readiness proof and diagnostics:
+  `src/front-doors/storybook-doctor/`.
+- Durable docs cleanup loop:
+  `src/front-doors/storybook-docs-loop/`.
 - Vocabulary: `CONTEXT.md`.
 - Target repo Storybook config: nearest Storybook main config.
 - Target repo package scripts and deps: nearest package manifest.
@@ -79,6 +82,10 @@ Default path: use the local ad-hoc endpoint. Do not persist MCP config.
 - Need to apply the hardened Autodocs pattern across one or more component
   stories: read `references/component-docs-rollout.md` and
   `references/docs-workflow-checklist.md`, then use the Story Authoring Loop.
+- Need durable state for long-session or batch docs cleanup: use
+  `storybook-docs-loop` discovery/help, then follow the emitted run card.
+  Keep exact flags and state semantics owned by CLI help, runtime code, and
+  tests.
 - Need a polished docs page UX best-practice tips story, or guidance with matrix:
   read
   `references/ux-guidance.md` and
@@ -165,15 +172,18 @@ Run commands from the target repo root.
     `references/docs-pattern.md`.
 18. Before migrating the hardened Autodocs pattern across components, read
     `references/component-docs-rollout.md`.
-19. Before adding a docs-page UX best-practice tips story, or guidance plus matrix, read
+19. For long-session or batch docs cleanup, use `storybook-docs-loop` for
+    scouting, batch state, resume, receipts, status, diagnostics, and cleanup.
+    Keep component/story edits outside the CLI.
+20. Before adding a docs-page UX best-practice tips story, or guidance plus matrix, read
     `references/ux-guidance.md`.
-20. Before adding a standalone matrix story, read `references/matrix-story-pattern.md`.
-21. Before making non-obvious accessibility claims or trade-offs, read
+21. Before adding a standalone matrix story, read `references/matrix-story-pattern.md`.
+22. Before making non-obvious accessibility claims or trade-offs, read
     `references/accessibility-source-route.md`.
-22. For component Docs workflows, read
+23. For component Docs workflows, read
     `references/docs-workflow-checklist.md` before final and return the completed
     checklist.
-23. Use `preview-stories` for preview URLs, docs tools for documentation lookup,
+24. Use `preview-stories` for preview URLs, docs tools for documentation lookup,
     and `run-story-tests` for focused story checks.
 
 ## Taxonomy Workflow
@@ -249,6 +259,8 @@ mcporter call --http-url "$STORYBOOK_URL/mcp" --allow-http \
 - Changed skill docs pass YAML parse and owner-path checks.
 - Component Docs work includes a completed
   `references/docs-workflow-checklist.md` checklist in the final handoff.
+- Durable docs-loop work used CLI discovery/help instead of copied flag or
+  state contracts.
 
 ## Next Safe Actions
 
@@ -260,9 +272,11 @@ target, risk, or next action. Bold the recommended default.
 2. Deeper diagnosis needed -> run `storybook-doctor deep --json --repo <path/to/project>`.
 3. Need a Storybook URL -> call `preview-stories`, then return the preview URL.
 4. Need confidence -> call `run-story-tests` for focused stories first.
-5. Need taxonomy cleanup -> read `STORYBOOK_TAXONOMY.md`, audit titles, then
+5. Need resumable docs cleanup -> run `storybook-docs-loop commands --json`,
+   choose the route from discovery/help, then follow the run card.
+6. Need taxonomy cleanup -> read `STORYBOOK_TAXONOMY.md`, audit titles, then
    run focused Storybook checks.
-6. Storybook appears hung -> **run `storybook-doctor deep --json --repo <path/to/project>`**, then read
+7. Storybook appears hung -> **run `storybook-doctor deep --json --repo <path/to/project>`**, then read
    `references/tips-and-tricks.md#hanging-or-stuck-process-triage`; classify
    before restart.
-7. Want persistent setup -> ask before adding or changing `mcporter` config.
+8. Want persistent setup -> ask before adding or changing `mcporter` config.

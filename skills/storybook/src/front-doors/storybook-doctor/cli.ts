@@ -24,7 +24,7 @@ import { runCheck } from "./readiness-engine.ts";
 import {
 	createDefaultStorybookDoctorRuntime,
 	type StorybookDoctorRuntime,
-} from "./storybook-doctor-runtime.ts";
+} from "./runtime.ts";
 
 const VERSION = "0.1.0";
 

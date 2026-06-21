@@ -16,5 +16,11 @@
 		"resolveJsonModule": true,
 		"isolatedModules": true
 	},
-	"include": ["src/**/*.ts", "tests/storybook-doctor.test.ts", "tests/branch-station-catalog.test.ts"]
+	"include": [
+		"src/**/*.ts",
+		"tests/storybook-doctor.test.ts",
+		"tests/storybook-docs-loop.test.ts",
+		"tests/storybook-docs-loop.integration.test.ts",
+		"tests/branch-station-catalog.test.ts"
+	]
 }
