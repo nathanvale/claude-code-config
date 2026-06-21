@@ -277,7 +277,6 @@ export async function writeDocsLoopRunState(
 	await runtime.writeTextFile(tempPath, serialized, { mode: 0o600 });
 	await runtime.chmod(tempPath, 0o600);
 	await runtime.rename(tempPath, paths.stateFile);
-	await runtime.chmod(paths.stateFile, 0o600);
 	return paths;
 }
 

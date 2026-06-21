@@ -234,7 +234,7 @@ function parseStorybookDocsLoopArgv(
 		throw usageError(`unknown command: ${argv[0]}`);
 	}
 	const kind = argv[0] as Exclude<StorybookDocsLoopCommand, "commands">;
-	const options = parseOptions(argv.slice(1));
+	const options = parseOptions(kind, argv.slice(1));
 	validateCommandOptions(kind, options);
 	return { kind, options };
 }
@@ -259,7 +259,10 @@ function parseCommandsArgv(argv: readonly string[]): void {
 	}
 }
 
-function parseOptions(argv: readonly string[]): ParsedOptions {
+function parseOptions(
+	command: Exclude<StorybookDocsLoopCommand, "commands">,
+	argv: readonly string[],
+): ParsedOptions {
 	const options: ParsedOptions = {
 		json: false,
 		plain: false,
@@ -269,16 +272,24 @@ function parseOptions(argv: readonly string[]): ParsedOptions {
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index];
 		if (BOOLEAN_FLAGS.has(arg)) {
+			validateCommandFlag(command, arg);
 			setBooleanOption(options, arg);
 			continue;
 		}
 		if (VALUE_FLAGS.has(arg)) {
+			validateCommandFlag(command, arg);
 			const value = requireNext(argv, index, arg);
 			setValueOption(options, arg, value);
 			index++;
 			continue;
 		}
 		const inline = splitInlineFlag(arg);
+		if (inline && isKnownFlag(inline.flag)) {
+			validateCommandFlag(command, inline.flag);
+		}
+		if (inline && BOOLEAN_FLAGS.has(inline.flag)) {
+			throw usageError(`${inline.flag} does not take a value.`);
+		}
 		if (inline && VALUE_FLAGS.has(inline.flag)) {
 			setValueOption(options, inline.flag, inline.value);
 			continue;
@@ -290,6 +301,19 @@ function parseOptions(argv: readonly string[]): ParsedOptions {
 		throw usageError("Use only one output mode: --json or --plain.");
 	}
 	return options;
+}
+
+function isKnownFlag(flag: string): boolean {
+	return BOOLEAN_FLAGS.has(flag) || VALUE_FLAGS.has(flag);
+}
+
+function validateCommandFlag(
+	command: Exclude<StorybookDocsLoopCommand, "commands">,
+	flag: string,
+): void {
+	if (!Object.hasOwn(storybookDocsLoopContracts[command].flags ?? {}, flag)) {
+		throw usageError(`${command} does not accept ${flag}.`);
+	}
 }
 
 function splitInlineFlag(
@@ -487,11 +511,11 @@ async function handleBatch(
 	});
 	if (inventory.status !== "ok") throwInventoryError(inventory);
 	const run = options.run ?? defaultRunId(runtime);
-	if (options.run && !options.force) {
+	if (!options.force) {
 		const existing = await listDocsLoopRunIds(runtime, repo);
-		if (existing.includes(options.run)) {
+		if (existing.includes(run)) {
 			throw usageError(
-				`run already exists: ${options.run}. Resume it, or pass --force to overwrite (discards receipts and cursor).`,
+				`run already exists: ${run}. Resume it, or pass --force to overwrite (discards receipts and cursor).`,
 			);
 		}
 	}

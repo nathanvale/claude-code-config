@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -40,6 +48,17 @@ const cleanupPaths: string[] = [];
 afterEach(async () => {
 	await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
+
+function expectJsonUsageError(
+	result: Awaited<ReturnType<typeof runForTest>>,
+) {
+	expect(result.exitCode).toBe(2);
+	expect(result.stderr).toBe("");
+	const envelope = JSON.parse(result.stdout);
+	expect(envelope.status).toBe("error");
+	expect(envelope.error.code).toBe("usage_error");
+	return envelope;
+}
 
 async function makeTempRoot(prefix: string): Promise<string> {
 	const path = await mkdtemp(join(tmpdir(), `docs-loop-${prefix}-`));
@@ -147,12 +166,14 @@ describe("docs-loop CLI front door", () => {
 
 	test("missing required flags return JSON usage errors when --json is present", async () => {
 		const result = await runForTest(["single", "--json"]);
-		expect(result.exitCode).toBe(2);
-		expect(result.stderr).toBe("");
-		const envelope = JSON.parse(result.stdout);
-		expect(envelope.status).toBe("error");
-		expect(envelope.error.code).toBe("usage_error");
+		const envelope = expectJsonUsageError(result);
 		expect(envelope.error.recoverability).toBe("change_input");
+	});
+
+	test("command-specific flags reject unsupported flags", async () => {
+		const result = await runForTest(["status", "--force", "--json"]);
+		const envelope = expectJsonUsageError(result);
+		expect(envelope.error.message).toBe("status does not accept --force.");
 	});
 });
 
@@ -415,7 +436,7 @@ describe("docs-loop command semantics", () => {
 			"packages/portal-ui/src/ui/Button/Button.stories.tsx",
 		);
 		const storage = resolveDocsLoopStorage(runtime);
-		await expect(readFile(storage.stateRoot, "utf8")).rejects.toThrow();
+		await expect(access(storage.stateRoot)).rejects.toThrow();
 	});
 
 	test("batch creates durable run state with cursor and ledger skeleton", async () => {
@@ -443,6 +464,29 @@ describe("docs-loop command semantics", () => {
 		expect(state.cursor).toBe(0);
 		expect(state.batch_size).toBe(1);
 		expect(JSON.stringify(state)).toContain("default_primary");
+	});
+
+	test("batch rejects generated run id collisions without force", async () => {
+		const { repo, runtime } = await makeCliFixture("batch-collision");
+		const args = batchArgs(repo);
+		const first = await runForTest(args, runtime);
+		expect(first.exitCode).toBe(0);
+		const second = await runForTest(args, runtime);
+		const envelope = expectJsonUsageError(second);
+		expect(envelope.error.message).toContain("run already exists:");
+	});
+
+	test("batch force intentionally overwrites generated run id collisions", async () => {
+		const { repo, runtime } = await makeCliFixture("batch-force");
+		const args = batchArgs(repo);
+		const first = await runForTest(args, runtime);
+		expect(first.exitCode).toBe(0);
+		const forced = await runForTest(batchArgs(repo, ["--force"]), runtime);
+		expect(forced.exitCode).toBe(0);
+		const envelope = JSON.parse(forced.stdout);
+		const state = await readDocsLoopRunState(runtime, repo, envelope.data.run);
+		expect(state.cursor).toBe(0);
+		expect(state.batch_size).toBe(3);
 	});
 
 	test("status and resume read existing state", async () => {
@@ -815,6 +859,18 @@ function minimalState(run: string): Record<string, unknown> {
 		current_batch: [],
 		ledger: {},
 	};
+}
+
+function batchArgs(repo: string, extra: readonly string[] = []): string[] {
+	return [
+		"batch",
+		"--repo",
+		repo,
+		"--pkg",
+		"packages/portal-ui",
+		...extra,
+		"--json",
+	];
 }
 
 async function makeInventoryFixture(): Promise<string> {

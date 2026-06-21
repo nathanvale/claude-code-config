@@ -2,6 +2,7 @@ import {
 	basename,
 	dirname,
 	extname,
+	isAbsolute,
 	join,
 	relative,
 	resolve,
@@ -455,5 +456,5 @@ function isContained(root: string, candidate: string): boolean {
 }
 
 function isAbsolutePath(path: string): boolean {
-	return resolve(path) === path;
+	return isAbsolute(path);
 }

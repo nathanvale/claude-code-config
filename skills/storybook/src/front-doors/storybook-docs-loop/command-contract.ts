@@ -198,6 +198,10 @@ export const storybookDocsLoopContracts = defineCommandFacadeContract(
 					type: "string",
 					description: "Number of components in the current batch.",
 				},
+				"--force": {
+					type: "boolean",
+					description: "Overwrite an existing run id.",
+				},
 				...outputFlags,
 			},
 			exitCodes,
