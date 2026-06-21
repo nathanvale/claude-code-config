@@ -61,6 +61,20 @@ describe("ledger — upsert + dedupe", () => {
 		expect(openFindings(ledger)).toHaveLength(2);
 	});
 
+	test("front-door ownership partitions clause finding signatures", () => {
+		const ledger = createLedger("front-door-shared");
+		upsertFinding(ledger, { ...surfaceInput, frontDoor: "admin" });
+		upsertFinding(ledger, { ...surfaceInput, frontDoor: "app" });
+		const open = openFindings(ledger);
+		expect(open).toHaveLength(2);
+		expect(
+			open.map((finding) => {
+				if ("station" in finding.recheck) throw new Error("expected clause recheck");
+				return finding.recheck.frontDoor;
+			}).sort(),
+		).toEqual(["admin", "app"]);
+	});
+
 	test("station findings dedupe by station anchor, not argv", () => {
 		const ledger = createLedger("classic-cinema");
 		upsertFinding(ledger, stationInput);
@@ -143,6 +157,33 @@ describe("ledger — signature stability (R7)", () => {
 		expect(a).not.toBe(b);
 	});
 
+	test("signature differs when the front door differs", () => {
+		const a = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "admin",
+		});
+		const b = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "app",
+		});
+		expect(a).not.toBe(b);
+	});
+
+	test("signature marks clause fields so scoped and unscoped tokens cannot collide", () => {
+		const scoped = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "admin",
+		});
+		const unscopedWithMatchingTokens = signature({
+			clauseId: "frontDoor",
+			argv: ["admin", "json-valid-under-failure", "check"],
+		});
+		expect(scoped).not.toBe(unscopedWithMatchingTokens);
+	});
+
 	test("station signature ignores invocation and keys by station identity", () => {
 		const station = {
 			stationId: "check.success",
@@ -167,6 +208,19 @@ describe("ledger — Markdown round-trip + format compatibility (R6)", () => {
 		const md = renderLedger(ledger);
 		expect(md).toContain("recheck: clause=json-valid-under-failure");
 		expect(md).toContain("invocation=`check --json`");
+	});
+
+	test("front-door clause rechecks serialize and parse", () => {
+		const ledger = createLedger("front-door-shared");
+		upsertFinding(ledger, { ...surfaceInput, frontDoor: "admin/users" });
+		const md = renderLedger(ledger);
+		expect(md).toContain("recheck: frontDoor=admin%2Fusers clause=json-valid-under-failure");
+
+		const reparsed = parseLedger("front-door-shared", md);
+		const [finding] = openFindings(reparsed);
+		if ("station" in finding.recheck) throw new Error("expected clause recheck");
+		expect(finding.recheck.frontDoor).toBe("admin/users");
+		expect(finding.recheck.argv).toEqual(["check", "--json"]);
 	});
 
 	test("a static finding renders its recheck with the no-invocation marker", () => {
