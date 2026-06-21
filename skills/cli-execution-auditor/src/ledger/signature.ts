@@ -53,8 +53,12 @@ export function signature(input: FindingSignatureInput): string {
 				input.station.findingKind,
 			]
 		: [
-				...(input.frontDoor ? ["frontDoor", input.frontDoor] : []),
+				"clause",
 				input.clauseId,
+				"frontDoor",
+				input.frontDoor === undefined ? "0" : "1",
+				...(input.frontDoor === undefined ? [] : [input.frontDoor]),
+				"argv",
 				...canonicalizeArgv(input.argv ?? []),
 			];
 	// NUL separator: cannot appear in a clause id or argv token, so the join is

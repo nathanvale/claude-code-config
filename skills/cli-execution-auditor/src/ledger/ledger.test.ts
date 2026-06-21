@@ -171,6 +171,19 @@ describe("ledger — signature stability (R7)", () => {
 		expect(a).not.toBe(b);
 	});
 
+	test("signature marks clause fields so scoped and unscoped tokens cannot collide", () => {
+		const scoped = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "admin",
+		});
+		const unscopedWithMatchingTokens = signature({
+			clauseId: "frontDoor",
+			argv: ["admin", "json-valid-under-failure", "check"],
+		});
+		expect(scoped).not.toBe(unscopedWithMatchingTokens);
+	});
+
 	test("station signature ignores invocation and keys by station identity", () => {
 		const station = {
 			stationId: "check.success",
