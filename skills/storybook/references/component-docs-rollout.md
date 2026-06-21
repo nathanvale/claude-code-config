@@ -27,6 +27,10 @@ Every migrated component docs page should have:
 - If Matrix imports shared story helpers, either put Matrix in a separate
   `*.matrix.stories.tsx` file with meta `tags: ['!manifest']`, or keep helpers local so
   Storybook's generated public import block stays clean.
+- A split matrix file is not proof that the component Docs page includes the
+  matrix. If the matrix is docs-facing, verify it on the actual Docs route and
+  keep it in the primary story file unless an explicit docs inclusion pattern
+  renders sibling CSF stories.
 - `Matrix` stays named `Matrix` in the sidebar, and
   `parameters.docs.description.story` owns the matrix explanation. The canvas
   renders table sections only.
@@ -48,6 +52,22 @@ Portal-ui owner paths:
   `packages/portal-ui/src/story-helpers/matrix.tsx`
 - Canonical component example:
   `packages/portal-ui/src/ui/Button/Button.stories.tsx`
+
+## Critical Don'ts
+
+- Do not put docs-facing optional stories (`Matrix`, `UxTips`, focused states)
+  in sibling `*.matrix.stories.tsx` or `*.states.stories.tsx` files unless an
+  explicit docs inclusion pattern proves the component Docs route renders those
+  sibling CSF stories. Left-nav visibility is not proof.
+- Do not use `tags: ['!manifest']` as a docs inclusion fix. It affects agent
+  manifests, not whether a sibling story appears in the component Docs page.
+- Do not import `DocsMatrix*` helpers into a manifest-facing primary story file
+  and call the migration complete before `pnpm --filter @packages/portal-ui
+  check:agent-registry` passes. Story-level `!manifest` cannot hide file-level
+  helper imports from the generated public import.
+- Do not choose between broken Docs and broken manifests silently. If both
+  cannot pass in the current pattern, stop the batch and report the manifest/docs
+  architecture gap.
 
 ## Batch Strategy
 
@@ -107,6 +127,10 @@ Matrix gate:
 - Use shared `DocsMatrix*` helpers when available.
 - Keep Matrix in Autodocs when it belongs in the docs learning path.
 - Tag Matrix `!autodocs` only for audit-only matrices.
+- Split Matrix into `*.matrix.stories.tsx` only after deciding whether it is
+  docs-facing, audit-only, or sidebar-only. Docs-facing matrices must appear on
+  the actual Docs route; audit-only matrices need `!autodocs` plus a handoff
+  reason.
 
 UX guidance gate:
 
@@ -144,7 +168,8 @@ Required reading before edits:
 Rules:
 - Preserve runtime component behavior.
 - Preserve unrelated user changes.
-- Use shared docs helpers instead of inline docs width/card/header styling.
+- Use shared docs helpers only when the agent registry still passes; do not leak
+  story-only helper imports into manifest-facing primary stories.
 - Put `@summary` above the exported component; a props-interface summary is not enough
   for AI manifests.
 - In portal-ui, use DocsContainer, DocsStoryStage, DocsMatrixShell,
@@ -155,6 +180,8 @@ Rules:
 - Keep focused stories only when they provide a direct link, code example, test target, decision rule, or edge-case guard.
 - Add Matrix only when side-by-side visual comparison earns it.
 - Keep Matrix out of AI manifests unless it is a realistic usage example.
+- Keep docs-facing optional stories on the actual Docs page. Do not split them
+  into sibling CSF files unless the Docs route proves they render there.
 - Add UxTips only when usage guidance earns it.
 - Every UxTips story must include a short best-practice summary and one visible authoritative source link in `parameters.docs.description.story`.
 - UxTips canvases must render component examples only; do not put guidance prose, source text, or source links inside the canvas.
@@ -168,6 +195,9 @@ Deliver:
 - Run `pnpm --filter @packages/portal-ui check:agent-registry` after manifest-facing
   changes.
 - Screenshot the Docs page when order, width, Matrix, or UxTips changed.
+- For inclusion repair only, use
+  `references/docs-workflow-checklist.md#optional-story-inclusion-repair-loop`
+  instead of rerunning the full migration.
 - Complete and return the docs workflow checklist.
 ```
 

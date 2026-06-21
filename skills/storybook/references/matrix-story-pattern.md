@@ -9,6 +9,19 @@ stories only unless the user asks for component implementation changes.
 Use `references/docs-pattern.md#matrix-decision` before adding a matrix to a
 component Docs page.
 
+## Critical Don'ts
+
+- Do not move a docs-facing `Matrix` into a sibling `*.matrix.stories.tsx` file
+  unless the actual component Docs route proves that sibling story appears in
+  the Docs page. Sidebar/nav visibility is not proof.
+- Do not use `tags: ['!manifest']` as a Docs-page inclusion mechanism. It is a
+  manifest signal, not a Docs block signal.
+- Do not import shared `DocsMatrix*` helpers into a manifest-facing primary
+  story file and finish without a passing
+  `pnpm --filter @packages/portal-ui check:agent-registry`. If the registry
+  fails, stop and report the manifest/docs pattern conflict instead of hiding
+  the story in a sibling file.
+
 ## When To Add One
 
 - Add a matrix when side-by-side review catches drift faster than isolated
@@ -68,7 +81,7 @@ then render `Matrix`, then `UxTips` or equivalent guidance underneath.
 Follow this ordering in every portal-ui story file with a matrix:
 
 ```
-// 1. Matrix helpers (import from story-helpers/matrix or inline if first use)
+// 1. Matrix helpers (manifest-safe only; do not leak story-only helper imports)
 // 2. Meta (with docs.description.component = inline docs example text + Figma node ref)
 // export default meta
 // type Story = StoryObj<typeof meta>

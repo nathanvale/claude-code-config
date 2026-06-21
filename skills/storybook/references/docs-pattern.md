@@ -193,6 +193,13 @@ Examples:
 
 ## Tags And Ordering
 
+- Critical don't: do not split docs-facing optional stories into sibling CSF
+  files just to protect manifests unless the actual Docs route proves those
+  sibling stories render in the Docs page. Left-nav visibility is not enough.
+- Critical don't: do not import `DocsMatrix*` helpers into a manifest-facing
+  primary story file and finish without a passing
+  `pnpm --filter @packages/portal-ui check:agent-registry`. Story-level
+  `!manifest` does not hide file-level imports from public import generation.
 - Put `Default` first by export order so Storybook's `Primary` doc block is a
   controls-ready playground.
 - Keep `Default` in Autodocs.
@@ -209,6 +216,12 @@ Examples:
 - Use `tags: ['!test']` for combo or matrix stories that are visual docs only
   and should not run as interaction tests.
 - Keep focused testable stories separate from visual combo stories.
+- Treat split `*.matrix.stories.tsx` files as a docs-inclusion risk: Storybook
+  may show the story in the sidebar while the component Docs page renders only
+  the primary CSF file's Stories block. If the matrix is docs-facing, verify the
+  actual Docs route and move the export into the primary story file or use an
+  explicit docs inclusion pattern. If it is audit-only, tag it `!autodocs` and
+  name the reason.
 
 ## Controls And Args
 
