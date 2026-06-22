@@ -192,7 +192,7 @@ Reference implementations:
 - `skills/skill-feedback/src/skill-feedback.integration.test.ts` — full
   coverage, no skipped stations (uses package-local helpers, predates shared
   extraction).
-- `skills/storybook/tests/storybook-doctor.integration.test.ts` — partial
+- `skills/use-storybook/tests/storybook-doctor.integration.test.ts` — partial
   coverage with skipped stations, uses shared helpers from the facade testing
   subpath.
 
@@ -284,7 +284,7 @@ Current repo alignment:
 
 | Package | Unit | Catalog | Integration | Status |
 |---------|------|---------|-------------|--------|
-| `skills/storybook` | Yes | Yes | Yes (shared helpers) | Fully aligned |
+| `skills/use-storybook` | Yes | Yes | Yes (shared helpers) | Fully aligned |
 | `skills/skill-feedback` | Yes | Yes | Yes (local helpers) | Aligned, could adopt shared helpers |
 | `skills/worktree` | Yes | No | Yes (no catalog) | Needs catalog + refactor |
 | `runtime/agent-worktree` | Yes | No | Yes (no catalog) | Needs catalog + refactor |
@@ -344,7 +344,7 @@ the shared helpers. Signs: local `cleanupPaths`/`cleanupServers` arrays, local
 9. Run the tests. Behavior must not change.
 
 Reference migration:
-- `skills/storybook/tests/storybook-doctor.integration.test.ts` — migrated to
+- `skills/use-storybook/tests/storybook-doctor.integration.test.ts` — migrated to
   both shared packages. Domain-specific helpers (`writeStorybookConfig`,
   `makeFullSetupDir`, route handlers) stayed test-local.
 

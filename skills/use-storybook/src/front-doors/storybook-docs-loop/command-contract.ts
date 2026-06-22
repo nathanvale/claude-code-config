@@ -7,9 +7,11 @@ import {
 	DOCS_LOOP_DOCTOR_CONTRACT_ID,
 	DOCS_LOOP_MARK_CONTRACT_ID,
 	DOCS_LOOP_PURGE_CONTRACT_ID,
+	DOCS_LOOP_RECEIPT_STATUSES,
 	DOCS_LOOP_RUN_CARD_CONTRACT_ID,
 	DOCS_LOOP_SCHEMA_VERSION,
 	DOCS_LOOP_STATUS_CONTRACT_ID,
+	DOCS_LOOP_VERIFICATION_FIELDS,
 	type StorybookDocsLoopCommand,
 } from "./docs-loop-model.ts";
 
@@ -326,24 +328,12 @@ export const storybookDocsLoopContracts = defineCommandFacadeContract(
 				},
 				"--field": {
 					type: "enum",
-					values: [
-						"default_primary",
-						"matrix",
-						"ux_tips",
-						"focused_stories",
-						"optional_docs_inclusion",
-						"preview",
-						"a11y_story_tests",
-						"screenshot",
-						"registry",
-						"fallow",
-						"blocker_or_degraded_reason",
-					],
+					values: DOCS_LOOP_VERIFICATION_FIELDS,
 					description: "Verification ledger field.",
 				},
 				"--status": {
 					type: "enum",
-					values: ["done", "na", "blocked"],
+					values: DOCS_LOOP_RECEIPT_STATUSES,
 					description: "Verification receipt status.",
 				},
 				"--reason": {

@@ -20,6 +20,7 @@ symlinks=(
 	"${CLAUDE_HOME}/context|${SCRIPT_DIR}/context"
 	"${CLAUDE_HOME}/rules|${SCRIPT_DIR}/rules"
 	"${CLAUDE_HOME}/commands|${SCRIPT_DIR}/commands"
+	"${CLAUDE_HOME}/skills|${SCRIPT_DIR}/skills"
 	"${CLAUDE_HOME}/agents|${SCRIPT_DIR}/agents"
 	"${CLAUDE_HOME}/runbooks|${SCRIPT_DIR}/runbooks"
 	"${CLAUDE_HOME}/hooks|${SCRIPT_DIR}/hooks"
@@ -30,9 +31,48 @@ symlinks=(
 	"${CONFIG_HOME}/memory|${SCRIPT_DIR}/memory"
 )
 
+prune_stale_codex_skill_links() {
+	local skills_dir="${CODEX_HOME}/skills"
+	local link
+	local target
+
+	[[ -d "$skills_dir" ]] || return 0
+
+	for link in "${skills_dir}"/*; do
+		[[ -L "$link" ]] || continue
+		target="$(readlink "$link")"
+		if [[ "$target" == "${SCRIPT_DIR}/skills/"* && ! -e "$target" ]]; then
+			rm "$link"
+			echo "  REMOVED STALE: $link -> $target"
+		fi
+	done
+}
+
+# Codex shares ~/.codex/skills/ across multiple sources (this repo, side-quest,
+# codex-native), so it cannot symlink the whole folder the way Claude does.
+# Instead, link each repo skill individually — but never disturb a name that is
+# already a real directory or a foreign symlink (those belong to another source).
+# This loop means new skills are picked up automatically: no per-skill edits.
+for skill_dir in "${SCRIPT_DIR}"/skills/*/; do
+	skill_name="$(basename "$skill_dir")"
+	[[ "$skill_name" == "archive" ]] && continue
+	codex_link="${CODEX_HOME}/skills/${skill_name}"
+	# Adopt the name only if it is absent, or already a symlink INTO this repo
+	# (a managed link we may be refreshing). Skip real dirs and foreign links.
+	if [[ -e "$codex_link" || -L "$codex_link" ]]; then
+		if [[ -L "$codex_link" && "$(readlink "$codex_link")" == "${SCRIPT_DIR}/skills/"* ]]; then
+			: # managed link into this repo — safe to (re)assert
+		else
+			continue # real dir or foreign source — leave it alone
+		fi
+	fi
+	symlinks+=("${codex_link}|${SCRIPT_DIR}/skills/${skill_name}")
+done
+
 create_links() {
 	echo "Creating symlinks..."
 	mkdir -p "$CODEX_HOME"
+	prune_stale_codex_skill_links
 	local failures=0
 	for entry in "${symlinks[@]}"; do
 		local link="${entry%%|*}"

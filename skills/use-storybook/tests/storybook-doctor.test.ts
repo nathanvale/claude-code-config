@@ -274,6 +274,54 @@ describe("readiness engine", () => {
 		).toBe(true);
 	});
 
+	test("2xx /mcp with non-JSON body does not mark MCP ready", async () => {
+		const result = await runCheck(
+			fakeRuntime({
+				fetch: async (url) => {
+					if (typeof url === "string" && url.endsWith("/mcp")) {
+						return new Response("<html>not json</html>", {
+							status: 200,
+						});
+					}
+					return new Response("ok", { status: 200 });
+				},
+			}),
+			{ url: "http://localhost:6006" },
+		);
+		expect(result.findings.some((f) => f.id === "mcp_tools_ready")).toBe(
+			false,
+		);
+		expect(
+			result.findings.some((f) => f.id === "manager_ok_mcp_missing"),
+		).toBe(true);
+	});
+
+	test("2xx /mcp JSON without result.tools array does not mark MCP ready", async () => {
+		const result = await runCheck(
+			fakeRuntime({
+				fetch: async (url) => {
+					if (typeof url === "string" && url.endsWith("/mcp")) {
+						return new Response(
+							JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+							{
+								status: 200,
+								headers: { "content-type": "application/json" },
+							},
+						);
+					}
+					return new Response("ok", { status: 200 });
+				},
+			}),
+			{ url: "http://localhost:6006" },
+		);
+		expect(result.findings.some((f) => f.id === "mcp_tools_ready")).toBe(
+			false,
+		);
+		expect(
+			result.findings.some((f) => f.id === "manager_ok_mcp_missing"),
+		).toBe(true);
+	});
+
 	test("raw /mcp ready but mcporter missing produces degraded", async () => {
 		const result = await runCheck(
 			fakeRuntimeWithMcp({

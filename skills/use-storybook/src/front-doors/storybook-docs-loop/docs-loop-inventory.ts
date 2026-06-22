@@ -226,7 +226,7 @@ async function resolveInventoryTarget(
 			next_safe_action: "Choose a package path inside the target repo.",
 		};
 	}
-	if (!(await runtime.fileExists(packageRoot))) {
+	if (!(await isDirectory(runtime, packageRoot))) {
 		return {
 			status: "blocked",
 			reason: "package_not_found",
@@ -234,6 +234,21 @@ async function resolveInventoryTarget(
 		};
 	}
 	return { status: "ok", repoRoot, packageRoot };
+}
+
+const S_IFMT = 0o170000;
+const S_IFDIR = 0o040000;
+
+async function isDirectory(
+	runtime: StorybookDocsLoopRuntime,
+	path: string,
+): Promise<boolean> {
+	try {
+		const { mode } = await runtime.stat(path);
+		return (mode & S_IFMT) === S_IFDIR;
+	} catch {
+		return false;
+	}
 }
 
 function resolvePackageRoot(repoRoot: string, pkg: string | undefined): string {

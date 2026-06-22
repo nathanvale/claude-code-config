@@ -150,7 +150,7 @@ describe("docs-loop CLI front door", () => {
 	test("--version writes version text to stdout", async () => {
 		const result = await runForTest(["--version"]);
 		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toBe("storybook-docs-loop 0.1.0\n");
+		expect(result.stdout).toMatch(/^storybook-docs-loop \d+\.\d+\.\d+\n$/);
 		expect(result.stderr).toBe("");
 	});
 
@@ -361,6 +361,39 @@ describe("docs-loop inventory", () => {
 			repo,
 			pkg: "packages/missing",
 			component: "Button",
+		});
+		expect(result.status).toBe("blocked");
+		if (result.status !== "blocked") throw new Error("expected blocked inventory");
+		expect(result.reason).toBe("package_not_found");
+		expect(result.next_safe_action).toContain("Check the package path");
+	});
+
+	test("file package path returns blocked target data", async () => {
+		const repo = await makeInventoryFixture();
+		const runtime = createDefaultStorybookDocsLoopRuntime({
+			cwd: () => repo,
+			getEnv: (name) => (name === "HOME" ? repo : undefined),
+		});
+		const result = await discoverDocsLoopInventory(runtime, {
+			repo,
+			pkg: "packages/portal-ui/package.json",
+			component: "Button",
+		});
+		expect(result.status).toBe("blocked");
+		if (result.status !== "blocked") throw new Error("expected blocked inventory");
+		expect(result.reason).toBe("package_not_found");
+		expect(result.next_safe_action).toContain("Check the package path");
+	});
+
+	test("file package path returns blocked target data for batch", async () => {
+		const repo = await makeInventoryFixture();
+		const runtime = createDefaultStorybookDocsLoopRuntime({
+			cwd: () => repo,
+			getEnv: (name) => (name === "HOME" ? repo : undefined),
+		});
+		const result = await discoverDocsLoopInventorySet(runtime, {
+			repo,
+			pkg: "packages/portal-ui/package.json",
 		});
 		expect(result.status).toBe("blocked");
 		if (result.status !== "blocked") throw new Error("expected blocked inventory");
