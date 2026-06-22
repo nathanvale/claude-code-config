@@ -32,6 +32,8 @@ taxonomy/title organization.
 | MCP discovery engine | `mcporter` CLI |
 | Target repo Storybook config | nearest Storybook main config |
 | Target repo taxonomy guide | nearest `STORYBOOK_TAXONOMY.md` |
+| Target repo package scripts | nearest package manifest |
+| Target repo test config | nearest Vitest, Playwright, or Storybook test config |
 | Provenance | `PROVENANCE.md` |
 
 ## Prerequisites
@@ -46,6 +48,8 @@ bun run --filter use-storybook-scripts storybook-doctor -- check --json --repo <
 - `ready` → proceed to Quick Start.
 - `degraded` → proceed; follow the `next_safe_action` for improvements.
 - `blocked` → follow the `next_safe_action` to resolve; do not start MCP work.
+
+Readiness proof includes Storybook version compatibility checks.
 
 For deeper diagnostics:
 
@@ -120,18 +124,6 @@ Run commands from the target repo root.
 10. Inspect ad-hoc endpoint:
     `mcporter list --http-url "$STORYBOOK_URL/mcp" --allow-http --schema`.
 11. Check configured servers: `mcporter list` (discovery source of truth).
-12. Before editing stories → call `get-storybook-story-instructions`.
-13. Before using a design-system prop → call `get-documentation`.
-14. Before structuring a Docs page → read `references/docs-pattern.md`.
-15. Before batch Autodocs rollout → read `references/component-docs-rollout.md`.
-16. For long-session docs cleanup → use `storybook-docs-loop` for scouting,
-    state, resume, receipts, and diagnostics.
-17. Before UX guidance stories → read `references/ux-guidance.md`.
-18. Before standalone matrix → read `references/matrix-story-pattern.md`.
-19. Before accessibility claims → read
-    `references/accessibility-source-route.md`.
-20. For Docs workflows → read `references/docs-workflow-checklist.md` before
-    final; return the completed checklist.
 
 ## Taxonomy Workflow
 

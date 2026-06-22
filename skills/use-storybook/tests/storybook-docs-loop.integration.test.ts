@@ -30,10 +30,7 @@ import {
 const RUNNER_PATH = fileURLToPath(
 	new URL("../src/front-doors/storybook-docs-loop/cli.ts", import.meta.url),
 );
-const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url)).replace(
-	/\/tests$/,
-	"",
-);
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 type Station = (typeof storybookDocsLoopBranchStationCatalog)[number];
 type StationId = Station["id"];
