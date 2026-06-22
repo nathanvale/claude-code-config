@@ -63,6 +63,27 @@ When a docs workflow feels complete, run this loop before final:
    dirty-tree findings.
 9. Fill the checklist in the final answer.
 
+## Optional Story Inclusion Repair Loop
+
+Use this loop when `Matrix`, `UX tips`, or focused optional stories exist in
+the sidebar but do not render on the actual Docs page.
+
+1. List the affected component titles and optional story ids with
+   `list-all-documentation` or the Storybook index.
+2. Open the actual Docs route for each affected title; do not rely on story
+   preview URLs.
+3. For each optional story, classify it as `docs-facing`, `audit-only`, or
+   `sidebar-only`.
+4. If `docs-facing`, make it render in the Docs page Stories block; prefer
+   keeping the export in the primary `Component.stories.tsx` unless the project
+   has an explicit MDX or custom-docs inclusion pattern for sibling CSF files.
+5. If `audit-only`, tag it with `!autodocs` and name the reason in the handoff.
+6. If `sidebar-only`, keep it out of Autodocs intentionally and name the direct
+   link, test, or review reason in the handoff.
+7. Re-open or screenshot the Docs route and confirm `Default` remains only in
+   the Primary block while kept optional stories appear under Stories.
+8. Run focused story tests with `a11y: true` for changed public stories.
+
 ## Gotcha
 
 - A docs workflow can look done after `Default` and `Matrix` pass. Stop and make
