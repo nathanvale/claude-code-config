@@ -39,7 +39,7 @@ component Docs page.
 1. Read the component props and current stories.
 2. Identify review axes: variant, size, state, density, intent, or content
    shape.
-3. Check existing matrix patterns, such as
+3. Check existing matrix patterns in the target project, e.g. (where present)
    `packages/portal-ui/src/ui/Snackbar/Snackbar.stories.tsx`.
 4. Call `get-storybook-story-instructions` when Storybook MCP is available.
 5. Use `get-documentation` before relying on design-system component props.
@@ -312,7 +312,8 @@ function MatrixRow({
 ```
 
 Wrap in `<div className="flex w-full max-w-screen-sm flex-col gap-8 p-2">` at the
-render root. Source of truth: `packages/portal-ui/src/ui/Snackbar/Snackbar.stories.tsx`.
+render root. For a worked example, see a matrix story in the target project, e.g.
+(where present) `packages/portal-ui/src/ui/Snackbar/Snackbar.stories.tsx`.
 
 ## State Specimens
 
