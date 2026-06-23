@@ -9,14 +9,19 @@ import {
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
 	BROWSER_USE_TARGETS_CONTRACT_ID,
 	BROWSER_USE_TARGETS_SCHEMA_VERSION,
+	BROWSER_USE_WARM_START_CONTRACT_ID,
+	BROWSER_USE_WARM_START_SCHEMA_VERSION,
 	type BrowserUseCommand,
 	browserUseContracts,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
+	browserUseWarmStartFailureActions,
+	browserUseWarmStartSuccessActions,
 } from "./command-contract";
 import { contractFlags } from "./browser-use-test-helpers";
 
 const ALL_COMMANDS: BrowserUseCommand[] = [
+	"warm-start",
 	"targets-list",
 	"targets-select",
 	"targets-status",
@@ -38,7 +43,7 @@ function discoveryTree() {
 // =========================================================================
 
 describe("U3 command contract", () => {
-	test("contract parses and exposes the targets and operate families", () => {
+	test("contract parses and exposes the warm, targets, and operate families", () => {
 		const result = parseCommandFacadeContract(browserUseContracts, {
 			path: "skills/browser-use/src/command-contract.ts",
 		});
@@ -56,6 +61,15 @@ describe("U3 command contract", () => {
 	});
 
 	test("subcommands expose only their declared flags", () => {
+		expect(contractFlags("warm-start")).toEqual([
+			"--adapter",
+			"--endpoint",
+			"--json",
+			"--plain",
+			"--port",
+			"--profile",
+			"--repair-adapter-config",
+		]);
 		expect(contractFlags("targets-status")).toEqual([
 			"--json",
 			"--plain",
@@ -66,8 +80,12 @@ describe("U3 command contract", () => {
 	});
 
 	// Scenario 5: command discovery exposes both result contracts with versions.
-	test("command discovery exposes browser-targets and browser-operation result contracts with versions", () => {
+	test("command discovery exposes warm-start, browser-targets, and browser-operation result contracts with versions", () => {
 		const tree = discoveryTree();
+		expect(tree.commands["warm-start"]?.result_contract).toMatchObject({
+			id: BROWSER_USE_WARM_START_CONTRACT_ID,
+			schema_version: BROWSER_USE_WARM_START_SCHEMA_VERSION,
+		});
 		for (const command of ["targets-list", "targets-select", "targets-status"] as const) {
 			expect(tree.commands[command]?.result_contract).toMatchObject({
 				id: BROWSER_USE_TARGETS_CONTRACT_ID,
@@ -80,8 +98,20 @@ describe("U3 command contract", () => {
 				schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
 			});
 		}
+		expect(BROWSER_USE_WARM_START_CONTRACT_ID).toBe("browser-use.warm-start");
 		expect(BROWSER_USE_TARGETS_CONTRACT_ID).toBe("browser-use.browser-targets");
 		expect(BROWSER_USE_OPERATION_CONTRACT_ID).toBe("browser-use.browser-operation");
+	});
+
+	test("warm start command discovery exposes runtime action affordances", () => {
+		const tree = discoveryTree();
+		const affordances = tree.commands["warm-start"]?.action_affordances;
+		expect(affordances?.success?.map((a) => a.id)).toEqual(
+			browserUseWarmStartSuccessActions.map((a) => a.id),
+		);
+		expect(affordances?.failure?.map((a) => a.id)).toEqual(
+			browserUseWarmStartFailureActions.map((a) => a.id),
+		);
 	});
 
 	test("operate command discovery exposes runtime action affordances", () => {
@@ -97,4 +127,3 @@ describe("U3 command contract", () => {
 		}
 	});
 });
-

@@ -253,7 +253,7 @@ export interface ProjectStationMapInput {
 	path?: string;
 }
 
-const STATION_ID_PATTERN = /^[a-z][a-z0-9:-]*\.[a-z][a-z0-9_:-]*$/;
+const STATION_ID_PATTERN = /^[a-z][a-z0-9:_-]*\.[a-z][a-z0-9:_-]*$/;
 const ALLOWED_CLASSIFICATIONS = new Set<string>(BRANCH_STATION_CLASSIFICATIONS);
 const ALLOWED_EVIDENCE_STATUSES = new Set<string>(
 	BRANCH_STATION_EVIDENCE_STATUSES,

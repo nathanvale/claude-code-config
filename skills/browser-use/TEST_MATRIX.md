@@ -12,6 +12,77 @@ Convention:
 - Failure signal: `error.hint`, `runtime_actions`, and `continuation.next_action_id` point at one safe next step.
 - Page signal: every real Chrome setup opens `https://example.com/`; every successful launch/reuse run checks `/json/list` for a `page` target at that URL.
 
+## Warm Start Front Door Cases
+
+### WS-C1 Ready stack
+
+case_id: `warm-start-ready`
+kind: unit + fixture smoke
+status: covered
+command: `browser-use warm start --json`
+requires: Warm Chrome proof succeeds on `9222`; selected `mcporter` config points at `http://127.0.0.1:9222`; Adapter Proof lists pages.
+
+expect:
+- [x] Exit `0`
+- [x] `status=ok`
+- [x] `continuation.next_action_id=warm-stack-ready`
+- [x] result names endpoint `http://127.0.0.1:9222`, browser pid, adapter ready, and page count.
+
+### WS-C2 Stale selected mcporter config
+
+case_id: `warm-start-stale-mcporter-config`
+kind: unit + fixture smoke
+status: covered
+command: `browser-use warm start --json`
+requires: Warm Chrome proof succeeds on `9222`; selected `mcporter` config points at stale `9223`.
+
+expect:
+- [x] Exit `20`
+- [x] `error.code=warm_start_adapter_config_stale`
+- [x] `continuation.next_action_id=repair-adapter-config`
+- [x] No config write in default mode.
+- [x] `9223` remains stale-port evidence only; default stays `9222`.
+
+### WS-C3 Explicit selected config repair
+
+case_id: `warm-start-repair-adapter-config`
+kind: unit + fixture smoke
+status: covered
+command: `browser-use warm start --repair-adapter-config --json`
+requires: Warm Chrome proof succeeds on `9222`; selected `mcporter` config is stale and stable between proof and write.
+
+expect:
+- [x] Updates selected `mcporter` `chrome-devtools` binding to `http://127.0.0.1:9222`.
+- [x] Reruns Adapter Proof.
+- [x] Exit `0` when proof passes.
+- [x] Aborts write if selected binding identity changes before repair.
+
+### WS-C4 Sticky daemon retry
+
+case_id: `warm-start-sticky-daemon-retry`
+kind: unit + fixture smoke
+status: covered
+command: `browser-use warm start --json`
+requires: selected config already matches `9222`; Adapter Proof reaches list-pages command failure.
+
+expect:
+- [x] Runs `mcporter daemon restart` once.
+- [x] Retries Adapter Proof once.
+- [x] Succeeds when retry passes.
+- [x] Emits inspect diagnostics if retry fails.
+
+### WS-C5 Adapter diagnostics, no restart
+
+case_id: `warm-start-inspect-diagnostics`
+kind: unit + fixture smoke
+status: covered
+command: `browser-use warm start --json`
+requires: Adapter Proof reaches timeout, unparsable output, missing dependency, or mismatched config.
+
+expect:
+- [x] Does not restart daemon.
+- [x] Emits `continuation.next_action_id=inspect-adapter-diagnostics` except stale config, which emits repair.
+
 ## Live Matrix
 
 | ID | Case | Setup | Command | Expected CLI Contract | Expected Observability | Status | Result Notes | Cleanup |

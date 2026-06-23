@@ -54,6 +54,7 @@ import {
 	runTargetsStatus,
 } from "./browser-use-selection";
 import { runOperate } from "./browser-use-operations";
+import { runWarmStart } from "./browser-use-warm";
 import {
 	type ParsedBrowserUseCommand,
 	applyEnvRunId,
@@ -191,6 +192,17 @@ async function executeCommand(input: {
 	durationMs: () => number;
 }): Promise<number> {
 	const { parsed, runtime } = input;
+	if (parsed.command === "warm-start") {
+		return runWarmStart({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			durationMs: input.durationMs,
+		});
+	}
+
 	const resultKind: ResultKind =
 		parsed.family === "targets" ? "browser_targets" : "browser_operation";
 
@@ -481,9 +493,11 @@ export async function runForTest(
 export {
 	BROWSER_USE_OPERATE_SUBCOMMANDS,
 	BROWSER_USE_TARGETS_SUBCOMMANDS,
+	BROWSER_USE_WARM_SUBCOMMANDS,
 	type BrowserUseCommand,
 	type BrowserUseOperateSubcommand,
 	type BrowserUseTargetsSubcommand,
+	type BrowserUseWarmSubcommand,
 } from "./command-contract";
 export {
 	type BrowserOperationTransportFailure,

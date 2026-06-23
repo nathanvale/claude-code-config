@@ -6,15 +6,17 @@ Use when Browser Adapter Proof emits a `chrome-devtools` dependency, config, bin
 
 - Proof runtime: `skills/browser-use/src/preflight-browser-adapter.ts`.
 - Proof front door: `skills/browser-use/package.json#bin` (`preflight-browser-adapter`).
+- Warm start front door: `browser-use warm start`.
 - Command contract: `skills/browser-use/src/command-contract.ts`.
 - Warm Chrome map: `skills/browser-use/references/warm-chrome.md`.
 
 ## Rules
 
-- Verify Warm Chrome first.
+- Run `browser-use warm start --json` first for ordinary browser entry.
+- Use `preflight-browser-adapter check` directly only when isolating adapter proof.
 - Follow the proof continuation.
 - Let Browser Adapter Proof classify dependency, config, binding, and output failures.
-- Repair selected `chrome-devtools` config only after proof asks for it.
+- Repair selected `chrome-devtools` config only after proof or warm start asks for it.
 - Read proof diagnostics for selected source, path hint, and observed port.
 - Repair one cause, rerun proof, then reroute.
 - Do not repair a working setup because paths look surprising.
@@ -78,7 +80,8 @@ Use when Browser Adapter Proof emits a `chrome-devtools` dependency, config, bin
 
 ## Verify
 
-- Run `preflight-browser-adapter check` after Warm Chrome proof.
+- Run `browser-use warm start --json` for the normal stack proof.
+- Run `preflight-browser-adapter check` only for focused Adapter Proof verification.
 - Pass: proof emits verified adapter continuation.
 - Dependency failure: expose `mcporter` or set the command-vector override.
 - Config stale: update config to the verified Warm Chrome endpoint.

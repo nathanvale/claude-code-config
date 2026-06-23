@@ -15,19 +15,12 @@ import {
 	type McporterCommandResult,
 	spawnMcporterCommand,
 } from "./mcporter-transport";
+import {
+	type AdapterProofRuntime,
+	createDefaultAdapterProofRuntime,
+} from "./preflight-browser-adapter";
 
-export type BrowserUseRuntime = {
-	env: Record<string, string | undefined>;
-	now: () => number;
-	// Structured, shell-free command runner the shared mcporter transport drives
-	// (plan U4). Same shape Browser Adapter Proof uses, so both surfaces run the
-	// command vector identically.
-	runCommand: (input: McporterCommandInput) => Promise<McporterCommandResult>;
-	// Read a supplied evidence file (--route, --adapter-proof) or selected-target
-	// state (--state). Kept on the runtime so the discovery/selection assembler
-	// stays pure and the CLI driver owns all I/O (mirrors AdapterProofRuntime /
-	// prepare's read-then-assemble split).
-	readTextFile: (path: string) => Promise<string>;
+export type BrowserUseRuntime = AdapterProofRuntime & {
 	// Write run-scoped selected-target state (U6). Owner-only and atomic: the
 	// default writes a temp sibling with 0600 perms then renames it over the
 	// target so a partial write is never observed and the file is never group/
@@ -47,13 +40,20 @@ export type BrowserUseRuntime = {
 export function createDefaultBrowserUseRuntime(
 	overrides: Partial<BrowserUseRuntime> = {},
 ): BrowserUseRuntime {
+	const base = createDefaultAdapterProofRuntime({
+		...overrides,
+		runCommand:
+			overrides.runCommand ??
+			((input: McporterCommandInput) => spawnMcporterCommand(input)),
+		readTextFile:
+			overrides.readTextFile ?? ((path: string) => readFile(path, "utf-8")),
+		writeTextFile:
+			overrides.writeTextFile ??
+			((path: string, contents: string) =>
+				writeStateFileAtomically(path, contents)),
+	});
 	return {
-		env: { ...process.env },
-		now: () => Date.now(),
-		runCommand: (input: McporterCommandInput) => spawnMcporterCommand(input),
-		readTextFile: (path: string) => readFile(path, "utf-8"),
-		writeTextFile: (path: string, contents: string) =>
-			writeStateFileAtomically(path, contents),
+		...base,
 		ensureDirectory: async (path: string) => {
 			await mkdir(path, { recursive: true, mode: 0o700 });
 		},

@@ -19,6 +19,7 @@ import {
 	BROWSER_USE_FAMILIES,
 	BROWSER_USE_OPERATE_SUBCOMMANDS,
 	BROWSER_USE_TARGETS_SUBCOMMANDS,
+	BROWSER_USE_WARM_SUBCOMMANDS,
 	type BrowserUseCommand,
 	type BrowserUseFamily,
 	browserUseContracts,
@@ -94,7 +95,7 @@ export function parseBrowserUseArgv(
 
 	if (!family) {
 		if (helpRequested) return { kind: "help" };
-		throw usageError("missing command family: expected targets or operate.");
+		throw usageError("missing command family: expected warm, targets, or operate.");
 	}
 
 	const subcommandToken = positionals[1];
@@ -177,6 +178,7 @@ function isFamily(value: string | undefined): value is BrowserUseFamily {
 }
 
 function subcommandsFor(family: BrowserUseFamily): readonly string[] {
+	if (family === "warm") return BROWSER_USE_WARM_SUBCOMMANDS;
 	return family === "targets"
 		? BROWSER_USE_TARGETS_SUBCOMMANDS
 		: BROWSER_USE_OPERATE_SUBCOMMANDS;
@@ -294,7 +296,8 @@ export function renderHelp(
 	command?: BrowserUseCommand,
 ): string {
 	if (command) {
-		return `${renderCommandUsage(browserUseContracts[command])}\n${ROUTE_PREREQUISITE_POINTER}\n`;
+		const routePointer = command === "warm-start" ? "" : `${ROUTE_PREREQUISITE_POINTER}\n`;
+		return `${renderCommandUsage(browserUseContracts[command])}\n${routePointer}`;
 	}
 	if (family) return renderFamilyHelp(family);
 	return renderRootHelp();
@@ -311,17 +314,14 @@ function renderFamilyHelp(family: BrowserUseFamily): string {
 		"Subcommands:",
 		...subLines,
 		"",
-		ROUTE_PREREQUISITE_POINTER,
+		...(family === "warm" ? [] : [ROUTE_PREREQUISITE_POINTER]),
 		"",
 	].join("\n");
 }
 
 function renderRootHelp(): string {
 	const familyLines = BROWSER_USE_FAMILIES.map((family) => {
-		const summary =
-			family === "targets"
-				? "Browser Target Discovery, Selection, and status."
-				: "Browser Operations: snapshot, screenshot, emulate.";
+		const summary = familySummary(family);
 		return `  ${family.padEnd(8)} ${summary}`;
 	});
 	return [
@@ -342,3 +342,12 @@ function renderRootHelp(): string {
 	].join("\n");
 }
 
+function familySummary(family: BrowserUseFamily): string {
+	if (family === "warm") {
+		return "Warm Chrome and chrome-devtools readiness.";
+	}
+	if (family === "targets") {
+		return "Browser Target Discovery, Selection, and status.";
+	}
+	return "Browser Operations: snapshot, screenshot, emulate.";
+}

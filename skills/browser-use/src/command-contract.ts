@@ -1014,6 +1014,9 @@ export const BROWSER_USE_TARGETS_SCHEMA_VERSION = "1" as const;
 export const BROWSER_USE_OPERATION_CONTRACT_ID =
 	"browser-use.browser-operation" as const;
 export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_WARM_START_CONTRACT_ID =
+	"browser-use.warm-start" as const;
+export const BROWSER_USE_WARM_START_SCHEMA_VERSION = "1" as const;
 
 // Command families and their subcommands. Public surface is `browser-use
 // <family> <subcommand>`; facade contract keys flatten to `<family>-<sub>`.
@@ -1033,7 +1036,11 @@ export const BROWSER_USE_OPERATE_SUBCOMMANDS = [
 export type BrowserUseOperateSubcommand =
 	(typeof BROWSER_USE_OPERATE_SUBCOMMANDS)[number];
 
-export const BROWSER_USE_FAMILIES = ["targets", "operate"] as const;
+export const BROWSER_USE_WARM_SUBCOMMANDS = ["start"] as const;
+export type BrowserUseWarmSubcommand =
+	(typeof BROWSER_USE_WARM_SUBCOMMANDS)[number];
+
+export const BROWSER_USE_FAMILIES = ["warm", "targets", "operate"] as const;
 export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
 
 // Browser Target Discovery modes (plan U5 R18-R20). `targets list --mode` takes
@@ -1048,6 +1055,7 @@ export type BrowserUseTargetDiscoveryMode =
 	(typeof BROWSER_USE_TARGET_DISCOVERY_MODES)[number];
 
 export type BrowserUseCommand =
+	| "warm-start"
 	| "targets-list"
 	| "targets-select"
 	| "targets-status"
@@ -1109,6 +1117,15 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"target_state_stale",
 	"target_state_mismatch",
 	"target_state_cross_run",
+	// Warm Start front door (issue #211).
+	"warm_start_browser_entry_required",
+	"warm_start_adapter_config_stale",
+	"warm_start_adapter_config_repair_aborted",
+	"warm_start_adapter_dependency_missing",
+	"warm_start_adapter_sticky_daemon_retry_failed",
+	"warm_start_adapter_output_failed",
+	"warm_start_daemon_restart_failed",
+	"warm_start_input_invalid",
 ] as const;
 export type BrowserUseDiagnosticCode =
 	(typeof BROWSER_USE_DIAGNOSTIC_CODES)[number];
@@ -1317,6 +1334,45 @@ export const browserUseOperationSuccessActions = [
 	},
 ] as const;
 
+export const browserUseWarmStartFailureActions = [
+	{
+		id: "launch-warm-chrome",
+		summary:
+			"Launch real Google Chrome with the dedicated Warm Chrome profile, then rerun warm start.",
+		sideEffects: ["browser"],
+	},
+	{
+		id: "repair-adapter-config",
+		summary:
+			"Rerun browser-use warm start with --repair-adapter-config to update selected mcporter chrome-devtools config.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "restart-mcporter-daemon",
+		summary:
+			"Restart mcporter daemon only after warm start reports the sticky-daemon class.",
+		sideEffects: ["write"],
+	},
+	{
+		id: "inspect-adapter-diagnostics",
+		summary: "Inspect adapter diagnostics before retrying warm start.",
+		sideEffects: ["check"],
+	},
+	{
+		id: "change-warm-start-input",
+		summary: "Correct warm start endpoint, port, profile, or adapter input.",
+		sideEffects: ["check"],
+	},
+] as const;
+
+export const browserUseWarmStartSuccessActions = [
+	{
+		id: "warm-stack-ready",
+		summary: "Use the proven Warm Chrome and chrome-devtools stack.",
+		sideEffects: ["browser"],
+	},
+] as const;
+
 type BrowserUseAudience = "agent" | "operator";
 type BrowserUseMutation = "check" | "browser";
 type BrowserUseCommandContract = CommandFacadeContract<
@@ -1328,6 +1384,33 @@ type BrowserUseCommandContract = CommandFacadeContract<
 const browserUseOutputFlags = {
 	"--json": { type: "boolean", description: "Emit JSON envelope." },
 	"--plain": { type: "boolean", description: "Emit stable text." },
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseWarmStartFlags = {
+	"--port": {
+		type: "string",
+		description: "Warm Chrome CDP port. Default: 9222.",
+	},
+	"--endpoint": {
+		type: "string",
+		description: "Warm Chrome loopback CDP endpoint. Default: http://127.0.0.1:9222.",
+	},
+	"--profile": {
+		type: "path",
+		description:
+			"Dedicated persistent Warm Chrome profile. Default: ~/.agent-warm-profile.",
+	},
+	"--adapter": {
+		type: "enum",
+		values: BROWSER_ADAPTER_PROOF_ADAPTERS,
+		description: "Browser Adapter to prove. Default: chrome-devtools.",
+	},
+	"--repair-adapter-config": {
+		type: "boolean",
+		description:
+			"Explicitly repair selected mcporter chrome-devtools config after proving Warm Chrome.",
+	},
+	...browserUseOutputFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
 // --dry-run + the mock-outcome env exercise success and failure envelopes
@@ -1527,8 +1610,41 @@ const browserUseOperationResultContract = {
 	schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseWarmStartResultContract = {
+	id: BROWSER_USE_WARM_START_CONTRACT_ID,
+	kind: "Warm browser stack readiness result.",
+	schema_version: BROWSER_USE_WARM_START_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
 export const browserUseContracts = defineCommandFacadeContract(
 	{
+		"warm-start": {
+			script: "browser-use",
+			summary:
+				"Launch or reuse Warm Chrome, prove chrome-devtools, and return the next safe action.",
+			usage: [
+				"warm start [--port 9222 | --endpoint http://127.0.0.1:9222] [--profile ~/.agent-warm-profile] [--adapter chrome-devtools] [--repair-adapter-config] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "network", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Warm start may launch local Chrome and can repair selected mcporter config only when --repair-adapter-config is set.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: adapterProofEnvVars,
+			resultContract: browserUseWarmStartResultContract,
+			actionAffordances: {
+				success: browserUseWarmStartSuccessActions,
+				failure: browserUseWarmStartFailureActions,
+			},
+			flags: browserUseWarmStartFlags,
+			exitCodes: browserUseExitCodes,
+		},
 		"targets-list": {
 			script: "browser-use",
 			summary:

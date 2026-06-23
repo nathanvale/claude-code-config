@@ -27,6 +27,21 @@ export function makeRuntime(
 		now: () => 1_000,
 		// Stub the live I/O seams so tests never touch real stdin/disk. Individual
 		// tests override readStdin/writeTextFile/readTextFile as needed.
+		platform: "darwin",
+		fetchJson: async () => {
+			throw new Error("test runtime blocks live CDP fetches");
+		},
+		findListener: async () => null,
+		currentUser: async () => "501",
+		statProfile: async () => {
+			throw new Error("test runtime has no profile stat");
+		},
+		ensureProfileDir: async (path) => path,
+		chmod: async () => {},
+		spawnChrome: async () => {},
+		sleep: async () => {},
+		isTemporaryPath: () => false,
+		cwd: "/tmp/browser-use-test",
 		readStdin: async () => "",
 		writeTextFile: async () => {},
 		ensureDirectory: async () => {},

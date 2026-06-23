@@ -2,7 +2,7 @@
 
 Reverse-engineered snapshot dated 2026-06-10. Descriptive, not prescriptive: records what the code and docs say today, not what the product should become.
 
-**What this is.** `browser-use` is agent-driven browser automation through a real "Warm Chrome" instance, with evidence-first adapter routing, target discovery/selection, and page operations. A task flows through four CLI subsystems — Warm Chrome proof, Adapter Proof, Adapter Router, then the `browser-use` operate front door — each gating the next on freshly proven evidence before any browser action runs. The shipped operator surface is snapshot (DOM), screenshot (pixels), and viewport emulation, scoped to a single selected page and bound to a verified loopback Chrome DevTools Protocol (CDP) endpoint.
+**What this is.** `browser-use` is agent-driven browser automation through a real "Warm Chrome" instance, with evidence-first adapter routing, target discovery/selection, and page operations. Browser entry now starts at `browser-use warm start`, which coordinates Warm Chrome proof, Adapter Proof, bounded selected-`mcporter` config repair, and one sticky-daemon retry before Router/target/action work. The shipped operator surface is snapshot (DOM), screenshot (pixels), and viewport emulation, scoped to a single selected page and bound to a verified loopback Chrome DevTools Protocol (CDP) endpoint.
 
 ---
 
@@ -16,7 +16,7 @@ Reverse-engineered snapshot dated 2026-06-10. Descriptive, not prescriptive: rec
 
 **In scope (MVP, shipped)**
 
-- Warm Chrome lifecycle: check, repair, launch, status over loopback CDP (port 9222 convention), macOS only.
+- Warm Chrome lifecycle: `browser-use warm start` plus focused check, repair, launch, status over loopback CDP (port 9222 convention), macOS only.
 - Adapter Proof for `chrome-devtools` via mcporter transport.
 - Evidence-first Adapter Router: `prepare`, `route`, `report` (pure evaluation, no probing).
 - Target discovery (recovery + route-bound modes), target selection with run-scoped state, and operations: `snapshot`, `screenshot`, `emulate`.
@@ -107,6 +107,7 @@ Targets discovery/selection and operations as a modular, evidence-driven workflo
 
 | Capability | Maturity | Evidence |
 |---|---|---|
+| Warm start front door (`warm start`: launch/reuse Warm Chrome, prove `chrome-devtools`, stale-config continuation, explicit repair, one daemon retry) | shipped | `skills/browser-use/src/browser-use-warm.ts`; station proof `skills/browser-use/src/browser-use-warm-station-catalog.ts` |
 | Module split: monolith → 8 acyclic modules (core, parser, runtime, transport, discovery, selection, operations, driver) | shipped | `docs/decisions/2026-06-10-002-browser-use-module-split-decision-log.md`; `docs/plans/2026-06-10-001-refactor-browser-use-module-split-plan.md` |
 | Target discovery (recovery + route-bound; navigable http(s) filter; privacy redaction) | shipped | `skills/browser-use/src/browser-use-discovery.ts:118` (`runTargetsList`), `:544` |
 | Target selection (hints XOR ordinal; run-scoped state, 0600, atomic, 15m TTL; `status` projection) | shipped | `skills/browser-use/src/browser-use-selection.ts:153`, `:292`; state TTL `:91` |
@@ -132,7 +133,8 @@ Targets discovery/selection and operations as a modular, evidence-driven workflo
 
 ```mermaid
 flowchart TD
-    task["Task request"] --> wc
+    task["Task request"] --> warmstart["browser-use warm start"]
+    warmstart --> wc
 
     subgraph WC["preflight-warm-chrome"]
       wc["check / launch / repair"] -->|"WarmChromeProof<br/>(endpoint, port, run_id)"| wcok{ready?}

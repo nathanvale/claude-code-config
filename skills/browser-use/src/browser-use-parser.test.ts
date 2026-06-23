@@ -14,6 +14,7 @@ describe("U3 help and version", () => {
 	test("--help renders targets and operate families", async () => {
 		const result = await runForTest(["--help"], makeRuntime());
 		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("warm");
 		expect(result.stdout).toContain("targets");
 		expect(result.stdout).toContain("operate");
 	});
@@ -55,6 +56,13 @@ describe("U3 help and version", () => {
 		expect(result.stdout).toContain("browser-adapter-router");
 	});
 
+	test("warm --help renders start without route prerequisite text", async () => {
+		const result = await runForTest(["warm", "--help"], makeRuntime());
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("start");
+		expect(result.stdout).not.toContain("browser-adapter-router");
+	});
+
 	// Scenario 4: operate family help renders snapshot, screenshot, emulate.
 	test("operate --help renders snapshot, screenshot, and emulate", async () => {
 		const result = await runForTest(["operate", "--help"], makeRuntime());
@@ -67,6 +75,7 @@ describe("U3 help and version", () => {
 
 	test("subcommand help advertises every declared flag and the route pointer", async () => {
 		const cases: Array<[string[], BrowserUseCommand]> = [
+			[["warm", "start", "--help"], "warm-start"],
 			[["targets", "list", "--help"], "targets-list"],
 			[["targets", "select", "--help"], "targets-select"],
 			[["targets", "status", "--help"], "targets-status"],
@@ -82,7 +91,14 @@ describe("U3 help and version", () => {
 				contract: browserUseContracts[command],
 				help: result.stdout,
 			});
-			expect(result.stdout).toContain("browser-adapter-router");
+			if (command === "warm-start") {
+				expect(result.stdout).toContain("9222");
+				expect(result.stdout).toContain("~/.agent-warm-profile");
+				expect(result.stdout).not.toContain("9223");
+				expect(result.stdout).not.toContain("browser-adapter-router");
+			} else {
+				expect(result.stdout).toContain("browser-adapter-router");
+			}
 		}
 	});
 });
@@ -110,19 +126,23 @@ describe("U3 parser", () => {
 
 	// Scenario 6: undeclared flags are rejected (exit 2) for every subcommand.
 	test("each subcommand rejects an undeclared flag with a usage error", async () => {
-		const cases: string[][] = [
-			["targets", "list", "--bogus", "--dry-run", "--json"],
-			["targets", "select", "--bogus", "--dry-run", "--json"],
-			["targets", "status", "--bogus", "--json"],
-			["operate", "snapshot", "--bogus", "--dry-run", "--json"],
-			["operate", "screenshot", "--out", "x.png", "--bogus", "--dry-run", "--json"],
-			["operate", "emulate", "--bogus", "--dry-run", "--json"],
+		const cases: Array<{ argv: string[]; rejected: string }> = [
+			{ argv: ["warm", "start", "--state", "state.json", "--json"], rejected: "--state" },
+			{ argv: ["targets", "list", "--bogus", "--dry-run", "--json"], rejected: "--bogus" },
+			{ argv: ["targets", "select", "--bogus", "--dry-run", "--json"], rejected: "--bogus" },
+			{ argv: ["targets", "status", "--bogus", "--json"], rejected: "--bogus" },
+			{ argv: ["operate", "snapshot", "--bogus", "--dry-run", "--json"], rejected: "--bogus" },
+			{
+				argv: ["operate", "screenshot", "--out", "x.png", "--bogus", "--dry-run", "--json"],
+				rejected: "--bogus",
+			},
+			{ argv: ["operate", "emulate", "--bogus", "--dry-run", "--json"], rejected: "--bogus" },
 		];
-		for (const argv of cases) {
+		for (const { argv, rejected } of cases) {
 			const result = await runForTest(argv, makeRuntime());
 			expect(result.exitCode).toBe(2);
 			expect(`${result.stdout}\n${result.stderr}`).toContain(
-				"unknown option: --bogus",
+				`unknown option: ${rejected}`,
 			);
 		}
 	});
@@ -134,6 +154,23 @@ describe("U3 parser", () => {
 		);
 		expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
 		expect(result.exitCode).toBe(0);
+	});
+
+	test("warm start accepts declared readiness flags", async () => {
+		const cases: string[][] = [
+			["warm", "start", "--json"],
+			["warm", "start", "--plain"],
+			["warm", "start", "--port", "9223", "--json"],
+			["warm", "start", "--endpoint", "http://127.0.0.1:9223", "--json"],
+			["warm", "start", "--profile", "/tmp/agent-warm-profile", "--json"],
+			["warm", "start", "--adapter", "chrome-devtools", "--json"],
+			["warm", "start", "--repair-adapter-config", "--json"],
+		];
+		for (const argv of cases) {
+			const result = await runForTest(argv, makeRuntime());
+			expect(`${result.stdout}\n${result.stderr}`).not.toContain("unknown option");
+			expect(result.exitCode).not.toBe(2);
+		}
 	});
 
 	// Regression: family/subcommand resolve POSITIONALLY, so a flag value equal
