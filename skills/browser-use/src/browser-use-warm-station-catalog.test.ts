@@ -31,6 +31,7 @@ describe("browser-use warm start Branch Station Catalog", () => {
 				"success",
 				"repairable_failure",
 				"success_after_repair",
+				"repair_aborted",
 				"success_after_retry",
 				"diagnostic_failure",
 			]),

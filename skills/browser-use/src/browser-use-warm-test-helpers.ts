@@ -18,6 +18,7 @@ import type {
 } from "./mcporter-transport";
 
 const cleanupPaths: string[] = [];
+type LaunchChromeInput = Parameters<BrowserUseRuntime["spawnChrome"]>[0];
 
 export async function cleanupWarmRuntimePaths(): Promise<void> {
 	await Promise.all(
@@ -28,11 +29,21 @@ export async function cleanupWarmRuntimePaths(): Promise<void> {
 export async function warmRuntime(input: {
 	port?: string;
 	commandResponses?: Record<string, McporterCommandResult[]>;
-} = {}): Promise<{ runtime: BrowserUseRuntime; calls: McporterCommandInput[] }> {
+	listener?: false | "after-spawn" | { pid: number; command: string };
+	endpointReady?: "always" | "after-spawn";
+} = {}): Promise<{
+	runtime: BrowserUseRuntime;
+	calls: McporterCommandInput[];
+	spawnChromeCalls: LaunchChromeInput[];
+}> {
 	const port = input.port ?? "9222";
 	const home = await makeDir();
 	const profile = await makeProfile(0o700);
 	const calls: McporterCommandInput[] = [];
+	const spawnChromeCalls: LaunchChromeInput[] = [];
+	const defaultListener = { pid: 12345, command: chromeCommand({ port, profile }) };
+	const listener = input.listener ?? defaultListener;
+	const endpointReady = input.endpointReady ?? "always";
 	const responses = input.commandResponses ?? {
 		"mcporter config get chrome-devtools --json": [okCommand(configStdout(port))],
 		"mcporter call chrome-devtools.list_pages --args {} --output json": [
@@ -51,14 +62,20 @@ export async function warmRuntime(input: {
 			};
 		})(),
 		fetchJson: async (url) => {
+			if (endpointReady === "after-spawn" && spawnChromeCalls.length === 0) {
+				throw new Error(`endpoint not ready: ${url}`);
+			}
 			if (url.endsWith("/json/version")) return cdpVersion(port);
 			if (url.endsWith("/json/list")) return [{ id: "page-1" }];
 			throw new Error(`unexpected URL: ${url}`);
 		},
-		findListener: async () => ({
-			pid: 12345,
-			command: chromeCommand({ port, profile }),
-		}),
+		findListener: async () => {
+			if (listener === false) return null;
+			if (listener === "after-spawn") {
+				return spawnChromeCalls.length > 0 ? defaultListener : null;
+			}
+			return listener;
+		},
 		currentUser: async () => String(userInfo().uid),
 		statProfile: async (path) => {
 			const realPath = await realpath(path);
@@ -75,7 +92,9 @@ export async function warmRuntime(input: {
 		writeTextFile: async (path, content) => {
 			await writeFile(path, content, "utf-8");
 		},
-		spawnChrome: async () => {},
+		spawnChrome: async (launch) => {
+			spawnChromeCalls.push(launch);
+		},
 		sleep: async () => {},
 		isTemporaryPath: () => false,
 		cwd: await makeDir(),
@@ -94,7 +113,7 @@ export async function warmRuntime(input: {
 		ensureDirectory: async () => {},
 	});
 
-	return { runtime, calls };
+	return { runtime, calls, spawnChromeCalls };
 }
 
 export function okCommand(stdout: string): McporterCommandResult {

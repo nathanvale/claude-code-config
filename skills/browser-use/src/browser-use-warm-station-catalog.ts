@@ -21,6 +21,7 @@ export const BROWSER_USE_WARM_START_BRANCH_STATION_IDS = [
 	"warm-start.ready",
 	"warm-start.stale_config",
 	"warm-start.repair_config",
+	"warm-start.repair_abort",
 	"warm-start.sticky_daemon_retry",
 	"warm-start.inspect_diagnostics",
 ] as const;
@@ -68,6 +69,19 @@ export const browserUseWarmStartBranchStationCatalog = [
 		expectedResultContractId: BROWSER_USE_WARM_START_CONTRACT_ID,
 		expectedContinuationId: "warm-stack-ready",
 		mutationExpectation: "writes_selected_mcporter_config",
+	},
+	{
+		id: "warm-start.repair_abort",
+		command: "warm-start",
+		classification: "required",
+		intent: "repair_aborted",
+		trigger: "explicit repair mode cannot re-confirm the selected mcporter binding",
+		expectedExitCode: 20,
+		expectedEnvelopeStatus: "error",
+		expectedResultContractId: BROWSER_USE_WARM_START_CONTRACT_ID,
+		expectedErrorCode: "warm_start_adapter_config_repair_aborted",
+		expectedContinuationId: "inspect-adapter-diagnostics",
+		mutationExpectation: "no_config_write_after_binding_change",
 	},
 	{
 		id: "warm-start.sticky_daemon_retry",

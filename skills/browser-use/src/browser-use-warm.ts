@@ -181,6 +181,7 @@ export async function runWarmStart(input: {
 
 		const repair = await repairSelectedMcporterConfig({
 			runtime: input.runtime,
+			adapter: options.adapter,
 			endpoint: options.endpoint,
 			expectedObservedPort: observedPort(adapter.stderr),
 		});
@@ -371,6 +372,7 @@ function parseEnvelope(stdout: string): Record<string, unknown> {
 
 async function repairSelectedMcporterConfig(input: {
 	runtime: BrowserUseRuntime;
+	adapter: string;
 	endpoint: string;
 	expectedObservedPort?: string;
 }): Promise<
@@ -385,13 +387,13 @@ async function repairSelectedMcporterConfig(input: {
 > {
 	const current = await runMcporter(
 		input.runtime,
-		["config", "get", "chrome-devtools", "--json"],
+		["config", "get", input.adapter, "--json"],
 		MCPORTER_TIMEOUT_MS,
 	);
 	if (!current.ok) {
 		return {
 			ok: false,
-			message: "Cannot inspect selected mcporter chrome-devtools config.",
+			message: `Cannot inspect selected mcporter ${input.adapter} config.`,
 			nextActionId: "inspect-adapter-diagnostics",
 			exitCode: 20,
 			repairActions: [],
@@ -400,7 +402,7 @@ async function repairSelectedMcporterConfig(input: {
 	if (current.result.timedOut || current.result.exitCode !== 0) {
 		return {
 			ok: false,
-			message: "Cannot inspect selected mcporter chrome-devtools config before repair.",
+			message: `Cannot inspect selected mcporter ${input.adapter} config before repair.`,
 			nextActionId: "inspect-adapter-diagnostics",
 			exitCode: 20,
 			repairActions: [],
@@ -411,7 +413,7 @@ async function repairSelectedMcporterConfig(input: {
 		return {
 			ok: false,
 			message:
-				"Selected mcporter chrome-devtools binding changed before repair; aborting config write.",
+				`Selected mcporter ${input.adapter} binding changed before repair; aborting config write.`,
 			nextActionId: "inspect-adapter-diagnostics",
 			exitCode: 20,
 			repairActions: [],
@@ -423,7 +425,7 @@ async function repairSelectedMcporterConfig(input: {
 		[
 			"config",
 			"set",
-			"chrome-devtools",
+			input.adapter,
 			"--browserUrl",
 			input.endpoint,
 			"--json",
@@ -433,7 +435,7 @@ async function repairSelectedMcporterConfig(input: {
 	if (!update.ok || update.result.timedOut || update.result.exitCode !== 0) {
 		return {
 			ok: false,
-			message: "Failed to update selected mcporter chrome-devtools config.",
+			message: `Failed to update selected mcporter ${input.adapter} config.`,
 			nextActionId: "inspect-adapter-diagnostics",
 			exitCode: 20,
 			repairActions: [],

@@ -62,7 +62,7 @@ Route through the Router continuation chain after the warm stack is ready:
 2. `browser-adapter-router prepare` (supply proof + report + task preconditions) → route-evidence envelope.
 3. `browser-adapter-router route` (supply envelope) → route artifact. Follow `use_selected_browser_adapter`.
 4. If Router asks for attachment proof: `preflight-browser-adapter check --adapter <id>` → Adapter Proof artifact, then rerun `prepare` + `route` with fresh proof.
-5. `browser-adapter-router status` against a prepared envelope for human route projection.
+5. Use `browser-adapter-router report` for human-readable capability projection until Router status is shipped.
 
 Exact flags and env vars: run `<command> --help` or read `skills/browser-use/src/command-contract.ts`. Follow each command's `continuation.next_action_id`; obey `continuation.constraints` — skip adapter fallback and cold-browser fallback when forbidden.
 

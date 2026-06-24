@@ -66,6 +66,53 @@ describe("browser-use warm start", () => {
 		expect(help.stdout).not.toContain("9223");
 	});
 
+	test("launch path records Chrome spawn when no listener exists yet", async () => {
+		const { runtime, spawnChromeCalls } = await warmRuntime({
+			listener: "after-spawn",
+			endpointReady: "after-spawn",
+		});
+		const result = await runForTest(
+			["warm", "start", "--profile", runtime.env.BROWSER_USE_PROFILE_DIR ?? "", "--json"],
+			runtime,
+		);
+		const envelope = parseJson(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(envelope.data).toMatchObject({
+			action: "warm_stack_ready",
+			browser_pid: 12345,
+		});
+		expect(spawnChromeCalls).toHaveLength(1);
+		expect(spawnChromeCalls[0]).toMatchObject({
+			port: "9222",
+			profileDir: runtime.env.BROWSER_USE_PROFILE_DIR,
+		});
+	});
+
+	test("port-conflict listener fails before launching another browser", async () => {
+		const { runtime, spawnChromeCalls } = await warmRuntime({
+			endpointReady: "after-spawn",
+			listener: {
+				pid: 54321,
+				command: "python3 -m http.server 9222",
+			},
+		});
+		const result = await runForTest(
+			["warm", "start", "--profile", runtime.env.BROWSER_USE_PROFILE_DIR ?? "", "--json"],
+			runtime,
+		);
+		const envelope = parseJson(result.stdout);
+
+		expect(result.exitCode).toBe(20);
+		expect(envelope.error).toMatchObject({
+			code: "warm_start_browser_entry_required",
+		});
+		expect(envelope.continuation).toMatchObject({
+			next_action_id: "launch-warm-chrome",
+		});
+		expect(spawnChromeCalls).toEqual([]);
+	});
+
 	test("returns repair-adapter-config without mutating stale mcporter config by default", async () => {
 		const { runtime, calls } = await warmRuntime({
 			commandResponses: {

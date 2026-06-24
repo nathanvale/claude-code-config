@@ -105,6 +105,24 @@ const stationScenarios: Record<
 			"--json",
 		]);
 	},
+	"warm-start.repair_abort": async (station) => {
+		const { runtime } = await warmRuntime({
+			commandResponses: {
+				"mcporter config get chrome-devtools --json": [
+					okCommand(configStdout("9223")),
+					okCommand(JSON.stringify({ args: ["chrome-devtools-mcp"] })),
+				],
+			},
+		});
+		return runStation(station, runtime, [
+			"warm",
+			"start",
+			"--profile",
+			runtime.env.BROWSER_USE_PROFILE_DIR ?? "",
+			"--repair-adapter-config",
+			"--json",
+		]);
+	},
 	"warm-start.sticky_daemon_retry": async (station) => {
 		const { runtime } = await warmRuntime({
 			commandResponses: {

@@ -40,20 +40,24 @@ export type BrowserUseRuntime = AdapterProofRuntime & {
 export function createDefaultBrowserUseRuntime(
 	overrides: Partial<BrowserUseRuntime> = {},
 ): BrowserUseRuntime {
+	const {
+		ensureDirectory: _ensureDirectory,
+		readStdin: _readStdin,
+		writeTextFile: _writeTextFile,
+		...adapterOverrides
+	} = overrides;
 	const base = createDefaultAdapterProofRuntime({
-		...overrides,
+		...adapterOverrides,
 		runCommand:
 			overrides.runCommand ??
 			((input: McporterCommandInput) => spawnMcporterCommand(input)),
 		readTextFile:
 			overrides.readTextFile ?? ((path: string) => readFile(path, "utf-8")),
-		writeTextFile:
-			overrides.writeTextFile ??
-			((path: string, contents: string) =>
-				writeStateFileAtomically(path, contents)),
 	});
 	return {
 		...base,
+		writeTextFile: (path: string, contents: string) =>
+			writeStateFileAtomically(path, contents),
 		ensureDirectory: async (path: string) => {
 			await mkdir(path, { recursive: true, mode: 0o700 });
 		},

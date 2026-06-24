@@ -1592,7 +1592,7 @@ const browserUseSelectEnvVars = [
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
 const browserUseExitCodes = {
-	"0": "Browser Targets listed or Browser Operation completed.",
+	"0": "Warm Start completed, Browser Targets listed, or Browser Operation completed.",
 	"1": "Runtime dependency failed.",
 	"2": "Usage error.",
 	"20": "Route/proof/target binding failed closed.",
