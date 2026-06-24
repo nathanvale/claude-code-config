@@ -30,7 +30,7 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 - `skill`: skill id.
 - `outcome`: `confirmed`, `failed`, or `ambiguous`.
 - `goal`: what the skill run tried to accomplish.
-- `friction.category`: one seeded friction category.
+- `friction.category`: `none`, `missing_context`, `unclear_ownership`, `tool_failure`, `verification_tax`, `bad_guidance`, `scope_mismatch`, or `other`.
 - `friction.note`: short evidence note.
 - `verification_burden.level`: `none`, `light`, `moderate`, or `heavy`.
 - `verification_burden.note`: short evidence note.
@@ -40,9 +40,10 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 - `skill_run_id`: explicit trusted run id when available.
 - `touched_surfaces`: owner paths or labels; max 5.
 - `observations`: evidence-only notes; max 3.
+- `observations[].kind`: `friction`, `verification_gap`, `missing_context`, `ownership_gap`, `tool_failure`, `bad_guidance`, `scope_mismatch`, `runtime_signal`, `product_signal`, or `other`.
 - `observations[].target`: owner path or label.
 - `observations[].summary`: short evidence summary.
-- `observations[].evidence_basis`: structured basis.
+- `observations[].evidence_basis`: `driver_observed`, `verification_step`, `tool_result`, `missing_source`, or `other`.
 
 ## Forbidden Content
 

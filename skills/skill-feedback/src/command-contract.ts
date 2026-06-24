@@ -2040,7 +2040,7 @@ function parseFrictionSignal(
 		return {
 			kind: "invalid",
 			path: `${path}.category`,
-			reason: "invalid_category",
+			reason: `invalid_category; expected one of ${FRICTION_CATEGORIES.join(", ")}`,
 		};
 	}
 	if (typeof raw.note !== "string") {
@@ -2072,7 +2072,7 @@ function parseVerificationBurden(
 		return {
 			kind: "invalid",
 			path: `${path}.level`,
-			reason: "invalid_level",
+			reason: `invalid_level; expected one of ${VERIFICATION_BURDEN_LEVELS.join(", ")}`,
 		};
 	}
 	if (typeof raw.note !== "string") {
@@ -2195,7 +2195,7 @@ function parseObservation(
 	}
 	const kind = stringFromUnknown(raw.kind);
 	if (!isObservationKind(kind)) {
-		return { kind: "invalid", path: `${path}.kind`, reason: "invalid_kind" };
+		return { kind: "invalid", path: `${path}.kind`, reason: `invalid_kind; expected one of ${OBSERVATION_KINDS.join(", ")}` };
 	}
 	if (typeof raw.summary !== "string") {
 		return {
@@ -2209,7 +2209,7 @@ function parseObservation(
 		return {
 			kind: "invalid",
 			path: `${path}.evidence_basis`,
-			reason: "invalid_evidence_basis",
+			reason: `invalid_evidence_basis; expected one of ${OBSERVATION_EVIDENCE_BASIS.join(", ")}`,
 		};
 	}
 	let target: ReportCardTarget | undefined;
