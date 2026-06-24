@@ -167,26 +167,17 @@
     "imessage@side-quest-engineering": false,
     "unifi-admin@side-quest-engineering": false,
     "contacts-hygiene@side-quest-engineering": false,
-    "browser-automation@side-quest-engineering": false,
     "compound-engineering@every-marketplace": true,
     "bitbucket-pr@side-quest-engineering": true,
-    "memory-os@side-quest-engineering": false,
     "playground@claude-plugins-official": false,
     "explanatory-output-style@claude-code-plugins": false,
-    "microsoft-docs@claude-plugins-official": false,
-    "superwhisper@superwhisper": false
+    "microsoft-docs@claude-plugins-official": false
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
       "source": {
         "source": "github",
         "repo": "anthropics/claude-plugins-official"
-      }
-    },
-    "superwhisper": {
-      "source": {
-        "source": "github",
-        "repo": "superultrainc/superwhisper-claude-code"
       }
     }
   },
