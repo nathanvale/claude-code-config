@@ -1708,6 +1708,9 @@ export function createWriterProof(
 	key: Uint8Array,
 	nonce: string,
 ): WriterProof {
+	if (!isHexString(nonce, 32)) {
+		throw new Error("writer proof nonce must be 32-char lowercase hex");
+	}
 	const contentDigest = writerProofContentDigest(report);
 	const payload = writerProofPayload(report, nonce, contentDigest);
 	return {
@@ -2121,7 +2124,7 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 		evidenceGap(
 			"cost_unavailable",
 			"cost",
-			"Skill-attributed cost is unavailable in v1.",
+			"Skill-attributed cost is unavailable for this report.",
 		),
 	]);
 	return {
@@ -2249,7 +2252,7 @@ function normalizeV2Report(
 		evidenceGap(
 			"cost_unavailable",
 			"cost",
-			"Skill-attributed cost is unavailable in v1.",
+			"Skill-attributed cost is unavailable for this report.",
 		),
 	]);
 	const proofVerified = proofContext?.verified === true;

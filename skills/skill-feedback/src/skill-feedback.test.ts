@@ -741,15 +741,15 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			writer_proof?: unknown;
 			skill_run_id?: string;
 			skill_run_id_provenance?: string;
-			};
-			expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-			const envelopeData = parseEnvelope(result.stdout).data as {
-				proof_status?: string;
-				proof_diagnostics?: string[];
-			};
-			expect(envelopeData.proof_status).toBe("attached");
-			expect(envelopeData.proof_diagnostics).toEqual([]);
-			expect(report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		};
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		const envelopeData = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(envelopeData.proof_status).toBe("attached");
+		expect(envelopeData.proof_diagnostics).toEqual([]);
+		expect(report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
 		expect(report.skill_run_id).not.toBe(detectionId);
 		expect(report.skill_run_id_provenance).toBe("runtime_owned");
 		expect(disk).not.toContain(detectionId);
@@ -777,6 +777,48 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			trusted_run: true,
 			trusted_skill_run_id: report.skill_run_id,
 		});
+	});
+
+	test("Claude detection-derived run ids contribute to hook report ids", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root);
+		const writeCapture = async (detectionId: string) => {
+			const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+				runtime,
+				internalTelemetry: {
+					model: "claude-opus-4-8",
+					detectionId,
+					captureMetadata: { capture_runtime: "claude_stop" },
+				},
+				runId: `record-${detectionId}`,
+			});
+			expect(result.exitCode).toBe(0);
+			if (!result.reportPath) throw new Error("expected report path");
+			const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+				report_id: string;
+				skill_run_id?: string;
+			};
+			return { report, result };
+		};
+
+		const first = await writeCapture("session:report-id-one");
+		const second = await writeCapture("session:report-id-two");
+
+		expect(first.report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(second.report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(first.report.skill_run_id).not.toBe(second.report.skill_run_id);
+		expect(first.report.report_id).not.toBe(second.report.report_id);
+		expect(first.result.reportPath).not.toBe(second.result.reportPath);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-distinct-hook-report-ids",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).not.toContain("duplicate_report_id");
+		expect(data.review_units.every((unit) => unit.trusted_run === true)).toBe(
+			true,
+		);
 	});
 
 	test("whitespace-only detection id cannot derive a runtime-owned run id", async () => {
@@ -940,7 +982,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		};
 		expect(data.proof_status).toBe("unavailable");
 		expect(data.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
-		await expect(readFile(keyPath, "utf-8")).rejects.toThrow();
+		expect(await readFile(keyPath, "utf-8")).toBe("bad\n");
 		if (!result.reportPath) throw new Error("expected report path");
 		const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
 			writer_proof?: unknown;
@@ -1046,8 +1088,8 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 	});
 
-			test("review skips trust store json files as non-report artifacts", async () => {
-				const { root } = await writeRecord(BASE_RECEIPT);
+	test("review skips trust store json files as non-report artifacts", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT);
 		await writeFile(
 			join(root, ".skill-feedback", ".trust", "not-a-report.json"),
 			'{"schema_version":"2"}\n',
@@ -1084,7 +1126,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 		expect(envelope.data).toMatchObject({ changed_state: "none" });
 		expect(result.stdout).not.toContain("write failed");
-		await expect(readFile(finalPaths[0] ?? "", "utf-8")).rejects.toThrow();
+		const reportPath = finalPaths.find((path) => !path.includes(".trust"));
+		expect(reportPath).toBeTruthy();
+		await expect(readFile(reportPath ?? "", "utf-8")).rejects.toThrow();
 	});
 
 	test("closeout write failure returns an envelope with no changed state", async () => {

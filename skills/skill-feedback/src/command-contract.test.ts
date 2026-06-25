@@ -1400,6 +1400,20 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		expect(normalized.report.writer_proof_verified).toBe(true);
 	});
 
+	test("rejects invalid writer proof nonces before signing", () => {
+		const report = schema2Report();
+
+		expect(() =>
+			createWriterProof(report, WRITER_PROOF_KEY, "not-a-hex-nonce"),
+		).toThrow("writer proof nonce must be 32-char lowercase hex");
+		expect(() =>
+			createWriterProof(report, WRITER_PROOF_KEY, "AA".repeat(16)),
+		).toThrow("writer proof nonce must be 32-char lowercase hex");
+		expect(() =>
+			createWriterProof(report, WRITER_PROOF_KEY, "ab".repeat(16)),
+		).not.toThrow();
+	});
+
 	test("valid writer proof preserves only Claude Stop runtime-owned provenance", () => {
 		const correlationOwnedHook = schema2Report({
 			skill_run_id_provenance: "correlation_owned",

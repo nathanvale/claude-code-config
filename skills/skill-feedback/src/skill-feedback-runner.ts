@@ -2923,6 +2923,9 @@ async function attachWriterProof(input: {
 		report.skill_run_id = deriveWriterOwnedSkillRunId(key.key, detectionId);
 		report.skill_run_id_provenance = "runtime_owned";
 	}
+	if (report.evidence_source === "hook_capture") {
+		report.report_id = hookCaptureReportId(report);
+	}
 	try {
 		return {
 			report: {
@@ -2979,7 +2982,6 @@ async function loadOrCreateWriterProofKey(
 		} catch {
 			const raced = await readWriterProofKeyFile(keyPath, runtime);
 			if (raced.ok) return raced;
-			await runtime.removeFile(keyPath).catch(() => undefined);
 			return { ok: false, diagnostics: ["trust_store_key_unusable"] };
 		}
 	}
@@ -3285,14 +3287,9 @@ function buildHookCaptureReport(
 		touched_surfaces: [],
 		observations: [],
 	};
-	const reportSeed = {
-		generated_ts: report.generated_ts,
-		report_card: reportCard,
-		runtime,
-	};
-	return {
+	const persisted: ReportCardSoftwareLearningReport = {
 		schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-		report_id: stableReportId("hook", reportSeed),
+		report_id: "",
 		untrusted_evidence: true,
 		generated_ts: report.generated_ts,
 		evidence_source: "hook_capture",
@@ -3309,6 +3306,14 @@ function buildHookCaptureReport(
 		evidence_gaps: hookCaptureEvidenceGaps(report),
 		redactions,
 	};
+	return { ...persisted, report_id: hookCaptureReportId(persisted) };
+}
+
+function hookCaptureReportId(report: ReportCardSoftwareLearningReport): string {
+	const { report_id, writer_proof, ...seed } = report;
+	void report_id;
+	void writer_proof;
+	return stableReportId("hook", seed);
 }
 
 function hookCaptureFriction(note: string): FrictionSignal {
