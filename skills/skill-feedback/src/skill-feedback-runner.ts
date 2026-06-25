@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
 	chmod,
@@ -41,6 +41,7 @@ import {
 	type CorrelationStatus,
 	type EvidenceGap,
 	type EvidenceGapCode,
+	type FrictionSignal,
 	type FrictionCategory,
 	type HealthClaimReadiness,
 	type HealthInboxStatus,
@@ -63,14 +64,17 @@ import {
 	type SkillFeedbackPurgeLane,
 	type SkillFeedbackOutcome,
 	type SoftwareLearningReport,
+	type WriterProofHealth,
+	type WriterProofWriteStatus,
 	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	buildSoftwareLearningReport,
-	isCaptureRuntime,
-	isSkillIdentityProvenance,
+	createWriterProof,
+	deriveWriterOwnedSkillRunId,
 	normalizeReport,
 	parseCloseoutReceipt,
 	parseReceipt,
 	skillFeedbackContracts,
+	verifyWriterProof,
 } from "./command-contract";
 import {
 	redactReportCardSoftwareLearningReport,
@@ -86,6 +90,8 @@ import {
 const RUNTIME_FAILURE_EXIT_CODE = 1;
 const USAGE_EXIT_CODE = 2;
 const INBOX_DIR = ".skill-feedback";
+const TRUST_DIR = ".trust";
+const TRUST_KEY_FILE = "key";
 const LOW_SIGNAL_INBOX_DIR = "low-signal";
 const LOW_SIGNAL_UNKNOWN_SKILL_REASON_ID = "unknown_skill_codex_stop";
 const LOW_SIGNAL_LANE_REPORT_REASON_ID = "low_signal_lane_report";
@@ -329,21 +335,21 @@ export type ReadTargetResolution =
 	  };
 
 /**
- * Engine-read telemetry merged into the receipt from stdin (KTD2a).
+ * Public stdin telemetry merged into the receipt.
  *
- * `model` is NEVER a CLI flag — it arrives only here, lifted from the harness
- * transcript by the Stop hook and piped to the runner over stdin. Reading it as
- * a trusted side input (parallel to {@link SkillFeedbackRuntime.readGitSha}) is
- * what keeps "telemetry trusted, narration redacted" a real invariant: there is
- * no flag an agent could use to author it and dodge the redactor.
- *
- * `usage` is intentionally NOT carried here in v0 — the transcript holds no
- * skill-scoped token total (the skill runs inline after the Stop hook's view),
- * so usage stays an explicit record gap until v1 sources it from OTel.
+ * Only `model` is accepted here. Trust-bearing capture fields use
+ * {@link InternalRecordTelemetry}, which is passed by hook code that calls the
+ * runner directly instead of piping public `record` stdin.
  */
 export type StdinTelemetry = {
 	model?: string;
-} & CaptureMetadata;
+};
+
+export type InternalRecordTelemetry = {
+	model?: string;
+	captureMetadata?: CaptureMetadata;
+	detectionId?: string;
+};
 
 export type SkillFeedbackRuntime = {
 	repoRoot: () => string;
@@ -370,21 +376,23 @@ export function createDefaultSkillFeedbackRuntime(
 	overrides: SkillFeedbackRuntimeOverrides = {},
 ): SkillFeedbackRuntime {
 	const runGit = overrides.runGit ?? defaultGitRunner;
+	const repoRoot = overrides.repoRoot ?? (() => process.cwd());
 	return {
-		repoRoot: () => process.cwd(),
+		repoRoot,
 		resolveReadTarget:
 			overrides.resolveReadTarget ??
 			((targetPath) =>
 				resolveSkillFeedbackReadTarget({
 					targetPath,
-					cwd: process.cwd(),
+					cwd: repoRoot(),
 					runGit,
 				})),
 		readGitSha: async () => {
-			const result = await runProcess(["git", "rev-parse", "HEAD"], process.cwd());
+			const cwd = repoRoot();
+			const result = await runProcess(["git", "rev-parse", "HEAD"], cwd);
 			return result.exitCode === 0 ? result.stdout.trim() : "";
 		},
-		readSkillVersion: async (skill) => skillVersionFromPackage(skill),
+		readSkillVersion: async (skill) => skillVersionFromPackage(skill, repoRoot()),
 		readStdinTelemetry: async () => parseStdinTelemetry(await readStdin()),
 		checkIgnored: async (repoRoot, relativePath) => {
 			const result = await runProcess(
@@ -414,6 +422,7 @@ export async function recordSkillFeedbackReceipt(
 	rawReceipt: unknown,
 	options: {
 		runtime?: SkillFeedbackRuntime;
+		internalTelemetry?: InternalRecordTelemetry;
 		runId?: string;
 	} = {},
 ): Promise<SkillFeedbackProcessResult> {
@@ -421,7 +430,7 @@ export async function recordSkillFeedbackReceipt(
 	const runId = options.runId ?? "skill-feedback-record";
 	const repoRoot = resolve(runtime.repoRoot());
 
-	const prepared = await prepareReceipt(rawReceipt, runtime);
+	const prepared = await prepareReceipt(rawReceipt, runtime, options.internalTelemetry);
 	if (!prepared.ok) {
 		const namesField =
 			prepared.code === "unknown_receipt_field" ||
@@ -461,8 +470,15 @@ export async function recordSkillFeedbackReceipt(
 		);
 	}
 
-	const report = buildSoftwareLearningReport(parsed, prepared.captureMetadata);
-	const redacted = redactSoftwareLearningReport(report).value;
+	const legacyReport = buildSoftwareLearningReport(
+		parsed,
+		prepared.captureMetadata,
+	);
+	const redactedLegacy = redactSoftwareLearningReport(legacyReport);
+	const report = buildHookCaptureReport(
+		redactedLegacy.value,
+		redactedLegacy.redactions,
+	);
 	const ignoreStatus = await runtime.checkIgnored(repoRoot, `${INBOX_DIR}/`);
 	if (ignoreStatus !== 0) {
 		return errorResult(
@@ -490,7 +506,7 @@ export async function recordSkillFeedbackReceipt(
 			},
 		);
 	}
-	const lane = isLowSignalCodexStopReport(redacted) ? "low-signal" : "primary";
+	const lane = isLowSignalCodexStopReport(report) ? "low-signal" : "primary";
 	const laneInbox =
 		lane === "low-signal"
 			? await prepareSkillFeedbackSubdirectory(
@@ -512,11 +528,18 @@ export async function recordSkillFeedbackReceipt(
 		);
 	}
 	const inboxPath = laneInbox.path;
-	const reportPath = join(inboxPath, reportFileName(redacted));
+	const proof = await attachWriterProof({
+		report,
+		inboxPath: inbox.path,
+		runtime,
+		detectionId: prepared.detectionId,
+	});
+	const persisted = proof.report;
+	const reportPath = join(inboxPath, reportFileName(persisted));
 	try {
 		await runtime.writePrivateFile(
 			reportPath,
-			`${JSON.stringify(redacted, null, "\t")}\n`,
+			`${JSON.stringify(persisted, null, "\t")}\n`,
 			0o600,
 		);
 	} catch {
@@ -538,14 +561,14 @@ export async function recordSkillFeedbackReceipt(
 		run_id: runId,
 		data: {
 			contract: SKILL_FEEDBACK_CONTRACT_ID,
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-			...redacted,
+			...persisted,
+			...writerProofWriteStatus(proof),
 		},
 	}) satisfies CliRuntimeSuccessEnvelope<
-		SoftwareLearningReport & {
+		ReportCardSoftwareLearningReport & {
 			contract: typeof SKILL_FEEDBACK_CONTRACT_ID;
 			schema_version: typeof SKILL_FEEDBACK_SCHEMA_VERSION;
-		}
+		} & WriterProofWriteStatus
 	>;
 	return {
 		exitCode: 0,
@@ -646,12 +669,18 @@ export async function closeoutSkillFeedbackReceipt(
 				},
 			);
 		}
-		const fileName = reportFileName(redacted.value);
+		const proof = await attachWriterProof({
+			report: redacted.value,
+			inboxPath,
+			runtime,
+		});
+		const persisted = proof.report;
+		const fileName = reportFileName(persisted);
 		const reportPath = join(inboxPath, fileName);
 		try {
 			await runtime.writePrivateFile(
 				reportPath,
-				`${JSON.stringify(redacted.value, null, "\t")}\n`,
+				`${JSON.stringify(persisted, null, "\t")}\n`,
 				0o600,
 			);
 		} catch {
@@ -697,15 +726,16 @@ export async function closeoutSkillFeedbackReceipt(
 		const data: CloseoutResultData = {
 			contract: SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-			report_id: redacted.value.report_id,
-			...(redacted.value.skill_run_id
-				? { skill_run_id: redacted.value.skill_run_id }
+			report_id: persisted.report_id,
+			...(persisted.skill_run_id
+				? { skill_run_id: persisted.skill_run_id }
 				: {}),
-			correlation_status: redacted.value.correlation_status,
-			evidence_gaps: redacted.value.evidence_gaps,
+			correlation_status: persisted.correlation_status,
+			evidence_gaps: persisted.evidence_gaps,
 			redactions: redacted.redactions,
 			written_path: `${INBOX_DIR}/${fileName}`,
 			closeout_coverage_contribution: "material_closeout",
+			...writerProofWriteStatus(proof),
 		};
 		const envelope = createCliRuntimeSuccessEnvelope({
 			run_id: runId,
@@ -1173,6 +1203,7 @@ type ReviewInboxRead = {
 	inboxRootStatus: InboxRootStatus;
 	skippedUnsafeCount: number;
 	invalidCount: number;
+	proofDiagnostics: string[];
 };
 
 type InboxRootStatus = "missing" | "readable" | "unsafe";
@@ -1218,6 +1249,7 @@ function emptyReviewInboxRead(): ReviewInboxRead {
 		inboxRootStatus: "missing",
 		skippedUnsafeCount: 0,
 		invalidCount: 0,
+		proofDiagnostics: [],
 	};
 }
 
@@ -1232,19 +1264,38 @@ async function readReviewInbox(
 		skippedUnsafeCount: scan.skippedUnsafeCount,
 		invalidCount: scan.invalidPaths.length,
 	};
-		for (const file of scan.files) {
-			let raw: unknown;
-			try {
-				raw = JSON.parse(await runtime.readText(file.path)) as unknown;
-			} catch (error) {
-				if (isPermissionErrorCode(error)) {
-					state.skippedUnsafeCount += 1;
-					continue;
-				}
-				state.invalidCount += 1;
+	const proofKey =
+		scan.rootStatus === "readable"
+			? await readWriterProofKey(repoRoot, runtime)
+			: ({ ok: false, diagnostics: [] } satisfies WriterProofKeyRead);
+	state.proofDiagnostics.push(...proofKey.diagnostics);
+	const rawReports: Array<{ file: SafeInboxJsonFile; raw: unknown }> = [];
+	for (const file of scan.files) {
+		try {
+			rawReports.push({
+				file,
+				raw: JSON.parse(await runtime.readText(file.path)) as unknown,
+			});
+		} catch (error) {
+			if (isPermissionErrorCode(error)) {
+				state.skippedUnsafeCount += 1;
 				continue;
 			}
-		const normalized = normalizeReport(raw);
+			state.invalidCount += 1;
+		}
+	}
+	const duplicateReportIds = duplicateReportIdSet(rawReports.map((entry) => entry.raw));
+	const duplicateProofNonces = duplicateWriterProofNonceSet(
+		rawReports.map((entry) => entry.raw),
+	);
+	for (const { file, raw } of rawReports) {
+		const proofContext = proofContextForRawReport({
+			raw,
+			proofKey,
+			duplicateReportIds,
+			duplicateProofNonces,
+		});
+		const normalized = normalizeReport(raw, proofContext);
 		if (normalized.kind !== "ok") {
 			state.invalidCount += 1;
 			continue;
@@ -1260,6 +1311,81 @@ async function readReviewInbox(
 		}
 	}
 	return state;
+}
+
+type WriterProofKeyRead =
+	| { ok: true; key: Uint8Array; diagnostics: string[] }
+	| { ok: false; diagnostics: string[] };
+
+function proofContextForRawReport(input: {
+	raw: unknown;
+	proofKey: WriterProofKeyRead;
+	duplicateReportIds: ReadonlySet<string>;
+	duplicateProofNonces: ReadonlySet<string>;
+}) {
+	const diagnostics: string[] = [];
+	const reportId = rawStringField(input.raw, "report_id");
+	const nonce = writerProofNonce(input.raw);
+	if (input.duplicateReportIds.has(reportId ?? "")) {
+		diagnostics.push("duplicate_report_id");
+	}
+	if (input.duplicateProofNonces.has(nonce ?? "")) {
+		diagnostics.push("duplicate_writer_proof_nonce");
+	}
+	if (!input.proofKey.ok) {
+		diagnostics.push(...input.proofKey.diagnostics);
+		return { verified: false, diagnostics: uniqueSorted(diagnostics) };
+	}
+	const verified = verifyWriterProof(input.raw, input.proofKey.key);
+	diagnostics.push(...(verified.diagnostics ?? []));
+	return {
+		verified: verified.verified && diagnostics.length === 0,
+		diagnostics: uniqueSorted(diagnostics),
+	};
+}
+
+function duplicateReportIdSet(reports: readonly unknown[]): ReadonlySet<string> {
+	return duplicateStringSet(reports.map((report) => rawStringField(report, "report_id")));
+}
+
+function duplicateWriterProofNonceSet(
+	reports: readonly unknown[],
+): ReadonlySet<string> {
+	return duplicateStringSet(reports.map(writerProofNonce));
+}
+
+function duplicateStringSet(values: readonly (string | undefined)[]): ReadonlySet<string> {
+	const counts = new Map<string, number>();
+	for (const value of values) {
+		if (!value) continue;
+		counts.set(value, (counts.get(value) ?? 0) + 1);
+	}
+	return new Set(
+		[...counts.entries()]
+			.filter(([, count]) => count > 1)
+			.map(([value]) => value),
+	);
+}
+
+function rawStringField(raw: unknown, field: string): string | undefined {
+	return raw &&
+		typeof raw === "object" &&
+		!Array.isArray(raw) &&
+		typeof (raw as Record<string, unknown>)[field] === "string"
+		? ((raw as Record<string, unknown>)[field] as string)
+		: undefined;
+}
+
+function writerProofNonce(raw: unknown): string | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const proof = (raw as Record<string, unknown>).writer_proof;
+	if (!proof || typeof proof !== "object" || Array.isArray(proof)) return undefined;
+	const nonce = (proof as Record<string, unknown>).nonce;
+	return typeof nonce === "string" ? nonce : undefined;
+}
+
+function uniqueSorted(values: readonly string[]): string[] {
+	return [...new Set(values)].sort();
 }
 
 function lowSignalReasonIdFor(
@@ -1382,6 +1508,7 @@ async function scanSafeJsonDirectory(input: {
 	}
 	for (const entry of entries.sort()) {
 		const reportPath = join(input.directoryPath, entry);
+		if (entry === TRUST_DIR) continue;
 		if (!entry.endsWith(".json")) {
 			if (isPartialInboxTempEntry(entry)) {
 				input.state.invalidPaths.push(relative(input.repoRoot, reportPath));
@@ -1426,17 +1553,37 @@ async function scanPurgeCandidates(
 	runtime: SkillFeedbackRuntime,
 ): Promise<SkillFeedbackPurgeScan> {
 	const scan = await scanSafeInboxJsonFiles(repoRoot, runtime);
+	const proofKey =
+		scan.rootStatus === "readable"
+			? await readWriterProofKey(repoRoot, runtime)
+			: ({ ok: false, diagnostics: [] } satisfies WriterProofKeyRead);
 	const candidates: SkillFeedbackPurgeCandidate[] = [];
 	const invalidPaths: string[] = [...scan.invalidPaths];
+	const rawReports: Array<{ file: SafeInboxJsonFile; raw: unknown }> = [];
 	for (const file of scan.files) {
-		let raw: unknown;
 		try {
-			raw = JSON.parse(await runtime.readText(file.path)) as unknown;
+			rawReports.push({
+				file,
+				raw: JSON.parse(await runtime.readText(file.path)) as unknown,
+			});
 		} catch {
 			invalidPaths.push(file.relativePath);
-			continue;
 		}
-		const normalized = normalizeReport(raw);
+	}
+	const duplicateReportIds = duplicateReportIdSet(
+		rawReports.map((entry) => entry.raw),
+	);
+	const duplicateProofNonces = duplicateWriterProofNonceSet(
+		rawReports.map((entry) => entry.raw),
+	);
+	for (const { file, raw } of rawReports) {
+		const proofContext = proofContextForRawReport({
+			raw,
+			proofKey,
+			duplicateReportIds,
+			duplicateProofNonces,
+		});
+		const normalized = normalizeReport(raw, proofContext);
 		if (normalized.kind !== "ok") {
 			invalidPaths.push(file.relativePath);
 			continue;
@@ -1623,10 +1770,11 @@ function buildReviewResultData(input: {
 			: {}),
 	};
 	const ledger = reduceReviewLedger(reports);
-	const claimReadiness = deriveClaimReadiness([
+	const allReports = [
 		...reports,
 		...lowSignalReports.map((entry) => entry.report),
-	]);
+	];
+	const claimReadiness = deriveClaimReadiness(allReports);
 	const inboxStatus = healthInboxStatus(input.inbox);
 	const correlation = healthCorrelation(reports);
 	const counts = healthCounts(input.inbox, correlation);
@@ -1683,6 +1831,7 @@ function buildReviewResultData(input: {
 		review_units: ledger.review_units,
 		ledger_entries: ledger.ledger_entries,
 		anchor_miss_telemetry: ledger.anchor_miss_telemetry,
+		proof_health: writerProofHealth(allReports, input.inbox.proofDiagnostics),
 		claim_readiness: claimReadiness,
 	};
 }
@@ -1707,6 +1856,10 @@ function buildHealthResultData(input: {
 }): HealthResultData {
 	const primaryReports = input.inbox.primaryReports;
 	const lowSignalReports = input.inbox.lowSignalReports;
+	const allReports = [
+		...primaryReports,
+		...lowSignalReports.map((entry) => entry.report),
+	];
 	const inboxStatus = healthInboxStatus(input.inbox);
 	const correlation = healthCorrelation(primaryReports);
 	const counts = healthCounts(input.inbox, correlation);
@@ -1722,10 +1875,7 @@ function buildHealthResultData(input: {
 		retentionWarning: retention.warning,
 	});
 	const claimReadiness = toHealthClaimReadiness(
-		deriveClaimReadiness([
-			...primaryReports,
-			...lowSignalReports.map((entry) => entry.report),
-		]),
+		deriveClaimReadiness(allReports),
 	);
 	const readTarget = healthReadTargetData(input.readTarget, inboxStatus);
 	return {
@@ -1741,6 +1891,7 @@ function buildHealthResultData(input: {
 			),
 		},
 		warnings,
+		proof_health: writerProofHealth(allReports, input.inbox.proofDiagnostics),
 		claim_readiness: claimReadiness,
 		correlation,
 		next_action: nextAction,
@@ -2003,6 +2154,35 @@ function reviewActionKey(item: ReviewOpenItem): string {
 
 function reportEvidenceRef(report: NormalizedSoftwareLearningReport): string {
 	return `report:${report.report_id}`;
+}
+
+function writerProofHealth(
+	reports: readonly NormalizedSoftwareLearningReport[],
+	extraDiagnostics: readonly string[] = [],
+): WriterProofHealth {
+	const diagnostics = new Set(extraDiagnostics);
+	let verifiedCount = 0;
+	let replayDiagnosticsCount = 0;
+	for (const report of reports) {
+		if (report.writer_proof_verified) verifiedCount += 1;
+		let hasReplayDiagnostic = false;
+		for (const diagnostic of report.proof_diagnostics ?? []) {
+			diagnostics.add(diagnostic);
+			if (
+				diagnostic === "duplicate_report_id" ||
+				diagnostic === "duplicate_writer_proof_nonce"
+			) {
+				hasReplayDiagnostic = true;
+			}
+		}
+		if (hasReplayDiagnostic) replayDiagnosticsCount += 1;
+	}
+	return {
+		verified_count: verifiedCount,
+		evidence_only_count: reports.length - verifiedCount,
+		replay_diagnostics_count: replayDiagnosticsCount,
+		diagnostics: [...diagnostics].sort(),
+	};
 }
 
 function deriveInboxHealth(
@@ -2427,6 +2607,7 @@ function pilotCheckpointSummary(input: {
 function renderPlainReview(data: ReviewResultData): string {
 	const lines = ["Skill Feedback Review"];
 	appendPlainReviewHealthBlock(lines, data);
+	appendPlainProofHealth(lines, data.proof_health);
 	appendPlainReviewCoverage(lines, data);
 	appendPlainReviewTriage(lines, data);
 	appendPlainReadiness(lines, data.claim_readiness);
@@ -2630,6 +2811,7 @@ function renderPlainHealth(data: HealthResultData): string {
 		`Inbox status: ${data.inbox_status}`,
 		`Counts: primary=${data.counts.primary} low-signal=${data.counts.low_signal} invalid=${data.counts.invalid} skipped=${data.counts.skipped_unsafe} unlinked=${data.counts.unlinked_primary}`,
 	];
+	appendPlainProofHealth(lines, data.proof_health);
 	appendHealthNewest(lines, data.newest);
 	appendPlainWarnings(lines, data.warnings);
 	appendPlainReadiness(lines, data.claim_readiness);
@@ -2640,6 +2822,19 @@ function renderPlainHealth(data: HealthResultData): string {
 		`Next action: ${data.next_action.action_id} - ${plainSafe(data.next_action.summary)}`,
 	);
 	return `${lines.join("\n")}\n`;
+}
+
+function appendPlainProofHealth(
+	lines: string[],
+	proofHealth: WriterProofHealth,
+): void {
+	const diagnostics =
+		proofHealth.diagnostics.length === 0
+			? ""
+			: ` diagnostics=${proofHealth.diagnostics.map(plainSafe).join(",")}`;
+	lines.push(
+		`Proof: verified=${proofHealth.verified_count} evidence-only=${proofHealth.evidence_only_count} replay=${proofHealth.replay_diagnostics_count}${diagnostics}`,
+	);
 }
 
 function appendHealthNewest(
@@ -2708,6 +2903,174 @@ function daysBetween(startIso: string, endIso: string): number | undefined {
 
 function roundRatio(value: number): number {
 	return Math.round(value * 1000) / 1000;
+}
+
+async function attachWriterProof(input: {
+	report: ReportCardSoftwareLearningReport;
+	inboxPath: string;
+	runtime: SkillFeedbackRuntime;
+	detectionId?: string;
+}): Promise<{ report: ReportCardSoftwareLearningReport; diagnostics: string[] }> {
+	const key = await loadOrCreateWriterProofKey(input.inboxPath, input.runtime);
+	if (!key.ok) return { report: input.report, diagnostics: key.diagnostics };
+	const report: ReportCardSoftwareLearningReport = { ...input.report };
+	const detectionId = normalizeWriterDetectionId(input.detectionId);
+	if (
+		detectionId &&
+		report.evidence_source === "hook_capture" &&
+		report.capture_runtime === "claude_stop"
+	) {
+		report.skill_run_id = deriveWriterOwnedSkillRunId(key.key, detectionId);
+		report.skill_run_id_provenance = "runtime_owned";
+	}
+	if (report.evidence_source === "hook_capture") {
+		report.report_id = hookCaptureReportId(report);
+	}
+	try {
+		return {
+			report: {
+				...report,
+				writer_proof: createWriterProof(
+					report as unknown as Record<string, unknown>,
+					key.key,
+					randomBytes(16).toString("hex"),
+				),
+			},
+			diagnostics: [],
+		};
+	} catch {
+		return {
+			report,
+			diagnostics: ["writer_proof_canonicalization_failed"],
+		};
+	}
+}
+
+function normalizeWriterDetectionId(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed === "" ? undefined : trimmed;
+}
+
+function writerProofWriteStatus(input: {
+	report: ReportCardSoftwareLearningReport;
+	diagnostics: string[];
+}): WriterProofWriteStatus {
+	return input.report.writer_proof
+		? { proof_status: "attached", proof_diagnostics: [] }
+		: {
+				proof_status: "unavailable",
+				proof_diagnostics: [...new Set(input.diagnostics)].sort(),
+			};
+}
+
+async function loadOrCreateWriterProofKey(
+	inboxPath: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<WriterProofKeyRead> {
+	const trustPath = join(inboxPath, TRUST_DIR);
+	const safe = await ensureSafeTrustDirectory(inboxPath, trustPath, runtime);
+	if (!safe.ok) return { ok: false, diagnostics: [safe.reason] };
+	const keyPath = join(trustPath, TRUST_KEY_FILE);
+	const existing = await lstatOptional(keyPath, runtime);
+	if (!existing) {
+		try {
+			await runtime.writePrivateFile(
+				keyPath,
+				`${randomBytes(32).toString("hex")}\n`,
+				0o600,
+			);
+		} catch {
+			const raced = await readWriterProofKeyFile(keyPath, runtime);
+			if (raced.ok) return raced;
+			return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+		}
+	}
+	return readWriterProofKeyFile(keyPath, runtime);
+}
+
+async function readWriterProofKey(
+	repoRoot: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<WriterProofKeyRead> {
+	const trustPath = join(repoRoot, INBOX_DIR, TRUST_DIR);
+	const trustStats = await lstatOptional(trustPath, runtime);
+	if (!trustStats) {
+		return { ok: false, diagnostics: ["trust_store_not_initialized"] };
+	}
+	if (
+		trustStats.isSymbolicLink() ||
+		!trustStats.isDirectory() ||
+		!hasPrivateMode(trustStats, 0o077)
+	) {
+		return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+	}
+	return readWriterProofKeyFile(join(trustPath, TRUST_KEY_FILE), runtime);
+}
+
+async function ensureSafeTrustDirectory(
+	inboxPath: string,
+	trustPath: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<SkillFeedbackResult<Record<never, never>, { reason: string }>> {
+	const existing = await lstatOptional(trustPath, runtime);
+	if (existing?.isSymbolicLink() || (existing && !existing.isDirectory())) {
+		return { ok: false, reason: "trust_store_key_unusable" };
+	}
+	if (!existing) {
+		try {
+			await runtime.mkdirPrivate(trustPath, 0o700);
+		} catch {
+			return { ok: false, reason: "trust_store_key_unusable" };
+		}
+	}
+	const verified = await lstatOptional(trustPath, runtime);
+	if (
+		!verified ||
+		verified.isSymbolicLink() ||
+		!verified.isDirectory() ||
+		!hasPrivateMode(verified, 0o077)
+	) {
+		return { ok: false, reason: "trust_store_key_unusable" };
+	}
+	const inboxReal = await safeRealpath(inboxPath, runtime);
+	const trustReal = await safeRealpath(trustPath, runtime);
+	if (!inboxReal || !trustReal || !isContainedPath(inboxReal, trustReal)) {
+		return { ok: false, reason: "trust_store_key_unusable" };
+	}
+	return { ok: true };
+}
+
+async function readWriterProofKeyFile(
+	keyPath: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<WriterProofKeyRead> {
+	let stats: Stats | undefined;
+	try {
+		stats = await lstatOptional(keyPath, runtime);
+	} catch {
+		return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+	}
+	if (!stats) return { ok: false, diagnostics: ["trust_store_not_initialized"] };
+	if (stats.isSymbolicLink() || !stats.isFile() || !hasPrivateMode(stats, 0o077)) {
+		return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+	}
+	try {
+		const raw = (await runtime.readText(keyPath)).trim();
+		if (!/^[0-9a-f]{64}$/.test(raw)) {
+			return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+		}
+		const key = Buffer.from(raw, "hex");
+		if (key.byteLength !== 32) {
+			return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+		}
+		return { ok: true, key, diagnostics: [] };
+	} catch {
+		return { ok: false, diagnostics: ["trust_store_key_unusable"] };
+	}
+}
+
+function hasPrivateMode(stats: Stats, unsafeMask: number): boolean {
+	return (stats.mode & unsafeMask) === 0;
 }
 
 async function prepareSkillFeedbackInbox(
@@ -2902,6 +3265,128 @@ async function closeoutRuntimeTelemetry(
 	return runtimeTelemetry;
 }
 
+function buildHookCaptureReport(
+	report: SoftwareLearningReport,
+	redactions: number,
+): ReportCardSoftwareLearningReport {
+	const runtime: ReportCardSoftwareLearningReport["runtime"] = {
+		...(report.git_sha ? { git_sha: report.git_sha } : {}),
+		...(report.skill_version ? { skill_version: report.skill_version } : {}),
+		...(report.model ? { model: report.model } : {}),
+		...(!report.gaps.includes("usage") ? { usage: report.usage } : {}),
+	};
+	const reportCard: Partial<CloseoutReceipt> = {
+		skill: report.skill,
+		outcome: report.outcome,
+		goal: report.goal,
+		friction: hookCaptureFriction(report.friction),
+		verification_burden: {
+			level: "none",
+			note: "Hook capture supplied no driver verification burden.",
+		},
+		touched_surfaces: [],
+		observations: [],
+	};
+	const persisted: ReportCardSoftwareLearningReport = {
+		schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+		report_id: "",
+		untrusted_evidence: true,
+		generated_ts: report.generated_ts,
+		evidence_source: "hook_capture",
+		...(report.capture_runtime
+			? { capture_runtime: report.capture_runtime }
+			: {}),
+		...(report.skill_identity_provenance
+			? { skill_identity_provenance: report.skill_identity_provenance }
+			: {}),
+		correlation_status: "unlinked",
+		skill: report.skill,
+		runtime,
+		report_card: reportCard,
+		evidence_gaps: hookCaptureEvidenceGaps(report),
+		redactions,
+	};
+	return { ...persisted, report_id: hookCaptureReportId(persisted) };
+}
+
+function hookCaptureReportId(report: ReportCardSoftwareLearningReport): string {
+	const { report_id, writer_proof, ...seed } = report;
+	void report_id;
+	void writer_proof;
+	return stableReportId("hook", seed);
+}
+
+function hookCaptureFriction(note: string): FrictionSignal {
+	if (note === "" || note === "Hook captured no transcript payload.") {
+		return {
+			category: "none",
+			note: "Hook capture supplied no friction signal.",
+		};
+	}
+	return { category: "other", note };
+}
+
+function hookCaptureEvidenceGaps(
+	report: SoftwareLearningReport,
+): readonly EvidenceGap[] {
+	const gaps = report.gaps
+		.filter((field) => field !== "usage")
+		.map(hookCaptureGap);
+	gaps.push(
+		evidenceGap(
+			"cost_unavailable",
+			"cost",
+			"Skill-attributed cost is unavailable in v1.",
+		),
+	);
+	return uniqueEvidenceGaps(gaps);
+}
+
+function hookCaptureGap(field: SoftwareLearningReport["gaps"][number]): EvidenceGap {
+	switch (field) {
+		case "skill":
+			return evidenceGap("missing_skill", field, "Hook capture is missing skill.");
+		case "outcome":
+			return evidenceGap(
+				"missing_outcome",
+				field,
+				"Hook capture is missing outcome.",
+			);
+		case "goal":
+			return evidenceGap("missing_goal", field, "Hook capture is missing goal.");
+		case "friction":
+			return evidenceGap(
+				"missing_friction",
+				field,
+				"Hook capture is missing friction.",
+			);
+		case "model":
+			return evidenceGap(
+				"missing_runtime_model",
+				field,
+				"Hook capture is missing model.",
+			);
+		case "git_sha":
+			return evidenceGap(
+				"missing_runtime_git_sha",
+				field,
+				"Hook capture is missing git SHA.",
+			);
+		case "skill_version":
+			return evidenceGap(
+				"missing_runtime_skill_version",
+				field,
+				"Hook capture is missing skill version.",
+			);
+		default:
+			return evidenceGap(
+				"cost_unavailable",
+				field,
+				"Hook capture does not carry trusted skill-attributed cost.",
+			);
+	}
+}
+
 function closeoutEvidenceGaps(
 	closeoutGaps: readonly EvidenceGap[],
 	runtimeTelemetry: ReportCardSoftwareLearningReport["runtime"],
@@ -2973,12 +3458,14 @@ function buildCloseoutReport(input: {
 		generated_ts: input.generatedTs,
 		evidence_source: "driver_closeout",
 		correlation_status: input.correlationStatus,
+		skill: input.receipt.skill ?? "",
 		...(input.receipt.skill_run_id
 			? { skill_run_id: input.receipt.skill_run_id }
 			: {}),
 		runtime: input.runtimeTelemetry,
 		report_card: input.receipt,
 		evidence_gaps: input.evidenceGaps,
+		redactions: 0,
 	};
 }
 
@@ -3072,8 +3559,14 @@ function isPermissionErrorCode(error: unknown): boolean {
 async function prepareReceipt(
 	rawReceipt: unknown,
 	runtime: SkillFeedbackRuntime,
+	internalTelemetry: InternalRecordTelemetry = {},
 ): Promise<
-	| { ok: true; fields: Partial<Receipt>; captureMetadata: CaptureMetadata }
+	| {
+			ok: true;
+			fields: Partial<Receipt>;
+			captureMetadata: CaptureMetadata;
+			detectionId?: string;
+	  }
 	| { ok: false; code: string; message: string }
 > {
 	if (
@@ -3111,24 +3604,21 @@ async function prepareReceipt(
 	if (fields.skill && !fields.skill_version) {
 		fields.skill_version = await runtime.readSkillVersion(fields.skill);
 	}
-	// Engine-read telemetry (KTD2a): model arrives only from stdin, never from a
-	// flag. It is merged here, alongside git_sha/skill_version, so it lives on
-	// the redactor's trusted side without an agent-authorable flag bypass. A
-	// receipt can never already carry it (no flag exists), so the stdin value is
-	// authoritative. usage is not sourced in v0 — it stays a record gap.
+	// Public stdin is model-only. Trust-bearing capture fields come from the
+	// hook-owned direct runner call so agent-authored record input cannot mint
+	// runtime proof.
 	const telemetry = await runtime.readStdinTelemetry();
-	if (telemetry.model) {
-		fields.model = telemetry.model;
+	const model = internalTelemetry.model ?? telemetry.model;
+	if (model) {
+		fields.model = model;
 	}
-	const captureMetadata: CaptureMetadata = {
-		...(telemetry.capture_runtime
-			? { capture_runtime: telemetry.capture_runtime }
-			: {}),
-		...(telemetry.skill_identity_provenance
-			? { skill_identity_provenance: telemetry.skill_identity_provenance }
-			: {}),
+	const detectionId = normalizeWriterDetectionId(internalTelemetry.detectionId);
+	return {
+		ok: true,
+		fields,
+		captureMetadata: internalTelemetry.captureMetadata ?? {},
+		...(detectionId ? { detectionId } : {}),
 	};
-	return { ok: true, fields, captureMetadata };
 }
 
 function errorResult(
@@ -3219,8 +3709,7 @@ function reportFileName(
 	report: SoftwareLearningReport | ReportCardSoftwareLearningReport,
 ): string {
 	const ts = report.generated_ts.replace(/[:.]/g, "-");
-	const skillName =
-		"skill" in report ? report.skill : (report.report_card.skill ?? "");
+	const skillName = report.skill;
 	const skill = skillName.replace(/[^a-zA-Z0-9._-]/g, "_") || "unknown-skill";
 	const hash = createHash("sha256")
 		.update(JSON.stringify(report))
@@ -3229,8 +3718,11 @@ function reportFileName(
 	return `${ts}-${skill}-${hash}.json`;
 }
 
-async function skillVersionFromPackage(skill: string): Promise<string> {
-	const packagePath = join(process.cwd(), "skills", skill, "package.json");
+async function skillVersionFromPackage(
+	skill: string,
+	repoRoot: string,
+): Promise<string> {
+	const packagePath = join(repoRoot, "skills", skill, "package.json");
 	try {
 		const raw = await readFile(packagePath, "utf-8");
 		const parsed = JSON.parse(raw) as { version?: unknown };
@@ -3250,7 +3742,7 @@ async function readStdin(): Promise<string> {
 }
 
 /**
- * Parse engine-read stdin into validated telemetry.
+ * Parse public record stdin into validated telemetry.
  *
  * Garbled, empty, or partially-typed input degrades to `{}` (R21) rather than
  * throwing — a missing or malformed telemetry channel must never break the
@@ -3274,12 +3766,6 @@ export function parseStdinTelemetry(raw: string): StdinTelemetry {
 	const telemetry: StdinTelemetry = {};
 	if (typeof object.model === "string" && object.model !== "") {
 		telemetry.model = object.model;
-	}
-	if (isCaptureRuntime(object.capture_runtime)) {
-		telemetry.capture_runtime = object.capture_runtime;
-	}
-	if (isSkillIdentityProvenance(object.skill_identity_provenance)) {
-		telemetry.skill_identity_provenance = object.skill_identity_provenance;
 	}
 	return telemetry;
 }

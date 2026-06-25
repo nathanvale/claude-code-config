@@ -1,4 +1,5 @@
 import {
+	chmod,
 	mkdtemp,
 	mkdir,
 	readFile,
@@ -44,6 +45,7 @@ import {
 	runProcessForTest,
 	type SkillFeedbackGitResult,
 	type SkillFeedbackGitRunner,
+	type InternalRecordTelemetry,
 	type SkillFeedbackRuntime,
 } from "./skill-feedback-runner";
 
@@ -194,11 +196,13 @@ function expectPermissionDeniedEnvelope(
 async function writeRecord(
 	receipt: Partial<Receipt>,
 	runtimeOverrides: Partial<SkillFeedbackRuntime> = {},
+	internalTelemetry?: InternalRecordTelemetry,
 ) {
 	const root = await makeRoot();
 	const runtime = stubRuntime(root, runtimeOverrides);
 	const result = await recordSkillFeedbackReceipt(receipt, {
 		runtime,
+		...(internalTelemetry ? { internalTelemetry } : {}),
 		runId: "skill-feedback-test",
 	});
 	const disk = result.reportPath
@@ -712,6 +716,394 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(fileMode).toBe(0o600);
 	});
 
+	test("record attaches writer proof and Claude runtime run id without exposing detection id", async () => {
+		const detectionId = "session:raw-detection-id";
+		const { root, result, disk } = await writeRecord(
+			BASE_RECEIPT,
+			{},
+			{
+				model: "claude-opus-4-8",
+				detectionId,
+				captureMetadata: {
+					capture_runtime: "claude_stop",
+					skill_identity_provenance: {
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
+					},
+				},
+			},
+		);
+		if (!result.reportPath) throw new Error("expected report path");
+
+		const report = JSON.parse(disk) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		const envelopeData = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(envelopeData.proof_status).toBe("attached");
+		expect(envelopeData.proof_diagnostics).toEqual([]);
+		expect(report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(report.skill_run_id).not.toBe(detectionId);
+		expect(report.skill_run_id_provenance).toBe("runtime_owned");
+		expect(disk).not.toContain(detectionId);
+		expect(result.stdout).not.toContain(detectionId);
+		expect(result.stderr).not.toContain(detectionId);
+
+		const trustDirMode =
+			(await stat(join(root, ".skill-feedback", ".trust"))).mode & 0o777;
+		const keyMode =
+			(await stat(join(root, ".skill-feedback", ".trust", "key"))).mode &
+			0o777;
+		expect(trustDirMode).toBe(0o700);
+		expect(keyMode).toBe(0o600);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-proof-preserved",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health).toMatchObject({
+			verified_count: 1,
+			evidence_only_count: 0,
+		});
+		expect(data.review_units[0]).toMatchObject({
+			trusted_run: true,
+			trusted_skill_run_id: report.skill_run_id,
+		});
+	});
+
+	test("Claude detection-derived run ids contribute to hook report ids", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root);
+		const writeCapture = async (detectionId: string) => {
+			const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+				runtime,
+				internalTelemetry: {
+					model: "claude-opus-4-8",
+					detectionId,
+					captureMetadata: { capture_runtime: "claude_stop" },
+				},
+				runId: `record-${detectionId}`,
+			});
+			expect(result.exitCode).toBe(0);
+			if (!result.reportPath) throw new Error("expected report path");
+			const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+				report_id: string;
+				skill_run_id?: string;
+			};
+			return { report, result };
+		};
+
+		const first = await writeCapture("session:report-id-one");
+		const second = await writeCapture("session:report-id-two");
+
+		expect(first.report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(second.report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(first.report.skill_run_id).not.toBe(second.report.skill_run_id);
+		expect(first.report.report_id).not.toBe(second.report.report_id);
+		expect(first.result.reportPath).not.toBe(second.result.reportPath);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-distinct-hook-report-ids",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).not.toContain("duplicate_report_id");
+		expect(data.review_units.every((unit) => unit.trusted_run === true)).toBe(
+			true,
+		);
+	});
+
+	test("whitespace-only detection id cannot derive a runtime-owned run id", async () => {
+		const { result, disk } = await writeRecord(
+			BASE_RECEIPT,
+			{},
+			{
+				model: "claude-opus-4-8",
+				detectionId: " \t\n ",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		const report = JSON.parse(disk) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		expect(report.skill_run_id).toBeUndefined();
+		expect(report.skill_run_id_provenance).toBeUndefined();
+	});
+
+	test("record reports proof-unavailable when proof payload canonicalization fails", async () => {
+		const { result, disk } = await writeRecord(BASE_RECEIPT, {}, {
+			captureMetadata: {
+				skill_identity_provenance: {
+					source: "none",
+					trusted: false,
+					extra: () => "not-json",
+				} as unknown as InternalRecordTelemetry["captureMetadata"] extends {
+					skill_identity_provenance?: infer Provenance;
+				}
+					? Provenance
+					: never,
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		const report = JSON.parse(disk) as { writer_proof?: unknown };
+		expect(data.proof_status).toBe("unavailable");
+		expect(data.proof_diagnostics).toEqual([
+			"writer_proof_canonicalization_failed",
+		]);
+		expect(report.writer_proof).toBeUndefined();
+	});
+
+	test("review degrades signed reports when trust key is unusable", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:lost-key",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-bad-proof-key",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_key_unusable");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("review reports replay diagnostics for copied signed reports", async () => {
+		const { root, disk } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:duplicate-proof",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await writeInboxReport(root, "copy.json", JSON.parse(disk));
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-duplicate-proof",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.replay_diagnostics_count).toBe(2);
+		expect(data.proof_health.diagnostics).toEqual(
+			expect.arrayContaining([
+				"duplicate_report_id",
+				"duplicate_writer_proof_nonce",
+			]),
+		);
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("first proof-capable write reuses a concurrently created trust key", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		const racedKey = "ab".repeat(32);
+		const keyPath = join(root, ".skill-feedback", ".trust", "key");
+		let raced = false;
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path === keyPath && !raced) {
+						raced = true;
+						await baseRuntime.writePrivateFile(path, `${racedKey}\n`, mode);
+						throw Object.assign(new Error("key already exists"), {
+							code: "EEXIST",
+						});
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			internalTelemetry: {
+				detectionId: "session:race-proof",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "trust-key-race",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.reportPath).toBeTruthy();
+		expect(await readFile(keyPath, "utf-8")).toBe(`${racedKey}\n`);
+		const report = JSON.parse(
+			await readFile(result.reportPath ?? "", "utf-8"),
+		) as { writer_proof?: unknown };
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+	});
+
+	test("first proof-capable write degrades when a raced trust key is unreadable", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		const keyPath = join(root, ".skill-feedback", ".trust", "key");
+		let raced = false;
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path === keyPath && !raced) {
+						raced = true;
+						await baseRuntime.writePrivateFile(path, "bad\n", mode);
+						throw Object.assign(new Error("key already exists"), {
+							code: "EEXIST",
+						});
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			internalTelemetry: {
+				detectionId: "session:race-unreadable-proof",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "trust-key-race-unreadable",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(data.proof_status).toBe("unavailable");
+		expect(data.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
+		expect(await readFile(keyPath, "utf-8")).toBe("bad\n");
+		if (!result.reportPath) throw new Error("expected report path");
+		const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.writer_proof).toBeUndefined();
+		expect(report.skill_run_id).toBeUndefined();
+		expect(report.skill_run_id_provenance).toBeUndefined();
+	});
+
+	test("record degrades to evidence-only when trust directory is unsafe", async () => {
+		const root = await makeRoot();
+		const inbox = join(root, ".skill-feedback");
+		const outside = await makeRoot();
+		await mkdir(inbox, { recursive: true, mode: 0o700 });
+		await symlink(outside, join(inbox, ".trust"));
+
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: stubRuntime(root),
+			internalTelemetry: {
+				detectionId: "session:unsafe-trust-dir",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "unsafe-trust-dir",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).not.toContain(".trust/key");
+		expect(result.stderr).not.toContain(".trust/key");
+		if (!result.reportPath) throw new Error("expected report path");
+		const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		const data = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(data.proof_status).toBe("unavailable");
+		expect(data.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
+		expect(report.writer_proof).toBeUndefined();
+		expect(report.skill_run_id).toBeUndefined();
+		expect(report.skill_run_id_provenance).toBeUndefined();
+	});
+
+	test("review degrades to evidence-only when trust key path is unsafe", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:key-symlink",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		const keyPath = join(root, ".skill-feedback", ".trust", "key");
+		await rm(keyPath);
+		await symlink(join(root, "outside-key"), keyPath);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-key-symlink",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_key_unusable");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+		expect(review.stdout).not.toContain(".trust/key");
+		expect(review.stderr).not.toContain(".trust/key");
+	});
+
+	test("review degrades when trust directory permissions are not private", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:world-readable-trust",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await chmod(join(root, ".skill-feedback", ".trust"), 0o777);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-trust-dir-permissions",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_key_unusable");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("review reports an initialized trust directory with missing key", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:missing-trust-key",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await rm(join(root, ".skill-feedback", ".trust", "key"));
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-missing-trust-key",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_not_initialized");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("review skips trust store json files as non-report artifacts", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT);
+		await writeFile(
+			join(root, ".skill-feedback", ".trust", "not-a-report.json"),
+			'{"schema_version":"2"}\n',
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-trust-skip",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.inbox_health.primary_count).toBe(1);
+		expect(data.inbox_health.invalid_count).toBe(0);
+	});
+
 	test("record write failure returns an envelope and rolls back final paths", async () => {
 		const root = await makeRoot();
 		const finalPaths: string[] = [];
@@ -734,7 +1126,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 		expect(envelope.data).toMatchObject({ changed_state: "none" });
 		expect(result.stdout).not.toContain("write failed");
-		await expect(readFile(finalPaths[0] ?? "", "utf-8")).rejects.toThrow();
+		const reportPath = finalPaths.find((path) => !path.includes(".trust"));
+		expect(reportPath).toBeTruthy();
+		await expect(readFile(reportPath ?? "", "utf-8")).rejects.toThrow();
 	});
 
 	test("closeout write failure returns an envelope with no changed state", async () => {
@@ -916,10 +1310,24 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			correlation_status: "unlinked",
 			closeout_coverage_contribution: "material_closeout",
 		});
-		const data = envelope.data as { written_path: string; report_id: string };
+		const data = envelope.data as {
+			written_path: string;
+			report_id: string;
+			redactions: number;
+			proof_status?: string;
+		};
 		const reportPath = join(root, data.written_path);
 		const disk = await readFile(reportPath, "utf-8");
 		expect(disk).toContain(`"report_id": "${data.report_id}"`);
+		const report = JSON.parse(disk) as {
+			redactions?: number;
+			writer_proof?: unknown;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.redactions).toBe(data.redactions);
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		expect(report.skill_run_id_provenance).toBeUndefined();
+		expect(data.proof_status).toBe("attached");
 		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
 		const markerBefore = await readFile(markerPath, "utf-8");
 		expect(markerBefore.trim()).not.toBe("");
@@ -1109,6 +1517,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(plain.exitCode).toBe(0);
 		expect(plain.stdout.indexOf("Review health:")).toBeLessThan(
 			plain.stdout.indexOf("No action:"),
+		);
+		expect(plain.stdout).toContain(
+			"Proof: verified=0 evidence-only=0 replay=0",
 		);
 		expect(plain.stdout).toContain(`repo_root=${root}`);
 		expect(plain.stdout).toContain(
@@ -1356,6 +1767,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stdout).toContain("Skill Feedback Health");
 		expect(result.stdout).toContain("Inbox status: missing");
 		expect(result.stdout).toContain("Counts: primary=0 low-signal=0");
+		expect(result.stdout).toContain("Proof: verified=0 evidence-only=0 replay=0");
 		expect(result.stdout).toContain("Warnings:");
 		expect(result.stdout).toContain("- inbox_missing:");
 		expect(result.stdout).toContain("Readiness:");
@@ -1913,24 +2325,25 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.no_action?.rationale).toContain("No high-signal");
 	});
 
-	test("record routes unknown-skill Codex Stop capture to the low-signal lane", async () => {
-		const { result, disk } = await writeRecord(
-			{
-				...BASE_RECEIPT,
-				skill: "unknown-skill",
-			},
-			{
-				readStdinTelemetry: async () => ({
+		test("record routes unknown-skill Codex Stop capture to the low-signal lane", async () => {
+			const { result, disk } = await writeRecord(
+				{
+					...BASE_RECEIPT,
+					skill: "unknown-skill",
+				},
+				{},
+				{
 					model: "gpt-5-codex",
-					capture_runtime: "codex_stop",
-					skill_identity_provenance: {
-						source: "none",
-						trusted: false,
-						reason: "codex_stop_payload_has_no_trusted_skill_identity",
+					captureMetadata: {
+						capture_runtime: "codex_stop",
+						skill_identity_provenance: {
+							source: "none",
+							trusted: false,
+							reason: "codex_stop_payload_has_no_trusted_skill_identity",
+						},
 					},
-				}),
-			},
-		);
+				},
+			);
 
 		expect(result.exitCode).toBe(0);
 		expect(result.reportPath).toContain(join(".skill-feedback", "low-signal"));
@@ -2471,13 +2884,13 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.ledger_entries[0]?.evidence_tier).not.toBe("corroborated");
 	});
 
-	test("real runner keeps Codex Stop unknown-skill capture low-signal beside closeout", async () => {
+	test("public record stdin cannot mint trusted runtime proof", async () => {
 		const root = await makeIgnoredGitRoot();
 		const capture = await runCli(
 			[
 				"record",
 				"--skill",
-				"unknown-skill",
+				"fallow",
 				"--goal",
 				"Harness hook observed a completed skill run.",
 				"--outcome",
@@ -2490,14 +2903,67 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			{
 				cwd: root,
 				stdin: JSON.stringify({
-					model: "gpt-5-codex",
-					capture_runtime: "codex_stop",
+					model: "claude-opus-4-8",
+					detection_id: "agent-authored-detection",
+					capture_runtime: "claude_stop",
 					skill_identity_provenance: {
-						source: "none",
-						trusted: false,
-						reason: "codex_stop_payload_has_no_trusted_skill_identity",
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
 					},
 				}),
+			},
+		);
+		expect(capture.exitCode).toBe(0);
+		const captureData = parseEnvelope(capture.stdout).data as {
+			capture_runtime?: string;
+			skill_identity_provenance?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+			writer_proof?: unknown;
+		};
+		expect(captureData.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		expect(captureData.capture_runtime).toBeUndefined();
+		expect(captureData.skill_identity_provenance).toBeUndefined();
+		expect(captureData.skill_run_id).toBeUndefined();
+		expect(captureData.skill_run_id_provenance).toBeUndefined();
+
+		const review = await runCli(["review"], { cwd: root });
+		expect(review.exitCode).toBe(0);
+		const reviewData = parseEnvelope(review.stdout).data as {
+			review_units: Array<{ trusted_run: boolean }>;
+			proof_health: { verified_count: number };
+		};
+		expect(reviewData.proof_health.verified_count).toBe(1);
+		expect(reviewData.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("internal Codex Stop capture stays low-signal beside closeout", async () => {
+		const root = await makeIgnoredGitRoot();
+		const capture = await recordSkillFeedbackReceipt(
+			{
+				skill: "unknown-skill",
+				goal: "Harness hook observed a completed skill run.",
+				outcome: "ambiguous",
+				friction: "Hook captured no transcript payload.",
+				generated_ts: "2026-06-11T10:00:00.000Z",
+			},
+			{
+				runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+				internalTelemetry: {
+					model: "gpt-5-codex",
+					captureMetadata: {
+						capture_runtime: "codex_stop",
+						skill_identity_provenance: {
+							source: "none",
+							trusted: false,
+							reason: "codex_stop_payload_has_no_trusted_skill_identity",
+						},
+					},
+				},
 			},
 		);
 		expect(capture.exitCode).toBe(0);
@@ -2536,34 +3002,30 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 	});
 
-	test("real runner keeps named Claude Stop capture in the primary lane", async () => {
+	test("internal Claude Stop capture stays in the primary lane", async () => {
 		const root = await makeIgnoredGitRoot();
-		const capture = await runCli(
-			[
-				"record",
-				"--skill",
-				"fallow",
-				"--goal",
-				"Harness hook observed a completed skill run.",
-				"--outcome",
-				"ambiguous",
-				"--friction",
-				"Hook captured no transcript payload.",
-				"--generated-ts",
-				"2026-06-11T10:00:00.000Z",
-			],
+		const capture = await recordSkillFeedbackReceipt(
 			{
-				cwd: root,
-				stdin: JSON.stringify({
+				skill: "fallow",
+				goal: "Harness hook observed a completed skill run.",
+				outcome: "ambiguous",
+				friction: "Hook captured no transcript payload.",
+				generated_ts: "2026-06-11T10:00:00.000Z",
+			},
+			{
+				runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+				internalTelemetry: {
 					model: "claude-opus-4-8",
-					capture_runtime: "claude_stop",
-					skill_identity_provenance: {
-						source: "claude_transcript_skill_tool_result",
-						trusted: true,
-						field: "toolUseResult.commandName",
-						reason: "claude_transcript_detection",
+					captureMetadata: {
+						capture_runtime: "claude_stop",
+						skill_identity_provenance: {
+							source: "claude_transcript_skill_tool_result",
+							trusted: true,
+							field: "toolUseResult.commandName",
+							reason: "claude_transcript_detection",
+						},
 					},
-				}),
+				},
 			},
 		);
 		expect(capture.exitCode).toBe(0);
@@ -3393,15 +3855,17 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const data = parseEnvelope(result.stdout).data as {
-			model: string;
-			degraded: boolean;
-			gaps: string[];
+			runtime: { model?: string; usage?: unknown };
+			evidence_gaps: Array<{ code: string }>;
 		};
-		expect(data.model).toBe("claude-opus-4-8");
-		// model is no longer a gap; usage remains one (not sourced in v0).
-		expect(data.gaps).not.toContain("model");
-		expect(data.gaps).toContain("usage");
-		expect(data.degraded).toBe(true);
+		expect(data.runtime.model).toBe("claude-opus-4-8");
+		expect(data.runtime.usage).toBeUndefined();
+		expect(data.evidence_gaps.map((gap) => gap.code)).not.toContain(
+			"missing_runtime_model",
+		);
+		expect(data.evidence_gaps.map((gap) => gap.code)).toContain(
+			"cost_unavailable",
+		);
 		expect(disk).toContain("claude-opus-4-8");
 	});
 
@@ -3412,12 +3876,17 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 
 		expect(result.exitCode).toBe(0);
 		const data = parseEnvelope(result.stdout).data as {
-			degraded: boolean;
-			gaps: string[];
+			runtime: { model?: string; usage?: unknown };
+			evidence_gaps: Array<{ code: string }>;
 		};
-		expect(data.degraded).toBe(true);
-		expect(data.gaps).toContain("model");
-		expect(data.gaps).toContain("usage");
+		expect(data.runtime.model).toBeUndefined();
+		expect(data.runtime.usage).toBeUndefined();
+		expect(data.evidence_gaps.map((gap) => gap.code)).toContain(
+			"missing_runtime_model",
+		);
+		expect(data.evidence_gaps.map((gap) => gap.code)).toContain(
+			"cost_unavailable",
+		);
 	});
 
 	for (const [label, raw] of [
@@ -3439,10 +3908,11 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 		expect(telemetry).toEqual({ model: "claude-opus-4-8" });
 	});
 
-	test("stdin telemetry extracts capture provenance without new flags", () => {
+	test("stdin telemetry ignores trust-bearing capture provenance", () => {
 		const telemetry = parseStdinTelemetry(
 			JSON.stringify({
 				model: "gpt-5-codex",
+				detection_id: "agent-authored",
 				capture_runtime: "codex_stop",
 				skill_identity_provenance: {
 					source: "none",
@@ -3453,29 +3923,25 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 			}),
 		);
 
-		expect(telemetry).toEqual({
-			model: "gpt-5-codex",
-			capture_runtime: "codex_stop",
-			skill_identity_provenance: {
-				source: "none",
-				trusted: false,
-				reason: "codex_stop_payload_has_no_trusted_skill_identity",
-			},
-		});
+		expect(telemetry).toEqual({ model: "gpt-5-codex" });
 	});
 
 	test("Codex Stop evidence without trusted identity blocks readiness", async () => {
-		const { root, disk } = await writeRecord(NARRATED_ONLY, {
-			readStdinTelemetry: async () => ({
+		const { root, disk } = await writeRecord(
+			NARRATED_ONLY,
+			{},
+			{
 				model: "gpt-5-codex",
-				capture_runtime: "codex_stop",
-				skill_identity_provenance: {
-					source: "none",
-					trusted: false,
-					reason: "codex_stop_payload_has_no_trusted_skill_identity",
+				captureMetadata: {
+					capture_runtime: "codex_stop",
+					skill_identity_provenance: {
+						source: "none",
+						trusted: false,
+						reason: "codex_stop_payload_has_no_trusted_skill_identity",
+					},
 				},
-			}),
-		});
+			},
+		);
 		expect(disk).toContain('"capture_runtime": "codex_stop"');
 		expect(disk).not.toContain("transcript_path");
 
@@ -3556,19 +4022,23 @@ describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
 		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
 	});
 
-	test("trusted Codex Stop identity stays evidence-only, never ready (R18)", async () => {
-		const { root } = await writeRecord(NARRATED_ONLY, {
-			readStdinTelemetry: async () => ({
-				model: "gpt-5-codex",
-				capture_runtime: "codex_stop",
-				skill_identity_provenance: {
-					source: "codex_stop_payload",
-					trusted: true,
-					field: "skill.name",
-					reason: "trusted_codex_stop_payload_identity",
+		test("trusted Codex Stop identity stays evidence-only, never ready (R18)", async () => {
+			const { root } = await writeRecord(
+				NARRATED_ONLY,
+				{},
+				{
+					model: "gpt-5-codex",
+					captureMetadata: {
+						capture_runtime: "codex_stop",
+						skill_identity_provenance: {
+							source: "codex_stop_payload",
+							trusted: true,
+							field: "skill.name",
+							reason: "trusted_codex_stop_payload_identity",
+						},
+					},
 				},
-			}),
-		});
+			);
 
 		const result = await reviewSkillFeedbackInbox({
 			runtime: stubRuntime(root),

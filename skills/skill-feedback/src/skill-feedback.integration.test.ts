@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	chmod,
 	mkdir,
 	mkdtemp,
+	readFile,
 	readdir,
 	rm,
 	stat,
@@ -67,12 +69,17 @@ const BASE_CLOSEOUT: CloseoutReceipt = {
 
 const stationScenarios = {
 	"record.success": { run: runRecordSuccess },
+	"record.proof_attached": { run: runRecordProofAttached },
+	"record.proof_unavailable": { run: runRecordProofUnavailable },
 	"record.invalid_usage": { run: runRecordInvalidUsage },
 	"closeout.success_stdin": { run: runCloseoutSuccessStdin },
+	"closeout.proof_attached": { run: runCloseoutProofAttached },
+	"closeout.proof_unavailable": { run: runCloseoutProofUnavailable },
 	"closeout.invalid_receipt": { run: runCloseoutInvalidReceipt },
 	"review.empty_inbox": { run: runReviewEmptyInbox },
 	"review.target_resolution_failed": { run: runReviewTargetResolutionFailed },
 	"health.populated_inbox": { run: runHealthPopulatedInbox },
+	"health.proof_diagnostics": { run: runHealthProofDiagnostics },
 	"health.unsafe_inbox": { run: runHealthUnsafeInbox },
 	"purge.preview": { run: runPurgePreview },
 	"purge.execute": { run: runPurgeExecute },
@@ -154,6 +161,65 @@ async function runRecordSuccess(
 	return evidenceFor(station, result, envelope);
 }
 
+async function runRecordProofAttached(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	const result = await runSkillFeedback(
+		[
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			"Record proof station.",
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"Clean run.",
+			"--generated-ts",
+			GENERATED_TS,
+		],
+		{ cwd: root, label: station.id },
+	);
+	const envelope = expectStationEnvelope(station, result);
+	const report = await readOnlyInboxReport(root);
+	expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+	expect(envelope.data?.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+	expect(envelope.data?.proof_status).toBe("attached");
+	expect(envelope.data?.proof_diagnostics).toEqual([]);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runRecordProofUnavailable(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await writeUnusableTrustKey(root);
+	const result = await runSkillFeedback(
+		[
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			"Record proof unavailable station.",
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"Clean run.",
+			"--generated-ts",
+			GENERATED_TS,
+		],
+		{ cwd: root, label: station.id },
+	);
+	const envelope = expectStationEnvelope(station, result);
+	const report = await readOnlyInboxReport(root);
+	expect(report.writer_proof).toBeUndefined();
+	expect(envelope.data?.writer_proof).toBeUndefined();
+	expect(envelope.data?.proof_status).toBe("unavailable");
+	expect(envelope.data?.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
+	return evidenceFor(station, result, envelope);
+}
+
 async function runRecordInvalidUsage(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
@@ -183,6 +249,42 @@ async function runCloseoutSuccessStdin(
 	const writtenPath = envelope.data?.written_path;
 	expect(typeof writtenPath, describeCliProcessRun(result)).toBe("string");
 	expect((await stat(join(root, writtenPath as string))).isFile()).toBe(true);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCloseoutProofAttached(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	const result = await runSkillFeedback(["closeout"], {
+		cwd: root,
+		label: station.id,
+		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	const report = await readOnlyInboxReport(root);
+	expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+	expect(report.skill_run_id_provenance).toBeUndefined();
+	expect(envelope.data?.proof_status).toBe("attached");
+	expect(envelope.data?.proof_diagnostics).toEqual([]);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCloseoutProofUnavailable(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await writeUnusableTrustKey(root);
+	const result = await runSkillFeedback(["closeout"], {
+		cwd: root,
+		label: station.id,
+		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	const report = await readOnlyInboxReport(root);
+	expect(report.writer_proof).toBeUndefined();
+	expect(envelope.data?.proof_status).toBe("unavailable");
+	expect(envelope.data?.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
 	return evidenceFor(station, result, envelope);
 }
 
@@ -240,6 +342,40 @@ async function runHealthPopulatedInbox(
 	const envelope = expectStationEnvelope(station, result);
 	expect(envelope.data?.inbox_status).toBe("populated");
 	expect(envelope.data?.counts).toMatchObject({ primary: 1 });
+	return evidenceFor(station, result, envelope);
+}
+
+async function runHealthProofDiagnostics(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await runSkillFeedback(
+		[
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			"Health proof diagnostics station.",
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"Clean run.",
+			"--generated-ts",
+			GENERATED_TS,
+		],
+		{ cwd: root, label: `${station.id}:setup` },
+	);
+	await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
+	await chmod(join(root, ".skill-feedback", ".trust", "key"), 0o600);
+	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data?.proof_health).toMatchObject({
+		verified_count: 0,
+		evidence_only_count: 1,
+	});
+	expect(
+		(envelope.data?.proof_health as { diagnostics?: string[] }).diagnostics,
+	).toContain("trust_store_key_unusable");
 	return evidenceFor(station, result, envelope);
 }
 
@@ -403,6 +539,24 @@ async function writeInboxReport(
 	const inbox = join(root, ".skill-feedback");
 	await mkdir(inbox, { recursive: true });
 	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function readOnlyInboxReport(root: string): Promise<Record<string, unknown>> {
+	const reports = await listInboxJsonFiles(root);
+	expect(reports).toHaveLength(1);
+	return JSON.parse(
+		await readFile(join(root, ".skill-feedback", reports[0] ?? ""), "utf8"),
+	) as Record<string, unknown>;
+}
+
+async function writeUnusableTrustKey(root: string): Promise<void> {
+	const trustDir = join(root, ".skill-feedback", ".trust");
+	await mkdir(trustDir, { recursive: true, mode: 0o700 });
+	await chmod(join(root, ".skill-feedback"), 0o700);
+	await chmod(trustDir, 0o700);
+	const keyPath = join(trustDir, "key");
+	await writeFile(keyPath, "bad\n");
+	await chmod(keyPath, 0o600);
 }
 
 async function writePurgeReports(root: string): Promise<void> {

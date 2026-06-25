@@ -37,7 +37,7 @@ async function fixtureText(): Promise<string> {
 function createMemoryDedupe() {
 	let lastDetectionId: string | null = null
 	return {
-		readLastDetectionId: async () => lastDetectionId,
+		readLastDetectionId: async (_transcriptPath: string) => lastDetectionId,
 		writeLastDetectionId: async (
 			_transcriptPath: string,
 			detectionId: string,
@@ -211,7 +211,10 @@ describe('skill-feedback hooks', () => {
 				skill: 'fallow',
 				generatedTs: GENERATED_TS,
 				// Engine-read model rides along; usage is absent in v0.
-				telemetry: { model: 'claude-opus-4-8' },
+				telemetry: {
+					model: 'claude-opus-4-8',
+					detection_id: 'inline-session:toolu_inline_fallow',
+				},
 			})
 			expect(await readFile(recordPath, 'utf8')).not.toContain(
 				'SECRET_TOKEN_SHOULD_NOT_APPEAR',
@@ -328,6 +331,7 @@ describe('skill-feedback hooks', () => {
 				},
 			},
 		})
+		expect(calls[0]?.telemetry).not.toHaveProperty('detection_id')
 	})
 
 	test('source-owned capture provenance overrides caller telemetry', () => {

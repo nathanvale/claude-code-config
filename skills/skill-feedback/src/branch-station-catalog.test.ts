@@ -92,12 +92,17 @@ describe("skill-feedback Branch Station Catalog", () => {
 	test("station ids use stable package-owned vocabulary", () => {
 		expect(skillFeedbackBranchStationCatalog.map((station) => station.id)).toEqual([
 			"record.success",
+			"record.proof_attached",
+			"record.proof_unavailable",
 			"record.invalid_usage",
 			"closeout.success_stdin",
+			"closeout.proof_attached",
+			"closeout.proof_unavailable",
 			"closeout.invalid_receipt",
 			"review.empty_inbox",
 			"review.target_resolution_failed",
 			"health.populated_inbox",
+			"health.proof_diagnostics",
 			"health.unsafe_inbox",
 			"purge.preview",
 			"purge.execute",

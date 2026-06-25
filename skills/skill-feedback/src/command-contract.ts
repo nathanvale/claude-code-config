@@ -1,3 +1,4 @@
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import {
 	type CommandFacadeContract,
 	defineCommandFacadeContract,
@@ -39,12 +40,14 @@ export const SKILL_FEEDBACK_HEALTH_CONTRACT_ID =
 export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
 	"skill-feedback.purge" as const;
 
+const SKILL_FEEDBACK_SCHEMA_VERSION_V1 = "1" as const;
+
 /**
  * Schema version for the package-owned Software Learning Report envelope.
  *
  * Increment when agent-visible record semantics change.
  */
-export const SKILL_FEEDBACK_SCHEMA_VERSION = "1" as const;
+export const SKILL_FEEDBACK_SCHEMA_VERSION = "2" as const;
 
 /**
  * Schema version for the review-specific claim-safe result envelope.
@@ -52,12 +55,12 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "1" as const;
  * Review result semantics can advance independently from persisted report
  * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "4" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "5" as const;
 
 /**
  * Schema version for health-specific read-only result envelopes.
  */
-export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "1" as const;
+export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "2" as const;
 
 /**
  * Schema version for purge-specific result envelopes.
@@ -126,6 +129,33 @@ const SKILL_RUN_ID_PROVENANCE_SOURCES = [
 	"runtime_owned",
 	"correlation_owned",
 	"report_authored",
+] as const;
+
+const WRITER_PROOF_ALGORITHM = "hmac-sha256" as const;
+const WRITER_PROOF_SIGNATURE_ENCODING = "hex" as const;
+const WRITER_PROOF_SIGNED_FIELDS = [
+	"capture_runtime",
+	"correlation_status",
+	"evidence_source",
+	"generated_ts",
+	"report_id",
+	"schema_version",
+	"skill",
+	"skill_run_id",
+	"skill_run_id_provenance",
+	"writer_proof.nonce",
+] as const;
+const WRITER_PROOF_SIGNED_FIELD_SET: ReadonlySet<string> = new Set(
+	WRITER_PROOF_SIGNED_FIELDS,
+);
+const WRITER_PROOF_DIRECT_FIELD_SET: ReadonlySet<string> = new Set(
+	WRITER_PROOF_SIGNED_FIELDS.filter((field) => !field.includes(".")),
+);
+const WRITER_PROOF_HEALTH_FIELDS = [
+	"verified_count",
+	"evidence_only_count",
+	"replay_diagnostics_count",
+	"diagnostics",
 ] as const;
 
 /**
@@ -342,6 +372,29 @@ export type SkillIdentityProvenanceReason =
 export type SkillRunIdProvenance =
 	(typeof SKILL_RUN_ID_PROVENANCE_SOURCES)[number];
 
+export type WriterProofSignedField =
+	(typeof WRITER_PROOF_SIGNED_FIELDS)[number];
+
+/**
+ * Local writer-owned proof over trust-bearing persisted report fields.
+ */
+export type WriterProof = {
+	algorithm: typeof WRITER_PROOF_ALGORITHM;
+	nonce: string;
+	signed_fields: readonly WriterProofSignedField[];
+	content_digest: string;
+	signature: string;
+};
+
+/**
+ * Proof context injected by the runner-owned inbox read path.
+ */
+export type WriterProofContext = {
+	verified: boolean;
+	diagnostics?: readonly string[];
+};
+
+
 /**
  * Capture-source provenance. `trusted` means the adapter trusts the named
  * source field; it is not Trusted skill identity or Trusted run proof.
@@ -550,11 +603,14 @@ export type ReportCardSoftwareLearningReport = {
 	capture_runtime?: CaptureRuntime;
 	skill_identity_provenance?: SkillIdentityProvenance;
 	correlation_status: CorrelationStatus;
+	skill: string;
 	skill_run_id?: string;
 	skill_run_id_provenance?: SkillRunIdProvenance;
+	writer_proof?: WriterProof;
 	runtime: NormalizedRuntimeTelemetry;
 	report_card: Partial<CloseoutReceipt>;
 	evidence_gaps: readonly EvidenceGap[];
+	redactions: number;
 };
 
 const CLOSEOUT_COVERAGE_CONTRIBUTIONS = ["material_closeout"] as const;
@@ -572,7 +628,7 @@ export type CloseoutResultData = {
 	redactions: number;
 	written_path: string;
 	closeout_coverage_contribution: CloseoutCoverageContribution;
-};
+} & WriterProofWriteStatus;
 
 const REVIEW_OPEN_REASONS = [
 	"high_verification_burden",
@@ -686,6 +742,18 @@ export type HealthNextAction = {
 	summary: string;
 };
 
+export type WriterProofHealth = {
+	verified_count: number;
+	evidence_only_count: number;
+	replay_diagnostics_count: number;
+	diagnostics: readonly string[];
+};
+
+export type WriterProofWriteStatus = {
+	proof_status: "attached" | "unavailable";
+	proof_diagnostics: readonly string[];
+};
+
 export type HealthResultData = {
 	contract: typeof SKILL_FEEDBACK_HEALTH_CONTRACT_ID;
 	schema_version: typeof SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION;
@@ -693,6 +761,7 @@ export type HealthResultData = {
 	counts: HealthCounts;
 	newest: HealthNewest;
 	warnings: readonly HealthWarning[];
+	proof_health: WriterProofHealth;
 	claim_readiness: HealthClaimReadiness;
 	correlation: HealthCorrelation;
 	next_action: HealthNextAction;
@@ -841,6 +910,7 @@ export type ReviewLedgerEntry = {
 	source_mix: readonly EvidenceSource[];
 	capture_runtime_mix: readonly CaptureRuntime[];
 	allowed_claims: readonly ReviewAllowedClaim[];
+	proof_diagnostics: readonly string[];
 	resolution_state: ReviewResolutionState;
 	verification_burden: ReviewLedgerVerificationBurden;
 	next_safe_action: string;
@@ -867,6 +937,7 @@ export type ReviewResultData = {
 	review_units: readonly ReviewUnitData[];
 	ledger_entries: readonly ReviewLedgerEntry[];
 	anchor_miss_telemetry: readonly ReviewAnchorMissTelemetry[];
+	proof_health: WriterProofHealth;
 	claim_readiness: ReviewClaimReadiness;
 };
 
@@ -920,7 +991,7 @@ export type ParsePurgeResultDataResult =
  */
 export type NormalizedSoftwareLearningReport = {
 	schema_version: typeof SKILL_FEEDBACK_SCHEMA_VERSION;
-	source_schema_version: "v0" | "v1";
+	source_schema_version: "v0" | "v1" | "v2";
 	report_id: string;
 	untrusted_evidence: true;
 	generated_ts: string;
@@ -940,6 +1011,8 @@ export type NormalizedSoftwareLearningReport = {
 	evidence_gaps: readonly EvidenceGap[];
 	cost: CostAttribution;
 	runtime: NormalizedRuntimeTelemetry;
+	writer_proof_verified?: boolean;
+	proof_diagnostics?: readonly string[];
 };
 
 /**
@@ -1327,6 +1400,13 @@ const V1_REPORT_FIELDS = [
 	"evidence_gaps",
 ] as const;
 const V1_REPORT_FIELD_SET: ReadonlySet<string> = new Set(V1_REPORT_FIELDS);
+const V2_REPORT_FIELDS = [
+	...V1_REPORT_FIELDS,
+	"skill",
+	"writer_proof",
+	"redactions",
+] as const;
+const V2_REPORT_FIELD_SET: ReadonlySet<string> = new Set(V2_REPORT_FIELDS);
 const REVIEW_RESULT_V2_FIELDS = [
 	"contract",
 	"schema_version",
@@ -1345,6 +1425,7 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"review_units",
 	"ledger_entries",
 	"anchor_miss_telemetry",
+	"proof_health",
 	"claim_readiness",
 ] as const;
 const REVIEW_RESULT_V2_FIELD_SET: ReadonlySet<string> = new Set(
@@ -1421,6 +1502,7 @@ const REVIEW_LEDGER_ENTRY_FIELDS = [
 	"source_mix",
 	"capture_runtime_mix",
 	"allowed_claims",
+	"proof_diagnostics",
 	"resolution_state",
 	"verification_burden",
 	"next_safe_action",
@@ -1451,6 +1533,7 @@ const HEALTH_RESULT_FIELDS = [
 	"counts",
 	"newest",
 	"warnings",
+	"proof_health",
 	"claim_readiness",
 	"correlation",
 	"next_action",
@@ -1607,6 +1690,118 @@ export function parseCloseoutReceipt(
 }
 
 /**
+ * Create a writer proof for a persisted schema 2 report.
+ *
+ * @param report - Report object before `writer_proof` is attached.
+ * @param key - Local HMAC key bytes from the private trust store.
+ * @param nonce - Hex nonce generated once for this proof.
+ * @returns Proof object safe to persist on the report.
+ * @throws {Error} When the report cannot be represented as canonical JSON.
+ *
+ * @example
+ * ```typescript
+ * const proof = createWriterProof(report, key, nonce)
+ * ```
+ */
+export function createWriterProof(
+	report: Record<string, unknown>,
+	key: Uint8Array,
+	nonce: string,
+): WriterProof {
+	if (!isHexString(nonce, 32)) {
+		throw new Error("writer proof nonce must be 32-char lowercase hex");
+	}
+	const contentDigest = writerProofContentDigest(report);
+	const payload = writerProofPayload(report, nonce, contentDigest);
+	return {
+		algorithm: WRITER_PROOF_ALGORITHM,
+		nonce,
+		signed_fields: WRITER_PROOF_SIGNED_FIELDS,
+		content_digest: contentDigest,
+		signature: hmacSha256Hex(key, canonicalJson(payload)),
+	};
+}
+
+/**
+ * Verify a persisted report's writer proof without trusting raw report text.
+ *
+ * @param report - Raw parsed report from the inbox.
+ * @param key - Local HMAC key bytes from the private trust store.
+ * @returns Verification result plus reason-code diagnostics.
+ *
+ * @example
+ * ```typescript
+ * const proof = verifyWriterProof(rawReport, key)
+ * ```
+ */
+export function verifyWriterProof(
+	report: unknown,
+	key: Uint8Array,
+): WriterProofContext {
+	if (!isRecord(report)) {
+		return { verified: false, diagnostics: ["writer_proof_report_invalid"] };
+	}
+	const proof = parseWriterProof(report.writer_proof);
+	if (!proof.ok) return { verified: false, diagnostics: [proof.reason] };
+	if (proof.value.algorithm !== WRITER_PROOF_ALGORITHM) {
+		return {
+			verified: false,
+			diagnostics: ["writer_proof_algorithm_unsupported"],
+		};
+	}
+	if (!sameStringList(proof.value.signed_fields, WRITER_PROOF_SIGNED_FIELDS)) {
+		return {
+			verified: false,
+			diagnostics: ["writer_proof_signed_fields_mismatch"],
+		};
+	}
+	let contentDigest: string;
+	let payload: unknown;
+	try {
+		contentDigest = writerProofContentDigest(report);
+		payload = writerProofPayload(report, proof.value.nonce, contentDigest);
+	} catch {
+		return {
+			verified: false,
+			diagnostics: ["writer_proof_canonicalization_failed"],
+		};
+	}
+	if (contentDigest !== proof.value.content_digest) {
+		return {
+			verified: false,
+			diagnostics: ["writer_proof_content_digest_mismatch"],
+		};
+	}
+	const expected = hmacSha256Hex(key, canonicalJson(payload));
+	if (!safeEqualHex(expected, proof.value.signature)) {
+		return {
+			verified: false,
+			diagnostics: ["writer_proof_signature_mismatch"],
+		};
+	}
+	return { verified: true, diagnostics: [] };
+}
+
+/**
+ * Derive a purpose-separated runtime run id from Claude Stop detection state.
+ *
+ * @param key - Local HMAC key bytes from the private trust store.
+ * @param detectionId - Stable Claude Stop detection id.
+ * @returns Hex skill run id that does not expose the raw detection id.
+ *
+ * @example
+ * ```typescript
+ * const runId = deriveWriterOwnedSkillRunId(key, detectionId)
+ * ```
+ */
+export function deriveWriterOwnedSkillRunId(
+	key: Uint8Array,
+	detectionId: string,
+): string {
+	return hmacSha256Hex(key, `skill-run:${detectionId}`);
+}
+
+/**
  * Normalize v0 and v1 report records into one review model.
  *
  * Review owns interpretation. The normalizer preserves evidence source,
@@ -1622,12 +1817,21 @@ export function parseCloseoutReceipt(
  * if (normalized.kind === "ok") review(normalized.report)
  * ```
  */
-export function normalizeReport(raw: unknown): NormalizeReportResult {
+export function normalizeReport(
+	raw: unknown,
+	proofContext?: WriterProofContext,
+): NormalizeReportResult {
 	if (!isRecord(raw)) {
 		return { kind: "invalid", path: "$", reason: "expected_object" };
 	}
 	if ("schema_version" in raw || "report_id" in raw || "report_card" in raw) {
-		return normalizeV1Report(raw);
+		if (raw.schema_version === SKILL_FEEDBACK_SCHEMA_VERSION_V1) {
+			return normalizeV1Report(raw);
+		}
+		if (raw.schema_version === SKILL_FEEDBACK_SCHEMA_VERSION) {
+			return normalizeV2Report(raw, proofContext);
+		}
+		return { kind: "invalid", path: "schema_version", reason: "unsupported" };
 	}
 	return normalizeV0Report(raw);
 }
@@ -1687,6 +1891,7 @@ function validateReviewResultDataShape(
 		validateReviewUnits(review.review_units),
 		validateReviewLedgerEntries(review.ledger_entries),
 		validateReviewAnchorMissTelemetry(review.anchor_miss_telemetry),
+		validateWriterProofHealth(review.proof_health, "proof_health"),
 		validateReviewClaimReadiness(review.claim_readiness),
 	].find(isReviewResultValidationError);
 }
@@ -1714,6 +1919,7 @@ export function parseHealthResultData(
 			validateHealthCounts(health.counts),
 			validateHealthNewest(health.newest),
 			validateHealthWarnings(health.warnings),
+			validateWriterProofHealth(health.proof_health, "proof_health"),
 			validateHealthClaimReadiness(health.claim_readiness),
 			validateHealthCorrelation(health.correlation),
 			validateHealthNextAction(health.next_action),
@@ -1838,7 +2044,7 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 			return { kind: "invalid", path: key, reason: "unknown_field" };
 		}
 	}
-	if (raw.schema_version !== SKILL_FEEDBACK_SCHEMA_VERSION) {
+	if (raw.schema_version !== SKILL_FEEDBACK_SCHEMA_VERSION_V1) {
 		return { kind: "invalid", path: "schema_version", reason: "unsupported" };
 	}
 	if (typeof raw.report_id !== "string") {
@@ -1918,7 +2124,7 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 		evidenceGap(
 			"cost_unavailable",
 			"cost",
-			"Skill-attributed cost is unavailable in v1.",
+			"Skill-attributed cost is unavailable for this report.",
 		),
 	]);
 	return {
@@ -1950,6 +2156,143 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 				gap_code: "cost_unavailable",
 			},
 			runtime,
+		},
+	};
+}
+
+function normalizeV2Report(
+	raw: Record<string, unknown>,
+	proofContext?: WriterProofContext,
+): NormalizeReportResult {
+	for (const key of Object.keys(raw)) {
+		if (!V2_REPORT_FIELD_SET.has(key)) {
+			return { kind: "invalid", path: key, reason: "unknown_field" };
+		}
+	}
+	if (raw.schema_version !== SKILL_FEEDBACK_SCHEMA_VERSION) {
+		return { kind: "invalid", path: "schema_version", reason: "unsupported" };
+	}
+	if (typeof raw.report_id !== "string") {
+		return { kind: "invalid", path: "report_id", reason: "expected_string" };
+	}
+	if (raw.untrusted_evidence !== true) {
+		return {
+			kind: "invalid",
+			path: "untrusted_evidence",
+			reason: "expected_true",
+		};
+	}
+	if (typeof raw.generated_ts !== "string") {
+		return { kind: "invalid", path: "generated_ts", reason: "expected_string" };
+	}
+	if (typeof raw.skill !== "string") {
+		return { kind: "invalid", path: "skill", reason: "expected_string" };
+	}
+	const evidenceSource = stringFromUnknown(raw.evidence_source);
+	if (!isEvidenceSource(evidenceSource)) {
+		return {
+			kind: "invalid",
+			path: "evidence_source",
+			reason: "invalid_evidence_source",
+		};
+	}
+	const captureRuntime = parseOptionalCaptureRuntime(raw.capture_runtime);
+	if (captureRuntime && typeof captureRuntime !== "string") return captureRuntime;
+	const provenance = parseOptionalSkillIdentityProvenance(
+		raw.skill_identity_provenance,
+	);
+	if (provenance && "kind" in provenance) return provenance;
+	const correlationStatus = stringFromUnknown(raw.correlation_status);
+	if (!isCorrelationStatus(correlationStatus)) {
+		return {
+			kind: "invalid",
+			path: "correlation_status",
+			reason: "invalid_correlation_status",
+		};
+	}
+	if (
+		"skill_run_id" in raw &&
+		raw.skill_run_id !== undefined &&
+		typeof raw.skill_run_id !== "string"
+	) {
+		return {
+			kind: "invalid",
+			path: "skill_run_id",
+			reason: "expected_string",
+		};
+	}
+	const skillRunIdProvenance = parseOptionalSkillRunIdProvenance(
+		raw.skill_run_id_provenance,
+	);
+	if (skillRunIdProvenance && typeof skillRunIdProvenance !== "string") {
+		return skillRunIdProvenance;
+	}
+	if (skillRunIdProvenance && !raw.skill_run_id) {
+		return {
+			kind: "invalid",
+			path: "skill_run_id_provenance",
+			reason: "missing_skill_run_id",
+		};
+	}
+	const runtime = parseRuntimeTelemetry(raw.runtime);
+	if ("kind" in runtime) return runtime;
+	const reportCard = parseCloseoutReceipt(raw.report_card);
+	if (reportCard.kind === "invalid") {
+		return {
+			kind: "invalid",
+			path: `report_card.${reportCard.path}`,
+			reason: reportCard.reason,
+		};
+	}
+	const rawEvidenceGaps = parseEvidenceGaps(raw.evidence_gaps);
+	if ("kind" in rawEvidenceGaps) return rawEvidenceGaps;
+	const evidenceGaps = uniqueEvidenceGaps([
+		...rawEvidenceGaps,
+		...reportCard.evidence_gaps,
+		evidenceGap(
+			"cost_unavailable",
+			"cost",
+			"Skill-attributed cost is unavailable for this report.",
+		),
+	]);
+	const proofVerified = proofContext?.verified === true;
+	const trustedRunProvenance =
+		proofVerified &&
+		evidenceSource === "hook_capture" &&
+		captureRuntime === "claude_stop" &&
+		skillRunIdProvenance === "runtime_owned";
+	const proofDiagnostics = proofContext?.diagnostics ?? [];
+	return {
+		kind: "ok",
+		report: {
+			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			source_schema_version: "v2",
+			report_id: raw.report_id,
+			untrusted_evidence: true,
+			generated_ts: raw.generated_ts,
+			evidence_source: evidenceSource,
+			...(captureRuntime ? { capture_runtime: captureRuntime } : {}),
+			...(provenance ? { skill_identity_provenance: provenance } : {}),
+			correlation_status: correlationStatus,
+			skill_run_id: raw.skill_run_id as string | undefined,
+			...(trustedRunProvenance
+				? { skill_run_id_provenance: skillRunIdProvenance }
+				: {}),
+			skill: reportCard.receipt.skill ?? raw.skill,
+			outcome: reportCard.receipt.outcome ?? "ambiguous",
+			goal: reportCard.receipt.goal,
+			friction: reportCard.receipt.friction,
+			verification_burden: reportCard.receipt.verification_burden,
+			touched_surfaces: reportCard.receipt.touched_surfaces ?? [],
+			observations: reportCard.receipt.observations ?? [],
+			evidence_gaps: evidenceGaps,
+			cost: {
+				status: SKILL_FEEDBACK_COST_STATUS.UNAVAILABLE,
+				gap_code: "cost_unavailable",
+			},
+			runtime,
+			writer_proof_verified: proofVerified,
+			proof_diagnostics: proofDiagnostics,
 		},
 	};
 }
@@ -2768,7 +3111,11 @@ function validateReviewLedgerEntries(
 			const error = validateReviewString(entry[field], `${path}.${field}`);
 			if (error) return error;
 		}
-		for (const field of ["review_unit_keys", "owner_paths"] as const) {
+		for (const field of [
+			"review_unit_keys",
+			"owner_paths",
+			"proof_diagnostics",
+		] as const) {
 			const error = validateReviewStringArray(entry[field], `${path}.${field}`);
 			if (error) return error;
 		}
@@ -2889,6 +3236,29 @@ function validateReviewLedgerVerificationBurden(
 	if ("note" in burden) {
 		return validateReviewString(burden.note, `${path}.note`);
 	}
+}
+
+function validateWriterProofHealth(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const health = requireReviewRecord(raw, path);
+	if (isReviewResultValidationError(health)) return health;
+	const unknown = validateAllowedKeys(
+		health,
+		new Set(WRITER_PROOF_HEALTH_FIELDS),
+		path,
+	);
+	if (unknown) return unknown;
+	for (const field of [
+		"verified_count",
+		"evidence_only_count",
+		"replay_diagnostics_count",
+	] as const) {
+		const error = validateReviewNumber(health[field], `${path}.${field}`);
+		if (error) return error;
+	}
+	return validateReviewStringArray(health.diagnostics, `${path}.diagnostics`);
 }
 
 function validateReviewAnchorMissTelemetry(
@@ -3156,6 +3526,159 @@ function v0Gap(field: ReceiptField): EvidenceGap {
 	}
 }
 
+type WriterProofParseResult =
+	| { ok: true; value: WriterProof }
+	| { ok: false; reason: string };
+
+function parseWriterProof(raw: unknown): WriterProofParseResult {
+	if (!isRecord(raw)) return { ok: false, reason: "writer_proof_missing" };
+	if (raw.algorithm !== WRITER_PROOF_ALGORITHM) {
+		return { ok: false, reason: "writer_proof_algorithm_unsupported" };
+	}
+	if (!isHexString(raw.nonce, 32)) {
+		return { ok: false, reason: "writer_proof_nonce_invalid" };
+	}
+	if (!Array.isArray(raw.signed_fields)) {
+		return { ok: false, reason: "writer_proof_signed_fields_invalid" };
+	}
+	const signedFields = raw.signed_fields;
+	if (
+		!signedFields.every(
+			(field): field is WriterProofSignedField =>
+				typeof field === "string" && WRITER_PROOF_SIGNED_FIELD_SET.has(field),
+		)
+	) {
+		return { ok: false, reason: "writer_proof_signed_fields_invalid" };
+	}
+	if (!isHexString(raw.content_digest, 64)) {
+		return { ok: false, reason: "writer_proof_content_digest_invalid" };
+	}
+	if (!isHexString(raw.signature, 64)) {
+		return { ok: false, reason: "writer_proof_signature_invalid" };
+	}
+	return {
+		ok: true,
+		value: {
+			algorithm: WRITER_PROOF_ALGORITHM,
+			nonce: raw.nonce,
+			signed_fields: signedFields,
+			content_digest: raw.content_digest,
+			signature: raw.signature,
+		},
+	};
+}
+
+function isHexString(value: unknown, length: number): value is string {
+	return (
+		typeof value === "string" &&
+		value.length === length &&
+		/^[0-9a-f]+$/.test(value)
+	);
+}
+
+function writerProofPayload(
+	report: Record<string, unknown>,
+	nonce: string,
+	contentDigest: string,
+): unknown {
+	return {
+		algorithm: WRITER_PROOF_ALGORITHM,
+		content_digest: contentDigest,
+		fields: Object.fromEntries(
+			WRITER_PROOF_SIGNED_FIELDS.map((field) => [
+				field,
+				writerProofFieldValue(report, field, nonce),
+			]),
+		),
+		signed_fields: WRITER_PROOF_SIGNED_FIELDS,
+	};
+}
+
+function writerProofFieldValue(
+	report: Record<string, unknown>,
+	field: WriterProofSignedField,
+	nonce: string,
+): unknown {
+	if (field === "writer_proof.nonce") {
+		return { present: true, value: nonce };
+	}
+	if (Object.hasOwn(report, field)) {
+		return { present: true, value: report[field] };
+	}
+	return { present: false };
+}
+
+function writerProofContentDigest(report: Record<string, unknown>): string {
+	const digestInput = Object.fromEntries(
+		Object.entries(report).filter(
+			([field]) =>
+				field !== "writer_proof" && !WRITER_PROOF_DIRECT_FIELD_SET.has(field),
+		),
+	);
+	return createHash("sha256")
+		.update(canonicalJson(digestInput))
+		.digest(WRITER_PROOF_SIGNATURE_ENCODING);
+}
+
+function canonicalJson(value: unknown): string {
+	return JSON.stringify(canonicalJsonValue(value));
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+	if (value === null) return null;
+	if (typeof value === "string" || typeof value === "boolean") return value;
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new Error("non-finite number");
+		return value;
+	}
+	if (
+		value === undefined ||
+		typeof value === "function" ||
+		typeof value === "symbol" ||
+		typeof value === "bigint"
+	) {
+		throw new Error("non-json value");
+	}
+	if (Array.isArray(value)) {
+		for (let index = 0; index < value.length; index += 1) {
+			if (!Object.hasOwn(value, index)) throw new Error("sparse array");
+		}
+		return value.map(canonicalJsonValue);
+	}
+	if (!isRecord(value)) throw new Error("non-json object");
+	if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+		throw new Error("custom toJSON");
+	}
+	const prototype = Object.getPrototypeOf(value);
+	if (prototype !== Object.prototype && prototype !== null) {
+		throw new Error("non-plain object");
+	}
+	return Object.fromEntries(
+		Object.keys(value)
+			.sort()
+			.map((key) => [key, canonicalJsonValue(value[key])]),
+	);
+}
+
+function hmacSha256Hex(key: Uint8Array, value: string): string {
+	return createHmac("sha256", key).update(value).digest("hex");
+}
+
+function safeEqualHex(left: string, right: string): boolean {
+	if (!isHexString(left, 64) || !isHexString(right, 64)) return false;
+	return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+function sameStringList(
+	left: readonly string[],
+	right: readonly string[],
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((value, index) => value === right[index])
+	);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -3256,11 +3779,11 @@ function isHealthNextActionId(value: unknown): value is HealthNextActionId {
 	).includes(value);
 }
 
-export function isCaptureRuntime(value: unknown): value is CaptureRuntime {
+function isCaptureRuntime(value: unknown): value is CaptureRuntime {
 	return (SKILL_FEEDBACK_CAPTURE_RUNTIMES as readonly unknown[]).includes(value);
 }
 
-export function isSkillIdentityProvenance(
+function isSkillIdentityProvenance(
 	value: unknown,
 ): value is SkillIdentityProvenance {
 	if (!isRecord(value)) return false;

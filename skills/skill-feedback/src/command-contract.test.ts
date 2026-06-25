@@ -25,6 +25,8 @@ import {
 	type ReviewResultData,
 	type SkillFeedbackCommand,
 	buildSoftwareLearningReport,
+	createWriterProof,
+	deriveWriterOwnedSkillRunId,
 	normalizeReport,
 	parseCloseoutReceipt,
 	parseHealthResultData,
@@ -33,6 +35,7 @@ import {
 	parseReceipt,
 	skillFeedbackContracts,
 	type SkillFeedbackPurgeResultData,
+	verifyWriterProof,
 } from "./command-contract";
 
 const COMPLETE_RECEIPT = {
@@ -148,6 +151,7 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 			source_mix: ["driver_closeout"],
 			capture_runtime_mix: [],
 			allowed_claims: ["repeated_anchor"],
+			proof_diagnostics: [],
 			resolution_state: "open",
 			verification_burden: {
 				level: "moderate",
@@ -166,6 +170,7 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 			source_mix: ["hook_capture"],
 			capture_runtime_mix: ["codex_stop"],
 			allowed_claims: [],
+			proof_diagnostics: [],
 			resolution_state: "no_action",
 			verification_burden: { level: "unknown" },
 			next_safe_action: "Wait for a repo-contained path before grouping.",
@@ -178,6 +183,12 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 			attempted_targets: [{ type: "label", value: "skill authoring docs" }],
 		},
 	],
+	proof_health: {
+		verified_count: 0,
+		evidence_only_count: 2,
+		replay_diagnostics_count: 0,
+		diagnostics: [],
+	},
 	claim_readiness: {
 		runtime_capture: {
 			status: "evidence_only",
@@ -222,6 +233,12 @@ const MINIMAL_HEALTH_RESULT = {
 			summary: "Primary reports lack trusted skill-run correlation.",
 		},
 	],
+	proof_health: {
+		verified_count: 0,
+		evidence_only_count: 2,
+		replay_diagnostics_count: 0,
+		diagnostics: [],
+	},
 	claim_readiness: {
 		runtime_capture: {
 			status: "evidence_only",
@@ -299,7 +316,7 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
-		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("4");
+		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("5");
 		expect(discoveryTree().commands.health?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
@@ -1024,6 +1041,37 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		],
 		skill_run_id: "run-explicit-1",
 	} as const;
+	const WRITER_PROOF_KEY = Buffer.from("11".repeat(32), "hex");
+
+	function schema2Report(overrides: Record<string, unknown> = {}) {
+		return {
+			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			report_id: "report_v2_proof",
+			untrusted_evidence: true,
+			generated_ts: COMPLETE_RECEIPT.generated_ts,
+			evidence_source: "hook_capture",
+			capture_runtime: "claude_stop",
+			skill_identity_provenance: {
+				source: "claude_transcript_skill_tool_result",
+				trusted: true,
+				field: "toolUseResult.commandName",
+				reason: "claude_transcript_detection",
+			},
+			correlation_status: "unlinked",
+			skill: COMPLETE_CLOSEOUT.skill,
+			skill_run_id: "run-runtime-1",
+			skill_run_id_provenance: "runtime_owned",
+			runtime: {
+				git_sha: COMPLETE_RECEIPT.git_sha,
+				skill_version: COMPLETE_RECEIPT.skill_version,
+				model: COMPLETE_RECEIPT.model,
+			},
+			report_card: COMPLETE_CLOSEOUT,
+			evidence_gaps: [],
+			redactions: 0,
+			...overrides,
+		};
+	}
 
 	test("validates a complete closeout receipt with optional lanes", () => {
 		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
@@ -1194,7 +1242,7 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
 		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
 		const normalized = normalizeReport({
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			schema_version: "1",
 			report_id: "report_v1_1",
 			untrusted_evidence: true,
 			generated_ts: COMPLETE_RECEIPT.generated_ts,
@@ -1223,7 +1271,7 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
 		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
 		const baseReport = {
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			schema_version: "1",
 			report_id: "report_v1_capture",
 			untrusted_evidence: true,
 			generated_ts: COMPLETE_RECEIPT.generated_ts,
@@ -1279,7 +1327,7 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
 		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
 		const baseReport = {
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
+			schema_version: "1",
 			report_id: "report_v1_run_provenance",
 			untrusted_evidence: true,
 			generated_ts: COMPLETE_RECEIPT.generated_ts,
@@ -1324,6 +1372,313 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 			kind: "invalid",
 			path: "skill_run_id_provenance",
 			reason: "invalid",
+		});
+	});
+
+	test("preserves schema 2 run provenance only after valid writer proof", () => {
+		const unsigned = schema2Report();
+		const unsignedNormalized = normalizeReport(unsigned);
+
+		expect(unsignedNormalized.kind).toBe("ok");
+		if (unsignedNormalized.kind !== "ok") {
+			throw new Error("expected normalized unsigned report");
+		}
+		expect(unsignedNormalized.report.skill_run_id).toBe("run-runtime-1");
+		expect(unsignedNormalized.report.skill_run_id_provenance).toBeUndefined();
+
+		const signed = {
+			...unsigned,
+			writer_proof: createWriterProof(unsigned, WRITER_PROOF_KEY, "ab".repeat(16)),
+		};
+		const proof = verifyWriterProof(signed, WRITER_PROOF_KEY);
+		const normalized = normalizeReport(signed, proof);
+
+		expect(proof).toEqual({ verified: true, diagnostics: [] });
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.skill_run_id_provenance).toBe("runtime_owned");
+		expect(normalized.report.writer_proof_verified).toBe(true);
+	});
+
+	test("rejects invalid writer proof nonces before signing", () => {
+		const report = schema2Report();
+
+		expect(() =>
+			createWriterProof(report, WRITER_PROOF_KEY, "not-a-hex-nonce"),
+		).toThrow("writer proof nonce must be 32-char lowercase hex");
+		expect(() =>
+			createWriterProof(report, WRITER_PROOF_KEY, "AA".repeat(16)),
+		).toThrow("writer proof nonce must be 32-char lowercase hex");
+		expect(() =>
+			createWriterProof(report, WRITER_PROOF_KEY, "ab".repeat(16)),
+		).not.toThrow();
+	});
+
+	test("valid writer proof preserves only Claude Stop runtime-owned provenance", () => {
+		const correlationOwnedHook = schema2Report({
+			skill_run_id_provenance: "correlation_owned",
+			correlation_status: "linked",
+		});
+		const signedCorrelationOwnedHook = {
+			...correlationOwnedHook,
+			writer_proof: createWriterProof(
+				correlationOwnedHook,
+				WRITER_PROOF_KEY,
+				"ac".repeat(16),
+			),
+		};
+		const normalizedCorrelationOwnedHook = normalizeReport(
+			signedCorrelationOwnedHook,
+			verifyWriterProof(signedCorrelationOwnedHook, WRITER_PROOF_KEY),
+		);
+
+		expect(normalizedCorrelationOwnedHook.kind).toBe("ok");
+		if (normalizedCorrelationOwnedHook.kind !== "ok") {
+			throw new Error("expected signed hook report to normalize");
+		}
+		expect(
+			normalizedCorrelationOwnedHook.report.skill_run_id_provenance,
+		).toBeUndefined();
+		expect(normalizedCorrelationOwnedHook.report.writer_proof_verified).toBe(true);
+
+		const {
+			capture_runtime: _captureRuntime,
+			skill_identity_provenance: _skillIdentityProvenance,
+			...driverCloseout
+		} = schema2Report({
+			evidence_source: "driver_closeout",
+			skill_run_id_provenance: "correlation_owned",
+			correlation_status: "linked",
+		});
+		const signedDriverCloseout = {
+			...driverCloseout,
+			writer_proof: createWriterProof(
+				driverCloseout,
+				WRITER_PROOF_KEY,
+				"ad".repeat(16),
+			),
+		};
+		const normalizedDriverCloseout = normalizeReport(
+			signedDriverCloseout,
+			verifyWriterProof(signedDriverCloseout, WRITER_PROOF_KEY),
+		);
+
+		expect(normalizedDriverCloseout.kind).toBe("ok");
+		if (normalizedDriverCloseout.kind !== "ok") {
+			throw new Error("expected signed closeout report to normalize");
+		}
+		expect(
+			normalizedDriverCloseout.report.skill_run_id_provenance,
+		).toBeUndefined();
+		expect(normalizedDriverCloseout.report.writer_proof_verified).toBe(true);
+	});
+
+	test("downgrades copied or wrong-scope writer proof to evidence-only", () => {
+		const report = schema2Report();
+		const signed = {
+			...report,
+			writer_proof: createWriterProof(report, WRITER_PROOF_KEY, "cd".repeat(16)),
+		};
+		const tampered = {
+			...signed,
+			report_card: {
+				...(signed.report_card as Record<string, unknown>),
+				goal: "Tampered goal.",
+			},
+		};
+		const tamperedProof = verifyWriterProof(tampered, WRITER_PROOF_KEY);
+		const tamperedNormalized = normalizeReport(tampered, tamperedProof);
+
+		expect(tamperedProof.verified).toBe(false);
+		expect(tamperedProof.diagnostics).toContain(
+			"writer_proof_content_digest_mismatch",
+		);
+		expect(tamperedNormalized.kind).toBe("ok");
+		if (tamperedNormalized.kind !== "ok") {
+			throw new Error("expected tampered report to stay readable");
+		}
+		expect(tamperedNormalized.report.skill_run_id_provenance).toBeUndefined();
+
+		const wrongScope = {
+			...signed,
+			writer_proof: {
+				...signed.writer_proof,
+				signed_fields: signed.writer_proof.signed_fields.filter(
+					(field) => field !== "skill_run_id_provenance",
+				),
+			},
+		};
+		expect(verifyWriterProof(wrongScope, WRITER_PROOF_KEY)).toMatchObject({
+			verified: false,
+			diagnostics: ["writer_proof_signed_fields_mismatch"],
+		});
+	});
+
+	test("writer proof covers every persisted schema 2 report field", () => {
+		const report = schema2Report();
+		const signed = {
+			...report,
+			writer_proof: createWriterProof(report, WRITER_PROOF_KEY, "9a".repeat(16)),
+		};
+		const mutations: Array<[string, Record<string, unknown>]> = [
+			["schema_version", { ...signed, schema_version: "3" }],
+			["report_id", { ...signed, report_id: "report_v2_other" }],
+			["untrusted_evidence", { ...signed, untrusted_evidence: false }],
+			[
+				"generated_ts",
+				{ ...signed, generated_ts: "2026-06-11T08:01:00.000Z" },
+			],
+			["evidence_source", { ...signed, evidence_source: "driver_closeout" }],
+			["capture_runtime", { ...signed, capture_runtime: "codex_stop" }],
+			[
+				"skill_identity_provenance",
+				{
+					...signed,
+					skill_identity_provenance: {
+						...(signed.skill_identity_provenance as Record<string, unknown>),
+						field: "other.field",
+					},
+				},
+			],
+			["correlation_status", { ...signed, correlation_status: "linked" }],
+			["skill_run_id", { ...signed, skill_run_id: "run-runtime-2" }],
+			[
+				"skill_run_id_provenance",
+				{ ...signed, skill_run_id_provenance: "correlation_owned" },
+			],
+			["skill", { ...signed, skill: "fallow" }],
+			["runtime", { ...signed, runtime: { ...signed.runtime, model: "other" } }],
+			[
+				"report_card",
+				{
+					...signed,
+					report_card: { ...signed.report_card, goal: "Tampered goal." },
+				},
+			],
+			[
+				"evidence_gaps",
+				{
+					...signed,
+					evidence_gaps: [
+						{
+							code: "cost_unavailable",
+							field: "cost",
+							message: "tampered",
+						},
+					],
+				},
+			],
+			["redactions", { ...signed, redactions: 1 }],
+		];
+
+		for (const [field, mutated] of mutations) {
+			const proof = verifyWriterProof(mutated, WRITER_PROOF_KEY);
+			expect({ field, verified: proof.verified }).toEqual({
+				field,
+				verified: false,
+			});
+		}
+	});
+
+	test("writer proof rejects unsupported algorithms and mismatched signatures", () => {
+		const report = schema2Report();
+		const signed = {
+			...report,
+			writer_proof: createWriterProof(report, WRITER_PROOF_KEY, "56".repeat(16)),
+		};
+
+		expect(
+			verifyWriterProof(
+				{
+					...signed,
+					writer_proof: { ...signed.writer_proof, algorithm: "ed25519" },
+				},
+				WRITER_PROOF_KEY,
+			),
+		).toMatchObject({
+			verified: false,
+			diagnostics: ["writer_proof_algorithm_unsupported"],
+		});
+		expect(
+			verifyWriterProof(
+				{
+					...signed,
+					writer_proof: { ...signed.writer_proof, signature: "00".repeat(32) },
+				},
+				WRITER_PROOF_KEY,
+			),
+		).toMatchObject({
+			verified: false,
+			diagnostics: ["writer_proof_signature_mismatch"],
+		});
+	});
+
+	test("normalization rejects unsupported schema 2 dispatch versions", () => {
+		expect(normalizeReport({ ...schema2Report(), schema_version: "3" })).toEqual({
+			kind: "invalid",
+			path: "schema_version",
+			reason: "unsupported",
+		});
+	});
+
+	test("writer-owned skill run ids are deterministic and purpose separated", () => {
+		const key = Buffer.from("22".repeat(32), "hex");
+
+		expect(deriveWriterOwnedSkillRunId(key, "detection-1")).toBe(
+			deriveWriterOwnedSkillRunId(key, "detection-1"),
+		);
+		expect(deriveWriterOwnedSkillRunId(key, "detection-1")).not.toBe(
+			deriveWriterOwnedSkillRunId(key, "detection-2"),
+		);
+		expect(deriveWriterOwnedSkillRunId(key, "detection-1")).toMatch(
+			/^[0-9a-f]{64}$/,
+		);
+	});
+
+	test("canonical writer proof payload rejects non-json inputs", () => {
+		expect(() =>
+			createWriterProof(
+				schema2Report({ runtime: { model: Number.NaN } }),
+				WRITER_PROOF_KEY,
+				"ef".repeat(16),
+			),
+		).toThrow();
+		const sparse = [] as unknown[];
+		sparse[1] = { code: "cost_unavailable" };
+		expect(() =>
+			createWriterProof(
+				schema2Report({ evidence_gaps: sparse }),
+				WRITER_PROOF_KEY,
+				"12".repeat(16),
+			),
+		).toThrow();
+		expect(() =>
+			createWriterProof(
+				schema2Report({
+					runtime: { toJSON: () => ({ model: "spoofed" }) },
+				}),
+				WRITER_PROOF_KEY,
+				"34".repeat(16),
+			),
+		).toThrow();
+	});
+
+	test("public receipts cannot self-assert signed trust-bearing fields", () => {
+		expect(
+			parseReceipt({
+				...COMPLETE_RECEIPT,
+				skill_run_id_provenance: "runtime_owned",
+			}),
+		).toMatchObject({ kind: "unknown-field", field: "skill_run_id_provenance" });
+		expect(
+			parseCloseoutReceipt({
+				...COMPLETE_CLOSEOUT,
+				skill_run_id_provenance: "runtime_owned",
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "skill_run_id_provenance",
+			reason: "unknown_field",
 		});
 	});
 
