@@ -87,6 +87,7 @@ export function reduceReviewLedger(
 				capture_runtime_mix: [],
 				verification_burden: { level: "unknown" },
 				trusted_run_evidence: [],
+				proof_diagnostics: [],
 			};
 			entries.set(key, entry);
 		}
@@ -131,6 +132,7 @@ type MutableLedgerEntry = {
 	capture_runtime_mix: CaptureRuntime[];
 	verification_burden: ReviewLedgerVerificationBurden;
 	trusted_run_evidence: TrustedRunEvidence[];
+	proof_diagnostics: string[];
 };
 
 /**
@@ -259,6 +261,11 @@ function accumulateReport(
 	) {
 		entry.capture_runtime_mix.push(report.capture_runtime);
 	}
+	for (const diagnostic of report.proof_diagnostics ?? []) {
+		if (!entry.proof_diagnostics.includes(diagnostic)) {
+			entry.proof_diagnostics.push(diagnostic);
+		}
+	}
 	if (unit.trusted_run) {
 		let evidence = entry.trusted_run_evidence.find(
 			(item) => item.review_unit_key === unit.review_unit_key,
@@ -280,8 +287,9 @@ function accumulateReport(
 
 /**
  * Promote evidence tier monotonically. Engine-owned identity reaches
- * `trusted_engine_identity`; mixed evidence inside one trusted unit reaches
- * `corroborated` (KTD6); hook capture alone reaches `runtime_observed` (R18).
+ * `trusted_engine_identity`; hook capture alone reaches `runtime_observed`.
+ * Corroboration stays reserved until the correlation plan provides a link
+ * primitive owned outside raw report text.
  */
 function promoteEvidenceTier(
 	current: ReviewEvidenceTier,
@@ -290,7 +298,6 @@ function promoteEvidenceTier(
 ): ReviewEvidenceTier {
 	if (current === "trusted_engine_identity") return current;
 	if (hasTrustedEngineIdentity(report)) return "trusted_engine_identity";
-	if (sameTrustedRunMixedEvidence(entry)) return "corroborated";
 	if (current === "corroborated") return current;
 	if (report.evidence_source === "hook_capture" && current === "driver_declared") {
 		return "runtime_observed";
@@ -375,6 +382,7 @@ function finalizeEntry(entry: MutableLedgerEntry): ReviewLedgerEntry {
 		source_mix: entry.source_mix,
 		capture_runtime_mix: entry.capture_runtime_mix,
 		allowed_claims: allowedClaims,
+		proof_diagnostics: entry.proof_diagnostics,
 		resolution_state: deriveResolutionState(entry),
 		verification_burden: entry.verification_burden,
 		next_safe_action: nextSafeAction(entry),
@@ -398,7 +406,6 @@ function deriveAllowedClaims(
 	if (entry.anchor_strength === "strong_path") claims.add("repeated_anchor");
 	if (entry.source_mix.length > 1) claims.add("mixed_evidence_sources");
 	if (sameTrustedRunMixedEvidence(entry)) claims.add("same_trusted_run");
-	if (entry.evidence_tier === "corroborated") claims.add("corroborated");
 	if (entry.evidence_tier === "trusted_engine_identity") {
 		claims.add("trusted_engine_identity");
 	}

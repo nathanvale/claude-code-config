@@ -37,7 +37,7 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 
 ## Optional Lanes
 
-- `skill_run_id`: explicit trusted run id when available.
+- `skill_run_id`: explicit run id evidence when available.
 - `touched_surfaces`: owner paths or labels; max 5.
 - `observations`: evidence-only notes; max 3.
 - `observations[].kind`: `friction`, `verification_gap`, `missing_context`, `ownership_gap`, `tool_failure`, `bad_guidance`, `scope_mismatch`, `runtime_signal`, `product_signal`, or `other`.
@@ -57,6 +57,16 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 - Put no severity on observations.
 - Put no next action on observations.
 - Put no repair instruction on observations.
+- Put no `skill_run_id_provenance` in the receipt.
+- Put no trust, proof, or correlation fields in the receipt.
+
+## Trust Boundary
+
+- The writer may attach `writer_proof` after validation.
+- The receipt cannot self-assert proof.
+- Closeout proof does not create `correlation_owned`.
+- Closeout proof does not create `corroborated`.
+- Review decides preserved provenance from raw report proof context.
 
 ## Example
 

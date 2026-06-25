@@ -97,9 +97,21 @@ The evidence bundle that review classifies as one thing. A linked unit represent
 _Avoid_: report, file, merged row, fuzzy group
 
 **Trusted run proof**:
-Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run` and `corroborated`; it does not prove Trusted skill identity or `trusted_engine_identity`.
+Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run`; `corroborated` stays blocked until a separate correlation design lands. It does not prove Trusted skill identity or `trusted_engine_identity`.
 Raw persisted inbox provenance is evidence-only unless a writer-owned source preserved it through normalization.
 _Avoid_: raw `skill_run_id`, trusted skill identity, assistant claim
+
+**Writer proof**:
+Local HMAC proof that the `skill-feedback` writer owned selected persisted report fields at write time. It can let review preserve writer-owned `skill_run_id_provenance`; it does not prove Trusted skill identity, engine-owned identity, hook-to-closeout correlation, or `corroborated`.
+_Avoid_: Trusted run proof, trusted skill identity, keychain proof, correlation proof
+
+**Trust store**:
+The private repo-local `.skill-feedback/.trust/` directory that holds the local writer proof key. Review treats missing, corrupt, unreadable, unsafe, or wrong-permission trust stores as proof-unavailable and keeps reports evidence-only.
+_Avoid_: inbox report, source file, public config, portable key
+
+**Proof health**:
+Review and health diagnostics for writer proof verification, evidence-only fallback, and same-inbox replay detection. It reports reason ids; it never prints signing keys, key paths, signature inputs, or derived key material.
+_Avoid_: readiness badge, trust badge, repair instruction, secret diagnostic
 
 **Pattern resolution ledger**:
 The primary review-value model for `skill-feedback review`: recurring evidence is grouped into patterns, and each pattern carries its resolution state, evidence quality, owner paths, verification burden, and next safe action. Pattern entries remain untrusted evidence until confirmed against owner source.

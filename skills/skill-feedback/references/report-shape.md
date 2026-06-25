@@ -39,6 +39,20 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - `report_card`: closeout evidence lanes.
 - `evidence_gaps`: typed missing-or-weak evidence codes.
 
+## V2 Software Learning Report
+
+- `schema_version`: `2`.
+- Shared persisted shape for hook capture and driver closeout.
+- Carries top-level `skill` for writer-owned proof payloads.
+- May carry `writer_proof` from the local writer.
+- A valid `writer_proof` proves selected writer-owned fields only.
+- A valid `writer_proof` does not prove Trusted skill identity.
+- A valid `writer_proof` does not prove hook-to-closeout correlation.
+- Missing or invalid proof keeps raw `skill_run_id_provenance` evidence-only.
+- Schema `1` and v0 reports remain readable as evidence-only.
+- `.skill-feedback/.trust/` is the private trust store, not a report lane.
+- Review and purge scanners skip `.skill-feedback/.trust/` by path.
+
 ## V2 Field Ownership
 
 - Keep exact v2 review fields, enum values, parser rules, and result version in `skills/skill-feedback/src/command-contract.ts`.
@@ -54,10 +68,12 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Treat `skill_identity_provenance.trusted` as capture-source trust only.
 - Do not map `skill_identity_provenance.trusted` directly to Trusted skill identity, Trusted run proof, or `trusted_engine_identity`.
 - Review derives shared run units only after a writer-owned source has preserved trusted run proof through normalization.
-- `normalizeReport` strips raw inbox `skill_run_id_provenance`; raw JSON cannot mint `same_trusted_run` or `corroborated`.
+- `normalizeReport` strips raw inbox `skill_run_id_provenance` unless proof context is verified; raw JSON cannot mint `same_trusted_run` or `corroborated`.
 - Review output carries review units, ledger entries, anchor-miss telemetry, open actions, no-action rationale, and claim-specific readiness facts.
 - Review output carries `inbox_health` for primary, low-signal, unsafe, and invalid artifact counts.
+- Review output carries `proof_health` for verified count, evidence-only count, replay diagnostics, and proof reason ids.
 - Review output carries minimal health projection fields for direct-review safety: `inbox_status`, `counts`, `warnings`, and `next_action`.
+- Ledger entries carry `proof_diagnostics` for entry-local proof fallback reasons.
 - Keep exact health projection fields, enum values, reason ids, and next-action ids in `skills/skill-feedback/src/command-contract.ts`.
 - Keep `allowed_claims` entry-local on ledger entries.
 - Do not expose top-level `allowed_claims`.
@@ -126,6 +142,9 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Treat low-signal as a logical lane: `.skill-feedback/low-signal/` plus legacy top-level unknown-skill Codex Stop reports.
 - Use low-signal evidence for capture-health/readiness context only.
 - Emit `inbox_health` for primary count, low-signal count, per-report low-signal reason ids, skipped unsafe artifacts, and invalid artifacts.
+- Emit `proof_health` without mutating inbox files.
+- Treat duplicate `report_id` and duplicate `writer_proof.nonce` values in the same inbox as replay diagnostics.
+- Exclude duplicated reports from trusted provenance preservation.
 - Use `unknown_skill_codex_stop` for unknown-skill Codex Stop reports.
 - Use `low_signal_lane_report` for reports treated as low-signal only because they live in `.skill-feedback/low-signal/`.
 - Warn when closeout coverage is low.
@@ -167,6 +186,7 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Treat low-signal as capture-health evidence only.
 - Summarize runtime capture, Trusted skill identity, and Daily pilot readiness separately.
 - Summarize primary correlation using the enum owned by `skills/skill-feedback/src/command-contract.ts`.
+- Summarize proof health using reason ids only.
 - Warn when all primary evidence is unlinked.
 - Warn when low-signal capture volume reaches the runtime-inspection threshold.
 - Warn when retention age/count is ready for explicit purge preview.

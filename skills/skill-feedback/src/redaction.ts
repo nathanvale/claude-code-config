@@ -127,6 +127,7 @@ export function redactReportCardSoftwareLearningReport(
 		redactions += summary.redactions;
 	}
 
+	redacted.redactions = redactions;
 	return { value: redacted, redactions };
 }
 
