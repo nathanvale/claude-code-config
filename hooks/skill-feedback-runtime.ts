@@ -6,6 +6,8 @@ import {
 	type FinalizeCorrelationWitnessResult,
 } from '../skills/skill-feedback/src/skill-feedback-runner'
 
+export type { CorrelationCloseoutCandidate }
+
 export type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
 export type SkillFeedbackSource = 'claude-stop' | 'codex-stop' | 'codex-notify'
 export type CaptureRuntime = 'claude_stop' | 'codex_stop' | 'codex_notify'
@@ -63,15 +65,18 @@ export interface HookRunResult {
 	exitCode: number
 	stdout: string
 	stderr: string
+	reportPath?: string
 }
 
 export interface CorrelationWitnessRequest {
 	cwd: string
 	skill: string
 	hookReportId: string
+	hookWrittenPath?: string
 	skillRunId: string
 	generatedTs: string
 	candidates: readonly CorrelationCloseoutCandidate[]
+	closeoutDiagnostics?: readonly string[]
 }
 
 const DEFAULT_HOOK_PROCESS_TIMEOUT_MS = 6_000
@@ -185,6 +190,7 @@ export async function runSkillFeedbackRecord(
 		exitCode: result.exitCode,
 		stdout: result.stdout,
 		stderr: result.stderr,
+		...(result.reportPath ? { reportPath: result.reportPath } : {}),
 	}
 }
 
@@ -195,9 +201,15 @@ export async function runSkillFeedbackCorrelationWitness(
 		{
 			skill: request.skill,
 			hookReportId: request.hookReportId,
+			...(request.hookWrittenPath
+				? { hookWrittenPath: request.hookWrittenPath }
+				: {}),
 			skillRunId: request.skillRunId,
 			createdTs: request.generatedTs,
 			candidates: request.candidates,
+			...(request.closeoutDiagnostics
+				? { closeoutDiagnostics: request.closeoutDiagnostics }
+				: {}),
 		},
 		{
 			runtime: createDefaultSkillFeedbackRuntime({

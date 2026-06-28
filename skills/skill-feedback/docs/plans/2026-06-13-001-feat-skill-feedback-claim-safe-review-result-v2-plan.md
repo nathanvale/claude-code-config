@@ -3,7 +3,7 @@ title: "feat: Skill-feedback claim-safe ReviewResultData v2"
 type: feat
 date: 2026-06-13
 depth: deep
-supersedes: docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md
+supersedes: skills/skill-feedback/docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md
 ---
 
 # feat: Skill-feedback claim-safe ReviewResultData v2
@@ -428,7 +428,7 @@ Pattern naming guardrail:
 
 **Files:**
 
-- `docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md`
+- `skills/skill-feedback/docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md`
 - `skills/skill-feedback/CONTEXT.md`
 - `skills/skill-feedback/references/report-shape.md`
 - `skills/skill-feedback/prototypes/NOTES.md`
@@ -536,9 +536,9 @@ Pattern naming guardrail:
 
 - `skills/skill-feedback/prototypes/NOTES.md`
 - `skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts`
-- `docs/ideation/2026-06-13-skill-feedback-review-pivot-ideation.html`
+- `skills/skill-feedback/docs/ideation/2026-06-13-skill-feedback-review-pivot-ideation.html`
 - `docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md`
-- `docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md`
+- `skills/skill-feedback/docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md`
 - `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`
 - `skills/skill-feedback/CONTEXT.md`
 - `skills/skill-feedback/references/report-shape.md`

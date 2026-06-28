@@ -2,7 +2,7 @@
 title: "feat: Skill-feedback pattern ledger v2"
 type: feat
 date: 2026-06-12
-origin: docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
 origin_status: "superseded by Decision 20 where this plan conflicts"
 depth: deep
 deepened: 2026-06-12
@@ -10,7 +10,7 @@ deepened: 2026-06-12
 
 # feat: Skill-feedback pattern ledger v2
 
-> Superseded on 2026-06-13 by `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`. Keep this file as historical context for the generic anchor-ledger plan. Use the replacement plan for active v2 work.
+> Superseded on 2026-06-13 by `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`. Keep this file as historical context for the generic anchor-ledger plan. Use the replacement plan for active v2 work.
 
 ## Summary
 
@@ -510,9 +510,9 @@ flowchart TB
 
 ## Sources / Research
 
-- `docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md` (origin; superseded by Decision 20 where it conflicts)
+- `skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md` (origin; superseded by Decision 20 where it conflicts)
 - `docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md`
-- `docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`
+- `skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`
 - `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`
 - `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md`
 - `skills/skill-feedback/CONTEXT.md`

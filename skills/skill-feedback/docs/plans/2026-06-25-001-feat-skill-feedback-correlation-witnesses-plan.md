@@ -4,8 +4,8 @@ type: feat
 date: 2026-06-25
 depth: deep
 deepened: 2026-06-25
-origin: docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
-builds_on: docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
+builds_on: skills/skill-feedback/docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md
 ---
 
 # feat: Skill-feedback correlation witnesses
@@ -249,10 +249,10 @@ The witness is a separate artifact under `.skill-feedback/.correlation/`. It rec
 
 ## Sources / Research
 
-- `docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md` shipped writer proof and deferred correlation witnesses, witness lifecycle, candidate diagnostics, `correlation_owned`, and `corroborated`.
-- `docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md` set the trust-first gate and separated hook-to-closeout correlation from engine-owned skill identity.
-- `docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md` made raw provenance evidence-only and reserved trusted links for writer-owned correlation sources.
-- `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` established reducer-owned review units, evidence tiers, allowed claims, and claim readiness.
+- `skills/skill-feedback/docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md` shipped writer proof and deferred correlation witnesses, witness lifecycle, candidate diagnostics, `correlation_owned`, and `corroborated`.
+- `skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md` set the trust-first gate and separated hook-to-closeout correlation from engine-owned skill identity.
+- `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md` made raw provenance evidence-only and reserved trusted links for writer-owned correlation sources.
+- `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` established reducer-owned review units, evidence tiers, allowed claims, and claim readiness.
 - `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md` accepted harness Stop hooks as capture triggers and rejected driver recall as proof.
 - `docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md` found no mature public Codex skill-identity signal.
 - `skills/skill-feedback/CONTEXT.md` defines Trusted run proof, Trusted skill identity, Correlation health, Review unit, Evidence source, and Low-signal lane.

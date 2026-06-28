@@ -31,6 +31,7 @@ import {
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	createCorrelationWitness,
+	createWriterProof,
 } from "./command-contract";
 
 const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
@@ -88,6 +89,13 @@ const stationScenarios = {
 	"purge.preview": { run: runPurgePreview },
 	"purge.execute": { run: runPurgeExecute },
 	"purge.invalid_usage": { run: runPurgeInvalidUsage },
+	"correlate.preview_repairable": { run: runCorrelatePreviewRepairable },
+	"correlate.execute_written": { run: runCorrelateExecuteWritten },
+	"correlate.already_linked": { run: runCorrelateAlreadyLinked },
+	"correlate.ambiguous": { run: runCorrelateAmbiguous },
+	"correlate.insufficient_evidence": { run: runCorrelateInsufficientEvidence },
+	"correlate.unsafe_inbox": { run: runCorrelateUnsafeInbox },
+	"correlate.invalid_usage": { run: runCorrelateInvalidUsage },
 } satisfies Record<SkillFeedbackStationId, StationScenario>;
 
 afterEach(async () => {
@@ -506,6 +514,128 @@ async function runPurgeInvalidUsage(
 	return evidenceFor(station, result, envelope);
 }
 
+async function runCorrelatePreviewRepairable(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const setup = await writeRepairableCorrelationFixture("preview");
+	const result = await runSkillFeedback(["correlate"], {
+		cwd: setup.root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({
+		mode: "preview",
+		counts: { repairable_count: 1, written_count: 0 },
+	});
+	expect(await listCorrelationWitnessFiles(setup.root)).toEqual([]);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCorrelateExecuteWritten(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const setup = await writeRepairableCorrelationFixture("execute");
+	const result = await runSkillFeedback(["correlate", "--execute"], {
+		cwd: setup.root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({
+		mode: "execute",
+		counts: { repairable_count: 1, written_count: 1 },
+	});
+	expect(await listCorrelationWitnessFiles(setup.root)).toHaveLength(1);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCorrelateAlreadyLinked(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const setup = await writeRepairableCorrelationFixture("linked");
+	await runSkillFeedback(["correlate", "--execute"], {
+		cwd: setup.root,
+		label: `${station.id}:setup`,
+	});
+	const result = await runSkillFeedback(["correlate", "--execute"], {
+		cwd: setup.root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({
+		mode: "execute",
+		counts: { already_linked_count: 1, written_count: 0 },
+	});
+	expect(await listCorrelationWitnessFiles(setup.root)).toHaveLength(1);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCorrelateAmbiguous(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const setup = await writeAmbiguousCorrelationFixture();
+	const result = await runSkillFeedback(["correlate"], {
+		cwd: setup.root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({
+		mode: "preview",
+		counts: { ambiguous_count: 1, repairable_count: 0 },
+	});
+	expect(await listCorrelationWitnessFiles(setup.root)).toEqual([]);
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCorrelateInsufficientEvidence(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const setup = await writeInsufficientCorrelationFixture();
+	const result = await runSkillFeedback(["correlate"], {
+		cwd: setup.root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({
+		mode: "preview",
+		counts: { insufficient_evidence_count: 1, repairable_count: 0 },
+		next_action: { action_id: "no_repair_available" },
+	});
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCorrelateUnsafeInbox(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await mkdir(join(root, ".skill-feedback"), { recursive: true });
+	await chmod(join(root, ".skill-feedback"), 0o700);
+	const outside = await makeRoot();
+	await symlink(outside, join(root, ".skill-feedback", ".correlation"));
+	const result = await runSkillFeedback(["correlate"], {
+		cwd: root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({
+		changed_state: "none",
+		diagnostics: ["correlation_witness_dir_unsafe"],
+	});
+	return evidenceFor(station, result, envelope);
+}
+
+async function runCorrelateInvalidUsage(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	const result = await runSkillFeedback(["correlate", "--hook-report-id", "x"], {
+		cwd: root,
+		label: station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data).toMatchObject({ changed_state: "none" });
+	return evidenceFor(station, result, envelope);
+}
+
 async function runSkillFeedback(
 	args: readonly string[],
 	options: { cwd?: string; stdin?: string; label: string },
@@ -631,6 +761,215 @@ async function writePurgeReports(root: string): Promise<void> {
 		"new.json",
 		v1CloseoutReport("report-new", "2026-06-01T00:00:00.000Z"),
 	);
+}
+
+async function writeRepairableCorrelationFixture(suffix: string): Promise<{
+	root: string;
+	hookReportId: string;
+	closeoutReportId: string;
+}> {
+	const root = await makeIgnoredGitRoot();
+	const key = await writeTrustKey(root);
+	const hook = await writeSignedCorrelationReport(root, {
+		fileName: `hook-${suffix}.json`,
+		key,
+		nonce: `${suffix.length}`.repeat(32).slice(0, 32).padEnd(32, "1"),
+		reportId: `report-hook-${suffix}`,
+		evidenceSource: "hook_capture",
+		captureRuntime: "claude_stop",
+		skillRunId: `run-${suffix}`,
+		skillRunIdProvenance: "runtime_owned",
+	});
+	const closeout = await writeSignedCorrelationReport(root, {
+		fileName: `closeout-${suffix}.json`,
+		key,
+		nonce: `${suffix.length + 1}`.repeat(32).slice(0, 32).padEnd(32, "2"),
+		reportId: `report-closeout-${suffix}`,
+		evidenceSource: "driver_closeout",
+	});
+	await writeCorrelationDiagnostic(root, `diagnostic_${"a".repeat(16)}.json`, {
+		schema_version: "1",
+		kind: "correlation_diagnostic",
+		created_ts: GENERATED_TS,
+		skill: "create-skill",
+		hook_report_id: hook.reportId,
+		diagnostics: ["correlation_candidate_missing"],
+		repair_candidates: [
+			{
+				source: "correlation_finalizer",
+				skill: "create-skill",
+				hook_report_id: hook.reportId,
+				hook_written_path: hook.relativePath,
+				closeout_report_id: closeout.reportId,
+				closeout_written_path: closeout.relativePath,
+				closeout_proof_status: "attached",
+				skill_run_id: `run-${suffix}`,
+			},
+		],
+	});
+	return {
+		root,
+		hookReportId: hook.reportId,
+		closeoutReportId: closeout.reportId,
+	};
+}
+
+async function writeAmbiguousCorrelationFixture(): Promise<{ root: string }> {
+	const setup = await writeRepairableCorrelationFixture("ambiguous");
+	await rm(
+		join(
+			setup.root,
+			".skill-feedback",
+			".correlation",
+			`diagnostic_${"a".repeat(16)}.json`,
+		),
+	);
+	const key = await readTrustKey(setup.root);
+	const second = await writeSignedCorrelationReport(setup.root, {
+		fileName: "closeout-ambiguous-two.json",
+		key,
+		nonce: "3".repeat(32),
+		reportId: "report-closeout-ambiguous-two",
+		evidenceSource: "driver_closeout",
+	});
+	await writeCorrelationDiagnostic(setup.root, `diagnostic_${"b".repeat(16)}.json`, {
+		schema_version: "1",
+		kind: "correlation_diagnostic",
+		created_ts: GENERATED_TS,
+		skill: "create-skill",
+		hook_report_id: setup.hookReportId,
+		diagnostics: ["correlation_candidate_missing"],
+		repair_candidates: [
+			{
+				source: "correlation_finalizer",
+				skill: "create-skill",
+				hook_report_id: setup.hookReportId,
+				hook_written_path: ".skill-feedback/hook-ambiguous.json",
+				closeout_report_id: setup.closeoutReportId,
+				closeout_written_path: ".skill-feedback/closeout-ambiguous.json",
+				closeout_proof_status: "attached",
+				skill_run_id: "run-ambiguous",
+			},
+			{
+				source: "correlation_finalizer",
+				skill: "create-skill",
+				hook_report_id: setup.hookReportId,
+				hook_written_path: ".skill-feedback/hook-ambiguous.json",
+				closeout_report_id: second.reportId,
+				closeout_written_path: second.relativePath,
+				closeout_proof_status: "attached",
+				skill_run_id: "run-ambiguous",
+			},
+		],
+	});
+	return { root: setup.root };
+}
+
+async function writeInsufficientCorrelationFixture(): Promise<{ root: string }> {
+	const root = await makeIgnoredGitRoot();
+	const key = await writeTrustKey(root);
+	const hook = await writeSignedCorrelationReport(root, {
+		fileName: "hook-insufficient.json",
+		key,
+		nonce: "4".repeat(32),
+		reportId: "report-hook-insufficient",
+		evidenceSource: "hook_capture",
+		captureRuntime: "claude_stop",
+		skillRunId: "run-insufficient",
+		skillRunIdProvenance: "runtime_owned",
+	});
+	await writeCorrelationDiagnostic(root, `diagnostic_${"c".repeat(16)}.json`, {
+		schema_version: "1",
+		kind: "correlation_diagnostic",
+		created_ts: GENERATED_TS,
+		skill: "create-skill",
+		hook_report_id: hook.reportId,
+		diagnostics: ["correlation_candidate_missing"],
+	});
+	return { root };
+}
+
+async function writeTrustKey(root: string): Promise<Buffer> {
+	const inbox = join(root, ".skill-feedback");
+	const trustDir = join(inbox, ".trust");
+	await mkdir(trustDir, { recursive: true, mode: 0o700 });
+	await chmod(inbox, 0o700);
+	await chmod(trustDir, 0o700);
+	const key = Buffer.from("12".repeat(32), "hex");
+	const keyPath = join(trustDir, "key");
+	await writeFile(keyPath, `${key.toString("hex")}\n`);
+	await chmod(keyPath, 0o600);
+	return key;
+}
+
+async function readTrustKey(root: string): Promise<Buffer> {
+	return Buffer.from(
+		(await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf8")).trim(),
+		"hex",
+	);
+}
+
+async function writeSignedCorrelationReport(
+	root: string,
+	input: {
+		fileName: string;
+		key: Buffer;
+		nonce: string;
+		reportId: string;
+		evidenceSource: "hook_capture" | "driver_closeout";
+		captureRuntime?: "claude_stop";
+		skillRunId?: string;
+		skillRunIdProvenance?: "runtime_owned";
+	},
+): Promise<{ reportId: string; relativePath: string }> {
+	const relativePath = `.skill-feedback/${input.fileName}`;
+	const report: Record<string, unknown> = {
+		schema_version: "2",
+		report_id: input.reportId,
+		untrusted_evidence: true,
+		generated_ts: GENERATED_TS,
+		evidence_source: input.evidenceSource,
+		...(input.captureRuntime ? { capture_runtime: input.captureRuntime } : {}),
+		correlation_status: "unlinked",
+		...(input.skillRunId ? { skill_run_id: input.skillRunId } : {}),
+		...(input.skillRunIdProvenance
+			? { skill_run_id_provenance: input.skillRunIdProvenance }
+			: {}),
+		runtime: { git_sha: "1234567890abcdef1234567890abcdef12345678" },
+		report_card: BASE_CLOSEOUT,
+		evidence_gaps: [],
+		skill: "create-skill",
+		redactions: 0,
+	};
+	const signed = {
+		...report,
+		writer_proof: createWriterProof(report, input.key, input.nonce),
+	};
+	await writeInboxReport(root, input.fileName, signed);
+	await chmod(join(root, relativePath), 0o600);
+	return { reportId: input.reportId, relativePath };
+}
+
+async function writeCorrelationDiagnostic(
+	root: string,
+	name: string,
+	value: unknown,
+): Promise<void> {
+	const directory = join(root, ".skill-feedback", ".correlation");
+	await mkdir(directory, { recursive: true, mode: 0o700 });
+	await chmod(directory, 0o700);
+	const path = join(directory, name);
+	await writeFile(path, `${JSON.stringify(value, null, "\t")}\n`);
+	await chmod(path, 0o600);
+}
+
+async function listCorrelationWitnessFiles(root: string): Promise<string[]> {
+	try {
+		const entries = await readdir(join(root, ".skill-feedback", ".correlation"));
+		return entries.filter((entry) => entry.startsWith("witness_")).sort();
+	} catch {
+		return [];
+	}
 }
 
 async function listInboxJsonFiles(root: string): Promise<string[]> {

@@ -136,7 +136,7 @@ flowchart TB
 ## Dependencies And Assumptions
 
 - `docs/brainstorms/2026-06-04-create-cli-product-shape-requirements.md` remains the product-shape baseline.
-- `docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md` remains the branch-confidence context.
+- `skills/skill-feedback/docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md` remains the branch-confidence context.
 - `docs/adr/0005-template-scaffold-contracts-are-runtime-owned.md` supports runtime ownership for deterministic contracts.
 - `docs/adr/0009-create-cli-uses-bounded-local-extension.md` supports bounded local extension instead of a fork.
 - `runtime/cli-command-facade/CONTEXT.md` owns Command Surface Alignment Proof language.
@@ -156,7 +156,7 @@ Deferred to planning:
 ## Sources
 
 - `docs/brainstorms/2026-06-04-create-cli-product-shape-requirements.md`
-- `docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`
+- `skills/skill-feedback/docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`
 - `skills/create-cli/SKILL.md`
 - `skills/create-cli/PROVENANCE.md`
 - `skills/create-cli/references/agent-native-cli-design.md`

@@ -1,6 +1,6 @@
 ---
 name: skill-feedback
-description: "Capture Software Learning Reports and driver closeout evidence."
+description: "Capture, close out, health-check, review, correlate, or purge repo-local Software Learning Reports."
 role: tool-workflow
 ---
 
@@ -9,12 +9,24 @@ role: tool-workflow
 Capture repo-local Software Learning Reports from harness capture and driver
 closeout.
 
+## Intent Classification
+
+Default no-args route: run a read-only health check unless the user explicitly
+asks for capture, closeout, review, correlate, or purge.
+
+1. No command or inbox state unclear -> **health** - run `bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain`.
+2. Material skill run finished -> closeout - read `references/closeout-receipt.md`, then pipe one compact JSON receipt through the direct runner.
+3. Evidence review requested -> review - run `bun --filter skill-feedback-scripts skill-feedback-runner -- review`; add `--plain` for human reading.
+4. Blocked correlation witness diagnostics -> correlate preview - run `bun --filter skill-feedback-scripts skill-feedback-runner -- correlate`; execute only when preview reports repairable candidates.
+5. Retention cleanup requested -> purge preview - inspect help first; execute only after checking preview output.
+
 ## Route
 
 - Use when a harness hook or manual smoke needs to record a finished skill run.
 - Use when the driver needs to file closeout evidence for a material skill run.
 - Use when the driver or human wants a read-only inbox health check.
 - Use when the driver or human wants a mutation-free inbox review.
+- Use when the driver or human wants preview-first private correlation repair.
 - Use when the driver or human wants explicit inbox retention cleanup.
 - Do not use for human-facing summaries, durable instruction updates, or skill-to-skill calls.
 - Keep `record` capture-owned.
@@ -47,6 +59,8 @@ closeout.
 - Keep public `closeout` stdin driver-authored; reject run ids, provenance, proof, trust, and witness fields from the receipt.
 - Keep health mutation-free.
 - Keep review mutation-free.
+- Keep correlate preview mutation-free.
+- Run correlate execute only after preview reports repairable candidates.
 - Treat retention warnings as guidance, not failure.
 - Run `purge` as the only inbox deletion workflow.
 - Keep purge preview-first; inspect help for exact selectors.
@@ -69,6 +83,9 @@ closeout.
 - Run `health` before trusting empty, surprising, or path-sensitive review evidence.
 - Use `health --plain` for compact inbox status, warnings, readiness, correlation, and next action.
 - Use `--repo <path>` when review or health must inspect an explicit target repo.
+- Run `correlate` after health reports blocked correlation witness diagnostics.
+- Use correlate preview as the diagnostic step; execute recomputes current private evidence before writing witnesses.
+- Treat all-insufficient correlate output as terminal for current evidence.
 - Run `review` to inspect coverage, open evidence, no-action rationale, retention, and pilot checkpoint data.
 - Add `--plain` when human-readable output is better than JSON.
 - Resolve `report:<id>` refs through JSON review output before opening raw inbox files.
@@ -92,8 +109,8 @@ closeout.
 
 ## Verification
 
-- Run Bun tests through `skills/test-runner/src/test-runner.sh`.
-- Run TypeScript through `mcp__tsc_runner.tsc_check`.
+- Run package tests: `skills/test-runner/src/test-runner.sh run --cwd skills/skill-feedback -- src`.
+- Run TypeScript with MCP `tsc_check`.
 - Run `cli-execution-auditor` before shipping facade changes.
 - YAML-parse this file after edits.
 - Run owner-path checks after changing referenced paths.

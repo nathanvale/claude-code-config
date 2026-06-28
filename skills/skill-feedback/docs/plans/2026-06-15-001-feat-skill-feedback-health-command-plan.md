@@ -3,7 +3,7 @@ title: "feat: Add skill-feedback health command"
 type: feat
 date: 2026-06-15
 depth: standard
-origin: docs/brainstorms/2026-06-14-skill-feedback-health-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-14-skill-feedback-health-requirements.md
 ---
 
 # feat: Add skill-feedback health command
@@ -460,14 +460,14 @@ flowchart TB
 
 ## Sources & Research
 
-- Origin requirements: `docs/brainstorms/2026-06-14-skill-feedback-health-requirements.md`.
+- Origin requirements: `skills/skill-feedback/docs/brainstorms/2026-06-14-skill-feedback-health-requirements.md`.
 - Skill workflow: `skills/skill-feedback/SKILL.md`.
 - Domain language: `skills/skill-feedback/CONTEXT.md`.
 - Field ownership map: `skills/skill-feedback/references/report-shape.md`.
 - Command contract owner: `skills/skill-feedback/src/command-contract.ts`.
 - Runner and scan owner: `skills/skill-feedback/src/skill-feedback-runner.ts`.
 - Current package tests: `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/skill-feedback.test.ts`.
-- Prior review hardening plan: `docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
-- Claim-safe review plan: `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`.
+- Prior review hardening plan: `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
+- Claim-safe review plan: `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`.
 - CLI guidance: `skills/create-cli/references/cli-guidelines.md`, `skills/create-cli/references/agent-native-cli-design.md`, `skills/create-cli/references/cli-command-facade.md`.
 - Code-style pressure gate: `context/code-style.md`.

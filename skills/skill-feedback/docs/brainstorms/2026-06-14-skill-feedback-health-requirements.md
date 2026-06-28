@@ -178,5 +178,5 @@ This is a trust problem, not a dashboard problem. A user or agent needs one comm
 - `skills/skill-feedback/references/report-shape.md`
 - `skills/skill-feedback/src/command-contract.ts`
 - `skills/skill-feedback/src/skill-feedback-runner.ts`
-- `docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`
-- `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`
+- `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`
+- `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`

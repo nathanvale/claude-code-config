@@ -69,6 +69,7 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 - A separate signed witness may link closeout to a runtime-owned Claude Stop hook report.
 - Review creates `correlation_owned` only after witness verification succeeds.
 - Review checks the witness, linked report proofs, skill match, writer key, and hook runtime run id.
+- Correlate repair may write a missing private witness after preview and current-evidence validation.
 - Receipt evidence alone does not create `corroborated`.
 
 ## Example

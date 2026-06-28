@@ -211,7 +211,7 @@ flowchart TB
 - `docs/research/loop-engineering-patterns/09-self-auditing-loop.html`
 - `docs/research/2026-06-09-agentic-loop-community-signal.md`
 - `docs/research/2026-06-10-loop-engineering-handoff.md`
-- `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
+- `skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
 - `skills/create-skill/SKILL.md`
 - `skills/create-skill/references/skill-design-decision-runbook.md`
 - `skills/runbook-orchestrator/SKILL.md`

@@ -5,7 +5,7 @@ date: 2026-06-13
 owner: skills/skill-feedback
 source:
   - docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/skill-feedback/CONTEXT.md
 ---
 

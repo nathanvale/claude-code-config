@@ -2,7 +2,7 @@
 title: "feat: Skill-feedback report-card v1"
 type: feat
 date: 2026-06-12
-origin: docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md
 depth: deep
 ---
 
@@ -348,7 +348,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 
 **Execution note:** Implement review before cost ingestion or latest-run reconciliation. The first useful read surface prevents a write-only inbox.
 
-**Patterns to follow:** Facade read-only command metadata in `runtime/cli-command-facade/tests/command-discovery.test.ts`; v0 deterministic timestamp rule in `docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`.
+**Patterns to follow:** Facade read-only command metadata in `runtime/cli-command-facade/tests/command-discovery.test.ts`; v0 deterministic timestamp rule in `skills/skill-feedback/docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`.
 
 **Test scenarios:**
 
@@ -530,8 +530,8 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 
 ## Sources & Research
 
-- `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
-- `docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`
+- `skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
+- `skills/skill-feedback/docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`
 - `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md`
 - `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`
 - `/tmp/handoff-skill-feedback-v0-telemetry-closeout.md`

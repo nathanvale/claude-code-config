@@ -108,6 +108,13 @@ describe("skill-feedback Branch Station Catalog", () => {
 			"purge.preview",
 			"purge.execute",
 			"purge.invalid_usage",
+			"correlate.preview_repairable",
+			"correlate.execute_written",
+			"correlate.already_linked",
+			"correlate.ambiguous",
+			"correlate.insufficient_evidence",
+			"correlate.unsafe_inbox",
+			"correlate.invalid_usage",
 		]);
 		expect(
 			skillFeedbackBranchStationCatalog.some((station) =>

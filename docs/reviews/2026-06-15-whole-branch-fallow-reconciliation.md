@@ -21,7 +21,7 @@ Tracked dirty files before reconciliation:
 | State | Path |
 | --- | --- |
 | modified | `CONTEXT.md` |
-| modified | `docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md` |
+| modified | `skills/skill-feedback/docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md` |
 | modified | `runtime/cli-command-facade/tests/process-testing.test.ts` |
 | modified | `runtime/cli-command-facade/tests/station-map.test.ts` |
 | modified | `scripts/command-entrypoint.integration.test.ts` |

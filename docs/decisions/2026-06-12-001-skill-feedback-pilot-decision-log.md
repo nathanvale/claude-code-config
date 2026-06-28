@@ -95,7 +95,7 @@ decision: Continue an implementation pilot while keeping the daily pilot gated
 owner: skills/skill-feedback
 source:
   - skills/skill-feedback/CONTEXT.md
-  - docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md
   - docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md
   - "2026-06-12 Codex session: implementation-pilot decision"
 decision_mode:
@@ -146,8 +146,8 @@ decided_at: "2026-06-12"
 decision: "Make review value the next optimization target"
 owner: "skills/skill-feedback"
 source:
-  - "docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md"
-  - "docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md"
+  - "skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md"
+  - "skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md"
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
   - "2026-06-12 Codex session: deferred queue grill"
 ```
@@ -193,7 +193,7 @@ decision: "Gate new skill-feedback feature work behind Codex lifecycle-hook proo
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md"
   - "https://developers.openai.com/codex/hooks"
   - "2026-06-12 Codex lifecycle-hook smoke"
 ```
@@ -982,7 +982,7 @@ decision: "Proceed with closeout-first anchor ledger and remove taxonomy-first v
 owner: "skills/skill-feedback"
 source:
   - "docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md"
-  - "docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md"
   - "skills/skill-feedback/CONTEXT.md"
   - "2026-06-13 grill-with-docs: Codex pivot research"
   - "2026-06-13 user request: remove taxonomy-first scope"
@@ -1051,7 +1051,7 @@ owner: "skills/skill-feedback"
 source:
   - "skills/skill-feedback/prototypes/NOTES.md"
   - "skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts"
-  - "docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md"
   - "docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md"
   - "2026-06-13 prototype verdict: ReviewResultData contract contenders"
 ```
@@ -1106,7 +1106,7 @@ decision: "Lock ReviewResultData v2 claim-safe grill rules for reducer inputs, l
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "2026-06-13 decision-mode grill: ReviewResultData v2"
 decision_mode:
   question: "What claim-safe ReviewResultData v2 rules should implementation preserve?"
@@ -1161,7 +1161,7 @@ decision: "Grill remaining ReviewResultData v2 branches in implementation order:
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "2026-06-13 decision-mode grill: remaining ReviewResultData v2 branches"
 ```
 
@@ -1194,7 +1194,7 @@ Consequences:
 
 Next:
 
-- Patch `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` with Decision 22.
+- Patch `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` with Decision 22.
 - Audit the patched plan for ICA vocabulary and owner drift.
 - Start the golden-vector grill from the patched, audited plan.
 
@@ -1213,7 +1213,7 @@ decision: "Use six claim-safety golden vectors plus one v1 no-action preservatio
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "2026-06-13 decision-mode grill: golden vectors"
 decision_mode:
   question: "Which golden-vector set is the minimum contract proof for ReviewResultData v2?"
@@ -1265,7 +1265,7 @@ decision: "Freeze the ReviewResultData v2 field names that prevent false claims 
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/src/command-contract.ts"
   - "skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts"
   - "2026-06-13 autonomous decision-mode batch: field names"
@@ -1323,7 +1323,7 @@ decision: "Migrate JSON and plain review output to consume reducer-owned allowed
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
   - "2026-06-13 autonomous decision-mode batch: renderer migration"
 decision_mode:
@@ -1373,7 +1373,7 @@ decision: "Implement ReviewResultData v2 serially: contract, review-unit trust, 
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/src/command-contract.ts"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
   - "2026-06-13 autonomous decision-mode batch: implementation order"
@@ -1427,7 +1427,7 @@ decision: "Delete ReviewResultData v2 prototype files only after their winning s
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/prototypes/NOTES.md"
   - "skills/skill-feedback/prototypes/review-result-contract-contenders.logic.ts"
   - "2026-06-13 autonomous decision-mode batch: prototype absorption"
@@ -1478,7 +1478,7 @@ decision: "Separate trusted run proof from Trusted skill identity for ReviewResu
 owner: "skills/skill-feedback"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/CONTEXT.md"
   - "skills/skill-feedback/src/command-contract.ts"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
@@ -1531,7 +1531,7 @@ owner: "skills/skill-feedback"
 scope: "ReviewResultData top-level allowed_claims"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/CONTEXT.md"
   - "2026-06-13 decision-mode grill: top-level allowed_claims scope"
 decision_mode:
@@ -1581,7 +1581,7 @@ owner: "skills/skill-feedback"
 scope: "timestamp proximity correlation"
 source:
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "skills/skill-feedback/CONTEXT.md"
   - "2026-06-13 decision-mode grill: timestamp proximity evidence"
 decision_mode:
@@ -1631,7 +1631,7 @@ decision: "Apply remaining ReviewResultData v2 plan-review guardrails before ce-
 owner: "skills/skill-feedback"
 scope: "ReviewResultData v2 implementation guardrails"
 source:
-  - "docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md"
   - "docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md"
   - "2026-06-13 ce-doc-review: ReviewResultData v2 plan"
   - "2026-06-13 decision-mode batch: remaining plan-review fixes"
@@ -1686,7 +1686,7 @@ decision: "Use the DAG build validator pattern for skill-feedback review merge r
 owner: "skills/skill-feedback"
 scope: "review merge-readiness execution"
 source:
-  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
   - "2026-06-13 Codex session: requested DAG build validator pattern"
 ```
 
@@ -1727,7 +1727,7 @@ decision: "Keep unknown-skill Codex Stop evidence in inbox health instead of the
 owner: "skills/skill-feedback"
 scope: "low-signal capture lane"
 source:
-  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
   - "skills/skill-feedback/src/command-contract.ts"
 ```
@@ -1770,7 +1770,7 @@ decision: "Keep review read-only and put inbox deletion behind explicit purge"
 owner: "skills/skill-feedback"
 scope: "inbox lifecycle and purge command"
 source:
-  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
   - "skills/skill-feedback/src/command-contract.ts"
 ```
@@ -1818,7 +1818,7 @@ decision: "Use stable evidence refs for review actions and keep renderer claims 
 owner: "skills/skill-feedback"
 scope: "review action identity and plain rendering"
 source:
-  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
   - "skills/skill-feedback/src/review-ledger-reducer.ts"
   - "skills/skill-feedback/src/command-contract.ts"
@@ -1865,7 +1865,7 @@ decision: "Contain skill-feedback writes and subprocesses before review merge"
 owner: "skills/skill-feedback"
 scope: "write safety and subprocess timeout behavior"
 source:
-  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
   - "skills/skill-feedback/src/skill-feedback-runner.ts"
   - "hooks/skill-feedback-runtime.ts"
 ```
@@ -1911,7 +1911,7 @@ decision: "Prove cross-lane review with conservative claims before merge"
 owner: "skills/skill-feedback"
 scope: "cross-lane review validation and references"
 source:
-  - "docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
+  - "skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md"
   - "skills/skill-feedback/src/skill-feedback.test.ts"
   - "skills/skill-feedback/src/command-contract.test.ts"
   - "skills/skill-feedback/SKILL.md"

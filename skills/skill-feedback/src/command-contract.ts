@@ -40,6 +40,12 @@ export const SKILL_FEEDBACK_HEALTH_CONTRACT_ID =
 export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
 	"skill-feedback.purge" as const;
 
+/**
+ * Stable result contract identity for correlation repair envelopes.
+ */
+export const SKILL_FEEDBACK_CORRELATE_CONTRACT_ID =
+	"skill-feedback.correlate" as const;
+
 const SKILL_FEEDBACK_SCHEMA_VERSION_V1 = "1" as const;
 
 /**
@@ -71,6 +77,11 @@ export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "3" as const;
  * Schema version for purge-specific result envelopes.
  */
 export const SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION = "1" as const;
+
+/**
+ * Schema version for correlation repair result envelopes.
+ */
+export const SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION = "1" as const;
 
 /**
  * Cost attribution stance for v1 report cards.
@@ -340,6 +351,7 @@ const SKILL_FEEDBACK_HEALTH_NEXT_ACTION_IDS = [
 	"confirm-capture-path",
 	"run-review",
 	"inspect-report-correlation",
+	"preview-correlation-repair",
 	"inspect-capture-identity",
 	"preview-purge",
 	"repair-inbox-state",
@@ -375,6 +387,54 @@ export const SKILL_FEEDBACK_PURGE_LANES = [
 	"all",
 ] as const;
 
+const SKILL_FEEDBACK_CORRELATE_MODES = ["preview", "execute"] as const;
+const SKILL_FEEDBACK_CORRELATE_CANDIDATE_CLASSES = [
+	"repairable",
+	"ambiguous",
+	"invalid",
+	"already_linked",
+	"insufficient_evidence",
+] as const;
+const SKILL_FEEDBACK_CORRELATE_REASON_IDS = [
+	"repairable_candidate",
+	"existing_valid_witness",
+	"insufficient_evidence",
+	"correlation_candidate_missing",
+	"correlation_candidate_ambiguous",
+	"correlation_candidate_source_missing",
+	"correlation_candidate_source_untrusted",
+	"correlation_candidate_source_boundary_mismatch",
+	"correlation_inbox_unreadable",
+	"correlation_writer_proof_key_unusable",
+	"correlation_report_unreadable",
+	"correlation_report_invalid",
+	"correlation_report_invalid_json",
+	"correlation_hook_report_missing",
+	"correlation_hook_proof_invalid",
+	"correlation_hook_runtime_mismatch",
+	"correlation_hook_skill_mismatch",
+	"correlation_hook_run_id_mismatch",
+	"correlation_closeout_report_missing",
+	"correlation_closeout_path_mismatch",
+	"correlation_closeout_proof_unavailable",
+	"correlation_closeout_proof_invalid",
+	"correlation_closeout_source_mismatch",
+	"correlation_closeout_skill_mismatch",
+	"correlation_runtime_unsupported",
+	"correlation_gitignore_gate_refused",
+	"correlation_witness_dir_unsafe",
+	"correlation_witness_write_failed",
+	"correlation_diagnostic_write_failed",
+	"correlation_partial_write_failed",
+] as const;
+const SKILL_FEEDBACK_CORRELATE_ACTION_IDS = [
+	"execute_repair",
+	"inspect_repair_blockers",
+	"no_repair_available",
+	"repair_complete",
+] as const;
+const SKILL_FEEDBACK_CORRELATE_SIDE_EFFECTS = ["read", "write"] as const;
+
 /**
  * V2 ledger verification levels include `unknown` for runtime-only evidence.
  */
@@ -390,6 +450,21 @@ export type SkillFeedbackOutcome = (typeof SKILL_FEEDBACK_OUTCOMES)[number];
 
 export type SkillFeedbackPurgeLane =
 	(typeof SKILL_FEEDBACK_PURGE_LANES)[number];
+
+export type SkillFeedbackCorrelateMode =
+	(typeof SKILL_FEEDBACK_CORRELATE_MODES)[number];
+
+export type SkillFeedbackCorrelateCandidateClass =
+	(typeof SKILL_FEEDBACK_CORRELATE_CANDIDATE_CLASSES)[number];
+
+export type SkillFeedbackCorrelateReasonId =
+	(typeof SKILL_FEEDBACK_CORRELATE_REASON_IDS)[number];
+
+export type SkillFeedbackCorrelateActionId =
+	(typeof SKILL_FEEDBACK_CORRELATE_ACTION_IDS)[number];
+
+export type SkillFeedbackCorrelateSideEffect =
+	(typeof SKILL_FEEDBACK_CORRELATE_SIDE_EFFECTS)[number];
 
 /**
  * Software Learning Report evidence source.
@@ -653,6 +728,10 @@ export type ParseCloseoutReceiptResult =
 			evidence_gaps: readonly EvidenceGap[];
 	  }
 	| { kind: "invalid"; path: string; reason: string };
+
+type ParseCloseoutReceiptOptions = {
+	allowLegacySkillRunId?: boolean;
+};
 
 /**
  * Runtime telemetry retained separately from driver-authored report-card data.
@@ -1061,6 +1140,43 @@ export type SkillFeedbackPurgeResultData = {
 	invalid_paths: readonly string[];
 };
 
+export type SkillFeedbackCorrelateCounts = {
+	diagnostic_count: number;
+	candidate_count: number;
+	repairable_count: number;
+	ambiguous_count: number;
+	invalid_count: number;
+	already_linked_count: number;
+	insufficient_evidence_count: number;
+	written_count: number;
+	blocked_count: number;
+	failed_count: number;
+};
+
+export type SkillFeedbackCorrelateCandidateData = {
+	candidate_key: string;
+	class: SkillFeedbackCorrelateCandidateClass;
+	hook_report_ref?: string;
+	closeout_report_refs: readonly string[];
+	reason_ids: readonly SkillFeedbackCorrelateReasonId[];
+};
+
+export type SkillFeedbackCorrelateNextAction = {
+	action_id: SkillFeedbackCorrelateActionId;
+	summary: string;
+	side_effects: readonly SkillFeedbackCorrelateSideEffect[];
+};
+
+export type SkillFeedbackCorrelateResultData = {
+	contract: typeof SKILL_FEEDBACK_CORRELATE_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION;
+	mode: SkillFeedbackCorrelateMode;
+	counts: SkillFeedbackCorrelateCounts;
+	candidates: readonly SkillFeedbackCorrelateCandidateData[];
+	next_action: SkillFeedbackCorrelateNextAction;
+	read_target?: ReviewReadTarget;
+};
+
 /**
  * Result of validating v2 ReviewResultData from an unknown JSON value.
  */
@@ -1074,6 +1190,10 @@ export type ParseHealthResultDataResult =
 
 export type ParsePurgeResultDataResult =
 	| { kind: "ok"; data: SkillFeedbackPurgeResultData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParseCorrelateResultDataResult =
+	| { kind: "ok"; data: SkillFeedbackCorrelateResultData }
 	| { kind: "invalid"; path: string; reason: string };
 
 /**
@@ -1438,6 +1558,7 @@ const CLOSEOUT_RECEIPT_FIELDS = [
 	"verification_burden",
 	"touched_surfaces",
 	"observations",
+	"skill_run_id",
 ] as const;
 const CLOSEOUT_RECEIPT_FIELD_SET: ReadonlySet<string> = new Set(
 	CLOSEOUT_RECEIPT_FIELDS,
@@ -1670,6 +1791,39 @@ const PURGE_RESULT_FIELDS = [
 	"skipped_paths",
 	"invalid_paths",
 ] as const;
+const CORRELATE_RESULT_FIELDS = [
+	"contract",
+	"schema_version",
+	"mode",
+	"counts",
+	"candidates",
+	"next_action",
+	"read_target",
+] as const;
+const CORRELATE_COUNTS_FIELDS = [
+	"diagnostic_count",
+	"candidate_count",
+	"repairable_count",
+	"ambiguous_count",
+	"invalid_count",
+	"already_linked_count",
+	"insufficient_evidence_count",
+	"written_count",
+	"blocked_count",
+	"failed_count",
+] as const;
+const CORRELATE_CANDIDATE_FIELDS = [
+	"candidate_key",
+	"class",
+	"hook_report_ref",
+	"closeout_report_refs",
+	"reason_ids",
+] as const;
+const CORRELATE_NEXT_ACTION_FIELDS = [
+	"action_id",
+	"summary",
+	"side_effects",
+] as const;
 const V0_PLACEHOLDER_FRICTION = new Set([
 	"",
 	"Hook captured no transcript payload.",
@@ -1694,17 +1848,31 @@ const V0_PLACEHOLDER_FRICTION = new Set([
  */
 export function parseCloseoutReceipt(
 	raw: unknown,
+	options: ParseCloseoutReceiptOptions = {},
 ): ParseCloseoutReceiptResult {
 	if (!isRecord(raw)) {
 		return { kind: "invalid", path: "$", reason: "expected_object" };
 	}
+	const allowLegacySkillRunId = options.allowLegacySkillRunId === true;
 	for (const key of Object.keys(raw)) {
+		if (key === "skill_run_id" && !allowLegacySkillRunId) {
+			return { kind: "invalid", path: key, reason: "unknown_field" };
+		}
 		if (!CLOSEOUT_RECEIPT_FIELD_SET.has(key)) {
 			return { kind: "invalid", path: key, reason: "unknown_field" };
 		}
 	}
 
 	const receipt: Partial<CloseoutReceipt> = {};
+	if (
+		allowLegacySkillRunId &&
+		"skill_run_id" in raw &&
+		raw.skill_run_id !== undefined
+	) {
+		if (typeof raw.skill_run_id !== "string") {
+			return { kind: "invalid", path: "skill_run_id", reason: "expected_string" };
+		}
+	}
 
 	if ("skill" in raw) {
 		if (typeof raw.skill !== "string") {
@@ -2157,6 +2325,40 @@ export function parsePurgeResultData(
 	return { kind: "ok", data: raw as SkillFeedbackPurgeResultData };
 }
 
+export function parseCorrelateResultData(
+	raw: unknown,
+): ParseCorrelateResultDataResult {
+	if (!isRecord(raw)) {
+		return { kind: "invalid", path: "$", reason: "expected_object" };
+	}
+	const topLevel = validateAllowedKeys(raw, new Set(CORRELATE_RESULT_FIELDS));
+	if (topLevel) return topLevel;
+	if (raw.contract !== SKILL_FEEDBACK_CORRELATE_CONTRACT_ID) {
+		return { kind: "invalid", path: "contract", reason: "unsupported" };
+	}
+	if (raw.schema_version !== SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION) {
+		return {
+			kind: "invalid",
+			path: "schema_version",
+			reason: "unsupported",
+		};
+	}
+	if (!isSkillFeedbackCorrelateMode(raw.mode)) {
+		return { kind: "invalid", path: "mode", reason: "invalid" };
+	}
+	const counts = validateCorrelateCounts(raw.counts);
+	if (counts) return counts;
+	const candidates = validateCorrelateCandidates(raw.candidates);
+	if (candidates) return candidates;
+	const nextAction = validateCorrelateNextAction(raw.next_action);
+	if (nextAction) return nextAction;
+	if ("read_target" in raw) {
+		const target = validateHealthReadTarget(raw.read_target);
+		if (target) return target;
+	}
+	return { kind: "ok", data: raw as SkillFeedbackCorrelateResultData };
+}
+
 function normalizeV0Report(raw: Record<string, unknown>): NormalizeReportResult {
 	const parsed = parseV0SoftwareLearningReport(raw);
 	if (!parsed.ok) return parsed.error;
@@ -2286,7 +2488,9 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 	}
 	const runtime = parseRuntimeTelemetry(raw.runtime);
 	if ("kind" in runtime) return runtime;
-	const reportCard = parseCloseoutReceipt(raw.report_card);
+	const reportCard = parseCloseoutReceipt(raw.report_card, {
+		allowLegacySkillRunId: true,
+	});
 	if (reportCard.kind === "invalid") {
 		return {
 			kind: "invalid",
@@ -2414,7 +2618,9 @@ function normalizeV2Report(
 	}
 	const runtime = parseRuntimeTelemetry(raw.runtime);
 	if ("kind" in runtime) return runtime;
-	const reportCard = parseCloseoutReceipt(raw.report_card);
+	const reportCard = parseCloseoutReceipt(raw.report_card, {
+		allowLegacySkillRunId: true,
+	});
 	if (reportCard.kind === "invalid") {
 		return {
 			kind: "invalid",
@@ -3666,6 +3872,105 @@ function validateHealthNextAction(
 	return validateReviewString(nextAction.summary, "next_action.summary");
 }
 
+function validateCorrelateCounts(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const counts = requireReviewRecord(raw, "counts");
+	if (isReviewResultValidationError(counts)) return counts;
+	const unknown = validateAllowedKeys(
+		counts,
+		new Set(CORRELATE_COUNTS_FIELDS),
+		"counts",
+	);
+	if (unknown) return unknown;
+	return validateNumberFields(counts, CORRELATE_COUNTS_FIELDS, "counts");
+}
+
+function validateCorrelateCandidates(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError("candidates", "expected_array");
+	for (const [index, candidateRaw] of raw.entries()) {
+		const path = `candidates[${index}]`;
+		const candidate = requireReviewRecord(candidateRaw, path);
+		if (isReviewResultValidationError(candidate)) return candidate;
+		const unknown = validateAllowedKeys(
+			candidate,
+			new Set(CORRELATE_CANDIDATE_FIELDS),
+			path,
+		);
+		if (unknown) return unknown;
+		const key = validateReviewString(candidate.candidate_key, `${path}.candidate_key`);
+		if (key) return key;
+		if (!isSkillFeedbackCorrelateCandidateClass(candidate.class)) {
+			return reviewResultError(`${path}.class`, "invalid_candidate_class");
+		}
+		if ("hook_report_ref" in candidate) {
+			const hookRef = validateReviewString(
+				candidate.hook_report_ref,
+				`${path}.hook_report_ref`,
+			);
+			if (hookRef) return hookRef;
+		}
+		const closeoutRefs = validateReviewStringArray(
+			candidate.closeout_report_refs,
+			`${path}.closeout_report_refs`,
+		);
+		if (closeoutRefs) return closeoutRefs;
+		const reasons = validateCorrelateReasonIds(
+			candidate.reason_ids,
+			`${path}.reason_ids`,
+		);
+		if (reasons) return reasons;
+	}
+}
+
+function validateCorrelateReasonIds(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError(path, "expected_array");
+	for (const [index, value] of raw.entries()) {
+		if (!isSkillFeedbackCorrelateReasonId(value)) {
+			return reviewResultError(`${path}[${index}]`, "invalid_reason_id");
+		}
+	}
+}
+
+function validateCorrelateNextAction(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const nextAction = requireReviewRecord(raw, "next_action");
+	if (isReviewResultValidationError(nextAction)) return nextAction;
+	const unknown = validateAllowedKeys(
+		nextAction,
+		new Set(CORRELATE_NEXT_ACTION_FIELDS),
+		"next_action",
+	);
+	if (unknown) return unknown;
+	if (!isSkillFeedbackCorrelateActionId(nextAction.action_id)) {
+		return reviewResultError("next_action.action_id", "invalid_action_id");
+	}
+	const summary = validateReviewString(nextAction.summary, "next_action.summary");
+	if (summary) return summary;
+	return validateCorrelateSideEffects(
+		nextAction.side_effects,
+		"next_action.side_effects",
+	);
+}
+
+function validateCorrelateSideEffects(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError(path, "expected_array");
+	for (const [index, value] of raw.entries()) {
+		if (!isSkillFeedbackCorrelateSideEffect(value)) {
+			return reviewResultError(`${path}[${index}]`, "invalid_side_effect");
+		}
+	}
+}
+
 function validateNumberFields<const Field extends readonly string[]>(
 	record: Record<string, unknown>,
 	fields: Field,
@@ -4143,6 +4448,44 @@ function isHealthNextActionId(value: unknown): value is HealthNextActionId {
 	).includes(value);
 }
 
+function isSkillFeedbackCorrelateMode(
+	value: unknown,
+): value is SkillFeedbackCorrelateMode {
+	return (SKILL_FEEDBACK_CORRELATE_MODES as readonly unknown[]).includes(value);
+}
+
+function isSkillFeedbackCorrelateCandidateClass(
+	value: unknown,
+): value is SkillFeedbackCorrelateCandidateClass {
+	return (
+		SKILL_FEEDBACK_CORRELATE_CANDIDATE_CLASSES as readonly unknown[]
+	).includes(value);
+}
+
+export function isSkillFeedbackCorrelateReasonId(
+	value: unknown,
+): value is SkillFeedbackCorrelateReasonId {
+	return (
+		SKILL_FEEDBACK_CORRELATE_REASON_IDS as readonly unknown[]
+	).includes(value);
+}
+
+function isSkillFeedbackCorrelateActionId(
+	value: unknown,
+): value is SkillFeedbackCorrelateActionId {
+	return (
+		SKILL_FEEDBACK_CORRELATE_ACTION_IDS as readonly unknown[]
+	).includes(value);
+}
+
+function isSkillFeedbackCorrelateSideEffect(
+	value: unknown,
+): value is SkillFeedbackCorrelateSideEffect {
+	return (
+		SKILL_FEEDBACK_CORRELATE_SIDE_EFFECTS as readonly unknown[]
+	).includes(value);
+}
+
 function isCaptureRuntime(value: unknown): value is CaptureRuntime {
 	return (SKILL_FEEDBACK_CAPTURE_RUNTIMES as readonly unknown[]).includes(value);
 }
@@ -4282,6 +4625,7 @@ const SKILL_FEEDBACK_COMMANDS = [
 	"review",
 	"health",
 	"purge",
+	"correlate",
 ] as const;
 
 /**
@@ -4295,7 +4639,8 @@ type SkillFeedbackMutation =
 	| "closeout"
 	| "review"
 	| "health"
-	| "purge";
+	| "purge"
+	| "correlate";
 type SkillFeedbackCommandContract = CommandFacadeContract<
 	SkillFeedbackCommand,
 	SkillFeedbackAudience,
@@ -4384,6 +4729,14 @@ const purgeResultContract = {
 	SkillFeedbackCommandContract["resultContract"]
 >;
 
+const correlateResultContract = {
+	id: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+	kind: "Software Learning Report correlation repair envelope.",
+	schema_version: SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
 const exitCodes = {
 	"0": "Record captured (possibly degraded) and written.",
 	"1": "Capture blocked before any write (gate refused or unsafe input).",
@@ -4412,6 +4765,12 @@ const purgeExitCodes = {
 	"0": "Purge preview completed or selected safe reports were deleted.",
 	"1": "Purge blocked by unsafe inbox state or deletion failure.",
 	"2": "Invalid purge usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const correlateExitCodes = {
+	"0": "Correlation repair preview completed or selected witnesses were written.",
+	"1": "Correlation repair blocked by unsafe inbox state or partial write failure.",
+	"2": "Invalid correlate usage.",
 } as const satisfies SkillFeedbackCommandContract["exitCodes"];
 
 const readOnlyFlags = {
@@ -4445,6 +4804,21 @@ const purgeFlags = {
 	"--execute": {
 		type: "boolean",
 		description: "Delete selected safe reports. Default previews only.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const correlateFlags = {
+	"--plain": {
+		type: "boolean",
+		description: "Emit compact human-readable output.",
+	},
+	"--repo": {
+		type: "string",
+		description: "Resolve the read target from this path's repository root.",
+	},
+	"--execute": {
+		type: "boolean",
+		description: "Write validated private correlation witnesses. Default previews only.",
 	},
 } as const satisfies SkillFeedbackCommandContract["flags"];
 
@@ -4540,12 +4914,32 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 			flags: purgeFlags,
 			exitCodes: purgeExitCodes,
 		},
+		correlate: {
+			script: "skill-feedback-runner",
+			summary: "Preview or repair missing private correlation witnesses.",
+			usage: ["correlate [--plain] [--repo <path>] [--execute]"],
+			json: true,
+			audience: "agent",
+			mutation: "correlate",
+			sideEffects: ["write"],
+			executionModes: ["dry_run", "normal"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			resultContract: correlateResultContract,
+			flags: correlateFlags,
+			exitCodes: correlateExitCodes,
+		},
 	} as const satisfies Record<
 		SkillFeedbackCommand,
 		SkillFeedbackCommandContract
 	>,
 	{
 		path: "skills/skill-feedback/src/command-contract.ts",
-		writeImplyingMutations: new Set(["capture", "closeout", "purge"]),
+		writeImplyingMutations: new Set([
+			"capture",
+			"closeout",
+			"purge",
+			"correlate",
+		]),
 	},
 );

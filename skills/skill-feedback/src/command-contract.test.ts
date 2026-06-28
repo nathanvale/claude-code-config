@@ -10,6 +10,8 @@ import {
 	NARRATED_FIELDS,
 	RECEIPT_FIELDS,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+	SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+	SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION,
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_COST_STATUS,
@@ -25,6 +27,7 @@ import {
 	type Receipt,
 	type ReviewResultData,
 	type SkillFeedbackCommand,
+	type SkillFeedbackCorrelateResultData,
 	buildSoftwareLearningReport,
 	correlationWitnessRelativePath,
 	createCorrelationWitness,
@@ -33,6 +36,7 @@ import {
 	isSafeCorrelationWitnessFileName,
 	normalizeReport,
 	parseCloseoutReceipt,
+	parseCorrelateResultData,
 	parseHealthResultData,
 	parsePurgeResultData,
 	parseReviewResultData,
@@ -306,11 +310,48 @@ const MINIMAL_PURGE_RESULT = {
 	invalid_paths: [],
 } as const satisfies SkillFeedbackPurgeResultData;
 
+const MINIMAL_CORRELATE_RESULT = {
+	contract: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+	schema_version: SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
+	mode: "preview",
+	counts: {
+		diagnostic_count: 1,
+		candidate_count: 1,
+		repairable_count: 1,
+		ambiguous_count: 0,
+		invalid_count: 0,
+		already_linked_count: 0,
+		insufficient_evidence_count: 0,
+		written_count: 0,
+		blocked_count: 0,
+		failed_count: 0,
+	},
+	candidates: [
+		{
+			candidate_key: "hook:report_hook_1",
+			class: "repairable",
+			hook_report_ref: "report:report_hook_1",
+			closeout_report_refs: ["report:report_closeout_1"],
+			reason_ids: ["repairable_candidate"],
+		},
+	],
+	next_action: {
+		action_id: "execute_repair",
+		summary: "Run correlate --execute to write validated private witnesses.",
+		side_effects: ["write"],
+	},
+} as const satisfies SkillFeedbackCorrelateResultData;
+
 describe("skill-feedback U2 command contract", () => {
-	test("declares valid facade-backed record, closeout, review, health, and purge commands", () => {
+	test("declares valid facade-backed record, closeout, review, health, purge, and correlate commands", () => {
 		const result = parseCommandFacadeContract(skillFeedbackContracts, {
 			path: "skills/skill-feedback/src/command-contract.ts",
-			writeImplyingMutations: new Set(["capture", "closeout", "purge"]),
+			writeImplyingMutations: new Set([
+				"capture",
+				"closeout",
+				"purge",
+				"correlate",
+			]),
 		});
 
 		expect(result.ok).toBe(true);
@@ -320,6 +361,7 @@ describe("skill-feedback U2 command contract", () => {
 			"review",
 			"health",
 			"purge",
+			"correlate",
 		]);
 		expect(discoveryTree().commands.record?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_CONTRACT_ID,
@@ -342,8 +384,17 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 		});
+		expect(discoveryTree().commands.correlate?.result_contract).toMatchObject({
+			id: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
+		});
 		expect(skillFeedbackContracts.purge.sideEffects).toEqual(["write"]);
 		expect(skillFeedbackContracts.purge.executionModes).toEqual([
+			"dry_run",
+			"normal",
+		]);
+		expect(skillFeedbackContracts.correlate.sideEffects).toEqual(["write"]);
+		expect(skillFeedbackContracts.correlate.executionModes).toEqual([
 			"dry_run",
 			"normal",
 		]);
@@ -385,6 +436,29 @@ describe("skill-feedback U2 command contract", () => {
 			expect(contract.outputModes).toEqual(["json", "plain"]);
 		});
 	}
+
+	test("correlate flags expose preview and execute without trust-bearing inputs", () => {
+		const flags = Object.keys(skillFeedbackContracts.correlate.flags).sort();
+
+		expect(flags).toEqual(["--execute", "--plain", "--repo"]);
+		expect(skillFeedbackContracts.correlate.usage).toEqual([
+			"correlate [--plain] [--repo <path>] [--execute]",
+		]);
+		expect(skillFeedbackContracts.correlate.outputModes).toEqual([
+			"json",
+			"plain",
+		]);
+		for (const reserved of [
+			"--hook-report-id",
+			"--closeout-report-id",
+			"--witness-id",
+			"--skill-run-id",
+			"--proof-status",
+			"--trust",
+		]) {
+			expect(flags).not.toContain(reserved);
+		}
+	});
 
 	test("parses a complete flat receipt into the full report field set", () => {
 		const parsed = parseReceipt(COMPLETE_RECEIPT);
@@ -664,6 +738,46 @@ describe("skill-feedback U1 review result v2 contract", () => {
 			kind: "invalid",
 			path: "retention.kind",
 			reason: "invalid",
+		});
+	});
+
+	test("validates correlate result output at the contract boundary", () => {
+		const parsed = parseCorrelateResultData(MINIMAL_CORRELATE_RESULT);
+
+		expect(parsed.kind).toBe("ok");
+		if (parsed.kind !== "ok") throw new Error("expected valid correlate result");
+		expect(parsed.data.contract).toBe(SKILL_FEEDBACK_CORRELATE_CONTRACT_ID);
+		expect(parsed.data.schema_version).toBe(
+			SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
+		);
+		expect(parsed.data.next_action.action_id).toBe("execute_repair");
+	});
+
+	test("rejects invalid correlate result classes and public trust fields", () => {
+		expect(
+			parseCorrelateResultData({
+				...MINIMAL_CORRELATE_RESULT,
+				candidates: [
+					{
+						...MINIMAL_CORRELATE_RESULT.candidates[0],
+						class: "trusted",
+					},
+				],
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "candidates[0].class",
+			reason: "invalid_candidate_class",
+		});
+		expect(
+			parseCorrelateResultData({
+				...MINIMAL_CORRELATE_RESULT,
+				witness_id: "witness_public_input",
+			}),
+		).toMatchObject({
+			kind: "invalid",
+			path: "witness_id",
+			reason: "unknown_field",
 		});
 	});
 
@@ -1099,7 +1213,7 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		expect(parsed.evidence_gaps).toEqual([]);
 	});
 
-	test("rejects public closeout skill-run and correlation authority fields", () => {
+	test("rejects public closeout run id and correlation authority fields", () => {
 		for (const field of [
 			"skill_run_id",
 			"skill_run_id_provenance",
@@ -1117,6 +1231,37 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 				reason: "unknown_field",
 			});
 		}
+	});
+
+	test("accepts legacy closeout skill-run id only for persisted report-card reads", () => {
+		const parsed = parseCloseoutReceipt(
+			{
+				...COMPLETE_CLOSEOUT,
+				skill_run_id: "legacy-run-id",
+			},
+			{ allowLegacySkillRunId: true },
+		);
+
+		expect(parsed.kind).toBe("ok");
+		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
+		expect("skill_run_id" in parsed.receipt).toBe(false);
+		expect(parsed.receipt).toMatchObject(COMPLETE_CLOSEOUT);
+	});
+
+	test("rejects malformed legacy closeout skill-run id in persisted report-card reads", () => {
+		expect(
+			parseCloseoutReceipt(
+				{
+					...COMPLETE_CLOSEOUT,
+					skill_run_id: 7,
+				},
+				{ allowLegacySkillRunId: true },
+			),
+		).toMatchObject({
+			kind: "invalid",
+			path: "skill_run_id",
+			reason: "expected_string",
+		});
 	});
 
 	test("missing closeout core fields become typed evidence gaps", () => {
@@ -1301,6 +1446,29 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		expect(normalized.report.touched_surfaces).toHaveLength(2);
 		expect(normalized.report.observations).toHaveLength(1);
 		expect(normalized.report.evidence_gaps).not.toContain("observations");
+	});
+
+	test("normalizes schema 2 closeout report with legacy report-card skill-run id as evidence-only", () => {
+		const normalized = normalizeReport(
+			schema2Report({
+				evidence_source: "driver_closeout",
+				capture_runtime: undefined,
+				skill_identity_provenance: undefined,
+				skill_run_id: undefined,
+				skill_run_id_provenance: undefined,
+				report_card: {
+					...COMPLETE_CLOSEOUT,
+					skill_run_id: "legacy-closeout-run",
+				},
+			}),
+		);
+
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.evidence_source).toBe("driver_closeout");
+		expect(normalized.report.skill_run_id).toBeUndefined();
+		expect(normalized.report.skill_run_id_provenance).toBeUndefined();
+		expect(normalized.report.skill).toBe(COMPLETE_CLOSEOUT.skill);
 	});
 
 	test("normalizes capture provenance fields and rejects invalid values", () => {

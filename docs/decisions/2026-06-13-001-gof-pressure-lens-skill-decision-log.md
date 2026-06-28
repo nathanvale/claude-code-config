@@ -8,7 +8,7 @@ timezone: Australia/Melbourne
 owner: skills/gof-pressure-lens
 source:
   - docs/ideation/2026-06-13-gof-pressure-lens-skill-ideation.html
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/skill-feedback/CONTEXT.md
   - "2026-06-13 Codex session: GoF pressure lens v1"
 decision_metadata_format: fenced-yaml-per-decision
@@ -44,7 +44,7 @@ decision: "Create v1 gof-pressure-lens as a pattern-referee skill with a pressur
 owner: skills/gof-pressure-lens
 source:
   - docs/ideation/2026-06-13-gof-pressure-lens-skill-ideation.html
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/skill-feedback/CONTEXT.md
   - "2026-06-13 Codex session: GoF pressure lens v1"
 ```
@@ -95,7 +95,7 @@ owner: skills/gof-pressure-lens
 decision_mode: standard
 source:
   - docs/ideation/2026-06-13-gof-pressure-lens-skill-ideation.html
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/improve-codebase-architecture/LANGUAGE.md
   - skills/create-skill/references/skill-design-decision-runbook.md
   - "2026-06-13 Codex session: GoF pressure lens v1 grill"

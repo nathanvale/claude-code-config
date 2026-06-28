@@ -3,7 +3,7 @@ date: 2026-06-12
 topic: skill-feedback-review-pattern-ledger-v2
 title: Skill-feedback review pattern ledger v2 requirements
 type: brainstorm
-builds_on: docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md
+builds_on: skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md
 ---
 
 # Skill-feedback review pattern ledger v2 requirements
@@ -214,8 +214,8 @@ flowchart TB
 ## Sources
 
 - `docs/decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md`
-- `docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`
-- `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
+- `skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`
+- `skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`
 - `skills/skill-feedback/CONTEXT.md`
 - `skills/skill-feedback/SKILL.md`
 - `skills/skill-feedback/src/command-contract.ts`

@@ -1,8 +1,9 @@
 # Provenance
 
-- Source plan: `docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`.
-- v1 source plan: `docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`.
-- Source brainstorm: `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`.
+- Source plan: `skills/skill-feedback/docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`.
+- v1 source plan: `skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`.
+- Correlation witness plan: `skills/skill-feedback/docs/plans/2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md`.
+- Source brainstorm: `skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`.
 - Hook decision: `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md`.
 - Package anatomy: `skills/fallow/`.
 - Facade lane: `skills/create-cli/references/cli-command-facade.md`.
@@ -18,4 +19,5 @@
 - v1 keeps `record` capture-owned.
 - v1 lets the driver submit closeout evidence through stdin.
 - v1 keeps human review after closeout.
+- Correlation witnesses are private hook/runtime artifacts, not public closeout input.
 - U8 owns harness hook wiring.

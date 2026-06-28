@@ -2,7 +2,7 @@
 date: 2026-06-11
 type: feat
 title: Skill-observability v0 — facade + capture adapters
-origin: docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md
 status: ready
 depth: standard
 execution_posture: redaction-test-first
@@ -36,7 +36,7 @@ The architecturally correct shape is a deterministic CLI facade the agent fills 
 
 ## Requirements
 
-Carried from origin (`see origin: docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`). The origin's 2026-06-11 v0 cut is the scope source of truth.
+Carried from origin (`see origin: skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md`). The origin's 2026-06-11 v0 cut is the scope source of truth.
 
 **In scope (v0):**
 
@@ -454,7 +454,7 @@ EFC-grounded (arXiv 2605.29682): actionable-feedback **density** predicts value,
 
 ## Sources & Research
 
-- Origin: `docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md` (reviewed 2026-06-11; v0 cut is the scope source of truth).
+- Origin: `skills/skill-feedback/docs/brainstorms/2026-06-10-skill-follow-up-feedback-loop-requirements.md` (reviewed 2026-06-11; v0 cut is the scope source of truth).
 - OpenTelemetry GenAI semantic conventions — `gen_ai.evaluation.result` (name/score/label/explanation/run-id), `execute_tool` / `invoke_agent` spans (status: Development as of 2026-06).
 - Claude Code Monitoring (OTel) — `claude_code.interaction` span hierarchy + per-request attrs; Anthropic self-service-analytics post — eval rows tagged skill-version + git-SHA + per-assertion pass/fail.
 - Codex `codex exec --json` `ThreadEvent` schema + `Usage` struct; `notify=agent-turn-complete` end-of-turn hook without skill identity.

@@ -186,6 +186,6 @@ flowchart TB
 - `skills/bad-practices/references/catalog.md`
 - `docs/ideation/2026-06-15-bad-practices-skill-ideation.html`
 - `skills/skill-feedback/SKILL.md`
-- `docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md`
+- `skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md`
 - [AI-Generated Smells](https://arxiv.org/html/2605.02741v1)
 - [Building shared coding guidelines for AI and people too](https://stackoverflow.blog/2026/03/26/coding-guidelines-for-ai-agents-and-people-too/)

@@ -27,6 +27,8 @@ import {
 import {
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+	SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+	SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
@@ -39,6 +41,11 @@ import {
 	type CaptureMetadata,
 	type CloseoutReceipt,
 	type CloseoutResultData,
+	type SkillFeedbackCorrelateCandidateData,
+	type SkillFeedbackCorrelateCounts,
+	type SkillFeedbackCorrelateMode,
+	type SkillFeedbackCorrelateReasonId,
+	type SkillFeedbackCorrelateResultData,
 	type CorrelationWitnessHealth,
 	type CorrelationWitnessSeed,
 	type CorrelationStatus,
@@ -79,6 +86,7 @@ import {
 	normalizeReport,
 	parseCloseoutReceipt,
 	parseReceipt,
+	isSkillFeedbackCorrelateReasonId,
 	skillFeedbackContracts,
 	verifyCorrelationWitness,
 	verifyWriterProof,
@@ -135,11 +143,13 @@ const SKILL_FEEDBACK_HELP_COMMANDS = [
 	"review",
 	"health",
 	"purge",
+	"correlate",
 ] as const satisfies readonly (keyof typeof skillFeedbackContracts)[];
 
 type HealthSignalInput = {
 	status: HealthInboxStatus;
 	counts: HealthResultData["counts"];
+	correlationWitnesses: CorrelationWitnessHealth;
 	retentionWarning?: string;
 };
 
@@ -204,6 +214,14 @@ const HEALTH_NEXT_ACTION_RULES: readonly HealthNextActionRule[] = [
 		action: {
 			action_id: "confirm-capture-path",
 			summary: "Confirm .skill-feedback/ is ignored before capture creates reports.",
+		},
+	},
+	{
+		matches: needsCorrelationRepairPreview,
+		action: {
+			action_id: "preview-correlation-repair",
+			summary:
+				"Run correlate preview to classify blocked correlation witness diagnostics.",
 		},
 	},
 	{
@@ -295,7 +313,8 @@ type SkillFeedbackResultContractId =
 	| typeof SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_REVIEW_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_HEALTH_CONTRACT_ID
-	| typeof SKILL_FEEDBACK_PURGE_CONTRACT_ID;
+	| typeof SKILL_FEEDBACK_PURGE_CONTRACT_ID
+	| typeof SKILL_FEEDBACK_CORRELATE_CONTRACT_ID;
 
 export type SkillFeedbackProcessResult = {
 	exitCode: number;
@@ -369,9 +388,11 @@ export type CorrelationCloseoutCandidate = {
 export type FinalizeCorrelationWitnessInput = {
 	skill: string;
 	hookReportId: string;
+	hookWrittenPath?: string;
 	skillRunId: string;
 	createdTs: string;
 	candidates: readonly CorrelationCloseoutCandidate[];
+	closeoutDiagnostics?: readonly string[];
 };
 
 export type FinalizeCorrelationWitnessResult =
@@ -390,7 +411,30 @@ type CorrelationDiagnosticArtifact = {
 	skill: string;
 	hook_report_id: string;
 	diagnostics: readonly string[];
+	repair_candidates?: readonly CorrelationRepairCandidateSource[];
 };
+
+type CorrelationRepairCandidateSource = {
+	source: "correlation_finalizer";
+	skill: string;
+	hook_report_id: string;
+	hook_written_path: string;
+	closeout_report_id: string;
+	closeout_written_path: string;
+	closeout_proof_status: string;
+	skill_run_id: string;
+};
+
+type CorrelationDirectoryArtifact = {
+	fileName: string;
+} & (
+	| { kind: "witness" | "diagnostic"; raw: unknown }
+	| { kind: "invalid"; diagnostic: string }
+);
+
+type CorrelationDirectoryRead =
+	| { ok: true; artifacts: CorrelationDirectoryArtifact[] }
+	| { ok: false; diagnostic: string };
 
 export type SkillFeedbackRuntime = {
 	repoRoot: () => string;
@@ -645,17 +689,16 @@ export async function closeoutSkillFeedbackReceipt(
 		);
 	}
 
-	try {
-		const generatedTs = runtime.nowIso();
-		const receipt = parsed.receipt;
-		const runtimeTelemetry = await closeoutRuntimeTelemetry(receipt, runtime);
-		const correlationStatus: CorrelationStatus = "unlinked";
-		const evidenceGaps = closeoutEvidenceGaps(
-			parsed.evidence_gaps,
-			runtimeTelemetry,
-			correlationStatus,
-		);
-		const report = buildCloseoutReport({
+		try {
+			const generatedTs = runtime.nowIso();
+			const receipt = parsed.receipt;
+			const runtimeTelemetry = await closeoutRuntimeTelemetry(receipt, runtime);
+			const correlationStatus: CorrelationStatus = "unlinked";
+			const evidenceGaps = closeoutEvidenceGaps(
+				parsed.evidence_gaps,
+				runtimeTelemetry,
+			);
+			const report = buildCloseoutReport({
 			generatedTs,
 			receipt,
 			runtimeTelemetry,
@@ -815,16 +858,7 @@ export async function finalizeSkillFeedbackCorrelationWitness(
 ): Promise<FinalizeCorrelationWitnessResult> {
 	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
 	const repoRoot = resolve(runtime.repoRoot());
-	if (input.candidates.length === 0) {
-		return blockCorrelationWitnessWithDiagnostic(input, runtime, repoRoot, [
-			"correlation_candidate_missing",
-		]);
-	}
-	if (input.candidates.length > 1) {
-		return blockCorrelationWitnessWithDiagnostic(input, runtime, repoRoot, [
-			"correlation_candidate_ambiguous",
-		]);
-	}
+	const closeoutDiagnostics = uniqueSorted(input.closeoutDiagnostics ?? []);
 
 	const scan = await scanSafeInboxJsonFiles(repoRoot, runtime);
 	if (scan.rootStatus !== "readable") {
@@ -832,6 +866,16 @@ export async function finalizeSkillFeedbackCorrelationWitness(
 			status: "blocked",
 			diagnostics: ["correlation_inbox_unreadable"],
 		};
+	}
+	if (input.candidates.length === 0) {
+		return blockCorrelationWitnessWithDiagnostic(
+			input,
+			runtime,
+			repoRoot,
+			closeoutDiagnostics.length > 0
+				? closeoutDiagnostics
+				: ["correlation_candidate_missing"],
+		);
 	}
 	const proofKey = await readWriterProofKey(repoRoot, runtime);
 	if (!proofKey.ok) {
@@ -843,18 +887,54 @@ export async function finalizeSkillFeedbackCorrelationWitness(
 			]),
 		};
 	}
-	const reports = await readNormalizedReportsForCorrelation({
+	const reportRead = await readNormalizedReportsForCorrelation({
 		files: scan.files,
 		proofKey,
 		runtime,
 	});
-	const hook = selectCorrelationHookReport(reports, input);
-	if (!hook.ok) return { status: "blocked", diagnostics: hook.diagnostics };
-	const candidate = input.candidates[0];
-	const closeout = selectCorrelationCloseoutReport(reports, candidate, input);
-	if (!closeout.ok) {
-		return { status: "blocked", diagnostics: closeout.diagnostics };
+	const readDiagnostics = correlationReportReadDiagnosticsForInput(
+		reportRead,
+		input,
+	);
+	if (readDiagnostics.length > 0) {
+		return blockCorrelationWitnessWithDiagnostic(
+			input,
+			runtime,
+			repoRoot,
+			uniqueSorted([...closeoutDiagnostics, ...readDiagnostics]),
+		);
 	}
+	const reports = reportRead.reports;
+	const hook = selectCorrelationHookReport(reports, input);
+	if (!hook.ok) {
+		return blockCorrelationWitnessWithDiagnostic(
+			input,
+			runtime,
+			repoRoot,
+			uniqueSorted([...closeoutDiagnostics, ...hook.diagnostics]),
+		);
+	}
+	const selection = selectEligibleCorrelationCandidate(reports, input);
+	if (!selection.ok) {
+		return blockCorrelationWitnessWithDiagnostic(
+			input,
+			runtime,
+			repoRoot,
+			uniqueSorted([...closeoutDiagnostics, ...selection.diagnostics]),
+		);
+	}
+	const ignoreStatus = await runtime.checkIgnored(repoRoot, `${INBOX_DIR}/`);
+	if (ignoreStatus !== 0) {
+		return blockCorrelationWitnessWithDiagnostic(input, runtime, repoRoot, [
+			"correlation_gitignore_gate_refused",
+		]);
+	}
+	const candidateDiagnostics = await persistCorrelationWitnessDiagnostics(
+		input,
+		runtime,
+		repoRoot,
+		uniqueSorted([...closeoutDiagnostics, ...selection.diagnostics]),
+	);
 	const inboxPath = join(repoRoot, INBOX_DIR);
 	const witnessDirectory = await prepareCorrelationWitnessDirectory(
 		inboxPath,
@@ -867,7 +947,7 @@ export async function finalizeSkillFeedbackCorrelationWitness(
 		skill: input.skill,
 		runtime_source: "claude_stop",
 		hook_report_id: input.hookReportId,
-		closeout_report_id: candidate.reportId,
+		closeout_report_id: selection.candidate.reportId,
 		skill_run_id: input.skillRunId,
 		created_ts: input.createdTs,
 	};
@@ -894,8 +974,74 @@ export async function finalizeSkillFeedbackCorrelationWitness(
 		status: "written",
 		witnessId: witness.witness_id,
 		witnessPath: `${INBOX_DIR}/${witnessRelativePath}`,
-		diagnostics: [],
+		diagnostics: candidateDiagnostics,
 	};
+}
+
+type CorrelationCandidateSelection =
+	| {
+			ok: true;
+			candidate: CorrelationCloseoutCandidate;
+			diagnostics: string[];
+	  }
+	| { ok: false; diagnostics: string[] };
+
+function selectEligibleCorrelationCandidate(
+	reports: readonly CorrelationReportRead[],
+	input: FinalizeCorrelationWitnessInput,
+): CorrelationCandidateSelection {
+	const eligible: CorrelationCloseoutCandidate[] = [];
+	const diagnostics: string[] = [];
+	for (const candidate of input.candidates) {
+		const closeout = selectCorrelationCloseoutReport(reports, candidate, input);
+		if (closeout.ok) eligible.push(candidate);
+		else diagnostics.push(...closeout.diagnostics);
+	}
+	if (eligible.length === 1) {
+		const candidate = eligible[0];
+		if (candidate) {
+			return {
+				ok: true,
+				candidate,
+				diagnostics: uniqueSorted(diagnostics),
+			};
+		}
+	}
+	if (eligible.length > 1) {
+		return {
+			ok: false,
+			diagnostics: uniqueSorted([
+				...diagnostics,
+				"correlation_candidate_ambiguous",
+			]),
+		};
+	}
+	return {
+		ok: false,
+		diagnostics: uniqueSorted(
+			diagnostics.length > 0
+				? diagnostics
+				: ["correlation_candidate_missing"],
+		),
+	};
+}
+
+async function persistCorrelationWitnessDiagnostics(
+	input: FinalizeCorrelationWitnessInput,
+	runtime: SkillFeedbackRuntime,
+	repoRoot: string,
+	diagnostics: readonly string[],
+): Promise<string[]> {
+	if (diagnostics.length === 0) return [];
+	const write = await writeCorrelationDiagnosticArtifact(
+		input,
+		runtime,
+		repoRoot,
+		diagnostics,
+	);
+	return write.ok
+		? uniqueSorted(diagnostics)
+		: uniqueSorted([...diagnostics, write.code]);
 }
 
 async function blockCorrelationWitnessWithDiagnostic(
@@ -937,6 +1083,7 @@ async function writeCorrelationDiagnosticArtifact(
 		skill: input.skill,
 		hook_report_id: input.hookReportId,
 		diagnostics: uniqueSorted(diagnostics),
+		...correlationRepairCandidateSourcesForInput(input),
 	};
 	const diagnosticId = stableReportId("diagnostic", artifact);
 	const diagnosticPath = join(
@@ -954,6 +1101,753 @@ async function writeCorrelationDiagnosticArtifact(
 	} catch {
 		return { ok: false, code: "correlation_diagnostic_write_failed" };
 	}
+}
+
+function correlationRepairCandidateSourcesForInput(
+	input: FinalizeCorrelationWitnessInput,
+): Pick<CorrelationDiagnosticArtifact, "repair_candidates"> {
+	if (!input.hookWrittenPath) return {};
+	const sources: CorrelationRepairCandidateSource[] = [];
+	for (const candidate of input.candidates) {
+		sources.push({
+			source: "correlation_finalizer",
+			skill: input.skill,
+			hook_report_id: input.hookReportId,
+			hook_written_path: input.hookWrittenPath,
+			closeout_report_id: candidate.reportId,
+			closeout_written_path: candidate.writtenPath,
+			closeout_proof_status: candidate.proofStatus,
+			skill_run_id: input.skillRunId,
+		});
+	}
+	return sources.length > 0 ? { repair_candidates: sources } : {};
+}
+
+type CorrelationRepairScanCandidate = SkillFeedbackCorrelateCandidateData & {
+	finalizeInput?: FinalizeCorrelationWitnessInput;
+};
+
+type CorrelationRepairScan =
+	| {
+			ok: true;
+			diagnosticCount: number;
+			candidates: CorrelationRepairScanCandidate[];
+			writtenCount: number;
+			failedCount: number;
+	  }
+	| { ok: false; diagnostics: string[] };
+
+type CorrelationDiagnosticRead = {
+	artifact: CorrelationDiagnosticArtifact;
+};
+
+type CorrelationArtifactRead =
+	| {
+			ok: true;
+			diagnostics: CorrelationDiagnosticRead[];
+			verifiedWitnesses: Array<
+				NonNullable<ReturnType<typeof verifyCorrelationWitness>["witness"]>
+			>;
+	  }
+	| { ok: false; diagnostics: string[] };
+
+type CorrelationRepairExecuteResult =
+	| Extract<CorrelationRepairScan, { ok: true }>
+	| {
+			ok: false;
+			diagnostics: string[];
+			changedState: "none" | "partial";
+			data: SkillFeedbackCorrelateResultData;
+	  };
+
+const INVALID_CORRELATION_REPAIR_DIAGNOSTICS: ReadonlySet<string> = new Set([
+	"correlation_hook_report_missing",
+	"correlation_hook_proof_invalid",
+	"correlation_hook_runtime_mismatch",
+	"correlation_hook_skill_mismatch",
+	"correlation_hook_run_id_mismatch",
+	"correlation_runtime_unsupported",
+	"correlation_inbox_unreadable",
+	"correlation_witness_dir_unsafe",
+]);
+
+export async function correlateSkillFeedbackInbox(
+	options: {
+		runtime?: SkillFeedbackRuntime;
+		runId?: string;
+		plain?: boolean;
+		targetPath?: string;
+		execute?: boolean;
+	} = {},
+): Promise<SkillFeedbackProcessResult> {
+	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
+	const runId = options.runId ?? "skill-feedback-correlate";
+	const readTarget = await runtime.resolveReadTarget(options.targetPath);
+	if (!readTarget.ok) {
+		return errorResult(
+			runId,
+			RUNTIME_FAILURE_EXIT_CODE,
+			readTarget.code,
+			readTarget.message,
+			{
+				recoverability: "repair_state",
+				hint: readTarget.hint,
+				contract: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+				data: readTargetFailureData(readTarget),
+			},
+		);
+	}
+	const mode: SkillFeedbackCorrelateMode = options.execute ? "execute" : "preview";
+	const scan = await scanCorrelationRepairCandidates(
+		readTarget.repoRoot,
+		runtime,
+	);
+	if (!scan.ok) {
+		return correlateRepairStateError(runId, scan.diagnostics);
+	}
+	const executedScan =
+		mode === "execute"
+			? await executeCorrelationRepairCandidates(scan, runtime, readTarget)
+			: scan;
+	if (!executedScan.ok) {
+		return correlateRepairStateError(
+			runId,
+			executedScan.diagnostics,
+			executedScan.changedState,
+			executedScan.data,
+		);
+	}
+	const data = buildCorrelateResultData({
+		mode,
+		scan: executedScan,
+		readTarget,
+	});
+	if (options.plain) return correlatePlainResult(data);
+	const envelope = createCliRuntimeSuccessEnvelope({
+		run_id: runId,
+		data,
+		runtime_actions: [
+			{
+				id: data.next_action.action_id,
+				summary: data.next_action.summary,
+				side_effects: data.next_action.side_effects,
+			},
+		],
+		continuation: { next_action_id: data.next_action.action_id },
+	}) satisfies CliRuntimeSuccessEnvelope<SkillFeedbackCorrelateResultData>;
+	return {
+		exitCode: 0,
+		stdout: `${JSON.stringify(envelope)}\n`,
+		stderr: "",
+	};
+}
+
+function correlatePlainResult(
+	data: SkillFeedbackCorrelateResultData,
+): SkillFeedbackProcessResult {
+	return {
+		exitCode: 0,
+		stdout: renderPlainCorrelate(data),
+		stderr: "",
+	};
+}
+
+async function executeCorrelationRepairCandidates(
+	scan: Extract<CorrelationRepairScan, { ok: true }>,
+	runtime: SkillFeedbackRuntime,
+	readTarget: Extract<ReadTargetResolution, { ok: true }>,
+): Promise<CorrelationRepairExecuteResult> {
+	const candidates: CorrelationRepairScanCandidate[] = [];
+	let writtenCount = 0;
+	let failedCount = 0;
+	for (const candidate of scan.candidates) {
+		if (candidate.class !== "repairable" || !candidate.finalizeInput) {
+			candidates.push(candidate);
+			continue;
+		}
+		const result = await finalizeSkillFeedbackCorrelationWitness(
+			candidate.finalizeInput,
+			{ runtime },
+		);
+		if (result.status === "written") {
+			writtenCount += 1;
+			candidates.push({
+				...candidate,
+				reason_ids: ["repairable_candidate"],
+			});
+			continue;
+		}
+		failedCount += 1;
+		const blocked = blockedCorrelationRepairCandidate(
+			{
+				schema_version: CORRELATION_DIAGNOSTIC_SCHEMA_VERSION,
+				kind: CORRELATION_DIAGNOSTIC_KIND,
+				created_ts: candidate.finalizeInput.createdTs,
+				skill: candidate.finalizeInput.skill,
+				hook_report_id: candidate.finalizeInput.hookReportId,
+				diagnostics: result.diagnostics,
+			},
+			result.diagnostics,
+		);
+		candidates.push(blocked);
+		if (
+			writtenCount > 0 ||
+			result.diagnostics.includes("correlation_witness_write_failed") ||
+			result.diagnostics.includes("correlation_diagnostic_write_failed")
+		) {
+			const remainingCandidates = scan.candidates.slice(candidates.length);
+			const failedScan = {
+				...scan,
+				candidates: [...candidates, ...remainingCandidates],
+				writtenCount,
+				failedCount,
+			};
+			const diagnostics =
+				writtenCount > 0
+					? uniqueSorted([
+							...result.diagnostics,
+							"correlation_partial_write_failed",
+						])
+					: [...result.diagnostics];
+			return {
+				ok: false,
+				diagnostics,
+				changedState: writtenCount > 0 ? "partial" : "none",
+				data: buildCorrelateResultData({
+					mode: "execute",
+					scan: failedScan,
+					readTarget,
+				}),
+			};
+		}
+	}
+	return {
+		...scan,
+		candidates,
+		writtenCount,
+		failedCount,
+	};
+}
+
+async function scanCorrelationRepairCandidates(
+	repoRoot: string,
+	runtime: SkillFeedbackRuntime,
+): Promise<CorrelationRepairScan> {
+	const scan = await scanSafeInboxJsonFiles(repoRoot, runtime);
+	if (scan.rootStatus === "unsafe") {
+		return { ok: false, diagnostics: ["correlation_inbox_unreadable"] };
+	}
+	if (scan.rootStatus === "missing") {
+		return {
+			ok: true,
+			diagnosticCount: 0,
+			candidates: [],
+			writtenCount: 0,
+			failedCount: 0,
+		};
+	}
+	const proofKey = await readWriterProofKey(repoRoot, runtime);
+	const reportRead = proofKey.ok
+		? await readNormalizedReportsForCorrelation({
+				files: scan.files,
+				proofKey,
+				runtime,
+			})
+		: { reports: [], failures: [] };
+	const artifactRead = await readCorrelationRepairArtifacts({
+		repoRoot,
+		runtime,
+		proofKey,
+	});
+	if (!artifactRead.ok) return artifactRead;
+	const verifiedByHook = new Map(
+		artifactRead.verifiedWitnesses.map((witness) => [
+			witness.hook_report_id,
+			witness,
+		]),
+	);
+	const candidates = artifactRead.diagnostics.map((diagnostic) =>
+		classifyCorrelationRepairDiagnostic({
+			diagnostic,
+			reports: reportRead.reports,
+			reportReadFailures: reportRead.failures,
+			verifiedByHook,
+			proofKeyUsable: proofKey.ok,
+			nowIso: runtime.nowIso(),
+		}),
+	);
+	return {
+		ok: true,
+		diagnosticCount: artifactRead.diagnostics.length,
+		candidates,
+		writtenCount: 0,
+		failedCount: 0,
+	};
+}
+
+async function readCorrelationRepairArtifacts(input: {
+	repoRoot: string;
+	runtime: SkillFeedbackRuntime;
+	proofKey: WriterProofKeyRead;
+}): Promise<CorrelationArtifactRead> {
+	const directoryRead = await readCorrelationDirectoryArtifacts(input);
+	if (!directoryRead.ok) return { ok: false, diagnostics: [directoryRead.diagnostic] };
+	const diagnostics: CorrelationDiagnosticRead[] = [];
+	const rawWitnesses: unknown[] = [];
+	for (const artifactRead of directoryRead.artifacts) {
+		if (artifactRead.kind === "invalid") {
+			return { ok: false, diagnostics: [artifactRead.diagnostic] };
+		}
+		if (artifactRead.kind === "diagnostic") {
+			const artifact = parseCorrelationDiagnosticArtifact(artifactRead.raw);
+			if (artifact) diagnostics.push({ artifact });
+		} else {
+			rawWitnesses.push(artifactRead.raw);
+		}
+	}
+	if (rawWitnesses.length > 0 && !input.proofKey.ok) {
+		return {
+			ok: true,
+			diagnostics,
+			verifiedWitnesses: [],
+		};
+	}
+	const verifiedWitnesses: Array<
+		NonNullable<ReturnType<typeof verifyCorrelationWitness>["witness"]>
+	> = [];
+	if (input.proofKey.ok) {
+		for (const raw of rawWitnesses) {
+			const context = verifyCorrelationWitness(raw, input.proofKey.key);
+			if (context.verified && context.witness) {
+				verifiedWitnesses.push(context.witness);
+			}
+		}
+	}
+	return { ok: true, diagnostics, verifiedWitnesses };
+}
+
+async function readCorrelationDirectoryArtifacts(input: {
+	repoRoot: string;
+	runtime: SkillFeedbackRuntime;
+}): Promise<CorrelationDirectoryRead> {
+	const inboxPath = join(input.repoRoot, INBOX_DIR);
+	const witnessDirectoryPath = join(
+		inboxPath,
+		SKILL_FEEDBACK_CORRELATION_WITNESS_DIR,
+	);
+	const directoryStats = await lstatOptional(witnessDirectoryPath, input.runtime);
+	if (!directoryStats) return { ok: true, artifacts: [] };
+	if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
+		return { ok: false, diagnostic: "correlation_witness_dir_unsafe" };
+	}
+	const inboxReal = await safeRealpath(inboxPath, input.runtime);
+	const witnessDirectoryReal = await safeRealpath(
+		witnessDirectoryPath,
+		input.runtime,
+	);
+	if (
+		!inboxReal ||
+		!witnessDirectoryReal ||
+		!isContainedPath(inboxReal, witnessDirectoryReal)
+	) {
+		return { ok: false, diagnostic: "correlation_witness_dir_unsafe" };
+	}
+	let entries: string[];
+	try {
+		entries = await readdir(witnessDirectoryPath);
+	} catch (error) {
+		if (isPermissionErrorCode(error)) {
+			return { ok: false, diagnostic: "correlation_witness_dir_unsafe" };
+		}
+		throw error;
+	}
+	const artifacts: CorrelationDirectoryArtifact[] = [];
+	for (const entry of entries.sort()) {
+		const isWitness = isSafeCorrelationWitnessFileName(entry);
+		const isDiagnostic = isSafeCorrelationDiagnosticFileName(entry);
+		if (!isWitness && !isDiagnostic) continue;
+		const artifactRead = await readSafeCorrelationJsonArtifact({
+			path: join(witnessDirectoryPath, entry),
+			witnessDirectoryReal,
+			runtime: input.runtime,
+		});
+		artifacts.push(
+			artifactRead.ok
+				? {
+						fileName: entry,
+						kind: isDiagnostic ? "diagnostic" : "witness",
+						raw: artifactRead.raw,
+					}
+				: {
+						fileName: entry,
+						kind: "invalid",
+						diagnostic: artifactRead.diagnostic,
+					},
+		);
+	}
+	return { ok: true, artifacts };
+}
+
+function parseCorrelationDiagnosticArtifact(
+	raw: unknown,
+): CorrelationDiagnosticArtifact | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const artifact = raw as Record<string, unknown>;
+	if (artifact.schema_version !== CORRELATION_DIAGNOSTIC_SCHEMA_VERSION) {
+		return undefined;
+	}
+	if (artifact.kind !== CORRELATION_DIAGNOSTIC_KIND) return undefined;
+	if (typeof artifact.created_ts !== "string") return undefined;
+	if (typeof artifact.skill !== "string") return undefined;
+	if (typeof artifact.hook_report_id !== "string") return undefined;
+	if (!Array.isArray(artifact.diagnostics)) return undefined;
+	const diagnostics = artifact.diagnostics.filter(
+		(diagnostic): diagnostic is string =>
+			typeof diagnostic === "string" && diagnostic.trim() !== "",
+	);
+	if (diagnostics.length === 0) return undefined;
+	const repairCandidates = parseCorrelationRepairCandidateSources(
+		artifact.repair_candidates,
+	);
+	return {
+		schema_version: CORRELATION_DIAGNOSTIC_SCHEMA_VERSION,
+		kind: CORRELATION_DIAGNOSTIC_KIND,
+		created_ts: artifact.created_ts,
+		skill: artifact.skill,
+		hook_report_id: artifact.hook_report_id,
+		diagnostics: uniqueSorted(diagnostics),
+		...(repairCandidates.length > 0
+			? { repair_candidates: repairCandidates }
+			: {}),
+	};
+}
+
+function parseCorrelationRepairCandidateSources(
+	raw: unknown,
+): CorrelationRepairCandidateSource[] {
+	if (!Array.isArray(raw)) return [];
+	const sources: CorrelationRepairCandidateSource[] = [];
+	for (const value of raw) {
+		if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+		const source = value as Record<string, unknown>;
+		if (source.source !== "correlation_finalizer") continue;
+		if (
+			typeof source.skill !== "string" ||
+			typeof source.hook_report_id !== "string" ||
+			typeof source.hook_written_path !== "string" ||
+			typeof source.closeout_report_id !== "string" ||
+			typeof source.closeout_written_path !== "string" ||
+			typeof source.closeout_proof_status !== "string" ||
+			typeof source.skill_run_id !== "string"
+		) {
+			continue;
+		}
+		sources.push({
+			source: "correlation_finalizer",
+			skill: source.skill,
+			hook_report_id: source.hook_report_id,
+			hook_written_path: source.hook_written_path,
+			closeout_report_id: source.closeout_report_id,
+			closeout_written_path: source.closeout_written_path,
+			closeout_proof_status: source.closeout_proof_status,
+			skill_run_id: source.skill_run_id,
+		});
+	}
+	return sources;
+}
+
+function classifyCorrelationRepairDiagnostic(input: {
+	diagnostic: CorrelationDiagnosticRead;
+	reports: readonly CorrelationReportRead[];
+	reportReadFailures: readonly { relativePath: string; diagnostic: string }[];
+	verifiedByHook: ReadonlyMap<
+		string,
+		NonNullable<ReturnType<typeof verifyCorrelationWitness>["witness"]>
+	>;
+	proofKeyUsable: boolean;
+	nowIso: string;
+}): CorrelationRepairScanCandidate {
+	const artifact = input.diagnostic.artifact;
+	const existing = input.verifiedByHook.get(artifact.hook_report_id);
+	if (existing) {
+		return {
+			candidate_key: `hook:${artifact.hook_report_id}`,
+			class: "already_linked",
+			hook_report_ref: reportRef(artifact.hook_report_id),
+			closeout_report_refs: [reportRef(existing.closeout_report_id)],
+			reason_ids: ["existing_valid_witness"],
+		};
+	}
+	const sources = artifact.repair_candidates ?? [];
+	if (sources.length === 0) {
+		return blockedCorrelationRepairCandidate(artifact, artifact.diagnostics);
+	}
+	if (!input.proofKeyUsable) {
+		return blockedCorrelationRepairCandidate(artifact, [
+			"correlation_writer_proof_key_unusable",
+		]);
+	}
+	const validated = sources.map((source) =>
+		validateCorrelationRepairCandidateSource({
+			artifact,
+			source,
+			reports: input.reports,
+			reportReadFailures: input.reportReadFailures,
+			nowIso: input.nowIso,
+		}),
+	);
+	const repairable = validated.filter(
+		(result): result is Extract<typeof result, { ok: true }> => result.ok,
+	);
+	if (repairable.length === 1) {
+		const candidate = repairable[0];
+		return {
+			candidate_key: `hook:${artifact.hook_report_id}`,
+			class: "repairable",
+			hook_report_ref: reportRef(artifact.hook_report_id),
+			closeout_report_refs: [reportRef(candidate.closeoutReportId)],
+			reason_ids: ["repairable_candidate"],
+			finalizeInput: candidate.finalizeInput,
+		};
+	}
+	if (repairable.length > 1) {
+		return {
+			candidate_key: `hook:${artifact.hook_report_id}`,
+			class: "ambiguous",
+			hook_report_ref: reportRef(artifact.hook_report_id),
+			closeout_report_refs: uniqueSorted(
+				repairable.map((candidate) => reportRef(candidate.closeoutReportId)),
+			),
+			reason_ids: ["correlation_candidate_ambiguous"],
+		};
+	}
+	return blockedCorrelationRepairCandidate(
+		artifact,
+		validated.flatMap((result) => (result.ok ? [] : result.diagnostics)),
+	);
+}
+
+function validateCorrelationRepairCandidateSource(input: {
+	artifact: CorrelationDiagnosticArtifact;
+	source: CorrelationRepairCandidateSource;
+	reports: readonly CorrelationReportRead[];
+	reportReadFailures: readonly { relativePath: string; diagnostic: string }[];
+	nowIso: string;
+}):
+	| {
+			ok: true;
+			closeoutReportId: string;
+			finalizeInput: FinalizeCorrelationWitnessInput;
+	  }
+	| { ok: false; diagnostics: string[] } {
+	const { artifact, source } = input;
+	if (
+		source.skill !== artifact.skill ||
+		source.hook_report_id !== artifact.hook_report_id
+	) {
+		return {
+			ok: false,
+			diagnostics: ["correlation_candidate_source_boundary_mismatch"],
+		};
+	}
+	const finalizeInput: FinalizeCorrelationWitnessInput = {
+		skill: source.skill,
+		hookReportId: source.hook_report_id,
+		hookWrittenPath: source.hook_written_path,
+		skillRunId: source.skill_run_id,
+		createdTs: input.nowIso,
+		candidates: [
+			{
+				reportId: source.closeout_report_id,
+				writtenPath: source.closeout_written_path,
+				proofStatus: source.closeout_proof_status,
+			},
+		],
+	};
+	const readDiagnostics = correlationReportReadDiagnosticsForInput(
+		{ failures: input.reportReadFailures },
+		finalizeInput,
+	);
+	if (readDiagnostics.length > 0) {
+		return { ok: false, diagnostics: readDiagnostics };
+	}
+	const hookEntry = input.reports.find(
+		(entry) => entry.report.report_id === source.hook_report_id,
+	);
+	if (!hookEntry || hookEntry.file.relativePath !== source.hook_written_path) {
+		return {
+			ok: false,
+			diagnostics: ["correlation_candidate_source_boundary_mismatch"],
+		};
+	}
+	const hook = selectCorrelationHookReport(input.reports, finalizeInput);
+	if (!hook.ok) return { ok: false, diagnostics: hook.diagnostics };
+	const selection = selectEligibleCorrelationCandidate(
+		input.reports,
+		finalizeInput,
+	);
+	if (!selection.ok) return { ok: false, diagnostics: selection.diagnostics };
+	return {
+		ok: true,
+		closeoutReportId: selection.candidate.reportId,
+		finalizeInput,
+	};
+}
+
+function blockedCorrelationRepairCandidate(
+	artifact: CorrelationDiagnosticArtifact,
+	diagnostics: readonly string[],
+): CorrelationRepairScanCandidate {
+	const className = correlationRepairClassForDiagnostics(diagnostics);
+	return {
+		candidate_key: `hook:${artifact.hook_report_id}`,
+		class: className,
+		hook_report_ref: reportRef(artifact.hook_report_id),
+		closeout_report_refs: [],
+		reason_ids: toCorrelateReasonIds(diagnostics, className),
+	};
+}
+
+function correlationRepairClassForDiagnostics(
+	diagnostics: readonly string[],
+): SkillFeedbackCorrelateCandidateData["class"] {
+	if (diagnostics.includes("correlation_candidate_ambiguous")) {
+		return "ambiguous";
+	}
+	if (diagnostics.some((diagnostic) => INVALID_CORRELATION_REPAIR_DIAGNOSTICS.has(diagnostic))) {
+		return "invalid";
+	}
+	return "insufficient_evidence";
+}
+
+function toCorrelateReasonIds(
+	diagnostics: readonly string[],
+	className: SkillFeedbackCorrelateCandidateData["class"],
+): SkillFeedbackCorrelateReasonId[] {
+	const reasonIds = diagnostics.filter(
+		(diagnostic): diagnostic is SkillFeedbackCorrelateReasonId =>
+			isSkillFeedbackCorrelateReasonId(diagnostic),
+	);
+	if (reasonIds.length > 0) return uniqueSorted(reasonIds);
+	return className === "insufficient_evidence"
+		? ["insufficient_evidence"]
+		: ["correlation_candidate_source_boundary_mismatch"];
+}
+
+function buildCorrelateResultData(input: {
+	mode: SkillFeedbackCorrelateMode;
+	scan: Extract<CorrelationRepairScan, { ok: true }>;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
+}): SkillFeedbackCorrelateResultData {
+	const counts = correlateCounts(input.scan);
+	const nextAction = correlateNextAction(input.mode, counts);
+	return {
+		contract: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+		schema_version: SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
+		mode: input.mode,
+		counts,
+		candidates: input.scan.candidates.map(({ finalizeInput: _input, ...candidate }) =>
+			candidate
+		),
+		next_action: nextAction,
+		...(input.readTarget.explicit
+			? { read_target: readTargetDiagnosticData(input.readTarget) }
+			: {}),
+	};
+}
+
+function correlateCounts(
+	scan: Extract<CorrelationRepairScan, { ok: true }>,
+): SkillFeedbackCorrelateCounts {
+	const candidates = scan.candidates;
+	return {
+		diagnostic_count: scan.diagnosticCount,
+		candidate_count: candidates.length,
+		repairable_count: candidates.filter((candidate) => candidate.class === "repairable")
+			.length,
+		ambiguous_count: candidates.filter((candidate) => candidate.class === "ambiguous")
+			.length,
+		invalid_count: candidates.filter((candidate) => candidate.class === "invalid")
+			.length,
+		already_linked_count: candidates.filter(
+			(candidate) => candidate.class === "already_linked",
+		).length,
+		insufficient_evidence_count: candidates.filter(
+			(candidate) => candidate.class === "insufficient_evidence",
+		).length,
+		written_count: scan.writtenCount,
+		blocked_count: candidates.filter(
+			(candidate) =>
+				candidate.class === "ambiguous" ||
+				candidate.class === "invalid" ||
+				candidate.class === "insufficient_evidence",
+		).length,
+		failed_count: scan.failedCount,
+	};
+}
+
+function correlateNextAction(
+	mode: SkillFeedbackCorrelateMode,
+	counts: SkillFeedbackCorrelateCounts,
+): SkillFeedbackCorrelateResultData["next_action"] {
+	if (mode === "preview" && counts.repairable_count > 0) {
+		return {
+			action_id: "execute_repair",
+			summary: "Run correlate --execute to write validated private witnesses.",
+			side_effects: ["write"],
+		};
+	}
+	if (
+		counts.ambiguous_count > 0 ||
+		counts.invalid_count > 0 ||
+		counts.failed_count > 0
+	) {
+		return {
+			action_id: "inspect_repair_blockers",
+			summary: "Inspect blocked correlate candidates before retrying repair.",
+			side_effects: ["read"],
+		};
+	}
+	if (counts.blocked_count > 0 || counts.candidate_count === 0) {
+		return {
+			action_id: "no_repair_available",
+			summary: "No correlation repair is available from current private evidence.",
+			side_effects: ["read"],
+		};
+	}
+	return {
+		action_id: "repair_complete",
+		summary: "Correlation repair has no remaining write candidates.",
+		side_effects: ["read"],
+	};
+}
+
+function correlateRepairStateError(
+	runId: string,
+	diagnostics: readonly string[],
+	changedState: "none" | "partial" = "none",
+	data?: SkillFeedbackCorrelateResultData,
+): SkillFeedbackProcessResult {
+	return errorResult(
+		runId,
+		RUNTIME_FAILURE_EXIT_CODE,
+		"correlate_repair_state_error",
+		"Skill-feedback correlate could not safely inspect repair evidence.",
+		{
+			recoverability: "repair_state",
+			hint: "Inspect .skill-feedback/.correlation ownership and rerun correlate preview.",
+			contract: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+			changedState,
+			data: {
+				diagnostics: uniqueSorted(diagnostics),
+				...(data ? { result: data } : {}),
+			},
+		},
+	);
+}
+
+function reportRef(reportId: string): string {
+	return `report:${reportId}`;
 }
 
 export async function reviewSkillFeedbackInbox(
@@ -1505,12 +2399,11 @@ async function readReviewInbox(
 		reports: normalizedReports.map((entry) => entry.report),
 		state,
 	});
-	const correlatedByReportId = new Map(
-		correlatedReports.map((report) => [report.report_id, report]),
-	);
-	for (const { file, report } of normalizedReports) {
-		const overlaid = correlatedByReportId.get(report.report_id) ?? report;
-		const lowSignalReasonId = lowSignalReasonIdFor(file, overlaid);
+	for (let index = 0; index < normalizedReports.length; index += 1) {
+		const entry = normalizedReports[index];
+		if (!entry) continue;
+		const overlaid = correlatedReports[index] ?? entry.report;
+		const lowSignalReasonId = lowSignalReasonIdFor(entry.file, overlaid);
 		if (lowSignalReasonId) {
 			state.lowSignalReports.push({
 				report: overlaid,
@@ -1594,7 +2487,7 @@ function writerProofNonce(raw: unknown): string | undefined {
 	return typeof nonce === "string" ? nonce : undefined;
 }
 
-function uniqueSorted(values: readonly string[]): string[] {
+function uniqueSorted<T extends string>(values: readonly T[]): T[] {
 	return [...new Set(values)].sort();
 }
 
@@ -1624,8 +2517,19 @@ async function applyVerifiedCorrelationWitnesses(input: {
 	const duplicateCloseouts = duplicateStringSet(
 		witnessRead.verified.map((witness) => witness.closeout_report_id),
 	);
+	const duplicateHooks = duplicateStringSet(
+		witnessRead.verified.map((witness) => witness.hook_report_id),
+	);
+	const reportsById = indexReportsById(input.reports);
 	const overlayByCloseoutId = new Map<string, string>();
 	for (const witness of witnessRead.verified) {
+		if (duplicateHooks.has(witness.hook_report_id)) {
+			input.state.correlationDiagnostics.push(
+				"correlation_witness_duplicate_hook",
+			);
+			input.state.blockedCorrelationWitnessCount += 1;
+			continue;
+		}
 		if (duplicateCloseouts.has(witness.closeout_report_id)) {
 			input.state.correlationDiagnostics.push(
 				"correlation_witness_duplicate_closeout",
@@ -1633,7 +2537,7 @@ async function applyVerifiedCorrelationWitnesses(input: {
 			input.state.blockedCorrelationWitnessCount += 1;
 			continue;
 		}
-		const link = validateCorrelationWitnessLink(witness, input.reports);
+		const link = validateCorrelationWitnessLink(witness, reportsById);
 		if (!link.ok) {
 			input.state.correlationDiagnostics.push(...link.diagnostics);
 			input.state.blockedCorrelationWitnessCount += 1;
@@ -1669,76 +2573,40 @@ async function readCorrelationWitnesses(input: {
 }): Promise<{
 	verified: Array<NonNullable<ReturnType<typeof verifyCorrelationWitness>["witness"]>>;
 }> {
-	const inboxPath = join(input.repoRoot, INBOX_DIR);
-	const witnessDirectoryPath = join(
-		inboxPath,
-		SKILL_FEEDBACK_CORRELATION_WITNESS_DIR,
-	);
-	const directoryStats = await lstatOptional(witnessDirectoryPath, input.runtime);
-	if (!directoryStats) return { verified: [] };
-	if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
-		input.state.correlationDiagnostics.push("correlation_witness_dir_unsafe");
+	const directoryRead = await readCorrelationDirectoryArtifacts(input);
+	if (!directoryRead.ok) {
+		input.state.correlationDiagnostics.push(directoryRead.diagnostic);
 		input.state.blockedCorrelationWitnessCount += 1;
 		return { verified: [] };
-	}
-	const inboxReal = await safeRealpath(inboxPath, input.runtime);
-	const witnessDirectoryReal = await safeRealpath(
-		witnessDirectoryPath,
-		input.runtime,
-	);
-	if (
-		!inboxReal ||
-		!witnessDirectoryReal ||
-		!isContainedPath(inboxReal, witnessDirectoryReal)
-	) {
-		input.state.correlationDiagnostics.push("correlation_witness_dir_unsafe");
-		input.state.blockedCorrelationWitnessCount += 1;
-		return { verified: [] };
-	}
-	let entries: string[];
-	try {
-		entries = await readdir(witnessDirectoryPath);
-	} catch (error) {
-		if (isPermissionErrorCode(error)) {
-			input.state.correlationDiagnostics.push("correlation_witness_dir_unsafe");
-			input.state.blockedCorrelationWitnessCount += 1;
-			return { verified: [] };
-		}
-		throw error;
 	}
 	const rawWitnesses: Array<{ fileName: string; raw: unknown }> = [];
-	for (const entry of entries.sort()) {
-		const isWitness = isSafeCorrelationWitnessFileName(entry);
-		const isDiagnostic = isSafeCorrelationDiagnosticFileName(entry);
-		if (!isWitness && !isDiagnostic) continue;
-		const artifactRead = await readSafeCorrelationJsonArtifact({
-			path: join(witnessDirectoryPath, entry),
-			witnessDirectoryReal,
-			runtime: input.runtime,
-		});
-		if (!artifactRead.ok) {
+	for (const artifactRead of directoryRead.artifacts) {
+		if (artifactRead.kind === "invalid") {
 			input.state.correlationDiagnostics.push(artifactRead.diagnostic);
 			input.state.blockedCorrelationWitnessCount += 1;
 			continue;
 		}
-		if (isDiagnostic) {
-			const diagnostics = diagnosticsFromCorrelationArtifact(artifactRead.raw);
-			if (!diagnostics) {
+		if (artifactRead.kind === "diagnostic") {
+			const artifact = parseCorrelationDiagnosticArtifact(artifactRead.raw);
+			if (!artifact) {
 				input.state.correlationDiagnostics.push("correlation_diagnostic_invalid");
 			} else {
-				input.state.correlationDiagnostics.push(...diagnostics);
+				input.state.correlationDiagnostics.push(...artifact.diagnostics);
 			}
 			input.state.blockedCorrelationWitnessCount += 1;
 			continue;
 		}
-		rawWitnesses.push({ fileName: entry, raw: artifactRead.raw });
+		rawWitnesses.push({
+			fileName: artifactRead.fileName,
+			raw: artifactRead.raw,
+		});
 	}
 	if (rawWitnesses.length > 0 && !input.proofKey.ok) {
 		input.state.correlationDiagnostics.push(
 			"correlation_writer_proof_key_unusable",
 			...input.proofKey.diagnostics,
 		);
-		input.state.blockedCorrelationWitnessCount += 1;
+		input.state.blockedCorrelationWitnessCount += rawWitnesses.length;
 		return { verified: [] };
 	}
 	if (!input.proofKey.ok) return { verified: [] };
@@ -1771,6 +2639,18 @@ async function readCorrelationWitnesses(input: {
 	return { verified };
 }
 
+function indexReportsById(
+	reports: readonly NormalizedSoftwareLearningReport[],
+): ReadonlyMap<string, NormalizedSoftwareLearningReport[]> {
+	const byId = new Map<string, NormalizedSoftwareLearningReport[]>();
+	for (const report of reports) {
+		const bucket = byId.get(report.report_id);
+		if (bucket) bucket.push(report);
+		else byId.set(report.report_id, [report]);
+	}
+	return byId;
+}
+
 function isSafeCorrelationDiagnosticFileName(fileName: string): boolean {
 	return /^diagnostic_[0-9a-f]{16}\.json$/.test(fileName);
 }
@@ -1801,34 +2681,12 @@ async function readSafeCorrelationJsonArtifact(input: {
 	}
 }
 
-function diagnosticsFromCorrelationArtifact(raw: unknown): string[] | null {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-	const artifact = raw as Record<string, unknown>;
-	if (artifact.schema_version !== CORRELATION_DIAGNOSTIC_SCHEMA_VERSION) {
-		return null;
-	}
-	if (artifact.kind !== CORRELATION_DIAGNOSTIC_KIND) return null;
-	if (typeof artifact.created_ts !== "string") return null;
-	if (typeof artifact.skill !== "string") return null;
-	if (typeof artifact.hook_report_id !== "string") return null;
-	if (!Array.isArray(artifact.diagnostics)) return null;
-	const diagnostics = artifact.diagnostics.filter(
-		(diagnostic): diagnostic is string =>
-			typeof diagnostic === "string" && diagnostic.trim() !== "",
-	);
-	return diagnostics.length > 0 ? uniqueSorted(diagnostics) : null;
-}
-
 function validateCorrelationWitnessLink(
 	witness: NonNullable<ReturnType<typeof verifyCorrelationWitness>["witness"]>,
-	reports: readonly NormalizedSoftwareLearningReport[],
+	reportsById: ReadonlyMap<string, readonly NormalizedSoftwareLearningReport[]>,
 ): { ok: true } | { ok: false; diagnostics: string[] } {
-	const hookReports = reports.filter(
-		(report) => report.report_id === witness.hook_report_id,
-	);
-	const closeoutReports = reports.filter(
-		(report) => report.report_id === witness.closeout_report_id,
-	);
+	const hookReports = reportsById.get(witness.hook_report_id) ?? [];
+	const closeoutReports = reportsById.get(witness.closeout_report_id) ?? [];
 	if (hookReports.length !== 1 || closeoutReports.length !== 1) {
 		return { ok: false, diagnostics: ["correlation_witness_orphan_report"] };
 	}
@@ -1871,16 +2729,25 @@ async function readNormalizedReportsForCorrelation(input: {
 	files: readonly SafeInboxJsonFile[];
 	proofKey: Extract<WriterProofKeyRead, { ok: true }>;
 	runtime: SkillFeedbackRuntime;
-}): Promise<CorrelationReportRead[]> {
+}): Promise<{
+	reports: CorrelationReportRead[];
+	failures: Array<{ relativePath: string; diagnostic: string }>;
+}> {
 	const rawReports: Array<{ file: SafeInboxJsonFile; raw: unknown }> = [];
+	const failures: Array<{ relativePath: string; diagnostic: string }> = [];
 	for (const file of input.files) {
 		try {
 			rawReports.push({
 				file,
 				raw: JSON.parse(await input.runtime.readText(file.path)) as unknown,
 			});
-		} catch {
-			continue;
+		} catch (error) {
+			failures.push({
+				relativePath: file.relativePath,
+				diagnostic: isPermissionErrorCode(error)
+					? "correlation_report_unreadable"
+					: "correlation_report_invalid_json",
+			});
 		}
 	}
 	const duplicateReportIds = duplicateReportIdSet(
@@ -1900,15 +2767,39 @@ async function readNormalizedReportsForCorrelation(input: {
 		const normalized = normalizeReport(raw, proofContext);
 		if (normalized.kind === "ok") {
 			reports.push({ file, report: normalized.report });
+		} else {
+			failures.push({
+				relativePath: file.relativePath,
+				diagnostic: "correlation_report_invalid",
+			});
 		}
 	}
-	return reports;
+	return { reports, failures };
 }
 
 type CorrelationReportRead = {
 	file: SafeInboxJsonFile;
 	report: NormalizedSoftwareLearningReport;
 };
+
+function correlationReportReadDiagnosticsForInput(
+	read: {
+		failures: readonly { relativePath: string; diagnostic: string }[];
+	},
+	input: FinalizeCorrelationWitnessInput,
+): string[] {
+	const candidatePaths = new Set(
+		input.candidates.map((candidate) => candidate.writtenPath),
+	);
+	if (input.hookWrittenPath) {
+		candidatePaths.add(input.hookWrittenPath);
+	}
+	return uniqueSorted(
+		read.failures
+			.filter((failure) => candidatePaths.has(failure.relativePath))
+			.map((failure) => failure.diagnostic),
+	);
+}
 
 function selectCorrelationHookReport(
 	reports: readonly CorrelationReportRead[],
@@ -2092,13 +2983,13 @@ async function scanSafeJsonDirectory(input: {
 	let entries: string[];
 	try {
 		entries = await readdir(input.directoryPath);
-		} catch (error) {
-			if (isNodeErrorCode(error, "ENOENT")) return;
-			if (isPermissionErrorCode(error)) {
-				markSkippedUnsafePath(input.state, input.repoRoot, input.directoryPath);
-				return;
-			}
-			throw error;
+	} catch (error) {
+		if (isNodeErrorCode(error, "ENOENT")) return;
+		if (isPermissionErrorCode(error)) {
+			markSkippedUnsafePath(input.state, input.repoRoot, input.directoryPath);
+			return;
+		}
+		throw error;
 	}
 	for (const entry of entries.sort()) {
 		const reportPath = join(input.directoryPath, entry);
@@ -2372,15 +3263,18 @@ function buildReviewResultData(input: {
 	const inboxStatus = healthInboxStatus(input.inbox);
 	const correlation = healthCorrelation(reports);
 	const counts = healthCounts(input.inbox, correlation);
+	const correlationWitnesses = correlationWitnessHealth(input.inbox);
 	const retention = retentionSummary(reports, input.nowIso);
 	const warnings = deriveHealthWarnings({
 		status: inboxStatus,
 		counts,
+		correlationWitnesses,
 		retentionWarning: retention.warning,
 	});
 	const nextAction = deriveHealthNextAction({
 		status: inboxStatus,
 		counts,
+		correlationWitnesses,
 		retentionWarning: retention.warning,
 	});
 	const pilotCheckpoint = pilotCheckpointSummary({
@@ -2426,7 +3320,7 @@ function buildReviewResultData(input: {
 		ledger_entries: ledger.ledger_entries,
 		anchor_miss_telemetry: ledger.anchor_miss_telemetry,
 		proof_health: writerProofHealth(allReports, input.inbox.proofDiagnostics),
-		correlation_witnesses: correlationWitnessHealth(input.inbox),
+		correlation_witnesses: correlationWitnesses,
 		claim_readiness: claimReadiness,
 	};
 }
@@ -2453,15 +3347,18 @@ function buildHealthResultData(input: {
 	const inboxStatus = healthInboxStatus(input.inbox);
 	const correlation = healthCorrelation(primaryReports);
 	const counts = healthCounts(input.inbox, correlation);
+	const correlationWitnesses = correlationWitnessHealth(input.inbox);
 	const retention = retentionSummary(primaryReports, input.nowIso);
 	const warnings = deriveHealthWarnings({
 		status: inboxStatus,
 		counts,
+		correlationWitnesses,
 		retentionWarning: retention.warning,
 	});
 	const nextAction = deriveHealthNextAction({
 		status: inboxStatus,
 		counts,
+		correlationWitnesses,
 		retentionWarning: retention.warning,
 	});
 	const claimReadiness = toHealthClaimReadiness(
@@ -2482,7 +3379,7 @@ function buildHealthResultData(input: {
 		},
 		warnings,
 		proof_health: writerProofHealth(allReports, input.inbox.proofDiagnostics),
-		correlation_witnesses: correlationWitnessHealth(input.inbox),
+		correlation_witnesses: correlationWitnesses,
 		claim_readiness: claimReadiness,
 		correlation,
 		next_action: nextAction,
@@ -2616,6 +3513,13 @@ function needsInboxRepair(input: HealthSignalInput): boolean {
 
 function needsCapturePathConfirmation(input: HealthSignalInput): boolean {
 	return input.status === "missing" || input.status === "empty";
+}
+
+function needsCorrelationRepairPreview(input: HealthSignalInput): boolean {
+	return (
+		input.correlationWitnesses.blocked_count > 0 &&
+		input.correlationWitnesses.diagnostics.length > 0
+	);
 }
 
 function needsCorrelationInspection(input: HealthSignalInput): boolean {
@@ -3431,6 +4335,33 @@ function renderPlainHealth(data: HealthResultData): string {
 	return `${lines.join("\n")}\n`;
 }
 
+function renderPlainCorrelate(data: SkillFeedbackCorrelateResultData): string {
+	const lines = [
+		"Skill Feedback Correlate",
+		`Mode: ${data.mode}`,
+		`Counts: diagnostics=${data.counts.diagnostic_count} candidates=${data.counts.candidate_count} repairable=${data.counts.repairable_count} already-linked=${data.counts.already_linked_count} ambiguous=${data.counts.ambiguous_count} insufficient=${data.counts.insufficient_evidence_count} invalid=${data.counts.invalid_count} written=${data.counts.written_count} failed=${data.counts.failed_count}`,
+	];
+	if (data.candidates.length > 0) {
+		lines.push("Candidates:");
+		for (const candidate of data.candidates.slice(0, 20)) {
+			const closeouts =
+				candidate.closeout_report_refs.length === 0
+					? "none"
+					: candidate.closeout_report_refs.map(plainSafe).join(",");
+			lines.push(
+				`- ${plainSafe(candidate.candidate_key)} class=${candidate.class} hook=${plainSafe(candidate.hook_report_ref ?? "none")} closeouts=${closeouts} reasons=${candidate.reason_ids.map(plainSafe).join(",")}`,
+			);
+		}
+		if (data.candidates.length > 20) {
+			lines.push(`- truncated=${data.candidates.length - 20}`);
+		}
+	}
+	lines.push(
+		`Next action: ${data.next_action.action_id} - ${plainSafe(data.next_action.summary)}`,
+	);
+	return `${lines.join("\n")}\n`;
+}
+
 function appendPlainProofHealth(
 	lines: string[],
 	proofHealth: WriterProofHealth,
@@ -3757,79 +4688,73 @@ async function prepareSkillFeedbackSubdirectory(
 	name: string,
 	runtime: SkillFeedbackRuntime,
 ): Promise<SkillFeedbackRepairResult<{ path: string }>> {
-	const subdirectoryPath = join(parentPath, name);
-	const existing = await lstatOptional(subdirectoryPath, runtime);
-	if (existing?.isSymbolicLink()) {
-		return {
-			ok: false,
-			code: "skill_feedback_low_signal_symlink_refused",
-			hint: "Replace .skill-feedback/low-signal with a private directory.",
-		};
-	}
-	if (existing && !existing.isDirectory()) {
-		return {
-			ok: false,
-			code: "skill_feedback_low_signal_not_directory",
-			hint: "Replace .skill-feedback/low-signal with a private directory.",
-		};
-	}
-	if (!existing) {
-		await runtime.mkdirPrivate(subdirectoryPath, 0o700);
-	}
-
-	const verified = await lstatOptional(subdirectoryPath, runtime);
-	if (!verified) {
-		return {
-			ok: false,
-			code: "skill_feedback_low_signal_missing_after_create",
-			hint: "Inspect .skill-feedback/low-signal ownership and rerun.",
-		};
-	}
-	if (verified.isSymbolicLink()) {
-		return {
-			ok: false,
-			code: "skill_feedback_low_signal_symlink_refused",
-			hint: "Replace .skill-feedback/low-signal with a private directory.",
-		};
-	}
-	if (!verified.isDirectory()) {
-		return {
-			ok: false,
-			code: "skill_feedback_low_signal_not_directory",
-			hint: "Replace .skill-feedback/low-signal with a private directory.",
-		};
-	}
-
-	const parentReal = await runtime.realpathPath(parentPath);
-	const subdirectoryReal = await runtime.realpathPath(subdirectoryPath);
-	if (!isContainedPath(parentReal, subdirectoryReal)) {
-		return {
-			ok: false,
-			code: "skill_feedback_low_signal_escape_refused",
-			hint: "Move .skill-feedback/low-signal inside the inbox and rerun.",
-		};
-	}
-	return { ok: true, path: subdirectoryPath };
+	return preparePrivateSubdirectory(parentPath, name, runtime, {
+		symlinkCode: "skill_feedback_low_signal_symlink_refused",
+		notDirectoryCode: "skill_feedback_low_signal_not_directory",
+		missingAfterCreateCode: "skill_feedback_low_signal_missing_after_create",
+		unusableCode: "skill_feedback_low_signal_not_directory",
+		escapeCode: "skill_feedback_low_signal_escape_refused",
+		replaceHint: "Replace .skill-feedback/low-signal with a private directory.",
+		missingHint: "Inspect .skill-feedback/low-signal ownership and rerun.",
+		escapeHint: "Move .skill-feedback/low-signal inside the inbox and rerun.",
+		requirePrivateMode: false,
+	});
 }
 
 async function prepareCorrelationWitnessDirectory(
 	inboxPath: string,
 	runtime: SkillFeedbackRuntime,
 ): Promise<SkillFeedbackRepairResult<{ path: string }>> {
-	const directoryPath = join(inboxPath, SKILL_FEEDBACK_CORRELATION_WITNESS_DIR);
+	return preparePrivateSubdirectory(
+		inboxPath,
+		SKILL_FEEDBACK_CORRELATION_WITNESS_DIR,
+		runtime,
+		{
+			symlinkCode: "correlation_witness_dir_symlink_refused",
+			notDirectoryCode: "correlation_witness_dir_not_directory",
+			missingAfterCreateCode: "correlation_witness_dir_missing_after_create",
+			unusableCode: "correlation_witness_dir_unusable",
+			escapeCode: "correlation_witness_dir_escape_refused",
+			replaceHint: "Replace .skill-feedback/.correlation with a private directory.",
+			missingHint: "Inspect .skill-feedback/.correlation ownership and rerun.",
+			escapeHint: "Move .skill-feedback/.correlation inside the inbox and rerun.",
+			requirePrivateMode: true,
+		},
+	);
+}
+
+type PrivateSubdirectoryCodes = {
+	symlinkCode: string;
+	notDirectoryCode: string;
+	missingAfterCreateCode: string;
+	unusableCode: string;
+	escapeCode: string;
+	replaceHint: string;
+	missingHint: string;
+	escapeHint: string;
+	requirePrivateMode: boolean;
+};
+
+async function preparePrivateSubdirectory(
+	parentPath: string,
+	name: string,
+	runtime: SkillFeedbackRuntime,
+	codes: PrivateSubdirectoryCodes,
+): Promise<SkillFeedbackRepairResult<{ path: string }>> {
+	const directoryPath = join(parentPath, name);
 	const existing = await lstatOptional(directoryPath, runtime);
 	if (existing?.isSymbolicLink()) {
 		return {
 			ok: false,
-			code: "correlation_witness_dir_symlink_refused",
-			hint: "Replace .skill-feedback/.correlation with a private directory.",
+			code: codes.symlinkCode,
+			hint: codes.replaceHint,
 		};
 	}
 	if (existing && !existing.isDirectory()) {
 		return {
 			ok: false,
-			code: "correlation_witness_dir_not_directory",
-			hint: "Replace .skill-feedback/.correlation with a private directory.",
+			code: codes.notDirectoryCode,
+			hint: codes.replaceHint,
 		};
 	}
 	if (!existing) {
@@ -3840,29 +4765,29 @@ async function prepareCorrelationWitnessDirectory(
 	if (!verified) {
 		return {
 			ok: false,
-			code: "correlation_witness_dir_missing_after_create",
-			hint: "Inspect .skill-feedback/.correlation ownership and rerun.",
+			code: codes.missingAfterCreateCode,
+			hint: codes.missingHint,
 		};
 	}
 	if (
 		verified.isSymbolicLink() ||
 		!verified.isDirectory() ||
-		!hasPrivateMode(verified, 0o077)
+		(codes.requirePrivateMode && !hasPrivateMode(verified, 0o077))
 	) {
 		return {
 			ok: false,
-			code: "correlation_witness_dir_unusable",
-			hint: "Replace .skill-feedback/.correlation with a private directory.",
+			code: codes.unusableCode,
+			hint: codes.replaceHint,
 		};
 	}
 
-	const inboxReal = await safeRealpath(inboxPath, runtime);
+	const inboxReal = await safeRealpath(parentPath, runtime);
 	const directoryReal = await safeRealpath(directoryPath, runtime);
 	if (!inboxReal || !directoryReal || !isContainedPath(inboxReal, directoryReal)) {
 		return {
 			ok: false,
-			code: "correlation_witness_dir_escape_refused",
-			hint: "Move .skill-feedback/.correlation inside the inbox and rerun.",
+			code: codes.escapeCode,
+			hint: codes.escapeHint,
 		};
 	}
 	return { ok: true, path: directoryPath };
@@ -4066,7 +4991,6 @@ function hookCaptureGap(field: SoftwareLearningReport["gaps"][number]): Evidence
 function closeoutEvidenceGaps(
 	closeoutGaps: readonly EvidenceGap[],
 	runtimeTelemetry: ReportCardSoftwareLearningReport["runtime"],
-	correlationStatus: CorrelationStatus,
 ): readonly EvidenceGap[] {
 	const gaps = [...closeoutGaps];
 	if (!runtimeTelemetry.git_sha) {
@@ -4093,15 +5017,6 @@ function closeoutEvidenceGaps(
 				"missing_runtime_model",
 				"runtime.model",
 				"Closeout has no trusted runtime model source.",
-			),
-		);
-	}
-	if (correlationStatus === "unlinked") {
-		gaps.push(
-			evidenceGap(
-				"unlinked_correlation",
-				"skill_run_id",
-				"Closeout did not include an explicit skill run id.",
 			),
 		);
 	}
@@ -4694,6 +5609,36 @@ async function runPurgeCommandCli(
 	);
 }
 
+async function runCorrelateCommandCli(
+	argv: readonly string[],
+	options: SkillFeedbackCliOptions,
+): Promise<number> {
+	const parsed = parseCorrelateArgs(argv.slice(1));
+	if (!parsed.ok) {
+		return writeProcessResult(
+			errorResult(
+				options.runId ?? "skill-feedback-correlate",
+				USAGE_EXIT_CODE,
+				"usage_error",
+				parsed.message,
+				{
+					recoverability: "change_input",
+					hint: "Run skill-feedback correlate --help and retry with valid flags.",
+					contract: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
+				},
+			),
+		);
+	}
+	return writeProcessResult(
+		await correlateSkillFeedbackInbox({
+			...options,
+			plain: parsed.options.plain,
+			targetPath: parsed.options.targetPath,
+			execute: parsed.options.execute,
+		}),
+	);
+}
+
 function purgeUsageError(
 	options: SkillFeedbackCliOptions,
 	message: string,
@@ -4716,6 +5661,7 @@ const SKILL_FEEDBACK_CLI_HANDLERS: Partial<Record<string, SkillFeedbackCliHandle
 	review: (argv, options) => runReadCommandCli("review", argv.slice(1), options),
 	health: (argv, options) => runReadCommandCli("health", argv.slice(1), options),
 	purge: runPurgeCommandCli,
+	correlate: runCorrelateCommandCli,
 };
 
 function writeProcessResult(result: SkillFeedbackProcessResult): number {
@@ -4868,6 +5814,44 @@ export function parseHealthArgs(
 	| { ok: true; options: { plain: boolean; targetPath?: string } }
 	| { ok: false; message: string } {
 	return parseReadOnlyArgs(argv, "health");
+}
+
+export function parseCorrelateArgs(
+	argv: readonly string[],
+):
+	| { ok: true; options: { plain: boolean; targetPath?: string; execute: boolean } }
+	| { ok: false; message: string } {
+	const args = argv[0] === "correlate" ? argv.slice(1) : argv;
+	const state: { plain: boolean; targetPath?: string; execute: boolean } = {
+		plain: false,
+		execute: false,
+	};
+	for (let index = 0; index < args.length; index += 1) {
+		const flag = args[index];
+		if (!flag?.startsWith("--")) {
+			return { ok: false, message: "Expected a correlate flag." };
+		}
+		switch (flag) {
+			case "--plain":
+				state.plain = true;
+				break;
+			case "--execute":
+				state.execute = true;
+				break;
+			case "--repo": {
+				const value = args[index + 1];
+				if (value === undefined || value.startsWith("--") || value.trim() === "") {
+					return { ok: false, message: "--repo requires a value." };
+				}
+				state.targetPath = value;
+				index += 1;
+				break;
+			}
+			default:
+				return { ok: false, message: `Unknown flag ${flag}.` };
+		}
+	}
+	return { ok: true, options: state };
 }
 
 function parseReadOnlyArgs(

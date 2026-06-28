@@ -2,7 +2,7 @@
 title: "feat: Add CLI Branch Station Maps"
 type: feat
 date: 2026-06-15
-origin: docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md
 ---
 
 # feat: Add CLI Branch Station Maps
@@ -187,7 +187,7 @@ If U5 proves a listed station is not deterministic, the package catalog records 
 
 ## Origin Requirement Trace
 
-This plan implements the active first-iteration requirements from `docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`. Future origin requirements `R34`-`R43` stay deferred unless documented as optional awareness.
+This plan implements the active first-iteration requirements from `skills/skill-feedback/docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`. Future origin requirements `R34`-`R43` stay deferred unless documented as optional awareness.
 
 | Origin scope | Plan coverage |
 | --- | --- |
@@ -571,8 +571,8 @@ scripts/
 
 ## Sources And Research
 
-- `docs/ideation/2026-06-15-deterministic-cli-branch-confidence-ideation.html`
-- `docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`
+- `skills/skill-feedback/docs/ideation/2026-06-15-deterministic-cli-branch-confidence-ideation.html`
+- `skills/skill-feedback/docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`
 - `docs/brainstorms/2026-06-14-command-entrypoint-integration-tests-requirements.md`
 - `docs/brainstorms/2026-06-10-cli-execution-experience-auditor-requirements.md`
 - `docs/plans/2026-06-14-003-test-command-entrypoint-integration-tests-plan.md`

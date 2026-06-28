@@ -239,7 +239,7 @@ The product outcome is not "all possible code branches are tested." The outcome 
 
 ## Dependencies And Assumptions
 
-- The first planning consumer is `docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md`.
+- The first planning consumer is `skills/skill-feedback/docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md`.
 - The current facade testing subpath exists at `runtime/cli-command-facade/src/testing.ts`.
 - The current facade package exports `@side-quest/cli-command-facade/testing`.
 - The current auditor already owns deterministic lane detection, subprocess surface checks, and findings in `skills/cli-execution-auditor/src/audit-engine.ts`.
@@ -249,8 +249,8 @@ The product outcome is not "all possible code branches are tested." The outcome 
 
 ## Sources And Research
 
-- `docs/ideation/2026-06-15-deterministic-cli-branch-confidence-ideation.html`
-- `docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md`
+- `skills/skill-feedback/docs/ideation/2026-06-15-deterministic-cli-branch-confidence-ideation.html`
+- `skills/skill-feedback/docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md`
 - `docs/brainstorms/2026-06-14-command-entrypoint-integration-tests-requirements.md`
 - `docs/brainstorms/2026-06-10-cli-execution-experience-auditor-requirements.md`
 - `runtime/cli-command-facade/package.json`

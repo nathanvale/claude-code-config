@@ -50,6 +50,7 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - A valid `writer_proof` does not prove hook-to-closeout correlation by itself.
 - Correlation witnesses live under `.skill-feedback/.correlation/`; they are signed link artifacts, not reports.
 - Correlation diagnostics live under `.skill-feedback/.correlation/diagnostic_*.json`; they carry reason ids only, not reports or public receipt input.
+- Correlation repair candidates come only from private diagnostic artifacts plus validated inbox reports.
 - Review scans `.skill-feedback/.correlation/` through witness validation and skips it during normal report scans.
 - Purge skips `.skill-feedback/.correlation/`.
 - Missing or invalid proof keeps raw `skill_run_id_provenance` evidence-only.
@@ -73,13 +74,8 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Do not map `skill_identity_provenance.trusted` directly to Trusted skill identity, Trusted run proof, or `trusted_engine_identity`.
 - Review derives shared run units only after a writer-owned source or verified correlation witness has preserved trusted run proof through normalization.
 - `normalizeReport` strips raw inbox `skill_run_id_provenance` unless proof context is verified; raw JSON cannot mint `same_trusted_run`, `correlation_owned`, or `corroborated`.
-- Review output carries review units, ledger entries, anchor-miss telemetry, open actions, no-action rationale, and claim-specific readiness facts.
-- Review output carries `inbox_health` for primary, low-signal, unsafe, and invalid artifact counts.
-- Review output carries `proof_health` for verified count, evidence-only count, replay diagnostics, and proof reason ids.
-- Review output carries `correlation_witnesses` for verified, blocked, orphan, and diagnostic counts.
-- Review output carries minimal health projection fields for direct-review safety: `inbox_status`, `counts`, `warnings`, and `next_action`.
-- Ledger entries carry `proof_diagnostics` for entry-local proof fallback reasons.
 - Keep exact health projection fields, enum values, reason ids, and next-action ids in `skills/skill-feedback/src/command-contract.ts`.
+- Keep exact correlate result fields, reason ids, candidate classes, and action ids in `skills/skill-feedback/src/command-contract.ts`.
 - Keep `allowed_claims` entry-local on ledger entries.
 - Do not expose top-level `allowed_claims`.
 - Do not expose v1 `capture_readiness` in v2 review output.
@@ -176,6 +172,20 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Evaluate age selectors at current run time for each purge invocation.
 - Default purge lane is `all`; `keep_latest` applies across the selected logical lane.
 
+## Correlate Output
+
+- Run correlate through `skill-feedback correlate`.
+- Preview is the default mode.
+- Execute uses `--execute` and recomputes current private evidence before writing.
+- Keep public input closed to report ids, run ids, witness ids, proof fields, trust fields, and correlation provenance.
+- Emit report refs as `report:<id>`, not filenames.
+- Classify candidates as repairable, ambiguous, invalid, already linked, or insufficient evidence.
+- Treat sparse historical diagnostics as insufficient evidence unless a private durable candidate source proves the same runtime boundary.
+- Route ambiguous, invalid, or failed repair candidates to blocker inspection before retrying execute.
+- Write only private witness or diagnostic artifacts under `.skill-feedback/.correlation/`.
+- Keep review and health mutation-free; correlate is the only repair workflow.
+- Treat all-insufficient preview output as terminal for current evidence.
+
 ## Health Output
 
 - Run health through `skill-feedback health`.
@@ -195,11 +205,12 @@ Source owner: `skills/skill-feedback/src/command-contract.ts`.
 - Summarize primary correlation using the enum owned by `skills/skill-feedback/src/command-contract.ts`.
 - Summarize proof health using reason ids only.
 - Summarize correlation witness health using reason ids only.
+- Route blocked correlation witness diagnostics to correlate preview.
 - Warn when all primary evidence is unlinked.
 - Warn when low-signal capture volume reaches the runtime-inspection threshold.
 - Warn when retention age/count is ready for explicit purge preview.
 - Emit one next action id and summary.
-- Never delete, repair, or call purge helpers.
+- Never delete, repair, call correlate execute, or call purge helpers.
 
 ## Reading Rule
 

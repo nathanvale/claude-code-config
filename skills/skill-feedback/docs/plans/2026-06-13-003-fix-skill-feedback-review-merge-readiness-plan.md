@@ -3,7 +3,7 @@ title: "fix: Skill-feedback review merge-readiness hardening"
 type: fix
 date: 2026-06-13
 depth: deep
-origin: docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
 ---
 
 # fix: Skill-feedback review merge-readiness hardening
@@ -12,7 +12,7 @@ origin: docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requ
 
 Harden `skill-feedback review` v2 for merge by closing trusted-boundary gaps, separating low-signal Codex Stop capture from primary ledger claims, adding a gated purge path, and proving the missing cross-lane capture review path.
 
-This follow-on plan keeps the claim-safe v2 contract shape from `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`, but treats the current implementation as not merge-ready until public input, raw inbox JSON, and live low-signal capture cannot manufacture review claims.
+This follow-on plan keeps the claim-safe v2 contract shape from `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`, but treats the current implementation as not merge-ready until public input, raw inbox JSON, and live low-signal capture cannot manufacture review claims.
 
 ## Execution Progress
 
@@ -477,8 +477,8 @@ flowchart TB
 
 ## Sources And Research
 
-- Origin requirements: `docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md`.
-- Current v2 plan: `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`.
+- Origin requirements: `skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md`.
+- Current v2 plan: `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`.
 - Report shape owner: `skills/skill-feedback/references/report-shape.md`.
 - Skill vocabulary: `skills/skill-feedback/CONTEXT.md`.
 - Runner owner: `skills/skill-feedback/src/skill-feedback-runner.ts`.

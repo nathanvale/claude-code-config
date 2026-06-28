@@ -4,7 +4,7 @@ type: fix
 date: 2026-06-24
 depth: deep
 deepened: 2026-06-24
-origin: docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
+origin: skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md
 ---
 
 # fix: Skill-feedback writer proof for capture trust
@@ -434,9 +434,9 @@ Do not introduce "Trusted run provenance" as a new term. This keeps field preser
 
 ## Sources / Research
 
-- `docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md` set the original trust-first gate and deferred writer-owned hook-to-closeout correlation.
-- `docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md` made raw provenance evidence-only and deferred engine-owned identity plus writer-owned correlation.
-- `docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` established reducer-owned `ReviewResultData`, evidence tiers, and entry-local allowed claims.
+- `skills/skill-feedback/docs/brainstorms/2026-06-12-skill-feedback-review-pattern-ledger-v2-requirements.md` set the original trust-first gate and deferred writer-owned hook-to-closeout correlation.
+- `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md` made raw provenance evidence-only and deferred engine-owned identity plus writer-owned correlation.
+- `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md` established reducer-owned `ReviewResultData`, evidence tiers, and entry-local allowed claims.
 - `docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md` accepted harness hooks as the capture trigger while keeping Codex close detection blocked on Trusted skill identity.
 - `docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md` found Codex Stop support but no mature public pattern for proving Trusted skill identity.
 - `skills/skill-feedback/CONTEXT.md` defines Trusted run proof, Trusted skill identity, Review unit, Correlation health, Evidence source, and Low-signal lane.
