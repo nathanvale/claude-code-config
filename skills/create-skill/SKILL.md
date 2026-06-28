@@ -18,6 +18,7 @@ skill or when vocabulary matters. Do NOT show a menu unless intent is ambiguous.
 | "create" / "new skill" / no target | Create new skill | `CONTEXT.md`; `references/skill-design-decision-runbook.md`; `references/skill-io-shape-examples.md` |
 | DX / numbered choices / next-action / landing page | Add ADHD-friendly DX | Target `SKILL.md`; `references/adhd-friendly-dx.md`; `references/skill-design-decision-runbook.md` |
 | Runtime / CLI / helper command | Add runtime behavior | `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/create-cli/SKILL.md` |
+| `mcporter` / MCP via CLI / MCP config / thin MCP skill / server alias / tool schema | Add MC Porter skill guidance | Target `SKILL.md` when fixing; `references/skill-design-decision-runbook.md`; `references/skill-io-shape-examples.md`; `references/mcporter-skill-design.md` |
 | Role / dependency / blocked / degraded | Check role or dependency | `references/skill-roles.md`; `references/skill-dependency-rules.md` |
 | Archive / merge / retire | Archive or merge | `references/archive-cleanup.md`; `references/consolidation-map.md` |
 | Shape / what kind of skill | Choose skill shape | `references/skill-io-shape-examples.md` |
@@ -40,6 +41,7 @@ Present only when intent classification cannot pick a route:
 - Defaults: review returns findings; create, fix, heal, repair, or patch edits source.
 - First safe action: classify intent from args, open only the references on that route.
 - Input/output gate: before create, fix, heal, repair, or patch edits, name the shape owned by `references/skill-design-decision-runbook.md#inputoutput-gate`.
+- MC Porter gate: when a skill uses `mcporter`, read `references/mcporter-skill-design.md`; before edits name the server alias, config owner, schema owner, read path, write path, config hygiene scan, and failure modes.
 - DX gate: every new or healed skill must have a no-args front door. Before handing off, check the new `SKILL.md` has an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. If the skill has multiple launch paths, the no-args route must show a numbered menu (max 4 choices, one bolded default, defaults stated as readable values). If the menu is missing, patch it before reporting done — do not leave it for a follow-up. Read `references/adhd-friendly-dx.md` for the pattern. Skills with choices but no menu fail this gate; skills with no front door at all also fail.
 - Visible state: report edited paths, new references, untracked files, skipped checks, and owner-path results.
 - Slow path: warn before repo-wide audits, external research, browser work, task-tracker writes, or multi-pass verification.
@@ -54,4 +56,5 @@ Present only when intent classification cannot pick a route:
 - Vocabulary: `CONTEXT.md`.
 - Decision runbook: `references/skill-design-decision-runbook.md`.
 - ADHD-friendly DX: `references/adhd-friendly-dx.md`.
+- MC Porter skill design: `references/mcporter-skill-design.md`.
 - Verification owner: `references/skill-design-decision-runbook.md#verification`; scripts live in `skills/create-skill/scripts/`.
