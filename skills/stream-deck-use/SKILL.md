@@ -74,19 +74,9 @@ mcporter list elgato --schema --timeout 15000
 ```
 
 8. If `mcporter` says `Unknown MCP server 'elgato'`, report `config-missing`
-   and add this entry only to `/Users/nathanvale/.config/mcporter/mcporter.json`:
-
-```json
-{
-  "mcpServers": {
-    "elgato": {
-      "description": "Elgato Stream Deck MCP Actions",
-      "command": "npx",
-      "args": ["--yes", "@elgato/mcp-server@latest"]
-    }
-  }
-}
-```
+   and inspect the current `mcporter` schema/doctor output before adding the
+   `elgato` server only to `/Users/nathanvale/.config/mcporter/mcporter.json`.
+   Keep exact config fields in the mcporter config owner, not this skill.
 
 9. Discover exposed actions:
 
