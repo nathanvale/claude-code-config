@@ -112,11 +112,15 @@ type ReviewUnit = {
 	report_ids: string[];
 	trusted_run: boolean;
 	trusted_skill_run_id?: string;
+	has_runtime_owned_hook: boolean;
+	has_correlation_owned_closeout: boolean;
 };
 
 type TrustedRunEvidence = {
 	review_unit_key: string;
 	source_mix: EvidenceSource[];
+	has_runtime_owned_hook: boolean;
+	has_correlation_owned_closeout: boolean;
 };
 
 type MutableLedgerEntry = {
@@ -159,6 +163,8 @@ function buildReviewUnits(
 						: `report:${report.report_id}`,
 				report_ids: [report.report_id],
 				trusted_run: false,
+				has_runtime_owned_hook: false,
+				has_correlation_owned_closeout: false,
 			});
 			continue;
 		}
@@ -169,11 +175,25 @@ function buildReviewUnits(
 				report_ids: [],
 				trusted_run: true,
 				trusted_skill_run_id: trustedRunId,
+				has_runtime_owned_hook: false,
+				has_correlation_owned_closeout: false,
 			};
 			byRun.set(trustedRunId, unit);
 			units.push(unit);
 		}
 		unit.report_ids.push(report.report_id);
+		if (
+			report.evidence_source === "hook_capture" &&
+			report.skill_run_id_provenance === "runtime_owned"
+		) {
+			unit.has_runtime_owned_hook = true;
+		}
+		if (
+			report.evidence_source === "driver_closeout" &&
+			report.skill_run_id_provenance === "correlation_owned"
+		) {
+			unit.has_correlation_owned_closeout = true;
+		}
 	}
 	return units;
 }
@@ -271,11 +291,22 @@ function accumulateReport(
 			(item) => item.review_unit_key === unit.review_unit_key,
 		);
 		if (!evidence) {
-			evidence = { review_unit_key: unit.review_unit_key, source_mix: [] };
+			evidence = {
+				review_unit_key: unit.review_unit_key,
+				source_mix: [],
+				has_runtime_owned_hook: false,
+				has_correlation_owned_closeout: false,
+			};
 			entry.trusted_run_evidence.push(evidence);
 		}
 		if (!evidence.source_mix.includes(report.evidence_source)) {
 			evidence.source_mix.push(report.evidence_source);
+		}
+		if (unit.has_runtime_owned_hook) {
+			evidence.has_runtime_owned_hook = true;
+		}
+		if (unit.has_correlation_owned_closeout) {
+			evidence.has_correlation_owned_closeout = true;
 		}
 	}
 	entry.evidence_tier = promoteEvidenceTier(entry.evidence_tier, report, entry);
@@ -287,9 +318,8 @@ function accumulateReport(
 
 /**
  * Promote evidence tier monotonically. Engine-owned identity reaches
- * `trusted_engine_identity`; hook capture alone reaches `runtime_observed`.
- * Corroboration stays reserved until the correlation plan provides a link
- * primitive owned outside raw report text.
+ * `trusted_engine_identity`; a verified hook/closeout witness reaches
+ * `corroborated`; hook capture alone reaches `runtime_observed`.
  */
 function promoteEvidenceTier(
 	current: ReviewEvidenceTier,
@@ -299,6 +329,7 @@ function promoteEvidenceTier(
 	if (current === "trusted_engine_identity") return current;
 	if (hasTrustedEngineIdentity(report)) return "trusted_engine_identity";
 	if (current === "corroborated") return current;
+	if (sameTrustedRunMixedEvidence(entry)) return "corroborated";
 	if (report.evidence_source === "hook_capture" && current === "driver_declared") {
 		return "runtime_observed";
 	}
@@ -325,8 +356,8 @@ function hasTrustedEngineIdentity(
 function sameTrustedRunMixedEvidence(entry: MutableLedgerEntry): boolean {
 	return entry.trusted_run_evidence.some(
 		(evidence) =>
-			evidence.source_mix.includes("driver_closeout") &&
-			evidence.source_mix.includes("hook_capture"),
+			evidence.has_runtime_owned_hook &&
+			evidence.has_correlation_owned_closeout,
 	);
 }
 
@@ -406,6 +437,7 @@ function deriveAllowedClaims(
 	if (entry.anchor_strength === "strong_path") claims.add("repeated_anchor");
 	if (entry.source_mix.length > 1) claims.add("mixed_evidence_sources");
 	if (sameTrustedRunMixedEvidence(entry)) claims.add("same_trusted_run");
+	if (entry.evidence_tier === "corroborated") claims.add("corroborated");
 	if (entry.evidence_tier === "trusted_engine_identity") {
 		claims.add("trusted_engine_identity");
 	}

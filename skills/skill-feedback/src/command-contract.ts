@@ -43,6 +43,11 @@ export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
 const SKILL_FEEDBACK_SCHEMA_VERSION_V1 = "1" as const;
 
 /**
+ * Schema version for the private correlation witness artifact family.
+ */
+export const SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION = "1" as const;
+
+/**
  * Schema version for the package-owned Software Learning Report envelope.
  *
  * Increment when agent-visible record semantics change.
@@ -55,12 +60,12 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "2" as const;
  * Review result semantics can advance independently from persisted report
  * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "5" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "6" as const;
 
 /**
  * Schema version for health-specific read-only result envelopes.
  */
-export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "2" as const;
+export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "3" as const;
 
 /**
  * Schema version for purge-specific result envelopes.
@@ -157,6 +162,43 @@ const WRITER_PROOF_HEALTH_FIELDS = [
 	"replay_diagnostics_count",
 	"diagnostics",
 ] as const;
+const CORRELATION_WITNESS_HEALTH_FIELDS = [
+	"verified_count",
+	"blocked_count",
+	"orphan_count",
+	"diagnostics",
+] as const;
+const CORRELATION_WITNESS_RUNTIME_SOURCES = ["claude_stop"] as const;
+const CORRELATION_WITNESS_SIGNED_FIELDS = [
+	"schema_version",
+	"witness_id",
+	"skill",
+	"runtime_source",
+	"hook_report_id",
+	"closeout_report_id",
+	"skill_run_id",
+	"created_ts",
+	"correlation_proof.nonce",
+] as const;
+const CORRELATION_WITNESS_SIGNED_FIELD_SET: ReadonlySet<string> = new Set(
+	CORRELATION_WITNESS_SIGNED_FIELDS,
+);
+const CORRELATION_WITNESS_FIELDS = [
+	"schema_version",
+	"witness_id",
+	"skill",
+	"runtime_source",
+	"hook_report_id",
+	"closeout_report_id",
+	"skill_run_id",
+	"created_ts",
+	"correlation_proof",
+] as const;
+const CORRELATION_WITNESS_FIELD_SET: ReadonlySet<string> = new Set(
+	CORRELATION_WITNESS_FIELDS,
+);
+
+export const SKILL_FEEDBACK_CORRELATION_WITNESS_DIR = ".correlation" as const;
 
 /**
  * Link quality between capture evidence and closeout enrichment.
@@ -394,6 +436,46 @@ export type WriterProofContext = {
 	diagnostics?: readonly string[];
 };
 
+export type CorrelationWitnessRuntimeSource =
+	(typeof CORRELATION_WITNESS_RUNTIME_SOURCES)[number];
+
+export type CorrelationWitnessSignedField =
+	(typeof CORRELATION_WITNESS_SIGNED_FIELDS)[number];
+
+/**
+ * Local writer-owned proof over the private correlation witness artifact.
+ */
+export type CorrelationWitnessProof = {
+	algorithm: typeof WRITER_PROOF_ALGORITHM;
+	nonce: string;
+	signed_fields: readonly CorrelationWitnessSignedField[];
+	signature: string;
+};
+
+export type CorrelationWitnessSeed = {
+	skill: string;
+	runtime_source: CorrelationWitnessRuntimeSource;
+	hook_report_id: string;
+	closeout_report_id: string;
+	skill_run_id: string;
+	created_ts: string;
+};
+
+/**
+ * Private artifact linking one hook capture report to one driver closeout.
+ */
+export type CorrelationWitness = CorrelationWitnessSeed & {
+	schema_version: typeof SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION;
+	witness_id: string;
+	correlation_proof: CorrelationWitnessProof;
+};
+
+export type CorrelationWitnessContext = {
+	verified: boolean;
+	diagnostics: readonly string[];
+	witness?: CorrelationWitness;
+};
+
 
 /**
  * Capture-source provenance. `trusted` means the adapter trusts the named
@@ -554,7 +636,6 @@ export type CloseoutReceipt = {
 	verification_burden: VerificationBurden;
 	touched_surfaces: readonly ReportCardTarget[];
 	observations: readonly ReportCardObservation[];
-	skill_run_id?: string;
 };
 
 /**
@@ -749,6 +830,13 @@ export type WriterProofHealth = {
 	diagnostics: readonly string[];
 };
 
+export type CorrelationWitnessHealth = {
+	verified_count: number;
+	blocked_count: number;
+	orphan_count: number;
+	diagnostics: readonly string[];
+};
+
 export type WriterProofWriteStatus = {
 	proof_status: "attached" | "unavailable";
 	proof_diagnostics: readonly string[];
@@ -762,6 +850,7 @@ export type HealthResultData = {
 	newest: HealthNewest;
 	warnings: readonly HealthWarning[];
 	proof_health: WriterProofHealth;
+	correlation_witnesses: CorrelationWitnessHealth;
 	claim_readiness: HealthClaimReadiness;
 	correlation: HealthCorrelation;
 	next_action: HealthNextAction;
@@ -938,6 +1027,7 @@ export type ReviewResultData = {
 	ledger_entries: readonly ReviewLedgerEntry[];
 	anchor_miss_telemetry: readonly ReviewAnchorMissTelemetry[];
 	proof_health: WriterProofHealth;
+	correlation_witnesses: CorrelationWitnessHealth;
 	claim_readiness: ReviewClaimReadiness;
 };
 
@@ -1348,7 +1438,6 @@ const CLOSEOUT_RECEIPT_FIELDS = [
 	"verification_burden",
 	"touched_surfaces",
 	"observations",
-	"skill_run_id",
 ] as const;
 const CLOSEOUT_RECEIPT_FIELD_SET: ReadonlySet<string> = new Set(
 	CLOSEOUT_RECEIPT_FIELDS,
@@ -1426,6 +1515,7 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"ledger_entries",
 	"anchor_miss_telemetry",
 	"proof_health",
+	"correlation_witnesses",
 	"claim_readiness",
 ] as const;
 const REVIEW_RESULT_V2_FIELD_SET: ReadonlySet<string> = new Set(
@@ -1534,6 +1624,7 @@ const HEALTH_RESULT_FIELDS = [
 	"newest",
 	"warnings",
 	"proof_health",
+	"correlation_witnesses",
 	"claim_readiness",
 	"correlation",
 	"next_action",
@@ -1664,17 +1755,6 @@ export function parseCloseoutReceipt(
 	} else {
 		receipt.observations = [];
 	}
-	if ("skill_run_id" in raw) {
-		if (typeof raw.skill_run_id !== "string") {
-			return {
-				kind: "invalid",
-				path: "skill_run_id",
-				reason: "expected_string",
-			};
-		}
-		receipt.skill_run_id = raw.skill_run_id;
-	}
-
 	const evidenceGaps = CLOSEOUT_CORE_GAPS.filter(
 		({ field }) => !(field in receipt),
 	).map(({ field, code, message }) => evidenceGap(code, field, message));
@@ -1780,6 +1860,96 @@ export function verifyWriterProof(
 		};
 	}
 	return { verified: true, diagnostics: [] };
+}
+
+export function createCorrelationWitness(
+	seed: CorrelationWitnessSeed,
+	key: Uint8Array,
+	nonce: string,
+): CorrelationWitness {
+	if (!isHexString(nonce, 32)) {
+		throw new Error("correlation witness nonce must be 32-char lowercase hex");
+	}
+	const witnessWithoutProof = {
+		schema_version: SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION,
+		witness_id: "",
+		...seed,
+	};
+	const witness = {
+		...witnessWithoutProof,
+		witness_id: correlationWitnessId(witnessWithoutProof),
+	};
+	return {
+		...witness,
+		correlation_proof: {
+			algorithm: WRITER_PROOF_ALGORITHM,
+			nonce,
+			signed_fields: CORRELATION_WITNESS_SIGNED_FIELDS,
+			signature: hmacSha256Hex(
+				key,
+				canonicalJson(correlationWitnessProofPayload(witness, nonce)),
+			),
+		},
+	};
+}
+
+export function verifyCorrelationWitness(
+	raw: unknown,
+	key: Uint8Array,
+): CorrelationWitnessContext {
+	const parsed = parseCorrelationWitnessBase(raw);
+	if (!parsed.ok) {
+		return { verified: false, diagnostics: parsed.diagnostics };
+	}
+	const proof = parseCorrelationWitnessProof(parsed.rawProof);
+	if (!proof.ok) {
+		return { verified: false, diagnostics: [proof.reason] };
+	}
+	const witness: CorrelationWitness = {
+		...parsed.witness,
+		correlation_proof: proof.value,
+	};
+	const diagnostics: string[] = [];
+	if (
+		!sameStringList(
+			proof.value.signed_fields,
+			CORRELATION_WITNESS_SIGNED_FIELDS,
+		)
+	) {
+		diagnostics.push("correlation_witness_signed_fields_mismatch");
+	}
+	if (witness.witness_id !== correlationWitnessId(witness)) {
+		diagnostics.push("correlation_witness_id_mismatch");
+	}
+	try {
+		const expected = hmacSha256Hex(
+			key,
+			canonicalJson(
+				correlationWitnessProofPayload(witness, proof.value.nonce),
+			),
+		);
+		if (!safeEqualHex(expected, proof.value.signature)) {
+			diagnostics.push("correlation_witness_signature_mismatch");
+		}
+	} catch {
+		diagnostics.push("correlation_witness_canonicalization_failed");
+	}
+	return {
+		verified: diagnostics.length === 0,
+		diagnostics,
+		witness,
+	};
+}
+
+export function isSafeCorrelationWitnessFileName(fileName: string): boolean {
+	return /^witness_[0-9a-f]{16}\.json$/.test(fileName);
+}
+
+export function correlationWitnessRelativePath(witnessId: string): string {
+	if (!/^witness_[0-9a-f]{16}$/.test(witnessId)) {
+		throw new Error("invalid correlation witness id");
+	}
+	return `${SKILL_FEEDBACK_CORRELATION_WITNESS_DIR}/${witnessId}.json`;
 }
 
 /**
@@ -1892,6 +2062,10 @@ function validateReviewResultDataShape(
 		validateReviewLedgerEntries(review.ledger_entries),
 		validateReviewAnchorMissTelemetry(review.anchor_miss_telemetry),
 		validateWriterProofHealth(review.proof_health, "proof_health"),
+		validateCorrelationWitnessHealth(
+			review.correlation_witnesses,
+			"correlation_witnesses",
+		),
 		validateReviewClaimReadiness(review.claim_readiness),
 	].find(isReviewResultValidationError);
 }
@@ -1920,6 +2094,10 @@ export function parseHealthResultData(
 			validateHealthNewest(health.newest),
 			validateHealthWarnings(health.warnings),
 			validateWriterProofHealth(health.proof_health, "proof_health"),
+			validateCorrelationWitnessHealth(
+				health.correlation_witnesses,
+				"correlation_witnesses",
+			),
 			validateHealthClaimReadiness(health.claim_readiness),
 			validateHealthCorrelation(health.correlation),
 			validateHealthNextAction(health.next_action),
@@ -3261,6 +3439,29 @@ function validateWriterProofHealth(
 	return validateReviewStringArray(health.diagnostics, `${path}.diagnostics`);
 }
 
+function validateCorrelationWitnessHealth(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const health = requireReviewRecord(raw, path);
+	if (isReviewResultValidationError(health)) return health;
+	const unknown = validateAllowedKeys(
+		health,
+		new Set(CORRELATION_WITNESS_HEALTH_FIELDS),
+		path,
+	);
+	if (unknown) return unknown;
+	for (const field of [
+		"verified_count",
+		"blocked_count",
+		"orphan_count",
+	] as const) {
+		const error = validateReviewNumber(health[field], `${path}.${field}`);
+		if (error) return error;
+	}
+	return validateReviewStringArray(health.diagnostics, `${path}.diagnostics`);
+}
+
 function validateReviewAnchorMissTelemetry(
 	raw: unknown,
 ): ReviewResultValidationError | undefined {
@@ -3530,6 +3731,18 @@ type WriterProofParseResult =
 	| { ok: true; value: WriterProof }
 	| { ok: false; reason: string };
 
+type CorrelationWitnessBaseParseResult =
+	| {
+			ok: true;
+			witness: Omit<CorrelationWitness, "correlation_proof">;
+			rawProof: unknown;
+	  }
+	| { ok: false; diagnostics: string[] };
+
+type CorrelationWitnessProofParseResult =
+	| { ok: true; value: CorrelationWitnessProof }
+	| { ok: false; reason: string };
+
 function parseWriterProof(raw: unknown): WriterProofParseResult {
 	if (!isRecord(raw)) return { ok: false, reason: "writer_proof_missing" };
 	if (raw.algorithm !== WRITER_PROOF_ALGORITHM) {
@@ -3568,12 +3781,119 @@ function parseWriterProof(raw: unknown): WriterProofParseResult {
 	};
 }
 
+function parseCorrelationWitnessBase(
+	raw: unknown,
+): CorrelationWitnessBaseParseResult {
+	if (!isRecord(raw)) {
+		return { ok: false, diagnostics: ["correlation_witness_invalid"] };
+	}
+	for (const key of Object.keys(raw)) {
+		if (!CORRELATION_WITNESS_FIELD_SET.has(key)) {
+			return { ok: false, diagnostics: ["correlation_witness_unknown_field"] };
+		}
+	}
+	if (raw.schema_version !== SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION) {
+		return {
+			ok: false,
+			diagnostics: ["correlation_witness_schema_unsupported"],
+		};
+	}
+	const witnessId = requiredNonEmptyString(raw.witness_id);
+	const skill = requiredNonEmptyString(raw.skill);
+	const hookReportId = requiredNonEmptyString(raw.hook_report_id);
+	const closeoutReportId = requiredNonEmptyString(raw.closeout_report_id);
+	const skillRunId = requiredNonEmptyString(raw.skill_run_id);
+	const createdTs = requiredNonEmptyString(raw.created_ts);
+	if (
+		!witnessId ||
+		!skill ||
+		!hookReportId ||
+		!closeoutReportId ||
+		!skillRunId ||
+		!createdTs
+	) {
+		return { ok: false, diagnostics: ["correlation_witness_invalid"] };
+	}
+	if (!isCorrelationWitnessRuntimeSource(raw.runtime_source)) {
+		return {
+			ok: false,
+			diagnostics: ["correlation_witness_runtime_unsupported"],
+		};
+	}
+	return {
+		ok: true,
+		witness: {
+			schema_version: SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION,
+			witness_id: witnessId,
+			skill,
+			runtime_source: raw.runtime_source,
+			hook_report_id: hookReportId,
+			closeout_report_id: closeoutReportId,
+			skill_run_id: skillRunId,
+			created_ts: createdTs,
+		},
+		rawProof: raw.correlation_proof,
+	};
+}
+
+function parseCorrelationWitnessProof(
+	raw: unknown,
+): CorrelationWitnessProofParseResult {
+	if (!isRecord(raw)) {
+		return { ok: false, reason: "correlation_witness_proof_missing" };
+	}
+	if (raw.algorithm !== WRITER_PROOF_ALGORITHM) {
+		return {
+			ok: false,
+			reason: "correlation_witness_proof_algorithm_unsupported",
+		};
+	}
+	if (!isHexString(raw.nonce, 32)) {
+		return { ok: false, reason: "correlation_witness_proof_nonce_invalid" };
+	}
+	if (!Array.isArray(raw.signed_fields)) {
+		return {
+			ok: false,
+			reason: "correlation_witness_proof_signed_fields_invalid",
+		};
+	}
+	const signedFields = raw.signed_fields;
+	if (
+		!signedFields.every(
+			(field): field is CorrelationWitnessSignedField =>
+				typeof field === "string" &&
+				CORRELATION_WITNESS_SIGNED_FIELD_SET.has(field),
+		)
+	) {
+		return {
+			ok: false,
+			reason: "correlation_witness_proof_signed_fields_invalid",
+		};
+	}
+	if (!isHexString(raw.signature, 64)) {
+		return { ok: false, reason: "correlation_witness_proof_signature_invalid" };
+	}
+	return {
+		ok: true,
+		value: {
+			algorithm: WRITER_PROOF_ALGORITHM,
+			nonce: raw.nonce,
+			signed_fields: signedFields,
+			signature: raw.signature,
+		},
+	};
+}
+
 function isHexString(value: unknown, length: number): value is string {
 	return (
 		typeof value === "string" &&
 		value.length === length &&
 		/^[0-9a-f]+$/.test(value)
 	);
+}
+
+function requiredNonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
 function writerProofPayload(
@@ -3618,6 +3938,50 @@ function writerProofContentDigest(report: Record<string, unknown>): string {
 	return createHash("sha256")
 		.update(canonicalJson(digestInput))
 		.digest(WRITER_PROOF_SIGNATURE_ENCODING);
+}
+
+function correlationWitnessId(
+	witness: Omit<CorrelationWitness, "correlation_proof" | "witness_id">,
+): string {
+	return stableReportId("witness", {
+		schema_version: witness.schema_version,
+		skill: witness.skill,
+		runtime_source: witness.runtime_source,
+		hook_report_id: witness.hook_report_id,
+		closeout_report_id: witness.closeout_report_id,
+		skill_run_id: witness.skill_run_id,
+		created_ts: witness.created_ts,
+	});
+}
+
+function correlationWitnessProofPayload(
+	witness: Omit<CorrelationWitness, "correlation_proof">,
+	nonce: string,
+): unknown {
+	return {
+		algorithm: WRITER_PROOF_ALGORITHM,
+		fields: Object.fromEntries(
+			CORRELATION_WITNESS_SIGNED_FIELDS.map((field) => [
+				field,
+				correlationWitnessFieldValue(witness, field, nonce),
+			]),
+		),
+		signed_fields: CORRELATION_WITNESS_SIGNED_FIELDS,
+	};
+}
+
+function correlationWitnessFieldValue(
+	witness: Omit<CorrelationWitness, "correlation_proof">,
+	field: CorrelationWitnessSignedField,
+	nonce: string,
+): unknown {
+	if (field === "correlation_proof.nonce") {
+		return { present: true, value: nonce };
+	}
+	if (Object.hasOwn(witness, field)) {
+		return { present: true, value: witness[field] };
+	}
+	return { present: false };
 }
 
 function canonicalJson(value: unknown): string {
@@ -3781,6 +4145,14 @@ function isHealthNextActionId(value: unknown): value is HealthNextActionId {
 
 function isCaptureRuntime(value: unknown): value is CaptureRuntime {
 	return (SKILL_FEEDBACK_CAPTURE_RUNTIMES as readonly unknown[]).includes(value);
+}
+
+function isCorrelationWitnessRuntimeSource(
+	value: unknown,
+): value is CorrelationWitnessRuntimeSource {
+	return (CORRELATION_WITNESS_RUNTIME_SOURCES as readonly unknown[]).includes(
+		value,
+	);
 }
 
 function isSkillIdentityProvenance(

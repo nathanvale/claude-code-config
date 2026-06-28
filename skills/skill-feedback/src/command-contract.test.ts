@@ -10,6 +10,7 @@ import {
 	NARRATED_FIELDS,
 	RECEIPT_FIELDS,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+	SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION,
 	SKILL_FEEDBACK_CONTRACT_ID,
 	SKILL_FEEDBACK_COST_STATUS,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
@@ -25,8 +26,11 @@ import {
 	type ReviewResultData,
 	type SkillFeedbackCommand,
 	buildSoftwareLearningReport,
+	correlationWitnessRelativePath,
+	createCorrelationWitness,
 	createWriterProof,
 	deriveWriterOwnedSkillRunId,
+	isSafeCorrelationWitnessFileName,
 	normalizeReport,
 	parseCloseoutReceipt,
 	parseHealthResultData,
@@ -35,6 +39,7 @@ import {
 	parseReceipt,
 	skillFeedbackContracts,
 	type SkillFeedbackPurgeResultData,
+	verifyCorrelationWitness,
 	verifyWriterProof,
 } from "./command-contract";
 
@@ -189,6 +194,12 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 		replay_diagnostics_count: 0,
 		diagnostics: [],
 	},
+	correlation_witnesses: {
+		verified_count: 0,
+		blocked_count: 0,
+		orphan_count: 0,
+		diagnostics: [],
+	},
 	claim_readiness: {
 		runtime_capture: {
 			status: "evidence_only",
@@ -237,6 +248,12 @@ const MINIMAL_HEALTH_RESULT = {
 		verified_count: 0,
 		evidence_only_count: 2,
 		replay_diagnostics_count: 0,
+		diagnostics: [],
+	},
+	correlation_witnesses: {
+		verified_count: 0,
+		blocked_count: 0,
+		orphan_count: 0,
 		diagnostics: [],
 	},
 	claim_readiness: {
@@ -316,7 +333,7 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
-		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("5");
+		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("6");
 		expect(discoveryTree().commands.health?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
@@ -1039,7 +1056,6 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 				evidence_basis: "driver_observed",
 			},
 		],
-		skill_run_id: "run-explicit-1",
 	} as const;
 	const WRITER_PROOF_KEY = Buffer.from("11".repeat(32), "hex");
 
@@ -1081,6 +1097,26 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		expect(parsed.receipt.touched_surfaces).toHaveLength(2);
 		expect(parsed.receipt.observations).toHaveLength(1);
 		expect(parsed.evidence_gaps).toEqual([]);
+	});
+
+	test("rejects public closeout skill-run and correlation authority fields", () => {
+		for (const field of [
+			"skill_run_id",
+			"skill_run_id_provenance",
+			"correlation_owned",
+			"witness_id",
+		]) {
+			expect(
+				parseCloseoutReceipt({
+					...COMPLETE_CLOSEOUT,
+					[field]: "driver-authored authority",
+				}),
+			).toMatchObject({
+				kind: "invalid",
+				path: field,
+				reason: "unknown_field",
+			});
+		}
 	});
 
 	test("missing closeout core fields become typed evidence gaps", () => {
@@ -1248,7 +1284,7 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 			generated_ts: COMPLETE_RECEIPT.generated_ts,
 			evidence_source: "driver_closeout",
 			correlation_status: "linked",
-			skill_run_id: COMPLETE_CLOSEOUT.skill_run_id,
+			skill_run_id: "run-explicit-1",
 			runtime: {
 				git_sha: COMPLETE_RECEIPT.git_sha,
 				skill_version: COMPLETE_RECEIPT.skill_version,
@@ -1412,6 +1448,111 @@ describe("skill-feedback U1 report-card v1 contract", () => {
 		expect(() =>
 			createWriterProof(report, WRITER_PROOF_KEY, "ab".repeat(16)),
 		).not.toThrow();
+	});
+
+	test("creates and verifies stable correlation witness proof", () => {
+		const witness = createCorrelationWitness(
+			{
+				skill: "create-skill",
+				runtime_source: "claude_stop",
+				hook_report_id: "hook_1111111111111111",
+				closeout_report_id: "closeout_2222222222222222",
+				skill_run_id: "run-trusted",
+				created_ts: "2026-06-25T00:00:00.000Z",
+			},
+			WRITER_PROOF_KEY,
+			"ef".repeat(16),
+		);
+
+		expect(witness.schema_version).toBe(
+			SKILL_FEEDBACK_CORRELATION_WITNESS_SCHEMA_VERSION,
+		);
+		expect(witness.witness_id).toMatch(/^witness_[0-9a-f]{16}$/);
+		expect(witness.correlation_proof).toMatchObject({
+			algorithm: "hmac-sha256",
+			nonce: "ef".repeat(16),
+			signed_fields: [
+				"schema_version",
+				"witness_id",
+				"skill",
+				"runtime_source",
+				"hook_report_id",
+				"closeout_report_id",
+				"skill_run_id",
+				"created_ts",
+				"correlation_proof.nonce",
+			],
+		});
+		expect(verifyCorrelationWitness(witness, WRITER_PROOF_KEY)).toEqual({
+			verified: true,
+			diagnostics: [],
+			witness,
+		});
+	});
+
+	test("correlation witness proof rejects tampered link fields", () => {
+		const witness = createCorrelationWitness(
+			{
+				skill: "create-skill",
+				runtime_source: "claude_stop",
+				hook_report_id: "hook_original",
+				closeout_report_id: "closeout_original",
+				skill_run_id: "run-trusted",
+				created_ts: "2026-06-25T00:00:00.000Z",
+			},
+			WRITER_PROOF_KEY,
+			"fa".repeat(16),
+		);
+
+		for (const tampered of [
+			{ ...witness, hook_report_id: "hook_other" },
+			{ ...witness, closeout_report_id: "closeout_other" },
+			{ ...witness, skill: "fallow" },
+		]) {
+			const verified = verifyCorrelationWitness(tampered, WRITER_PROOF_KEY);
+			expect(verified.verified).toBe(false);
+			expect(verified.diagnostics).toContain(
+				"correlation_witness_signature_mismatch",
+			);
+		}
+	});
+
+	test("correlation witness schema and path rules fail closed", () => {
+		const witness = createCorrelationWitness(
+			{
+				skill: "create-skill",
+				runtime_source: "claude_stop",
+				hook_report_id: "hook_1111111111111111",
+				closeout_report_id: "closeout_2222222222222222",
+				skill_run_id: "run-trusted",
+				created_ts: "2026-06-25T00:00:00.000Z",
+			},
+			WRITER_PROOF_KEY,
+			"fb".repeat(16),
+		);
+
+		expect(
+			verifyCorrelationWitness(
+				{ ...witness, schema_version: "999" },
+				WRITER_PROOF_KEY,
+			),
+		).toEqual({
+			verified: false,
+			diagnostics: ["correlation_witness_schema_unsupported"],
+		});
+		expect(isSafeCorrelationWitnessFileName(`${witness.witness_id}.json`)).toBe(
+			true,
+		);
+		expect(isSafeCorrelationWitnessFileName("../witness_bad.json")).toBe(false);
+		expect(isSafeCorrelationWitnessFileName(`${witness.witness_id}.json.tmp`)).toBe(
+			false,
+		);
+		expect(correlationWitnessRelativePath(witness.witness_id)).toBe(
+			`.correlation/${witness.witness_id}.json`,
+		);
+		expect(() => correlationWitnessRelativePath("../bad")).toThrow(
+			"invalid correlation witness id",
+		);
 	});
 
 	test("valid writer proof preserves only Claude Stop runtime-owned provenance", () => {

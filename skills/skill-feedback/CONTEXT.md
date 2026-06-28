@@ -97,13 +97,18 @@ The evidence bundle that review classifies as one thing. A linked unit represent
 _Avoid_: report, file, merged row, fuzzy group
 
 **Trusted run proof**:
-Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run`; `corroborated` stays blocked until a separate correlation design lands. It does not prove Trusted skill identity or `trusted_engine_identity`.
+Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run`. It supports `corroborated` only when the same trusted review unit has runtime-owned hook capture and a correlation-owned driver closeout. It does not prove Trusted skill identity or `trusted_engine_identity`.
 Raw persisted inbox provenance is evidence-only unless a writer-owned source preserved it through normalization.
 _Avoid_: raw `skill_run_id`, trusted skill identity, assistant claim
 
 **Writer proof**:
-Local HMAC proof that the `skill-feedback` writer owned selected persisted report fields at write time. It can let review preserve writer-owned `skill_run_id_provenance`; it does not prove Trusted skill identity, engine-owned identity, hook-to-closeout correlation, or `corroborated`.
+Local HMAC proof that the `skill-feedback` writer owned selected persisted report fields at write time. It can let review preserve writer-owned `skill_run_id_provenance`; it does not prove Trusted skill identity, engine-owned identity, hook-to-closeout correlation, or `corroborated` by itself.
 _Avoid_: Trusted run proof, trusted skill identity, keychain proof, correlation proof
+
+**Correlation witness**:
+A private signed link artifact under `.skill-feedback/.correlation/` that can connect one runtime-owned Claude Stop hook report to one driver closeout report. Review verifies the witness, both linked report proofs, skill match, writer key, and hook runtime run id before overlaying `correlation_owned` on the closeout. Public closeout receipts cannot create witnesses or set correlation provenance.
+Blocked witness finalization may write private `diagnostic_*.json` artifacts under the same directory; these carry reason ids only and never act as reports or closeout input.
+_Avoid_: public receipt field, raw transcript match, assistant claim, timestamp match
 
 **Trust store**:
 The private repo-local `.skill-feedback/.trust/` directory that holds the local writer proof key. Review treats missing, corrupt, unreadable, unsafe, or wrong-permission trust stores as proof-unavailable and keeps reports evidence-only.
@@ -175,11 +180,11 @@ A later review-surfaced hypothesis that a skill, reference, context, or runtime 
 _Avoid_: recommendation, instruction, proposal file, source edit
 
 **Correlation status**:
-The link quality between capture evidence and closeout enrichment. It is `linked` when a shared Skill run id exists, and `unlinked` when closeout evidence writes without a link.
+The link quality between capture evidence and closeout enrichment. It is `linked` when review has a trusted run link from runtime-owned or correlation-owned provenance, and `unlinked` when closeout evidence writes without a verified link.
 _Avoid_: match, merge status, certainty
 
 **Correlation health**:
-The review lane that summarizes linked and unlinked closeout evidence. Many unlinked closeouts indicate skill-feedback or runtime-adapter inspection, not a target-skill defect.
+The review lane that summarizes linked and unlinked closeout evidence plus correlation witness diagnostics. Many unlinked closeouts or blocked witnesses indicate skill-feedback or runtime-adapter inspection, not a target-skill defect.
 _Avoid_: skill quality, closeout quality, blame
 
 **Agent-authored fields**:
@@ -219,7 +224,7 @@ The optional correlation id shared by capture evidence and later closeout enrich
 _Avoid_: filename, Claude detection id, session id alone, report id
 
 **Skill run id provenance**:
-The report field that says who owns a `skill_run_id` link claim. Raw persisted values are evidence-only at the inbox boundary; only writer-owned provenance preserved through normalization can coalesce review units.
+The report field that says who owns a `skill_run_id` link claim. Raw persisted values are evidence-only at the inbox boundary; only writer-owned or witness-verified provenance preserved through normalization can coalesce review units. Public receipts cannot set it.
 _Avoid_: raw id trust, assistant claim, timestamp proximity
 
 **Cost attribution**:

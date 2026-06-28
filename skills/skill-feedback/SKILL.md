@@ -42,8 +42,9 @@ closeout.
 - Redact `AGENT_AUTHORED_STRING_PATHS`; read `references/redaction.md` before changing policy.
 - Keep `model`, `git_sha`, and `skill_version` engine-read; do not add flags for them.
 - Treat `proof_status`, `proof_diagnostics`, and `proof_health` as writer-proof diagnostics; read `CONTEXT.md` before interpreting trust language.
-- Treat `corroborated` as blocked claim language; same-run links stop at `same_trusted_run` until a separate correlation design lands.
+- Treat `corroborated` as review-derived only after a runtime-owned hook and correlation-owned closeout witness verify the same trusted run.
 - Keep public `record` stdin model-only; detection ids, capture runtime, and skill identity provenance from stdin are ignored.
+- Keep public `closeout` stdin driver-authored; reject run ids, provenance, proof, trust, and witness fields from the receipt.
 - Keep health mutation-free.
 - Keep review mutation-free.
 - Treat retention warnings as guidance, not failure.
@@ -61,6 +62,8 @@ closeout.
 - For closeout, send one structured JSON object on stdin.
 - For closeout, use the direct runner command in `references/closeout-receipt.md`; filtered package scripts do not carry piped stdin.
 - For closeout, keep the receipt to the material evidence lanes in `references/closeout-receipt.md`.
+- Let Claude Stop finalize separate signed correlation witnesses when it has one validated closeout candidate and a runtime-owned hook run id.
+- Keep Codex unknown-skill Stop capture low-signal until a runtime-owned skill identity source exists.
 - Do not put narrated closeout JSON in argv.
 - Do not ask the human at closeout time.
 - Run `health` before trusting empty, surprising, or path-sensitive review evidence.

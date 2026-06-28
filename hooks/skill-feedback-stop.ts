@@ -6,10 +6,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
 	type HookRunResult,
+	type CorrelationWitnessRequest,
+	type FinalizeCorrelationWitnessResult,
 	type RecordRequest,
 	type SkillDetection,
 	buildRecordRequest,
 	resolveGitRoot,
+	runSkillFeedbackCorrelationWitness,
 	runSkillFeedbackRecord,
 } from './skill-feedback-runtime'
 
@@ -29,10 +32,25 @@ export interface SkillFeedbackStopRuntime {
 	resolveGitRoot: (cwd: string) => Promise<string>
 	nowIso: () => string
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
+	finalizeCorrelationWitness?: (
+		request: CorrelationWitnessRequest,
+	) => Promise<FinalizeCorrelationWitnessResult>
 }
 
 export interface ClaudeSkillDetection extends SkillDetection {
 	detectionId: string
+}
+
+export interface ClaudeCloseoutCandidate {
+	reportId: string
+	writtenPath: string
+	proofStatus: string
+}
+
+export interface ClaudeTranscriptSkillFeedbackAnalysis {
+	detection: ClaudeSkillDetection | null
+	closeoutCandidates: readonly ClaudeCloseoutCandidate[]
+	diagnostics: readonly string[]
 }
 
 function isStopHookInput(value: unknown): value is StopHookInput {
@@ -53,8 +71,17 @@ function isStopHookInput(value: unknown): value is StopHookInput {
 export function detectSkillFromClaudeTranscriptText(
 	text: string,
 ): ClaudeSkillDetection | null {
+	return analyzeSkillFeedbackClaudeTranscriptText(text).detection
+}
+
+export function analyzeSkillFeedbackClaudeTranscriptText(
+	text: string,
+): ClaudeTranscriptSkillFeedbackAnalysis {
 	let latest: ClaudeSkillDetection | null = null
+	let closeoutCandidates: ClaudeCloseoutCandidate[] = []
+	let diagnostics: string[] = []
 	const modelByToolUseId = new Map<string, string>()
+	let closeoutCommandToolUseIds = new Set<string>()
 	for (const line of text.split('\n')) {
 		const trimmed = line.trim()
 		if (!trimmed) continue
@@ -83,9 +110,26 @@ export function detectSkillFromClaudeTranscriptText(
 			latest = model
 				? { ...detection, telemetry: { ...detection.telemetry, model } }
 				: detection
+			closeoutCandidates = []
+			diagnostics = []
+			closeoutCommandToolUseIds = new Set<string>()
+		}
+		if (latest) {
+			for (const toolUseId of readCloseoutCommandToolUseIds(parsed)) {
+				closeoutCommandToolUseIds.add(toolUseId)
+			}
+		}
+		if (latest) {
+			for (const result of readCloseoutCandidates(
+				parsed,
+				closeoutCommandToolUseIds,
+			)) {
+				if (result.kind === 'candidate') closeoutCandidates.push(result.candidate)
+				else diagnostics.push(result.diagnostic)
+			}
 		}
 	}
-	return latest
+	return { detection: latest, closeoutCandidates, diagnostics }
 }
 
 function detectSkillFromClaudeTranscriptEntry(
@@ -158,10 +202,106 @@ function readSkillLaunchModels(
 	return launches
 }
 
+type CloseoutParseResult =
+	| { kind: 'candidate'; candidate: ClaudeCloseoutCandidate }
+	| { kind: 'diagnostic'; diagnostic: string }
+
+function readCloseoutCommandToolUseIds(entry: unknown): string[] {
+	const message = objectFrom(objectFrom(entry)?.message)
+	if (!message || message.role !== 'assistant') return []
+	const content = Array.isArray(message.content) ? message.content : []
+	const ids: string[] = []
+	for (const item of content) {
+		const object = objectFrom(item)
+		if (object?.type !== 'tool_use') continue
+		const id = stringFrom(object.id)
+		if (id && isSkillFeedbackCloseoutCommand(object)) ids.push(id)
+	}
+	return ids
+}
+
+function isSkillFeedbackCloseoutCommand(
+	toolUse: Record<string, unknown>,
+): boolean {
+	const input = objectFrom(toolUse.input)
+	const command = stringFrom(input?.command)
+	if (!command) return false
+	return (
+		/(^|\s)(\.\/)?skills\/skill-feedback\/src\/skill-feedback-runner\.ts(\s|$)/.test(
+			command,
+		) && /(^|\s)closeout(\s|$)/.test(command)
+	)
+}
+
+function readCloseoutCandidates(
+	entry: unknown,
+	closeoutCommandToolUseIds: ReadonlySet<string>,
+): CloseoutParseResult[] {
+	const message = objectFrom(objectFrom(entry)?.message)
+	if (!message) return []
+	const content = Array.isArray(message.content) ? message.content : []
+	const results: CloseoutParseResult[] = []
+	for (const item of content) {
+		const object = objectFrom(item)
+		if (object?.type !== 'tool_result') continue
+		const toolUseId = stringFrom(object.tool_use_id)
+		if (!toolUseId || !closeoutCommandToolUseIds.has(toolUseId)) continue
+		const text = stringFrom(object.content)
+		if (!text) continue
+		for (const payload of jsonObjectsFromToolResultText(text)) {
+			const candidate = closeoutCandidateFromEnvelope(payload)
+			if (candidate) results.push(candidate)
+		}
+	}
+	return results
+}
+
+function jsonObjectsFromToolResultText(text: string): unknown[] {
+	const objects: unknown[] = []
+	const seen = new Set<string>()
+	const candidates = text.includes('\n') ? text.split('\n') : [text]
+	for (const candidate of candidates) {
+		const trimmed = candidate.trim()
+		if (!trimmed || seen.has(trimmed) || !trimmed.startsWith('{')) continue
+		seen.add(trimmed)
+		try {
+			objects.push(JSON.parse(trimmed))
+		} catch {
+			if (trimmed.includes('skill-feedback.closeout')) {
+				objects.push({ malformedCloseoutEnvelope: true })
+			}
+		}
+	}
+	return objects
+}
+
+function closeoutCandidateFromEnvelope(payload: unknown): CloseoutParseResult | null {
+	const envelope = objectFrom(payload)
+	if (!envelope) return null
+	if (envelope.malformedCloseoutEnvelope === true) {
+		return { kind: 'diagnostic', diagnostic: 'closeout_envelope_malformed_json' }
+	}
+	if (envelope.status !== 'ok') return null
+	const data = objectFrom(envelope.data)
+	if (!data || data.contract !== 'skill-feedback.closeout') return null
+	const reportId = stringFrom(data.report_id)
+	const writtenPath = stringFrom(data.written_path)
+	const proofStatus = stringFrom(data.proof_status)
+	if (!reportId || !writtenPath || !proofStatus) return null
+	return {
+		kind: 'candidate',
+		candidate: { reportId, writtenPath, proofStatus },
+	}
+}
+
 export async function handleSkillFeedbackStop(
 	input: StopHookInput,
 	runtime: SkillFeedbackStopRuntime = createDefaultStopRuntime(),
-): Promise<{ captured: boolean; detection?: SkillDetection }> {
+): Promise<{
+	captured: boolean
+	detection?: SkillDetection
+	correlation?: FinalizeCorrelationWitnessResult
+}> {
 	if (input.stop_hook_active) return { captured: false }
 	let transcript = ''
 	try {
@@ -169,7 +309,8 @@ export async function handleSkillFeedbackStop(
 	} catch {
 		return { captured: false }
 	}
-	const detection = detectSkillFromClaudeTranscriptText(transcript)
+	const analysis = analyzeSkillFeedbackClaudeTranscriptText(transcript)
+	const detection = analysis.detection
 	if (!detection) return { captured: false }
 	if (
 		(await runtime.readLastDetectionId(input.transcript_path)) ===
@@ -194,11 +335,23 @@ export async function handleSkillFeedbackStop(
 	if (result.exitCode !== 0) {
 		return { captured: false, detection }
 	}
+	const recordData = hookRecordDataFromStdout(result.stdout)
+	let correlation: FinalizeCorrelationWitnessResult | undefined
+	if (recordData?.skillRunId) {
+		correlation = await finalizeCorrelationWitnessSafe(runtime, {
+			cwd,
+			skill: detection.skill,
+			hookReportId: recordData.reportId,
+			skillRunId: recordData.skillRunId,
+			generatedTs: runtime.nowIso(),
+			candidates: analysis.closeoutCandidates,
+		})
+	}
 	await runtime.writeLastDetectionId(
 		input.transcript_path,
 		detection.detectionId,
 	)
-	return { captured: true, detection }
+	return { captured: true, detection, ...(correlation ? { correlation } : {}) }
 }
 
 function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
@@ -209,6 +362,41 @@ function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
 		resolveGitRoot,
 		nowIso: () => new Date().toISOString(),
 		runRecord: runSkillFeedbackRecord,
+		finalizeCorrelationWitness: runSkillFeedbackCorrelationWitness,
+	}
+}
+
+async function finalizeCorrelationWitnessSafe(
+	runtime: SkillFeedbackStopRuntime,
+	request: CorrelationWitnessRequest,
+): Promise<FinalizeCorrelationWitnessResult> {
+	try {
+		const finalize =
+			runtime.finalizeCorrelationWitness ?? runSkillFeedbackCorrelationWitness
+		return await finalize(request)
+	} catch {
+		return {
+			status: 'blocked',
+			diagnostics: ['correlation_witness_finalization_failed'],
+		}
+	}
+}
+
+function hookRecordDataFromStdout(
+	stdout: string,
+): { reportId: string; skillRunId?: string } | null {
+	try {
+		const envelope = objectFrom(JSON.parse(stdout))
+			const data = objectFrom(envelope?.data)
+			const reportId = stringFrom(data?.report_id)
+			if (!reportId) return null
+			const skillRunId = stringFrom(data?.skill_run_id)
+			return {
+				reportId,
+				...(skillRunId ? { skillRunId } : {}),
+			}
+		} catch {
+			return null
 	}
 }
 

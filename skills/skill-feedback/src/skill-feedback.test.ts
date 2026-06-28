@@ -27,11 +27,13 @@ import {
 	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+	createCorrelationWitness,
 	skillFeedbackContracts,
 } from "./command-contract";
 import {
 	closeoutSkillFeedbackReceipt,
 	createDefaultSkillFeedbackRuntime,
+	finalizeSkillFeedbackCorrelationWitness,
 	healthSkillFeedbackInbox,
 	parseHealthArgs,
 	parsePurgeArgs,
@@ -777,6 +779,388 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			trusted_run: true,
 			trusted_skill_run_id: report.skill_run_id,
 		});
+	});
+
+	test("correlation finalizer writes one signed witness for matching Claude hook and closeout", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlation-run",
+				captureMetadata: {
+					capture_runtime: "claude_stop",
+					skill_identity_provenance: {
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
+					},
+				},
+			},
+			runId: "record-correlation-hook",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlation",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+		const result = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+
+		expect(result.status).toBe("written");
+		if (result.status !== "written") throw new Error("expected witness");
+		expect(result.witnessPath).toMatch(
+			/^\.skill-feedback\/\.correlation\/witness_[0-9a-f]{16}\.json$/,
+		);
+		const witnessDisk = await readFile(join(root, result.witnessPath), "utf-8");
+		const witness = JSON.parse(witnessDisk) as Record<string, unknown>;
+		expect(witness).toMatchObject({
+			schema_version: "1",
+			witness_id: result.witnessId,
+			skill: BASE_RECEIPT.skill,
+			runtime_source: "claude_stop",
+			hook_report_id: hookData.report_id,
+			closeout_report_id: closeoutData.report_id,
+			skill_run_id: hookData.skill_run_id,
+			correlation_proof: { algorithm: "hmac-sha256" },
+		});
+		expect(witnessDisk).not.toContain(closeoutData.written_path);
+		const dirMode =
+			(await stat(join(root, ".skill-feedback", ".correlation"))).mode & 0o777;
+		const fileMode = (await stat(join(root, result.witnessPath))).mode & 0o777;
+		expect(dirMode).toBe(0o700);
+		expect(fileMode).toBe(0o600);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-correlation-witness",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData.review_units).toHaveLength(1);
+		expect(reviewData.review_units[0]).toMatchObject({
+			trusted_run: true,
+			trusted_skill_run_id: hookData.skill_run_id,
+		});
+		expect(reviewData.ledger_entries[0]?.allowed_claims).toEqual(
+			expect.arrayContaining(["same_trusted_run", "corroborated"]),
+		);
+		expect(reviewData.ledger_entries[0]?.evidence_tier).toBe("corroborated");
+		expect(reviewData.correlation_witnesses).toMatchObject({
+			verified_count: 1,
+			blocked_count: 0,
+			orphan_count: 0,
+			diagnostics: [],
+		});
+	});
+
+	test("correlation finalizer blocks invalid closeout proof and duplicate candidates", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:invalid-closeout-proof",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-invalid-closeout-proof",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-invalid-proof",
+		});
+		if (!closeout.reportPath) throw new Error("expected closeout report");
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+		const pathMismatch = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: ".skill-feedback/not-the-closeout-report.json",
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(pathMismatch).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_closeout_path_mismatch"],
+		});
+
+		const rawCloseout = JSON.parse(await readFile(closeout.reportPath, "utf-8"));
+		rawCloseout.report_card.goal = "Tampered after signing.";
+		await writeFile(closeout.reportPath, `${JSON.stringify(rawCloseout, null, "\t")}\n`);
+
+		const invalidProof = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+
+		expect(invalidProof).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_closeout_proof_invalid"],
+		});
+		const duplicate = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: "closeout-one",
+						writtenPath: ".skill-feedback/closeout-one.json",
+						proofStatus: "attached",
+					},
+					{
+						reportId: "closeout-two",
+						writtenPath: ".skill-feedback/closeout-two.json",
+						proofStatus: "attached",
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(duplicate).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_candidate_ambiguous"],
+		});
+		const diagnosticFiles = (
+			await readdir(join(root, ".skill-feedback", ".correlation"))
+		).filter((entry) => entry.startsWith("diagnostic_"));
+		expect(diagnosticFiles).toHaveLength(1);
+		const diagnosticDisk = await readFile(
+			join(root, ".skill-feedback", ".correlation", diagnosticFiles[0] ?? ""),
+			"utf-8",
+		);
+		expect(diagnosticDisk).toContain("correlation_candidate_ambiguous");
+		expect(diagnosticDisk).not.toContain("closeout-one");
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-correlation-candidate-diagnostic",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+		expect(healthData.correlation_witnesses).toMatchObject({
+			blocked_count: 1,
+			diagnostics: ["correlation_candidate_ambiguous"],
+		});
+	});
+
+	test("health reports orphan witnesses even when no reports exist", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:orphan-witness",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-orphan-witness-key",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			skill_run_id: string;
+		};
+		await rm(capture.reportPath);
+		const keyHex = (
+			await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf-8")
+		).trim();
+		const witness = createCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				runtime_source: "claude_stop",
+				hook_report_id: "missing-hook-report",
+				closeout_report_id: "missing-closeout-report",
+				skill_run_id: hookData.skill_run_id,
+				created_ts: GENERATED_TS,
+			},
+			Buffer.from(keyHex, "hex"),
+			"0".repeat(32),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await chmod(witnessDir, 0o700);
+		const witnessPath = join(witnessDir, `${witness.witness_id}.json`);
+		await writeFile(witnessPath, `${JSON.stringify(witness, null, "\t")}\n`);
+		await chmod(witnessPath, 0o600);
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-orphan-only-witness",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+
+		expect(health.exitCode).toBe(0);
+		expect(healthData.counts.primary).toBe(0);
+		expect(healthData.correlation_witnesses).toMatchObject({
+			verified_count: 0,
+			blocked_count: 1,
+			orphan_count: 1,
+			diagnostics: ["correlation_witness_orphan_report"],
+		});
+	});
+
+	test("health reports mixed valid invalid diagnostic and orphan correlation artifacts", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:mixed-witnesses",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-mixed-witnesses",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-mixed-witnesses",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		const written = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(written.status).toBe("written");
+		const diagnostic = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: "ambiguous-one",
+						writtenPath: ".skill-feedback/ambiguous-one.json",
+						proofStatus: "attached",
+					},
+					{
+						reportId: "ambiguous-two",
+						writtenPath: ".skill-feedback/ambiguous-two.json",
+						proofStatus: "attached",
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(diagnostic).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_candidate_ambiguous"],
+		});
+		const keyHex = (
+			await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf-8")
+		).trim();
+		const orphan = createCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				runtime_source: "claude_stop",
+				hook_report_id: hookData.report_id,
+				closeout_report_id: "missing-closeout-report",
+				skill_run_id: hookData.skill_run_id,
+				created_ts: GENERATED_TS,
+			},
+			Buffer.from(keyHex, "hex"),
+			"1".repeat(32),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		const orphanPath = join(witnessDir, `${orphan.witness_id}.json`);
+		await writeFile(orphanPath, `${JSON.stringify(orphan, null, "\t")}\n`);
+		await chmod(orphanPath, 0o600);
+		const invalidPath = join(witnessDir, "witness_aaaaaaaaaaaaaaaa.json");
+		await writeFile(invalidPath, "{not json}\n");
+		await chmod(invalidPath, 0o600);
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-mixed-correlation-artifacts",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+
+		expect(healthData.correlation_witnesses).toMatchObject({
+			verified_count: 1,
+			blocked_count: 3,
+			orphan_count: 1,
+		});
+		expect(healthData.correlation_witnesses.diagnostics).toEqual(
+			expect.arrayContaining([
+				"correlation_candidate_ambiguous",
+				"correlation_witness_invalid_json",
+				"correlation_witness_orphan_report",
+			]),
+		);
 	});
 
 	test("Claude detection-derived run ids contribute to hook report ids", async () => {
@@ -2085,6 +2469,33 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.newest.primary_generated_ts).toBe("2026-06-13T00:00:00.000Z");
 	});
 
+	test("health keeps the last same-instant timestamp by inbox order", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "a-offset.json", {
+			reportId: "report-offset",
+			generatedTs: "2026-06-13T11:00:00.000+11:00",
+			correlationStatus: "linked",
+			skillRunId: "run-offset",
+			skillRunIdProvenance: "correlation_owned",
+		});
+		await writeV1CloseoutInboxReport(root, "b-utc.json", {
+			reportId: "report-utc",
+			generatedTs: "2026-06-13T00:00:00.000Z",
+			correlationStatus: "linked",
+			skillRunId: "run-utc",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-newest-same-instant",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.newest.primary_generated_ts).toBe("2026-06-13T00:00:00.000Z");
+	});
+
 	test("health treats unknown-skill Codex Stop as runtime evidence while identity stays blocked", async () => {
 		const root = await makeRoot();
 		await writeLowSignalInboxReport(
@@ -2534,6 +2945,46 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.candidate_paths).toEqual([".skill-feedback/old.json"]);
 		await expect(readFile(join(root, ".skill-feedback", "old.json"), "utf-8"))
 			.resolves.toContain("report-old");
+	});
+
+	test("purge preview ignores private correlation witness files", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await writeFile(
+			join(witnessDir, "witness_1111111111111111.json"),
+			`${JSON.stringify({ schema_version: "1", witness_id: "witness_1111111111111111" })}\n`,
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-preview-witness-skip",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			candidate_paths: string[];
+		};
+		expect(data.candidate_count).toBe(1);
+		expect(data.candidate_paths).toEqual([".skill-feedback/old.json"]);
+		await expect(
+			readFile(join(witnessDir, "witness_1111111111111111.json"), "utf-8"),
+		).resolves.toContain("witness_1111111111111111");
 	});
 
 	test("purge execute deletes selected low-signal reports only", async () => {

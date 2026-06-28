@@ -1,6 +1,9 @@
 import {
 	createDefaultSkillFeedbackRuntime,
+	finalizeSkillFeedbackCorrelationWitness,
 	recordSkillFeedbackReceipt,
+	type CorrelationCloseoutCandidate,
+	type FinalizeCorrelationWitnessResult,
 } from '../skills/skill-feedback/src/skill-feedback-runner'
 
 export type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
@@ -60,6 +63,15 @@ export interface HookRunResult {
 	exitCode: number
 	stdout: string
 	stderr: string
+}
+
+export interface CorrelationWitnessRequest {
+	cwd: string
+	skill: string
+	hookReportId: string
+	skillRunId: string
+	generatedTs: string
+	candidates: readonly CorrelationCloseoutCandidate[]
 }
 
 const DEFAULT_HOOK_PROCESS_TIMEOUT_MS = 6_000
@@ -174,6 +186,26 @@ export async function runSkillFeedbackRecord(
 		stdout: result.stdout,
 		stderr: result.stderr,
 	}
+}
+
+export async function runSkillFeedbackCorrelationWitness(
+	request: CorrelationWitnessRequest,
+): Promise<FinalizeCorrelationWitnessResult> {
+	return finalizeSkillFeedbackCorrelationWitness(
+		{
+			skill: request.skill,
+			hookReportId: request.hookReportId,
+			skillRunId: request.skillRunId,
+			createdTs: request.generatedTs,
+			candidates: request.candidates,
+		},
+		{
+			runtime: createDefaultSkillFeedbackRuntime({
+				repoRoot: () => request.cwd,
+				readStdinTelemetry: async () => ({}),
+			}),
+		},
+	)
 }
 
 export async function runBufferedProcess(

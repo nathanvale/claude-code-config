@@ -30,6 +30,7 @@ import {
 	type CloseoutReceipt,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	createCorrelationWitness,
 } from "./command-contract";
 
 const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
@@ -80,6 +81,9 @@ const stationScenarios = {
 	"review.target_resolution_failed": { run: runReviewTargetResolutionFailed },
 	"health.populated_inbox": { run: runHealthPopulatedInbox },
 	"health.proof_diagnostics": { run: runHealthProofDiagnostics },
+	"health.correlation_witness_diagnostics": {
+		run: runHealthCorrelationWitnessDiagnostics,
+	},
 	"health.unsafe_inbox": { run: runHealthUnsafeInbox },
 	"purge.preview": { run: runPurgePreview },
 	"purge.execute": { run: runPurgeExecute },
@@ -376,6 +380,63 @@ async function runHealthProofDiagnostics(
 	expect(
 		(envelope.data?.proof_health as { diagnostics?: string[] }).diagnostics,
 	).toContain("trust_store_key_unusable");
+	return evidenceFor(station, result, envelope);
+}
+
+async function runHealthCorrelationWitnessDiagnostics(
+	station: (typeof skillFeedbackBranchStationCatalog)[number],
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await runSkillFeedback(
+		[
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			"Health witness diagnostics station.",
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"Clean run.",
+			"--generated-ts",
+			GENERATED_TS,
+		],
+		{ cwd: root, label: `${station.id}:setup` },
+	);
+	const key = Buffer.from(
+		(await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf8")).trim(),
+		"hex",
+	);
+	const witness = createCorrelationWitness(
+		{
+			skill: "create-skill",
+			runtime_source: "claude_stop",
+			hook_report_id: "hook_missing",
+			closeout_report_id: "closeout_missing",
+			skill_run_id: "run-missing",
+			created_ts: GENERATED_TS,
+		},
+		key,
+		"aa".repeat(16),
+	);
+	const witnessDir = join(root, ".skill-feedback", ".correlation");
+	await mkdir(witnessDir, { recursive: true, mode: 0o700 });
+	await chmod(witnessDir, 0o700);
+	const witnessPath = join(witnessDir, `${witness.witness_id}.json`);
+	await writeFile(witnessPath, `${JSON.stringify(witness, null, "\t")}\n`);
+	await chmod(witnessPath, 0o600);
+
+	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
+	const envelope = expectStationEnvelope(station, result);
+	expect(envelope.data?.correlation_witnesses).toMatchObject({
+		verified_count: 0,
+		blocked_count: 1,
+		orphan_count: 1,
+	});
+	expect(
+		(envelope.data?.correlation_witnesses as { diagnostics?: string[] })
+			.diagnostics,
+	).toContain("correlation_witness_orphan_report");
 	return evidenceFor(station, result, envelope);
 }
 

@@ -103,6 +103,7 @@ describe("skill-feedback Branch Station Catalog", () => {
 			"review.target_resolution_failed",
 			"health.populated_inbox",
 			"health.proof_diagnostics",
+			"health.correlation_witness_diagnostics",
 			"health.unsafe_inbox",
 			"purge.preview",
 			"purge.execute",
