@@ -34,6 +34,7 @@ Rules:
 | 2026-06-25 | correlation witnesses | Private Claude hook-to-closeout links | Backfill repair |
 | 2026-06-28 | correlation backfill plan | Preview/execute repair contract direction | Durable candidate source |
 | 2026-06-29 | docs router and tracker uplift | Package docs split, tracker lanes, ICA vocabulary cleanup | `TASKS.md` active queue |
+| 2026-06-29 | correlation backfill shipped | `correlate` preview/execute, durable finalizer-authored candidate source, verified on main | Trusted skill identity |
 
 ## 2026-06-11 - V0 Capture Package
 
@@ -134,6 +135,35 @@ Rules:
 - Decisions: execute recomputes current private evidence before writing.
 - Follow-up: define durable repairable candidate source or narrow execute scope
   in `TASKS.md`.
+
+## 2026-06-29 - Correlation Backfill Shipped
+
+- Outcome: the 2026-06-28 backfill plan (U1-U5) was implemented and merged to
+  main: `correlate` ships with preview default and `--execute`, plain/JSON
+  output, `--repo`, and Branch Station coverage for preview, execute,
+  already-linked, ambiguous, insufficient-evidence, unsafe-inbox, and
+  invalid-usage branches.
+- Trust added: the correlation finalizer now embeds a durable
+  `repair_candidates[]` source into blocked diagnostic artifacts, so execute
+  recomputes and revalidates against current private evidence before writing a
+  witness. The durable-candidate-source open question from 2026-06-28 is
+  resolved in code; public argv and stdin still cannot mint trust-bearing
+  correlation fields.
+- Caveat: the 4 pre-existing live diagnostics are legacy sparse artifacts
+  (`hook_report_id` + `correlation_candidate_missing` only). They correctly stay
+  `insufficient_evidence` per KTD5; live `correlate --plain` reporting
+  `no_repair_available` for them is by-design, not a gap. New runs carry
+  repairable sources.
+- Evidence: `skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/src/branch-station-catalog.ts`;
+  `hooks/skill-feedback-stop.ts`.
+- Verification: package tests pass (7 files, 274 tests, 0 failed); `tsc_check`
+  clean; merged to main at `1c38f90a`.
+- Decisions: legacy sparse diagnostics remain unrecoverable by design; durable
+  candidate sources are finalizer-authored, never public input.
+- Follow-up: trusted skill identity remains the daily-pilot blocker.
 
 ## 2026-06-29 - Docs Router And Tracker Uplift
 

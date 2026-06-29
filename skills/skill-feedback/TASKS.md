@@ -26,31 +26,28 @@ Inbox Retention, Redaction Trust, Docs Language, Verification.
 
 ## Current Priority
 
-Keep the correlation backfill repair path honest: current preview classifies 4
-blocked diagnostics as `insufficient_evidence` and reports no available repair.
-Execute can write only after durable private evidence exists, or the execute
-scope narrows to candidates that current source can validate.
+Correlation backfill shipped to main (`1c38f90a`): `correlate` preview/execute,
+durable finalizer-authored candidate source, 274 tests passing. The 4 legacy
+sparse diagnostics stay `insufficient_evidence` by design (KTD5), so
+`no_repair_available` is correct, not a gap.
+
+The next frontier is Trusted skill identity: the daily pilot gate is blocked on
+`trusted_skill_identity_missing`, and Codex Stop has no engine-owned skill
+identity source. Decide whether to name a trusted source or formally defer.
 
 Next safe action:
 
 ```bash
-sed -n '207,299p' skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md
+bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
 ```
 
 ## Now
 
-- [ ] P0 Define durable correlation backfill candidate source Lane:
-      Correlation. Done when: `correlate --execute` writes witnesses only from
-      private candidate evidence that survives current validation, or the execute
-      scope is narrowed to candidates with enough private source. Next: finish
-      `skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md`
-      U1-U4 against `src/skill-feedback-runner.ts`.
-
-- [ ] P0 Re-run package verification for the correlation branch Lane:
-      Verification. Done when: skill-feedback tests, typecheck, command
-      discovery/help/parser/runtime checks, and branch station evidence pass
-      after current dirty source changes. Next:
-      `skills/test-runner/src/test-runner.sh run --cwd skills/skill-feedback -- src`.
+- [ ] P1 Find or defer Trusted skill identity source Lane: Capture Runtime.
+      Done when: Codex Stop either gains engine-owned skill identity evidence or
+      stays documented as low-signal runtime evidence, unblocking or formally
+      deferring the daily pilot gate. Next: revisit
+      `docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md`.
 
 - [ ] P1 Confirm daily pilot gate status Lane: Capture Runtime. Done when:
       `health` and `review` show runtime capture, Trusted skill identity, Daily
@@ -59,11 +56,6 @@ sed -n '207,299p' skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feed
       checks pass.
 
 ## Next
-
-- [ ] P1 Find or defer Trusted Codex skill identity source Lane: Capture
-      Runtime. Done when: Codex Stop either gains engine-owned skill identity
-      evidence or stays documented as low-signal runtime evidence. Next: revisit
-      `docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md`.
 
 - [ ] P1 Decide native skill-attributed cost source Lane: Capture Runtime. Done
       when: cost remains `cost_unavailable` by design or a trusted runtime source
@@ -94,16 +86,15 @@ sed -n '207,299p' skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feed
 
 ## Latest Signals
 
-- 2026-06-29: source brainstorms, ideation artifacts, and plans copied under
-  `skills/skill-feedback/docs/` with `docs/INDEX.md`.
-- 2026-06-29: `correlate --plain` preview found 4 candidates, all
-  `insufficient_evidence`, with next action `no_repair_available`.
+- 2026-06-29: correlation backfill (U1-U5) merged to main at `1c38f90a`;
+  package tests 274 pass, `tsc_check` clean.
+- 2026-06-29: durable-candidate-source open question resolved in code; finalizer
+  embeds `repair_candidates[]` into blocked diagnostics, execute revalidates.
+- 2026-06-29: `correlate --plain` preview found 4 legacy sparse candidates, all
+  `insufficient_evidence` -> `no_repair_available`; correct by design (KTD5).
+- 2026-06-29: `health --plain` shows daily pilot blocked on
+  `trusted_skill_identity_missing`; promoted to top of `Now`.
 - 2026-06-29: package docs split added from the Component Tracker pattern.
-- 2026-06-29: ICA vocabulary pass identified missing `Report card`, `Owner path`,
-  `HealthResultData Interface`, `Command facade contract`, and `Branch Station
-  Catalog` terms.
-- 2026-06-29: explorers found no major drift between current `SKILL.md`,
-  `CONTEXT.md`, later plans, and current source.
 
 ## Command Shortcuts
 
