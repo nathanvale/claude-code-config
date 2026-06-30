@@ -22,7 +22,7 @@ routing. Do not load unrelated gates.
    - Expected behavior: smallest create path; no runtime gates unless evidence earns them.
 3. Runtime-backed skill.
    - Prompt shape: "create a skill that wraps a CLI with JSON output and durable writes."
-   - Expected behavior: route to runtime owners, `skills/create-cli/SKILL.md`, safety gates, and source-owned contracts before prose guidance.
+   - Expected behavior: route to runtime owners, `skills/create-cli/SKILL.md`, safety gates, and source-owned contracts; then use frontmatter and body gates before writing new `SKILL.md` source.
 4. Bloated skill review.
    - Target shape: oversized first-screen owner maps, copied contracts, workflow sprawl, unearned Run Cards, or branch-only examples in `SKILL.md`.
    - Expected behavior: findings-first review flags bloat, names owner/reference path, and stays read-only.
@@ -32,9 +32,9 @@ routing. Do not load unrelated gates.
 6. Ambiguous request.
    - Prompt shape: "make this skill better."
    - Expected behavior: classify the smallest safe branch or show the menu when target, owner, or write authority is unsafe.
-7. Rename clarity.
-   - Prompt shape: "review skill-author" and "create a skill."
-   - Expected behavior: name does not over-bias toward creation; description still routes review, repair, archive, and merge.
+7. Legacy name.
+   - Prompt shape: "review skill-author", "review create-skill", "create a skill", and handoffs naming the removed create-skill source path.
+   - Expected behavior: route legacy names to canonical `skill-author`; patch live references only when implementation is requested; do not create an alias unless active-reference evidence proves a bridge is needed.
 
 ## Review Output
 

@@ -15,7 +15,7 @@ qualified local help or emergency services.
 
 ## Owner Paths
 
-- Pattern: `skills/skill-author/references/skill-design-decision-runbook.md#write-something-skill-io-example`.
+- Pattern: `skills/skill-author/references/skill-io-shape-examples.md#skill-io-example`.
 - Language: `skills/adhd-helper/CONTEXT.md`.
 - Support Cards: `skills/adhd-helper/references/support-cards.md`.
 - Work-style source: `AGENTS.md`.

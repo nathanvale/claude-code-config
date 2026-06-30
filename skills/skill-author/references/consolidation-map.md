@@ -14,6 +14,7 @@ skills/skill-author/
     archive-cleanup.md
     community-skill-research-sources.md
     consolidation-map.md
+    mcporter-skill-design.md
     research-portability.md
     run-card-template.md
     runtime-portability.md
@@ -23,8 +24,10 @@ skills/skill-author/
     skill-frontmatter-gate.md
     skill-io-shape-examples.md
     skill-owner-path-gate.md
+    skill-review-rubric.md
     skill-safety-gate.md
     skill-verification-gate.md
+    skill-workflow-fitness-probes.md
   scripts/
     check-gotcha-decision.ts
     check-owner-paths.ts

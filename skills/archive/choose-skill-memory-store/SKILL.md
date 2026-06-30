@@ -11,14 +11,14 @@ Do not use for accepted repo decisions. Use `decisions`.
 
 ## Owner Paths
 
-- Memory storage routing map: `skills/skill-author/references/skill-memory-storage-routing.md`.
-- Skill philosophy: `skills/skill-author/references/skill-design-philosophy.md`.
+- Memory storage routing map: `skills/context-advisor/references/storage-routing.md`.
+- Skill design runbook: `skills/skill-author/references/skill-design-decision-runbook.md`.
 - Skill vocabulary: `skills/skill-author/CONTEXT.md`.
 - Decision log: `docs/decisions/`.
 
 ## Workflow
 
-1. Read `skills/skill-author/references/skill-memory-storage-routing.md`.
+1. Read `skills/context-advisor/references/storage-routing.md`.
 2. Name the memory owner.
 3. Name the memory kind.
 4. Name mutability.
@@ -48,7 +48,7 @@ Do not use for accepted repo decisions. Use `decisions`.
 - Do not let worker agents write durable memory directly.
 - Route durable writes through a curator, skill driver, or accepted owner workflow.
 - Treat logs, JSON, SQLite, projections, backups, and embeddings as durable sensitive stores.
-- Use `create-agent-native-skill` when storage introduces or changes helper commands, machine-readable output, durable writes, side effects, privacy, durability, status, refresh, repair, retry, or runtime recovery.
+- Use `skill-author` runtime-backed guidance when storage introduces or changes helper commands, machine-readable output, durable writes, side effects, privacy, durability, status, refresh, repair, retry, or runtime recovery.
 
 ## Next Safe Action
 
@@ -56,5 +56,5 @@ Do not use for accepted repo decisions. Use `decisions`.
 - If privacy, durability, write authority, or side-effect stance is unclear, ask one question.
 - If memory is an accepted repo decision, use `decisions`.
 - If storage choice is unresolved and affects ownership, privacy, durability, or side effects, use `decision-mode` or `grill-with-docs`.
-- If accepted storage choice requires a runtime-backed capability, use `create-agent-native-skill`.
+- If accepted storage choice requires a runtime-backed capability, use `skill-author`.
 - If memory is only hot startup guidance, patch hot startup guidance and point to the durable owner.

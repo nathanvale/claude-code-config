@@ -2,7 +2,7 @@
 
 Use this source note before changing community-skill rules reached from `references/skill-design-decision-runbook.md`.
 
-Keep the philosophy guide as the rulebook. Keep source freshness here.
+Keep accepted rules in the owning `skill-author` reference. Keep source freshness here.
 
 ## Current Sources
 

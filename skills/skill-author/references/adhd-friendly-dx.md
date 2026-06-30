@@ -6,8 +6,6 @@ status output, or next actions that could overload the user or next agent.
 Source pattern:
 
 - `skills/lll-account-switch/SKILL.md`
-- `experience-sdk/.agents/skills/extension-qa-session/SKILL.md`
-- `experience-sdk/.agents/skills/design-parity-session/SKILL.md`
 
 ## Goal
 

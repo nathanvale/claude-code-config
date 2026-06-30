@@ -11,7 +11,7 @@ Temporary skill bridge.
 
 - Canonical capability: `skills/skill-author/SKILL.md`.
 - Vocabulary owner path: `skills/skill-author/CONTEXT.md`.
-- Skill design owner path: `skills/skill-author/references/skill-design-philosophy.md`.
+- Skill design runbook: `skills/skill-author/references/skill-design-decision-runbook.md`.
 - Legacy references and templates: this directory, for extraction review only.
 
 ## Entry-Screen Route

@@ -460,7 +460,7 @@ When auditing, return a findings table:
 
 - JSDoc standard: `context/code-style.md` §JSDoc
 - Loop helper: `skills/component-library-standard/scripts/jsdoc-summary-loop.mjs`
-- Pattern: `skills/skill-author/references/skill-design-decision-runbook.md#write-something-skill-io-example`
+- Pattern: `skills/skill-author/references/skill-io-shape-examples.md#skill-io-example`
 
 ## Next Safe Action
 
