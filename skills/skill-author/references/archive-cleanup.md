@@ -56,7 +56,7 @@ Use before moving skills into `skills/archive/`.
 
 ## Validation
 
-- Run `bun run skills/create-skill/scripts/skill-description-audit.ts`.
+- Run `bun run skills/skill-author/scripts/skill-description-audit.ts`.
 - Run `scripts/agent-instructions.sh check --json`.
 - Run `git diff --check`.
 - YAML-parse edited `SKILL.md` frontmatter.

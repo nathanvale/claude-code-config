@@ -1,4 +1,4 @@
-# Create Skill Context
+# Skill Author Context
 
 Scoped vocabulary for portable skill authoring, skill cleanup, capability ownership, and agent-native helper handoff.
 
@@ -6,7 +6,7 @@ This context owns reusable skill-creation language. Repo-specific domains keep t
 
 ## Preview Index
 
-- Read `Skill Design` for routing, invocation, roles, portability, and context-storage terms.
+- Read `Skill Design` for routing, invocation, portability, and context-storage terms.
 - Read `Capability Ownership` before deciding which artifact owns a contract.
 - Read `Agent-Native Helpers` before naming runtime-backed helper surfaces.
 
@@ -66,15 +66,7 @@ _Avoid_: second workflow owner, vague philosophy doc, required heading schema
 
 **Heading Selection Matrix**:
 Advisory matrix that helps choose `SKILL.md` body headings from use case and selection strength; not a body-heading contract.
-_Avoid_: required heading schema, role heading template, body-heading contract
-
-**Skill role**:
-The primary job label for a skill: main-entry, advisor, tool-workflow, support-reference, control-plane, quality-gate, or bridge.
-_Avoid_: lifecycle status, risk tier, freeform category, multi-role taxonomy
-
-**Skill ability**:
-A small named extra behavior a skill may perform without changing its primary role.
-_Avoid_: second role, hidden side effect, role soup
+_Avoid_: required heading schema, fixed heading template, body-heading contract
 
 **Portable skill bundle**:
 A skill bundle whose reusable workflow guidance avoids hidden repo-specific paths, local machine facts, personal assumptions, and harness-only contracts unless those limits are named.

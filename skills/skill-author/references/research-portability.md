@@ -121,7 +121,7 @@ Patch order:
 
 ## Portability Rules
 
-- Prefer files inside `skills/create-skill/` for reusable skill-authoring knowledge.
+- Prefer files inside `skills/skill-author/` for reusable skill-authoring knowledge.
 - Use old `context/` files as temporary owner-path redirect stubs only during migration.
 - Remove redirect stubs after active-reference audit passes.
 - Do not copy deterministic contracts into skill prose.

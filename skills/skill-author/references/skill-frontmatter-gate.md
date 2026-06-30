@@ -30,5 +30,5 @@ Use when creating or changing skill frontmatter, trigger descriptions, routing, 
 ## Verification
 
 - YAML-parse after frontmatter edits.
-- Run description audit after description edits: `bun run skills/create-skill/scripts/skill-description-audit.ts --json`.
+- Run description audit after description edits: `bun run skills/skill-author/scripts/skill-description-audit.ts --json`.
 - Run startup check after startup route edits: `scripts/agent-instructions.sh check --json`.

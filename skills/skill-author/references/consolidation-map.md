@@ -1,11 +1,11 @@
 # Consolidation Map
 
-Use when moving scattered skill-authoring material into `skills/create-skill/`.
+Use when moving scattered skill-authoring material into `skills/skill-author/`.
 
 ## Working Folder Shape
 
 ```text
-skills/create-skill/
+skills/skill-author/
   SKILL.md
   CONTEXT.md
   references/
@@ -23,14 +23,12 @@ skills/create-skill/
     skill-frontmatter-gate.md
     skill-io-shape-examples.md
     skill-owner-path-gate.md
-    skill-roles.md
     skill-safety-gate.md
     skill-verification-gate.md
   scripts/
     check-gotcha-decision.ts
     check-owner-paths.ts
     skill-description-audit.ts
-    skill-role-audit.ts
 ```
 
 - Project tracker owner: `skills/coding-task-tracker/SKILL.md`.
@@ -51,5 +49,5 @@ skills/create-skill/
 - Remove stale owner-path redirects instead of preserving compatibility wrappers.
 - Keep exact contracts in scripts, tests, generated docs, and CLI help.
 - Keep research sources as source notes, not rules.
-- Run `bun run skills/create-skill/scripts/skill-description-audit.ts` after description changes.
+- Run `bun run skills/skill-author/scripts/skill-description-audit.ts` after description changes.
 - Run startup checks after moving owner paths.

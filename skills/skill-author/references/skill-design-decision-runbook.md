@@ -3,7 +3,7 @@
 Use when creating, reviewing, healing, repairing, or patching portable
 `SKILL.md` files.
 
-Path base: `skills/create-skill/`.
+Path base: `skills/skill-author/`.
 Vocabulary owner: `CONTEXT.md`.
 
 ## Start Here
@@ -48,10 +48,10 @@ Open only the branch needed for the current step.
 | Shape `SKILL.md`, headings, no-args behavior, run card, examples, or branch-hidden references | `references/skill-body-shape-gate.md`; `references/skill-io-shape-examples.md` only when heading shape is unclear |
 | Name or repair owner paths, references, contracts, or path authority | `references/skill-owner-path-gate.md` |
 | Add or review safety gate, gotcha, private data boundary, destructive action, or side effect | `references/skill-safety-gate.md` |
-| Choose verification, handoff, YAML parse, description audit, role audit, owner-path check, or startup check | `references/skill-verification-gate.md` |
+| Choose verification, handoff, YAML parse, description audit, owner-path check, or startup check | `references/skill-verification-gate.md` |
 | Add runtime behavior, CLI surface, helper command, machine output, durable write, or repair envelope | `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/create-cli/SKILL.md` |
 | Add MC Porter skill guidance | `references/mcporter-skill-design.md` |
-| Choose role or dependency behavior | `references/skill-roles.md`; `references/skill-dependency-rules.md` |
+| Choose dependency behavior | `references/skill-dependency-rules.md` |
 | Archive, merge, or retire a skill | `references/archive-cleanup.md`; `references/consolidation-map.md` |
 | Import external input or community-skill research | `references/research-portability.md`; `references/community-skill-research-sources.md` |
 | Review only | Target `SKILL.md`; `references/skill-review-rubric.md` |
@@ -70,7 +70,7 @@ Open only the branch needed for the current step.
 - Name the skill driver.
 - Callee does one job.
 - Hand back changed state, remaining work, blocked condition, handback target, and next safe action.
-- For create-skill self-healing, continue in the current invocation, name the owner path, patch the smallest fix, and validate.
+- For skill-author self-healing, continue in the current invocation, name the owner path, patch the smallest fix, and validate.
 - Use lifecycle hooks only when the runtime owns the event.
 
 ## Quality Checks

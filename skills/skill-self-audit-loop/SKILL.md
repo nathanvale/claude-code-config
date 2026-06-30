@@ -12,8 +12,8 @@ Do not use for ordinary one-shot skill review. Do not audit every skill. Do not 
 
 ## Owner Paths
 
-- Skill repair owner: `skills/create-skill/SKILL.md`.
-- Skill design runbook: `skills/create-skill/references/skill-design-decision-runbook.md`.
+- Skill repair owner: `skills/skill-author/SKILL.md`.
+- Skill design runbook: `skills/skill-author/references/skill-design-decision-runbook.md`.
 - Storage owner: `skills/context-advisor/references/storage-routing.md`.
 - CLI owner for future helpers: `skills/create-cli/SKILL.md`.
 - Source requirements: `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md`.
@@ -22,7 +22,7 @@ Do not use for ordinary one-shot skill review. Do not audit every skill. Do not 
 ## Workflow
 
 1. Work from the repo root that owns the target `SKILL.md`.
-2. Read `skills/create-skill/references/skill-design-decision-runbook.md`.
+2. Read `skills/skill-author/references/skill-design-decision-runbook.md`.
 3. If the target `SKILL.md` is missing, ask one question.
 4. Read the target `SKILL.md`.
 5. Read claim-relevant owner paths named by the target skill.
@@ -89,7 +89,7 @@ Reject style, taste, missing examples, and vague wording unless they create one 
 
 - Repair Candidates are evidence handoffs, not tasks.
 - Name the smallest likely owner path and repair shape.
-- Point every candidate to `skills/create-skill/SKILL.md`.
+- Point every candidate to `skills/skill-author/SKILL.md`.
 - Do not authorize source edits.
 - A later repair workflow rereads the target skill and owner paths before patching.
 
@@ -114,7 +114,7 @@ convergence: not_started
 - This file is not canonical skill instruction.
 - Research explains loop shape only.
 - Findings require local source evidence.
-- Repair source through `skills/create-skill/SKILL.md`.
+- Repair source through `skills/skill-author/SKILL.md`.
 - Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/create-cli/SKILL.md` first.
 
 ## Driver Commands
@@ -152,7 +152,7 @@ One-pass fallback:
 
 ## Loaded Owner Paths
 
-- `skills/create-skill/references/skill-design-decision-runbook.md`
+- `skills/skill-author/references/skill-design-decision-runbook.md`
 - `<target SKILL.md>`
 
 ## Skipped Owner Paths

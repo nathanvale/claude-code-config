@@ -11,14 +11,14 @@ Do not use for accepted repo decisions. Use `decisions`.
 
 ## Owner Paths
 
-- Memory storage routing map: `skills/create-skill/references/skill-memory-storage-routing.md`.
-- Skill philosophy: `skills/create-skill/references/skill-design-philosophy.md`.
-- Skill vocabulary: `skills/create-skill/CONTEXT.md`.
+- Memory storage routing map: `skills/skill-author/references/skill-memory-storage-routing.md`.
+- Skill philosophy: `skills/skill-author/references/skill-design-philosophy.md`.
+- Skill vocabulary: `skills/skill-author/CONTEXT.md`.
 - Decision log: `docs/decisions/`.
 
 ## Workflow
 
-1. Read `skills/create-skill/references/skill-memory-storage-routing.md`.
+1. Read `skills/skill-author/references/skill-memory-storage-routing.md`.
 2. Name the memory owner.
 3. Name the memory kind.
 4. Name mutability.

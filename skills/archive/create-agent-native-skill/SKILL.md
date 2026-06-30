@@ -9,17 +9,17 @@ Temporary skill bridge.
 
 ## Owner Paths
 
-- Canonical capability: `skills/create-skill/SKILL.md`.
-- Runtime-backed skill design reference: `skills/create-skill/references/agent-native-skill-design.md`.
-- Skill philosophy: `skills/create-skill/references/skill-design-philosophy.md`.
+- Canonical capability: `skills/skill-author/SKILL.md`.
+- Runtime-backed skill design reference: `skills/skill-author/references/agent-native-skill-design.md`.
+- Skill philosophy: `skills/skill-author/references/skill-design-philosophy.md`.
 - CLI design owner path: `skills/create-cli/SKILL.md`.
 
 ## Entry-Screen Route
 
-1. Read `skills/create-skill/SKILL.md`.
-2. Read `skills/create-skill/references/agent-native-skill-design.md`.
-3. Continue the request through `create-skill`.
+1. Read `skills/skill-author/SKILL.md`.
+2. Read `skills/skill-author/references/agent-native-skill-design.md`.
+3. Continue the request through `skill-author`.
 
 ## Removal Condition
 
-- Remove this skill bridge after active references route runtime-backed skill creation requests to `create-skill`.
+- Remove this skill bridge after active references route runtime-backed skill creation requests to `skill-author`.

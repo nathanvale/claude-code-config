@@ -17,7 +17,7 @@ Use when creating or repairing owner paths, references, contract pointers, and p
 
 ## Verification
 
-- Run owner-path checks after adding, renaming, removing, or retargeting local owner paths: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
+- Run owner-path checks after adding, renaming, removing, or retargeting local owner paths: `bun run skills/skill-author/scripts/check-owner-paths.ts --json`.
 - Resolve `references/`, `scripts/`, `CONTEXT.md`, and `SKILL.md` from the owning skill root.
 - Write package and config owner paths with enough path context to check them, such as `skills/<name>/package.json` or `runtime/<name>/tsconfig.json`.
 - Resolve missing owners before handoff, or record the blocked state and next repair.

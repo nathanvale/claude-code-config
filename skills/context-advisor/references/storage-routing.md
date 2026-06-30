@@ -4,7 +4,7 @@ Use this reference when a skill, agent, helper, or human needs durable context
 placement advice.
 
 Keep `skills/context-advisor/SKILL.md` as the advisor front door.
-Keep `skills/create-skill/references/skill-design-philosophy.md` as the skill design owner.
+Keep `skills/skill-author/references/skill-design-decision-runbook.md` as the skill design owner.
 
 This map advises context placement. It does not own content, mutate stores, or manage runtime state.
 
@@ -80,21 +80,21 @@ This map advises context placement. It does not own content, mutate stores, or m
 - When co-locating, leave the inbound links intact: move references with the doc, or the move breaks discovery.
 - Numbered, cross-referenced records (ADRs indexed by sequence) resist relocation; keep them at the level their index lives unless the whole index moves.
 
-## `CONTEXT.md` Definition
+## CONTEXT.md Definition
 
-- Use `CONTEXT.md` for project-specific domain vocabulary.
+- Use CONTEXT.md for project-specific domain vocabulary.
 - Include canonical terms, tight definitions, avoided aliases, explicit ambiguities, and obvious relationships.
 - Include terms that help agents name modules, seams, and architecture candidates in domain language.
-- Use the nearest scoped `CONTEXT.md` before root context.
+- Use the nearest scoped CONTEXT.md before root context.
 - Use `CONTEXT-MAP.md` when multiple domain contexts need a map.
-- Create or update `CONTEXT.md` when a conversation names a durable domain concept or sharpens a fuzzy domain term.
+- Create or update CONTEXT.md when a conversation names a durable domain concept or sharpens a fuzzy domain term.
 - Use `improve-codebase-architecture` when maintaining domain terms for architecture deepening, seam naming, module candidates, or architecture review output.
 - Keep architecture vocabulary in the architecture skill owner.
-- Add `CONTEXT.md` examples only after repeated routing drift; keep examples in a routing reference, not root `CONTEXT.md`.
+- Add CONTEXT.md examples only after repeated routing drift; keep examples in a routing reference, not root CONTEXT.md.
 - Keep accepted decisions in `docs/decisions/` or ADRs.
-- Keep project tracker state in scoped `TASKS.md` or the relevant project tracker.
+- Keep project tracker state in scoped TASKS.md or the relevant project tracker.
 - Keep workflows in `SKILL.md`.
-- Keep generic programming concepts, implementation details, temporary notes, research summaries, and setup facts out of `CONTEXT.md`.
+- Keep generic programming concepts, implementation details, temporary notes, research summaries, and setup facts out of CONTEXT.md.
 
 ## Routing
 
@@ -115,12 +115,12 @@ This map advises context placement. It does not own content, mutate stores, or m
   - Provide a refresh/status verb when agents rely on it.
 
 - If context is a durable domain term:
-  - Store in the nearest `CONTEXT.md`.
+  - Store in the nearest CONTEXT.md.
   - Include only project-specific domain language.
   - Define what the term is, not implementation steps.
   - Include avoided aliases when naming drift would hurt review or implementation.
   - Add relationships when they clarify seams or ownership.
-  - Use scoped `CONTEXT.md` files before root context.
+  - Use scoped CONTEXT.md files before root context.
   - Record a decision only when the term came from an accepted choice.
 
 - If context is an accepted decision:
@@ -129,10 +129,10 @@ This map advises context placement. It does not own content, mutate stores, or m
   - Use ADR shape only when the ADR threshold is met.
 
 - If context is project tracker state, work queue, open question, progress state, audit queue, or next action:
-  - Store in a scoped `TASKS.md` or project tracker owned by the relevant area.
+  - Store in a scoped TASKS.md or project tracker owned by the relevant area.
   - Add tracker shape examples only after repeated drift across multiple trackers.
   - Keep accepted decisions in `docs/decisions/`.
-  - Keep domain terms in the nearest `CONTEXT.md`.
+  - Keep domain terms in the nearest CONTEXT.md.
   - Keep rules in the rulebook owner.
   - Update after task state changes.
 
@@ -265,7 +265,7 @@ This map advises context placement. It does not own content, mutate stores, or m
 - If privacy, durability, write authority, or side-effect stance is unclear, ask one question.
 - If the storage choice is unresolved and affects ownership, privacy, durability, or side effects, use `decision-mode` or `grill-with-docs`.
 - If the context is an accepted repo decision, use `record-decision`.
-- If the context is project tracker state or unresolved work state, patch the scoped `TASKS.md` or project tracker.
-- If accepted storage choice requires a runtime-backed skill capability, use `create-skill`.
-- If storage requires a new or changed agent-facing CLI surface, use `create-cli` inside the `create-skill` runtime-backed path.
+- If the context is project tracker state or unresolved work state, patch the scoped TASKS.md or project tracker.
+- If accepted storage choice requires a runtime-backed skill capability, use `skill-author`.
+- If storage requires a new or changed agent-facing CLI surface, use `create-cli` inside the `skill-author` runtime-backed path.
 - If the context is only hot startup guidance, patch hot startup guidance and point to the durable owner.

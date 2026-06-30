@@ -1,16 +1,15 @@
 ---
-name: create-skill
+name: skill-author
 description: "Create, repair, review, archive, or merge repo SKILL.md source when trigger descriptions, invocation lanes, routing, owner paths, or dependencies change."
-role: main-entry
 ---
 
-# Create Skill
+# Skill Author
 
 ## Intent Classification
 
 Classify from args top to bottom and proceed. Read `CONTEXT.md` only when
-creating a new skill or when vocabulary matters. Do not show a menu unless
-intent is ambiguous.
+creating a new skill or when vocabulary matters. Show the menu only for no
+args, no target, or ambiguous intent.
 
 | Signal | Route | References to open |
 |--------|-------|--------------------|
@@ -22,18 +21,20 @@ intent is ambiguous.
 | Target skill + safety/gotcha/private/destructive/auth/side effect | Fix safety gate | Target `SKILL.md`; `references/skill-safety-gate.md` |
 | Target skill + verification/check/test/YAML/handoff | Fix verification | Target `SKILL.md`; `references/skill-verification-gate.md` |
 | Target skill + fix/heal/repair/improve/patch | Classify edit branch | Target `SKILL.md`; `references/skill-design-decision-runbook.md`, then open the smallest branch reference |
-| "create" / "new skill" / no target | Create new skill | `CONTEXT.md`; `references/skill-design-decision-runbook.md`, then open the smallest branch reference |
+| No args / no target | Show menu below | - |
+| "create" / "new skill" | Create new skill | `CONTEXT.md`; `references/skill-design-decision-runbook.md`, then open the smallest branch reference |
 | Runtime / CLI / helper command | Add runtime behavior | `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/create-cli/SKILL.md` |
 | `mcporter` / MCP via CLI / MCP config / thin MCP skill / server alias / tool schema | Add MC Porter skill guidance | Target `SKILL.md` when fixing; `references/mcporter-skill-design.md`; branch gate only when the `SKILL.md` body changes |
-| Role / blocked / degraded | Check role or dependency | `references/skill-roles.md`; `references/skill-dependency-rules.md` |
+| Blocked / degraded / dependency | Check dependency behavior | `references/skill-dependency-rules.md` |
 | Archive / merge / retire | Archive or merge | `references/archive-cleanup.md`; `references/consolidation-map.md` |
 | Research / import / handover | Import external input | `references/research-portability.md`; `references/community-skill-research-sources.md` |
 | Context / where to save | Route to context advisor | `skills/context-advisor/SKILL.md` |
 | Ambiguous | Show menu below | - |
 
-### Ambiguous-only menu
+### No-args or ambiguous menu
 
-Present only when intent classification cannot pick a route:
+Present only for no args, no target, or when intent classification cannot pick
+a route:
 
 1. **Fix, heal, or repair a skill** - name the target, open its `SKILL.md`.
 2. Review an existing skill - read target + runbook review-only branch + review rubric, return findings.
@@ -43,7 +44,7 @@ Present only when intent classification cannot pick a route:
 ## Run Card
 
 - Scope: create, repair, review, archive, or merge repo skill source files.
-- First safe action: classify intent from args, open only the references for that route.
+- First safe action: show the menu for no args or no target; otherwise classify intent from args and open only the references for that route.
 - Mode defaults: review-only returns findings; mixed review plus patch edits only requested findings; create, fix, heal, repair, or patch edits source.
 - Review boundary: do not patch during review unless the user asks for edits.
 - Thin-router gate: keep `SKILL.md` a `thin router` for the `current step only`.

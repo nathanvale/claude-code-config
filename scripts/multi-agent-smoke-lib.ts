@@ -1034,28 +1034,28 @@ Return a JSON object with these meanings:
 		title: "Heal-skill route is reachable",
 		fields: [
 			"healSkillRepairsSkillInstructions",
-			"createSkillOwnsGeneralSkillAuthoring",
-			"healSkillReplacesCreateSkillForNewSkills",
+			"skillAuthorOwnsGeneralSkillAuthoring",
+			"healSkillReplacesSkillAuthorForNewSkills",
 		],
 		prompt: `Heal-skill reachability smoke test.
 
 Return a JSON object with these meanings:
 - whoAmI: "claude" or "codex"
 - healSkillRepairsSkillInstructions: true if heal-skill repairs incorrect or outdated skill instructions
-- createSkillOwnsGeneralSkillAuthoring: true if create-skill owns general skill authoring and cleanup
-- healSkillReplacesCreateSkillForNewSkills: true only if heal-skill replaces create-skill for new skill creation`,
+- skillAuthorOwnsGeneralSkillAuthoring: true if skill-author owns general skill authoring and cleanup
+- healSkillReplacesSkillAuthorForNewSkills: true only if heal-skill replaces skill-author for new skill creation`,
 		expectations: {
 			claude: {
 				whoAmI: "claude",
 				healSkillRepairsSkillInstructions: true,
-				createSkillOwnsGeneralSkillAuthoring: true,
-				healSkillReplacesCreateSkillForNewSkills: false,
+				skillAuthorOwnsGeneralSkillAuthoring: true,
+				healSkillReplacesSkillAuthorForNewSkills: false,
 			},
 			codex: {
 				whoAmI: "codex",
 				healSkillRepairsSkillInstructions: true,
-				createSkillOwnsGeneralSkillAuthoring: true,
-				healSkillReplacesCreateSkillForNewSkills: false,
+				skillAuthorOwnsGeneralSkillAuthoring: true,
+				healSkillReplacesSkillAuthorForNewSkills: false,
 			},
 		},
 	}),

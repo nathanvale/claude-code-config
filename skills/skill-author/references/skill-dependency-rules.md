@@ -60,7 +60,7 @@ Example:
 
 Example:
 
-- `skills/create-skill/references/skill-design-decision-runbook.md`.
+- `skills/skill-author/references/skill-design-decision-runbook.md`.
 
 **Blocked state**
 

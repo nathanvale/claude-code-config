@@ -1,6 +1,6 @@
-# Create Skill Hardening Tracker
+# Skill Author Hardening Tracker
 
-Goal: make `skills/create-skill/` the canonical capability for skill authoring, review, healing, repair, cleanup, and consolidation.
+Goal: make `skills/skill-author/` the canonical capability for skill authoring, review, healing, repair, cleanup, and consolidation.
 
 ## Current Status
 
@@ -15,7 +15,7 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 
 ## Pickup Workflow
 
-- Start by reading `skills/create-skill/SKILL.md`, `skills/create-skill/CONTEXT.md`, and this tracker.
+- Start by reading `skills/skill-author/SKILL.md`, `skills/skill-author/CONTEXT.md`, and this tracker.
 - Read only the owner paths needed for the next task.
 - Use `grill-with-docs` when language, boundaries, workflow shape, or plan fit is fuzzy.
 - Use `decision-mode` when the next move has real options.
@@ -36,16 +36,16 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 
 ## Owner Paths
 
-- Portable skill owner path: `skills/create-skill/SKILL.md`.
-- Vocabulary owner path: `skills/create-skill/CONTEXT.md`.
-- Skill design owner path: `skills/create-skill/references/skill-design-philosophy.md`.
+- Portable skill owner path: `skills/skill-author/SKILL.md`.
+- Vocabulary owner path: `skills/skill-author/CONTEXT.md`.
+- Skill design owner path: `skills/skill-author/references/skill-design-philosophy.md`.
 - Storage routing map: `skills/context-advisor/references/storage-routing.md`.
-- Storage routing legacy pointer: `skills/create-skill/references/skill-memory-storage-routing.md`.
-- I/O shape examples: `skills/create-skill/references/skill-io-shape-examples.md`.
-- Agent-native skill design: `skills/create-skill/references/agent-native-skill-design.md`.
-- Runtime portability: `skills/create-skill/references/runtime-portability.md`.
-- Community-skill source note: `skills/create-skill/references/community-skill-research-sources.md`.
-- Skill collision and routing evidence audit: `skills/create-skill/scripts/skill-description-audit.ts`.
+- Storage routing legacy pointer: `skills/skill-author/references/skill-memory-storage-routing.md`.
+- I/O shape examples: `skills/skill-author/references/skill-io-shape-examples.md`.
+- Agent-native skill design: `skills/skill-author/references/agent-native-skill-design.md`.
+- Runtime portability: `skills/skill-author/references/runtime-portability.md`.
+- Community-skill source note: `skills/skill-author/references/community-skill-research-sources.md`.
+- Skill collision and routing evidence audit: `skills/skill-author/scripts/skill-description-audit.ts`.
 - Decision trail: `docs/decisions/2026-06-06-001-decisions-skill-decision-log.md`.
 - Archived agent-native skill source: `skills/archive/create-agent-native-skill/SKILL.md`.
 - Context advisor: `skills/context-advisor/SKILL.md`.
@@ -81,7 +81,7 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Deferred project-tracker shape examples until repeated drift appears across multiple trackers.
 - Deferred `CONTEXT.md` examples until repeated routing drift justifies a routing reference.
 - Added maintained source note for community-skill research inputs.
-- Kept runtime-backed skill design inside `create-skill` as `references/agent-native-skill-design.md`.
+- Kept runtime-backed skill design inside `skill-author` as `references/agent-native-skill-design.md`.
 - Kept existing-skill audits scoped to selected audit targets or observed failures.
 - Kept old-skill alias wrapper cleanup gated by rename evidence, old-name references, or selected scoped audit.
 - Verified current Codex and Claude skill/memory docs without changing vendor-memory rules.
@@ -93,11 +93,11 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Audited selected `SKILL.md` bodies for copied contracts; moved exact flags, schemas, artifacts, and command shapes back to owners.
 - Audited skill references for hidden required context; exposed unreferenced references and marked legacy XML guidance as historical.
 - Added a read-only description audit script for future skill-description crossover checks.
-- Created `skills/create-skill/` as the portable skill bundle for skill authoring, cleanup, and research portability.
+- Created `skills/skill-author/` as the portable skill bundle for skill authoring, cleanup, and research portability.
 - Drafted first-pass active, archive-review, user-workflow-review, and consolidation buckets for archive-first cleanup.
-- Consolidated `context/agent-native-cli`, `context/capability-registry`, `context/references`, and `context/skill-design` into `skills/create-skill/`.
-- Aligned `create-skill` skill and references to locked context vocabulary.
-- Resolved owner split: `create-skill` owns all skill authoring routes, `create-cli` owns CLI contract design, and `context-advisor` owns storage routing advice.
+- Consolidated `context/agent-native-cli`, `context/capability-registry`, `context/references`, and `context/skill-design` into `skills/skill-author/`.
+- Aligned `skill-author` skill and references to locked context vocabulary.
+- Resolved owner split: `skill-author` owns all skill authoring routes, `create-cli` owns CLI contract design, and `context-advisor` owns storage routing advice.
 - Converted `create-agent-skills` into a temporary skill bridge before archive.
 - Researched current XML guidance with Firecrawl; rejected pure XML skill-body structure and kept XML only for scoped prompt/content boundaries.
 - Accepted the first keep-active skill list for archive-first cleanup.
@@ -107,12 +107,12 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Set `skill-memory-storage-routing.md` as the seed for the legacy storage-framework replacement direction.
 - Added migration work to review the legacy storage framework and fold reusable storage-contract rules into the new routing owner.
 - Created `context-advisor` as the portable storage routing owner.
-- Kept `create-skill` storage routing as an owner-reference fallback, not a hard dependency.
+- Kept `skill-author` storage routing as an owner-reference fallback, not a hard dependency.
 - Archived `choose-skill-memory-store` after extracting reusable routing and output guidance.
 - Classified `issue-to-pr` and `runbook-orchestrator` as protected user-invocable runbook control planes.
-- Moved runtime-backed skill guidance into `create-skill`.
+- Moved runtime-backed skill guidance into `skill-author`.
 - Archived `create-agent-native-skill` without a bridge because it had not been used as a real route.
-- Archived `create-agent-skills` after extraction review found no reusable owner material beyond existing `create-skill` references.
+- Archived `create-agent-skills` after extraction review found no reusable owner material beyond existing `skill-author` references.
 - Archived archive-safe low/no-active-route skills from the accepted cleanup batch.
 - Protected dependency skills that still serve active routes: `agent-reliability-guardrails`, `imessage-reader`, `prompt-system-router`, and `prompt-system-workflow`.
 - Reduced live skills to accepted keep-active skills plus protected dependency and runbook control-plane skills.
@@ -157,7 +157,7 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Started portability audit; split portable export payload from local project state.
 - Updated moved-context guidance so redirect stubs are temporary and removable after active-reference audit.
 - Rewrote user-scope symlink findings without absolute local paths.
-- Classified remaining create-skill export scan hits as audit patterns, source notes, or local cleanup receipt.
+- Classified remaining skill-author export scan hits as audit patterns, source notes, or local cleanup receipt.
 - Found the `2026-06-08` portability session with `ce-sessions` and promoted runtime portability rules into `references/runtime-portability.md`.
 - Added `prove:workspace-portability` to build a clean temp export, run frozen install, run workspace invariant checks, and run focused package tests/typechecks.
 - Proved bundled workspace portability for `runtime/cli-command-facade` plus the four tracked facade consumers.
@@ -170,8 +170,8 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Classified `find-skills` and `grill-me` as user-scope symlink skills, not repo-owned active or archived payloads.
 - Re-ran active archived-path scan; remaining matches are cleanup receipts, explicit rejected compatibility routes, or ordinary non-skill words.
 - Audited active `context/` contracts for legacy storage-framework residue; removed archived `people-enrich` runtime owner paths, replaced `qmd-findings` with `search-findings`, and fixed doubled `context/context` path references.
-- Re-ran create-skill portable-owner scan for local paths, retired folders, archived skills, package-link shapes, and unbundled runtime hints.
-- Classified remaining create-skill portability hits as portable audit patterns, runtime portability rules, source notes, or local cleanup receipt.
+- Re-ran skill-author portable-owner scan for local paths, retired folders, archived skills, package-link shapes, and unbundled runtime hints.
+- Classified remaining skill-author portability hits as portable audit patterns, runtime portability rules, source notes, or local cleanup receipt.
 - Cleared stale consolidation-map extraction queue entries after context legacy audit and symlink classification.
 - Re-audited live `PROVENANCE.md` files; all remaining files are short source-history or evidence-path notes.
 - Fixed `draft-message` active context lookup from stale doubled context path to `context/comms-style.md`; description audit still passes.
@@ -182,7 +182,7 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Classified extra archive payloads for `choose-skill-memory-store` and `create-agent-native-skill` as preserved retired sources from absent untracked old paths, not archive mismatches.
 - Closed the handoff open question: the recovered handoff's research queue was already completed and reflected in this tracker.
 - Tightened archive cleanup receipt wording so completed context audits and empty candidate buckets read as closed.
-- Ran QMD research recall for create-skill hardening on 2026-06-08.
+- Ran QMD research recall for skill-author hardening on 2026-06-08.
 - Classified QMD hits as absorbed rules, deferred machinery, or candidate audits.
 - Audited package-bearing skill bundles for Bun package governance.
 - Promoted target Bun-backed skill shape to `references/runtime-portability.md`.
@@ -255,13 +255,13 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 
 ## Dependency Research Notes
 
-- `create-skill` now uses optional handoff plus owner-reference fallback for `context-advisor`.
+- `skill-author` now uses optional handoff plus owner-reference fallback for `context-advisor`.
 - `productivity-sync` uses `productivity-connectors` as support reference for tool-name maps.
 - `productivity-sync` uses `imessage-reader` as a CLI fallback owner path.
 - `to-issues`, `to-prd`, and `triage` use `docs/agents/` owner files instead of retired setup skill routes.
 - `context-advisor`, `record-decision`, `prompt-system-workflow`, `runbook-orchestrator`, `triage`, and `improve-codebase-architecture` now label helper-skill missing states.
 - Archived `browser-domain-memory`; future browser memory work routes to `browser-use`.
-- `create-skill` runtime-backed guidance routes CLI contract changes to `create-cli`.
+- `skill-author` runtime-backed guidance routes CLI contract changes to `create-cli`.
 - `ship-by-unit` borrows `ce-work` patterns but forbids invoking `/ce-work`.
 - Missing-skill policy now has first-pass labels for hard dependency, optional handoff, owner-reference fallback, bundled reference, blocked state, and degraded state.
 - Dependency sections are routing cards only: type, missing state, owner path, fallback, next repair.
@@ -292,10 +292,10 @@ Goal: make `skills/create-skill/` the canonical capability for skill authoring, 
 - Local `file:` dependencies outside the skill bundle mean local development portability unless the dependency owner travels with the export payload.
 - Workspace portable bundle: export includes root `package.json`, root `bun.lock`, skill packages, and `runtime/` owners.
 - Standalone skill zip: every runtime dependency is public/installable or bundled inside that single skill zip.
-- Allowed create-skill export scan hit: audit patterns in `references/research-portability.md`.
-- Allowed create-skill export scan hit: source freshness notes in `references/community-skill-research-sources.md`.
-- Allowed create-skill export scan hit: provenance source note in `references/runtime-portability.md`.
-- Allowed create-skill export scan hit: local cleanup receipt in `references/archive-cleanup.md`.
+- Allowed skill-author export scan hit: audit patterns in `references/research-portability.md`.
+- Allowed skill-author export scan hit: source freshness notes in `references/community-skill-research-sources.md`.
+- Allowed skill-author export scan hit: provenance source note in `references/runtime-portability.md`.
+- Allowed skill-author export scan hit: local cleanup receipt in `references/archive-cleanup.md`.
 
 ## Bun Facade Migration Tracker
 
@@ -446,7 +446,7 @@ Done:
 - Done (Low): runtime portability docs now scope package-bin shebang guidance to published or externally consumed bins.
 - Done (Low): runtime portability docs mark `noUncheckedIndexedAccess` as intentionally non-enforced until the hardening pass lands.
 - Done (Nit): runtime portability docs name TypeScript or JavaScript Bun bin shebangs.
-- Done (Nit): create-skill route-step audit invocations include `--json`.
+- Done (Nit): skill-author route-step audit invocations include `--json`.
 - Done (Nit): removed untracked generated evidence from `skills/test-runner/src/var/`; generated evidence stays under ignored top-level `var/`.
 - Done (Nit): active package tsconfig include/exclude globs now make nested source and fixture/prototype exceptions explicit.
 - Done: corrected tracker wording for browser-use facade dependency and tarball payload.
@@ -476,7 +476,7 @@ TASKS.md claims to tighten (state is correct, wording over-generalizes):
 - Before future archive: audit protected dependency skills `agent-reliability-guardrails`, `imessage-reader`, `prompt-system-router`, and `prompt-system-workflow`.
 - When browser-use implementation resumes: decide whether to implement or hide advertised `operate snapshot`, `operate screenshot`, and `operate emulate`.
 - Before changing facade-backed script dependencies: use the Bun facade migration tracker.
-- Before changing runtime-backed skill creation guidance: keep the owner in `skills/create-skill/references/agent-native-skill-design.md`.
+- Before changing runtime-backed skill creation guidance: keep the owner in `skills/skill-author/references/agent-native-skill-design.md`.
 - After any rename: audit skill bridges and alias wrappers.
 - After repeated unlabeled or stale helper routes survive manual review: consider a dependency audit script.
 - If a future replacement explicitly accepts it: revisit legacy storage-framework folder taxonomy, hot-context policy, or old `/capture` workflow.
@@ -490,8 +490,8 @@ TASKS.md claims to tighten (state is correct, wording over-generalizes):
 ## Validation
 
 - Run `scripts/agent-instructions.sh check --json`.
-- Run `bun run skills/create-skill/scripts/skill-description-audit.ts` after adding, renaming, or changing skill descriptions.
-- Run `bun run skills/create-skill/scripts/skill-role-audit.ts` after adding, archiving, or changing active skill roles.
+- Run `bun run skills/skill-author/scripts/skill-description-audit.ts` after adding, renaming, or changing skill descriptions.
+- Run `bun run skills/skill-author/scripts/skill-role-audit.ts` after adding, archiving, or changing active skill roles.
 - Run `bash -n scripts/agent-instructions.sh`.
 - Run decision-log YAML parse after decision edits.
 - Run `git diff --check`.
@@ -500,6 +500,6 @@ TASKS.md claims to tighten (state is correct, wording over-generalizes):
 
 ## Next Safe Action
 
-- Start next session by reading `skills/create-skill/SKILL.md`, `skills/create-skill/CONTEXT.md`, and this file.
+- Start next session by reading `skills/skill-author/SKILL.md`, `skills/skill-author/CONTEXT.md`, and this file.
 - If a conditional trigger fires, read the named owner paths and run the matching audit.
 - Otherwise validate before handoff.

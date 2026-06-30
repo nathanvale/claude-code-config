@@ -61,7 +61,7 @@ anti-pattern list, or future scaffold/review-skill input.
 ## Verification
 
 - YAML-parse this file after frontmatter edits.
-- Run `bun run skills/create-skill/scripts/check-owner-paths.ts --json` after owner-path edits.
+- Run `bun run skills/skill-author/scripts/check-owner-paths.ts --json` after owner-path edits.
 
 ## Next Safe Action
 

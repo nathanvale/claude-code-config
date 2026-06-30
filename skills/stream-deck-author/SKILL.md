@@ -130,8 +130,8 @@ target, risk, or write authority. Bold exactly one recommended default.
 ## Verification
 
 - YAML-parse this file after edits.
-- `bun run skills/create-skill/scripts/skill-description-audit.ts --json`.
-- `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
+- `bun run skills/skill-author/scripts/skill-description-audit.ts --json`.
+- `bun run skills/skill-author/scripts/check-owner-paths.ts --json`.
 - `mcporter config doctor`.
 - `mcporter config get streamdeck-author`.
 - `mcporter list streamdeck-author --schema --timeout 60000`.
