@@ -37,6 +37,7 @@ Use when shaping `SKILL.md`, headings, first-screen behavior, examples, run card
 ## Heading Pruning
 
 - Apply the `deletion test` before handoff: if deleting text does not change agent behavior for the selected branch, delete it or move it to a `branch-hidden reference`.
+- In source-edit handoff, report `deletion test`: kept, moved, deleted, or none.
 - Treat headings as options, not a checklist.
 - If `Owner Map`, `Workflow`, `Next Safe Action`, `Verification`, and `Safety` all appear, file a review finding by default until each heading passes the `deletion test`.
 - Use `references/skill-io-shape-examples.md#heading-selection-matrix` when heading choice is unclear.

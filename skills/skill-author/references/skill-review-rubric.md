@@ -42,6 +42,12 @@ Do not impersonate rubric authors. Use the rubric as a review lens.
 - Flag sediment: install boilerplate, changelogs, TODOs, licenses, duplicated examples, or broad background.
 - Flag strong defaults treated as cumulative checklists.
 
+## Workflow Fitness
+
+- Use `references/skill-workflow-fitness-probes.md` only when reviewing a skill-authoring workflow or when the user asks whether the workflow works in practice.
+- Keep ordinary static reviews on this rubric.
+- Do not load edit gates for workflow probes unless the user asks to patch findings.
+
 ## Review Output Shape
 
 - Lead with findings by severity.

@@ -91,5 +91,5 @@ Open only the branch needed for the current step.
 
 - Open the smallest branch reference from the index.
 - Patch only the current branch.
-- Record `deletion test` result before handoff: kept, moved, deleted, or none.
+- For create, fix, heal, repair, or patch source edits, record the `deletion test` result before handoff: kept, moved, deleted, or none.
 - Run the branch-owned verification from `references/skill-verification-gate.md`.

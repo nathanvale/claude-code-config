@@ -17,6 +17,7 @@ Use when choosing checks, handoff evidence, or post-edit verification for skill 
 - Report untracked files.
 - Report skipped checks.
 - Report owner-path results.
+- For create, fix, heal, repair, or patch source edits, report `deletion test`: kept, moved, deleted, or none.
 - Return owner file, check result, next safe action, and user-facing skill follow-up.
 
 ## Review-Only Route
