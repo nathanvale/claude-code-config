@@ -6,9 +6,9 @@ Keep exact field lists, command flags, output envelopes, and validation rules in
 
 ## Preview Index
 
-- Read `Skill I/O Example` for model-readable prose workflows.
-- Read `Simple Operation I/O Example` for command wrapper skills.
-- Read `Runtime-Backed Capability Example` for script or CLI-backed skills.
+- Read `Skill I/O Example` for candidate pieces in model-readable prose workflows.
+- Read `Simple Operation I/O Example` for candidate pieces in command wrapper skills.
+- Read `Runtime-Backed Capability Example` for candidate pieces in script or CLI-backed skills.
 - Read `Heading Selection Matrix` when choosing `SKILL.md` body headings from input/output shape.
 - Stop once the skill's input/output owner, heading shape, and next safe action are clear.
 
@@ -29,12 +29,12 @@ Use this matrix when choosing `SKILL.md` body headings.
 
 Shape-specific starts:
 
-| Shape | Minimal heading set | Add only when |
+| Shape | Start with | Add only when |
 |---|---|---|
-| Write something | `Owner Paths`, `Workflow`, `Example`, `Next Safe Action` | Output style, facts, or fallback behavior would be unclear without it. |
-| Simple operation | `Owner Paths`, `Workflow`, `Output Handling`, `Next Safe Action` | stdout, stderr, exit code, or command ownership changes the workflow. |
-| Runtime-backed capability | `Owner Paths`, `Workflow`, `Safety`, `Next Safe Action` | Parsed input, machine output, durable writes, retry, or repair state changes the workflow. |
-| Main-entry router | `Intent Classification`, `Run Card` or `Next Safe Action`, `Owner Map` | Multiple routes, slow work, or visible state would be unclear without it. |
+| Write something | One `Workflow` or `Next Safe Action` heading. | Owner paths, examples, or output style would be unclear without it. |
+| Simple operation | One `Workflow` heading naming the command owner and report shape. | stdout, stderr, exit code, or command ownership changes the workflow. |
+| Runtime-backed capability | One `Workflow` heading plus a blocking `Safety` line when needed. | Parsed input, machine output, durable writes, retry, or repair state changes the workflow. |
+| Main-entry router | `Intent Classification`. | `Run Card` or `Owner Map` changes first-minute route, halt, or continuation behavior. |
 
 Optional headings:
 
@@ -69,6 +69,8 @@ Good pattern:
 
 ## Skill I/O Example
 
+Copy only the pieces that change the selected branch.
+
 ```markdown
 ---
 name: draft-release-notes
@@ -79,18 +81,12 @@ description: "Draft release notes when shipped changes, PR notes, issue notes, o
 
 Use when the user asks for release notes, changelog copy, or a shipped-change summary.
 
-## Owner Paths
-
-- Pattern: `references/skill-design-decision-runbook.md#write-something-skill-io-example`.
-- Style guide: `context/comms-style.md`.
-- Fact input: current diff, PR notes, issue notes, or user-supplied summary.
-
 ## Workflow
 
-1. Read the fact input.
+1. Read the fact input: current diff, PR notes, issue notes, or user-supplied summary.
 2. Draft in the requested channel format.
 3. Flag unsupported claims.
-4. Check the example shape before final output.
+4. Use `context/comms-style.md` only when channel style is unclear.
 
 ## Example
 
@@ -109,6 +105,8 @@ Output:
 
 ## Simple Operation I/O Example
 
+Copy only the pieces that change the selected branch.
+
 ```markdown
 ---
 name: run-repo-check
@@ -119,15 +117,9 @@ description: "Run repository checks when the user asks for lint, format check, t
 
 Use when the user asks to run the repo check, lint, format check, or type check.
 
-## Owner Paths
-
-- Pattern: `references/skill-design-decision-runbook.md#run-a-command-simple-operation-io`.
-- Command owner path: `package.json`.
-- Test owner path: repo check tests or CI workflow.
-
 ## Workflow
 
-1. Read the command from the owner path.
+1. Read the command from `package.json`.
 2. Run it from the repo root.
 3. Report exit code, stdout summary, and stderr diagnostics.
 
@@ -144,6 +136,8 @@ Use when the user asks to run the repo check, lint, format check, or type check.
 
 ## Runtime-Backed Capability Example
 
+Copy only the pieces that change the selected branch.
+
 ```markdown
 ---
 name: record-decision
@@ -154,20 +148,11 @@ description: "Record accepted repo decisions through the record-decision runtime
 
 Use when a decision is accepted and belongs in the repo decision log.
 
-## Owner Paths
-
-- Pattern: `references/skill-design-decision-runbook.md#use-a-reliable-tool-runtime-backed-capability`.
-- CLI design: `skills/create-cli/SKILL.md`.
-- Input contract owner path: `packages/record-decision/src/record-input.ts`.
-- Output transport: `@side-quest/cli-command-facade`.
-- Output data owner path: `packages/record-decision/src/record-output.ts`.
-- Test owner path: `packages/record-decision/tests/record.test.ts`.
-
 ## Workflow
 
-1. Read the input contract owner path.
+1. Read input contract owner `packages/record-decision/src/record-input.ts`.
 2. Build the prose input envelope.
-3. Run the command named by the CLI owner path.
+3. Run the command named by the CLI owner.
 4. Follow the returned next safe action.
 
 ## Safety

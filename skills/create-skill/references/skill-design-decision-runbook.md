@@ -15,6 +15,7 @@ Agent-native CLI vocabulary owner: `CONTEXT.md`.
 - Name the top ship-but-fail scenario.
 - Choose the smallest shape.
 - Run the input/output gate before source edits.
+- Choose the invocation lane before frontmatter or trigger edits.
 - Keep `SKILL.md` a `thin router` for the `current step only`.
 - Put branch-only detail behind a `branch-hidden reference`.
 - Apply the `deletion test`: if removal does not change current-branch behavior, delete the text or move it behind a context pointer.
@@ -64,14 +65,18 @@ Use before create, fix, heal, repair, or patch edits.
 - Use: `skills/create-cli/SKILL.md` before changing CLI/runtime surfaces.
 - Stop: exact fields, flags, envelopes, states, and output semantics belong in code, help, tests, or generated docs.
 
-## Pick Invocation Mode
+## Pick Invocation Lane
 
-- Auto: safe read-only workflows where over-triggering is low-cost.
-- Manual command: missed invocation would lose data, mutate state, or bypass safety.
-- User-only: user authority is required.
-- Path-scoped: safe only inside named files or folders.
-- Model-only: guidance only; no tool or workflow should run automatically.
-- Always name the fallback route: command, slash invocation, driver handoff, hook owner, or owner path.
+Use before creating or changing frontmatter, trigger descriptions, or routing.
+
+- `model lane`: the description stays visible as a model context pointer. Use when automatic recall is valuable and false positives are low-cost.
+- `self invocation lane`: user, slash-command, driver, hook, or owner-path invocation. Use when false positives are costly, user authority matters, or the workflow is high-load, private, durable, external, destructive, or spendy.
+- Ask one question when the lane is unclear: `Model lane or self invocation lane?`
+- Do not ask when the user named the lane, existing frontmatter already declares it, or an owner path requires it.
+- For `model lane`, make `description` short, concrete, and trigger-shaped.
+- For `self invocation lane`, add or preserve `disable-model-invocation: true` when the runtime supports it, and name the fallback invocation route.
+- Use `user-invocable` only when an existing owner path or runtime already uses that field.
+- Do not invent new frontmatter fields for lanes.
 
 ## Frontmatter
 
@@ -79,6 +84,8 @@ Use before create, fix, heal, repair, or patch edits.
 - Match `name` to the directory unless a runtime requires an alias.
 - Write `description` as trigger conditions, not a summary.
 - Front-load domain nouns and trigger phrases.
+- Keep `model lane` descriptions narrow enough to avoid unrelated context load.
+- Keep `self invocation lane` descriptions readable for users, but pair them with `disable-model-invocation: true` when the runtime supports it.
 - Add `when not` only when a nearby skill collision exists.
 - Rename skills directly unless active route evidence proves a bridge is needed.
 - Add a skill bridge only for live references in startup docs, active skills, scripts, plugin manifests, exported bundles, known external docs, or current user invocations.
@@ -103,7 +110,7 @@ Use before create, fix, heal, repair, or patch edits.
 - Start heading choice from input/output shape, not `role`.
 - Reject pure XML skill-body structure.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
-- **Every new skill must have a no-args front door.** Add an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. A skill with no front door stalls on first run. Use `references/adhd-friendly-dx.md` for the pattern. Enforce during create and patch routes; review-only runs flag missing front doors in findings.
+- **Every new skill must have a no-args front door.** Add one clear default action in an `## Intent Classification` block or equivalent `## Next Safe Actions` block. Use a numbered menu only when user choice changes owner, risk, target, or next action. A skill with no front door stalls on first run. Use `references/adhd-friendly-dx.md` for multi-choice flows. Enforce during create and patch routes; review-only runs flag missing front doors in findings.
 - Apply the `deletion test` before handoff: if deleting text does not change agent behavior for the selected branch, delete it or move it to a `branch-hidden reference`.
 
 ## Owner Paths
@@ -224,6 +231,7 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Prefer prune or substitute before adding instructions.
 - Prefer `thin router` shape over complete first-screen coverage.
 - Strong default headings are options, not a checklist.
+- Treat copied example heading sets as draft material until the `deletion test` proves each heading changes selected-branch behavior.
 - Branch-only detail belongs in a `branch-hidden reference`.
 - Run the `deletion test` against the `current step only`.
 - Choose a scoped audit target; do not audit the whole repo from runbook changes alone.
@@ -248,7 +256,7 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Use `references/skill-review-rubric.md` for review-only workflows.
 - Prefer examples for judgment-heavy workflows.
 - Move rare branches and deep context to one-level `references/`.
-- **No-args front door (mandatory):** every skill must handle invocation with no args. Check that an `## Intent Classification` or `## Next Safe Actions` block exists with a clear default action. If absent, add it before considering the skill shippable.
+- **No-args front door (mandatory):** every skill must handle invocation with no args. Check that an `## Intent Classification` or `## Next Safe Actions` block exists with one clear default action. Add a menu only when user choice changes owner, risk, target, or next action. If no default action exists, add it before considering the skill shippable.
 
 #### Run Card Pattern
 

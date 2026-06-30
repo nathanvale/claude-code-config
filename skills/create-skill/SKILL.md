@@ -1,6 +1,6 @@
 ---
 name: create-skill
-description: "Create, fix, repair, review, archive, or merge agent skills. Use for SKILL.md work, skill routing, owner paths, roles, dependencies, portability, and reusable skill guidance."
+description: "Create, fix, repair, review, archive, or merge SKILL.md source. Use for skill trigger descriptions, invocation lanes, routing, owner paths, roles, dependencies, portability, and reusable skill guidance."
 role: main-entry
 ---
 
@@ -42,13 +42,12 @@ Present only when intent classification cannot pick a route:
 - Mode defaults: review returns findings only; create, fix, heal, repair, or patch edits source.
 - Review-only branch: read target `SKILL.md` and `references/skill-review-rubric.md`; return findings with severity, path, rubric failure, suggested direction, and next safe action.
 - Review boundary: do not patch during review unless the user asks for edits.
-- Edit-only gates: the next gates apply only to create, fix, heal, repair, or patch routes.
-- Input/output gate: before create, fix, heal, repair, or patch edits, name the shape owned by `references/skill-design-decision-runbook.md#inputoutput-gate`.
-- Thin-router gate: before create, fix, heal, repair, or patch edits, keep `SKILL.md` a `thin router` for the `current step only`: trigger, branch choice, immediate fail-closed gate, one owner anchor per hot branch, and next safe action.
-- Branch-hidden reference rule: move branch-only detail to `branch-hidden reference` files in `references/`; keep exact flags, schemas, states, output envelopes, and deterministic contracts in their `single source of truth`: code, CLI help, generated docs, tests, or scripts.
-- Deletion test: if deleting text does not change agent behavior for the selected branch, delete it or move it behind a context pointer.
-- MC Porter gate: when a skill uses `mcporter`, read `references/mcporter-skill-design.md`; before edits name the server alias, config owner, schema owner, read path, write path, config hygiene scan, and failure modes.
-- DX gate: every new or healed skill must have a no-args front door. Before handing off, check the new `SKILL.md` has an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. If the skill has multiple launch paths, the no-args route must show a numbered menu (max 4 choices, one bolded default, defaults stated as readable values). If the menu is missing, patch it before reporting done — do not leave it for a follow-up. Read `references/adhd-friendly-dx.md` for the pattern. Skills with choices but no menu fail this gate; skills with no front door at all also fail.
+- Edit branch: read `references/skill-design-decision-runbook.md`, then apply only the gates for the selected branch.
+- Invocation lane: before frontmatter or trigger edits, choose `model lane` or `self invocation lane`; ask the user one question when the lane is unclear.
+- Thin-router gate: keep `SKILL.md` a `thin router` for the `current step only`; move branch-only detail to `branch-hidden reference` files.
+- Pruning gate: apply the `deletion test` before handoff; headings are options, not a checklist.
+- MC Porter branch: when a skill uses `mcporter`, read `references/mcporter-skill-design.md` before edits.
+- DX branch: every new or healed skill needs one no-args default action; use a numbered menu only when user choice changes owner, risk, target, or next action.
 - Visible state: report edited paths, new references, untracked files, skipped checks, and owner-path results.
 - Slow path: warn before repo-wide audits, external research, browser work, task-tracker writes, or multi-pass verification.
 - Verify: run the checks owned by `references/skill-design-decision-runbook.md#verification`.

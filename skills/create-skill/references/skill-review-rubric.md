@@ -15,6 +15,7 @@ Do not impersonate rubric authors. Use the rubric as a review lens.
 
 - Check the description for concrete trigger phrases.
 - Check that routing starts from the user's request shape.
+- Check that the invocation lane is explicit or safely inherited: `model lane` or `self invocation lane`.
 - Flag vague summaries, personal-name leakage, and near-duplicate skill overlap.
 
 ## Structure
