@@ -42,6 +42,8 @@ const cleanupPaths: string[] = [];
 
 type SkillFeedbackStationId =
 	(typeof skillFeedbackBranchStationCatalog)[number]["id"];
+type SkillFeedbackBranchStation =
+	(typeof skillFeedbackBranchStationCatalog)[number];
 
 type RuntimeEnvelope = {
 	status?: "ok" | "error";
@@ -50,7 +52,28 @@ type RuntimeEnvelope = {
 };
 
 type StationScenario = {
-	run: (station: (typeof skillFeedbackBranchStationCatalog)[number]) => Promise<SkillFeedbackBranchStationEvidence>;
+	run: (station: SkillFeedbackBranchStation) => Promise<SkillFeedbackBranchStationEvidence>;
+};
+
+type StationProbe = {
+	root: string;
+	result: CliProcessResult;
+	envelope: RuntimeEnvelope;
+};
+
+type IgnoredGitStationOptions = {
+	args: readonly string[];
+	stdin?: string;
+	label?: string;
+	prepare?: (root: string) => Promise<void>;
+	assert?: (probe: StationProbe) => Promise<void> | void;
+};
+
+type ExistingRootStationOptions = {
+	root: string;
+	args: readonly string[];
+	label?: string;
+	assert?: (probe: StationProbe) => Promise<void> | void;
 };
 
 const BASE_CLOSEOUT: CloseoutReceipt = {
@@ -146,11 +169,10 @@ describe("skill-feedback Branch Station integration", () => {
 });
 
 async function runRecordSuccess(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(
-		[
+	return coverIgnoredGitStation(station, {
+		args: [
 			"record",
 			"--skill",
 			"create-skill",
@@ -165,20 +187,20 @@ async function runRecordSuccess(
 			"--explanation",
 			"Process evidence.",
 		],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.skill, describeCliProcessRun(result)).toBe("create-skill");
-	expect(await listInboxJsonFiles(root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
+		assert: async ({ root, result, envelope }) => {
+			expect(envelope.data?.skill, describeCliProcessRun(result)).toBe(
+				"create-skill",
+			);
+			expect(await listInboxJsonFiles(root)).toHaveLength(1);
+		},
+	});
 }
 
 async function runRecordProofAttached(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(
-		[
+	return coverIgnoredGitStation(station, {
+		args: [
 			"record",
 			"--skill",
 			"create-skill",
@@ -191,24 +213,24 @@ async function runRecordProofAttached(
 			"--generated-ts",
 			GENERATED_TS,
 		],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-	expect(envelope.data?.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-	expect(envelope.data?.proof_status).toBe("attached");
-	expect(envelope.data?.proof_diagnostics).toEqual([]);
-	return evidenceFor(station, result, envelope);
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+			expect(envelope.data?.writer_proof).toMatchObject({
+				algorithm: "hmac-sha256",
+			});
+			expect(envelope.data?.proof_status).toBe("attached");
+			expect(envelope.data?.proof_diagnostics).toEqual([]);
+		},
+	});
 }
 
 async function runRecordProofUnavailable(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writeUnusableTrustKey(root);
-	const result = await runSkillFeedback(
-		[
+	return coverIgnoredGitStation(station, {
+		prepare: writeUnusableTrustKey,
+		args: [
 			"record",
 			"--skill",
 			"create-skill",
@@ -221,113 +243,109 @@ async function runRecordProofUnavailable(
 			"--generated-ts",
 			GENERATED_TS,
 		],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toBeUndefined();
-	expect(envelope.data?.writer_proof).toBeUndefined();
-	expect(envelope.data?.proof_status).toBe("unavailable");
-	expect(envelope.data?.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
-	return evidenceFor(station, result, envelope);
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toBeUndefined();
+			expect(envelope.data?.writer_proof).toBeUndefined();
+			expect(envelope.data?.proof_status).toBe("unavailable");
+			expect(envelope.data?.proof_diagnostics).toEqual([
+				"trust_store_key_unusable",
+			]);
+		},
+	});
 }
 
 async function runRecordInvalidUsage(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["record", "--skill", "create-skill"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["record", "--skill", "create-skill"],
+		assert: async ({ root }) => {
+			expect(await listInboxJsonFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(await listInboxJsonFiles(root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutSuccessStdin(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["closeout"],
 		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		assert: async ({ root, result, envelope }) => {
+			expect(envelope.data?.contract, describeCliProcessRun(result)).toBe(
+				SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+			);
+			const writtenPath = envelope.data?.written_path;
+			expect(typeof writtenPath, describeCliProcessRun(result)).toBe("string");
+			expect((await stat(join(root, writtenPath as string))).isFile()).toBe(true);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.contract, describeCliProcessRun(result)).toBe(
-		SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
-	);
-	const writtenPath = envelope.data?.written_path;
-	expect(typeof writtenPath, describeCliProcessRun(result)).toBe("string");
-	expect((await stat(join(root, writtenPath as string))).isFile()).toBe(true);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutProofAttached(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["closeout"],
 		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+			expect(report.skill_run_id_provenance).toBeUndefined();
+			expect(envelope.data?.proof_status).toBe("attached");
+			expect(envelope.data?.proof_diagnostics).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
-	expect(report.skill_run_id_provenance).toBeUndefined();
-	expect(envelope.data?.proof_status).toBe("attached");
-	expect(envelope.data?.proof_diagnostics).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutProofUnavailable(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writeUnusableTrustKey(root);
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		prepare: writeUnusableTrustKey,
+		args: ["closeout"],
 		stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		assert: async ({ root, envelope }) => {
+			const report = await readOnlyInboxReport(root);
+			expect(report.writer_proof).toBeUndefined();
+			expect(envelope.data?.proof_status).toBe("unavailable");
+			expect(envelope.data?.proof_diagnostics).toEqual([
+				"trust_store_key_unusable",
+			]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	const report = await readOnlyInboxReport(root);
-	expect(report.writer_proof).toBeUndefined();
-	expect(envelope.data?.proof_status).toBe("unavailable");
-	expect(envelope.data?.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCloseoutInvalidReceipt(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const result = await runSkillFeedback(["closeout"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		args: ["closeout"],
 		stdin: "[]\n",
+		assert: async ({ root }) => {
+			expect(await listInboxJsonFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(await listInboxJsonFiles(root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runReviewEmptyInbox(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await mkdir(join(root, ".skill-feedback"), { recursive: true });
-	const result = await runSkillFeedback(["review"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.coverage).toMatchObject({ total_reports: 0 });
-	expect(envelope.data?.inbox_status).toBe("empty");
-	return evidenceFor(station, result, envelope);
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["review"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.coverage).toMatchObject({ total_reports: 0 });
+			expect(envelope.data?.inbox_status).toBe("empty");
+		},
+	});
 }
 
 async function runReviewTargetResolutionFailed(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const nonRepo = await makeRoot();
 	const result = await runSkillFeedback(["review", "--repo", nonRepo], {
@@ -342,75 +360,55 @@ async function runReviewTargetResolutionFailed(
 }
 
 async function runHealthPopulatedInbox(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writeInboxReport(
-		root,
-		"populated.json",
-		v1CloseoutReport("report-health-populated", GENERATED_TS),
-	);
-	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.inbox_status).toBe("populated");
-	expect(envelope.data?.counts).toMatchObject({ primary: 1 });
-	return evidenceFor(station, result, envelope);
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"populated.json",
+				v1CloseoutReport("report-health-populated", GENERATED_TS),
+			);
+		},
+		args: ["health"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.inbox_status).toBe("populated");
+			expect(envelope.data?.counts).toMatchObject({ primary: 1 });
+		},
+	});
 }
 
 async function runHealthProofDiagnostics(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await runSkillFeedback(
-		[
-			"record",
-			"--skill",
-			"create-skill",
-			"--goal",
-			"Health proof diagnostics station.",
-			"--outcome",
-			"confirmed",
-			"--friction",
-			"Clean run.",
-			"--generated-ts",
-			GENERATED_TS,
-		],
-		{ cwd: root, label: `${station.id}:setup` },
-	);
-	await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
-	await chmod(join(root, ".skill-feedback", ".trust", "key"), 0o600);
-	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.proof_health).toMatchObject({
-		verified_count: 0,
-		evidence_only_count: 1,
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await runRecordFixture(root, `${station.id}:setup`, {
+				goal: "Health proof diagnostics station.",
+			});
+			await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
+			await chmod(join(root, ".skill-feedback", ".trust", "key"), 0o600);
+		},
+		args: ["health"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.proof_health).toMatchObject({
+				verified_count: 0,
+				evidence_only_count: 1,
+			});
+			expect(
+				(envelope.data?.proof_health as { diagnostics?: string[] }).diagnostics,
+			).toContain("trust_store_key_unusable");
+		},
 	});
-	expect(
-		(envelope.data?.proof_health as { diagnostics?: string[] }).diagnostics,
-	).toContain("trust_store_key_unusable");
-	return evidenceFor(station, result, envelope);
 }
 
 async function runHealthCorrelationWitnessDiagnostics(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const root = await makeIgnoredGitRoot();
-	await runSkillFeedback(
-		[
-			"record",
-			"--skill",
-			"create-skill",
-			"--goal",
-			"Health witness diagnostics station.",
-			"--outcome",
-			"confirmed",
-			"--friction",
-			"Clean run.",
-			"--generated-ts",
-			GENERATED_TS,
-		],
-		{ cwd: root, label: `${station.id}:setup` },
-	);
+	await runRecordFixture(root, `${station.id}:setup`, {
+		goal: "Health witness diagnostics station.",
+	});
 	const key = Buffer.from(
 		(await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf8")).trim(),
 		"hex",
@@ -449,103 +447,100 @@ async function runHealthCorrelationWitnessDiagnostics(
 }
 
 async function runHealthUnsafeInbox(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	const outside = await makeRoot();
-	await symlink(outside, join(root, ".skill-feedback"));
-	const result = await runSkillFeedback(["health"], { cwd: root, label: station.id });
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data?.inbox_status).toBe("unsafe");
-	return evidenceFor(station, result, envelope);
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			const outside = await makeRoot();
+			await symlink(outside, join(root, ".skill-feedback"));
+		},
+		args: ["health"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.inbox_status).toBe("unsafe");
+		},
+	});
 }
 
 async function runPurgePreview(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writePurgeReports(root);
-	const result = await runSkillFeedback(["purge", "--keep-latest", "1"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		prepare: writePurgeReports,
+		args: ["purge", "--keep-latest", "1"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+				mode: "preview",
+				candidate_count: 1,
+				deleted_count: 0,
+			});
+			expect(await listInboxJsonFiles(root)).toHaveLength(2);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-		mode: "preview",
-		candidate_count: 1,
-		deleted_count: 0,
-	});
-	expect(await listInboxJsonFiles(root)).toHaveLength(2);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runPurgeExecute(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writePurgeReports(root);
-	const result = await runSkillFeedback(
-		["purge", "--keep-latest", "1", "--execute"],
-		{ cwd: root, label: station.id },
-	);
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-		mode: "execute",
-		candidate_count: 1,
-		deleted_count: 1,
+	return coverIgnoredGitStation(station, {
+		prepare: writePurgeReports,
+		args: ["purge", "--keep-latest", "1", "--execute"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+				mode: "execute",
+				candidate_count: 1,
+				deleted_count: 1,
+			});
+			expect(await listInboxJsonFiles(root)).toHaveLength(1);
+		},
 	});
-	expect(await listInboxJsonFiles(root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runPurgeInvalidUsage(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 ): Promise<SkillFeedbackBranchStationEvidence> {
-	const root = await makeIgnoredGitRoot();
-	await writePurgeReports(root);
-	const result = await runSkillFeedback(["purge", "--execute"], {
-		cwd: root,
-		label: station.id,
+	return coverIgnoredGitStation(station, {
+		prepare: writePurgeReports,
+		args: ["purge", "--execute"],
+		assert: async ({ root }) => {
+			expect(await listInboxJsonFiles(root)).toHaveLength(2);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(await listInboxJsonFiles(root)).toHaveLength(2);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelatePreviewRepairable(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeRepairableCorrelationFixture("preview");
-	const result = await runSkillFeedback(["correlate"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "preview",
+				counts: { repairable_count: 1, written_count: 0 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "preview",
-		counts: { repairable_count: 1, written_count: 0 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateExecuteWritten(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeRepairableCorrelationFixture("execute");
-	const result = await runSkillFeedback(["correlate", "--execute"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate", "--execute"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "execute",
+				counts: { repairable_count: 1, written_count: 1 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toHaveLength(1);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "execute",
-		counts: { repairable_count: 1, written_count: 1 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateAlreadyLinked(
@@ -556,51 +551,51 @@ async function runCorrelateAlreadyLinked(
 		cwd: setup.root,
 		label: `${station.id}:setup`,
 	});
-	const result = await runSkillFeedback(["correlate", "--execute"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate", "--execute"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "execute",
+				counts: { already_linked_count: 1, written_count: 0 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toHaveLength(1);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "execute",
-		counts: { already_linked_count: 1, written_count: 0 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toHaveLength(1);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateAmbiguous(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeAmbiguousCorrelationFixture();
-	const result = await runSkillFeedback(["correlate"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate"],
+		assert: async ({ root, envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "preview",
+				counts: { ambiguous_count: 1, repairable_count: 0 },
+			});
+			expect(await listCorrelationWitnessFiles(root)).toEqual([]);
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "preview",
-		counts: { ambiguous_count: 1, repairable_count: 0 },
-	});
-	expect(await listCorrelationWitnessFiles(setup.root)).toEqual([]);
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateInsufficientEvidence(
 	station: (typeof skillFeedbackBranchStationCatalog)[number],
 ): Promise<SkillFeedbackBranchStationEvidence> {
 	const setup = await writeInsufficientCorrelationFixture();
-	const result = await runSkillFeedback(["correlate"], {
-		cwd: setup.root,
-		label: station.id,
+	return coverExistingRootStation(station, {
+		root: setup.root,
+		args: ["correlate"],
+		assert: ({ envelope }) => {
+			expect(envelope.data).toMatchObject({
+				mode: "preview",
+				counts: { insufficient_evidence_count: 1, repairable_count: 0 },
+				next_action: { action_id: "no_repair_available" },
+			});
+		},
 	});
-	const envelope = expectStationEnvelope(station, result);
-	expect(envelope.data).toMatchObject({
-		mode: "preview",
-		counts: { insufficient_evidence_count: 1, repairable_count: 0 },
-		next_action: { action_id: "no_repair_available" },
-	});
-	return evidenceFor(station, result, envelope);
 }
 
 async function runCorrelateUnsafeInbox(
@@ -649,8 +644,60 @@ async function runSkillFeedback(
 	});
 }
 
+async function coverIgnoredGitStation(
+	station: SkillFeedbackBranchStation,
+	options: IgnoredGitStationOptions,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await options.prepare?.(root);
+	const result = await runSkillFeedback(options.args, {
+		cwd: root,
+		label: options.label ?? station.id,
+		stdin: options.stdin,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	await options.assert?.({ root, result, envelope });
+	return evidenceFor(station, result, envelope);
+}
+
+async function coverExistingRootStation(
+	station: SkillFeedbackBranchStation,
+	options: ExistingRootStationOptions,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const result = await runSkillFeedback(options.args, {
+		cwd: options.root,
+		label: options.label ?? station.id,
+	});
+	const envelope = expectStationEnvelope(station, result);
+	await options.assert?.({ root: options.root, result, envelope });
+	return evidenceFor(station, result, envelope);
+}
+
+async function runRecordFixture(
+	root: string,
+	label: string,
+	input: { goal: string },
+): Promise<CliProcessResult> {
+	return runSkillFeedback(
+		[
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			input.goal,
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"Clean run.",
+			"--generated-ts",
+			GENERATED_TS,
+		],
+		{ cwd: root, label },
+	);
+}
+
 function expectStationEnvelope(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 	result: CliProcessResult,
 ): RuntimeEnvelope {
 	expect(result.exitCode, describeCliProcessRun(result)).toBe(
@@ -675,7 +722,7 @@ function expectStationEnvelope(
 }
 
 function evidenceFor(
-	station: (typeof skillFeedbackBranchStationCatalog)[number],
+	station: SkillFeedbackBranchStation,
 	result: CliProcessResult,
 	envelope: RuntimeEnvelope,
 ): SkillFeedbackBranchStationEvidence {

@@ -12,6 +12,7 @@ Current source map:
 - Writer proof: `skills/skill-feedback/docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md`.
 - Correlation witnesses: `skills/skill-feedback/docs/plans/2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md`.
 - Correlation backfill repair: `skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md`.
+- P0/P1 ownership refactor: `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md`.
 
 ## Language
 
@@ -88,7 +89,7 @@ The build-phase use of closeout reports during v1 implementation, smoke tests, a
 _Avoid_: daily pilot, launch, production use, Codex end-to-end proof
 
 **Daily pilot**:
-The normal-use phase where skill-feedback reports become part of everyday review and triage. It starts only after review/correlation work and true Codex end-to-end proof satisfy the accepted pilot gate.
+The normal-use phase where skill-feedback reports become part of everyday review and triage. It may run on Claude Code once review/correlation work and the accepted Claude-supported pilot gate pass. Codex remains deferred for Trusted skill identity until an engine-owned skill invocation source exists.
 _Avoid_: implementation pilot, smoke test, proof-of-run, closeout experiment
 
 **Codex capture readiness gate**:
@@ -130,7 +131,7 @@ _Avoid_: Trusted run proof, trusted skill identity, keychain proof, correlation 
 
 **Correlation witness**:
 A private signed link artifact under `.skill-feedback/.correlation/` that can connect one runtime-owned Claude Stop hook report to one driver closeout report. Review verifies the witness, both linked report proofs, skill match, writer key, and hook runtime run id before overlaying `correlation_owned` on the closeout. Public closeout receipts cannot create witnesses or set correlation provenance.
-Blocked witness finalization may write private `diagnostic_*.json` artifacts under the same directory; these carry reason ids only and never act as reports or closeout input.
+Blocked witness finalization may write private `diagnostic_*.json` artifacts under the same directory; these carry diagnostics plus optional private repair candidate boundaries. They never act as reports or closeout input.
 _Avoid_: public receipt field, raw transcript match, assistant claim, timestamp match
 
 **Correlation repair**:
@@ -175,7 +176,7 @@ Entry-local claim language that downstream agents may repeat about one ledger en
 _Avoid_: global claim, badge, renderer copy, inferred language
 
 **Claim readiness**:
-The v2 review facts that split runtime capture, Trusted skill identity, and Daily pilot readiness. Each readiness fact carries status, reason ids, and evidence refs.
+The review stance for whether a readiness claim is safe to repeat. It separates runtime capture, Trusted skill identity, and Daily pilot readiness. Daily-pilot readiness is runtime-scoped: Claude Code can be supported while Codex Trusted skill identity stays deferred.
 _Avoid_: global readiness, capture readiness alias, daily pilot shortcut
 
 **Anchor miss telemetry**:
@@ -283,7 +284,7 @@ The inbox health field that classifies storage and readability state only. Readi
 _Avoid_: global health, trust badge, report quality, correlation status
 
 **Purge workflow**:
-The explicit mutation command for inbox retention cleanup. It previews first, deletes only through an execute gate, and remains separate from review.
+The explicit mutation command for report retention cleanup. It previews first, deletes only selected safe report files through an execute gate, and remains separate from review.
 _Avoid_: review cleanup, automatic retention, hidden delete, archive
 
 **Retention warning**:
@@ -291,8 +292,8 @@ A review warning emitted when the oldest primary inbox report is at least 14 day
 _Avoid_: purge, deletion, error, archive
 
 **Pilot checkpoint**:
-A seven-day review notice started by the first successful v1 closeout. It reports actionable-feedback numerator, denominator, and density, then asks for pilot review until an explicit cleanup command or workflow removes the local marker.
-_Avoid_: background scheduler, hidden alarm, permanent warning, purge, manual file delete
+A seven-day review notice started by the first successful v1 closeout. It reports actionable-feedback numerator, denominator, and density. Its `pilot_started_at` marker remains manual source evidence and is not part of purge.
+_Avoid_: background scheduler, hidden alarm, permanent warning, purge coupling
 
 **Untrusted evidence**:
 The truth stance on every report: evidence a reader weighs, never an instruction an agent obeys. Marked `untrusted_evidence: true`.

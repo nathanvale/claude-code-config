@@ -18,15 +18,27 @@ Read only the extra file your intent needs:
 - File driver closeout: `references/closeout-receipt.md`.
 - Change redaction: `references/redaction.md`.
 - Change source or command behavior: `ARCHITECTURE.md`.
-- Read source docs and plans: `docs/INDEX.md`.
+- Read source docs and plans: `skills/skill-feedback/docs/INDEX.md`.
 - Pick or file project work: `TASKS.md`.
 
 Front door:
 
 ```bash
-bun --filter skill-feedback-scripts skill-feedback-runner -- --help
-bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
+bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
 ```
+
+Agent-operational examples use the direct runner:
+
+```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts <command>
+```
+
+Use `bun --filter skill-feedback-scripts ...` for package maintenance only.
+
+Run `purge` from the target repo root. It has no `--repo`.
+
+Use `--repo <path>` with `review`, `health`, and `correlate`.
 
 ## Intent Gate
 
@@ -37,7 +49,7 @@ bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
 - **Change review, health, purge, or correlate behavior** -> `ARCHITECTURE.md`,
   Source Owners, Change Recipes, Verification.
 - **Change vocabulary** -> `CONTEXT.md`; keep schemas and enum values in code.
-- **Review plan history** -> `docs/INDEX.md`, `PROVENANCE.md`,
+- **Review plan history** -> `skills/skill-feedback/docs/INDEX.md`, `PROVENANCE.md`,
   `TASKS.archive.md`.
 - **Choose next work** -> `TASKS.md`.
 
@@ -48,13 +60,16 @@ bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
 - `package.json` - package script names.
 - `src/command-contract.ts` - command metadata, result contracts, parser rules,
   help/discovery contracts, schema versions, enums.
+- `src/runtime-contract.ts` - runtime and read-target interfaces.
 - `src/skill-feedback-runner.ts` - CLI dispatch, argv parsing, process result
-  rendering, filesystem safety, command engines.
+  rendering, default runtime, filesystem safety, command orchestration.
 
 **Capture and closeout**
 
 - `src/skill-feedback-runner.ts` - `record`, `closeout`, report writes, writer
   proof, trust store, pilot marker.
+- `src/report-normalizer.ts` - persisted report parsing, proof-context
+  application, cost-unavailable projection.
 - `src/capture-adapters.ts` - Claude OTel and Codex JSON adapter seams.
 - `src/redaction.ts` - agent-authored field redaction.
 - `references/closeout-receipt.md` - driver closeout receipt guidance.
@@ -64,20 +79,32 @@ bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
 - `src/review-ledger-reducer.ts` - review units, ledger entries, evidence tiers,
   entry-local allowed claims.
 - `src/ledger-anchor-adapter.ts` - repo-contained owner path anchors.
-- `src/skill-feedback-runner.ts` - inbox read, health, review, plain renderers.
+- `src/inbox-read-model.ts` - safe inbox scans, raw report reads, duplicate and
+  proof facts, low-signal classification, health facts, purge candidates.
+- `src/skill-feedback-runner.ts` - health, review, process envelopes, plain
+  renderers.
 - `references/report-shape.md` - result-shape reading rules.
 
 **Correlation and retention**
 
 - `src/command-contract.ts` - writer proof and correlation witness contracts.
-- `src/skill-feedback-runner.ts` - witness finalization, correlate, purge, safe
-  inbox scans.
+- `src/correlation-witness-artifacts.ts` - witness and diagnostic artifact IO,
+  safe correlation directory reads, artifact classification.
+- `src/correlation-witness-workflow.ts` - finalization, verification overlay,
+  repair classification, execute orchestration.
+- `src/inbox-read-model.ts` - purge candidate projection and safe report reads.
+- `src/skill-feedback-runner.ts` - correlate and purge CLI envelopes, renderers,
+  explicit purge deletion.
 - `src/branch-station-catalog.ts` - command branch coverage catalog.
 - `src/branch-station-evidence.ts` - station evidence projection helpers.
 
 **Tests**
 
 - `src/command-contract.test.ts` - discovery and contract drift.
+- `src/report-normalizer.test.ts` - persisted report normalization.
+- `src/correlation-witness-artifacts.test.ts` - artifact IO and
+  repair-candidate classification.
+- `src/correlation-witness-workflow.test.ts` - workflow-owned witness behavior.
 - `src/skill-feedback.test.ts` - help, parser, runtime semantics.
 - `src/skill-feedback.integration.test.ts` - process-boundary stations.
 - `src/review-ledger-reducer.test.ts` - ledger and claim rules.
@@ -104,6 +131,45 @@ bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
   safety checks, preview/execute tests, and docs.
 - **Vocabulary:** update `CONTEXT.md`; use full names when `Facade` could mean
   CLI facade or `ReviewResultData Facade`.
+- **Source owner split or move:** update `ARCHITECTURE.md` Module Map, Source
+  Owners here, `README.md` file map, `references/report-shape.md` when output
+  or report semantics moved, and `SKILL.md` only when workflow ownership
+  changed.
+
+## Doc Drift Gate
+
+Run after any source-owner split, CLI contract change, output-envelope change,
+or task-status closure.
+
+Check these package docs in the same pass:
+
+- `skills/skill-feedback/README.md`
+- `skills/skill-feedback/ARCHITECTURE.md`
+- `skills/skill-feedback/SKILL.md`
+- `skills/skill-feedback/CONTEXT.md`
+- `skills/skill-feedback/references/report-shape.md`
+- `skills/skill-feedback/docs/INDEX.md`
+- `skills/skill-feedback/TASKS.md`
+- `skills/skill-feedback/TASKS.archive.md`
+
+Use runnable probes. Treat `find` and `rg` as inspection aids; treat the
+owner-path command as a pass/fail gate.
+
+```bash
+find skills/skill-feedback/src -maxdepth 1 -type f | sort
+rg -n 'bun --filter skill-feedback-scripts skill-feedback-runner|Active Follow-Up|Active v2|reason ids only|runtime abstraction|witness read' skills/skill-feedback
+bun run skills/create-skill/scripts/check-owner-paths.ts --json skills/skill-feedback/README.md skills/skill-feedback/ARCHITECTURE.md skills/skill-feedback/AGENTS.md skills/skill-feedback/SKILL.md skills/skill-feedback/CONTEXT.md skills/skill-feedback/references/report-shape.md skills/skill-feedback/docs/INDEX.md skills/skill-feedback/TASKS.md skills/skill-feedback/TASKS.archive.md
+```
+
+## Drift Anti-Patterns
+
+- Do not let `ARCHITECTURE.md` say the runner owns behavior extracted to a
+  module.
+- Do not leave archive follow-up rows sounding active after closure.
+- Do not document diagnostics as reason-id-only when artifacts carry private
+  candidate boundaries.
+- Do not use package-relative owner paths where the owner-path checker expects
+  repo-relative paths.
 
 ## Debug
 
@@ -133,11 +199,17 @@ bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain
 `TASKS.md` is the active dashboard. Keep it short. Move completed detail to
 `TASKS.archive.md`.
 
+When `TASKS.md` closes a queue item, archive the completed detail in
+`TASKS.archive.md` during the same pass.
+
+Leave historical plan docs unchanged unless `skills/skill-feedback/docs/INDEX.md`
+or archive wording misleads current agents.
+
 Task shape:
 
 ```markdown
 - [ ] P0/P1/P2 Title Lane: Review Ledger. Done when: observable command, test,
-      or doc result. Next: `bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain`.
+      or doc result. Next: `bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain`.
 ```
 
 Use these lanes:
@@ -190,5 +262,5 @@ Run docs checks after docs-only changes:
 
 ```bash
 git diff --check -- skills/skill-feedback
-bun --filter skill-feedback-scripts skill-feedback-runner -- --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
 ```

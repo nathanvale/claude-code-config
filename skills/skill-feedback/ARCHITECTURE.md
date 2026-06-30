@@ -19,13 +19,20 @@ Its interface is:
 Implementation modules behind that interface are:
 
 - command contracts and result types in `src/command-contract.ts`,
-- CLI dispatch, filesystem safety, and command engines in
+- runtime and read-target interfaces in `src/runtime-contract.ts`,
+- persisted report parsing in `src/report-normalizer.ts`,
+- safe inbox read projections in `src/inbox-read-model.ts`,
+- private correlation witness artifact IO in
+  `src/correlation-witness-artifacts.ts`,
+- private correlation witness workflow in `src/correlation-witness-workflow.ts`,
+- CLI dispatch, filesystem safety, writes, and renderers in
   `src/skill-feedback-runner.ts`,
 - review ledger reduction in `src/review-ledger-reducer.ts`,
 - owner path anchoring in `src/ledger-anchor-adapter.ts`,
 - harness adapter seams in `src/capture-adapters.ts`,
 - redaction in `src/redaction.ts`,
-- branch station coverage in `src/branch-station-catalog.ts`.
+- branch station coverage in `src/branch-station-catalog.ts`,
+- branch station evidence projection in `src/branch-station-evidence.ts`.
 
 ## CLI Entry Flow
 
@@ -53,9 +60,22 @@ flowchart TD
 
 - `package.json`: exposes `skill-feedback-runner`, `test`, and `typecheck`.
 - `src/command-contract.ts`: command metadata, parser rules, schemas, result
-  contracts, help/discovery contract, proof/witness contracts.
-- `src/skill-feedback-runner.ts`: CLI entry, read-target resolution, safe inbox
-  reads, safe writes, renderers, and command handlers.
+  contracts, help/discovery contract, proof and witness artifact contracts.
+- `src/runtime-contract.ts`: `ReadTargetResolution`, `StdinTelemetry`, and
+  `SkillFeedbackRuntime` interfaces shared by runner, inbox reads, and
+  correlation owners.
+- `src/report-normalizer.ts`: persisted v0/v1/v2 report parsing, evidence-gap
+  normalization, cost-unavailable projection, and proof-context application.
+- `src/inbox-read-model.ts`: safe inbox scans, raw report reads, duplicate and
+  proof facts, low-signal classification, health facts, and purge candidates.
+- `src/correlation-witness-artifacts.ts`: private witness and diagnostic
+  artifact schemas, safe correlation directory access, reads, classification,
+  and diagnostic writes.
+- `src/correlation-witness-workflow.ts`: finalization, verification overlays,
+  repair classification, and execute orchestration.
+- `src/skill-feedback-runner.ts`: CLI entry, default runtime wiring,
+  read-target resolution implementation, safe report writes, command
+  orchestration, process envelopes, and plain renderers.
 
 The command facade contract is the external seam. Tests cover discovery
 metadata, help rendering, parser acceptance, runtime semantics, and branch
@@ -67,19 +87,32 @@ station evidence.
 | --- | --- | --- |
 | `record` | Writes hook-owned Software Learning Report; fail-closed on gitignore | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `closeout` | Writes driver closeout from stdin; no argv receipt | `src/skill-feedback-runner.ts`, `references/closeout-receipt.md` |
-| `review` | Read-only claim-safe report card | `src/skill-feedback-runner.ts`, `src/review-ledger-reducer.ts` |
-| `health` | Read-only inbox, readiness, warning, next-action summary | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
-| `purge` | Preview by default; `--execute` deletes selected safe reports | `src/skill-feedback-runner.ts` |
-| `correlate` | Preview by default; `--execute` writes private witnesses | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `review` | Read-only claim-safe report card | `src/inbox-read-model.ts`, `src/review-ledger-reducer.ts`, `src/skill-feedback-runner.ts` |
+| `health` | Read-only inbox, readiness, warning, next-action summary | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `purge` | Preview by default; `--execute` deletes selected safe reports | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts` |
+| `correlate` | Preview by default; `--execute` writes private witnesses | `src/correlation-witness-artifacts.ts`, `src/correlation-witness-workflow.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 
 ## Module Map
 
 - `src/command-contract.ts`: contract ids, schema versions, command metadata,
-  parsed types, result envelopes, report normalization, writer proof, correlation
-  witness creation and verification.
-- `src/skill-feedback-runner.ts`: runtime abstraction, gitignore gate, inbox
-  preparation, record and closeout writes, health/review/correlate/purge
-  engines, safe JSON scans, plain rendering, CLI parsing.
+  parsed types, result envelopes, writer proof, and correlation witness
+  artifact contracts.
+- `src/runtime-contract.ts`: runtime and read-target interfaces shared across
+  source owners; runner re-exports keep test and hook compatibility.
+- `src/report-normalizer.ts`: persisted report parsing, `normalizeReport`,
+  evidence-gap normalization, proof-context application, and cost-unavailable
+  projection.
+- `src/inbox-read-model.ts`: safe inbox scans, raw JSON reads, normalization
+  calls, duplicate report and proof facts, low-signal lane classification,
+  health facts, and purge candidate projection.
+- `src/correlation-witness-artifacts.ts`: correlation directory reads,
+  artifact parsing, witness validation helpers, diagnostic writes, and
+  repair-candidate artifact classification.
+- `src/correlation-witness-workflow.ts`: finalization, verification overlays,
+  repair classification, and execute orchestration.
+- `src/skill-feedback-runner.ts`: default runtime implementation, gitignore
+  gate, inbox preparation, record and closeout writes, CLI parsing, process
+  envelopes, command orchestration, and plain rendering.
 - `src/review-ledger-reducer.ts`: review unit grouping, trusted run handling,
   ledger entries, evidence tiers, resolution state, entry-local allowed claims.
 - `src/ledger-anchor-adapter.ts`: repo-contained owner path canonicalization,
@@ -102,8 +135,9 @@ flowchart LR
   Record --> Report["Software Learning Report"]
   Closeout --> Report
   Report --> Inbox[".skill-feedback/"]
-  Inbox --> Proof["writer proof check"]
-  Proof --> Normalize["normalize reports"]
+  Inbox --> ReadModel["inbox read model"]
+  ReadModel --> Proof["writer proof facts"]
+  Proof --> Normalize["report normalizer"]
   Normalize --> Health["health"]
   Normalize --> Review["review"]
 ```
@@ -139,17 +173,20 @@ trust or readiness.
 ```mermaid
 flowchart TD
   StopHook["Claude Stop hook"] --> Candidate["validated closeout candidate"]
-  Candidate --> Witness["private correlation witness"]
+  Candidate --> Workflow["correlation witness workflow"]
+  Workflow --> Witness["private correlation witness"]
   Witness --> InboxRead["review/health witness validation"]
-  Diagnostic["blocked diagnostic"] --> Preview["correlate preview"]
+  Diagnostic["blocked diagnostic"] --> Workflow
+  Workflow --> Preview["correlate preview"]
   Preview --> Repairable{"repairable?"}
   Repairable -- "Yes" --> Execute["correlate --execute"]
   Execute --> Witness
 ```
 
 Correlation witnesses live under `.skill-feedback/.correlation/`. Diagnostics
-carry reason ids only. Public report ids, run ids, proof fields, trust fields,
-and closeout receipt fields cannot create a witness.
+carry diagnostics plus optional private repair candidate boundaries. They are
+not reports or public closeout input. Public report ids, run ids, proof fields,
+trust fields, and closeout receipt fields cannot create a witness.
 
 ## Inbox Retention Flow
 
@@ -163,8 +200,9 @@ flowchart TD
   Execute --> Delete["delete selected safe reports"]
 ```
 
-Purge skips `.trust/` and `.correlation/`. Correlation witness and diagnostic
-retention needs a separate contract before deletion support.
+Purge deletes selected safe report files only. It skips `.trust/`,
+`.correlation/`, interrupted temp artifacts, and `pilot_started_at`; those stay
+health or source evidence unless a future command contract names them.
 
 ## Locality
 

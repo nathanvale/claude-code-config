@@ -6,7 +6,6 @@ import {
 import {
 	evidenceGap,
 	stableReportId,
-	uniqueEvidenceGaps,
 } from "./report-helpers";
 
 /**
@@ -46,8 +45,6 @@ export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
 export const SKILL_FEEDBACK_CORRELATE_CONTRACT_ID =
 	"skill-feedback.correlate" as const;
 
-const SKILL_FEEDBACK_SCHEMA_VERSION_V1 = "1" as const;
-
 /**
  * Schema version for the private correlation witness artifact family.
  */
@@ -66,12 +63,12 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "2" as const;
  * Review result semantics can advance independently from persisted report
  * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "6" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "7" as const;
 
 /**
  * Schema version for health-specific read-only result envelopes.
  */
-export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "3" as const;
+export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "4" as const;
 
 /**
  * Schema version for purge-specific result envelopes.
@@ -889,6 +886,8 @@ export type HealthClaimReadiness = {
 	runtime_capture: HealthReadinessFact;
 	trusted_skill_identity: HealthReadinessFact;
 	daily_pilot: HealthReadinessFact;
+	claude_daily_pilot: HealthReadinessFact;
+	codex_trusted_skill_identity: HealthReadinessFact;
 };
 
 export type HealthCorrelation = {
@@ -1041,7 +1040,34 @@ export type ReviewClaimReadiness = {
 	runtime_capture: ReviewClaimReadinessFact;
 	trusted_skill_identity: ReviewClaimReadinessFact;
 	daily_pilot: ReviewClaimReadinessFact;
+	claude_daily_pilot: ReviewClaimReadinessFact;
+	codex_trusted_skill_identity: ReviewClaimReadinessFact;
 };
+
+/**
+ * Contract-owned claim order and labels for plain review and health output.
+ *
+ * Renderers iterate this list so they repeat the result contract's decision
+ * surfaces instead of choosing their own readiness claims.
+ *
+ * @example
+ * ```typescript
+ * const labels = SKILL_FEEDBACK_DECISION_READINESS_SURFACES.map(
+ *   (surface) => surface.label,
+ * )
+ * ```
+ */
+export const SKILL_FEEDBACK_DECISION_READINESS_SURFACES = [
+	{ key: "runtime_capture", label: "runtime capture" },
+	{ key: "claude_daily_pilot", label: "Claude daily pilot" },
+	{
+		key: "codex_trusted_skill_identity",
+		label: "Codex Trusted skill identity",
+	},
+] as const satisfies readonly {
+	key: Extract<keyof HealthClaimReadiness, keyof ReviewClaimReadiness>;
+	label: string;
+}[];
 
 /**
  * V2 top-level action derived from reducer-owned evidence.
@@ -1594,29 +1620,6 @@ const CLOSEOUT_CORE_GAPS = [
 	code: EvidenceGapCode;
 	message: string;
 }>;
-const V1_REPORT_FIELDS = [
-	"schema_version",
-	"report_id",
-	"untrusted_evidence",
-	"generated_ts",
-	"evidence_source",
-	"capture_runtime",
-	"skill_identity_provenance",
-	"correlation_status",
-	"skill_run_id",
-	"skill_run_id_provenance",
-	"runtime",
-	"report_card",
-	"evidence_gaps",
-] as const;
-const V1_REPORT_FIELD_SET: ReadonlySet<string> = new Set(V1_REPORT_FIELDS);
-const V2_REPORT_FIELDS = [
-	...V1_REPORT_FIELDS,
-	"skill",
-	"writer_proof",
-	"redactions",
-] as const;
-const V2_REPORT_FIELD_SET: ReadonlySet<string> = new Set(V2_REPORT_FIELDS);
 const REVIEW_RESULT_V2_FIELDS = [
 	"contract",
 	"schema_version",
@@ -1731,6 +1734,8 @@ const REVIEW_CLAIM_READINESS_FIELDS = [
 	"runtime_capture",
 	"trusted_skill_identity",
 	"daily_pilot",
+	"claude_daily_pilot",
+	"codex_trusted_skill_identity",
 ] as const;
 const REVIEW_CLAIM_READINESS_FACT_FIELDS = [
 	"status",
@@ -1767,6 +1772,8 @@ const HEALTH_CLAIM_READINESS_FIELDS = [
 	"runtime_capture",
 	"trusted_skill_identity",
 	"daily_pilot",
+	"claude_daily_pilot",
+	"codex_trusted_skill_identity",
 ] as const;
 const HEALTH_READINESS_FACT_FIELDS = ["status", "reason_ids"] as const;
 const HEALTH_CORRELATION_FIELDS = [
@@ -1824,11 +1831,6 @@ const CORRELATE_NEXT_ACTION_FIELDS = [
 	"summary",
 	"side_effects",
 ] as const;
-const V0_PLACEHOLDER_FRICTION = new Set([
-	"",
-	"Hook captured no transcript payload.",
-]);
-
 /**
  * Validate driver-authored v1 closeout evidence.
  *
@@ -2140,41 +2142,6 @@ export function deriveWriterOwnedSkillRunId(
 }
 
 /**
- * Normalize v0 and v1 report records into one review model.
- *
- * Review owns interpretation. The normalizer preserves evidence source,
- * separates runtime telemetry from report-card data, and records unavailable
- * cost as a typed gap.
- *
- * @param raw - Unknown on-disk report data.
- * @returns Normalized report or a validation error.
- *
- * @example
- * ```typescript
- * const normalized = normalizeReport(JSON.parse(rawReport))
- * if (normalized.kind === "ok") review(normalized.report)
- * ```
- */
-export function normalizeReport(
-	raw: unknown,
-	proofContext?: WriterProofContext,
-): NormalizeReportResult {
-	if (!isRecord(raw)) {
-		return { kind: "invalid", path: "$", reason: "expected_object" };
-	}
-	if ("schema_version" in raw || "report_id" in raw || "report_card" in raw) {
-		if (raw.schema_version === SKILL_FEEDBACK_SCHEMA_VERSION_V1) {
-			return normalizeV1Report(raw);
-		}
-		if (raw.schema_version === SKILL_FEEDBACK_SCHEMA_VERSION) {
-			return normalizeV2Report(raw, proofContext);
-		}
-		return { kind: "invalid", path: "schema_version", reason: "unsupported" };
-	}
-	return normalizeV0Report(raw);
-}
-
-/**
  * Validate v2 review output at the contract boundary.
  *
  * @param raw - Unknown JSON value to validate as ReviewResultData v2.
@@ -2357,394 +2324,6 @@ export function parseCorrelateResultData(
 		if (target) return target;
 	}
 	return { kind: "ok", data: raw as SkillFeedbackCorrelateResultData };
-}
-
-function normalizeV0Report(raw: Record<string, unknown>): NormalizeReportResult {
-	const parsed = parseV0SoftwareLearningReport(raw);
-	if (!parsed.ok) return parsed.error;
-	const report = parsed.report;
-	const captureRuntime = parseOptionalCaptureRuntime(raw.capture_runtime);
-	if (captureRuntime && typeof captureRuntime !== "string") return captureRuntime;
-	const provenance = parseOptionalSkillIdentityProvenance(
-		raw.skill_identity_provenance,
-	);
-	if (provenance && "kind" in provenance) return provenance;
-	const evidenceGaps = uniqueEvidenceGaps([
-		...report.gaps
-			.filter((field) => field !== "usage")
-			.map((field) => v0Gap(field)),
-		evidenceGap(
-			"cost_unavailable",
-			"cost",
-			"Skill-attributed cost is unavailable in v1.",
-		),
-	]);
-	const friction = V0_PLACEHOLDER_FRICTION.has(report.friction)
-		? undefined
-		: { category: "other" as const, note: report.friction };
-	const runtime: NormalizedRuntimeTelemetry = {
-		git_sha: report.git_sha || undefined,
-		skill_version: report.skill_version || undefined,
-		model: report.model || undefined,
-	};
-	if (!report.gaps.includes("usage")) {
-		runtime.usage = report.usage;
-	}
-	return {
-		kind: "ok",
-		report: {
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-			source_schema_version: "v0",
-			report_id: stableReportId("v0", report),
-			untrusted_evidence: true,
-			generated_ts: report.generated_ts,
-			evidence_source: "hook_capture",
-			...(captureRuntime ? { capture_runtime: captureRuntime } : {}),
-			...(provenance ? { skill_identity_provenance: provenance } : {}),
-			correlation_status: "unlinked",
-			skill: report.skill,
-			outcome: report.outcome,
-			goal: report.goal || undefined,
-			friction,
-			touched_surfaces: [],
-			observations: [],
-			evidence_gaps: evidenceGaps,
-			cost: {
-				status: SKILL_FEEDBACK_COST_STATUS.UNAVAILABLE,
-				gap_code: "cost_unavailable",
-			},
-			runtime,
-		},
-	};
-}
-
-function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult {
-	for (const key of Object.keys(raw)) {
-		if (!V1_REPORT_FIELD_SET.has(key)) {
-			return { kind: "invalid", path: key, reason: "unknown_field" };
-		}
-	}
-	if (raw.schema_version !== SKILL_FEEDBACK_SCHEMA_VERSION_V1) {
-		return { kind: "invalid", path: "schema_version", reason: "unsupported" };
-	}
-	if (typeof raw.report_id !== "string") {
-		return { kind: "invalid", path: "report_id", reason: "expected_string" };
-	}
-	if (raw.untrusted_evidence !== true) {
-		return {
-			kind: "invalid",
-			path: "untrusted_evidence",
-			reason: "expected_true",
-		};
-	}
-	if (typeof raw.generated_ts !== "string") {
-		return { kind: "invalid", path: "generated_ts", reason: "expected_string" };
-	}
-	const evidenceSource = stringFromUnknown(raw.evidence_source);
-	if (!isEvidenceSource(evidenceSource)) {
-		return {
-			kind: "invalid",
-			path: "evidence_source",
-			reason: "invalid_evidence_source",
-		};
-	}
-	const captureRuntime = parseOptionalCaptureRuntime(raw.capture_runtime);
-	if (captureRuntime && typeof captureRuntime !== "string") return captureRuntime;
-	const provenance = parseOptionalSkillIdentityProvenance(
-		raw.skill_identity_provenance,
-	);
-	if (provenance && "kind" in provenance) return provenance;
-	const correlationStatus = stringFromUnknown(raw.correlation_status);
-	if (!isCorrelationStatus(correlationStatus)) {
-		return {
-			kind: "invalid",
-			path: "correlation_status",
-			reason: "invalid_correlation_status",
-		};
-	}
-	if (
-		"skill_run_id" in raw &&
-		raw.skill_run_id !== undefined &&
-		typeof raw.skill_run_id !== "string"
-	) {
-		return {
-			kind: "invalid",
-			path: "skill_run_id",
-			reason: "expected_string",
-		};
-	}
-	const skillRunIdProvenance = parseOptionalSkillRunIdProvenance(
-		raw.skill_run_id_provenance,
-	);
-	if (skillRunIdProvenance && typeof skillRunIdProvenance !== "string") {
-		return skillRunIdProvenance;
-	}
-	if (skillRunIdProvenance && !raw.skill_run_id) {
-		return {
-			kind: "invalid",
-			path: "skill_run_id_provenance",
-			reason: "missing_skill_run_id",
-		};
-	}
-	const runtime = parseRuntimeTelemetry(raw.runtime);
-	if ("kind" in runtime) return runtime;
-	const reportCard = parseCloseoutReceipt(raw.report_card, {
-		allowLegacySkillRunId: true,
-	});
-	if (reportCard.kind === "invalid") {
-		return {
-			kind: "invalid",
-			path: `report_card.${reportCard.path}`,
-			reason: reportCard.reason,
-		};
-	}
-	const rawEvidenceGaps = parseEvidenceGaps(raw.evidence_gaps);
-	if ("kind" in rawEvidenceGaps) return rawEvidenceGaps;
-	const evidenceGaps = uniqueEvidenceGaps([
-		...rawEvidenceGaps,
-		...reportCard.evidence_gaps,
-		evidenceGap(
-			"cost_unavailable",
-			"cost",
-			"Skill-attributed cost is unavailable for this report.",
-		),
-	]);
-	return {
-		kind: "ok",
-		report: {
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-			source_schema_version: "v1",
-			report_id: raw.report_id,
-			untrusted_evidence: true,
-			generated_ts: raw.generated_ts,
-			evidence_source: evidenceSource,
-			...(captureRuntime ? { capture_runtime: captureRuntime } : {}),
-			...(provenance ? { skill_identity_provenance: provenance } : {}),
-			correlation_status: correlationStatus,
-			skill_run_id: raw.skill_run_id as string | undefined,
-			// Raw inbox JSON is evidence, not writer-owned proof. Keep the id as
-			// inspectable context, but do not let persisted provenance labels mint a
-			// trusted review unit.
-			skill: reportCard.receipt.skill ?? "",
-			outcome: reportCard.receipt.outcome ?? "ambiguous",
-			goal: reportCard.receipt.goal,
-			friction: reportCard.receipt.friction,
-			verification_burden: reportCard.receipt.verification_burden,
-			touched_surfaces: reportCard.receipt.touched_surfaces ?? [],
-			observations: reportCard.receipt.observations ?? [],
-			evidence_gaps: evidenceGaps,
-			cost: {
-				status: SKILL_FEEDBACK_COST_STATUS.UNAVAILABLE,
-				gap_code: "cost_unavailable",
-			},
-			runtime,
-		},
-	};
-}
-
-function normalizeV2Report(
-	raw: Record<string, unknown>,
-	proofContext?: WriterProofContext,
-): NormalizeReportResult {
-	for (const key of Object.keys(raw)) {
-		if (!V2_REPORT_FIELD_SET.has(key)) {
-			return { kind: "invalid", path: key, reason: "unknown_field" };
-		}
-	}
-	if (raw.schema_version !== SKILL_FEEDBACK_SCHEMA_VERSION) {
-		return { kind: "invalid", path: "schema_version", reason: "unsupported" };
-	}
-	if (typeof raw.report_id !== "string") {
-		return { kind: "invalid", path: "report_id", reason: "expected_string" };
-	}
-	if (raw.untrusted_evidence !== true) {
-		return {
-			kind: "invalid",
-			path: "untrusted_evidence",
-			reason: "expected_true",
-		};
-	}
-	if (typeof raw.generated_ts !== "string") {
-		return { kind: "invalid", path: "generated_ts", reason: "expected_string" };
-	}
-	if (typeof raw.skill !== "string") {
-		return { kind: "invalid", path: "skill", reason: "expected_string" };
-	}
-	const evidenceSource = stringFromUnknown(raw.evidence_source);
-	if (!isEvidenceSource(evidenceSource)) {
-		return {
-			kind: "invalid",
-			path: "evidence_source",
-			reason: "invalid_evidence_source",
-		};
-	}
-	const captureRuntime = parseOptionalCaptureRuntime(raw.capture_runtime);
-	if (captureRuntime && typeof captureRuntime !== "string") return captureRuntime;
-	const provenance = parseOptionalSkillIdentityProvenance(
-		raw.skill_identity_provenance,
-	);
-	if (provenance && "kind" in provenance) return provenance;
-	const correlationStatus = stringFromUnknown(raw.correlation_status);
-	if (!isCorrelationStatus(correlationStatus)) {
-		return {
-			kind: "invalid",
-			path: "correlation_status",
-			reason: "invalid_correlation_status",
-		};
-	}
-	if (
-		"skill_run_id" in raw &&
-		raw.skill_run_id !== undefined &&
-		typeof raw.skill_run_id !== "string"
-	) {
-		return {
-			kind: "invalid",
-			path: "skill_run_id",
-			reason: "expected_string",
-		};
-	}
-	const skillRunIdProvenance = parseOptionalSkillRunIdProvenance(
-		raw.skill_run_id_provenance,
-	);
-	if (skillRunIdProvenance && typeof skillRunIdProvenance !== "string") {
-		return skillRunIdProvenance;
-	}
-	if (skillRunIdProvenance && !raw.skill_run_id) {
-		return {
-			kind: "invalid",
-			path: "skill_run_id_provenance",
-			reason: "missing_skill_run_id",
-		};
-	}
-	const runtime = parseRuntimeTelemetry(raw.runtime);
-	if ("kind" in runtime) return runtime;
-	const reportCard = parseCloseoutReceipt(raw.report_card, {
-		allowLegacySkillRunId: true,
-	});
-	if (reportCard.kind === "invalid") {
-		return {
-			kind: "invalid",
-			path: `report_card.${reportCard.path}`,
-			reason: reportCard.reason,
-		};
-	}
-	const rawEvidenceGaps = parseEvidenceGaps(raw.evidence_gaps);
-	if ("kind" in rawEvidenceGaps) return rawEvidenceGaps;
-	const evidenceGaps = uniqueEvidenceGaps([
-		...rawEvidenceGaps,
-		...reportCard.evidence_gaps,
-		evidenceGap(
-			"cost_unavailable",
-			"cost",
-			"Skill-attributed cost is unavailable for this report.",
-		),
-	]);
-	const proofVerified = proofContext?.verified === true;
-	const trustedRunProvenance =
-		proofVerified &&
-		evidenceSource === "hook_capture" &&
-		captureRuntime === "claude_stop" &&
-		skillRunIdProvenance === "runtime_owned";
-	const proofDiagnostics = proofContext?.diagnostics ?? [];
-	return {
-		kind: "ok",
-		report: {
-			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
-			source_schema_version: "v2",
-			report_id: raw.report_id,
-			untrusted_evidence: true,
-			generated_ts: raw.generated_ts,
-			evidence_source: evidenceSource,
-			...(captureRuntime ? { capture_runtime: captureRuntime } : {}),
-			...(provenance ? { skill_identity_provenance: provenance } : {}),
-			correlation_status: correlationStatus,
-			skill_run_id: raw.skill_run_id as string | undefined,
-			...(trustedRunProvenance
-				? { skill_run_id_provenance: skillRunIdProvenance }
-				: {}),
-			skill: reportCard.receipt.skill ?? raw.skill,
-			outcome: reportCard.receipt.outcome ?? "ambiguous",
-			goal: reportCard.receipt.goal,
-			friction: reportCard.receipt.friction,
-			verification_burden: reportCard.receipt.verification_burden,
-			touched_surfaces: reportCard.receipt.touched_surfaces ?? [],
-			observations: reportCard.receipt.observations ?? [],
-			evidence_gaps: evidenceGaps,
-			cost: {
-				status: SKILL_FEEDBACK_COST_STATUS.UNAVAILABLE,
-				gap_code: "cost_unavailable",
-			},
-			runtime,
-			writer_proof_verified: proofVerified,
-			proof_diagnostics: proofDiagnostics,
-		},
-	};
-}
-
-function parseV0SoftwareLearningReport(
-	raw: Record<string, unknown>,
-):
-	| { ok: true; report: SoftwareLearningReport }
-	| { ok: false; error: NormalizeReportResult } {
-	const rawGaps = parseV0ReceiptGaps(raw.gaps);
-	if ("kind" in rawGaps) return { ok: false, error: rawGaps };
-	const receiptInput: Record<string, unknown> = {
-		skill: raw.skill,
-		goal: raw.goal,
-		outcome: raw.outcome,
-		friction: raw.friction,
-		skill_version: raw.skill_version,
-		git_sha: raw.git_sha,
-		model: raw.model,
-		usage: raw.usage,
-		generated_ts: raw.generated_ts,
-	};
-	if (raw.explanation !== undefined && raw.explanation !== null) {
-		receiptInput.explanation = raw.explanation;
-	}
-	const parsed = parseReceipt(receiptInput);
-	if (parsed.kind !== "ok" && parsed.kind !== "degraded") {
-		return {
-			ok: false,
-			error: {
-				kind: "invalid",
-				path: parsed.kind === "unknown-field" ? parsed.field : parsed.field,
-				reason: parsed.kind,
-			},
-		};
-	}
-	const report = {
-		...buildSoftwareLearningReport(parsed),
-		degraded: raw.degraded === true || rawGaps.length > 0,
-		gaps:
-			rawGaps.length > 0
-				? rawGaps
-				: parsed.kind === "degraded"
-					? parsed.gaps
-					: [],
-	};
-	return { ok: true, report };
-}
-
-function parseV0ReceiptGaps(
-	raw: unknown,
-): readonly ReceiptField[] | NormalizeReportResult {
-	if (raw === undefined) return [];
-	if (!Array.isArray(raw)) {
-		return { kind: "invalid", path: "gaps", reason: "expected_array" };
-	}
-	const gaps: ReceiptField[] = [];
-	for (const [index, gap] of raw.entries()) {
-		if (!RECEIPT_FIELD_SET.has(String(gap))) {
-			return {
-				kind: "invalid",
-				path: `gaps[${index}]`,
-				reason: "invalid_gap",
-			};
-		}
-		gaps.push(gap as ReceiptField);
-	}
-	return gaps;
 }
 
 function parseFrictionSignal(
@@ -2951,86 +2530,6 @@ function parseObservation(
 		summary: raw.summary,
 		evidence_basis: evidenceBasis,
 	};
-}
-
-function parseRuntimeTelemetry(
-	raw: unknown,
-): NormalizedRuntimeTelemetry | NormalizeReportResult {
-	if (!isRecord(raw)) {
-		return { kind: "invalid", path: "runtime", reason: "expected_object" };
-	}
-	const runtime: NormalizedRuntimeTelemetry = {};
-	for (const key of Object.keys(raw)) {
-		if (key !== "git_sha" && key !== "skill_version" && key !== "model" && key !== "usage") {
-			return {
-				kind: "invalid",
-				path: `runtime.${key}`,
-				reason: "unknown_field",
-			};
-		}
-	}
-	for (const key of ["git_sha", "skill_version", "model"] as const) {
-		if (key in raw) {
-			if (typeof raw[key] !== "string") {
-				return {
-					kind: "invalid",
-					path: `runtime.${key}`,
-					reason: "expected_string",
-				};
-			}
-			runtime[key] = raw[key];
-		}
-	}
-	if ("usage" in raw) {
-		if (!isReceiptUsage(raw.usage)) {
-			return { kind: "invalid", path: "runtime.usage", reason: "invalid_usage" };
-		}
-		runtime.usage = raw.usage;
-	}
-	return runtime;
-}
-
-function parseEvidenceGaps(
-	raw: unknown,
-): readonly EvidenceGap[] | NormalizeReportResult {
-	if (raw === undefined) return [];
-	if (!Array.isArray(raw)) {
-		return { kind: "invalid", path: "evidence_gaps", reason: "expected_array" };
-	}
-	const gaps: EvidenceGap[] = [];
-	for (const [index, gapRaw] of raw.entries()) {
-		if (!isRecord(gapRaw)) {
-			return {
-				kind: "invalid",
-				path: `evidence_gaps[${index}]`,
-				reason: "expected_object",
-			};
-		}
-		const code = stringFromUnknown(gapRaw.code);
-		if (!isEvidenceGapCode(code)) {
-			return {
-				kind: "invalid",
-				path: `evidence_gaps[${index}].code`,
-				reason: "invalid_gap_code",
-			};
-		}
-		if (typeof gapRaw.path !== "string") {
-			return {
-				kind: "invalid",
-				path: `evidence_gaps[${index}].path`,
-				reason: "expected_string",
-			};
-		}
-		if (typeof gapRaw.message !== "string") {
-			return {
-				kind: "invalid",
-				path: `evidence_gaps[${index}].message`,
-				reason: "expected_string",
-			};
-		}
-		gaps.push({ code, path: gapRaw.path, message: gapRaw.message });
-	}
-	return gaps;
 }
 
 type ReviewResultValidationError = Extract<
@@ -3995,43 +3494,6 @@ function validateOptionalStringFields<const Field extends readonly string[]>(
 		.find(isReviewResultValidationError);
 }
 
-function v0Gap(field: ReceiptField): EvidenceGap {
-	switch (field) {
-		case "skill":
-			return evidenceGap("missing_skill", field, "v0 record is missing skill.");
-		case "outcome":
-			return evidenceGap("missing_outcome", field, "v0 record is missing outcome.");
-		case "goal":
-			return evidenceGap("missing_goal", field, "v0 record is missing goal.");
-		case "friction":
-			return evidenceGap("missing_friction", field, "v0 record is missing friction.");
-		case "model":
-			return evidenceGap(
-				"missing_runtime_model",
-				field,
-				"v0 record is missing model.",
-			);
-		case "git_sha":
-			return evidenceGap(
-				"missing_runtime_git_sha",
-				field,
-				"v0 record is missing git SHA.",
-			);
-		case "skill_version":
-			return evidenceGap(
-				"missing_runtime_skill_version",
-				field,
-				"v0 record is missing skill version.",
-			);
-		default:
-			return evidenceGap(
-				"cost_unavailable",
-				field,
-				"v0 record does not carry trusted skill-attributed cost.",
-			);
-	}
-}
-
 type WriterProofParseResult =
 	| { ok: true; value: WriterProof }
 	| { ok: false; reason: string };
@@ -4498,79 +3960,6 @@ function isCorrelationWitnessRuntimeSource(
 	);
 }
 
-function isSkillIdentityProvenance(
-	value: unknown,
-): value is SkillIdentityProvenance {
-	if (!isRecord(value)) return false;
-	const source = value.source;
-	if (
-		!(SKILL_IDENTITY_PROVENANCE_SOURCES as readonly unknown[]).includes(source)
-	) {
-		return false;
-	}
-	if (typeof value.trusted !== "boolean") return false;
-	if ("field" in value && typeof value.field !== "string") return false;
-	if (
-		"reason" in value &&
-		!(
-			SKILL_IDENTITY_PROVENANCE_REASONS as readonly unknown[]
-		).includes(value.reason)
-	) {
-		return false;
-	}
-	return true;
-}
-
-function isSkillRunIdProvenance(
-	value: unknown,
-): value is SkillRunIdProvenance {
-	return (SKILL_RUN_ID_PROVENANCE_SOURCES as readonly unknown[]).includes(value);
-}
-
-function parseOptionalCaptureRuntime(
-	raw: unknown,
-): CaptureRuntime | NormalizeReportResult | undefined {
-	if (raw === undefined) return undefined;
-	if (!isCaptureRuntime(raw)) {
-		return { kind: "invalid", path: "capture_runtime", reason: "invalid" };
-	}
-	return raw;
-}
-
-function parseOptionalSkillIdentityProvenance(
-	raw: unknown,
-): SkillIdentityProvenance | NormalizeReportResult | undefined {
-	if (raw === undefined) return undefined;
-	if (!isSkillIdentityProvenance(raw)) {
-		return {
-			kind: "invalid",
-			path: "skill_identity_provenance",
-			reason: "invalid",
-		};
-	}
-	return raw;
-}
-
-function parseOptionalSkillRunIdProvenance(
-	raw: unknown,
-): SkillRunIdProvenance | NormalizeReportResult | undefined {
-	if (raw === undefined) return undefined;
-	if (!isSkillRunIdProvenance(raw)) {
-		return {
-			kind: "invalid",
-			path: "skill_run_id_provenance",
-			reason: "invalid",
-		};
-	}
-	return raw;
-}
-
-function isCorrelationStatus(value: unknown): value is CorrelationStatus {
-	return (SKILL_FEEDBACK_CORRELATION_STATUSES as readonly unknown[]).includes(
-		value,
-	);
-}
-
 function isFrictionCategory(value: unknown): value is FrictionCategory {
 	return (FRICTION_CATEGORIES as readonly unknown[]).includes(value);
 }
@@ -4601,10 +3990,6 @@ function isObservationEvidenceBasis(
 	value: unknown,
 ): value is ObservationEvidenceBasis {
 	return (OBSERVATION_EVIDENCE_BASIS as readonly unknown[]).includes(value);
-}
-
-function isEvidenceGapCode(value: unknown): value is EvidenceGapCode {
-	return (EVIDENCE_GAP_CODES as readonly unknown[]).includes(value);
 }
 
 function isValidOwnerPath(path: string): boolean {

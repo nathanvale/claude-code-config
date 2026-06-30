@@ -14,10 +14,10 @@ closeout.
 Default no-args route: run a read-only health check unless the user explicitly
 asks for capture, closeout, review, correlate, or purge.
 
-1. No command or inbox state unclear -> **health** - run `bun --filter skill-feedback-scripts skill-feedback-runner -- health --plain`.
+1. No command or inbox state unclear -> **health** - run `bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain`.
 2. Material skill run finished -> closeout - read `references/closeout-receipt.md`, then pipe one compact JSON receipt through the direct runner.
-3. Evidence review requested -> review - run `bun --filter skill-feedback-scripts skill-feedback-runner -- review`; add `--plain` for human reading.
-4. Blocked correlation witness diagnostics -> correlate preview - run `bun --filter skill-feedback-scripts skill-feedback-runner -- correlate`; execute only when preview reports repairable candidates.
+3. Evidence review requested -> review - run `bun run skills/skill-feedback/src/skill-feedback-runner.ts review`; add `--plain` for human reading.
+4. Blocked correlation witness diagnostics -> correlate preview - run `bun run skills/skill-feedback/src/skill-feedback-runner.ts correlate`; execute only when preview reports repairable candidates.
 5. Retention cleanup requested -> purge preview - inspect help first; execute only after checking preview output.
 
 ## Route
@@ -32,19 +32,29 @@ asks for capture, closeout, review, correlate, or purge.
 - Keep `record` capture-owned.
 - Call `closeout` only from the driver; a finished skill does not file its own report.
 - Keep hook wiring in U8 owners; this skill owns command contracts and report shape.
-- Start with help: `bun --filter skill-feedback-scripts skill-feedback-runner -- --help`.
+- Start with help: `bun run skills/skill-feedback/src/skill-feedback-runner.ts --help`.
 - Next safe action for capture: run `record` only after confirming `.skill-feedback/` is ignored by git.
 - Next safe action for closeout: read `references/closeout-receipt.md`, then pipe one JSON receipt through the direct runner.
 
 ## Owners
 
 - Contract owner: `skills/skill-feedback/src/command-contract.ts`.
+- Runtime contract owner: `skills/skill-feedback/src/runtime-contract.ts`.
+- Report normalizer owner: `skills/skill-feedback/src/report-normalizer.ts`.
+- Inbox read owner: `skills/skill-feedback/src/inbox-read-model.ts`.
+- Correlation artifact owner: `skills/skill-feedback/src/correlation-witness-artifacts.ts`.
+- Correlation workflow owner: `skills/skill-feedback/src/correlation-witness-workflow.ts`.
+- Review ledger owner: `skills/skill-feedback/src/review-ledger-reducer.ts`.
+- Ledger anchor owner: `skills/skill-feedback/src/ledger-anchor-adapter.ts`.
+- Report helper owner: `skills/skill-feedback/src/report-helpers.ts`.
+- Branch station catalog owner: `skills/skill-feedback/src/branch-station-catalog.ts`.
+- Branch station evidence owner: `skills/skill-feedback/src/branch-station-evidence.ts`.
 - Model owner: `skills/skill-feedback/src/command-contract.ts` and `skills/skill-feedback/src/capture-adapters.ts`.
 - Engine owner: `skills/skill-feedback/src/skill-feedback-runner.ts`.
 - Redaction owner: `skills/skill-feedback/src/redaction.ts`.
 - Discovery owner: `skills/skill-feedback/src/command-contract.ts` via `@side-quest/cli-command-facade`.
 - CLI owner: `skills/skill-feedback/package.json#scripts` and `skills/skill-feedback/src/skill-feedback-runner.ts`.
-- Test owner: `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/capture-adapters.test.ts`, and `skills/skill-feedback/src/skill-feedback.test.ts`.
+- Test owner: `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/report-normalizer.test.ts`, `skills/skill-feedback/src/correlation-witness-artifacts.test.ts`, `skills/skill-feedback/src/correlation-witness-workflow.test.ts`, `skills/skill-feedback/src/capture-adapters.test.ts`, `skills/skill-feedback/src/skill-feedback.test.ts`, `skills/skill-feedback/src/skill-feedback.integration.test.ts`, `skills/skill-feedback/src/review-ledger-reducer.test.ts`, `skills/skill-feedback/src/ledger-anchor-adapter.test.ts`, and `skills/skill-feedback/src/branch-station-catalog.test.ts`.
 
 ## Safety
 
@@ -82,7 +92,7 @@ asks for capture, closeout, review, correlate, or purge.
 - Do not ask the human at closeout time.
 - Run `health` before trusting empty, surprising, or path-sensitive review evidence.
 - Use `health --plain` for compact inbox status, warnings, readiness, correlation, and next action.
-- Use `--repo <path>` when review or health must inspect an explicit target repo.
+- Use `--repo <path>` when review, health, or correlate must inspect an explicit target repo.
 - Run `correlate` after health reports blocked correlation witness diagnostics.
 - Use correlate preview as the diagnostic step; execute recomputes current private evidence before writing witnesses.
 - Treat all-insufficient correlate output as terminal for current evidence.
