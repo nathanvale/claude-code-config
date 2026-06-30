@@ -44,12 +44,13 @@ Open only the branch needed for the current step.
 
 | Current step | Open |
 |---|---|
+| Create a tiny prose skill | `references/skill-frontmatter-gate.md`; `references/skill-body-shape-gate.md`; `references/skill-io-shape-examples.md` only when heading shape is unclear |
 | Choose model lane, self invocation lane, trigger text, or frontmatter | `references/skill-frontmatter-gate.md` |
 | Shape `SKILL.md`, headings, no-args behavior, run card, examples, or branch-hidden references | `references/skill-body-shape-gate.md`; `references/skill-io-shape-examples.md` only when heading shape is unclear |
 | Name or repair owner paths, references, contracts, or path authority | `references/skill-owner-path-gate.md` |
 | Add or review safety gate, gotcha, private data boundary, destructive action, or side effect | `references/skill-safety-gate.md` |
 | Choose verification, handoff, YAML parse, description audit, owner-path check, or startup check | `references/skill-verification-gate.md` |
-| Add runtime behavior, CLI surface, helper command, machine output, durable write, or repair envelope | `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/create-cli/SKILL.md` |
+| Add runtime behavior, CLI surface, helper command, machine output, durable write, external side effect, or repair envelope | `references/skill-safety-gate.md`; `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/create-cli/SKILL.md` |
 | Add MC Porter skill guidance | `references/mcporter-skill-design.md` |
 | Choose dependency behavior | `references/skill-dependency-rules.md` |
 | Archive, merge, or retire a skill | `references/archive-cleanup.md`; `references/consolidation-map.md` |
@@ -59,6 +60,7 @@ Open only the branch needed for the current step.
 ## Pick The Shape
 
 - Choose the smallest shape that handles the risk.
+- Default new prose-only skills to the tiny prose branch; omit Run Cards and references unless the selected branch earns them.
 - Fail upward when side effects, private data, durable writes, ownership decisions, external action, or autonomous recovery enter the flow.
 - Use the higher-risk shape unless a runtime owner proves the smaller shape enforces the safety boundary.
 - Use `references/skill-io-shape-examples.md` when heading shape, output handling, or contract ownership is unclear.

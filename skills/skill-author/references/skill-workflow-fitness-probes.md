@@ -11,6 +11,9 @@ evidence shows workflow-fitness risk.
 Run as mental or practical probes. Return findings; do not patch unless the
 user asks for edits.
 
+Open branch references read-only only when a probe needs them to test actual
+routing. Do not load unrelated gates.
+
 1. No-args menu.
    - Prompt shape: invoke the skill with no args.
    - Expected behavior: show a menu; do not create or patch by default.

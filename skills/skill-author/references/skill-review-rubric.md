@@ -46,7 +46,8 @@ Do not impersonate rubric authors. Use the rubric as a review lens.
 
 - Use `references/skill-workflow-fitness-probes.md` only when reviewing a skill-authoring workflow or when the user asks whether the workflow works in practice.
 - Keep ordinary static reviews on this rubric.
-- Do not load edit gates for workflow probes unless the user asks to patch findings.
+- For workflow-fitness probes, open the smallest relevant branch references read-only when needed to test actual routing.
+- Do not patch or load unrelated edit gates during review-only probes.
 
 ## Review Output Shape
 
