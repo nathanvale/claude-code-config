@@ -8,12 +8,14 @@ role: main-entry
 
 ## Intent Classification
 
-Classify from args and proceed. Read `CONTEXT.md` only when creating a new
-skill or when vocabulary matters. Do not show a menu unless intent is ambiguous.
+Classify from args top to bottom and proceed. Read `CONTEXT.md` only when
+creating a new skill or when vocabulary matters. Do not show a menu unless
+intent is ambiguous.
 
 | Signal | Route | References to open |
 |--------|-------|--------------------|
-| Target skill + review/audit/check | Review target skill | Target `SKILL.md`; `references/skill-review-rubric.md` |
+| Target skill + review/audit/check + patch/fix/apply | Review, then patch requested findings | Target `SKILL.md`; `references/skill-design-decision-runbook.md`; `references/skill-review-rubric.md`, then open the smallest branch reference for requested findings |
+| Target skill + review/audit/check | Review target skill | Target `SKILL.md`; `references/skill-design-decision-runbook.md`, then `references/skill-review-rubric.md` |
 | Target skill + description/trigger/frontmatter/invocation lane/model lane/self invocation | Fix trigger/frontmatter | Target `SKILL.md`; `references/skill-frontmatter-gate.md` |
 | Target skill + body/headings/first screen/run card/no-args/next action/examples | Fix body shape | Target `SKILL.md`; `references/skill-body-shape-gate.md`; `references/skill-io-shape-examples.md` when heading shape is unclear |
 | Target skill + owner path/contract/reference/dependency | Fix owner paths | Target `SKILL.md`; `references/skill-owner-path-gate.md`; `references/skill-dependency-rules.md` when dependency behavior changes |
@@ -34,7 +36,7 @@ skill or when vocabulary matters. Do not show a menu unless intent is ambiguous.
 Present only when intent classification cannot pick a route:
 
 1. **Fix, heal, or repair a skill** - name the target, open its `SKILL.md`.
-2. Review an existing skill - read target + review rubric, return findings.
+2. Review an existing skill - read target + runbook review-only branch + review rubric, return findings.
 3. Create a new skill - read `CONTEXT.md` first for vocabulary.
 4. Unsure - read `CONTEXT.md`, then pick the closest route above or stop.
 
@@ -42,7 +44,7 @@ Present only when intent classification cannot pick a route:
 
 - Scope: create, repair, review, archive, or merge repo skill source files.
 - First safe action: classify intent from args, open only the references for that route.
-- Mode defaults: review returns findings only; create, fix, heal, repair, or patch edits source.
+- Mode defaults: review-only returns findings; mixed review plus patch edits only requested findings; create, fix, heal, repair, or patch edits source.
 - Review boundary: do not patch during review unless the user asks for edits.
 - Thin-router gate: keep `SKILL.md` a `thin router` for the `current step only`.
 - Pruning gate: apply the `deletion test`; headings are options, not a checklist.

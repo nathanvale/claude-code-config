@@ -52,6 +52,14 @@ _Avoid_: skill runbook, self-contained handbook, hidden reference tree, exhausti
 A repeated request shape or workflow a skill is meant to handle.
 _Avoid_: one-off prompt, implementation unit, user story, broad domain
 
+**Overloaded actor**:
+The user, agent, runtime, maintainer, or reviewer carrying avoidable work because the skill shape is wrong.
+_Avoid_: vague stakeholder, blame target, ceremonial persona
+
+**False-success scenario**:
+A ship-but-fail case where the skill appears complete but fails its route, safety, owner, output, or verification job.
+_Avoid_: generic risk, exhaustive test plan, worst imaginable failure
+
 **Skill design decision runbook**:
 Reference owner that helps choose the smallest skill shape, invocation mode, owner path, safety gate, and next safe action.
 _Avoid_: second workflow owner, vague philosophy doc, required heading schema

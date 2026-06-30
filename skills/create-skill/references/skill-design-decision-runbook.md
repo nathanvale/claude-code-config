@@ -1,6 +1,7 @@
 # Skill Design Decision Runbook
 
-Use when creating, healing, repairing, or patching portable `SKILL.md` files.
+Use when creating, reviewing, healing, repairing, or patching portable
+`SKILL.md` files.
 
 Path base: `skills/create-skill/`.
 Vocabulary owner: `CONTEXT.md`.
@@ -8,10 +9,11 @@ Vocabulary owner: `CONTEXT.md`.
 ## Start Here
 
 - Name the request shape or task family.
-- Name the stressed operator.
+- Name the overloaded actor: agent, user, runtime, maintainer, or reviewer.
 - Name the wrong decision this skill prevents.
 - Name the smallest useful intervention.
-- Name the top ship-but-fail scenario.
+- Name the top false-success scenario: complete-looking skill, failed route,
+  safety, owner, output, or verification.
 - Run the input/output gate.
 - Choose the smallest branch reference.
 - Open only the branch reference needed for the current step.
@@ -49,7 +51,7 @@ Open only the branch needed for the current step.
 | Choose role or dependency behavior | `references/skill-roles.md`; `references/skill-dependency-rules.md` |
 | Archive, merge, or retire a skill | `references/archive-cleanup.md`; `references/consolidation-map.md` |
 | Import external input or community-skill research | `references/research-portability.md`; `references/community-skill-research-sources.md` |
-| Review only | `references/skill-review-rubric.md` |
+| Review only | Target `SKILL.md`; `references/skill-review-rubric.md` |
 
 ## Pick The Shape
 
