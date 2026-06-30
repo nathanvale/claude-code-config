@@ -2,6 +2,9 @@
 
 Source owners: `skills/skill-feedback/src/command-contract.ts`,
 `skills/skill-feedback/src/runtime-contract.ts`,
+`skills/skill-feedback/src/runtime-file-safety.ts`,
+`skills/skill-feedback/src/raw-object.ts`,
+`skills/skill-feedback/src/decision-surface.ts`,
 `skills/skill-feedback/src/report-normalizer.ts`,
 `skills/skill-feedback/src/inbox-read-model.ts`,
 `skills/skill-feedback/src/correlation-witness-artifacts.ts`,
@@ -16,11 +19,14 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 - Keep `skills/skill-feedback/src/` flat.
 - Read `command-contract.ts` first for schema versions, contract ids, enums, exported result shapes, and parser rules.
 - Read `runtime-contract.ts` for `ReadTargetResolution`, `StdinTelemetry`, and `SkillFeedbackRuntime`.
+- Read `runtime-file-safety.ts` for shared path containment, optional lstat, safe realpath, private-mode, and Node error-code helpers.
+- Read `raw-object.ts` for shared unknown JSON string-field and duplicate-string helpers.
+- Read `decision-surface.ts` for review and health result assembly, warnings, next action, readiness, retention, pilot checkpoint, and read-target projection.
 - Read `report-normalizer.ts` for persisted report parsing, proof-context application, and cost-unavailable projection.
 - Read `inbox-read-model.ts` for safe scans, raw report reads, duplicate/proof facts, low-signal classification, health facts, and purge candidates.
 - Read `correlation-witness-artifacts.ts` for witness and diagnostic artifact schemas, safe correlation directory reads, diagnostic writes, and repair-candidate classification.
 - Read `correlation-witness-workflow.ts` for finalization, verification overlay, repair classification, and execute orchestration.
-- Read review and health orchestration in `skill-feedback-runner.ts`.
+- Read review and health orchestration in `decision-surface.ts` and `skill-feedback-runner.ts`.
 - Keep default runtime wiring, CLI orchestration, review/health dispatch, explicit writes, and rendering glue in `skill-feedback-runner.ts`.
 - Read `review-ledger-reducer.ts` for reducer-owned review-unit, ledger-entry, evidence-tier, entry-local claim, and readiness logic.
 - Read `ledger-anchor-adapter.ts` for repo-contained path canonicalization, anchor strength, weak-anchor reasons, and strong-only `ledger_anchor_key` facts.
@@ -76,13 +82,14 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 
 - Keep exact v2 review fields, enum values, parser rules, and result version in `skills/skill-feedback/src/command-contract.ts`.
 - Keep runtime and read-target interfaces in `skills/skill-feedback/src/runtime-contract.ts`.
+- Keep review and health result assembly in `skills/skill-feedback/src/decision-surface.ts`.
 - Keep persisted report normalization in `skills/skill-feedback/src/report-normalizer.ts`.
 - Keep safe inbox read facts in `skills/skill-feedback/src/inbox-read-model.ts`.
 - Keep correlation artifact IO and diagnostic classification in `skills/skill-feedback/src/correlation-witness-artifacts.ts`.
 - Keep correlation witness workflow behavior in `skills/skill-feedback/src/correlation-witness-workflow.ts`.
-- Treat `ReviewResultData` as the v2 review result contract; the runner emits it.
-- Treat `HealthResultData` as the health result contract; the runner emits it.
-- `ReviewResultDataV1` survives only as a type source for reused v1 sub-shapes (`retention`, `pilot_checkpoint`); v2 review output never carries `capture_readiness`.
+- Treat `ReviewResultData` as the v2 review result contract; `decision-surface.ts` assembles it and the runner emits it.
+- Treat `HealthResultData` as the health result contract; `decision-surface.ts` assembles it and the runner emits it.
+- `ReviewResultDataV1` is legacy compatibility vocabulary only; v2 review output never carries `capture_readiness`.
 - Use `SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION` for review output; do not reuse the persisted report schema version for v2 review output.
 - Use `SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION` for health output; do not reuse review or persisted report schema versions.
 - Do not copy the v2 review schema into this reference.
@@ -166,8 +173,14 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 - Run review through `skill-feedback review`.
 - Keep review mutation-free.
 - Apply verified correlation witnesses before reducing review units.
-- Lead plain review with a compact health block when inbox state or warnings can change interpretation.
-- Lead with coverage when no health-critical state is present.
+- Lead plain review with health state, top warning, and next action.
+- Treat review JSON as the full evidence source.
+- Treat `review --plain` as bounded by default.
+- Use `full_evidence=json` as the pointer to complete open item, open action, and ledger arrays.
+- Read `truncated_open_actions` and `truncated_ledger_entries` as omitted row counts.
+- Read row-local `evidence_refs_omitted` as omitted evidence refs for that row.
+- Read open-action rows from `- action=<key> next=<text> evidence=<refs>`.
+- Read ledger rows from `- owner=<path|unknown>`.
 - Count closeout, capture-only, unlinked, and evidence-gap reports.
 - Count only primary reports in coverage.
 - Keep unknown-skill Codex Stop capture in the low-signal lane.

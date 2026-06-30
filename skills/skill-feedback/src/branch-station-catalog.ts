@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file
+// Public Branch Station catalog seam; package tests and docs consume this entrypoint.
 import {
 	type BranchStation,
 	type BranchStationEvidence,
@@ -23,6 +25,8 @@ import {
  * Keep this list in code so tests can prove the package catalog implemented
  * the plan's first station set before integration rows add evidence.
  */
+// Public Branch Station seam; Fallow cannot see downstream catalog consumers.
+// fallow-ignore-next-line unused-export
 export const SKILL_FEEDBACK_PLANNING_BRANCH_STATION_IDS = [
 	"record.success",
 	"record.proof_attached",
@@ -56,6 +60,8 @@ export const SKILL_FEEDBACK_PLANNING_BRANCH_STATION_IDS = [
  * The catalog names branch meaning and expectations only. Tests own setup,
  * probes, and evidence rows keyed by `station.id`.
  */
+// Public Branch Station seam; Fallow cannot see downstream catalog consumers.
+// fallow-ignore-next-line unused-export
 export const skillFeedbackBranchStationCatalog = [
 	{
 		id: "record.success",
@@ -339,6 +345,8 @@ const skillFeedbackContractEntries = Object.entries(skillFeedbackContracts) as A
  *
  * @returns Facade discovery tree for the public skill-feedback commands
  */
+// Public Branch Station seam; Fallow cannot see downstream catalog consumers.
+// fallow-ignore-next-line unused-export
 export function projectSkillFeedbackStationDiscovery() {
 	return projectCommandDiscoveryTree(skillFeedbackContractEntries);
 }
@@ -349,6 +357,8 @@ export function projectSkillFeedbackStationDiscovery() {
  * @param evidence - Optional evidence rows to validate with the catalog
  * @returns Deterministic drift records
  */
+// Public Branch Station seam; Fallow cannot see downstream catalog consumers.
+// fallow-ignore-next-line unused-export
 export function findSkillFeedbackBranchStationCatalogDrift(
 	evidence: readonly BranchStationEvidence[] = [],
 ) {
@@ -366,6 +376,8 @@ export function findSkillFeedbackBranchStationCatalogDrift(
  * @param evidence - Test-owned station evidence manifest
  * @returns Deterministic Station Map JSON data
  */
+// Public Branch Station seam; Fallow cannot see downstream catalog consumers.
+// fallow-ignore-next-line unused-export
 export function projectSkillFeedbackStationMap(
 	evidence: readonly BranchStationEvidence[] = [],
 ): StationMap {

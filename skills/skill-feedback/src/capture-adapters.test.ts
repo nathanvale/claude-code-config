@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file
+// Bun test entrypoint; package runner invokes this file without static imports.
 import { describe, expect, test } from "bun:test";
 import { RECEIPT_FIELDS, type Receipt } from "./command-contract";
 import {

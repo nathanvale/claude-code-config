@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication
+// Bun test entrypoint with private artifact fixtures; package runner invokes this file without static imports.
 import {
 	chmod,
 	lstat,

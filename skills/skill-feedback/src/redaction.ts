@@ -84,6 +84,8 @@ export function redactSoftwareLearningReport(
 	return { value: redacted, redactions };
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 export function redactReportCardSoftwareLearningReport(
 	report: ReportCardSoftwareLearningReport,
 ): RedactionResult<ReportCardSoftwareLearningReport> {
@@ -186,6 +188,8 @@ function redactAuthUrls(
 	input: string,
 	countRedactions: (count: number) => void,
 ): string {
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 	return input.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (rawUrl) => {
 		const protocol = rawUrl.slice(0, rawUrl.indexOf(":")).toLowerCase();
 		if (protocol !== "http" && protocol !== "https") {

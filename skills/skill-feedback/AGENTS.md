@@ -61,8 +61,12 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
 - `src/command-contract.ts` - command metadata, result contracts, parser rules,
   help/discovery contracts, schema versions, enums.
 - `src/runtime-contract.ts` - runtime and read-target interfaces.
+- `src/runtime-file-safety.ts` - shared filesystem containment, mode, and
+  Node error-code helpers.
+- `src/raw-object.ts` - shared unknown JSON object field and duplicate-string
+  helpers.
 - `src/skill-feedback-runner.ts` - CLI dispatch, argv parsing, process result
-  rendering, default runtime, filesystem safety, command orchestration.
+  rendering, default runtime, command orchestration.
 
 **Capture and closeout**
 
@@ -81,6 +85,8 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
 - `src/ledger-anchor-adapter.ts` - repo-contained owner path anchors.
 - `src/inbox-read-model.ts` - safe inbox scans, raw report reads, duplicate and
   proof facts, low-signal classification, health facts, purge candidates.
+- `src/decision-surface.ts` - review and health result assembly, warnings,
+  next action, readiness, retention, pilot checkpoint, and read-target projection.
 - `src/skill-feedback-runner.ts` - health, review, process envelopes, plain
   renderers.
 - `references/report-shape.md` - result-shape reading rules.
@@ -106,6 +112,9 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
   repair-candidate classification.
 - `src/correlation-witness-workflow.test.ts` - workflow-owned witness behavior.
 - `src/skill-feedback.test.ts` - help, parser, runtime semantics.
+- `src/decision-surface.test.ts` - review and health decision projection.
+- `src/runtime-file-safety.test.ts` - shared filesystem safety helpers.
+- `src/raw-object.test.ts` - shared raw object helpers.
 - `src/skill-feedback.integration.test.ts` - process-boundary stations.
 - `src/review-ledger-reducer.test.ts` - ledger and claim rules.
 - `src/ledger-anchor-adapter.test.ts` - owner path anchors.
@@ -158,7 +167,7 @@ owner-path command as a pass/fail gate.
 ```bash
 find skills/skill-feedback/src -maxdepth 1 -type f | sort
 rg -n 'bun --filter skill-feedback-scripts skill-feedback-runner|Active Follow-Up|Active v2|reason ids only|runtime abstraction|witness read' skills/skill-feedback
-bun run skills/create-skill/scripts/check-owner-paths.ts --json skills/skill-feedback/README.md skills/skill-feedback/ARCHITECTURE.md skills/skill-feedback/AGENTS.md skills/skill-feedback/SKILL.md skills/skill-feedback/CONTEXT.md skills/skill-feedback/references/report-shape.md skills/skill-feedback/docs/INDEX.md skills/skill-feedback/TASKS.md skills/skill-feedback/TASKS.archive.md
+bun run skills/skill-author/scripts/check-owner-paths.ts --json skills/skill-feedback/README.md skills/skill-feedback/ARCHITECTURE.md skills/skill-feedback/AGENTS.md skills/skill-feedback/SKILL.md skills/skill-feedback/CONTEXT.md skills/skill-feedback/references/report-shape.md skills/skill-feedback/docs/INDEX.md skills/skill-feedback/TASKS.md skills/skill-feedback/TASKS.archive.md
 ```
 
 ## Drift Anti-Patterns
@@ -170,6 +179,17 @@ bun run skills/create-skill/scripts/check-owner-paths.ts --json skills/skill-fee
   candidate boundaries.
 - Do not use package-relative owner paths where the owner-path checker expects
   repo-relative paths.
+
+## Fallow Policy
+
+- Keep `fallow-ignore` comments adjacent to analyzer blind spots.
+- Use `unused-file` for Bun test entrypoints and public seam files Fallow cannot
+  reach by static imports.
+- Use `code-duplication` only for test fixtures or literals whose duplication
+  proves separate scenarios.
+- Use `complexity` only as a line-level suppression on owner-local defensive
+  branches that package tests or live smokes cover.
+- Rerun Fallow and package gates after changing suppressions.
 
 ## Debug
 

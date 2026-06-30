@@ -44,6 +44,8 @@ export type ReviewLedgerResult = {
  * const { review_units, ledger_entries } = reduceReviewLedger(reports)
  * ```
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 export function reduceReviewLedger(
 	reports: readonly NormalizedSoftwareLearningReport[],
 ): ReviewLedgerResult {
@@ -144,6 +146,8 @@ type MutableLedgerEntry = {
  * `skill_run_id` proves same-run linkage; untrusted, report-authored, or
  * missing run ids stay report-local (R7, R7b, R8).
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function buildReviewUnits(
 	reports: readonly NormalizedSoftwareLearningReport[],
 ): ReviewUnit[] {
@@ -264,6 +268,8 @@ function indexReportOccurrencesToUnits(
 	});
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function accumulateReport(
 	entry: MutableLedgerEntry,
 	report: NormalizedSoftwareLearningReport,
@@ -321,6 +327,8 @@ function accumulateReport(
  * `trusted_engine_identity`; a verified hook/closeout witness reaches
  * `corroborated`; hook capture alone reaches `runtime_observed`.
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function promoteEvidenceTier(
 	current: ReviewEvidenceTier,
 	report: NormalizedSoftwareLearningReport,
@@ -361,6 +369,8 @@ function sameTrustedRunMixedEvidence(entry: MutableLedgerEntry): boolean {
 	);
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function mergeVerificationBurden(
 	current: ReviewLedgerVerificationBurden,
 	report: NormalizedSoftwareLearningReport,
@@ -430,6 +440,8 @@ function deriveResolutionState(entry: MutableLedgerEntry): ReviewResolutionState
  * Derive entry-local allowed claims (R6). Each claim is gated by the evidence
  * that earns it; renderers repeat only these labels and never widen them.
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function deriveAllowedClaims(
 	entry: MutableLedgerEntry,
 ): readonly ReviewAllowedClaim[] {
@@ -470,6 +482,8 @@ function toReviewUnitData(unit: ReviewUnit): ReviewUnitData {
  * (R14). Telemetry accumulates attempted targets per weak reason for later
  * anchor-source proposals.
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function anchorMissTelemetry(
 	anchorFacts: readonly ReturnType<typeof deriveLedgerAnchorFacts>[],
 ): readonly ReviewAnchorMissTelemetry[] {

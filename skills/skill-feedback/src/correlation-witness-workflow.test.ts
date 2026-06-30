@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication
+// Bun test entrypoint with witness workflow fixtures; package runner invokes this file without static imports.
 import {
 	chmod,
 	lstat,

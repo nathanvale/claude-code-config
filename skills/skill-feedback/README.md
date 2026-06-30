@@ -65,6 +65,7 @@ JSON. Package-filtered Bun commands are package-maintenance helpers and prefix
 stdout.
 
 Use JSON for automation. Use `--plain` for compact human reading where supported.
+`review --plain` is bounded; use review JSON for full evidence arrays.
 
 | Command | Output | Repo targeting | Mutation |
 | --- | --- | --- | --- |
@@ -136,6 +137,9 @@ skills/skill-feedback/
   src/
     command-contract.ts      CLI contracts, schemas, enums, result types
     runtime-contract.ts      Runtime and read-target interfaces
+    runtime-file-safety.ts   Shared filesystem safety helpers
+    raw-object.ts            Shared raw JSON object helpers
+    decision-surface.ts      Review and health result assembly
     skill-feedback-runner.ts CLI dispatch, default runtime, writes, orchestration, renderers
     report-normalizer.ts     Persisted v0/v1/v2 parsing and proof-context normalization
     inbox-read-model.ts      Safe inbox reads, proof facts, health facts, purge candidates

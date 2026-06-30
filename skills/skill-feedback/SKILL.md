@@ -40,8 +40,11 @@ asks for capture, closeout, review, correlate, or purge.
 
 - Contract owner: `skills/skill-feedback/src/command-contract.ts`.
 - Runtime contract owner: `skills/skill-feedback/src/runtime-contract.ts`.
+- Runtime file-safety owner: `skills/skill-feedback/src/runtime-file-safety.ts`.
+- Raw object helper owner: `skills/skill-feedback/src/raw-object.ts`.
 - Report normalizer owner: `skills/skill-feedback/src/report-normalizer.ts`.
 - Inbox read owner: `skills/skill-feedback/src/inbox-read-model.ts`.
+- Decision surface owner: `skills/skill-feedback/src/decision-surface.ts`.
 - Correlation artifact owner: `skills/skill-feedback/src/correlation-witness-artifacts.ts`.
 - Correlation workflow owner: `skills/skill-feedback/src/correlation-witness-workflow.ts`.
 - Review ledger owner: `skills/skill-feedback/src/review-ledger-reducer.ts`.
@@ -50,11 +53,11 @@ asks for capture, closeout, review, correlate, or purge.
 - Branch station catalog owner: `skills/skill-feedback/src/branch-station-catalog.ts`.
 - Branch station evidence owner: `skills/skill-feedback/src/branch-station-evidence.ts`.
 - Model owner: `skills/skill-feedback/src/command-contract.ts` and `skills/skill-feedback/src/capture-adapters.ts`.
-- Engine owner: `skills/skill-feedback/src/skill-feedback-runner.ts`.
+- Engine owner: `skills/skill-feedback/src/decision-surface.ts` and `skills/skill-feedback/src/skill-feedback-runner.ts`.
 - Redaction owner: `skills/skill-feedback/src/redaction.ts`.
 - Discovery owner: `skills/skill-feedback/src/command-contract.ts` via `@side-quest/cli-command-facade`.
 - CLI owner: `skills/skill-feedback/package.json#scripts` and `skills/skill-feedback/src/skill-feedback-runner.ts`.
-- Test owner: `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/report-normalizer.test.ts`, `skills/skill-feedback/src/correlation-witness-artifacts.test.ts`, `skills/skill-feedback/src/correlation-witness-workflow.test.ts`, `skills/skill-feedback/src/capture-adapters.test.ts`, `skills/skill-feedback/src/skill-feedback.test.ts`, `skills/skill-feedback/src/skill-feedback.integration.test.ts`, `skills/skill-feedback/src/review-ledger-reducer.test.ts`, `skills/skill-feedback/src/ledger-anchor-adapter.test.ts`, and `skills/skill-feedback/src/branch-station-catalog.test.ts`.
+- Test owner: `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/report-normalizer.test.ts`, `skills/skill-feedback/src/decision-surface.test.ts`, `skills/skill-feedback/src/runtime-file-safety.test.ts`, `skills/skill-feedback/src/raw-object.test.ts`, `skills/skill-feedback/src/correlation-witness-artifacts.test.ts`, `skills/skill-feedback/src/correlation-witness-workflow.test.ts`, `skills/skill-feedback/src/capture-adapters.test.ts`, `skills/skill-feedback/src/skill-feedback.test.ts`, `skills/skill-feedback/src/skill-feedback.integration.test.ts`, `skills/skill-feedback/src/review-ledger-reducer.test.ts`, `skills/skill-feedback/src/ledger-anchor-adapter.test.ts`, and `skills/skill-feedback/src/branch-station-catalog.test.ts`.
 
 ## Safety
 
@@ -97,7 +100,7 @@ asks for capture, closeout, review, correlate, or purge.
 - Use correlate preview as the diagnostic step; execute recomputes current private evidence before writing witnesses.
 - Treat all-insufficient correlate output as terminal for current evidence.
 - Run `review` to inspect coverage, open evidence, no-action rationale, retention, and pilot checkpoint data.
-- Add `--plain` when human-readable output is better than JSON.
+- Add `--plain` when bounded human-readable output is better than complete JSON.
 - Resolve `report:<id>` refs through JSON review output before opening raw inbox files.
 - Match `report:<id>` to `review_units[*].report_ids`; when raw JSON is needed, scan safe `.skill-feedback/**/*.json` reports by `report_id`.
 - Do not infer a report filename from `report:<id>`; filenames include timestamp, skill, and content hash.

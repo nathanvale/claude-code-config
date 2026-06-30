@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with reducer evidence fixtures; package runner invokes this file without static imports.
 import { describe, expect, test } from "bun:test";
 import type {
 	CaptureRuntime,

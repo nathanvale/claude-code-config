@@ -20,13 +20,15 @@ Implementation modules behind that interface are:
 
 - command contracts and result types in `src/command-contract.ts`,
 - runtime and read-target interfaces in `src/runtime-contract.ts`,
+- shared filesystem and raw object helpers in `src/runtime-file-safety.ts` and
+  `src/raw-object.ts`,
+- review and health decision assembly in `src/decision-surface.ts`,
 - persisted report parsing in `src/report-normalizer.ts`,
 - safe inbox read projections in `src/inbox-read-model.ts`,
 - private correlation witness artifact IO in
   `src/correlation-witness-artifacts.ts`,
 - private correlation witness workflow in `src/correlation-witness-workflow.ts`,
-- CLI dispatch, filesystem safety, writes, and renderers in
-  `src/skill-feedback-runner.ts`,
+- CLI dispatch, writes, and renderers in `src/skill-feedback-runner.ts`,
 - review ledger reduction in `src/review-ledger-reducer.ts`,
 - owner path anchoring in `src/ledger-anchor-adapter.ts`,
 - harness adapter seams in `src/capture-adapters.ts`,
@@ -52,8 +54,9 @@ flowchart TD
   Inbox --> Health
   Inbox --> Purge
   Inbox --> Correlate
-  Review --> Output["JSON/plain output"]
-  Health --> Output
+  Review --> Surface["src/decision-surface.ts"]
+  Health --> Surface
+  Surface --> Output["JSON/plain output"]
   Purge --> Output
   Correlate --> Output
 ```
@@ -64,6 +67,13 @@ flowchart TD
 - `src/runtime-contract.ts`: `ReadTargetResolution`, `StdinTelemetry`, and
   `SkillFeedbackRuntime` interfaces shared by runner, inbox reads, and
   correlation owners.
+- `src/runtime-file-safety.ts`: shared path containment, optional lstat,
+  safe realpath, private-mode, and Node error-code helpers.
+- `src/raw-object.ts`: shared unknown JSON object string-field and duplicate
+  string helpers.
+- `src/decision-surface.ts`: review and health result assembly from safe inbox
+  reads, reducer facts, warnings, next action, readiness, retention, pilot
+  checkpoint, and read-target diagnostics.
 - `src/report-normalizer.ts`: persisted v0/v1/v2 report parsing, evidence-gap
   normalization, cost-unavailable projection, and proof-context application.
 - `src/inbox-read-model.ts`: safe inbox scans, raw report reads, duplicate and
@@ -87,8 +97,8 @@ station evidence.
 | --- | --- | --- |
 | `record` | Writes hook-owned Software Learning Report; fail-closed on gitignore | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `closeout` | Writes driver closeout from stdin; no argv receipt | `src/skill-feedback-runner.ts`, `references/closeout-receipt.md` |
-| `review` | Read-only claim-safe report card | `src/inbox-read-model.ts`, `src/review-ledger-reducer.ts`, `src/skill-feedback-runner.ts` |
-| `health` | Read-only inbox, readiness, warning, next-action summary | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `review` | Read-only claim-safe report card | `src/inbox-read-model.ts`, `src/review-ledger-reducer.ts`, `src/decision-surface.ts`, `src/skill-feedback-runner.ts` |
+| `health` | Read-only inbox, readiness, warning, next-action summary | `src/inbox-read-model.ts`, `src/decision-surface.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `purge` | Preview by default; `--execute` deletes selected safe reports | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts` |
 | `correlate` | Preview by default; `--execute` writes private witnesses | `src/correlation-witness-artifacts.ts`, `src/correlation-witness-workflow.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 
@@ -99,6 +109,11 @@ station evidence.
   artifact contracts.
 - `src/runtime-contract.ts`: runtime and read-target interfaces shared across
   source owners; runner re-exports keep test and hook compatibility.
+- `src/runtime-file-safety.ts`: shared filesystem safety helpers used by
+  runner, inbox reads, and correlation artifacts.
+- `src/raw-object.ts`: shared raw-object field and duplicate string helpers.
+- `src/decision-surface.ts`: review and health `ReviewResultData` /
+  `HealthResultData` assembly; consumes safe inbox reads and reducer facts.
 - `src/report-normalizer.ts`: persisted report parsing, `normalizeReport`,
   evidence-gap normalization, proof-context application, and cost-unavailable
   projection.
@@ -161,12 +176,15 @@ flowchart TD
   Units --> Anchors["Anchor Adapter"]
   Anchors --> Reducer["Review ledger reducer"]
   Reducer --> Claims["Entry-local allowed claims"]
-  Claims --> ReviewResult["ReviewResultData"]
+  Claims --> Surface["Decision surface"]
+  Surface --> ReviewResult["ReviewResultData"]
   ReviewResult --> Render["JSON/plain render"]
 ```
 
 The reducer owns claim derivation. Renderers repeat facts; they do not infer
 trust or readiness.
+The decision surface assembles review and health results; the runner renders
+envelopes and bounded plain output.
 
 ## Correlation Flow
 

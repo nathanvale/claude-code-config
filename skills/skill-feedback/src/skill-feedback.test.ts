@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with command scenario fixtures; package runner invokes this file without static imports.
 import {
 	chmod,
 	mkdtemp,
@@ -5364,26 +5366,51 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		);
 	});
 
-	test("review --plain renders open items, retention, and pilot checkpoint", async () => {
-		const root = await makeIgnoredGitRoot();
-		await writeInboxReport(root, "plain-heavy.json", {
+	async function writePlainReviewCloseoutReport(
+		root: string,
+		name: string,
+		input: {
+			reportId: string;
+			reportCard?: Partial<CloseoutReceipt>;
+			evidenceGaps?: unknown[];
+			generatedTs?: string;
+			skillRunId?: string;
+		},
+	): Promise<void> {
+		await writeInboxReport(root, name, {
 			schema_version: "1",
-			report_id: "report-plain-heavy",
+			report_id: input.reportId,
 			untrusted_evidence: true,
-			generated_ts: "2020-01-01T00:00:00.000Z",
+			generated_ts: input.generatedTs ?? GENERATED_TS,
 			evidence_source: "driver_closeout",
 			correlation_status: "linked",
-			skill_run_id: "run-plain",
+			...(input.skillRunId ? { skill_run_id: input.skillRunId } : {}),
 			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
 			report_card: {
 				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+				observations: [],
+				...input.reportCard,
+			},
+			evidence_gaps: input.evidenceGaps ?? [],
+		});
+	}
+
+	test("review --plain renders open actions, retention, and pilot checkpoint", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writePlainReviewCloseoutReport(root, "plain-heavy.json", {
+			reportId: "report-plain-heavy",
+			generatedTs: "2020-01-01T00:00:00.000Z",
+			skillRunId: "run-plain",
+			reportCard: {
 				friction: { category: "tool_failure", note: "Tool failed." },
 				verification_burden: {
 					level: "heavy",
 					note: "Needed full verification.",
 				},
 			},
-			evidence_gaps: [
+			evidenceGaps: [
 				{
 					code: "missing_runtime_git_sha",
 					path: "runtime.git_sha",
@@ -5404,7 +5431,7 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 		expect(direct.exitCode).toBe(0);
 		expect(direct.stderr).toBe("");
-		expect(direct.stdout).toContain("Open items:");
+		expect(direct.stdout).toContain("Open actions:");
 
 		const result = await runCli(["review", "--plain"], { cwd: root });
 
@@ -5412,13 +5439,207 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain("Skill Feedback Review");
 		expect(result.stdout).toContain("Reports: 1");
-		expect(result.stdout).toContain("Open items:");
-		expect(result.stdout).toContain("- high_verification_burden:");
-		expect(result.stdout).toContain("- evidence_gap:");
+		expect(result.stdout).toContain("Open actions:");
+		expect(result.stdout.indexOf("top_warning=")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("- next_action=")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("Readiness:")).toBeLessThan(
+			result.stdout.indexOf("Open actions:"),
+		);
+		expect(result.stdout.indexOf("Open actions:")).toBeLessThan(
+			result.stdout.indexOf("Ledger:"),
+		);
+		expect(result.stdout).toContain("- action=action:");
+		expect(result.stdout).toContain(
+			"next=Inspect the verification burden note against source and tests.",
+		);
+		expect(result.stdout).toContain("evidence=report:report-plain-heavy");
+		expect(result.stdout).toContain("reason=high_verification_burden");
+		expect(result.stdout).toContain("full_evidence=json");
 		expect(result.stdout).toContain(
 			"Retention: Inbox is ready for a future gated purge workflow.",
 		);
 		expect(result.stdout).toContain("Pilot checkpoint:");
+	});
+
+	test("review --plain caps open actions while JSON keeps complete evidence", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 11; index += 1) {
+			await writePlainReviewCloseoutReport(root, `action-${index}.json`, {
+				reportId: `report-action-${index}`,
+				reportCard: {
+					observations: [
+						{
+							kind: "tool_failure",
+							target: {
+								type: "path",
+								value: `skills/skill-feedback/action-${index}.md`,
+							},
+							summary: `Owner path ${index} needs inspection.`,
+							evidence_basis: "driver_observed",
+						},
+					],
+				},
+			});
+		}
+
+		const json = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open-action-cap-json",
+		});
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open-action-cap-plain",
+			plain: true,
+		});
+
+		const data = parseEnvelope(json.stdout).data as ReviewResultData;
+		expect(data.open_actions).toHaveLength(11);
+		const actionLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- action="));
+		expect(actionLines).toHaveLength(10);
+		expect(actionLines[0]?.startsWith("- action=action:")).toBe(true);
+		expect(actionLines[0]).toContain(" next=Inspect the owner path");
+		expect(actionLines[0]).toContain(" evidence=report:");
+		expect(plain.stdout).toContain("truncated_open_actions=1");
+		expect(plain.stdout).toContain("full_evidence=json");
+	});
+
+	test("review --plain caps ledger anchors while JSON ledger stays complete", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 21; index += 1) {
+			await writePlainReviewCloseoutReport(root, `ledger-${index}.json`, {
+				reportId: `report-ledger-${index}`,
+				reportCard: {
+					touched_surfaces: [
+						{
+							type: "path",
+							value: `skills/skill-feedback/ledger-${index}.md`,
+						},
+					],
+					observations: [],
+				},
+			});
+		}
+
+		const json = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-cap-json",
+		});
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-cap-plain",
+			plain: true,
+		});
+
+		const data = parseEnvelope(json.stdout).data as ReviewResultData;
+		expect(data.ledger_entries).toHaveLength(21);
+		const ledgerLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- owner="));
+		expect(ledgerLines).toHaveLength(20);
+		expect(ledgerLines[0]?.startsWith("- owner=skills/skill-feedback/")).toBe(
+			true,
+		);
+		expect(plain.stdout).toContain("truncated_ledger_entries=1");
+		expect(plain.stdout).not.toContain("truncated_open_actions=");
+		expect(plain.stdout).toContain("full_evidence=json");
+	});
+
+	test("review --plain caps per-row evidence refs and reports omitted counts", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 5; index += 1) {
+			await writePlainReviewCloseoutReport(root, `repeat-${index}.json`, {
+				reportId: `repeat-${index}`,
+				reportCard: {
+					friction: {
+						category: "tool_failure",
+						note: "Tool failed during verification.",
+					},
+					touched_surfaces: [
+						{ type: "path", value: "skills/skill-feedback/shared.md" },
+					],
+					observations: [],
+				},
+			});
+		}
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-evidence-ref-cap",
+			plain: true,
+		});
+
+		const actionLine = plain.stdout
+			.split("\n")
+			.find((line) => line.includes("reason=repeated_friction"));
+		expect(actionLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(actionLine ?? "").toContain("evidence_refs_omitted=2");
+		const ledgerLine = plain.stdout
+			.split("\n")
+			.find((line) => line.startsWith("- owner=skills/skill-feedback/shared.md"));
+		expect(ledgerLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(ledgerLine ?? "").toContain("evidence_refs_omitted=2");
+	});
+
+	test("review --plain ranks open ledger anchors before no-action unknown owners", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "label.json", {
+			schema_version: "1",
+			report_id: "label-only",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				touched_surfaces: [{ type: "label", value: "runtime" }],
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+		await writeInboxReport(root, "path.json", {
+			schema_version: "1",
+			report_id: "path-owned",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				touched_surfaces: [
+					{ type: "path", value: "skills/skill-feedback/open.md" },
+				],
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-rank-owner",
+			plain: true,
+		});
+
+		const ledgerLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- owner="));
+		expect(
+			ledgerLines[0]?.startsWith("- owner=skills/skill-feedback/open.md"),
+		).toBe(true);
+		expect(ledgerLines).toContainEqual(
+			expect.stringContaining("- owner=unknown evidence=report:label-only"),
+		);
 	});
 
 	test("review pilot density counts closeouts with open signal when action exists", async () => {

@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication
+// Bun test entrypoint with persisted report fixtures; package runner invokes this file without static imports.
 import { describe, expect, test } from "bun:test";
 import {
 	SKILL_FEEDBACK_COST_STATUS,

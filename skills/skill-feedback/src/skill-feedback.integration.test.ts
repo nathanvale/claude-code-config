@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with process-boundary fixtures; package runner invokes this file without static imports.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmod,

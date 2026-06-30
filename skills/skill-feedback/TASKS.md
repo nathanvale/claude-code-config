@@ -32,10 +32,11 @@ skill identity stays deferred, native cost stays `cost_unavailable`, and
 `report:<id>` stays a documented JSON lookup.
 
 Source owners are now split across `command-contract.ts`,
-`report-normalizer.ts`, `inbox-read-model.ts`,
-`correlation-witness-artifacts.ts`, `correlation-witness-workflow.ts`, and
-`runtime-contract.ts`; `skill-feedback-runner.ts` keeps CLI dispatch, rendering,
-writes, and command orchestration.
+`decision-surface.ts`, `report-normalizer.ts`, `inbox-read-model.ts`,
+`correlation-witness-artifacts.ts`, `correlation-witness-workflow.ts`,
+`runtime-contract.ts`, `runtime-file-safety.ts`, and `raw-object.ts`;
+`skill-feedback-runner.ts` keeps CLI dispatch, rendering, writes, and command
+orchestration.
 
 Next safe action:
 
@@ -60,6 +61,18 @@ No active P2 tasks.
 
 ## Latest Signals
 
+- 2026-06-30: Decision surface and bounded review plain output closed:
+  `decision-surface.ts` owns review and health result assembly; runner keeps
+  process envelopes and plain renderers. `review --plain` now surfaces health,
+  top warning, next action, top open actions, top ledger anchors, truncation
+  facts, and `full_evidence=json`; review JSON remains complete.
+- 2026-06-30: Inherited Fallow cleanup closed. `audit` reports
+  `introduced=0 inherited=0`; `dead-code`, `dupes`, and `health` report zero
+  findings for `skills/skill-feedback`. Shared raw-object helpers removed the
+  production duplicate; adjacent suppressions now document analyzer blind spots
+  for public seams, test entrypoints, fixture duplication, and covered
+  parser/orchestration complexity. Package runner passed 13 files, 299 tests;
+  typecheck passed.
 - 2026-06-30: Focused skill-feedback CLI smoke passed: package runner passed 10
   files, 282 tests; typecheck passed; `git diff --check -- skills/skill-feedback
   docs/decisions docs/research` clean; help rendered for root, `record`,

@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file
+// Public Branch Station evidence seam; process-boundary tests consume this entrypoint.
 import type {
 	BranchStationEvidence,
 	StationMap,
@@ -15,6 +17,8 @@ export type SkillFeedbackBranchStationEvidence = BranchStationEvidence;
  * @param evidence - Test-owned evidence rows keyed by Branch Station id
  * @returns Deterministic Station Map JSON data
  */
+// Public Branch Station seam; Fallow cannot see downstream evidence consumers.
+// fallow-ignore-next-line unused-export
 export function projectSkillFeedbackBranchStationEvidence(
 	evidence: readonly SkillFeedbackBranchStationEvidence[],
 ): StationMap {
@@ -27,6 +31,8 @@ export function projectSkillFeedbackBranchStationEvidence(
  * @param evidence - Test-owned evidence rows keyed by Branch Station id
  * @returns Canonically sorted station ids whose status is still missing
  */
+// Public Branch Station seam; Fallow cannot see downstream evidence consumers.
+// fallow-ignore-next-line unused-export
 export function listMissingSkillFeedbackBranchStationEvidence(
 	evidence: readonly SkillFeedbackBranchStationEvidence[],
 ): string[] {

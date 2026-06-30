@@ -40,6 +40,8 @@ Rules:
 | 2026-06-30 | Decision Surface Renderer | Plain readiness labels are contract-owned; correlate action text stays result-owned | Branch Station scenario harness later closed |
 | 2026-06-30 | P2 queue closed | Station helpers and retention no-build contracts pinned by tests | No open P2 tasks |
 | 2026-06-30 | Dirty-tree review follow-ups closed | Artifact and runtime ownership split; plan directives made imperative | One P3 purge output parity question remains |
+| 2026-06-30 | Decision surface and bounded review plain closed | Review/health assembly owner split; plain review bounded around next action | One P3 purge output parity question remains |
+| 2026-06-30 | Inherited Fallow cleanup closed | Audit, dead-code, dupes, and health clean for skill-feedback | One P3 purge output parity question remains |
 
 ## 2026-06-11 - V0 Capture Package
 
@@ -295,3 +297,48 @@ Rules:
 - Decisions: no active P1/P2 queue remains. The only later item is the P3 purge
   plain-output parity question in `TASKS.md`.
 - Follow-up: review/commit prep only unless new tasks appear.
+
+## 2026-06-30 - Decision Surface And Bounded Review Plain Closed
+
+- Outcome: review and health result assembly moved to
+  `skills/skill-feedback/src/decision-surface.ts`; `review --plain` became a
+  bounded decision surface around health, next action, top open actions, and top
+  ledger anchors.
+- Trust added: maintainers can change warnings, next action, readiness,
+  retention, pilot checkpoint, and read-target projection without treating the
+  runner as the decision owner. Agents get bounded plain output plus
+  `full_evidence=json` when full arrays are needed.
+- Evidence: `skills/skill-feedback/src/decision-surface.ts`;
+  `skills/skill-feedback/src/decision-surface.test.ts`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/src/skill-feedback.test.ts`;
+  `skills/skill-feedback/references/report-shape.md`.
+- Verification: focused decision-surface tests, runner tests, command-contract
+  tests, branch-station catalog tests, and typecheck passed during the slice.
+- Decisions: no schema version, parser rule, command flag, or JSON evidence
+  field changed; caps stay runner-owned and fixed.
+- Follow-up: the P3 purge plain-output parity question remains the only tracker
+  item.
+
+## 2026-06-30 - Inherited Fallow Cleanup Closed
+
+- Outcome: inherited Fallow debt for `skills/skill-feedback` closed. `audit`
+  reports `introduced=0 inherited=0`; `dead-code`, `dupes`, and `health`
+  report zero findings.
+- Trust added: public Branch Station and capture adapter seams are retained with
+  local analyzer proof; Bun test entrypoints are marked as runner-invoked; test
+  fixture duplication is marked where scenario literals are intentional;
+  line-level complexity suppressions sit next to covered owner-local defensive
+  branches; shared raw-object helpers remove the one production duplicate.
+- Evidence: `skills/skill-feedback/src/raw-object.ts`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/report-normalizer.ts`;
+  `skills/skill-feedback/src/branch-station-catalog.ts`;
+  `skills/skill-feedback/src/capture-adapters.ts`;
+  `skills/skill-feedback/AGENTS.md`.
+- Verification: Fallow `audit`, `dead-code`, `dupes`, and `health` are clean;
+  package tests pass (13 files, 299 tests, 0 failed); typecheck passed.
+- Decisions: no public command flags, schema versions, parser acceptance,
+  result contract ids, or JSON result fields changed.
+- Follow-up: the P3 purge plain-output parity question remains the only tracker
+  item.
