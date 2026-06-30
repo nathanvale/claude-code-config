@@ -17,39 +17,38 @@ Keep exact field lists, command flags, output envelopes, and validation rules in
 Use this matrix when choosing `SKILL.md` body headings.
 
 - Start from the skill's input/output shape, not its `role`.
-- Treat stars as selection strength, not a required schema.
-- Strong default does not mean include all strong headings.
-- Add headings only when they improve entry-screen route clarity.
+- Choose only headings needed for the current branch.
+- Treat the sets below as starting shapes, not cumulative checklists.
+- Add a heading only when it changes first-minute route, halt, or continuation behavior.
 - Keep `SKILL.md` a `thin router` for the `current step only`.
 - Put branch-only detail behind a `branch-hidden reference`.
 - Keep exact contracts in their `single source of truth`.
 - Prefer deleting vague headings before adding new ones.
 - Apply the `deletion test`: if a heading does not change selected-branch behavior, delete it or move it.
+- If `Owner Map`, `Workflow`, `Next Safe Action`, `Verification`, and `Safety` all appear, run the `deletion test` before handoff.
 
-Selection strength:
+Shape-specific starts:
 
-- `★★★`: strong default when the Use When applies.
-- `★★`: useful when it reduces ambiguity.
-- `★`: optional scanning aid.
-- `avoid`: usually duplicates an owner path or bloats the skill.
+| Shape | Minimal heading set | Add only when |
+|---|---|---|
+| Write something | `Owner Paths`, `Workflow`, `Example`, `Next Safe Action` | Output style, facts, or fallback behavior would be unclear without it. |
+| Simple operation | `Owner Paths`, `Workflow`, `Output Handling`, `Next Safe Action` | stdout, stderr, exit code, or command ownership changes the workflow. |
+| Runtime-backed capability | `Owner Paths`, `Workflow`, `Safety`, `Next Safe Action` | Parsed input, machine output, durable writes, retry, or repair state changes the workflow. |
+| Main-entry router | `Intent Classification`, `Run Card` or `Next Safe Action`, `Owner Map` | Multiple routes, slow work, or visible state would be unclear without it. |
 
-| Heading | Use When | Selection Strength | Notes |
-|---|---|---|---|
-| `Owner Map` / `Owner Paths` / `Owner` | The skill names owner paths for commands, runtimes, trackers, references, docs, or contracts. | `★★★` | Use a small first-screen routing map only. Put exhaustive owner lists in references unless needed for the next action. |
-| `Pick One` / `Workflow` | The skill maps request shapes or tells the agent how to act. | `★★★` | Use `Pick One` for main-entry routing. Use `Workflow` for hot-path current-step flow only. |
-| `Next Safe Action` | The agent may stop, hand off, repair input, or need a clear continuation. | `★★★` | Strong default for agent-native skills. |
-| `Verification` | The skill has scripts, runtime behavior, generated output, audits, or repo edits. | `★★★` | Name a focused verification command for the selected branch. Keep proof matrices in owner paths or references. |
-| `Safety` | The skill mutates state, touches private data, performs external actions, or has failure risk. | `★★★` | Include immediate fail-closed gates only. |
-| `Commands` | The skill wraps CLI, tool, service, or script invocations. | `★★` | Keep exact flags in help, code, generated docs, tests, or scripts. |
-| `Output Handling` | stdout, stderr, JSON, envelope, artifact, or error behavior changes the workflow. | `★★` | Common for simple operation and runtime-backed skills. |
-| `Example` / `Examples` | The skill shapes model-written artifacts or output style. | `★★` | Keep examples illustrative and non-authoritative. |
-| `Gotchas` / `Known Pitfalls` | Refinement evidence shows agents repeatedly miss a non-obvious fact. | `★★` | Add from refinement evidence, not theoretical risk. |
-| `Dependencies` / `Prerequisites` | Missing setup blocks or degrades the workflow. | `★★` | Name missing state, fallback, and next repair. |
-| `Request Shape` | User input needs classification, normalization, or routing before work starts. | `★★` | Use when request shape affects owner, safety, or workflow. |
-| `Output Shape` | The skill returns a specific prose report, packet, or artifact shape. | `★★` | Use `Output Contract` only when pointing at a machine-owned contract. |
-| `References` / `Reference Files` | The skill has branch detail, rare paths, examples, owner maps, troubleshooting, or review criteria. | `★★★` | Preferred place for `branch-hidden reference` detail. Say when to load each reference. |
-| `Notes` | Miscellaneous leftover guidance. | `avoid` | Rename, prune, or move into a precise heading. |
-| `Contract` | Exact flags, schemas, states, or output semantics appear in prose. | `avoid` | Use only to point at the authoritative owner path. |
+Optional headings:
+
+| Heading | Add only when | Delete or move when |
+|---|---|---|
+| `Verification` | A focused check is needed for the selected branch. | It becomes a proof matrix or repeats another owner path. |
+| `Safety` | A fail-closed gate can block before action. | It is broad caution detached from the selected branch. |
+| `Commands` | Command ownership or working directory affects the next action. | It copies exact flags owned by help, code, tests, or scripts. |
+| `Examples` | Model-written output needs a concrete shape. | It becomes an exact contract without a machine owner. |
+| `Gotchas` | Refinement evidence proves a repeated non-obvious miss. | It describes theoretical risk. |
+| `Dependencies` | Missing setup blocks or degrades the workflow. | It lists background prerequisites that do not affect the next action. |
+| `References` | Branch-hidden detail needs a load point. | It becomes an exhaustive owner map on the first screen. |
+| `Notes` | Never as a default. | Rename, prune, or move into a precise heading. |
+| `Contract` | Only to point at the authoritative owner path. | It copies exact flags, schemas, states, or output semantics. |
 
 ## Thin Router Example
 

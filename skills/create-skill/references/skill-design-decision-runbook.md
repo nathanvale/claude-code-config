@@ -1,6 +1,6 @@
 # Skill Design Decision Runbook
 
-Use when creating, reviewing, healing, or repairing portable `SKILL.md` files.
+Use when creating, healing, repairing, or patching portable `SKILL.md` files.
 
 Path base: `skills/create-skill/`.
 Vocabulary owner: `CONTEXT.md`.
@@ -89,9 +89,11 @@ Use before create, fix, heal, repair, or patch edits.
 ## Skill Body
 
 - Keep `SKILL.md` as a `thin router`, not the operating manual.
-- First-screen budget: trigger, boundary, branch choice, immediate fail-closed gate, one owner anchor per hot branch, and next safe action.
-- Aim the first screen at the `current step only`.
-- Put exhaustive owner maps, rare branches, command recipes, trust models, branch workflows, examples, and troubleshooting behind `branch-hidden reference` pointers.
+- First-screen budget: include only text that changes route, halt, or continuation for the selected branch.
+- Keep trigger, boundary, branch choice, and next safe action visible only when they affect the `current step only`.
+- Add an immediate fail-closed gate only when it can block the current branch before action.
+- Name one owner anchor only when route, halt, or continuation depends on it.
+- Put exhaustive owner maps, verification matrices, rare branches, command recipes, trust models, branch workflows, examples, and troubleshooting behind `branch-hidden reference` pointers.
 - Tell the agent which reference to read only after branch selection.
 - Move depth into one-level `references/`.
 - Move repeated deterministic work into `scripts/`.
@@ -101,7 +103,7 @@ Use before create, fix, heal, repair, or patch edits.
 - Start heading choice from input/output shape, not `role`.
 - Reject pure XML skill-body structure.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
-- **Every new skill must have a no-args front door.** Add an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. A skill with no front door stalls on first run. Use `references/adhd-friendly-dx.md` for the pattern. Enforce during create and during the Skill Review Checklist DX/UX step.
+- **Every new skill must have a no-args front door.** Add an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. A skill with no front door stalls on first run. Use `references/adhd-friendly-dx.md` for the pattern. Enforce during create and patch routes; review-only runs flag missing front doors in findings.
 - Apply the `deletion test` before handoff: if deleting text does not change agent behavior for the selected branch, delete it or move it to a `branch-hidden reference`.
 
 ## Owner Paths
@@ -243,7 +245,7 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Treat temp files, generated artifacts, changed state, and skipped checks as visible state.
 - Prefer run cards for long, branching, slow, side-effectful, or multi-verification workflows.
 - Use `references/run-card-template.md` for a copyable Run Card and review prompts.
-- Prefer checklists for review workflows.
+- Use `references/skill-review-rubric.md` for review-only workflows.
 - Prefer examples for judgment-heavy workflows.
 - Move rare branches and deep context to one-level `references/`.
 - **No-args front door (mandatory):** every skill must handle invocation with no args. Check that an `## Intent Classification` or `## Next Safe Actions` block exists with a clear default action. If absent, add it before considering the skill shippable.
@@ -257,27 +259,11 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Publish: return the expected final shape.
 - Fallback: name unavailable tools, missing evidence, blocked state, and next safe action.
 
-### Skill Review Checklist
+### Review-Only Route
 
-- Touch each category during review.
-- Deepen only where risk, drift, or evidence appears.
-- Frontmatter: check `name`, quoted `description`, trigger scope, role, and personal-name leakage.
-- First screen: check `thin router` shape: trigger, boundary, branch choice, immediate fail-closed gate, one owner anchor when needed, and next safe action.
-- Oversized entry screen: fail exhaustive owner maps, command contracts, schemas, state machines, all branch workflows, or unselected branch detail in `SKILL.md`.
-- Branch-hidden reference: check branch-only detail loads only after branch selection.
-- Deletion test: delete or move text that does not change behavior for the `current step only`.
-- Shape: check smallest useful shape and fail-up path for side effects, private data, durable writes, external action, spending, auth, or autonomous recovery.
-- Run Card: check long, branching, slow, side-effectful, or multi-verification workflows against `references/run-card-template.md`.
-- Skip Run Card review for short, linear workflows.
-- Owner paths: check deterministic behavior points at code, CLI help, generated docs, tests, or scripts.
-- Contracts: check examples stay illustrative unless an owner enforces exact behavior.
-- Safety: check private data, durable mutation, external sends, destructive operations, wrong authority, and stale auth fail closed.
-- Tooling: check allowed tools match the workflow and stale tool references are removed.
-- Runtime drift: compare docs with script flags, command paths, stdout, stderr, exit codes, temp files, and emitted state.
-- Verification: check relevant commands are named and runnable from the documented working directory.
-- Portability: check hidden local assumptions are marked with owner path, fallback, or blocked state.
-- Composition: check handoffs name the driver, changed state, remaining work, handback target, and next safe action.
-- Gotchas: record `Gotcha decision:` for every create, review, or heal pass.
+- Use `references/skill-review-rubric.md`.
+- Keep review-only runs read-only unless the user asks to patch.
+- Do not load edit gates for a review-only branch.
 
 ## State, Memory, And Observability
 

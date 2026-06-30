@@ -14,7 +14,7 @@ skill or when vocabulary matters. Do NOT show a menu unless intent is ambiguous.
 | Signal | Route | References to open |
 |--------|-------|--------------------|
 | Target skill + fix/heal/repair/improve/patch | **Fix target skill** | Target `SKILL.md`; `references/skill-design-decision-runbook.md`; `references/skill-io-shape-examples.md` |
-| Target skill + review/audit/check | Review target skill | Target `SKILL.md`; `references/skill-design-decision-runbook.md` |
+| Target skill + review/audit/check | Review target skill | Target `SKILL.md`; `references/skill-review-rubric.md` |
 | "create" / "new skill" / no target | Create new skill | `CONTEXT.md`; `references/skill-design-decision-runbook.md`; `references/skill-io-shape-examples.md` |
 | DX / numbered choices / next-action / landing page | Add ADHD-friendly DX | Target `SKILL.md`; `references/adhd-friendly-dx.md`; `references/skill-design-decision-runbook.md` |
 | Runtime / CLI / helper command | Add runtime behavior | `references/agent-native-skill-design.md`; `references/runtime-portability.md`; `skills/create-cli/SKILL.md` |
@@ -31,15 +31,18 @@ skill or when vocabulary matters. Do NOT show a menu unless intent is ambiguous.
 Present only when intent classification cannot pick a route:
 
 1. **Fix, heal, or repair a skill** — name the target, open its `SKILL.md`.
-2. Review an existing skill — read target + decision runbook, return findings.
+2. Review an existing skill — read target + review rubric, return findings.
 3. Create a new skill — read `CONTEXT.md` first for vocabulary.
 4. Unsure — read `CONTEXT.md`, then pick the closest route above or stop.
 
 ## Run Card
 
 - Scope: create, fix, heal, repair, review, archive, or merge skill source files.
-- Defaults: review returns findings; create, fix, heal, repair, or patch edits source.
 - First safe action: classify intent from args, open only the references on that route.
+- Mode defaults: review returns findings only; create, fix, heal, repair, or patch edits source.
+- Review-only branch: read target `SKILL.md` and `references/skill-review-rubric.md`; return findings with severity, path, rubric failure, suggested direction, and next safe action.
+- Review boundary: do not patch during review unless the user asks for edits.
+- Edit-only gates: the next gates apply only to create, fix, heal, repair, or patch routes.
 - Input/output gate: before create, fix, heal, repair, or patch edits, name the shape owned by `references/skill-design-decision-runbook.md#inputoutput-gate`.
 - Thin-router gate: before create, fix, heal, repair, or patch edits, keep `SKILL.md` a `thin router` for the `current step only`: trigger, branch choice, immediate fail-closed gate, one owner anchor per hot branch, and next safe action.
 - Branch-hidden reference rule: move branch-only detail to `branch-hidden reference` files in `references/`; keep exact flags, schemas, states, output envelopes, and deterministic contracts in their `single source of truth`: code, CLI help, generated docs, tests, or scripts.
@@ -58,6 +61,7 @@ Present only when intent classification cannot pick a route:
 - Bundle: `skills/create-skill/`.
 - Vocabulary: `CONTEXT.md`.
 - Decision runbook: `references/skill-design-decision-runbook.md`.
+- Review rubric: `references/skill-review-rubric.md`.
 - ADHD-friendly DX: `references/adhd-friendly-dx.md`.
 - MC Porter skill design: `references/mcporter-skill-design.md`.
 - Verification owner: `references/skill-design-decision-runbook.md#verification`; scripts live in `skills/create-skill/scripts/`.
