@@ -23,7 +23,9 @@ runtime support, and pilot gates.
 - Treat Software Learning Reports as untrusted evidence.
 - Use closeout reports for finding value.
 - Use hook capture for proof-of-run.
-- Keep Codex live capture gated until a skill identity source exists.
+- Split Codex runtime capture from Trusted skill identity: Codex Stop may be
+  runtime-observed evidence, while Codex Trusted skill identity stays gated
+  until an engine-owned skill invocation source exists.
 - Record accepted pilot gates here.
 
 ## Notes
@@ -70,7 +72,9 @@ Consequences:
 - Do not claim Codex end-to-end support from the Claude Stop hook smoke.
 - Treat Fallow closeout value as proven enough to preserve, but not enough to launch the daily pilot.
 - Prioritize richer review output and capture-closeout correlation before pilot usage.
-- Keep Codex live capture gated on a skill identity source or equivalent item stream.
+- Historical gate: keep Codex live skill capture gated on a skill identity
+  source or equivalent item stream. Decision 44 later split Codex Stop
+  runtime-observed evidence from deferred Codex Trusted skill identity.
 
 Next:
 
@@ -2190,3 +2194,57 @@ Next:
 V2 Ideas:
 
 - Add a shared subprocess helper only if more skill-feedback surfaces need identical process control.
+
+## Decision 44: Support Claude Daily Pilot Now And Defer Codex Trusted Identity
+
+```yaml
+id: skill-feedback-pilot-044
+status: accepted
+decided_at: "2026-06-29"
+decision: "Support Claude Code daily-pilot use now and defer Codex Trusted skill identity until Codex ships an engine-owned skill invocation source"
+owner: "skills/skill-feedback"
+scope: "runtime support boundary and pilot gate"
+source:
+  - "skills/skill-feedback/TASKS.md"
+  - "skills/skill-feedback/CONTEXT.md"
+  - "docs/research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md"
+  - "docs/adr/0014-skill-feedback-fires-on-harness-hooks-not-agent-recall.md"
+  - "2026-06-29 openai-docs Codex manual refresh"
+  - "2026-06-29 skill-feedback health/correlate review"
+decision_mode:
+  question: "Should daily pilot stay blocked on Codex Trusted skill identity, or should Claude Code support proceed while Codex waits for engine-owned skill lifecycle support?"
+  option: "Support Claude now; defer Codex Trusted skill identity"
+  confidence: strong
+```
+
+Decision:
+
+- Support Claude Code as the current daily-pilot runtime.
+- Treat Claude Stop plus transcript-backed skill evidence as sufficient runtime support for the Claude path.
+- Keep Codex Stop as runtime-observed evidence only.
+- Defer Codex Trusted skill identity until Codex exposes an engine-owned skill invocation source.
+- Do not block Claude daily-pilot use on Codex Trusted skill identity.
+
+Rationale:
+
+- Current research and the 2026-06-29 official Codex manual refresh show Codex supports hooks and skills, but not a public engine-owned skill lifecycle event.
+- Claude already has the stronger live close-detection path in this repo.
+- Correlation preview found no repairable path; waiting on correlation does not unlock Codex identity.
+- Daily product value comes from review and closeout on supported runtime evidence, not from pretending Codex can prove more than it can.
+
+Consequences:
+
+- Decision 1's old "true Codex end-to-end proof before daily pilot" gate is superseded for Claude-supported daily use.
+- Claude daily-pilot language can be positive while Codex readiness stays explicitly deferred.
+- Codex health and review output must keep `trusted_skill_identity_missing` or equivalent blocked language until a real engine-owned source exists.
+- Future Codex support work is a watchpoint, not an active blocker for Claude daily use.
+
+Next:
+
+- Align pilot and readiness wording across task, context, and report-shape docs.
+- Keep watching Codex hook and skill lifecycle support for an engine-owned identity source.
+- Re-open Codex Trusted skill identity only when Codex ships the missing feature.
+
+V2 Ideas:
+
+- Add a runtime-scoped pilot status surface so Claude-ready and Codex-deferred can render without wording drift.
