@@ -60,7 +60,8 @@ Use when MC Porter is declared as the single MCP config surface for a workflow.
 
 ## Skill Body Checklist
 
-- Put the alias, config owner, schema owner, runtime owner, and safety boundary on the first screen.
+- Name the alias, config owner, schema owner, runtime owner, and safety boundary before editing.
+- Put only owner anchors that change route, halt, or continuation on the first screen; keep the full owner checklist in this reference.
 - Keep the first safe action read-only unless the skill's whole purpose is a user-approved mutation.
 - Separate read-only discovery from mutating apply paths.
 - Include config hygiene when MC Porter is the declared single config surface.

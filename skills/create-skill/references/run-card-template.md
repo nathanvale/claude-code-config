@@ -16,21 +16,27 @@ Do not add Run Card lint or audit scripts until observed drift, repeated missed 
 - Routing owner: `references/skill-body-shape-gate.md#run-card`.
 - Skill shape examples: `references/skill-io-shape-examples.md`.
 
-## Author Template
+## Candidate Bullets
 
-Copy this shape into the skill body or a one-level reference when it reduces first-minute load.
+Use as a bullet bank, not a copy template.
+
+Start with first safe action and fallback:
 
 ```markdown
 ## Run Card
 
+- First safe action: name the first read, command, tool call, or user question.
+- Fallback: name missing tools, missing evidence, blocked state, degraded state, and next safe action.
+```
+
+Add only when the bullet changes route, halt, continuation, or visible-state
+decisions:
+
 - Scope: name the task family, boundary, and non-goals.
 - Defaults: name mode, working directory, inputs, outputs, and confirmation gates.
-- First safe action: name the first read, command, tool call, or user question.
 - Visible state: name temp files, generated artifacts, external state, side effects, and skipped checks.
 - Verify: name the focused checks, claim checks, or manual inspection steps.
 - Publish: name the expected final answer, artifact, handoff, or status shape.
-- Fallback: name missing tools, missing evidence, blocked state, degraded state, and next safe action.
-```
 
 ## Review Prompts
 

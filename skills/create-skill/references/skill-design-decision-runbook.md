@@ -8,6 +8,9 @@ Vocabulary owner: `CONTEXT.md`.
 
 ## Start Here
 
+Use this list as driver scratch. Do not copy it into `SKILL.md` or handoff
+text.
+
 - Name the request shape or task family.
 - Name the overloaded actor: agent, user, runtime, maintainer, or reviewer.
 - Name the wrong decision this skill prevents.
@@ -88,4 +91,5 @@ Open only the branch needed for the current step.
 
 - Open the smallest branch reference from the index.
 - Patch only the current branch.
+- Record `deletion test` result before handoff: kept, moved, deleted, or none.
 - Run the branch-owned verification from `references/skill-verification-gate.md`.
