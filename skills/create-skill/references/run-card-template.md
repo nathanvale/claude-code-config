@@ -13,7 +13,7 @@ Do not add Run Card lint or audit scripts until observed drift, repeated missed 
 ## Owner Paths
 
 - Vocabulary: `skills/create-skill/CONTEXT.md#run-card`.
-- Routing owner: `references/skill-design-decision-runbook.md#skill-dxux`.
+- Routing owner: `references/skill-body-shape-gate.md#run-card`.
 - Skill shape examples: `references/skill-io-shape-examples.md`.
 
 ## Author Template

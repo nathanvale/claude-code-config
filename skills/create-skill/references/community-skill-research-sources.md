@@ -1,6 +1,6 @@
 # Community Skill Research Sources
 
-Use this source note before changing community-skill rules in `references/skill-design-decision-runbook.md`.
+Use this source note before changing community-skill rules reached from `references/skill-design-decision-runbook.md`.
 
 Keep the philosophy guide as the rulebook. Keep source freshness here.
 

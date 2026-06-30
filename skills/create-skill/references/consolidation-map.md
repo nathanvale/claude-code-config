@@ -17,10 +17,15 @@ skills/create-skill/
     research-portability.md
     run-card-template.md
     runtime-portability.md
+    skill-body-shape-gate.md
     skill-dependency-rules.md
     skill-design-decision-runbook.md
+    skill-frontmatter-gate.md
     skill-io-shape-examples.md
+    skill-owner-path-gate.md
     skill-roles.md
+    skill-safety-gate.md
+    skill-verification-gate.md
   scripts/
     check-gotcha-decision.ts
     check-owner-paths.ts

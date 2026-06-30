@@ -25,7 +25,7 @@ Use this matrix when choosing `SKILL.md` body headings.
 - Keep exact contracts in their `single source of truth`.
 - Prefer deleting vague headings before adding new ones.
 - Apply the `deletion test`: if a heading does not change selected-branch behavior, delete it or move it.
-- If `Owner Map`, `Workflow`, `Next Safe Action`, `Verification`, and `Safety` all appear, run the `deletion test` before handoff.
+- If `Owner Map`, `Workflow`, `Next Safe Action`, `Verification`, and `Safety` all appear, file a review finding by default until each heading passes the `deletion test`.
 
 Shape-specific starts:
 
@@ -69,7 +69,7 @@ Good pattern:
 
 ## Skill I/O Example
 
-Copy only the pieces that change the selected branch.
+Start with one heading. Add examples only when model-written output needs shape.
 
 ```markdown
 ---
@@ -84,9 +84,10 @@ Use when the user asks for release notes, changelog copy, or a shipped-change su
 ## Workflow
 
 1. Read the fact input: current diff, PR notes, issue notes, or user-supplied summary.
-2. Draft in the requested channel format.
-3. Flag unsupported claims.
-4. Use `context/comms-style.md` only when channel style is unclear.
+2. If facts are missing, inspect the input artifacts before drafting.
+3. Draft in the requested channel format.
+4. Flag unsupported claims.
+5. Use `context/comms-style.md` only when channel style is unclear.
 
 ## Example
 
@@ -98,14 +99,11 @@ Output:
 - Added CSV export for filtered reports.
 - Clarified export-disabled states when no matching rows exist.
 
-## Next Safe Action
-
-- If facts are missing, inspect the input artifacts before drafting.
 ```
 
 ## Simple Operation I/O Example
 
-Copy only the pieces that change the selected branch.
+Start with one heading. Add output handling only when stdout, stderr, or exit codes change the next action.
 
 ```markdown
 ---
@@ -121,22 +119,15 @@ Use when the user asks to run the repo check, lint, format check, or type check.
 
 1. Read the command from `package.json`.
 2. Run it from the repo root.
-3. Report exit code, stdout summary, and stderr diagnostics.
-
-## Output Handling
-
-- Treat stdout as the user-facing result.
-- Treat stderr as diagnostics.
-- Treat non-zero exit as a repair path.
-
-## Next Safe Action
-
-- If the command is missing, inspect the owner path before inventing a replacement.
+3. If the command is missing, inspect the owner path before inventing a replacement.
+4. Treat stdout as the user-facing result.
+5. Treat stderr as diagnostics.
+6. Treat non-zero exit as a repair path.
 ```
 
 ## Runtime-Backed Capability Example
 
-Copy only the pieces that change the selected branch.
+Start with workflow plus one blocking safety line when durable writes or external side effects are present.
 
 ```markdown
 ---
@@ -151,17 +142,14 @@ Use when a decision is accepted and belongs in the repo decision log.
 ## Workflow
 
 1. Read input contract owner `packages/record-decision/src/record-input.ts`.
-2. Build the prose input envelope.
-3. Run the command named by the CLI owner.
-4. Follow the returned next safe action.
+2. If the contract owner path is missing, stop and run `create-cli`.
+3. Build the prose input envelope.
+4. Run the command named by the CLI owner.
+5. Follow the returned next safe action.
 
 ## Safety
 
 - Default to dry-run.
 - Require explicit execute mode for durable writes.
 - Route repair envelopes back to input changes.
-
-## Next Safe Action
-
-- If the contract owner path is missing, stop and run `create-cli`.
 ```
