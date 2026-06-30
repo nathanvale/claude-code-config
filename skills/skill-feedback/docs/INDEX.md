@@ -56,6 +56,7 @@ Those adjacent docs are linked below.
 | [2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md](./plans/2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md) | `skills/skill-feedback/docs/plans/2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md` | Private signed correlation witnesses. |
 | [2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md](./plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md) | `skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md` | Correlate preview/execute backfill repair. |
 | [2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md](./plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md) | `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md` | P0/P1 task closure, owner split, and no-build decisions. |
+| [2026-06-30-001-refactor-skill-feedback-decision-surface-review-plain-plan.md](./plans/2026-06-30-001-refactor-skill-feedback-decision-surface-review-plain-plan.md) | `skills/skill-feedback/docs/plans/2026-06-30-001-refactor-skill-feedback-decision-surface-review-plain-plan.md` | Decision surface module and bounded review plain output plan. |
 
 ## Adjacent Root Docs
 
