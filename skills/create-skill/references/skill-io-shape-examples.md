@@ -18,9 +18,13 @@ Use this matrix when choosing `SKILL.md` body headings.
 
 - Start from the skill's input/output shape, not its `role`.
 - Treat stars as selection strength, not a required schema.
+- Strong default does not mean include all strong headings.
 - Add headings only when they improve entry-screen route clarity.
-- Keep exact contracts in owner paths.
+- Keep `SKILL.md` a `thin router` for the `current step only`.
+- Put branch-only detail behind a `branch-hidden reference`.
+- Keep exact contracts in their `single source of truth`.
 - Prefer deleting vague headings before adding new ones.
+- Apply the `deletion test`: if a heading does not change selected-branch behavior, delete it or move it.
 
 Selection strength:
 
@@ -31,21 +35,38 @@ Selection strength:
 
 | Heading | Use When | Selection Strength | Notes |
 |---|---|---|---|
-| `Owner Map` / `Owner Paths` / `Owner` | The skill names owner paths for commands, runtimes, trackers, references, docs, or contracts. | `★★★` | Use `Owner Map` for a small first-screen map. Use `Owner Paths` when several owners need detail. Use `Owner` for one. |
-| `Pick One` / `Workflow` | The skill maps request shapes or tells the agent how to act. | `★★★` | Use `Pick One` for main-entry routing. Use `Workflow` for operator flow. |
+| `Owner Map` / `Owner Paths` / `Owner` | The skill names owner paths for commands, runtimes, trackers, references, docs, or contracts. | `★★★` | Use a small first-screen routing map only. Put exhaustive owner lists in references unless needed for the next action. |
+| `Pick One` / `Workflow` | The skill maps request shapes or tells the agent how to act. | `★★★` | Use `Pick One` for main-entry routing. Use `Workflow` for hot-path current-step flow only. |
 | `Next Safe Action` | The agent may stop, hand off, repair input, or need a clear continuation. | `★★★` | Strong default for agent-native skills. |
-| `Verification` | The skill has scripts, runtime behavior, generated output, audits, or repo edits. | `★★★` | Script-backed skills name a focused verification path. |
-| `Safety` | The skill mutates state, touches private data, performs external actions, or has failure risk. | `★★★` | Include only when safety changes behavior. |
-| `Commands` | The skill wraps CLI, tool, service, or script invocations. | `★★` | Keep exact flags in help, code, or generated docs when possible. |
+| `Verification` | The skill has scripts, runtime behavior, generated output, audits, or repo edits. | `★★★` | Name a focused verification command for the selected branch. Keep proof matrices in owner paths or references. |
+| `Safety` | The skill mutates state, touches private data, performs external actions, or has failure risk. | `★★★` | Include immediate fail-closed gates only. |
+| `Commands` | The skill wraps CLI, tool, service, or script invocations. | `★★` | Keep exact flags in help, code, generated docs, tests, or scripts. |
 | `Output Handling` | stdout, stderr, JSON, envelope, artifact, or error behavior changes the workflow. | `★★` | Common for simple operation and runtime-backed skills. |
 | `Example` / `Examples` | The skill shapes model-written artifacts or output style. | `★★` | Keep examples illustrative and non-authoritative. |
 | `Gotchas` / `Known Pitfalls` | Refinement evidence shows agents repeatedly miss a non-obvious fact. | `★★` | Add from refinement evidence, not theoretical risk. |
 | `Dependencies` / `Prerequisites` | Missing setup blocks or degrades the workflow. | `★★` | Name missing state, fallback, and next repair. |
 | `Request Shape` | User input needs classification, normalization, or routing before work starts. | `★★` | Use when request shape affects owner, safety, or workflow. |
 | `Output Shape` | The skill returns a specific prose report, packet, or artifact shape. | `★★` | Use `Output Contract` only when pointing at a machine-owned contract. |
-| `References` / `Reference Files` | The skill has one-level detail files. | `★` | Say when to load each reference. |
+| `References` / `Reference Files` | The skill has branch detail, rare paths, examples, owner maps, troubleshooting, or review criteria. | `★★★` | Preferred place for `branch-hidden reference` detail. Say when to load each reference. |
 | `Notes` | Miscellaneous leftover guidance. | `avoid` | Rename, prune, or move into a precise heading. |
 | `Contract` | Exact flags, schemas, states, or output semantics appear in prose. | `avoid` | Use only to point at the authoritative owner path. |
+
+## Thin Router Example
+
+Illustrative only.
+
+Bad pattern:
+
+- `SKILL.md` includes exhaustive owners, trust model, command contracts, schema notes, and all branch workflows.
+- The agent loads detail for branches it has not selected.
+- The `single source of truth` drifts because prose restates code, help, tests, or scripts.
+
+Good pattern:
+
+- `SKILL.md` routes the current request and stops after the next safe action.
+- `SKILL.md` names one owner anchor when route, halt, or continuation depends on it.
+- Branch-only detail lives behind a `branch-hidden reference`.
+- Exact flags, schemas, states, output envelopes, and deterministic contracts stay in code, CLI help, generated docs, tests, or scripts.
 
 ## Skill I/O Example
 

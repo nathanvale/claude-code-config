@@ -15,6 +15,9 @@ Agent-native CLI vocabulary owner: `CONTEXT.md`.
 - Name the top ship-but-fail scenario.
 - Choose the smallest shape.
 - Run the input/output gate before source edits.
+- Keep `SKILL.md` a `thin router` for the `current step only`.
+- Put branch-only detail behind a `branch-hidden reference`.
+- Apply the `deletion test`: if removal does not change current-branch behavior, delete the text or move it behind a context pointer.
 - Stop once owner path, verification, and next safe action are clear.
 
 ## Input/Output Gate
@@ -85,9 +88,11 @@ Use before create, fix, heal, repair, or patch edits.
 
 ## Skill Body
 
-- Keep `SKILL.md` as entry-screen route clarity.
-- Put trigger, boundary, owner paths, safety gate, and next safe action on the first screen.
-- Tell the agent which files exist and when to read them.
+- Keep `SKILL.md` as a `thin router`, not the operating manual.
+- First-screen budget: trigger, boundary, branch choice, immediate fail-closed gate, one owner anchor per hot branch, and next safe action.
+- Aim the first screen at the `current step only`.
+- Put exhaustive owner maps, rare branches, command recipes, trust models, branch workflows, examples, and troubleshooting behind `branch-hidden reference` pointers.
+- Tell the agent which reference to read only after branch selection.
 - Move depth into one-level `references/`.
 - Move repeated deterministic work into `scripts/`.
 - Use Markdown headings unless a host runtime requires another format.
@@ -97,10 +102,14 @@ Use before create, fix, heal, repair, or patch edits.
 - Reject pure XML skill-body structure.
 - Use XML-like tags only inside prompt packets, examples, or quoted inputs when boundary clarity beats Markdown.
 - **Every new skill must have a no-args front door.** Add an `## Intent Classification` block (or equivalent `## Next Safe Actions` block) that tells the agent what to do when invoked with no arguments. A skill with no front door stalls on first run. Use `references/adhd-friendly-dx.md` for the pattern. Enforce during create and during the Skill Review Checklist DX/UX step.
+- Apply the `deletion test` before handoff: if deleting text does not change agent behavior for the selected branch, delete it or move it to a `branch-hidden reference`.
 
 ## Owner Paths
 
 - Name the owner path instead of copying the contract.
+- Treat the owner path as the `single source of truth`.
+- Keep exhaustive owner maps in references unless needed for the next action.
+- On the first screen, name only the owner anchor needed to route, halt, or continue.
 - If no authoritative owner path exists, do not rely on the behavior as a contract.
 - For examples: mark illustrative.
 - For exact behavior: create or name the owner before relying on it.
@@ -211,6 +220,10 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 ## Quality Checks
 
 - Prefer prune or substitute before adding instructions.
+- Prefer `thin router` shape over complete first-screen coverage.
+- Strong default headings are options, not a checklist.
+- Branch-only detail belongs in a `branch-hidden reference`.
+- Run the `deletion test` against the `current step only`.
 - Choose a scoped audit target; do not audit the whole repo from runbook changes alone.
 - During skill review or healing, remove stale skill bridges when active route evidence no longer requires them.
 - Mark personal/local assumptions explicitly.
@@ -249,7 +262,10 @@ Command: `bun run skills/create-skill/scripts/check-owner-paths.ts --json`.
 - Touch each category during review.
 - Deepen only where risk, drift, or evidence appears.
 - Frontmatter: check `name`, quoted `description`, trigger scope, role, and personal-name leakage.
-- First screen: check trigger, boundary, owner paths, safety gate, and next safe action.
+- First screen: check `thin router` shape: trigger, boundary, branch choice, immediate fail-closed gate, one owner anchor when needed, and next safe action.
+- Oversized entry screen: fail exhaustive owner maps, command contracts, schemas, state machines, all branch workflows, or unselected branch detail in `SKILL.md`.
+- Branch-hidden reference: check branch-only detail loads only after branch selection.
+- Deletion test: delete or move text that does not change behavior for the `current step only`.
 - Shape: check smallest useful shape and fail-up path for side effects, private data, durable writes, external action, spending, auth, or autonomous recovery.
 - Run Card: check long, branching, slow, side-effectful, or multi-verification workflows against `references/run-card-template.md`.
 - Skip Run Card review for short, linear workflows.
