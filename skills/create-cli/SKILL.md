@@ -11,6 +11,10 @@ safety, and validation depth.
 
 ## Do This First
 
+- If the request edits `create-cli`, its routing, or this `SKILL.md`,
+  `skills/skill-author/SKILL.md` owns the skill edit; run
+  `references/behavior-regression-checklist.md` before and after meaningful
+  edits.
 - If there are no args, no command purpose, or only "make a CLI", ask the
   numbered router below; do not invent a spec.
 - If the request is to create or edit a skill that wraps a CLI,
@@ -24,8 +28,8 @@ safety, and validation depth.
   3. Facade-backed CLI: explicit facade-backed, reusable facade code, facade
      runtime validation, or `@side-quest/cli-command-facade`.
   4. Not sure: ask the numbered router.
-- Treat implementation language alone as ambiguous. Bun TypeScript does not
-  imply Agent-native or Facade-backed.
+- Treat implementation stack alone as ambiguous. Bun TypeScript plus command
+  purpose does not imply Basic, Agent-native, or Facade-backed.
 - If intent is clear, route directly.
 - If intent is ambiguous, ask which lane fits: humans only, agents/scripts too,
   reusable runtime validation, or not sure.
@@ -87,7 +91,6 @@ for the selected lane:
   Station catalog.
 - Design complete → hand the filled Minimum CLI Design Brief and lane-specific
   proof path to the implementer.
-- Skill edit → run `references/behavior-regression-checklist.md` before and after.
 
 ## Notes
 
@@ -96,5 +99,3 @@ for the selected lane:
 - Do not copy runtime schemas, generated envelopes, parser rules, facade field
   catalogues, or helper signatures into the answer; those are owned by
   `references/agent-native-cli-design.md` and `references/cli-command-facade.md` — name them.
-- Before and after meaningful edits to this skill, run
-  `references/behavior-regression-checklist.md` against the changed behavior.

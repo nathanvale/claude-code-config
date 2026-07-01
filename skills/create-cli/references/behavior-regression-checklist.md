@@ -43,6 +43,7 @@ Use before and after meaningful edits to `create-cli`.
 - **Prompt:** `Create a Bun TypeScript CLI for checking project health.`
 - **Expected route:** Ambiguous; offer numbered router.
 - **Expected markers:**
+  - Does not choose Basic only because Bun TypeScript and a purpose appear.
   - Does not choose Facade-backed only because Bun TypeScript appears.
   - Offers Basic CLI, Agent-native CLI, Facade-backed CLI, and Not sure.
   - Frames choice by user need: humans, agents/scripts, or runtime validation.
@@ -96,6 +97,7 @@ Use before and after meaningful edits to `create-cli`.
 - **Prompt:** `Update create-cli routing.`
 - **Expected route:** Skill edit.
 - **Expected markers:**
+  - Routes before the no-args / no-command-purpose guard.
   - Runs this checklist before and after meaningful edits.
   - Patches only behavior that improves routing, structure, steering, or pruning.
   - Does not add copied contracts to `SKILL.md`.
