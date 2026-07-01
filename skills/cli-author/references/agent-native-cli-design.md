@@ -41,6 +41,46 @@ Read after `cli-guidelines.md`. Use before `cli-command-facade.md`.
 - Redact machine-visible sensitive values.
 - Include a smoke command or minimal proof path.
 
+## No-Arg Front Door Behavior
+
+Use when designing what the CLI does with no subcommand or operands. This is
+different from CLI Front Door layout, which names source ownership.
+
+- Keep help-on-no-args as the default for stateless CLIs.
+- Use get-started output when state is absent and setup is the next useful act.
+- Use a dashboard only when the CLI owns meaningful current state, recent
+  activity, health, or a work queue.
+- Keep no-arg output a launcher, not a report dump.
+- Show the top 3-5 next commands or drill-downs.
+- Put diagnostics in an advanced block unless the tool is broken, unsafe,
+  unauthenticated, or unreadable.
+- Keep destructive work preview-first; no-arg may point to preview, but must not
+  execute it.
+- Keep no-arg dashboards read-only unless a command contract says otherwise and
+  the user explicitly opts into a write mode.
+- Keep machine users covered with command discovery, a JSON command, or a
+  stable `--json` mode; do not force agents to scrape a decorative dashboard.
+
+State gates:
+
+| State | No-arg behavior |
+| --- | --- |
+| Stateless or unknown purpose | Show concise help and examples. |
+| Empty state | Show get-started help and the setup or capture command. |
+| Populated state | Show bounded dashboard plus command launcher. |
+| Unsafe or unreadable state | Show repair path and stop before normal actions. |
+| Destructive work available | Show preview command, not execute. |
+
+Review questions:
+
+- Does no-arg answer what exists, what changed, and what to do next?
+- Does the first screen launch the user's current work before diagnostics?
+- Does empty state teach the next safe command?
+- Does populated state avoid dumping full reports?
+- Does unsafe state make repair obvious before other commands?
+- Does destructive state stop at preview?
+- Does automation have a parseable path that does not scrape human layout?
+
 ## Recipe Triggers
 
 Add recipes when they change driver behavior or reduce real risk.
@@ -251,6 +291,7 @@ shared validation, or structured envelopes.
 - Can failures drive repair without guessing?
 - Can the driver correlate the run with diagnostics?
 - Can large output stay under context budget?
+- Is no-arg behavior selected from owned state instead of CLI fashion?
 - Can side effects be previewed or gated?
 - Is projected discovery text maintainer-authored and safe?
 - Does every stable result literal have the right owner?
@@ -262,4 +303,4 @@ shared validation, or structured envelopes.
 - CLI baseline: `references/cli-guidelines.md`.
 - Facade-backed path: `references/cli-command-facade.md`.
 - Vocabulary: `../../CONTEXT.md`.
-- Extension decision: `../../../docs/adr/0009-cli-author-uses-bounded-local-extension.md`.
+- Extension decision: `docs/adr/0009-cli-author-uses-bounded-local-extension.md`.

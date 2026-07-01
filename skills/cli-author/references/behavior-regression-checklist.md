@@ -75,6 +75,19 @@ Use before and after meaningful edits to `cli-author`.
   - Treats private-handler `add-tests` findings as coverage prompts, not
     automatic direct-test requirements.
 
+### Stateful No-Arg Front Door
+
+- **Prompt:** `Design an agent-native CLI where no args should show current inbox state and next commands.`
+- **Expected route:** Agent-native CLI.
+- **Expected markers:**
+  - Chooses no-arg behavior from owned state, not generic CLI fashion.
+  - Keeps stateless and empty states on help or get-started output.
+  - Uses populated state for a bounded dashboard and command launcher.
+  - Routes unsafe or unreadable state to repair.
+  - Routes destructive work to preview, not execute.
+  - Keeps diagnostics secondary unless the tool is broken or unsafe.
+  - Preserves a parseable path for agents.
+
 ### Facade-Backed Bun TypeScript CLI
 
 - **Prompt:** `Create a facade-backed Bun TypeScript CLI using @side-quest/cli-command-facade.`
@@ -119,6 +132,7 @@ Use before and after meaningful edits to `cli-author`.
 - Ambiguous Bun TypeScript prompt asks or offers before choosing depth.
 - Agent-native non-TypeScript prompt stays language-agnostic.
 - Multi-command agent-native prompt preserves implementation-shape guidance.
+- Stateful no-arg prompt uses state gates without making dashboards universal.
 - Facade-backed prompt follows facade path only when explicitly requested.
 - Skill-author overlap prompt keeps skill creation owned by `skill-author`.
 - References point to owner paths for deterministic contract shape.

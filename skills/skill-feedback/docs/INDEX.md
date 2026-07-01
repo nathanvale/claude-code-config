@@ -58,6 +58,8 @@ Those adjacent docs are linked below.
 | [2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md](./plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md) | `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md` | P0/P1 task closure, owner split, and no-build decisions. |
 | [2026-06-30-001-refactor-skill-feedback-decision-surface-review-plain-plan.md](./plans/2026-06-30-001-refactor-skill-feedback-decision-surface-review-plain-plan.md) | `skills/skill-feedback/docs/plans/2026-06-30-001-refactor-skill-feedback-decision-surface-review-plain-plan.md` | Decision surface module and bounded review plain output plan. |
 | [2026-06-30-002-refactor-skill-feedback-inherited-fallow-cleanup-plan.md](./plans/2026-06-30-002-refactor-skill-feedback-inherited-fallow-cleanup-plan.md) | `skills/skill-feedback/docs/plans/2026-06-30-002-refactor-skill-feedback-inherited-fallow-cleanup-plan.md` | Inherited Fallow cleanup plan across test scenario depth, command contracts, runner internals, and package owner proof. |
+| [2026-07-02-001-feat-skill-feedback-human-observability-mvp-plan.md](./plans/2026-07-02-001-feat-skill-feedback-human-observability-mvp-plan.md) | `skills/skill-feedback/docs/plans/2026-07-02-001-feat-skill-feedback-human-observability-mvp-plan.md` | Requirements-only MVP for human report browsing, usage, queue, and default dashboard repair. |
+| [2026-07-02-002-spec-skill-feedback-no-arg-front-door.md](./plans/2026-07-02-002-spec-skill-feedback-no-arg-front-door.md) | `skills/skill-feedback/docs/plans/2026-07-02-002-spec-skill-feedback-no-arg-front-door.md` | CLI-author spec for the no-arg dashboard state gates, launcher shape, and implementation contract path. |
 
 ## Adjacent Root Docs
 

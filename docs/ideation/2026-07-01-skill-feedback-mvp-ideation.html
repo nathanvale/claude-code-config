@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Skill Feedback MVP</title>
+  <style>
+    :root {
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #1f2328;
+      --muted: #5d6673;
+      --line: #d8d8d0;
+      --soft: #eef3f6;
+      --accent: #176b87;
+      --accent-soft: #e3f4f8;
+      --warn: #8a4b09;
+      --warn-soft: #fff2dc;
+      --good: #1f6f43;
+      --good-soft: #e7f6ec;
+      --code: #f2f2ee;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(940px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 42px 0 56px;
+    }
+
+    header,
+    section,
+    footer {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 24px;
+      margin: 0 0 18px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.2;
+      letter-spacing: 0;
+      margin: 0;
+    }
+
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.35rem; margin-bottom: 14px; }
+    h3 { font-size: 1.05rem; margin-bottom: 10px; }
+
+    p {
+      max-width: 74ch;
+      margin: 0 0 12px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid currentColor;
+    }
+
+    code {
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 0.08rem 0.3rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .meta,
+    .stats,
+    .jump-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--ink);
+      padding: 5px 9px;
+      font-size: 0.86rem;
+      white-space: nowrap;
+    }
+
+    .stat {
+      flex: 1 1 150px;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      padding: 12px;
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 1.4rem;
+      color: inherit;
+    }
+
+    ul,
+    ol {
+      margin: 0 0 0 1.2rem;
+      padding: 0;
+    }
+
+    li + li { margin-top: 7px; }
+
+    .axis-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .axis {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      padding: 12px;
+    }
+
+    .idea {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px;
+      margin-top: 16px;
+      background: #fff;
+    }
+
+    .idea h3 {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .rank {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .field {
+      margin: 10px 0 0;
+    }
+
+    .field dt {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .field dd {
+      margin: 3px 0 0;
+      max-width: 78ch;
+    }
+
+    .confidence {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .callout {
+      border: 1px solid #ebd3a8;
+      border-radius: 8px;
+      background: var(--warn-soft);
+      color: #4c2d08;
+      padding: 14px;
+      margin-top: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.93rem;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft);
+    }
+
+    .composition-signal {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    @media (max-width: 700px) {
+      main { width: min(100vw - 20px, 940px); padding-top: 18px; }
+      header, section, footer { padding: 18px; }
+      h1 { font-size: 1.6rem; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="pill">Ideation artifact</p>
+      <h1>Ideation: Skill Feedback MVP</h1>
+      <p>The MVP is not better correlation. It is the shortest path from captured reports to a human answer: what happened, what gets used, what hurts, and what to improve next.</p>
+      <div class="meta" aria-label="Metadata">
+        <span class="pill">Date: <time datetime="2026-07-01">2026-07-01</time></span>
+        <span class="pill">Topic: skill-feedback-mvp</span>
+        <span class="pill">Focus: human-usable skill observability MVP</span>
+        <span class="pill">Mode: repo-grounded</span>
+      </div>
+      <div class="stats" aria-label="Grounding stats">
+        <div class="stat"><strong>254</strong>primary reports</div>
+        <div class="stat"><strong>545</strong>low-signal reports</div>
+        <div class="stat"><strong>0</strong>linked primary reports</div>
+        <div class="stat"><strong>4</strong>human commands in MVP</div>
+      </div>
+    </header>
+
+    <section id="grounding-context">
+      <h2>Grounding Context</h2>
+      <p>Current architecture defines `skill-feedback` as a CLI over repo-local Software Learning Reports, but the public command surface is `record`, `closeout`, `dashboard`, `review`, `health`, `purge`, and `correlate`. That surface exposes capture and diagnostics before it exposes the reports themselves.</p>
+      <p>The inbox scanner already reads safe JSON files, normalizes reports, splits primary from low-signal reports, and preserves invalid or unsafe artifacts as evidence. The data needed for a report browser exists; the missing piece is a human product surface over it.</p>
+      <p>Live health output on 2026-07-01 showed `primary=254`, `low_signal=545`, `unlinked_primary=254`, and `next_action=preview-correlation-repair`. That next action is technically coherent but product-wrong for a human trying to inspect learning reports.</p>
+      <p>Direct repo basis: `skills/skill-feedback/ARCHITECTURE.md:7` describes the CLI over reports; `ARCHITECTURE.md:104` lists the current command surface; `skills/skill-feedback/src/inbox-read-model.ts:180` reads normalized inbox reports; `skills/skill-feedback/src/decision-surface.ts:135` routes blocked witnesses to correlation preview; `skills/skill-feedback/src/skill-feedback-runner.ts:1436` says plain review is bounded and agent-scanning oriented.</p>
+    </section>
+
+    <section id="topic-axes">
+      <h2>Topic Axes</h2>
+      <div class="axis-list">
+        <div class="axis"><strong>Report access</strong><br>Can a human see the reports without knowing JSON, filenames, or schema?</div>
+        <div class="axis"><strong>Skill usage</strong><br>Can a human answer which skills are used and how they are going?</div>
+        <div class="axis"><strong>Improvement queue</strong><br>Can evidence turn into a ranked next-change list?</div>
+        <div class="axis"><strong>Default path</strong><br>Does the first command lead to value instead of diagnostics?</div>
+        <div class="axis"><strong>Promotion loop</strong><br>Can repeated evidence become a skill edit or a deliberate no-build decision?</div>
+      </div>
+    </section>
+
+    <section id="ranked-ideas">
+      <h2>Ranked Ideas</h2>
+      <nav class="jump-list" aria-label="Ranked idea links">
+        <a class="pill" href="#idea-1">1. Reports first</a>
+        <a class="pill" href="#idea-2">2. Report detail</a>
+        <a class="pill" href="#idea-3">3. Usage board</a>
+        <a class="pill" href="#idea-4">4. Improvement queue</a>
+        <a class="pill" href="#idea-5">5. Default dashboard</a>
+        <a class="pill" href="#idea-6">6. Weekly digest</a>
+      </nav>
+
+      <article class="idea" id="idea-1">
+        <h3><span class="rank">1</span> Reports First: `skill-feedback reports`</h3>
+        <p>Make `reports` the first MVP command. It prints a bounded, readable table of recent reports with timestamp, skill, outcome, one-line goal, lane, and `report:<id>`. It defaults to recent primary reports and accepts small filters like `--skill`, `--source`, `--lane`, and `--limit`.</p>
+        <dl class="field">
+          <dt>Axis</dt><dd>Report access</dd>
+          <dt>Basis</dt><dd>direct: `ARCHITECTURE.md:7-18` says the product is a CLI over Software Learning Reports, but `ARCHITECTURE.md:104-112` lists no command that simply shows reports. Current health output proves there are hundreds of reports to show.</dd>
+          <dt>Rationale</dt><dd>This is the missing product doorway. Without it, every other analytic surface feels fake because users cannot inspect the evidence.</dd>
+          <dt>Downsides</dt><dd>Requires a stable plain layout and output budget. Needs careful default sorting so low-signal noise does not drown primary reports.</dd>
+        </dl>
+        <div class="confidence">
+          <span class="pill">Confidence: 95%</span>
+          <span class="pill">Complexity: Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <h3><span class="rank">2</span> Report Detail: `skill-feedback report <id>`</h3>
+        <p>Add one drill-down command that resolves `report:<id>` to a human-readable report page. Show goal, friction, verification burden, touched surfaces, observations, evidence gaps, source, lane, and generated time. Keep `--json` for scripts, but make plain text the default.</p>
+        <dl class="field">
+          <dt>Axis</dt><dd>Report access</dd>
+          <dt>Basis</dt><dd>direct: review output already emits `report:<id>` evidence refs, and `inbox-read-model.ts:180-230` already returns normalized report objects split by primary and low-signal lanes.</dd>
+          <dt>Rationale</dt><dd>`report:<id>` currently points to an internal lookup ritual. This command closes the loop from signal to evidence.</dd>
+          <dt>Downsides</dt><dd>Duplicate report IDs and invalid reports need clear errors. The command should avoid exposing unsafe filesystem paths by default.</dd>
+        </dl>
+        <div class="confidence">
+          <span class="pill">Confidence: 93%</span>
+          <span class="pill">Complexity: Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <h3><span class="rank">3</span> Usage Board: `skill-feedback usage`</h3>
+        <p>Rank skills by report count, confirmed/failed/ambiguous outcomes, closeout coverage, low-signal volume, last seen time, common friction, and common verification burden. The command answers one question: which skills are actually being used and how healthy are they?</p>
+        <dl class="field">
+          <dt>Axis</dt><dd>Skill usage</dd>
+          <dt>Basis</dt><dd>direct: reports carry `skill`, `outcome`, friction, verification burden, source, and generated timestamp; current sample rows include recent `skill-feedback`, `skill-author`, `handoff`, and `compound-engineering:ce-commit` reports.</dd>
+          <dt>Rationale</dt><dd>Continuous improvement needs usage distribution before deep diagnostics. This turns passive capture into a portfolio view.</dd>
+          <dt>Downsides</dt><dd>Unknown-skill and low-signal reports can distort rankings unless the lane is visible and filterable.</dd>
+        </dl>
+        <div class="confidence">
+          <span class="pill">Confidence: 88%</span>
+          <span class="pill">Complexity: Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <h3><span class="rank">4</span> Improvement Queue: `skill-feedback queue`</h3>
+        <p>Convert repeated evidence into a ranked queue of improvement candidates. Rows show target skill or owner path, reason, supporting report refs, observed friction, verification burden, and the next safe action. The first version can use existing review ledger data without adding new report fields.</p>
+        <dl class="field">
+          <dt>Axis</dt><dd>Improvement queue</dd>
+          <dt>Basis</dt><dd>direct: current `review --plain` already produces engineering signals and open actions with owner paths and `report:<id>` refs, but the output is long, truncated, and mixed with health, readiness, witnesses, and ledger internals.</dd>
+          <dt>Rationale</dt><dd>This is the actual continuous-improvement loop. It changes the product from "we stored reports" to "here is what to fix next."</dd>
+          <dt>Downsides</dt><dd>Ranking can imply false certainty. The command should label evidence strength and allow `--skill` and `--owner` filters.</dd>
+        </dl>
+        <div class="confidence">
+          <span class="pill">Confidence: 84%</span>
+          <span class="pill">Complexity: Medium</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <h3><span class="rank">5</span> Default Dashboard as Command Launcher</h3>
+        <p>Rewrite zero-arg `skill-feedback` as a small command launcher with counts and human next actions. It should show inbox counts, newest report time, top used skills, top friction, and exactly four commands: `reports`, `report <id>`, `usage`, and `queue`. Diagnostics move behind `health`, `review`, and `correlate`.</p>
+        <dl class="field">
+          <dt>Axis</dt><dd>Default path</dd>
+          <dt>Basis</dt><dd>direct: `decision-surface.ts:135-139` currently chooses `preview-correlation-repair`; the live dashboard followed that path even when the user wanted to see reports.</dd>
+          <dt>Rationale</dt><dd>The first command teaches the product. If it points to internal repair, the product feels broken even when data exists.</dd>
+          <dt>Downsides</dt><dd>Requires changing tests that currently assert correlation and purge next actions on the dashboard.</dd>
+        </dl>
+        <div class="confidence">
+          <span class="pill">Confidence: 91%</span>
+          <span class="pill">Complexity: Low</span>
+        </div>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <h3><span class="rank">6</span> Weekly Skill Learning Digest</h3>
+        <p>Add a read-only digest command after the first four surfaces exist. It summarizes the last 7 days: most-used skills, new friction, highest verification burden, repeated owner paths, and suggested follow-up. It gives the system a recurring review ritual without requiring the user to remember individual commands.</p>
+        <dl class="field">
+          <dt>Axis</dt><dd>Promotion loop</dd>
+          <dt>Basis</dt><dd>reasoned: the product goal is continuous skill improvement; recurring human review is how captured evidence turns into action when there is no automatic safe edit path.</dd>
+          <dt>Rationale</dt><dd>This makes the skill observability loop durable. It also helps identify unused skills by absence, not just noisy skills by report count.</dd>
+          <dt>Downsides</dt><dd>Not MVP-zero. It depends on report browsing and usage ranking first, otherwise it becomes another opaque summary.</dd>
+        </dl>
+        <div class="confidence">
+          <span class="pill">Confidence: 72%</span>
+          <span class="pill">Complexity: Medium</span>
+        </div>
+      </article>
+    </section>
+
+    <section id="rejection-summary">
+      <h2>Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Idea</th>
+            <th>Reason Rejected</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>Fix correlation first</td>
+            <td>Wrong MVP order. Correlation improves trust, but report visibility is blocked at the product layer.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>Build a rich web UI</td>
+            <td>Too expensive before the CLI answers basic questions. Start with commands that can later power a UI.</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>Make `review --plain` bigger</td>
+            <td>Duplicates the current failure mode: one dense mixed output instead of task-specific human commands.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>Auto-edit skills from evidence</td>
+            <td>Too much agency for evidence-only reports. The MVP should recommend edits and preserve human review.</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Purge and retention tooling</td>
+            <td>Operationally useful, but it does not help users understand report value.</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>Trusted Codex identity</td>
+            <td>Blocked on engine-owned evidence. Keep it visible in health, but do not let it block human observability.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="mvp-cut">
+      <h2>MVP Cut</h2>
+      <div class="callout">
+        Ship `reports`, `report <id>`, `usage`, `queue`, and the default dashboard rewrite. Defer correlation repair, purge parity, rich UI, and automated skill edits.
+      </div>
+      <p>Acceptance bar: a fresh user can run `skill-feedback`, pick one of the shown commands, inspect actual reports, see which skills are used, and get a ranked improvement queue without touching `jq`, filenames, or report schemas.</p>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-07-01T11:18:26Z by ce-ideate from repo context and live `skill-feedback` command output.
+    </footer>
+  </main>
+</body>
+</html>

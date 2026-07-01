@@ -46,11 +46,37 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts
 
 ## Now
 
-No active P1 tasks.
+- [ ] P0 Human reports MVP Lane: CLI Contract. Done when:
+      `skill-feedback reports` shows recent reports in a readable table with
+      timestamp, skill, outcome, one-line goal, and `report:<id>`; no jq,
+      filenames, or schema knowledge needed. Next: build from existing inbox
+      scan and add plain-output tests.
+- [ ] P0 Human report detail MVP Lane: CLI Contract. Done when:
+      `skill-feedback report <id>` shows the report goal, friction,
+      verification burden, touched surfaces, observations, and evidence gaps in
+      readable plain text; `--json` stays available for scripts. Next: resolve
+      `report:<id>` through inbox data, not filesystem naming.
+- [ ] P0 Human usage MVP Lane: Review Ledger. Done when:
+      `skill-feedback usage` answers "what skills are being used and how did
+      they go?" with ranked skills, counts, outcomes, last used, and common
+      friction. Next: aggregate from normalized reports and low-signal lane.
+- [ ] P0 Human improvement queue MVP Lane: Review Ledger. Done when:
+      `skill-feedback queue` answers "what should I improve next?" with ranked
+      skills or owner paths, reason, supporting `report:<id>` refs, and next
+      safe action. Next: start from repeated friction, high verification burden,
+      and repeated observations already present in review data.
+- [ ] P0 Default UX repair Lane: CLI Contract. Done when: running
+      `skill-feedback` without args shows a short human dashboard with only
+      useful next commands: `reports`, `usage`, `queue`, and `review`; internal
+      diagnostics appear only behind `health` or explicit debug commands. Next:
+      rewrite dashboard plain renderer and tests.
 
 ## Next
 
-No active P2 tasks.
+- [ ] P1 Human promotion loop Lane: Docs Language. Done when: the queue makes a
+      clear jump from evidence to action: "inspect these reports, edit this
+      skill owner path, or record no-build"; docs explain this with one example.
+      Next: write after `reports`, `report`, `usage`, and `queue` exist.
 
 ## Later
 

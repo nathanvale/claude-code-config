@@ -43,6 +43,7 @@ for the selected lane:
 - Command name and one-sentence purpose.
 - Target users: humans, scripts, agents, or mixed.
 - Invocation shape: command tree, args, flags, stdin/files/URLs.
+- No-arg behavior: help/get-started, state dashboard, or repair path.
 - Help behavior: `-h/--help`, examples, discoverability.
 - Output streams: primary data to stdout; diagnostics to stderr.
 - Output modes: human text, `--json`, `--plain`, or other stable modes.
@@ -65,6 +66,7 @@ for the selected lane:
 - Agent-native CLI:
   - Read `references/agent-native-cli-design.md`.
   - Apply the runtime-contract minimum in any language.
+  - Decide no-arg behavior from owned state; keep stateless CLIs on help.
   - Add recipes only when risk or workflow value earns them.
   - Name behavior owners before implementation.
   - Add human handoff for destructive, auth, billing, externally visible, or
