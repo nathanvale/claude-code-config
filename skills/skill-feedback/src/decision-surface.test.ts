@@ -89,6 +89,7 @@ describe("decision surface", () => {
 			rationale: "No skill-feedback reports found.",
 		});
 		expect(review.ledger_entries).toEqual([]);
+		expect(review.engineering_signals).toEqual([]);
 		expect(review.next_action.action_id).toBe("confirm-capture-path");
 		expect(health.inbox_status).toBe("missing");
 		expect(health.next_action.action_id).toBe("confirm-capture-path");
@@ -287,5 +288,92 @@ describe("decision surface", () => {
 			"evidence_gap",
 			"unlinked_correlation_spike",
 		]);
+	});
+
+	test("derives engineering signals from open owner-path ledger entries", () => {
+		const sharedPath = "skills/skill-feedback/SKILL.md";
+		const otherPath = "skills/create-skill/SKILL.md";
+		const moderatePath = "skills/fallow/SKILL.md";
+		const defaultPath = "skills/worktree/SKILL.md";
+		const secondaryDefaultPath = "skills/worktree/README.md";
+		const read = inbox({
+			inboxRootStatus: "readable",
+			primaryReports: [
+				report({
+					report_id: "shared-one",
+					touched_surfaces: [{ type: "path", value: sharedPath }],
+					friction: { category: "tool_failure", note: "Tool failed." },
+				}),
+				report({
+					report_id: "shared-two",
+					touched_surfaces: [{ type: "path", value: sharedPath }],
+					friction: { category: "tool_failure", note: "Tool failed again." },
+				}),
+				report({
+					report_id: "heavy-one",
+					touched_surfaces: [{ type: "path", value: otherPath }],
+					verification_burden: { level: "heavy", note: "Broad check." },
+				}),
+				report({
+					report_id: "moderate-one",
+					touched_surfaces: [{ type: "path", value: moderatePath }],
+					verification_burden: { level: "moderate", note: "Moderate check." },
+					observations: [
+						{
+							kind: "ownership_gap",
+							target: { type: "path", value: moderatePath },
+							summary: "Owner path needed inspection.",
+							evidence_basis: "driver_observed",
+						},
+					],
+				}),
+				report({
+					report_id: "default-one",
+					touched_surfaces: [
+						{ type: "path", value: defaultPath },
+						{ type: "path", value: secondaryDefaultPath },
+					],
+					observations: [
+						{
+							kind: "ownership_gap",
+							target: { type: "path", value: defaultPath },
+							summary: "Owner path needed inspection.",
+							evidence_basis: "driver_observed",
+						},
+					],
+				}),
+			],
+		});
+
+		const review = buildReviewResultData({
+			inbox: read,
+			nowIso: GENERATED_TS,
+			readTarget: readTarget(),
+		});
+
+		expect(review.engineering_signals.map((signal) => signal.reason)).toEqual([
+			"repeated_anchor",
+			"high_verification_burden",
+			"moderate_verification_burden",
+			"driver_declared_owner_path",
+			"driver_declared_owner_path",
+		]);
+		expect(review.engineering_signals.map((signal) => signal.owner_path)).toContain(
+			secondaryDefaultPath,
+		);
+		expect(review.engineering_signals[0]).toMatchObject({
+			owner_path: sharedPath,
+			evidence_tier: "driver_declared",
+			source_mix: ["driver_closeout"],
+			allowed_claims: ["repeated_anchor"],
+		});
+		expect(review.engineering_signals[0]?.evidence_refs).toEqual([
+			"report:shared-one",
+			"report:shared-two",
+		]);
+		expect(review.engineering_signals[0]?.next_safe_action).toContain(
+			"Inspect repeated evidence",
+		);
+		expect(review.engineering_signals[0]?.signal_key).toStartWith("signal:");
 	});
 });

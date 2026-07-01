@@ -160,7 +160,9 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 
 ## Command Envelope
 
-- Every command emits a JSON process envelope for automation.
+- Machine-readable commands emit a JSON process envelope for automation.
+- `dashboard` success output is bounded plain text; use `health` for the
+  machine-readable envelope over the same health facts.
 - Success envelopes carry `status`, `run_id`, `data`, `runtime_actions`, and `continuation`.
 - Command identity and schema version live in `data.contract` and `data.schema_version`.
 - Error envelopes carry `status: "error"`, `data.changed_state`, `data.contract`, `data.schema_version`, and `error` fields.
@@ -176,10 +178,18 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 - Lead plain review with health state, top warning, and next action.
 - Treat review JSON as the full evidence source.
 - Treat `review --plain` as bounded by default.
-- Use `full_evidence=json` as the pointer to complete open item, open action, and ledger arrays.
-- Read `truncated_open_actions` and `truncated_ledger_entries` as omitted row counts.
+- Use `full_evidence=json` as the pointer to complete open item, open action,
+  engineering signal, and ledger arrays.
+- Read `truncated_open_actions`, `truncated_engineering_signals`, and
+  `truncated_ledger_entries` as omitted row counts.
 - Read row-local `evidence_refs_omitted` as omitted evidence refs for that row.
 - Read open-action rows from `- action=<key> next=<text> evidence=<refs>`.
+- Read engineering-signal rows from
+  `- signal=<key> reason=<reason> owner=<path> evidence=<refs>`.
+- Treat `engineering_signals` as derived review ledger evidence, not a repair
+  instruction.
+- Expect one signal per open owner path after ledger merge; review JSON is the
+  complete source when plain output truncates rows or evidence refs.
 - Read ledger rows from `- owner=<path|unknown>`.
 - Count closeout, capture-only, unlinked, and evidence-gap reports.
 - Count only primary reports in coverage.
@@ -239,6 +249,10 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 - Keep health mutation-free.
 - Emit JSON by default.
 - Support `--plain` for compact human reading.
+- Use zero-arg `skill-feedback` or `skill-feedback dashboard` for the bounded
+  human dashboard.
+- Keep dashboard rows derived from `HealthResultData`; do not add separate trust
+  claims there.
 - Support `--repo <path>` through the same read-target resolver as review.
 - Do not fall back from a failed explicit `--repo` to caller cwd.
 - Do not expose absolute `repo_root` or `inbox_path` in healthy success data.

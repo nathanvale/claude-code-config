@@ -18,6 +18,7 @@ import {
 	type ReportCardObservation,
 	type ReviewClaimReadiness,
 	type ReviewClaimReadinessFact,
+	type ReviewEngineeringSignal,
 	type ReviewOpenItem,
 	type ReviewReadTarget,
 	type ReviewResultData,
@@ -49,6 +50,15 @@ const REVIEW_OPEN_SEVERITY_RANK: Record<ReviewOpenItem["severity"], number> = {
 	action: 0,
 	warning: 1,
 	info: 2,
+};
+const ENGINEERING_SIGNAL_BURDEN_REASON: Partial<
+	Record<
+		ReviewResultData["ledger_entries"][number]["verification_burden"]["level"],
+		ReviewEngineeringSignal["reason"]
+	>
+> = {
+	heavy: "high_verification_burden",
+	moderate: "moderate_verification_burden",
 };
 
 type HealthSignalInput = {
@@ -268,6 +278,7 @@ export function buildReviewResultData(
 			...pilotCheckpointField(pilotCheckpoint),
 			review_units: ledger.review_units,
 			ledger_entries: ledger.ledger_entries,
+			engineering_signals: deriveEngineeringSignals(ledger.ledger_entries),
 			anchor_miss_telemetry: ledger.anchor_miss_telemetry,
 		proof_health: writerProofHealth(allReports, input.inbox.proofDiagnostics),
 		correlation_witnesses: correlationWitnesses,
@@ -684,6 +695,170 @@ function reviewActionKey(item: ReviewOpenItem): string {
 		target,
 	});
 	return `action:${createHash("sha256").update(seed).digest("hex").slice(0, 16)}`;
+}
+
+function deriveEngineeringSignals(
+	entries: ReviewResultData["ledger_entries"],
+): ReviewEngineeringSignal[] {
+	const signalsByOwnerPath = new Map<string, ReviewEngineeringSignal>();
+	for (const signal of entries
+		.filter((entry) => entry.resolution_state === "open")
+		.flatMap(engineeringSignalsFromLedgerEntry)) {
+		const existing = signalsByOwnerPath.get(signal.owner_path);
+		signalsByOwnerPath.set(
+			signal.owner_path,
+			existing ? mergeEngineeringSignals(existing, signal) : signal,
+		);
+	}
+	return [...signalsByOwnerPath.values()].sort(compareEngineeringSignals);
+}
+
+function engineeringSignalsFromLedgerEntry(
+	entry: ReviewResultData["ledger_entries"][number],
+): ReviewEngineeringSignal[] {
+	const reason = engineeringSignalReason(entry);
+	return entry.owner_paths.map((ownerPath) => ({
+		signal_key: engineeringSignalKey(ownerPath, reason),
+		reason,
+		owner_path: ownerPath,
+		evidence_refs: entry.review_unit_keys,
+		evidence_tier: entry.evidence_tier,
+		source_mix: entry.source_mix,
+		allowed_claims: entry.allowed_claims,
+		next_safe_action: engineeringSignalNextAction(reason),
+	}));
+}
+
+function mergeEngineeringSignals(
+	left: ReviewEngineeringSignal,
+	right: ReviewEngineeringSignal,
+): ReviewEngineeringSignal {
+	const evidenceRefs = uniqueSorted([...left.evidence_refs, ...right.evidence_refs]);
+	const allowedClaims = uniqueSorted([
+		...left.allowed_claims,
+		...right.allowed_claims,
+	]);
+	const sourceMix = uniqueSorted([...left.source_mix, ...right.source_mix]);
+	const reason = engineeringSignalMergedReason({
+		evidenceRefs,
+		allowedClaims,
+		leftReason: left.reason,
+		rightReason: right.reason,
+	});
+	return {
+		signal_key: engineeringSignalKey(left.owner_path, reason),
+		reason,
+		owner_path: left.owner_path,
+		evidence_refs: evidenceRefs,
+		evidence_tier: strongerEvidenceTier(left.evidence_tier, right.evidence_tier),
+		source_mix: sourceMix,
+		allowed_claims: allowedClaims,
+		next_safe_action: engineeringSignalNextAction(reason),
+	};
+}
+
+function engineeringSignalReason(
+	entry: ReviewResultData["ledger_entries"][number],
+): ReviewEngineeringSignal["reason"] {
+	if (
+		entry.allowed_claims.includes("repeated_anchor") &&
+		entry.review_unit_keys.length > 1
+	) {
+		return "repeated_anchor";
+	}
+	return (
+		ENGINEERING_SIGNAL_BURDEN_REASON[entry.verification_burden.level] ??
+		"driver_declared_owner_path"
+	);
+}
+
+function engineeringSignalMergedReason(input: {
+	evidenceRefs: readonly string[];
+	allowedClaims: ReviewEngineeringSignal["allowed_claims"];
+	leftReason: ReviewEngineeringSignal["reason"];
+	rightReason: ReviewEngineeringSignal["reason"];
+}): ReviewEngineeringSignal["reason"] {
+	if (
+		input.allowedClaims.includes("repeated_anchor") &&
+		input.evidenceRefs.length > 1
+	) {
+		return "repeated_anchor";
+	}
+	return engineeringSignalReasonRank(input.leftReason) <=
+		engineeringSignalReasonRank(input.rightReason)
+		? input.leftReason
+		: input.rightReason;
+}
+
+function engineeringSignalKey(
+	ownerPath: string,
+	reason: ReviewEngineeringSignal["reason"],
+): string {
+	const seed = JSON.stringify({ owner_path: ownerPath, reason });
+	return `signal:${createHash("sha256").update(seed).digest("hex").slice(0, 16)}`;
+}
+
+function engineeringSignalNextAction(
+	reason: ReviewEngineeringSignal["reason"],
+): string {
+	switch (reason) {
+		case "repeated_anchor":
+			return "Inspect repeated evidence for this owner path; promote a skill or owner-doc change only after confirming reports.";
+		case "high_verification_burden":
+			return "Inspect heavy verification evidence; reduce the verification burden if the pattern holds.";
+		case "moderate_verification_burden":
+			return "Inspect moderate verification evidence; tighten the owner workflow if the pattern holds.";
+		default:
+			return "Inspect this owner path and evidence before deciding on a skill change.";
+	}
+}
+
+function compareEngineeringSignals(
+	left: ReviewEngineeringSignal,
+	right: ReviewEngineeringSignal,
+): number {
+	return (
+		engineeringSignalReasonRank(left.reason) -
+			engineeringSignalReasonRank(right.reason) ||
+		right.evidence_refs.length - left.evidence_refs.length ||
+		left.owner_path.localeCompare(right.owner_path) ||
+		left.signal_key.localeCompare(right.signal_key)
+	);
+}
+
+function engineeringSignalReasonRank(
+	reason: ReviewEngineeringSignal["reason"],
+): number {
+	switch (reason) {
+		case "repeated_anchor":
+			return 0;
+		case "high_verification_burden":
+			return 1;
+		case "moderate_verification_burden":
+			return 2;
+		default:
+			return 3;
+	}
+}
+
+function strongerEvidenceTier(
+	left: ReviewEngineeringSignal["evidence_tier"],
+	right: ReviewEngineeringSignal["evidence_tier"],
+): ReviewEngineeringSignal["evidence_tier"] {
+	return evidenceTierRank(left) >= evidenceTierRank(right) ? left : right;
+}
+
+function evidenceTierRank(tier: ReviewEngineeringSignal["evidence_tier"]): number {
+	switch (tier) {
+		case "trusted_engine_identity":
+			return 4;
+		case "corroborated":
+			return 3;
+		case "runtime_observed":
+			return 2;
+		default:
+			return 1;
+	}
 }
 
 function reportEvidenceRef(report: NormalizedSoftwareLearningReport): string {
@@ -1257,7 +1432,7 @@ function roundRatio(value: number): number {
 	return Math.round(value * 1000) / 1000;
 }
 
-function uniqueSorted(values: readonly string[]): string[] {
+function uniqueSorted<T extends string>(values: readonly T[]): T[] {
 	return [...new Set(values)].sort();
 }
 

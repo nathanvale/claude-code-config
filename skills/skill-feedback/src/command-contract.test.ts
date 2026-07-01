@@ -186,6 +186,18 @@ const MINIMAL_REVIEW_RESULT_V2 = {
 			next_safe_action: "Wait for a repo-contained path before grouping.",
 		},
 	],
+	engineering_signals: [
+		{
+			signal_key: "signal:create-skill",
+			reason: "repeated_anchor",
+			owner_path: "skills/create-skill/SKILL.md",
+			evidence_refs: ["report:report_1"],
+			evidence_tier: "driver_declared",
+			source_mix: ["driver_closeout"],
+			allowed_claims: ["repeated_anchor"],
+			next_safe_action: "Open the referenced owner path and verify evidence.",
+		},
+	],
 	anchor_miss_telemetry: [
 		{
 			weak_anchor_reason: "label_only",
@@ -374,7 +386,7 @@ const MINIMAL_CORRELATE_RESULT = {
 } as const satisfies SkillFeedbackCorrelateResultData;
 
 describe("skill-feedback U2 command contract", () => {
-	test("declares valid facade-backed record, closeout, review, health, purge, and correlate commands", () => {
+	test("declares valid facade-backed record, closeout, dashboard, review, health, purge, and correlate commands", () => {
 		const result = parseCommandFacadeContract(skillFeedbackContracts, {
 			path: "skills/skill-feedback/src/command-contract.ts",
 			writeImplyingMutations: new Set([
@@ -389,6 +401,7 @@ describe("skill-feedback U2 command contract", () => {
 		expect(Object.keys(skillFeedbackContracts)).toEqual([
 			"record",
 			"closeout",
+			"dashboard",
 			"review",
 			"health",
 			"purge",
@@ -406,8 +419,13 @@ describe("skill-feedback U2 command contract", () => {
 			id: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 		});
-		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("7");
+		expect(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION).toBe("8");
 		expect(SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION).toBe("4");
+		expect(discoveryTree().commands.dashboard).toMatchObject({
+			json: false,
+			output_modes: ["plain"],
+		});
+		expect(discoveryTree().commands.dashboard?.result_contract).toBeUndefined();
 		expect(discoveryTree().commands.health?.result_contract).toMatchObject({
 			id: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
@@ -468,6 +486,17 @@ describe("skill-feedback U2 command contract", () => {
 			expect(contract.outputModes).toEqual(["json", "plain"]);
 		});
 	}
+
+	test("dashboard exposes a read-only plain front door with repo targeting", () => {
+		const contract = skillFeedbackContracts.dashboard;
+
+		expect(contract.usage).toEqual(["dashboard [--repo <path>]"]);
+		expect(Object.keys(contract.flags)).toEqual(["--repo"]);
+		expect(contract.sideEffects).toEqual(["read"]);
+		expect(contract.outputModes).toEqual(["plain"]);
+		expect(contract.json).toBe(false);
+		expect(contract.resultContract).toBeUndefined();
+	});
 
 	test("correlate flags expose preview and execute without trust-bearing inputs", () => {
 		const flags = Object.keys(skillFeedbackContracts.correlate.flags).sort();
@@ -830,6 +859,7 @@ describe("skill-feedback U1 review result v2 contract", () => {
 		);
 		expect(parsed.data.review_units).toHaveLength(2);
 		expect(parsed.data.ledger_entries).toHaveLength(2);
+		expect(parsed.data.engineering_signals).toHaveLength(1);
 		expect(parsed.data.anchor_miss_telemetry).toHaveLength(1);
 		expect(parsed.data.open_actions).toHaveLength(1);
 		expect(parsed.data.inbox_status).toBe("populated");
@@ -1010,6 +1040,20 @@ describe("skill-feedback U1 review result v2 contract", () => {
 				path: "ledger_entries[0].allowed_claims[0]",
 			},
 			{
+				name: "engineering signal reason",
+				mutate: (data) => {
+					data.engineering_signals[0].reason = "mystery_signal";
+				},
+				path: "engineering_signals[0].reason",
+			},
+			{
+				name: "engineering signal source",
+				mutate: (data) => {
+					data.engineering_signals[0].source_mix[0] = "manual_note";
+				},
+				path: "engineering_signals[0].source_mix[0]",
+			},
+			{
 				name: "readiness status",
 				mutate: (data) => {
 					data.claim_readiness.runtime_capture.status = "waiting";
@@ -1038,6 +1082,67 @@ describe("skill-feedback U1 review result v2 contract", () => {
 			expect(parseReviewResultData(data), name).toMatchObject({
 				kind: "invalid",
 				path,
+			});
+		}
+	});
+
+	test("rejects malformed engineering signal shape", () => {
+		const cases: Array<{
+			name: string;
+			mutate: (data: Record<string, any>) => void;
+			path: string;
+			reason: string;
+		}> = [
+			{
+				name: "missing signal array",
+				mutate: (data) => {
+					delete data.engineering_signals;
+				},
+				path: "engineering_signals",
+				reason: "expected_array",
+			},
+			{
+				name: "non-array signal field",
+				mutate: (data) => {
+					data.engineering_signals = {};
+				},
+				path: "engineering_signals",
+				reason: "expected_array",
+			},
+			{
+				name: "unsafe owner path",
+				mutate: (data) => {
+					data.engineering_signals[0].owner_path = "../outside";
+				},
+				path: "engineering_signals[0].owner_path",
+				reason: "invalid_owner_path",
+			},
+			{
+				name: "unknown signal field",
+				mutate: (data) => {
+					data.engineering_signals[0].severity = "high";
+				},
+				path: "engineering_signals[0].severity",
+				reason: "unknown_field",
+			},
+			{
+				name: "malformed evidence refs",
+				mutate: (data) => {
+					data.engineering_signals[0].evidence_refs = ["report:ok", 42];
+				},
+				path: "engineering_signals[0].evidence_refs[1]",
+				reason: "expected_string",
+			},
+		];
+
+		for (const scenario of cases) {
+			const data = reviewResultV2Fixture() as Record<string, any>;
+			scenario.mutate(data);
+
+			expect(parseReviewResultData(data), scenario.name).toMatchObject({
+				kind: "invalid",
+				path: scenario.path,
+				reason: scenario.reason,
 			});
 		}
 	});
@@ -1155,6 +1260,7 @@ describe("skill-feedback U1 review result v2 contract", () => {
 			open_actions: [],
 			review_units: [],
 			ledger_entries: [],
+			engineering_signals: [],
 			anchor_miss_telemetry: [],
 			no_action: { rationale: "No high-signal report exists." },
 		} satisfies ReviewResultData;

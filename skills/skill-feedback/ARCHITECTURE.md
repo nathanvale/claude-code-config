@@ -12,8 +12,9 @@ Its interface is:
 
 - `skill-feedback-runner` package script.
 - `src/command-contract.ts` command facade contract.
-- JSON result envelopes for all commands.
-- Plain output for `review`, `health`, and `correlate`.
+- JSON result envelopes for machine-readable commands.
+- Plain output for `dashboard`, `review`, `health`, and `correlate`.
+- Zero-arg dashboard alias over the health read model.
 - Private repo-local inbox files under `.skill-feedback/`.
 
 Implementation modules behind that interface are:
@@ -28,7 +29,8 @@ Implementation modules behind that interface are:
 - private correlation witness artifact IO in
   `src/correlation-witness-artifacts.ts`,
 - private correlation witness workflow in `src/correlation-witness-workflow.ts`,
-- CLI dispatch, writes, and renderers in `src/skill-feedback-runner.ts`,
+- CLI dispatch, writes, dashboard command output, and renderers in
+  `src/skill-feedback-runner.ts`,
 - review ledger reduction in `src/review-ledger-reducer.ts`,
 - owner path anchoring in `src/ledger-anchor-adapter.ts`,
 - harness adapter seams in `src/capture-adapters.ts`,
@@ -42,8 +44,10 @@ Implementation modules behind that interface are:
 flowchart TD
   Script["package script<br/>skill-feedback-runner"] --> Runner["src/skill-feedback-runner.ts"]
   Runner --> Contract["src/command-contract.ts"]
+  Runner --> Dashboard["zero-arg dashboard alias"]
   Contract --> Record["record"]
   Contract --> Closeout["closeout"]
+  Contract --> DashboardCommand["dashboard"]
   Contract --> Review["review"]
   Contract --> Health["health"]
   Contract --> Purge["purge"]
@@ -52,10 +56,13 @@ flowchart TD
   Closeout --> Inbox
   Inbox --> Review
   Inbox --> Health
+  Inbox --> DashboardCommand
   Inbox --> Purge
   Inbox --> Correlate
   Review --> Surface["src/decision-surface.ts"]
   Health --> Surface
+  DashboardCommand --> Health
+  Dashboard --> Health
   Surface --> Output["JSON/plain output"]
   Purge --> Output
   Correlate --> Output
@@ -85,7 +92,8 @@ flowchart TD
   repair classification, and execute orchestration.
 - `src/skill-feedback-runner.ts`: CLI entry, default runtime wiring,
   read-target resolution implementation, safe report writes, command
-  orchestration, process envelopes, and plain renderers.
+  orchestration, process envelopes, dashboard command output, and plain
+  renderers.
 
 The command facade contract is the external seam. Tests cover discovery
 metadata, help rendering, parser acceptance, runtime semantics, and branch
@@ -97,10 +105,15 @@ station evidence.
 | --- | --- | --- |
 | `record` | Writes hook-owned Software Learning Report; fail-closed on gitignore | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `closeout` | Writes driver closeout from stdin; no argv receipt | `src/skill-feedback-runner.ts`, `references/closeout-receipt.md` |
+| `dashboard` | Read-only plain front door over health facts | `src/decision-surface.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `review` | Read-only claim-safe report card | `src/inbox-read-model.ts`, `src/review-ledger-reducer.ts`, `src/decision-surface.ts`, `src/skill-feedback-runner.ts` |
 | `health` | Read-only inbox, readiness, warning, next-action summary | `src/inbox-read-model.ts`, `src/decision-surface.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `purge` | Preview by default; `--execute` deletes selected safe reports | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts` |
 | `correlate` | Preview by default; `--execute` writes private witnesses | `src/correlation-witness-artifacts.ts`, `src/correlation-witness-workflow.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+
+The zero-arg front door aliases the contract-backed `dashboard` renderer over
+`HealthResultData`; `health` remains the JSON/plain data contract for scripts
+and agents.
 
 ## Module Map
 
@@ -127,7 +140,8 @@ station evidence.
   repair classification, and execute orchestration.
 - `src/skill-feedback-runner.ts`: default runtime implementation, gitignore
   gate, inbox preparation, record and closeout writes, CLI parsing, process
-  envelopes, command orchestration, and plain rendering.
+  envelopes, command orchestration, dashboard command rendering, and plain
+  rendering.
 - `src/review-ledger-reducer.ts`: review unit grouping, trusted run handling,
   ledger entries, evidence tiers, resolution state, entry-local allowed claims.
 - `src/ledger-anchor-adapter.ts`: repo-contained owner path canonicalization,

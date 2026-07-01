@@ -36,7 +36,8 @@ describe("skill-feedback Branch Station Catalog", () => {
 				.filter(
 					(station) =>
 						station.expectedExitCode === 0 &&
-						station.expectedEnvelopeStatus === "ok",
+						(!("expectedEnvelopeStatus" in station) ||
+							station.expectedEnvelopeStatus === "ok"),
 				)
 				.map((station) => station.command),
 		);
@@ -101,6 +102,9 @@ describe("skill-feedback Branch Station Catalog", () => {
 			"closeout.proof_attached",
 			"closeout.proof_unavailable",
 			"closeout.invalid_receipt",
+			"dashboard.missing_inbox",
+			"dashboard.populated_inbox",
+			"dashboard.unsafe_inbox",
 			"review.empty_inbox",
 			"review.target_resolution_failed",
 			"health.populated_inbox",

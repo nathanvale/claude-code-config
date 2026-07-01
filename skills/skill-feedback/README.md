@@ -17,6 +17,12 @@ Reports are evidence. They are not canonical skill instructions.
 
 ## Start Here
 
+Open the front-door dashboard:
+
+```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
+```
+
 Inspect help:
 
 ```bash
@@ -27,6 +33,12 @@ Check inbox health:
 
 ```bash
 bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
+```
+
+Use JSON for automation:
+
+```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health
 ```
 
 Read shared language before interpreting trust terms:
@@ -60,15 +72,17 @@ come only from capture, closeout, `correlate --execute`, or `purge --execute`.
 
 ## CLI Commands
 
-Run operational commands from the target repo root. The direct runner emits raw
-JSON. Package-filtered Bun commands are package-maintenance helpers and prefix
-stdout.
+Run operational commands from the target repo root. The zero-arg direct runner
+aliases `dashboard`, which emits bounded plain text. Machine-readable commands
+emit raw JSON unless `--plain` is supported and passed. Package-filtered Bun
+commands are package-maintenance helpers and prefix stdout.
 
 Use JSON for automation. Use `--plain` for compact human reading where supported.
 `review --plain` is bounded; use review JSON for full evidence arrays.
 
 | Command | Output | Repo targeting | Mutation |
 | --- | --- | --- | --- |
+| `dashboard` | plain | `--repo <path>` | read-only |
 | `record` | JSON | current repo only | writes report |
 | `closeout` | JSON | current repo only | writes closeout report |
 | `review` | JSON, plain | `--repo <path>` | read-only |
@@ -80,7 +94,10 @@ Use JSON for automation. Use `--plain` for compact human reading where supported
 
 ```bash
 # Health and discovery
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
+bun run skills/skill-feedback/src/skill-feedback-runner.ts dashboard
 bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health
 bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
 
 # Review

@@ -24,7 +24,10 @@ Read only the extra file your intent needs:
 Front door:
 
 ```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
+bun run skills/skill-feedback/src/skill-feedback-runner.ts dashboard
 bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
+bun run skills/skill-feedback/src/skill-feedback-runner.ts health
 bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
 ```
 
@@ -193,12 +196,14 @@ bun run skills/skill-author/scripts/check-owner-paths.ts --json skills/skill-fee
 
 ## Debug
 
-1. Run `health --plain`.
-2. Inspect command help.
-3. Run read-only `review --plain` or `correlate --plain` when health routes
+1. Run the zero-arg dashboard.
+2. Run `health` when a machine-readable envelope is needed.
+3. Run `health --plain` when full human health detail is needed.
+4. Inspect command help.
+5. Run read-only `review --plain` or `correlate --plain` when health routes
    there.
-4. Inspect `.skill-feedback/` only after checking the report shape reading rule.
-5. Fix source owners, not inbox reports, when evidence points to a code or docs
+6. Inspect `.skill-feedback/` only after checking the report shape reading rule.
+7. Fix source owners, not inbox reports, when evidence points to a code or docs
    defect.
 
 ## Safety Invariants
@@ -282,5 +287,6 @@ Run docs checks after docs-only changes:
 
 ```bash
 git diff --check -- skills/skill-feedback
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
 bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
 ```

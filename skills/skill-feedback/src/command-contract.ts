@@ -67,7 +67,7 @@ export const SKILL_FEEDBACK_SCHEMA_VERSION = "2" as const;
  * Review result semantics can advance independently from persisted report
  * records so older readers do not silently accept changed review output.
  */
-export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "7" as const;
+export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "8" as const;
 
 /**
  * Schema version for health-specific read-only result envelopes.
@@ -306,6 +306,16 @@ const REVIEW_ALLOWED_CLAIMS = [
 	"same_trusted_run",
 	"corroborated",
 	"trusted_engine_identity",
+] as const;
+
+/**
+ * Headline reasons for engineering signals derived from review ledger facts.
+ */
+const REVIEW_ENGINEERING_SIGNAL_REASONS = [
+	"repeated_anchor",
+	"high_verification_burden",
+	"moderate_verification_burden",
+	"driver_declared_owner_path",
 ] as const;
 
 /**
@@ -997,6 +1007,12 @@ export type ReviewEvidenceTier = (typeof REVIEW_EVIDENCE_TIERS)[number];
 export type ReviewAllowedClaim = (typeof REVIEW_ALLOWED_CLAIMS)[number];
 
 /**
+ * V2 headline reason for one software-engineering signal.
+ */
+export type ReviewEngineeringSignalReason =
+	(typeof REVIEW_ENGINEERING_SIGNAL_REASONS)[number];
+
+/**
  * V2 readiness status for one claim surface.
  */
 export type ReviewClaimReadinessStatus =
@@ -1123,6 +1139,20 @@ export type ReviewLedgerEntry = {
 };
 
 /**
+ * V2 bounded engineering signal derived from ledger evidence.
+ */
+export type ReviewEngineeringSignal = {
+	signal_key: string;
+	reason: ReviewEngineeringSignalReason;
+	owner_path: string;
+	evidence_refs: readonly string[];
+	evidence_tier: ReviewEvidenceTier;
+	source_mix: readonly EvidenceSource[];
+	allowed_claims: readonly ReviewAllowedClaim[];
+	next_safe_action: string;
+};
+
+/**
  * V2 review result contract consumed by JSON, plain output, and future agents.
  */
 export type ReviewResultData = {
@@ -1142,6 +1172,7 @@ export type ReviewResultData = {
 	pilot_checkpoint?: ReviewPilotCheckpoint;
 	review_units: readonly ReviewUnitData[];
 	ledger_entries: readonly ReviewLedgerEntry[];
+	engineering_signals: readonly ReviewEngineeringSignal[];
 	anchor_miss_telemetry: readonly ReviewAnchorMissTelemetry[];
 	proof_health: WriterProofHealth;
 	correlation_witnesses: CorrelationWitnessHealth;
@@ -1655,6 +1686,7 @@ const REVIEW_RESULT_V2_FIELDS = [
 	"pilot_checkpoint",
 	"review_units",
 	"ledger_entries",
+	"engineering_signals",
 	"anchor_miss_telemetry",
 	"proof_health",
 	"correlation_witnesses",
@@ -1737,6 +1769,16 @@ const REVIEW_LEDGER_ENTRY_FIELDS = [
 	"proof_diagnostics",
 	"resolution_state",
 	"verification_burden",
+	"next_safe_action",
+] as const;
+const REVIEW_ENGINEERING_SIGNAL_FIELDS = [
+	"signal_key",
+	"reason",
+	"owner_path",
+	"evidence_refs",
+	"evidence_tier",
+	"source_mix",
+	"allowed_claims",
 	"next_safe_action",
 ] as const;
 const REVIEW_LEDGER_VERIFICATION_BURDEN_FIELDS = [
@@ -2219,6 +2261,7 @@ function validateReviewResultDataShape(
 			: undefined,
 		validateReviewUnits(review.review_units),
 		validateReviewLedgerEntries(review.ledger_entries),
+		validateReviewEngineeringSignals(review.engineering_signals),
 		validateReviewAnchorMissTelemetry(review.anchor_miss_telemetry),
 		validateWriterProofHealth(review.proof_health, "proof_health"),
 		validateCorrelationWitnessHealth(
@@ -3147,6 +3190,59 @@ function validateReviewLedgerEntries(
 	}
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
+function validateReviewEngineeringSignals(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) {
+		return reviewResultError("engineering_signals", "expected_array");
+	}
+	for (const [index, signalRaw] of raw.entries()) {
+		const path = `engineering_signals[${index}]`;
+		const signal = requireReviewRecord(signalRaw, path);
+		if (isReviewResultValidationError(signal)) return signal;
+		const unknown = validateAllowedKeys(
+			signal,
+			new Set(REVIEW_ENGINEERING_SIGNAL_FIELDS),
+			path,
+		);
+		if (unknown) return unknown;
+		for (const field of ["signal_key", "owner_path", "next_safe_action"] as const) {
+			const error = validateReviewString(signal[field], `${path}.${field}`);
+			if (error) return error;
+		}
+		if (typeof signal.owner_path === "string" && !isValidOwnerPath(signal.owner_path)) {
+			return reviewResultError(`${path}.owner_path`, "invalid_owner_path");
+		}
+		if (!isReviewEngineeringSignalReason(signal.reason)) {
+			return reviewResultError(`${path}.reason`, "invalid_signal_reason");
+		}
+		const evidenceRefs = validateReviewStringArray(
+			signal.evidence_refs,
+			`${path}.evidence_refs`,
+		);
+		if (evidenceRefs) return evidenceRefs;
+		if (!isReviewEvidenceTier(signal.evidence_tier)) {
+			return reviewResultError(`${path}.evidence_tier`, "invalid_evidence_tier");
+		}
+		const sourceMix = validateEnumArray(
+			signal.source_mix,
+			`${path}.source_mix`,
+			isEvidenceSource,
+			"invalid_evidence_source",
+		);
+		if (sourceMix) return sourceMix;
+		const allowedClaims = validateEnumArray(
+			signal.allowed_claims,
+			`${path}.allowed_claims`,
+			isReviewAllowedClaim,
+			"invalid_allowed_claim",
+		);
+		if (allowedClaims) return allowedClaims;
+	}
+}
+
 function validateEnumArray(
 	raw: unknown,
 	path: string,
@@ -3918,6 +4014,14 @@ function isReviewAllowedClaim(value: unknown): value is ReviewAllowedClaim {
 	return (REVIEW_ALLOWED_CLAIMS as readonly unknown[]).includes(value);
 }
 
+function isReviewEngineeringSignalReason(
+	value: unknown,
+): value is ReviewEngineeringSignalReason {
+	return (REVIEW_ENGINEERING_SIGNAL_REASONS as readonly unknown[]).includes(
+		value,
+	);
+}
+
 function isReviewClaimReadinessStatus(
 	value: unknown,
 ): value is ReviewClaimReadinessStatus {
@@ -4083,6 +4187,7 @@ function isValidOwnerPath(path: string): boolean {
 const SKILL_FEEDBACK_COMMANDS = [
 	"record",
 	"closeout",
+	"dashboard",
 	"review",
 	"health",
 	"purge",
@@ -4098,6 +4203,7 @@ type SkillFeedbackAudience = "agent";
 type SkillFeedbackMutation =
 	| "capture"
 	| "closeout"
+	| "dashboard"
 	| "review"
 	| "health"
 	| "purge"
@@ -4222,6 +4328,12 @@ const healthExitCodes = {
 	"2": "Invalid health usage.",
 } as const satisfies SkillFeedbackCommandContract["exitCodes"];
 
+const dashboardExitCodes = {
+	"0": "Dashboard rendered without mutating the inbox.",
+	"1": "Dashboard blocked by unsafe inbox state or target resolution failure.",
+	"2": "Invalid dashboard usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
 const purgeExitCodes = {
 	"0": "Purge preview completed or selected safe reports were deleted.",
 	"1": "Purge blocked by unsafe inbox state or deletion failure.",
@@ -4239,6 +4351,13 @@ const readOnlyFlags = {
 		type: "boolean",
 		description: "Emit compact human-readable output.",
 	},
+	"--repo": {
+		type: "string",
+		description: "Resolve the read target from this path's repository root.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const dashboardFlags = {
 	"--repo": {
 		type: "string",
 		description: "Resolve the read target from this path's repository root.",
@@ -4327,6 +4446,20 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 			resultContract: closeoutResultContract,
 			flags: {},
 			exitCodes: closeoutExitCodes,
+		},
+		dashboard: {
+			script: "skill-feedback-runner",
+			summary: "Show the read-only front-door dashboard for the current repo.",
+			usage: ["dashboard [--repo <path>]"],
+			json: false,
+			audience: "agent",
+			mutation: "dashboard",
+			sideEffects: ["read"],
+			executionModes: ["normal"],
+			outputModes: ["plain"],
+			interactivity: "none",
+			flags: dashboardFlags,
+			exitCodes: dashboardExitCodes,
 		},
 		review: {
 			script: "skill-feedback-runner",

@@ -41,7 +41,7 @@ orchestration.
 Next safe action:
 
 ```bash
-bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
 ```
 
 ## Now
@@ -61,6 +61,11 @@ No active P2 tasks.
 
 ## Latest Signals
 
+- 2026-07-01: Zero-arg front door now aliases contract-backed `dashboard`,
+  grouped into good and needs-work checks. `health` keeps JSON/plain output for
+  scripts and agents. Unit and process-boundary tests cover empty, populated,
+  and unsafe dashboard paths; review engineering signals now preserve every
+  owner path on open ledger entries.
 - 2026-06-30: Decision surface and bounded review plain output closed:
   `decision-surface.ts` owns review and health result assembly; runner keeps
   process envelopes and plain renderers. `review --plain` now surfaces health,
@@ -136,6 +141,7 @@ No active P2 tasks.
 ## Command Shortcuts
 
 ```bash
+bun run skills/skill-feedback/src/skill-feedback-runner.ts
 bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
 bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
 bun run skills/skill-feedback/src/skill-feedback-runner.ts review --plain

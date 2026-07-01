@@ -103,6 +103,9 @@ const stationScenarios = {
 	"closeout.proof_attached": { run: runCloseoutProofAttached },
 	"closeout.proof_unavailable": { run: runCloseoutProofUnavailable },
 	"closeout.invalid_receipt": { run: runCloseoutInvalidReceipt },
+	"dashboard.missing_inbox": { run: runDashboardMissingInbox },
+	"dashboard.populated_inbox": { run: runDashboardPopulatedInbox },
+	"dashboard.unsafe_inbox": { run: runDashboardUnsafeInbox },
 	"review.empty_inbox": { run: runReviewEmptyInbox },
 	"review.target_resolution_failed": { run: runReviewTargetResolutionFailed },
 	"health.populated_inbox": { run: runHealthPopulatedInbox },
@@ -167,6 +170,24 @@ describe("skill-feedback Branch Station integration", () => {
 		expect(() => parseCliProcessJson(result)).toThrow(
 			/label=skill-feedback help non-json[\s\S]*argv=[\s\S]*stdout=/,
 		);
+	});
+
+	test("zero-arg front door renders the dashboard through the process boundary", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runSkillFeedback([], {
+			cwd: root,
+			label: "skill-feedback front-door dashboard",
+		});
+
+		expect(result.exitCode, describeCliProcessRun(result)).toBe(0);
+		expect(result.stderr, describeCliProcessRun(result)).toBe("");
+		expect(result.stdout).toContain("Skill Feedback Dashboard");
+		expect(result.stdout).toContain("Overall: needs work");
+		expect(result.stdout).toContain("Good:");
+		expect(result.stdout).toContain("Needs work:");
+		expect(() => parseCliProcessJson(result)).toThrow();
+		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
 	});
 });
 
@@ -329,6 +350,61 @@ async function runCloseoutInvalidReceipt(
 			expect(await listInboxJsonFiles(root)).toEqual([]);
 		},
 	});
+}
+
+async function runDashboardMissingInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	const result = await runSkillFeedback(["dashboard"], {
+		cwd: root,
+		label: station.id,
+	});
+	expectDashboardPlainResult(station, result);
+	expect(result.stdout).toContain("Skill Feedback Dashboard");
+	expect(result.stdout).toContain("- Inbox: missing; primary=0 low-signal=0");
+	expect(result.stdout).toContain("Commands: health | review");
+	expect(() => parseCliProcessJson(result)).toThrow();
+	expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
+	return evidenceForPlain(station, result);
+}
+
+async function runDashboardPopulatedInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	await writeInboxReport(
+		root,
+		"dashboard-populated.json",
+		v1CloseoutReport("report-dashboard-populated", GENERATED_TS),
+	);
+	const result = await runSkillFeedback(["dashboard"], {
+		cwd: root,
+		label: station.id,
+	});
+	expectDashboardPlainResult(station, result);
+	expect(result.stdout).toContain("Counts: primary=1 low-signal=0");
+	expect(result.stdout).toContain("Next: inspect-report-correlation");
+	expect(result.stdout).toContain("Commands: health | review");
+	expect(() => parseCliProcessJson(result)).toThrow();
+	return evidenceForPlain(station, result);
+}
+
+async function runDashboardUnsafeInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	const root = await makeIgnoredGitRoot();
+	const outside = await makeRoot();
+	await symlink(outside, join(root, ".skill-feedback"));
+	const result = await runSkillFeedback(["dashboard"], {
+		cwd: root,
+		label: station.id,
+	});
+	expectDashboardPlainResult(station, result);
+	expect(result.stdout).toContain("Overall: needs work");
+	expect(result.stdout).toContain("- Inbox: unsafe; primary=0 low-signal=0");
+	expect(() => parseCliProcessJson(result)).toThrow();
+	return evidenceForPlain(station, result);
 }
 
 async function runReviewEmptyInbox(
@@ -702,16 +778,17 @@ function expectStationEnvelope(
 	station: SkillFeedbackBranchStation,
 	result: CliProcessResult,
 ): RuntimeEnvelope {
+	const expected = stationEnvelopeExpectation(station);
 	expect(result.exitCode, describeCliProcessRun(result)).toBe(
 		station.expectedExitCode,
 	);
 	const envelope = parseCliProcessJson<RuntimeEnvelope>(result);
 	expect(envelope.status, describeCliProcessRun(result)).toBe(
-		station.expectedEnvelopeStatus,
+		expected.envelopeStatus,
 	);
 	const observedContract = observedResultContractId(envelope);
 	expect(observedContract, describeCliProcessRun(result)).toBe(
-		station.expectedResultContractId,
+		expected.resultContractId,
 	);
 	const expectedErrorCode =
 		"expectedErrorCode" in station ? station.expectedErrorCode : undefined;
@@ -721,6 +798,35 @@ function expectStationEnvelope(
 		);
 	}
 	return envelope;
+}
+
+function stationEnvelopeExpectation(station: SkillFeedbackBranchStation): {
+	envelopeStatus: "ok" | "error";
+	resultContractId: string;
+} {
+	if (
+		!("expectedEnvelopeStatus" in station) ||
+		!("expectedResultContractId" in station)
+	) {
+		throw new Error(`${station.id} does not declare a JSON envelope expectation.`);
+	}
+	return {
+		envelopeStatus: station.expectedEnvelopeStatus,
+		resultContractId: station.expectedResultContractId,
+	};
+}
+
+function expectDashboardPlainResult(
+	station: SkillFeedbackBranchStation,
+	result: CliProcessResult,
+): void {
+	expect(result.exitCode, describeCliProcessRun(result)).toBe(
+		station.expectedExitCode,
+	);
+	expect(result.stderr, describeCliProcessRun(result)).toBe("");
+	expect(result.stdout, describeCliProcessRun(result)).toContain(
+		"Skill Feedback Dashboard",
+	);
 }
 
 function evidenceFor(
@@ -735,6 +841,17 @@ function evidenceFor(
 		observedEnvelopeStatus: envelope.status,
 		observedResultContractId: observedResultContractId(envelope),
 		...(envelope.error?.code ? { observedErrorCode: envelope.error.code } : {}),
+	};
+}
+
+function evidenceForPlain(
+	station: SkillFeedbackBranchStation,
+	result: CliProcessResult,
+): SkillFeedbackBranchStationEvidence {
+	return {
+		stationId: station.id,
+		status: "covered",
+		observedExitCode: result.exitCode ?? undefined,
 	};
 }
 

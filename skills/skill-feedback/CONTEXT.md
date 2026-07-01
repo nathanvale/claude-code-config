@@ -108,6 +108,14 @@ _Avoid_: cleanup, archive, review-and-delete
 The read-only `skill-feedback health` command that reports inbox operability, readiness, correlation, warnings, and one next action before deeper review. It never deletes, repairs, or exposes healthy repo paths.
 _Avoid_: review ledger, purge preview, cleanup, trust badge
 
+**Front-door dashboard**:
+The zero-arg human output from `skill-feedback`, also available as
+`skill-feedback dashboard`. It groups existing health facts into good and
+needs-work checks, then shows one next action. It is contract-discovered plain
+rendering over `HealthResultData`, not a review claim. Use
+`skill-feedback health` for the machine-readable JSON envelope.
+_Avoid_: review result, trust badge, repair plan, per-skill verdict
+
 **Review decision surface**:
 A command-envelope-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
 _Avoid_: dashboard, raw dump, generic CLI output

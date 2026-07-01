@@ -12,7 +12,7 @@ import {
 	realpath,
 	unlink,
 } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	type AgentHintActionForRecoverability,
 	type AgentHintForRecoverability,
@@ -30,7 +30,6 @@ import {
 	SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_DECISION_READINESS_SURFACES,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
-	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_LANES,
@@ -48,6 +47,7 @@ import {
 	type EvidenceGap,
 	type FrictionSignal,
 	type HealthClaimReadiness,
+	type HealthCorrelation,
 	type HealthResultData,
 	type HealthWarning,
 	type Receipt,
@@ -62,7 +62,6 @@ import {
 	type SoftwareLearningReport,
 	type WriterProofHealth,
 	type WriterProofWriteStatus,
-	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
 	buildSoftwareLearningReport,
 	createWriterProof,
 	deriveWriterOwnedSkillRunId,
@@ -136,6 +135,7 @@ const DEFAULT_RUNNER_PROCESS_TIMEOUT_MS = 6_000;
 const CLOSEOUT_RECEIPT_DOCS_URL =
 	"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md";
 const SKILL_FEEDBACK_HELP_COMMANDS = [
+	"dashboard",
 	"record",
 	"closeout",
 	"review",
@@ -143,6 +143,13 @@ const SKILL_FEEDBACK_HELP_COMMANDS = [
 	"purge",
 	"correlate",
 ] as const satisfies readonly (keyof typeof skillFeedbackContracts)[];
+
+type HealthCliOutputMode = "json" | "plain" | "dashboard";
+type HealthDashboardRow = {
+	label: string;
+	detail: string;
+	good: boolean;
+};
 
 type SkillFeedbackErrorRecoverability = "change_input" | "repair_state";
 
@@ -995,6 +1002,7 @@ export async function healthSkillFeedbackInbox(
 		runtime?: SkillFeedbackRuntime;
 		runId?: string;
 		plain?: boolean;
+		dashboard?: boolean;
 		targetPath?: string;
 	} = {},
 ): Promise<SkillFeedbackProcessResult> {
@@ -1004,22 +1012,35 @@ export async function healthSkillFeedbackInbox(
 	if (!readTarget.ok) {
 		return healthReadTargetError(runId, readTarget);
 	}
-	return readHealthProcessResult(runId, readTarget, runtime, options.plain === true);
+	return readHealthProcessResult(
+		runId,
+		readTarget,
+		runtime,
+		healthOutputMode(options),
+	);
+}
+
+function healthOutputMode(options: {
+	plain?: boolean;
+	dashboard?: boolean;
+}): HealthCliOutputMode {
+	if (options.dashboard === true) return "dashboard";
+	return options.plain === true ? "plain" : "json";
 }
 
 async function readHealthProcessResult(
 	runId: string,
 	readTarget: Extract<ReadTargetResolution, { ok: true }>,
 	runtime: SkillFeedbackRuntime,
-	plain: boolean,
+	outputMode: HealthCliOutputMode,
 ): Promise<SkillFeedbackProcessResult> {
 	try {
-	const inbox = await readReviewInbox({
-		repoRoot: readTarget.repoRoot,
-		runtime,
-		readWriterProofKey,
-		applyVerifiedCorrelationWitnesses,
-	});
+		const inbox = await readReviewInbox({
+			repoRoot: readTarget.repoRoot,
+			runtime,
+			readWriterProofKey,
+			applyVerifiedCorrelationWitnesses,
+		});
 		return healthProcessResult(
 			runId,
 			buildHealthResultData({
@@ -1027,7 +1048,7 @@ async function readHealthProcessResult(
 				nowIso: runtime.nowIso(),
 				readTarget,
 			}),
-			plain,
+			outputMode,
 		);
 	} catch (error) {
 		return healthFailedError(runId, error);
@@ -1069,11 +1090,22 @@ function readTargetFailureData(
 function healthProcessResult(
 	runId: string,
 	data: HealthResultData,
-	plain: boolean,
+	outputMode: HealthCliOutputMode,
 ): SkillFeedbackProcessResult {
-	if (plain) return healthPlainResult(data);
+	if (outputMode === "dashboard") return healthDashboardResult(data);
+	if (outputMode === "plain") return healthPlainResult(data);
 	if (data.inbox_status === "unsafe") return healthUnsafeResult(runId, data);
 	return healthSuccessResult(runId, data);
+}
+
+function healthDashboardResult(
+	data: HealthResultData,
+): SkillFeedbackProcessResult {
+	return {
+		exitCode: data.inbox_status === "unsafe" ? RUNTIME_FAILURE_EXIT_CODE : 0,
+		stdout: renderHealthDashboard(data),
+		stderr: "",
+	};
 }
 
 function healthPlainResult(data: HealthResultData): SkillFeedbackProcessResult {
@@ -1398,6 +1430,7 @@ function readTargetDiagnosticData(
 
 const REVIEW_PLAIN_OPEN_ACTION_LIMIT = 10;
 const REVIEW_PLAIN_LEDGER_ENTRY_LIMIT = 20;
+const REVIEW_PLAIN_ENGINEERING_SIGNAL_LIMIT = 10;
 const REVIEW_PLAIN_EVIDENCE_REF_LIMIT = 3;
 
 /**
@@ -1411,6 +1444,7 @@ function renderPlainReview(data: ReviewResultData): string {
 	appendPlainProofHealth(lines, data.proof_health);
 	appendPlainCorrelationWitnessHealth(lines, data.correlation_witnesses);
 	appendPlainReviewCoverage(lines, data);
+	appendPlainEngineeringSignals(lines, data.engineering_signals);
 	appendPlainReadiness(lines, data.claim_readiness);
 	appendPlainReviewTriage(lines, data);
 	appendPlainReviewLedger(lines, data);
@@ -1533,6 +1567,42 @@ function plainOpenAction(
 		`reason=${action.open_reason}`,
 		...(action.target ? [`target=${plainTarget(action.target)}`] : []),
 	].join(" ");
+}
+
+function appendPlainEngineeringSignals(
+	lines: string[],
+	signals: ReviewResultData["engineering_signals"],
+): void {
+	if (signals.length === 0) return;
+	lines.push("Engineering signals:");
+	for (const signal of signals.slice(0, REVIEW_PLAIN_ENGINEERING_SIGNAL_LIMIT)) {
+		lines.push(plainEngineeringSignal(signal));
+	}
+	if (signals.length > REVIEW_PLAIN_ENGINEERING_SIGNAL_LIMIT) {
+		lines.push(
+			`truncated_engineering_signals=${signals.length - REVIEW_PLAIN_ENGINEERING_SIGNAL_LIMIT}`,
+		);
+	}
+}
+
+function plainEngineeringSignal(
+	signal: ReviewResultData["engineering_signals"][number],
+): string {
+	const omitted = plainEvidenceRefsOmitted(signal.evidence_refs);
+	const claims = plainClaims(signal.allowed_claims);
+	return [
+		`- signal=${plainSafe(signal.signal_key)}`,
+		`reason=${signal.reason}`,
+		`owner=${plainSafe(signal.owner_path) || "unknown"}`,
+		`tier=${signal.evidence_tier}`,
+		`sources=${signal.source_mix.join("/")}`,
+		claims,
+		`evidence=${plainEvidenceRefs(signal.evidence_refs)}`,
+		...(omitted > 0 ? [`evidence_refs_omitted=${omitted}`] : []),
+		`next=${plainSafe(signal.next_safe_action) || "none"}`,
+	]
+		.filter((part) => part !== "")
+		.join(" ");
 }
 
 function appendPlainReviewLedger(
@@ -1754,6 +1824,172 @@ function renderPlainHealth(data: HealthResultData): string {
 		`Next action: ${data.next_action.action_id} - ${plainSafe(data.next_action.summary)}`,
 	);
 	return `${lines.join("\n")}\n`;
+}
+
+function renderHealthDashboard(data: HealthResultData): string {
+	const rows = healthDashboardRows(data);
+	const needsWork = rows.filter((row) => !row.good);
+	const good = rows.filter((row) => row.good);
+	const lines = [
+		"Skill Feedback Dashboard",
+		`Overall: ${needsWork.length === 0 ? "good" : "needs work"}`,
+		`Counts: primary=${data.counts.primary} low-signal=${data.counts.low_signal} invalid=${data.counts.invalid} skipped=${data.counts.skipped_unsafe} unlinked=${data.counts.unlinked_primary}`,
+		healthDashboardNewest(data.newest),
+		"",
+	];
+	appendDashboardSection(lines, "Good", good);
+	appendDashboardSection(lines, "Needs work", needsWork);
+	lines.push(
+		"",
+		`Next: ${data.next_action.action_id} - ${plainSafe(data.next_action.summary)}`,
+		dashboardCommandsLine(data),
+	);
+	return `${lines.join("\n")}\n`;
+}
+
+function dashboardCommandsLine(data: Pick<HealthResultData, "next_action">): string {
+	const nextCommand =
+		DASHBOARD_NEXT_COMMANDS[data.next_action.action_id] ?? "health";
+	return `Commands: ${uniqueOrdered([
+		"health",
+		nextCommand,
+		"review",
+	]).join(" | ")}`;
+}
+
+const DASHBOARD_NEXT_COMMANDS: Partial<
+	Record<HealthResultData["next_action"]["action_id"], string>
+> = {
+	"preview-correlation-repair": "correlate",
+	"preview-purge": "purge --help",
+	"inspect-report-correlation": "review",
+	"inspect-capture-identity": "review",
+	"run-review": "review",
+};
+
+function uniqueOrdered(values: readonly string[]): string[] {
+	return [...new Set(values)];
+}
+
+function healthDashboardRows(data: HealthResultData): HealthDashboardRow[] {
+	const rows: HealthDashboardRow[] = [
+		inboxDashboardRow(data),
+		warningsDashboardRow(data.warnings),
+		proofDashboardRow(data.proof_health),
+		correlationDashboardRow(data.correlation, data.counts.primary),
+		witnessDashboardRow(data.correlation_witnesses),
+	];
+	for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
+		const fact = data.claim_readiness[surface.key];
+		rows.push({
+			label: surface.label,
+			detail: readinessDashboardDetail(fact),
+			good: fact.status === "ready",
+		});
+	}
+	return rows;
+}
+
+function inboxDashboardRow(data: HealthResultData): HealthDashboardRow {
+	const blockingWarnings = new Set([
+		"inbox_missing",
+		"inbox_empty",
+		"unsafe_inbox",
+		"partial_readability",
+	]);
+	const hasBlockingWarning = data.warnings.some((warning) =>
+		blockingWarnings.has(warning.reason_id),
+	);
+	return {
+		label: "Inbox",
+		detail: `${data.inbox_status}; primary=${data.counts.primary} low-signal=${data.counts.low_signal}`,
+		good: data.inbox_status === "populated" && !hasBlockingWarning,
+	};
+}
+
+function warningsDashboardRow(
+	warnings: readonly HealthWarning[],
+): HealthDashboardRow {
+	return {
+		label: "Warnings",
+		detail:
+			warnings.length === 0
+				? "none"
+				: warnings.map((warning) => plainSafe(warning.reason_id)).join(", "),
+		good: warnings.length === 0,
+	};
+}
+
+function proofDashboardRow(proofHealth: WriterProofHealth): HealthDashboardRow {
+	return {
+		label: "Proof",
+		detail: `verified=${proofHealth.verified_count} evidence-only=${proofHealth.evidence_only_count} replay=${proofHealth.replay_diagnostics_count}${dashboardDiagnostics(proofHealth.diagnostics)}`,
+		good:
+			proofHealth.evidence_only_count === 0 &&
+			proofHealth.replay_diagnostics_count === 0 &&
+			proofHealth.diagnostics.length === 0,
+	};
+}
+
+function correlationDashboardRow(
+	correlation: HealthCorrelation,
+	primaryCount: number,
+): HealthDashboardRow {
+	return {
+		label: "Correlation",
+		detail: `${correlation.status} linked=${correlation.linked_primary_count} unlinked=${correlation.unlinked_primary_count}`,
+		good:
+			correlation.status === "linked" ||
+			(correlation.status === "none" && primaryCount === 0),
+	};
+}
+
+function witnessDashboardRow(
+	health: CorrelationWitnessHealth,
+): HealthDashboardRow {
+	return {
+		label: "Witnesses",
+		detail: `verified=${health.verified_count} blocked=${health.blocked_count} orphan=${health.orphan_count}${dashboardDiagnostics(health.diagnostics)}`,
+		good:
+			health.blocked_count === 0 &&
+			health.orphan_count === 0 &&
+			health.diagnostics.length === 0,
+	};
+}
+
+function readinessDashboardDetail(
+	fact: HealthClaimReadiness[keyof HealthClaimReadiness],
+): string {
+	const reasons =
+		fact.reason_ids.length === 0 ? "" : ` (${fact.reason_ids.join(", ")})`;
+	return `${fact.status}${reasons}`;
+}
+
+function dashboardDiagnostics(diagnostics: readonly string[]): string {
+	return diagnostics.length === 0
+		? ""
+		: ` diagnostics=${diagnostics.map(plainSafe).join(",")}`;
+}
+
+function healthDashboardNewest(newest: HealthResultData["newest"]): string {
+	const primary = newest.primary_generated_ts ?? "none";
+	const lowSignal = newest.low_signal_generated_ts ?? "none";
+	return `Newest: primary=${primary} low-signal=${lowSignal}`;
+}
+
+function appendDashboardSection(
+	lines: string[],
+	title: string,
+	rows: readonly HealthDashboardRow[],
+): void {
+	lines.push(`${title}:`);
+	if (rows.length === 0) {
+		lines.push("- none");
+		return;
+	}
+	for (const row of rows) {
+		lines.push(`- ${row.label}: ${plainSafe(row.detail)}`);
+	}
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -2893,6 +3129,8 @@ export async function runProcessForTest(
 	return runProcess(command, cwd, timeoutMs);
 }
 
+// Covered by unit and process-boundary argv tests; dispatcher branches mirror public CLI routes.
+// fallow-ignore-next-line complexity
 export async function runSkillFeedbackCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions = {},
@@ -2900,6 +3138,9 @@ export async function runSkillFeedbackCli(
 	const command = argv[0];
 	if (argv.includes("--help") || argv.includes("-h")) {
 		return writeHelp(command);
+	}
+	if (command === undefined) {
+		return runDashboardCommandCli([], options);
 	}
 	const handler = skillFeedbackCliHandler(command);
 	if (!handler) return writeProcessResult(unknownCommandResult(command, options));
@@ -2912,12 +3153,64 @@ function writeHelp(command: string | undefined): number {
 }
 
 function skillFeedbackCliHandler(
-	command: string | undefined,
+	command: string,
 ): SkillFeedbackCliHandler | undefined {
-	if (command === undefined || command === "record" || command.startsWith("--")) {
+	if (command === "record" || command.startsWith("--")) {
 		return runRecordCommandCli;
 	}
 	return SKILL_FEEDBACK_CLI_HANDLERS[command];
+}
+
+// Covered by public dashboard CLI tests; keep runner-local usage branches explicit.
+// fallow-ignore-next-line complexity
+async function runDashboardCommandCli(
+	argv: readonly string[],
+	options: SkillFeedbackCliOptions,
+): Promise<number> {
+	const dashboardUsageMessage =
+		argv[0] !== undefined && !argv[0].startsWith("--")
+			? "Expected a dashboard flag."
+			: argv.includes("--plain")
+				? "Unknown flag --plain."
+				: undefined;
+	if (dashboardUsageMessage) {
+		return writeProcessResult(
+			errorResult(
+				options.runId ?? "skill-feedback-dashboard",
+				USAGE_EXIT_CODE,
+				"usage_error",
+				dashboardUsageMessage,
+				{
+					recoverability: "change_input",
+					hint: "Run skill-feedback dashboard --help and retry with valid flags.",
+					contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+				},
+			),
+		);
+	}
+	const parsed = parseReadOnlyArgs(argv, "health");
+	if (!parsed.ok) {
+		return writeProcessResult(
+			errorResult(
+				options.runId ?? "skill-feedback-dashboard",
+				USAGE_EXIT_CODE,
+				"usage_error",
+				parsed.message,
+				{
+					recoverability: "change_input",
+					hint: "Run skill-feedback dashboard --help and retry with valid flags.",
+					contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+				},
+			),
+		);
+	}
+	return writeProcessResult(
+		await healthSkillFeedbackInbox({
+			...options,
+			dashboard: true,
+			targetPath: parsed.options.targetPath,
+		}),
+	);
 }
 
 function unknownCommandResult(
@@ -3072,6 +3365,7 @@ function purgeUsageError(
 }
 
 const SKILL_FEEDBACK_CLI_HANDLERS: Partial<Record<string, SkillFeedbackCliHandler>> = {
+	dashboard: (argv, options) => runDashboardCommandCli(argv.slice(1), options),
 	closeout: runCloseoutCommandCli,
 	review: (argv, options) => runReadCommandCli("review", argv.slice(1), options),
 	health: (argv, options) => runReadCommandCli("health", argv.slice(1), options),
@@ -3150,7 +3444,7 @@ function renderSkillFeedbackHelp(command: string | undefined): string {
 	if (isSkillFeedbackHelpCommand(command)) {
 		return renderCommandUsage(skillFeedbackContracts[command]);
 	}
-	return `${SKILL_FEEDBACK_HELP_COMMANDS.map((helpCommand) =>
+	return `skill-feedback\n\nFront door:\n  skill-feedback                  Show read-only dashboard for the current repo.\n  skill-feedback dashboard        Show the same dashboard with optional repo targeting.\n  skill-feedback health           Show machine-readable health JSON.\n  skill-feedback --help           Show command help.\n\nCommands:\n\n${SKILL_FEEDBACK_HELP_COMMANDS.map((helpCommand) =>
 		renderCommandUsage(skillFeedbackContracts[helpCommand]).trimEnd(),
 	).join("\n\n")}\n`;
 }
@@ -3256,12 +3550,10 @@ export function parseCorrelateArgs(
 				state.execute = true;
 				break;
 			case "--repo": {
-				const value = args[index + 1];
-				if (value === undefined || value.startsWith("--") || value.trim() === "") {
-					return { ok: false, message: "--repo requires a value." };
-				}
-				state.targetPath = value;
-				index += 1;
+				const parsed = parseRepoFlagValue(args, index);
+				if (!parsed.ok) return parsed;
+				state.targetPath = parsed.value;
+				index = parsed.nextIndex;
 				break;
 			}
 			default:
@@ -3314,16 +3606,31 @@ function parseReadOnlyRepoFlag(
 	args: readonly string[],
 	index: number,
 ): ParsedReadOnlyFlag {
+	const parsed = parseRepoFlagValue(args, index);
+	if (!parsed.ok) return parsed;
+	return {
+		ok: true,
+		nextIndex: parsed.nextIndex,
+		apply: (state) => {
+			state.targetPath = parsed.value;
+		},
+	};
+}
+
+function parseRepoFlagValue(
+	args: readonly string[],
+	index: number,
+):
+	| { ok: true; value: string; nextIndex: number }
+	| { ok: false; message: string } {
 	const value = args[index + 1];
 	if (value === undefined || value.startsWith("--") || value.trim() === "") {
 		return { ok: false, message: "--repo requires a value." };
 	}
 	return {
 		ok: true,
+		value,
 		nextIndex: index + 1,
-		apply: (state) => {
-			state.targetPath = value;
-		},
 	};
 }
 
