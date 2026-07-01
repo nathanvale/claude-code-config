@@ -4,9 +4,9 @@ date: 2026-06-02
 supersedes: 0007
 ---
 
-# create-cli Uses Bounded Local Extension
+# cli-author Uses Bounded Local Extension
 
-ADR 0007 kept `create-cli` as a verbatim upstream core with a tiny side-quest
+ADR 0007 kept `cli-author` as a verbatim upstream core with a tiny side-quest
 whitelist: one facade reference, one pointer line, and local scripts. That was
 right when the local need was only "implement this spec with the contract
 runtime."
@@ -20,7 +20,7 @@ The old principle still holds. The old whitelist is too constricting.
 
 ## Decision
 
-`create-cli` keeps its upstream core verbatim, but may grow a bounded local
+`cli-author` keeps its upstream core verbatim, but may grow a bounded local
 extension.
 
 The extension may include:
@@ -62,7 +62,7 @@ references when their order matters.
 - **Keep ADR 0007 strict.** Rejected: every useful local reference expansion
   would feel like a whitelist violation, even when it preserves the upstream
   core.
-- **Fork `create-cli`.** Rejected: still unnecessary. The upstream core remains
+- **Fork `cli-author`.** Rejected: still unnecessary. The upstream core remains
   useful as the human-first CLI design baseline.
 - **Create a separate agent-native CLI skill.** Rejected: same workflow, same
   skill drivers, same contract runtime. A separate skill would create parallel

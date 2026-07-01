@@ -640,10 +640,10 @@ changed, the startup instruction check reports no drift.
 - `context/code-style.md`
 - `context/bun-runner.md`
 - `CONTEXT.md`
-- `skills/create-cli/SKILL.md`
-- `skills/create-cli/references/cli-guidelines.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
-- `skills/create-cli/references/cli-command-facade.md`
+- `skills/cli-author/SKILL.md`
+- `skills/cli-author/references/cli-guidelines.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
+- `skills/cli-author/references/cli-command-facade.md`
 - `skills/fallow/SKILL.md`
 - `skills/fallow/PROVENANCE.md`
 - `skills/fallow/references/commands.md`

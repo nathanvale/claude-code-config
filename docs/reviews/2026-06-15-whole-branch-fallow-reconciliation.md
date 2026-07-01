@@ -25,7 +25,7 @@ Tracked dirty files before reconciliation:
 | modified | `runtime/cli-command-facade/tests/process-testing.test.ts` |
 | modified | `runtime/cli-command-facade/tests/station-map.test.ts` |
 | modified | `scripts/command-entrypoint.integration.test.ts` |
-| modified | `skills/create-cli/references/cli-command-facade.md` |
+| modified | `skills/cli-author/references/cli-command-facade.md` |
 
 Untracked files before reconciliation:
 

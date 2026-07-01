@@ -267,5 +267,5 @@ This map advises context placement. It does not own content, mutate stores, or m
 - If the context is an accepted repo decision, use `record-decision`.
 - If the context is project tracker state or unresolved work state, patch the scoped TASKS.md or project tracker.
 - If accepted storage choice requires a runtime-backed skill capability, use `skill-author`.
-- If storage requires a new or changed agent-facing CLI surface, use `create-cli` inside the `skill-author` runtime-backed path.
+- If storage requires a new or changed agent-facing CLI surface, use `cli-author` inside the `skill-author` runtime-backed path.
 - If the context is only hot startup guidance, patch hot startup guidance and point to the durable owner.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>create-cli — skill visualization</title>
+<title>cli-author — skill visualization</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #30363d;
@@ -75,7 +75,7 @@
 <body>
 <header>
   <div class="wrap">
-    <h1><code>create-cli</code></h1>
+    <h1><code>cli-author</code></h1>
     <p class="tagline">Design a CLI's surface — args, flags, help, output, errors, dry-run — then enforce it with a typed runtime contract.</p>
     <div class="badges">
       <span class="badge">Claude Code skill</span>
@@ -107,7 +107,7 @@
   <p class="lead">A skill that designs a command-line interface <em>human-first, script-friendly</em>, against the clig.dev rubric. The design philosophy stays language-agnostic; the recommended way to <em>build</em> the result is TypeScript + Bun on top of <code>@side-quest/cli-command-facade</code> — the runtime that enforces the patterns you designed, so you never hand-roll flag parsing, exit-code mapping, JSON envelopes, or error shapes.</p>
   <div class="panel">
     <dl class="kv">
-      <dt>name</dt><dd><code>create-cli</code></dd>
+      <dt>name</dt><dd><code>cli-author</code></dd>
       <dt>trigger</dt><dd>"design a CLI", "CLI spec", "args/flags/help/exit codes for…"</dd>
       <dt>identity</dt><dd>Verbatim copy of steipete/agent-scripts (MIT) + a side-quest facade reference</dd>
       <dt>output</dt><dd>A compact CLI spec + (for side-quest) a validated <code>CommandFacadeContract</code></dd>
@@ -117,10 +117,10 @@
 
 <section id="flow">
   <h2><span class="num">02</span>The pipeline — design → enforce → guard</h2>
-  <p class="lead">create-cli and the facade are two halves of one flow. They meet at a single typed object.</p>
+  <p class="lead">cli-author and the facade are two halves of one flow. They meet at a single typed object.</p>
   <div class="panel">
     <div class="flow">
-      <span class="step" style="border-color:var(--accent)">create-cli<br><span style="color:var(--muted)">design the spec</span></span>
+      <span class="step" style="border-color:var(--accent)">cli-author<br><span style="color:var(--muted)">design the spec</span></span>
       <span class="arrow">→</span>
       <span class="step" style="border-color:var(--purple)">CommandFacadeContract<br><span style="color:var(--muted)">one typed object</span></span>
       <span class="arrow">→</span>
@@ -372,7 +372,7 @@ Diagnostics: --quiet --verbose
 <section id="files">
   <h2><span class="num">11</span>Skill files</h2>
   <div class="panel">
-<div class="tree">skills/create-cli<span class="dim">/</span>
+<div class="tree">skills/cli-author<span class="dim">/</span>
 ├── SKILL.md                     <span class="dim"># verbatim body + 1 facade pointer line</span>
 ├── PROVENANCE.md                <span class="dim"># verbatim core + side-quest reference</span>
 ├── LICENSE.upstream             <span class="dim"># MIT © steipete</span>
@@ -386,7 +386,7 @@ Diagnostics: --quiet --verbose
 </section>
 
 <footer>
-  <p>create-cli — Claude Code skill. Core: steipete/agent-scripts (MIT) + clig.dev rubric. Implementation path: <code>@side-quest/cli-command-facade</code> (private, side-quest-engineering).</p>
+  <p>cli-author — Claude Code skill. Core: steipete/agent-scripts (MIT) + clig.dev rubric. Implementation path: <code>@side-quest/cli-command-facade</code> (private, side-quest-engineering).</p>
   <p>This page is a static export of the skill's structure and the findings validated by 70 throwaway prototype contracts (since deleted; conclusions live in <code>references/cli-command-facade.md</code>). Generated 2026-05-31.</p>
 </footer>
 

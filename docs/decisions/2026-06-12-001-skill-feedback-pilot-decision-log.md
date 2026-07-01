@@ -2038,7 +2038,7 @@ Consequences:
 
 - Agents should not infer filenames from `report:<id>`.
 - Review docs remain the audit trail; this decision updates routing guidance only.
-- Future resolver work is additive and should use `create-cli` before adding the command.
+- Future resolver work is additive and should use `cli-author` before adding the command.
 
 Next:
 

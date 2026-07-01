@@ -142,7 +142,7 @@ Use when a decision is accepted and belongs in the repo decision log.
 ## Workflow
 
 1. Read input contract owner `packages/record-decision/src/record-input.ts`.
-2. If the contract owner path is missing, stop and run `create-cli`.
+2. If the contract owner path is missing, stop and run `cli-author`.
 3. Build the prose input envelope.
 4. Run the command named by the CLI owner.
 5. Follow the returned next safe action.

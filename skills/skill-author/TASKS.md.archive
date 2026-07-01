@@ -26,7 +26,7 @@ Goal: make `skills/skill-author/` the canonical capability for skill authoring, 
 - Keep unresolved ideas in this tracker, not in the decision log.
 - Update this tracker after every accepted hardening decision or completed audit batch.
 - Route storage-placement questions to `skills/context-advisor/SKILL.md`.
-- Route CLI contract changes through `create-cli`.
+- Route CLI contract changes through `cli-author`.
 - Preserve `productivity-sync` as the only protected live productivity workflow.
 - Treat `context/` as the durable recall and synthesis folder; do not create new `memory/` folders.
 - Keep `PROVENANCE.md` as source history only.
@@ -97,7 +97,7 @@ Goal: make `skills/skill-author/` the canonical capability for skill authoring, 
 - Drafted first-pass active, archive-review, user-workflow-review, and consolidation buckets for archive-first cleanup.
 - Consolidated `context/agent-native-cli`, `context/capability-registry`, `context/references`, and `context/skill-design` into `skills/skill-author/`.
 - Aligned `skill-author` skill and references to locked context vocabulary.
-- Resolved owner split: `skill-author` owns all skill authoring routes, `create-cli` owns CLI contract design, and `context-advisor` owns storage routing advice.
+- Resolved owner split: `skill-author` owns all skill authoring routes, `cli-author` owns CLI contract design, and `context-advisor` owns storage routing advice.
 - Converted `create-agent-skills` into a temporary skill bridge before archive.
 - Researched current XML guidance with Firecrawl; rejected pure XML skill-body structure and kept XML only for scoped prompt/content boundaries.
 - Accepted the first keep-active skill list for archive-first cleanup.
@@ -212,7 +212,7 @@ Goal: make `skills/skill-author/` the canonical capability for skill authoring, 
 - Renamed `decisions` to `record-decision`; active accepted-decision routes now use the verb-object skill name.
 - Audited CLI implementation governance after `coding-task-tracker` Fallow findings.
 - Added agent-native CLI implementation-shape guidance for thin dispatchers, named handlers, shared helper extraction, and Fallow follow-up.
-- Added a `create-cli` behavior-regression prompt for multi-command agent-native CLI implementation shape.
+- Added a `cli-author` behavior-regression prompt for multi-command agent-native CLI implementation shape.
 - Completed developer tooling governance and duplication audit; no new governance patch needed.
 - Verified active workspace TypeScript versions stay root-catalog owned, Biome stays root-only, package typecheck scripts are consistent, and workspace portability proof passes.
 - Classified duplicate tooling scan hits as expected root ownership, archived package history, or non-workspace legacy `imessage-reader` context.
@@ -261,7 +261,7 @@ Goal: make `skills/skill-author/` the canonical capability for skill authoring, 
 - `to-issues`, `to-prd`, and `triage` use `docs/agents/` owner files instead of retired setup skill routes.
 - `context-advisor`, `record-decision`, `prompt-system-workflow`, `runbook-orchestrator`, `triage`, and `improve-codebase-architecture` now label helper-skill missing states.
 - Archived `browser-domain-memory`; future browser memory work routes to `browser-use`.
-- `skill-author` runtime-backed guidance routes CLI contract changes to `create-cli`.
+- `skill-author` runtime-backed guidance routes CLI contract changes to `cli-author`.
 - `ship-by-unit` borrows `ce-work` patterns but forbids invoking `/ce-work`.
 - Missing-skill policy now has first-pass labels for hard dependency, optional handoff, owner-reference fallback, bundled reference, blocked state, and degraded state.
 - Dependency sections are routing cards only: type, missing state, owner path, fallback, next repair.
@@ -316,7 +316,7 @@ Governance target:
 Current package audit:
 
 - Pilot passed: `skills/browser-use/package.json` plus `skills/browser-use/src/`.
-- Pilot passed: `skills/create-cli/package.json` plus `skills/create-cli/src/`.
+- Pilot passed: `skills/cli-author/package.json` plus `skills/cli-author/src/`.
 - Pilot passed: `skills/fallow/package.json` plus `skills/fallow/src/`.
 - Pilot passed: `skills/test-runner/package.json` plus `skills/test-runner/src/`.
 - Archived Bun package: `skills/archive/browser-domain-memory/scripts/package.json`; leave historical.
@@ -364,7 +364,7 @@ Workspace migration steps:
 - Keep package name `@side-quest/cli-command-facade` unless a rename decision is accepted.
 - Done: changed tracked facade-backed script package dependencies from local `file:` paths to `workspace:*`.
 - Done: `skills/browser-use` is a workspace package with a version-pinned facade dependency; the facade package now carries private-install distribution metadata.
-- Done: pilot moved `skills/create-cli` to skill-root package shape.
+- Done: pilot moved `skills/cli-author` to skill-root package shape.
 - Done: `skills/fallow` is a workspace package using `workspace:*`.
 - Done: `skills/test-runner` is a workspace package using `workspace:*`.
 - Done: `skills/test-runner` package `test` script runs the focused runner suite, not intentionally failing fixtures.
@@ -381,10 +381,10 @@ Workspace migration steps:
 - Done: made active package `tsconfig.json` files explicit and self-contained for portability.
 - Deferred: `noUncheckedIndexedAccess` surfaced broad argument and fixture indexing work; handle as a focused hardening pass.
 - Done: updated `scripts/prove-workspace-portability.ts` export paths, excluded paths, and proof receipt expectations.
-- Done: create-cli pilot passed `bun --filter create-cli-scripts typecheck`.
-- Done: create-cli pilot passed `bun --filter create-cli-scripts smoke`.
-- Done: create-cli pilot passed `bun run check:workspace-facade`.
-- Done: create-cli pilot passed `bun run prove:workspace-portability`.
+- Done: cli-author pilot passed `bun --filter cli-author-scripts typecheck`.
+- Done: cli-author pilot passed `bun --filter cli-author-scripts smoke`.
+- Done: cli-author pilot passed `bun run check:workspace-facade`.
+- Done: cli-author pilot passed `bun run prove:workspace-portability`.
 - Done: fallow package-shape migration passed `bun --filter fallow-scripts typecheck`.
 - Done: fallow package-shape migration passed `bun --filter fallow-scripts test`.
 - Done: fallow package-shape migration passed `bun run check:workspace-facade`.
@@ -398,7 +398,7 @@ Workspace migration steps:
 - Done: browser-use package-shape migration passed `bun run check:workspace-facade`.
 - Done: browser-use package-shape migration passed `bun run prove:workspace-portability`.
 - Done: browser-use bin simplification passed direct executable `--version` checks for all five package bins.
-- Done: removed private package `bin` metadata from `skills/create-cli`, `skills/fallow`, and `skills/test-runner`.
+- Done: removed private package `bin` metadata from `skills/cli-author`, `skills/fallow`, and `skills/test-runner`.
 - Done: updated docs and active owner paths that refer to Bun-owned files under `scripts/`.
 - Done: updated active front-door references in `skills/browser-use/SKILL.md`, `skills/browser-use/references/warm-chrome.md`, and `skills/browser-use/references/browser-adapter-chrome-devtools.md`.
 - Done: reviewed `skill-design-philosophy.md` and `agent-native-skill-design.md` wording; package-backed runtime shape routes to `runtime-portability.md`.
@@ -410,7 +410,7 @@ Workspace migration steps:
 
 Migration order:
 
-- Pilot package: `skills/create-cli/package.json` plus `skills/create-cli/src/`.
+- Pilot package: `skills/cli-author/package.json` plus `skills/cli-author/src/`.
 - Create-cli pilot passed workspace install, invariant check, focused package checks, and portability proof.
 - Migration complete for active tracked facade consumers.
 
@@ -420,10 +420,10 @@ Tracked packages:
 - `skills/browser-use/package.json`: distribution status `private: false`, public access, built `dist/` payload plus mandatory package metadata and `LICENSE.upstream`; verify with `bun --filter browser-use-scripts build`, `bun --filter browser-use-scripts pack:dry-run`, and `npm pack --dry-run`.
 - `skills/test-runner/package.json`: status moved to skill-root package shape; verify with `bun --filter test-runner-scripts test` and `bun --filter test-runner-scripts typecheck`.
 - `skills/fallow/package.json`: status moved to skill-root package shape; verify with `bun --filter fallow-scripts test` and `bun --filter fallow-scripts typecheck`.
-- `skills/create-cli/package.json`: status moved to skill-root package pilot; verify with `bun --filter create-cli-scripts smoke` and `bun --filter create-cli-scripts typecheck`.
+- `skills/cli-author/package.json`: status moved to skill-root package pilot; verify with `bun --filter cli-author-scripts smoke` and `bun --filter cli-author-scripts typecheck`.
 - TypeScript governance: verify with `bun run check:workspace-facade` plus each active package typecheck.
 - Bundled workspace portability proof: passed with `bun run prove:workspace-portability` on `2026-06-09`.
-- Clean export proof payload: root `package.json`, root `bun.lock`, workspace scanner, portability proof script, `runtime/cli-command-facade`, `skills/browser-use`, `skills/create-cli`, `skills/fallow`, and `skills/test-runner`.
+- Clean export proof payload: root `package.json`, root `bun.lock`, workspace scanner, portability proof script, `runtime/cli-command-facade`, `skills/browser-use`, `skills/cli-author`, `skills/fallow`, and `skills/test-runner`.
 - Clean export proof excludes generated dependency and evidence folders: `node_modules`, `tsconfig.tsbuildinfo`, and `skills/test-runner/var`.
 
 ## Governance Review Findings

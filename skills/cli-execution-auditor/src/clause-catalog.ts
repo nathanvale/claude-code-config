@@ -93,7 +93,7 @@ export const LANE_CLAUSES: readonly LaneClause[] = [
 			kind: "symbol",
 			name: "COMMAND_FACADE_BASELINE_EXIT_CODES",
 			module: "runtime/cli-command-facade/src/command-contract.ts",
-			note: "The public 0/1/2 baseline floor constant; parseCommandFacadeContract emits command-baseline-exit-*-missing when a contract omits one. Supersedes older create-cli prose.",
+			note: "The public 0/1/2 baseline floor constant; parseCommandFacadeContract emits command-baseline-exit-*-missing when a contract omits one. Supersedes older cli-author prose.",
 		},
 		assertion:
 			"Every command's exitCodes declares the baseline floor (0 success, 1 failure, 2 usage).",

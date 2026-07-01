@@ -26,7 +26,7 @@ Do not use for live decision-making. Route unresolved choices to `decision-mode`
 - `docs/decisions/`: hard dependency for persisted decisions.
 - `references/operating-manual.md`: bundled reference.
 - `decision-mode`: optional handoff for unresolved choices.
-- `create-cli`: hard dependency before implementing or changing helper CLI behavior.
+- `cli-author`: hard dependency before implementing or changing helper CLI behavior.
 - Missing `docs/decisions/`: blocked for persistence. Default fallback: create `docs/decisions/`, then proceed with the workflow. If the user opts to skip creation, produce a draft entry in-session only and tell them it is not persisted.
 - Missing optional handoff: continue only for already accepted decisions.
 

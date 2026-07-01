@@ -1,9 +1,9 @@
-# Handoff: Fresh Rubric Review Of `create-cli`
+# Handoff: Fresh Rubric Review Of `cli-author`
 
-Focus: hand off to another agent for a fresh review of whether `create-cli`
+Focus: hand off to another agent for a fresh review of whether `cli-author`
 helps agents design small, effective CLI surfaces without bloating skill prose.
 
-User phrasing: "review the create-cli skill with the Matt peacock rubric and
+User phrasing: "review the cli-author skill with the Matt peacock rubric and
 the new skill-author skill."
 
 Interpret "Matt peacock rubric" as the public skill-quality rubric used in this
@@ -16,12 +16,12 @@ repo. Do not impersonate anyone. Use only:
 
 ## Current Objective
 
-Run a fresh review of `skills/create-cli/SKILL.md` as a skill, using the current
+Run a fresh review of `skills/cli-author/SKILL.md` as a skill, using the current
 canonical `skill-author` review workflow.
 
 The next agent should answer:
 
-- Does `create-cli` trigger only for CLI design/spec requests?
+- Does `cli-author` trigger only for CLI design/spec requests?
 - Does it route Basic CLI, Agent-native CLI, and Facade-backed CLI without
   excess context load?
 - Does it keep `SKILL.md` as a `thin router`, or does the first screen carry
@@ -44,13 +44,13 @@ Use `skill-author` as the review owner.
 1. Read `skills/skill-author/SKILL.md`.
 2. Read `skills/skill-author/references/skill-design-decision-runbook.md`.
 3. Read `skills/skill-author/references/skill-review-rubric.md`.
-4. Review target `skills/create-cli/SKILL.md`.
-5. Open only the smallest relevant `create-cli` branch references needed to
+4. Review target `skills/cli-author/SKILL.md`.
+5. Open only the smallest relevant `cli-author` branch references needed to
    test actual routing.
 6. Preserve review-only behavior: do not patch.
 
 Use `skill-author` workflow-fitness probes only if you are reviewing whether
-`create-cli` works in practice as a skill workflow. Otherwise stay with the
+`cli-author` works in practice as a skill workflow. Otherwise stay with the
 static review rubric.
 
 ## Current Repo State
@@ -86,7 +86,7 @@ Use this matrix.
 
 | Lens | Review Question |
 |---|---|
-| Trigger | Does `create-cli` route CLI design requests by concrete trigger phrases without grabbing unrelated implementation or skill-authoring work? |
+| Trigger | Does `cli-author` route CLI design requests by concrete trigger phrases without grabbing unrelated implementation or skill-authoring work? |
 | Structure | Does `SKILL.md` stay first-screen and branch-selecting, with lane detail hidden behind `references/`? |
 | Steering | Does it name first safe action, ambiguity behavior, owner paths, safety gates, and exact-contract owners? |
 | Pruning | Does it avoid copied schemas, generated envelopes, parser rules, facade fields, command catalogues, helper signatures, examples-as-contracts, and unearned checklists? |
@@ -95,15 +95,15 @@ Use this matrix.
 
 Primary review target:
 
-- `skills/create-cli/SKILL.md`
+- `skills/cli-author/SKILL.md`
 
 Likely branch references:
 
-- `skills/create-cli/references/cli-guidelines.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
-- `skills/create-cli/references/cli-command-facade.md`
-- `skills/create-cli/references/cli-front-door-layouts.md`
-- `skills/create-cli/references/behavior-regression-checklist.md`
+- `skills/cli-author/references/cli-guidelines.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
+- `skills/cli-author/references/cli-command-facade.md`
+- `skills/cli-author/references/cli-front-door-layouts.md`
+- `skills/cli-author/references/behavior-regression-checklist.md`
 
 Supporting skill-author paths:
 
@@ -121,7 +121,7 @@ Supporting skill-author paths:
 Run these as mental or practical probes. Return findings; do not patch.
 
 1. No-args / ambiguous CLI design:
-   - Prompt shape: invoke `create-cli` with no args, or "make a CLI".
+   - Prompt shape: invoke `cli-author` with no args, or "make a CLI".
    - Expected behavior: ask or show the lane router; do not invent a full spec.
 
 2. Basic shell CLI:
@@ -148,7 +148,7 @@ Run these as mental or practical probes. Return findings; do not patch.
      owners; does not copy facade fields into `SKILL.md`.
 
 6. Skill edit:
-   - Prompt shape: "Update create-cli routing."
+   - Prompt shape: "Update cli-author routing."
    - Expected behavior: run or consult `references/behavior-regression-checklist.md`
      before and after meaningful edits.
 
@@ -156,7 +156,7 @@ Run these as mental or practical probes. Return findings; do not patch.
    - Prompt shape: "create a skill that wraps a CLI with JSON output and durable
      writes."
    - Expected behavior: `skill-author` owns skill creation and calls
-     `create-cli` only for the CLI surface; `create-cli` should not become a
+     `cli-author` only for the CLI surface; `cli-author` should not become a
      duplicate skill-authoring workflow.
 
 ## Review Output Shape
@@ -183,7 +183,7 @@ Then include:
 - Do not add a `create-skill` bridge.
 - Do not treat historical `create-skill` mentions in old docs/tests as active
   owner drift unless a live owner-path check proves it.
-- Do not copy exact CLI contracts from `create-cli` references into this
+- Do not copy exact CLI contracts from `cli-author` references into this
   handoff or into `SKILL.md`.
 - If current docs for vendor behavior matter, refresh sources before making
   rule claims.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>create-cli — interactive explorer</title>
+<title>cli-author — interactive explorer</title>
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d; --fg:#e6edf3;
@@ -111,7 +111,7 @@
 <header>
   <div class="wrap htop">
     <div>
-      <h1><code>create-cli</code> · interactive explorer</h1>
+      <h1><code>cli-author</code> · interactive explorer</h1>
       <p class="tagline">Edit a contract, watch it validate live, break it, auto-fix it, share it. A teaching subset of the facade's drift rules — shape, audience, side-effects, and the #64 high-stakes guard — ported to run in your browser.</p>
     </div>
     <div class="htools">
@@ -195,7 +195,7 @@
 <!-- GALLERY -->
 <section class="view" id="gallery">
   <h2>Shape gallery</h2>
-  <p class="lead">14 structural patterns create-cli can produce. <b>Click any card</b> to load it into the playground and poke it.</p>
+  <p class="lead">14 structural patterns cli-author can produce. <b>Click any card</b> to load it into the playground and poke it.</p>
   <div class="gallery" id="gallery-grid"></div>
 </section>
 
@@ -643,7 +643,7 @@ function flowSources(){
   const gateColor=broke?'fill:#3d1412,stroke:#f85149,color:#f85149':'fill:#0f2e17,stroke:#3fb950,color:#3fb950';
   const okStage='fill:#0f2e17,stroke:#3fb950,color:#e6edf3';
   const pipeline=`flowchart LR
-  D["✍️ design<br/>(create-cli)"] --> C["📦 CommandFacadeContract<br/>${cmds.length} command(s)"]
+  D["✍️ design<br/>(cli-author)"] --> C["📦 CommandFacadeContract<br/>${cmds.length} command(s)"]
   C --> G{"🔒 define() gate<br/>${broke?'BLOCKS — '+validate(obj).length+' issue(s)':'passes'}"}
   G -->|${broke?'✗ throws':'✓ ok'}| P["🌳 projection<br/>agent-context"]
   P --> A["🤖 agent reads<br/>the catalog"]

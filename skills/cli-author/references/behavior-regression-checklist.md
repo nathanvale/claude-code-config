@@ -1,6 +1,6 @@
 # Behavior Regression Checklist
 
-Use before and after meaningful edits to `create-cli`.
+Use before and after meaningful edits to `cli-author`.
 
 ## Method
 
@@ -20,7 +20,7 @@ Use before and after meaningful edits to `create-cli`.
 
 ### No Args / Ambiguous CLI
 
-- **Prompt:** invoke `create-cli` with no args, or `make a CLI`.
+- **Prompt:** invoke `cli-author` with no args, or `make a CLI`.
 - **Expected route:** Ambiguous; offer the numbered router.
 - **Expected markers:**
   - Does not invent a full spec.
@@ -94,7 +94,7 @@ Use before and after meaningful edits to `create-cli`.
 
 ### Skill Edit
 
-- **Prompt:** `Update create-cli routing.`
+- **Prompt:** `Update cli-author routing.`
 - **Expected route:** Skill edit.
 - **Expected markers:**
   - Routes before the no-args / no-command-purpose guard.
@@ -105,11 +105,11 @@ Use before and after meaningful edits to `create-cli`.
 ### Skill-Author Overlap
 
 - **Prompt:** `create a skill that wraps a CLI with JSON output and durable writes.`
-- **Expected route:** `skill-author` owns skill creation; `create-cli` owns only
+- **Expected route:** `skill-author` owns skill creation; `cli-author` owns only
   the CLI surface.
 - **Expected markers:**
   - Keeps skill frontmatter/body/safety gates with `skills/skill-author/SKILL.md`.
-  - Uses `create-cli` only after the CLI surface is selected.
+  - Uses `cli-author` only after the CLI surface is selected.
   - Does not duplicate the skill-author workflow.
 
 ## Acceptance Gate

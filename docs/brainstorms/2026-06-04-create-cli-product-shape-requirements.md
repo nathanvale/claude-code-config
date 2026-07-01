@@ -1,13 +1,13 @@
 ---
 date: 2026-06-04
-topic: create-cli-product-shape
+topic: cli-author-product-shape
 ---
 
-# Create CLI Product Shape Requirements
+# CLI Author Product Shape Requirements
 
 ## Summary
 
-`create-cli` should become a low-friction CLI design front door with three distinct concepts: a minimum CLI design brief, an optional agent-native design mode that applies the runtime-contract minimum plus risk-selected recipes in any language, and an optional facade-backed implementation path for reusable TypeScript facade runtime validation.
+`cli-author` should become a low-friction CLI design front door with three distinct concepts: a minimum CLI design brief, an optional agent-native design mode that applies the runtime-contract minimum plus risk-selected recipes in any language, and an optional facade-backed implementation path for reusable TypeScript facade runtime validation.
 
 The skill should preserve Pete's human-first CLI design coach while restoring the local agent-native value that the thin rewrite lost.
 
@@ -17,7 +17,7 @@ The skill should preserve Pete's human-first CLI design coach while restoring th
 
 The current product tension is not Pete versus local. Pete's shape is still useful: it gives agents and humans a compact CLI UX coach for shell scripts, language-specific tools, and small commands.
 
-The local value is different: `create-cli` also needs to help agents build CLI surfaces that other agents can discover, run, parse, recover from, and validate. The agent-native design standard starts from the runtime-contract minimum, then adds recipes when risk or workflow value earns them. That standard should not be tied to `@side-quest/cli-command-facade`. The facade is one optional enforcement backend, not the definition of agent-native CLI design.
+The local value is different: `cli-author` also needs to help agents build CLI surfaces that other agents can discover, run, parse, recover from, and validate. The agent-native design standard starts from the runtime-contract minimum, then adds recipes when risk or workflow value earns them. That standard should not be tied to `@side-quest/cli-command-facade`. The facade is one optional enforcement backend, not the definition of agent-native CLI design.
 
 The previous rewrite followed the skill design philosophy but made the skill too thin. Scratch runs showed that the basic shell path still worked, but the Bun TypeScript prompt lost the richer local behavior. The target shape keeps the skill thin while making the product decision visible.
 
@@ -25,7 +25,7 @@ The previous rewrite followed the skill design philosophy but made the skill too
 
 ## Key Decisions
 
-- **One skill, three concepts.** Keep one `create-cli` skill. Separate the minimum CLI design brief, agent-native design mode, and facade-backed implementation path.
+- **One skill, three concepts.** Keep one `cli-author` skill. Separate the minimum CLI design brief, agent-native design mode, and facade-backed implementation path.
 - **Default to Pete-shaped design coaching.** Basic CLI requests stay lightweight and language-agnostic.
 - **Make agent-native language-agnostic.** Any language can apply the runtime-contract minimum: command metadata and help, parseable JSON stdout discipline, structured runtime errors, run correlation, safe stderr diagnostics, redaction coverage, side-effect stance, and non-interactive execution.
 - **Add recipes by risk.** Agent-native mode adds command discovery, result contract discovery, agent hints, runtime action guidance, diagnostic capabilities, write previews, and alignment proofs only when the command's risk, scale, or workflow value earns them.
@@ -56,7 +56,7 @@ flowchart TB
 
 ## Actors
 
-- A1. **Skill driver:** A human, plan, or agent invoking `create-cli`.
+- A1. **Skill driver:** A human, plan, or agent invoking `cli-author`.
 - A2. **CLI implementer:** The agent or human building the command after the design pass.
 - A3. **CLI user:** The human, script, or agent that will run the command.
 - A4. **Runtime owner:** The package, generated help, tests, or facade runtime that owns deterministic behavior.
@@ -67,7 +67,7 @@ flowchart TB
 
 **DX front door**
 
-- R1. `create-cli` presents a small numbered router when intent is ambiguous.
+- R1. `cli-author` presents a small numbered router when intent is ambiguous.
 - R2. The router offers four choices: Basic CLI, Agent-native CLI, Facade-backed CLI, and Not sure.
 - R3. The router routes clear prompts without forcing a menu.
 - R4. The router asks or offers when the prompt says only "Bun TypeScript CLI", because Bun TypeScript does not imply facade-backed.
@@ -129,7 +129,7 @@ flowchart TB
 - R42. The harness can start as a manual scratch-run checklist.
 - R43. The harness does not require a deterministic evaluator until repeated manual runs prove one is needed.
 - R44. A skill edit is kept only when it improves the observed task behavior without bloating the skill.
-- R45. During implementation, the manual checklist lives at `skills/create-cli/references/behavior-regression-checklist.md`.
+- R45. During implementation, the manual checklist lives at `skills/cli-author/references/behavior-regression-checklist.md`.
 
 ---
 
@@ -163,10 +163,10 @@ flowchart TB
 
 ## Acceptance Examples
 
-- AE1. **Covers R1-R14.** Given the prompt "create a shell CLI", when `create-cli` runs, then it uses Basic CLI mode and produces a compact human-first CLI design without facade-specific implementation guidance.
-- AE2. **Covers R15-R21.** Given the prompt "create an agent-native Python CLI", when `create-cli` runs, then it applies the runtime-contract minimum and risk-selected recipes in Python without requiring the facade path.
-- AE3. **Covers R22-R26.** Given the prompt "create a facade-backed Bun TypeScript CLI", when `create-cli` runs, then it applies agent-native design mode and follows the facade runtime path.
-- AE4. **Covers R4-R6, R26.** Given the prompt "create a Bun TypeScript CLI", when intent is ambiguous, then `create-cli` asks or offers whether the user wants Basic, Agent-native, or Facade-backed.
+- AE1. **Covers R1-R14.** Given the prompt "create a shell CLI", when `cli-author` runs, then it uses Basic CLI mode and produces a compact human-first CLI design without facade-specific implementation guidance.
+- AE2. **Covers R15-R21.** Given the prompt "create an agent-native Python CLI", when `cli-author` runs, then it applies the runtime-contract minimum and risk-selected recipes in Python without requiring the facade path.
+- AE3. **Covers R22-R26.** Given the prompt "create a facade-backed Bun TypeScript CLI", when `cli-author` runs, then it applies agent-native design mode and follows the facade runtime path.
+- AE4. **Covers R4-R6, R26.** Given the prompt "create a Bun TypeScript CLI", when intent is ambiguous, then `cli-author` asks or offers whether the user wants Basic, Agent-native, or Facade-backed.
 - AE5. **Covers R27-R37.** Given a future edit to `SKILL.md` or a reference, when the edit copies schema fields or helper signatures from the facade runtime, then the edit is rejected or moved to the runtime owner.
 - AE6. **Covers R38-R45.** Given a future skill rewrite, when the behavior-regression prompt set shows that basic CLI still works but agent-native mode no longer routes, then the rewrite is incomplete.
 
@@ -199,10 +199,10 @@ flowchart TB
 ## Dependencies And Assumptions
 
 - `context/skill-design-philosophy.md` remains the source of truth for skill shape.
-- `docs/adr/0009-create-cli-uses-bounded-local-extension.md` remains the ADR backing local extension.
-- `skills/create-cli/references/cli-guidelines.md` remains the upstream human-first CLI baseline.
-- `skills/create-cli/references/agent-native-cli-design.md` remains the agent-native judgment owner.
-- `skills/create-cli/references/cli-command-facade.md` remains the facade runtime path owner.
+- `docs/adr/0009-cli-author-uses-bounded-local-extension.md` remains the ADR backing local extension.
+- `skills/cli-author/references/cli-guidelines.md` remains the upstream human-first CLI baseline.
+- `skills/cli-author/references/agent-native-cli-design.md` remains the agent-native judgment owner.
+- `skills/cli-author/references/cli-command-facade.md` remains the facade runtime path owner.
 - Scratch comparison results remain valid evidence for the routing regression.
 
 ---
@@ -217,7 +217,7 @@ flowchart TB
 
 - Decide exact `SKILL.md` wording for the numbered router.
 - Implement the compact minimum CLI design brief checklist in `SKILL.md`.
-- Create `skills/create-cli/references/behavior-regression-checklist.md` during implementation.
+- Create `skills/cli-author/references/behavior-regression-checklist.md` during implementation.
 - Decide the smallest edits needed to restore advanced routing without growing the skill body.
 
 ---
@@ -225,11 +225,11 @@ flowchart TB
 ## Sources
 
 - Skill philosophy: `context/skill-design-philosophy.md`
-- Current skill: `skills/create-cli/SKILL.md`
-- Provenance: `skills/create-cli/PROVENANCE.md`
-- Agent-native reference: `skills/create-cli/references/agent-native-cli-design.md`
-- Facade reference: `skills/create-cli/references/cli-command-facade.md`
-- Extension ADR: `docs/adr/0009-create-cli-uses-bounded-local-extension.md`
-- Ideation artifact: `docs/ideation/2026-06-04-create-cli-product-shape-ideation.md`
+- Current skill: `skills/cli-author/SKILL.md`
+- Provenance: `skills/cli-author/PROVENANCE.md`
+- Agent-native reference: `skills/cli-author/references/agent-native-cli-design.md`
+- Facade reference: `skills/cli-author/references/cli-command-facade.md`
+- Extension ADR: `docs/adr/0009-cli-author-uses-bounded-local-extension.md`
+- Ideation artifact: `docs/ideation/2026-06-04-cli-author-product-shape-ideation.md`
 - CLIG: `https://clig.dev/`
 - SkillOpt: `https://microsoft.github.io/SkillOpt/`

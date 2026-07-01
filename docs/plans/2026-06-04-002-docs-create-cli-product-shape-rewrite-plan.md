@@ -1,16 +1,16 @@
 ---
-title: "docs: Rewrite create-cli product shape"
+title: "docs: Rewrite cli-author product shape"
 type: docs
 status: completed
 date: 2026-06-04
-origin: docs/brainstorms/2026-06-04-create-cli-product-shape-requirements.md
+origin: docs/brainstorms/2026-06-04-cli-author-product-shape-requirements.md
 ---
 
-# docs: Rewrite create-cli product shape
+# docs: Rewrite cli-author product shape
 
 ## Summary
 
-Rewrite `create-cli` as one compact CLI design front door with three lanes: Basic CLI, Agent-native CLI, and Facade-backed CLI. Keep `SKILL.md` short and route-oriented. Move deeper judgment into references, and keep deterministic contracts in owner paths, runtime code, generated help, and checks.
+Rewrite `cli-author` as one compact CLI design front door with three lanes: Basic CLI, Agent-native CLI, and Facade-backed CLI. Keep `SKILL.md` short and route-oriented. Move deeper judgment into references, and keep deterministic contracts in owner paths, runtime code, generated help, and checks.
 
 ---
 
@@ -50,7 +50,7 @@ The rewrite restores the richer local behavior without forking the workflow, cre
 
 **Skill Shape**
 
-- R16. Keep one `create-cli` skill and one workflow.
+- R16. Keep one `cli-author` skill and one workflow.
 - R17. Keep `SKILL.md` compact: router, workflow order, minimum brief checklist, owner paths, and lane-neutral output skeleton.
 - R18. Reframe `references/agent-native-cli-design.md` around runtime-contract minimum, recipe triggers, owners, safety, and review.
 - R19. Prune `references/cli-command-facade.md` into a facade path map: trigger, owner paths, validation loop, proof expectations, and coach-filled gaps.
@@ -60,7 +60,7 @@ The rewrite restores the richer local behavior without forking the workflow, cre
 **Validation**
 
 - R22. Validate YAML frontmatter after edits.
-- R23. Run `skill-creator` quick validation against `skills/create-cli`.
+- R23. Run `skill-creator` quick validation against `skills/cli-author`.
 - R24. Run manual prompt checks for Basic shell, ambiguous Bun TypeScript, Agent-native non-TypeScript, and Facade-backed Bun TypeScript.
 - R25. Keep edits only when prompt checks improve routing without bloating `SKILL.md`.
 
@@ -68,7 +68,7 @@ The rewrite restores the richer local behavior without forking the workflow, cre
 
 ## Key Technical Decisions
 
-- **One skill, three lanes:** Keep Basic, Agent-native, and Facade-backed as modes inside `create-cli`, not separate skills. This preserves the shared CLI design workflow and avoids parallel policy.
+- **One skill, three lanes:** Keep Basic, Agent-native, and Facade-backed as modes inside `cli-author`, not separate skills. This preserves the shared CLI design workflow and avoids parallel policy.
 - **Runtime-contract standard before runtime backend:** Agent-native is a design standard. Facade-backed is one optional backend. This prevents Bun TypeScript from becoming an accidental facade trigger.
 - **Checklist before rewrite:** Add the manual behavior-regression checklist before or alongside skill edits so the implementer can compare observed routing against the intended product shape.
 - **`SKILL.md` routes, references teach judgment:** `SKILL.md` should hold only the router, workflow order, brief checklist, owner pointers, and output skeleton. Reference docs can explain risk selection and facade implementation.
@@ -81,7 +81,7 @@ The rewrite restores the richer local behavior without forking the workflow, cre
 
 ```mermaid
 flowchart TB
-  P["create-cli prompt"] --> R["SKILL.md router"]
+  P["cli-author prompt"] --> R["SKILL.md router"]
   R --> B["Basic CLI"]
   R --> A["Agent-native CLI"]
   R --> F["Facade-backed CLI"]
@@ -102,16 +102,16 @@ flowchart TB
 
 **In Scope**
 
-- Edit `skills/create-cli/SKILL.md`.
-- Edit `skills/create-cli/references/agent-native-cli-design.md`.
-- Edit `skills/create-cli/references/cli-command-facade.md`.
-- Add `skills/create-cli/references/behavior-regression-checklist.md`.
+- Edit `skills/cli-author/SKILL.md`.
+- Edit `skills/cli-author/references/agent-native-cli-design.md`.
+- Edit `skills/cli-author/references/cli-command-facade.md`.
+- Add `skills/cli-author/references/behavior-regression-checklist.md`.
 - Run frontmatter, skill validation, and manual prompt checks.
 
 **Out of Scope**
 
 - Runtime code changes in `@side-quest/cli-command-facade`.
-- New create-cli ADR.
+- New cli-author ADR.
 - Separate agent-native CLI skill.
 - Generated evaluator or deterministic scoring harness.
 - Playground refresh unless manual checks expose a blocking stale artifact.
@@ -125,7 +125,7 @@ flowchart TB
 - **Goal:** Add the checklist that proves the rewrite preserves Basic behavior and restores advanced routing.
 - **Requirements:** R20, R22, R24, R25
 - **Files:**
-  - `skills/create-cli/references/behavior-regression-checklist.md`
+  - `skills/cli-author/references/behavior-regression-checklist.md`
 - **Approach:** Create a terse manual checklist with prompt, expected route, expected structural markers, observed route, observed markers, and before/after notes. Include at least four prompts: basic shell CLI, ambiguous Bun TypeScript CLI, agent-native Python or shell CLI, and facade-backed Bun TypeScript CLI.
 - **Patterns to Follow:** `context/skill-design-philosophy.md` evidence loop; work-style bullets; origin AE1-AE6.
 - **Test Scenarios:**
@@ -139,22 +139,22 @@ flowchart TB
 - **Goal:** Rewrite `SKILL.md` into a compact router plus shared Minimum CLI design brief.
 - **Requirements:** R1-R10, R13-R17, R22, R23
 - **Files:**
-  - `skills/create-cli/SKILL.md`
+  - `skills/cli-author/SKILL.md`
 - **Approach:** Keep frontmatter short with a quoted `description`. Replace the current "Agent-native or implementing?" trigger with explicit lane routing. Add the brief checklist and a smaller lane-neutral output skeleton. Keep owner pointers to `references/cli-guidelines.md`, `references/agent-native-cli-design.md`, and `references/cli-command-facade.md`.
-- **Patterns to Follow:** `context/skill-design-philosophy.md`; `skills/create-cli/PROVENANCE.md`; `docs/adr/0009-create-cli-uses-bounded-local-extension.md`; current `SKILL.md` terse style.
+- **Patterns to Follow:** `context/skill-design-philosophy.md`; `skills/cli-author/PROVENANCE.md`; `docs/adr/0009-cli-author-uses-bounded-local-extension.md`; current `SKILL.md` terse style.
 - **Test Scenarios:**
   - Covers R1/R10. "create a shell CLI" routes to Basic mode and emits human-first CLI design without facade guidance.
   - Covers R4/R5. "create a Bun TypeScript CLI" offers the numbered router instead of choosing facade-backed.
   - Covers R6-R9. Every lane starts from the Minimum CLI design brief and avoids copied runtime contracts.
   - Covers R16/R17. The skill remains one workflow and stays short enough to scan.
-- **Verification:** YAML-parse `SKILL.md`; run `skill-creator` quick validation for `skills/create-cli`; compare `SKILL.md` length and section count before/after.
+- **Verification:** YAML-parse `SKILL.md`; run `skill-creator` quick validation for `skills/cli-author`; compare `SKILL.md` length and section count before/after.
 
 ### U3. Agent-Native Reference Reframe
 
 - **Goal:** Reframe the agent-native reference around runtime-contract minimum, recipe triggers, owners, safety, and review.
 - **Requirements:** R2, R7-R14, R18, R22, R24, R25
 - **Files:**
-  - `skills/create-cli/references/agent-native-cli-design.md`
+  - `skills/cli-author/references/agent-native-cli-design.md`
 - **Approach:** Keep the design-layer doc conceptual and language-agnostic. Name the runtime-contract minimum without copying facade shapes. Define recipe triggers for discovery, result contracts, agent hints, runtime action guidance, diagnostics, write previews, and alignment proofs. Preserve safety and human handoff guidance.
 - **Patterns to Follow:** Existing terse bullets in `agent-native-cli-design.md`; `CONTEXT.md` terms; ADR 0009 bounded local extension.
 - **Test Scenarios:**
@@ -169,9 +169,9 @@ flowchart TB
 - **Goal:** Turn the facade reference into a path map for the optional runtime backend.
 - **Requirements:** R3, R7-R9, R13, R15, R19, R22, R24, R25
 - **Files:**
-  - `skills/create-cli/references/cli-command-facade.md`
+  - `skills/cli-author/references/cli-command-facade.md`
 - **Approach:** Prune broad facade teaching into trigger, owner paths, validation loop, proof expectations, and coach-filled gaps. Point to package owners for exact contract shape, parser behavior, generated help, runtime envelope, diagnostics, and tests. Preserve enough guidance for a Facade-backed implementation to start confidently.
-- **Patterns to Follow:** `docs/adr/0009-create-cli-uses-bounded-local-extension.md`; facade package ownership model; current facade reference headings that already separate design from runtime.
+- **Patterns to Follow:** `docs/adr/0009-cli-author-uses-bounded-local-extension.md`; facade package ownership model; current facade reference headings that already separate design from runtime.
 - **Test Scenarios:**
   - Covers R3/R15. Explicit facade prompts route to facade path after Agent-native design.
   - Covers R9/R19. Runtime fields and helper APIs are referenced by owner path, not restated as a mini-manual.
@@ -184,10 +184,10 @@ flowchart TB
 - **Goal:** Prove the rewrite meets the requirements and did not bloat or drift.
 - **Requirements:** R1-R25
 - **Files:**
-  - `skills/create-cli/SKILL.md`
-  - `skills/create-cli/references/behavior-regression-checklist.md`
-  - `skills/create-cli/references/agent-native-cli-design.md`
-  - `skills/create-cli/references/cli-command-facade.md`
+  - `skills/cli-author/SKILL.md`
+  - `skills/cli-author/references/behavior-regression-checklist.md`
+  - `skills/cli-author/references/agent-native-cli-design.md`
+  - `skills/cli-author/references/cli-command-facade.md`
 - **Approach:** Run the manual prompt checklist, YAML frontmatter parse, `skill-creator` quick validation, and targeted search scans. Inspect the final diff for unrelated changes.
 - **Patterns to Follow:** `context/skill-design-philosophy.md` evidence loop; `skill-creator` validation guidance.
 - **Test Scenarios:**
@@ -212,12 +212,12 @@ flowchart TB
 
 ## Sources / Research
 
-- Origin: `docs/brainstorms/2026-06-04-create-cli-product-shape-requirements.md`
-- Current skill: `skills/create-cli/SKILL.md`
+- Origin: `docs/brainstorms/2026-06-04-cli-author-product-shape-requirements.md`
+- Current skill: `skills/cli-author/SKILL.md`
 - Skill philosophy: `context/skill-design-philosophy.md`
-- Provenance: `skills/create-cli/PROVENANCE.md`
-- Agent-native reference: `skills/create-cli/references/agent-native-cli-design.md`
-- Facade reference: `skills/create-cli/references/cli-command-facade.md`
-- Upstream baseline: `skills/create-cli/references/cli-guidelines.md`
-- Extension decision: `docs/adr/0009-create-cli-uses-bounded-local-extension.md`
+- Provenance: `skills/cli-author/PROVENANCE.md`
+- Agent-native reference: `skills/cli-author/references/agent-native-cli-design.md`
+- Facade reference: `skills/cli-author/references/cli-command-facade.md`
+- Upstream baseline: `skills/cli-author/references/cli-guidelines.md`
+- Extension decision: `docs/adr/0009-cli-author-uses-bounded-local-extension.md`
 - Skill validation workflow: `skill-creator`

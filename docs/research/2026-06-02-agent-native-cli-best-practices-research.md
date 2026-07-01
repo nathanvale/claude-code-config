@@ -1,6 +1,6 @@
 # Agent-Native CLI Best Practices Research, 2026-06
 
-Purpose: root-repo research provenance for 2026-06 `create-cli` rubric updates.
+Purpose: root-repo research provenance for 2026-06 `cli-author` rubric updates.
 
 Not skill reference material.
 

@@ -640,7 +640,7 @@ durability:
   reflected_in_plan: true
 evidence:
   - skill-design philosophy forbids copying flags, schemas, state machines, and output semantics into SKILL.md
-  - create-cli guidance keeps deterministic CLI behavior in help, code, and tests
+  - cli-author guidance keeps deterministic CLI behavior in help, code, and tests
   - reference docs would add another drift surface for a small v1 runner
 ```
 
@@ -675,7 +675,7 @@ decided_at: "2026-06-04"
 superseded_at: "2026-06-04"
 superseded_by: test-runner-compact-runner-022
 decision_mode:
-  question: Which create-cli lane should the runner use?
+  question: Which cli-author lane should the runner use?
   option: 1
   confidence: strong
 scope: skills/test-runner
@@ -695,7 +695,7 @@ evidence:
 Decision:
 
 - Treat the runner as an agent-native CLI surface.
-- Apply `create-cli` agent-native guidance before implementation.
+- Apply `cli-author` agent-native guidance before implementation.
 - Do not use the facade runtime in v1.
 
 Rationale:
@@ -1039,7 +1039,7 @@ Rationale:
 
 Consequences:
 
-- The plan should read `skills/create-cli/references/cli-command-facade.md` before implementation.
+- The plan should read `skills/cli-author/references/cli-command-facade.md` before implementation.
 - Owner naming must include contract, model, engine or parser, discovery/help, CLI, and tests where applicable.
 - If implementation needs a new dependency, ask before adding it.
 
@@ -1807,7 +1807,7 @@ durability:
   reflected_in_brainstorm: true
   reflected_in_plan: true
 evidence:
-  - create-cli facade-backed guidance requires owner naming before implementation
+  - cli-author facade-backed guidance requires owner naming before implementation
   - structured recovery diagnostics need stable contract ownership
   - deferring owner naming risks drift between help, parser, result shape, and tests
 ```

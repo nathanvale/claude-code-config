@@ -11,7 +11,7 @@ only when a second code consumer exists.
 
 ## Static clauses (caught with zero target invocations)
 
-- **exit-floor** → `COMMAND_FACADE_BASELINE_EXIT_CODES` (`runtime/cli-command-facade/src/command-contract.ts`); detected via `parseCommandFacadeContract` emitting `command-baseline-exit-*-missing`. The 0/1/2 floor is machine-enforced; supersedes older create-cli prose.
+- **exit-floor** → `COMMAND_FACADE_BASELINE_EXIT_CODES` (`runtime/cli-command-facade/src/command-contract.ts`); detected via `parseCommandFacadeContract` emitting `command-baseline-exit-*-missing`. The 0/1/2 floor is machine-enforced; supersedes older cli-author prose.
 - **help-flag-alignment** → `assertCommandHelpFlagSurface` (`runtime/cli-command-facade/src/testing.ts`). Rendered help must advertise exactly the contract's flags.
 - **redaction-discipline** → `assertNoRuntimeContractFixtureLeaks` + `RUNTIME_CONTRACT_REDACTION_FIXTURES` (`runtime/cli-command-facade/src/testing.ts`). No projected text leaks a known secret marker.
 - **no-raw-runner** → source-grep rule `no-raw-test-runner`. Source routes runners via `test-runner.sh` / MCP runners, never raw `bun test` / `biome` / `tsc` (code-quality rule). heal bug a.
@@ -54,5 +54,5 @@ keeps the co-fire column so a future cascading defect stays documented.
 
 Agent-native floor clauses (stderr discipline, run correlation, structured
 failure category, retry safety) come from
-`skills/create-cli/references/agent-native-cli-design.md` "Runtime-Contract
+`skills/cli-author/references/agent-native-cli-design.md` "Runtime-Contract
 Minimum" — cited by reference, never copied.

@@ -1,17 +1,17 @@
 ---
-name: create-cli
+name: cli-author
 description: "Design CLI UX/specs: basic CLI, agent-native CLI, or facade-backed CLI."
 role: main-entry
 ---
 
-# Create CLI
+# CLI Author
 
 Design CLI surface area: syntax, behavior, help, output, errors, config,
 safety, and validation depth.
 
 ## Do This First
 
-- If the request edits `create-cli`, its routing, or this `SKILL.md`,
+- If the request edits `cli-author`, its routing, or this `SKILL.md`,
   `skills/skill-author/SKILL.md` owns the skill edit; run
   `references/behavior-regression-checklist.md` before and after meaningful
   edits.

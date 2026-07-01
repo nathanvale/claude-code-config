@@ -4,9 +4,9 @@ date: 2026-05-31
 superseded_by: 0009
 ---
 
-# create-cli Stays Verbatim-Upstream, Not Forked
+# cli-author Stays Verbatim-Upstream, Not Forked
 
-The `create-cli` skill is a verbatim copy of steipete/agent-scripts' design-methodology
+The `cli-author` skill is a verbatim copy of steipete/agent-scripts' design-methodology
 skill (MIT). `PROVENANCE.md` holds its `SKILL.md` body + `references/cli-guidelines.md`
 as byte-diffable against upstream; side-quest facade-awareness attaches only as additive
 material (the `references/cli-command-facade.md` doc + one pointer line + the `scripts/`
@@ -14,7 +14,7 @@ npm-link). See ADR 0002 (prose orchestrates, code owns determinism) and ADR 0004
 hand-maintained prose duplicates deterministic contracts) for the placement lineage.
 
 While planning the facade-aware emission slice
-(`docs/plans/2026-05-31-002-feat-facade-aware-create-cli-emission-plan.md`), a real
+(`docs/plans/2026-05-31-002-feat-facade-aware-cli-author-emission-plan.md`), a real
 pressure surfaced: the skill should make an autonomous agent emit a `CommandFacadeContract`
 by default. The body's default instruction is "emit a markdown spec"; the contract-emission
 lives in the reference behind the pointer. Making the contract the *default* output would
@@ -22,11 +22,11 @@ require editing the verbatim body — i.e. forking upstream. This ADR records wh
 
 ## Decision
 
-create-cli stays verbatim-upstream. Facade-awareness lands only as additive side-quest
+cli-author stays verbatim-upstream. Facade-awareness lands only as additive side-quest
 material. We do **not** fork the body to change what the skill emits by default.
 
 The decision was informed by data, not preference: an audit of steipete/agent-scripts
-showed `skills/create-cli` is near-frozen — last content change 2026-01-01; the only 2026
+showed `skills/cli-author` is near-frozen — last content change 2026-01-01; the only 2026
 touches were frontmatter cosmetics — even though the repo overall is active. So the
 "free upstream improvements" benefit of staying verbatim is currently weak. But two
 durable reasons hold regardless:

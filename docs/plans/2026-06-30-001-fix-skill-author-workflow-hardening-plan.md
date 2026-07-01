@@ -88,7 +88,7 @@ flowchart TB
   D -->|yes| E[Branch-hidden probes]
   D -->|no| F[Findings-only review]
   B -->|create / repair| G{Runtime or CLI signal?}
-  G -->|yes| H[create-cli + runtime owners]
+  G -->|yes| H[cli-author + runtime owners]
   G -->|no| I[Smallest skill-author branch]
   H --> J[Deletion test + verification]
   I --> J
@@ -120,9 +120,9 @@ flowchart TB
 - **Dependencies:** None.
 - **Files:** `skills/skill-author/SKILL.md`.
 - **Approach:** Move or refine the runtime route so the top-down classifier treats it as the more specific create case. Keep generic create available for prose-only skills.
-- **Patterns to follow:** Keep the route table compact and first-screen only; do not copy `create-cli` rules into `skill-author`.
+- **Patterns to follow:** Keep the route table compact and first-screen only; do not copy `cli-author` rules into `skill-author`.
 - **Test scenarios:**
-  - Prompt: “create a skill that wraps a CLI with JSON output and durable writes.” Expected route: runtime behavior with `skills/create-cli/SKILL.md`, `references/agent-native-skill-design.md`, and `references/runtime-portability.md`.
+  - Prompt: “create a skill that wraps a CLI with JSON output and durable writes.” Expected route: runtime behavior with `skills/cli-author/SKILL.md`, `references/agent-native-skill-design.md`, and `references/runtime-portability.md`.
   - Prompt: “create a skill that drafts short release notes from PR facts.” Expected route: generic create path, no runtime references unless later evidence earns them.
   - Prompt: no args. Expected route: menu, no create action.
 - **Verification:** Description audit passes; startup check still finds `skills/skill-author/SKILL.md`; manual prompt routing matches the three scenarios.

@@ -12,7 +12,7 @@ Temporary skill bridge.
 - Canonical capability: `skills/skill-author/SKILL.md`.
 - Runtime-backed skill design reference: `skills/skill-author/references/agent-native-skill-design.md`.
 - Skill design runbook: `skills/skill-author/references/skill-design-decision-runbook.md`.
-- CLI design owner path: `skills/create-cli/SKILL.md`.
+- CLI design owner path: `skills/cli-author/SKILL.md`.
 
 ## Entry-Screen Route
 

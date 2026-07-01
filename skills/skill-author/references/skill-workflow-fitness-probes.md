@@ -22,7 +22,7 @@ routing. Do not load unrelated gates.
    - Expected behavior: smallest create path; no runtime gates unless evidence earns them.
 3. Runtime-backed skill.
    - Prompt shape: "create a skill that wraps a CLI with JSON output and durable writes."
-   - Expected behavior: route to runtime owners, `skills/create-cli/SKILL.md`, safety gates, and source-owned contracts; then use frontmatter and body gates before writing new `SKILL.md` source.
+   - Expected behavior: route to runtime owners, `skills/cli-author/SKILL.md`, safety gates, and source-owned contracts; then use frontmatter and body gates before writing new `SKILL.md` source.
 4. Bloated skill review.
    - Target shape: oversized first-screen owner maps, copied contracts, workflow sprawl, unearned Run Cards, or branch-only examples in `SKILL.md`.
    - Expected behavior: findings-first review flags bloat, names owner/reference path, and stays read-only.

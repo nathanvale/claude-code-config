@@ -16,14 +16,14 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 - Storage routing map: `references/storage-routing.md`.
 - Skill authoring owner: `skills/skill-author/SKILL.md`.
 - Runtime-backed skill design owner: `skills/skill-author/references/agent-native-skill-design.md`.
-- CLI contract owner: `skills/create-cli/SKILL.md`.
+- CLI contract owner: `skills/cli-author/SKILL.md`.
 - Decision owner: `skills/record-decision/SKILL.md`.
 
 ## Dependencies
 
 - `references/storage-routing.md`: bundled reference, hard dependency.
 - `skills/skill-author/SKILL.md`: optional handoff for skill-authoring routes.
-- `skills/create-cli/SKILL.md`: optional handoff for CLI-contract routes.
+- `skills/cli-author/SKILL.md`: optional handoff for CLI-contract routes.
 - `skills/record-decision/SKILL.md`: optional handoff for accepted decision capture.
 - `decision-mode` or `grill-with-docs`: optional handoff for unresolved ownership choices.
 - Missing storage-routing map: blocked.
@@ -44,7 +44,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 
 ## Output
 
-- Status: recommend, ask, escalate-record-decision, escalate-skill-author, escalate-create-cli, or blocked.
+- Status: recommend, ask, escalate-record-decision, escalate-skill-author, escalate-cli-author, or blocked.
 - Recommendation: storage bucket and owner path.
 - Required facts: owner, kind, mutability, sensitivity, privacy, query, retention, deletion, recovery, write actor.
 - Assumptions: facts inferred from prompt.

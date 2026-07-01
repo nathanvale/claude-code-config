@@ -57,7 +57,7 @@ The bet: codify the standard first, prove it converts one real runner, and the r
 ### Gold standard — contract
 
 - R4. A written Agent Runner contract exists, extracted from test-runner, naming the required surface: subcommands (`run`/`status`/`detail` and their roles), modes (compact/repair/triage/json), the result envelope shape, exit-code semantics, and proof obligations (a benchmark and an auditor pass).
-- R5. The contract names owners, not copies them: it points at `skills/create-cli/references/cli-command-facade.md` and `agent-native-cli-design.md` for the facade four-surface proof rather than restating those rules.
+- R5. The contract names owners, not copies them: it points at `skills/cli-author/references/cli-command-facade.md` and `agent-native-cli-design.md` for the facade four-surface proof rather than restating those rules.
 - R6. test-runner provably conforms to the contract — the contract is validated against its own exemplar before any conversion.
 
 ### Gold standard — auditor enforcement
@@ -99,7 +99,7 @@ The bet: codify the standard first, prove it converts one real runner, and the r
 - The generated **Command Surface Map** aggregating runner contracts.
 - The per-owner **applies-when predicate** field every owner declares.
 - **Task Doctor** — the thin advisor that reduces over the Map to emit the next-safe-check route.
-- Promoting tier-C owners (create-cli facade proof, startup health) into the predicate scheme.
+- Promoting tier-C owners (cli-author facade proof, startup health) into the predicate scheme.
 
 ### Outside this product's identity
 
@@ -132,7 +132,7 @@ The bet: codify the standard first, prove it converts one real runner, and the r
 ## Outstanding Questions
 
 - **Which runner converts first — Biome (format-runner) or tsc (typescript-runner)?** Biome covers lint+format (two MCP tools retired, broader guidance cleanup); tsc is a single check with simpler output. Resolve at planning.
-- Does the scaffold live as a `create-cli` capability, a standalone template dir, or a generator script? (Implementation choice — defer to ce-plan.)
+- Does the scaffold live as a `cli-author` capability, a standalone template dir, or a generator script? (Implementation choice — defer to ce-plan.)
 - Does the collated `skills/test-runner/docs/` move the originals or link them in place? Default assumption: link/summarize in place to avoid breaking existing cross-references; confirm at planning.
 
 ---
@@ -142,6 +142,6 @@ The bet: codify the standard first, prove it converts one real runner, and the r
 - Deferral thread: `docs/brainstorms/2026-06-05-production-agent-test-runner-convergence-requirements.md` (R35; "Biome and TypeScript stay separate").
 - Larger direction: `docs/ideation/2026-06-14-task-doctor-ideation.html` (ideas #1–#3; Map and doctor are follow-ons to this).
 - Prior runner history (collation targets): `docs/brainstorms/2026-06-04-test-runner-compact-runner-requirements.md`, `docs/brainstorms/2026-06-05-agent-runner-context-escalation-requirements.md`, `docs/plans/2026-06-04-003-feat-test-runner-compact-runner-plan.md`, `docs/plans/2026-06-05-001-feat-agent-runner-context-escalation-plan.md`, `docs/ideation/2026-06-04-test-runner-compact-runner-ideation.md`, `docs/decisions/2026-06-04-test-runner-compact-runner-decision-log.md`.
-- Contract source: `skills/create-cli/references/cli-command-facade.md`, `skills/create-cli/references/agent-native-cli-design.md`.
+- Contract source: `skills/cli-author/references/cli-command-facade.md`, `skills/cli-author/references/agent-native-cli-design.md`.
 - Family guidance to update: `rules/code-quality.md`, `context/bun-runner.md`.
 - Exemplar: `skills/test-runner/` (SKILL.md, src/command-contract.ts, src/test-runner.ts, src/test-runner.benchmark.ts).

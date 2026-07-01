@@ -14,7 +14,7 @@ runtime owner for machine-checkable contracts.
 
 ## Boundary
 
-- Keep `create-cli` as the design front door.
+- Keep `cli-author` as the design front door.
 - Keep exact contract shape in `@side-quest/cli-command-facade`.
 - Keep command catalog meaning, route policy, result vocabulary, redaction, and
   runtime semantics in the consuming package.

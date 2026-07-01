@@ -71,7 +71,7 @@ Add recipes when they change driver behavior or reduce real risk.
 - CLI owns argv parsing, IO, rendering, diagnostics, and test harnesses.
 - Package-owned result vocabulary owns stable package-specific literals; see
   `../../CONTEXT.md`.
-- Private implementation detail stays out of create-cli prose.
+- Private implementation detail stays out of cli-author prose.
 
 ## CLI Front Door Shape
 
@@ -262,4 +262,4 @@ shared validation, or structured envelopes.
 - CLI baseline: `references/cli-guidelines.md`.
 - Facade-backed path: `references/cli-command-facade.md`.
 - Vocabulary: `../../CONTEXT.md`.
-- Extension decision: `../../docs/adr/0009-create-cli-uses-bounded-local-extension.md`.
+- Extension decision: `../../../docs/adr/0009-cli-author-uses-bounded-local-extension.md`.

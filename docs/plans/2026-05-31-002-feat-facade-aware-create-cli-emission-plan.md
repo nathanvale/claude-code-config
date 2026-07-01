@@ -1,17 +1,17 @@
 ---
-title: "feat: Facade-aware create-cli — emit a CommandFacadeContract skeleton"
+title: "feat: Facade-aware cli-author — emit a CommandFacadeContract skeleton"
 status: active
 type: feat
 date: 2026-05-31
-origin: side-quest-engineering/docs/brainstorms/2026-05-29-002-facade-aware-create-cli-integration.md
+origin: side-quest-engineering/docs/brainstorms/2026-05-29-002-facade-aware-cli-author-integration.md
 ---
 
-# feat: Facade-aware create-cli — emit a CommandFacadeContract skeleton
+# feat: Facade-aware cli-author — emit a CommandFacadeContract skeleton
 
 ## Summary
 
-Narrow the hand-translation gap between the `create-cli` skill (design front-end)
-and `@side-quest/cli-command-facade` (enforcement runtime). Today create-cli
+Narrow the hand-translation gap between the `cli-author` skill (design front-end)
+and `@side-quest/cli-command-facade` (enforcement runtime). Today cli-author
 emits a markdown CLI spec and a human hand-translates it into a typed
 `CommandFacadeContract`. This slice makes a ready-to-drop contract skeleton +
 `defineCommandFacadeContract` wire-up *available and canonical in the facade
@@ -41,17 +41,17 @@ upstream "CLI spec skeleton" template.
 
 ## Problem Frame
 
-`create-cli` and `cli-command-facade` are two halves of one pipeline that meet at
+`cli-author` and `cli-command-facade` are two halves of one pipeline that meet at
 one type: `CommandFacadeContract`. The brainstorm (see origin) established the
 mental model — **"nothing merges"**: the skill is author-time *prompt*; the facade
 is runtime *code*. The skill's job is to (a) produce the spec as a contract object
 and (b) show generated code how to consume the package.
 
-**Today:** the two halves are joined by hand. create-cli emits markdown; a human
+**Today:** the two halves are joined by hand. cli-author emits markdown; a human
 hand-translates it into a `CommandFacadeContract`. There's a manual translation gap
 where the markdown spec and the typed contract can silently diverge.
 
-**Goal:** create-cli's *recommended deliverable* (canonical in the facade reference,
+**Goal:** cli-author's *recommended deliverable* (canonical in the facade reference,
 reachable via the pointer) is the contract object + the few wire-up lines that hand
 it to the facade. Where the link is live, `defineCommandFacadeContract` validates the
 contract at construction (GAP A, already shipped), so a subtly-broken spec can't ship
@@ -67,7 +67,7 @@ contract) is deferred — one-way for v1.
 
 ## Requirements
 
-- **R1.** create-cli's facade reference *provides* a ready-to-drop
+- **R1.** cli-author's facade reference *provides* a ready-to-drop
   `CommandFacadeContract` skeleton as the recommended implementation deliverable,
   reachable via the existing "Do This First" pointer — *without* changing what the
   verbatim-upstream body instructs the model to emit. (origin: "Goal" + "Framing")
@@ -108,7 +108,7 @@ deferred — no local upstream).
 ## Key Technical Decisions
 
 - **KTD1 — Skill-side only; facade untouched.** All changes land in
-  `skills/create-cli/` in this repo. The facade package is a consumed dependency
+  `skills/cli-author/` in this repo. The facade package is a consumed dependency
   whose needed surface already shipped. Rationale: honors "nothing merges"; the
   runtime stays code, the skill stays prompt. (origin: GAP A "lives in the toolkit,
   not the skill" — that work is done; this slice is the cross-repo *third caller*.)
@@ -191,12 +191,12 @@ deferred — no local upstream).
   Until that's observed, a sharpened pointer + the facade's catch-and-correct loop
   covers it — the 5-angle prototype (see Sources) showed agent emission is robust, so
   the fork is currently unjustified. **Decision recorded durably in
-  `docs/adr/0007-create-cli-stays-verbatim-upstream-not-forked.md`** (rationale,
+  `docs/adr/0007-cli-author-stays-verbatim-upstream-not-forked.md`** (rationale,
   alternatives, and the watchable trigger).
 
 ### Outside this product's identity
 
-- create-cli does not become a code generator that writes the whole command. It
+- cli-author does not become a code generator that writes the whole command. It
   emits the *contract* + wire-up; the command body is the author's (human or agent)
   work. (origin: anti-goal — "dissolving graduated runtime code into prose".)
 
@@ -209,7 +209,7 @@ The pipeline this slice completes, and where each piece lives:
 ```mermaid
 flowchart LR
   subgraph CCC["claude-code-config (this slice — skill, author-time)"]
-    DESIGN["create-cli SKILL.md body<br/>(verbatim upstream — untouched)"]
+    DESIGN["cli-author SKILL.md body<br/>(verbatim upstream — untouched)"]
     REF["references/cli-command-facade.md<br/>(additive: canonical contract skeleton)"]
     DESIGN -. "one pointer line<br/>(existing, untouched)" .-> REF
   end
@@ -233,7 +233,7 @@ The provenance boundary, as a gate:
 
 ```mermaid
 flowchart TD
-  EDIT["proposed change to create-cli"] --> Q{"touches SKILL.md body<br/>or cli-guidelines.md?"}
+  EDIT["proposed change to cli-author"] --> Q{"touches SKILL.md body<br/>or cli-guidelines.md?"}
   Q -->|yes| FORK["❌ forks upstream core<br/>— reject, re-route to reference"]
   Q -->|no| Q2{"additive side-quest<br/>material in references/?"}
   Q2 -->|yes| OK["✅ provenance-safe — proceed"]
@@ -244,7 +244,7 @@ flowchart TD
 
 ## Implementation Units
 
-> **Execution posture — build LEAN (governs all units).** create-cli is steipete's
+> **Execution posture — build LEAN (governs all units).** cli-author is steipete's
 > lean design skill, and that is exactly what the community converges on for skills
 > that "just work" cross-harness: small body, one concern, procedural prose, *only
 > novel knowledge*, portable frontmatter, description-as-trigger (community research +
@@ -261,7 +261,7 @@ flowchart TD
 ### U1. Strengthen the reference skeleton into the canonical emit target
 
 **Goal:** Make the "Wire-up (copy, adjust names)" block in
-`references/cli-command-facade.md` the explicit, canonical "this is what create-cli
+`references/cli-command-facade.md` the explicit, canonical "this is what cli-author
 emits" deliverable — a complete `CommandFacadeContract` skeleton showing the three
 shipped fields in context, paired with `defineCommandFacadeContract` and framed as
 the design→enforce handoff.
@@ -272,20 +272,20 @@ the design→enforce handoff.
 can run — surfaced by prototype 2026-05-31). Facade foundation already merged.
 
 **Files:**
-- `skills/create-cli/references/cli-command-facade.md` (modify — the Wire-up section
-  + a short "what create-cli emits" framing line above it)
+- `skills/cli-author/references/cli-command-facade.md` (modify — the Wire-up section
+  + a short "what cli-author emits" framing line above it)
 
 **Approach:**
 - The existing Wire-up block (a `build` command literal + `define()` call) is the
   seed. Extend it to a skeleton that (a) shows where `outputModes`/`interactivity`/
   `envVars` go in a realistic command, (b) keeps the `as const satisfies` narrowing
   pattern proven by the memory-os-legacy adapter, (c) frames it as "emit this object
-  as the create-cli deliverable, then hand it to `define()`".
+  as the cli-author deliverable, then hand it to `define()`".
 - Mirror the real adapter shape (`MemoryOsCommandContract` typing pattern) so the
   skeleton matches a known-good in-repo consumer, not an invented shape.
 - Keep R7 honest: do NOT show `--json` as reserved; show it as a declared, author-
   owned flag (the reference already states this in "Facade owns the diagnostic flags").
-- Add one framing sentence: "create-cli's recommended deliverable is this object + the
+- Add one framing sentence: "cli-author's recommended deliverable is this object + the
   `define()` line — design and enforcement in one artifact, no hand-translation (for an
   author/agent who follows the pointer, on a machine with the link)."
 - **Wire the skeleton to the reference's existing "Self-correction loop (autonomous
@@ -347,12 +347,12 @@ units; folded per the lean-skill bar.)
 **Dependencies:** U1 (the skeleton it annotates).
 
 **Files:**
-- `skills/create-cli/references/cli-command-facade.md` (modify — add a short
+- `skills/cli-author/references/cli-command-facade.md` (modify — add a short
   "Two ways to drive this" + "When an autonomous build must pause" passage)
-- `skills/create-cli/SKILL.md` (modify — **only** the side-quest-owned pointer line in
+- `skills/cli-author/SKILL.md` (modify — **only** the side-quest-owned pointer line in
   "Do This First" + the frontmatter additions below; the verbatim body + template are
   untouched)
-- `skills/create-cli/PROVENANCE.md` (modify — the "Side-quest additions" paragraph)
+- `skills/cli-author/PROVENANCE.md` (modify — the "Side-quest additions" paragraph)
 
 **Approach:**
 - *Sharpen the pointer (the load-bearing edit).* The "Do This First" pointer line is
@@ -407,11 +407,11 @@ units; folded per the lean-skill bar.)
     agent. (Claude: unblocks it. Codex: correct declaration, but Codex's sandbox policy
     may still gate — see System-Wide Impact.)
   - `argument-hint: "[cli description]"` — signals an invocable description (e.g.
-    `/create-cli "a git worktree tool"`). The frozen body has no `$ARGUMENTS`
+    `/cli-author "a git worktree tool"`). The frozen body has no `$ARGUMENTS`
     placeholder, but args auto-append, so the clarify loop can seed from them without a
     body edit.
   - **Invocation posture stays default** — no `disable-model-invocation`, no
-    `user-invocable: false`, no `context: fork`. create-cli *designs* (no side effects
+    `user-invocable: false`, no `context: fork`. cli-author *designs* (no side effects
     in the skill itself), so auto-invocation is correct; `context: fork` is
     contraindicated — it would isolate the clarify loop from the human-in-the-loop ask.
 
@@ -458,7 +458,7 @@ U1's compile-time drift guard.
 **Dependencies:** none. (U1's typecheck scenario depends on this.)
 
 **Files:**
-- `skills/create-cli/scripts/tsconfig.json` (create)
+- `skills/cli-author/scripts/tsconfig.json` (create)
 
 **Approach:**
 - **Surfaced by prototype (2026-05-31):** `scripts/` has `package.json` + the live
@@ -481,14 +481,14 @@ U1's compile-time drift guard.
 - **Declare `@types/node` explicitly.** `types: ["node"]` works today only because tsc
   resolves `@types/node` from the repo root by accident; the `scripts/` package
   declares only `@side-quest/cli-command-facade`. Add `@types/node` to
-  `skills/create-cli/scripts/package.json` devDependencies so the typecheck stays a
+  `skills/cli-author/scripts/package.json` devDependencies so the typecheck stays a
   real, portable runnable check — otherwise a fresh install / teammate machine / pruned
   root dep silently brings the `node:*` errors back, the exact silent-gap class U5
   exists to close.
 
 **Files (updated):**
-- `skills/create-cli/scripts/tsconfig.json` (create)
-- `skills/create-cli/scripts/package.json` (modify — add `@types/node` devDependency)
+- `skills/cli-author/scripts/tsconfig.json` (create)
+- `skills/cli-author/scripts/package.json` (modify — add `@types/node` devDependency)
 
 **Test scenarios:**
 - *Typecheck resolves linked types.* With the tsconfig present (incl. `types:
@@ -525,7 +525,7 @@ compile-time drift guard a real, runnable check.
   frontmatter additions (below) are portable to both. Two harness-specific nuances the
   plan must respect:
   - *Invocation differs.* Claude auto-loads a skill by `description` match; Codex
-    invokes via an explicit `$create-cli …` text marker (or `/create-cli` with inline
+    invokes via an explicit `$cli-author …` text marker (or `/cli-author` with inline
     args). So "will the agent reach the skill" has two different mechanics — Claude
     leans on the (verbatim-frozen, weak) description; Codex leans on the `$marker`
     being emitted. The plan's pointer-sharpening helps the *post-load* hop on both; the
@@ -623,7 +623,7 @@ compile-time drift guard a real, runnable check.
   **landed**), #63 (fused-name → **landed via #69**), #64 (mutation/sideEffects
   cross-check → **LANDED via PR #71, `29ab153a`** — was the remaining real
   prerequisite; with it merged the facade-enforced security floor is complete and the
-  autonomous create-cli path is unblocked), #68 (AUTH_* false-positive — deferred),
+  autonomous cli-author path is unblocked), #68 (AUTH_* false-positive — deferred),
   #70 (usage-grammar false-positive: the #66 scanner rejects legitimate parsed flag
   names like `--scope-cwd`/`--secret-ref` in `usage[]`; split out of #64, same class
   as #68 — deferred), prefix-fused residual (**now tracked: #63 re-scoped 2026-06-01** —
@@ -659,15 +659,15 @@ compile-time drift guard a real, runnable check.
 ## Sources & Research
 
 - Origin brainstorm (resolved + prototyped):
-  `side-quest-engineering/docs/brainstorms/2026-05-29-002-facade-aware-create-cli-integration.md`
+  `side-quest-engineering/docs/brainstorms/2026-05-29-002-facade-aware-cli-author-integration.md`
 - Foundation merged: side-quest-engineering PR #59, squash `1737a7ae` (the 3 fields
   + `parse`/`define`). Verified: exports at
   `packages/cli-command-facade/src/command-facade.ts:1437,1460`.
 - 2-adapter proof: `plugins/browser-automation/tools/governance/command-contract.ts`
   and `plugins/memory-os-legacy/scripts/command-contract.ts` both call
   `defineCommandFacadeContract` (the latter read as the skeleton pattern for U1).
-- Provenance constraint: `skills/create-cli/PROVENANCE.md`. Verbatim-rule rationale
-  audited 2026-05-31: upstream `skills/create-cli` is near-frozen (last content
+- Provenance constraint: `skills/cli-author/PROVENANCE.md`. Verbatim-rule rationale
+  audited 2026-05-31: upstream `skills/cli-author` is near-frozen (last content
   change 2026-01-01; May touches were frontmatter cosmetics), so the "free upstream
   improvements" pillar is currently weak — but the two durable pillars (provenance
   auditability + the repo's no-parallel/compose-don't-absorb rule) still hold. Fork

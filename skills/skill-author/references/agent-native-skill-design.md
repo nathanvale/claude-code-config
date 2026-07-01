@@ -8,9 +8,9 @@ Do not use for ordinary prose-only skills.
 ## Owner Paths
 
 - Skill design decision runbook: `references/skill-design-decision-runbook.md`.
-- Agent-native CLI design layer owner path: `skills/create-cli/SKILL.md`.
-- Agent-native CLI guidance: `skills/create-cli/references/agent-native-cli-design.md`.
-- Facade-backed CLI path: `skills/create-cli/references/cli-command-facade.md`.
+- Agent-native CLI design layer owner path: `skills/cli-author/SKILL.md`.
+- Agent-native CLI guidance: `skills/cli-author/references/agent-native-cli-design.md`.
+- Facade-backed CLI path: `skills/cli-author/references/cli-command-facade.md`.
 - Example skill shapes: `references/skill-io-shape-examples.md`.
 - Runtime portability: `references/runtime-portability.md`.
 - Worked example: `skills/record-decision/references/operating-manual.md`.
@@ -19,10 +19,10 @@ Do not use for ordinary prose-only skills.
 
 ## Dependencies
 
-- `skills/create-cli/SKILL.md`: hard dependency for new or changed CLI/runtime surfaces.
+- `skills/cli-author/SKILL.md`: hard dependency for new or changed CLI/runtime surfaces.
 - Missing state: blocked.
-- Next repair: add `skills/create-cli/SKILL.md` to the export payload or install the owning skill before designing the command surface.
-- Do not copy create-cli command rules, flags, schemas, or workflow into this file.
+- Next repair: add `skills/cli-author/SKILL.md` to the export payload or install the owning skill before designing the command surface.
+- Do not copy cli-author command rules, flags, schemas, or workflow into this file.
 
 ## Workflow
 
@@ -34,7 +34,7 @@ Do not use for ordinary prose-only skills.
 6. Define the package-owned output `data` vocabulary.
 7. Use facade-owned runtime envelopes for output transport when facade-backed.
 8. Name contract, model, engine, discovery, CLI, and test owner paths.
-9. Run `create-cli` before adding or changing command surfaces.
+9. Run `cli-author` before adding or changing command surfaces.
 10. Write `SKILL.md` as entry-screen route clarity plus owner paths.
 11. Put exact contracts in code, help, generated docs, and tests.
 12. Prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift.
@@ -67,6 +67,6 @@ Do not use for ordinary prose-only skills.
 
 ## Next Safe Action
 
-- If the command surface is not designed, run `create-cli`.
+- If the command surface is not designed, run `cli-author`.
 - If the skill boundary is unresolved, use `decision-mode` or `grill-with-docs`.
 - If the contract is ready, implement the runtime owner files and tests before widening skill prose.

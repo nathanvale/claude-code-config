@@ -15,7 +15,7 @@ Do not use for ordinary one-shot skill review. Do not audit every skill. Do not 
 - Skill repair owner: `skills/skill-author/SKILL.md`.
 - Skill design runbook: `skills/skill-author/references/skill-design-decision-runbook.md`.
 - Storage owner: `skills/context-advisor/references/storage-routing.md`.
-- CLI owner for future helpers: `skills/create-cli/SKILL.md`.
+- CLI owner for future helpers: `skills/cli-author/SKILL.md`.
 - Source requirements: `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md`.
 - Loop-proof methods: `skills/skill-self-audit-loop/references/loop-proof-methods.md` — how to prove a loop feature works before trusting it.
 
@@ -115,7 +115,7 @@ convergence: not_started
 - Research explains loop shape only.
 - Findings require local source evidence.
 - Repair source through `skills/skill-author/SKILL.md`.
-- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/create-cli/SKILL.md` first.
+- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/cli-author/SKILL.md` first.
 
 ## Driver Commands
 

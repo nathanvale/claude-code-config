@@ -203,7 +203,7 @@ Rules:
 - Workspace invariant owner: `scripts/check-workspace-facade-invariants.ts`.
 - Workspace portability proof owner: `scripts/prove-workspace-portability.ts`.
 - Runtime package context owner: `runtime/cli-command-facade/CONTEXT.md`.
-- CLI surface owner: `skills/create-cli/SKILL.md`.
+- CLI surface owner: `skills/cli-author/SKILL.md`.
 - Use this file only to classify portability, export shape, bundled owners, and missing-runtime state.
 - Do not copy repo-wide TypeScript, Biome, workspace, or npm publish policy into this file.
 

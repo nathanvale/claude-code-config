@@ -276,7 +276,7 @@ flowchart TB
 ## Sources
 
 - `skills/browser-use/docs/plans/2026-06-01-002-fix-browser-use-preflight-agent-feedback-plan.md`
-- `skills/create-cli/references/cli-command-facade.md`
+- `skills/cli-author/references/cli-command-facade.md`
 - `skills/browser-use/SKILL.md`
 - `skills/browser-use/references/warm-chrome.md`
 - `skills/browser-use/scripts/command-contract.ts`

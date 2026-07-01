@@ -55,7 +55,7 @@ Rules:
 - Keep unresolved work, local file paths, and cleanup status in the project tracker.
 - Source notes may cite local evidence paths; missing local evidence does not block skill operation.
 - Use `runtime-portability.md` for Bun, Node, Python, shell, package, lockfile, and helper-script portability.
-- Export `skills/create-cli/SKILL.md` or name it as a hard dependency when runtime-backed skill guidance changes CLI/runtime surfaces.
+- Export `skills/cli-author/SKILL.md` or name it as a hard dependency when runtime-backed skill guidance changes CLI/runtime surfaces.
 
 ## Handover Intake
 

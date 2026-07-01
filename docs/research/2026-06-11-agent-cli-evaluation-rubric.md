@@ -5,8 +5,8 @@ timezone: Australia/Melbourne
 status: draft
 source:
   - docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md
-  - skills/create-cli/references/cli-guidelines.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/cli-guidelines.md
+  - skills/cli-author/references/agent-native-cli-design.md
 ---
 
 # Agent CLI Evaluation Rubric
@@ -266,7 +266,7 @@ Unresolved:
 - Keep uncertain observations in the decision log `Notes`.
 - Escalate to ADR only when the decision is hard to reverse, surprising without context, and a real trade-off.
 - Route live unresolved choices through `decision-mode`.
-- Use `create-cli` before turning an adopted pattern into a new CLI surface.
+- Use `cli-author` before turning an adopted pattern into a new CLI surface.
 
 ## Seed: Playwright
 

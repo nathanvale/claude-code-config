@@ -69,7 +69,7 @@ Fold these into a part's method; do not give them their own slot.
 - Method: resume-honesty replication — hand a converged loop file to a blind agent; it must continue from the file alone without re-discovering closed findings.
 - Trust: independence + oracle (the known answer is "already converged with these closed signatures").
 - Pass: blind resume is no-op or append-only; no closed signature re-opened; history never deleted.
-- Worked example: blind agent resumed the `create-cli` loop file, re-derived all 3 closed signatures as non-contradictions, re-opened none, confirmed convergence.
+- Worked example: blind agent resumed the `cli-author` loop file, re-derived all 3 closed signatures as non-contradictions, re-opened none, confirmed convergence.
 - Companions (unearned): frontmatter-body consistency oracle (static invariants); golden-ledger drift (freeze the ledger; diff after a rule or model change).
 
 ### Idempotency / resume-safety — unearned

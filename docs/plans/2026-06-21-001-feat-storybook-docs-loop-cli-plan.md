@@ -270,7 +270,7 @@ The implementer may collapse tiny modules within a front-door folder if implemen
 
 **Execution note:** Start with contract validation, discovery projection, and help expectation tests before command behavior.
 
-**Patterns to follow:** `skills/storybook/src/front-doors/storybook-doctor/command-contract.ts` (after U0), `skills/storybook/tests/storybook-doctor.test.ts`, `skills/create-cli/references/cli-command-facade.md`.
+**Patterns to follow:** `skills/storybook/src/front-doors/storybook-doctor/command-contract.ts` (after U0), `skills/storybook/tests/storybook-doctor.test.ts`, `skills/cli-author/references/cli-command-facade.md`.
 
 **Test scenarios:**
 - Contract validation accepts every docs-loop command and rejects write-implying mutations except documented loop state/cache writes.
@@ -360,7 +360,7 @@ The implementer may collapse tiny modules within a front-door folder if implemen
 
 **Execution note:** Implement command semantics through `runForTest()` so parser and handler behavior stay aligned.
 
-**Patterns to follow:** `skills/storybook/src/front-doors/storybook-doctor/cli.ts`, `skills/storybook/references/docs-workflow-checklist.md`, `skills/create-cli/references/agent-native-cli-design.md`.
+**Patterns to follow:** `skills/storybook/src/front-doors/storybook-doctor/cli.ts`, `skills/storybook/references/docs-workflow-checklist.md`, `skills/cli-author/references/agent-native-cli-design.md`.
 
 **Test scenarios:**
 - `single --component Notification --json` emits one run card with no durable state writes (read-only scouting).
@@ -525,7 +525,7 @@ Keep completion proof in the docs workflow checklist. Keep exact command behavio
 - `skills/storybook/src/front-doors/storybook-doctor/cli.ts` and `skills/storybook/src/front-doors/storybook-doctor/command-contract.ts` provide the existing facade-backed CLI pattern (after U0 layout migration).
 - `skills/storybook/src/front-doors/storybook-doctor/branch-station-catalog.ts` and `skills/storybook/tests/storybook-doctor.integration.test.ts` provide Branch Station and process-boundary proof patterns.
 - `skills/cli-execution-auditor/src/fixtures/good-front-door-local/` provides the canonical multi-front-door fixture layout with front-door-local command contracts.
-- `skills/create-cli/references/cli-guidelines.md`, `agent-native-cli-design.md`, and `cli-command-facade.md` define CLI, agent-native, and facade-backed expectations.
+- `skills/cli-author/references/cli-guidelines.md`, `agent-native-cli-design.md`, and `cli-command-facade.md` define CLI, agent-native, and facade-backed expectations.
 - `skills/create-skill/references/skill-design-decision-runbook.md` defines skill-owner-path and deterministic-contract boundaries.
 - `skills/storybook/references/component-docs-rollout.md` and `docs-workflow-checklist.md` define Storybook docs cleanup completion proof.
 - XDG Base Directory Specification 0.8 confirms `$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, absolute-path requirements, and default locations: https://specifications.freedesktop.org/basedir/latest/

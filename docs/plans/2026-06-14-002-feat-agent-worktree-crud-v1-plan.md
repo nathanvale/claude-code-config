@@ -337,7 +337,7 @@ runtime/agent-worktree/
 
 - Origin requirements: `docs/brainstorms/2026-06-14-agent-native-multi-agent-cli-requirements.md`.
 - Accepted decisions: `docs/decisions/2026-06-14-001-agent-worktree-decision-log.md`.
-- CLI contract owner: `skills/create-cli/SKILL.md`, `skills/create-cli/references/agent-native-cli-design.md`, `skills/create-cli/references/cli-command-facade.md`.
+- CLI contract owner: `skills/cli-author/SKILL.md`, `skills/cli-author/references/agent-native-cli-design.md`, `skills/cli-author/references/cli-command-facade.md`.
 - Facade runtime owner: `runtime/cli-command-facade/src/command-contract.ts`, `runtime/cli-command-facade/src/command-metadata.ts`, `runtime/cli-command-facade/src/runtime-envelope.ts`.
 - Existing `worktree` patterns: `skills/worktree/src/command-contract.ts`, `skills/worktree/src/worktree.ts`, `skills/worktree/src/worktree-discovery.ts`.
 - Pattern gate: `context/code-style.md`.

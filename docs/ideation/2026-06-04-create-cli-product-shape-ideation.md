@@ -1,15 +1,15 @@
 ---
-title: "create-cli product shape ideation"
+title: "cli-author product shape ideation"
 date: 2026-06-04
 status: draft
-topic: "skills/create-cli"
+topic: "skills/cli-author"
 ---
 
-# create-cli Product Shape Ideation
+# cli-author Product Shape Ideation
 
 ## Grounding
 
-- Treat `create-cli` as a repo-local skill product.
+- Treat `cli-author` as a repo-local skill product.
 - Preserve Pete's upstream CLI design coach as the default experience.
 - Preserve the local agent-native extension from ADR 0009.
 - Follow `context/skill-design-philosophy.md`: skill routes; owners hold contracts.

@@ -87,7 +87,7 @@ flowchart TB
 **CLI/Runtime Domain**
 
 - R13. V1 includes a CLI/runtime domain for command-surface smells that cause poor agent behavior.
-- R14. CLI/runtime entries route exact flag, schema, envelope, and exit-code details to `create-cli`, command contracts, generated help, or tests.
+- R14. CLI/runtime entries route exact flag, schema, envelope, and exit-code details to `cli-author`, command contracts, generated help, or tests.
 - R15. CLI/runtime entries prefer mechanical repair hints over prose policy.
 
 **Handoff Packet**
@@ -155,7 +155,7 @@ flowchart TB
 
 - Moving rules into startup instructions.
 - Copying owner contracts into `bad-practices`.
-- Replacing `improve-codebase-architecture`, `seam-scaffold`, `gof-pressure-lens`, `create-cli`, `test-runner`, or `skill-feedback`.
+- Replacing `improve-codebase-architecture`, `seam-scaffold`, `gof-pressure-lens`, `cli-author`, `test-runner`, or `skill-feedback`.
 
 ---
 

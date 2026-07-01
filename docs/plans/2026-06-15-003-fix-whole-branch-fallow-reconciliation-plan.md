@@ -210,7 +210,7 @@ stateDiagram-v2
 
 **Approach:** Split real duplication only along existing auditor boundaries: command parsing, Station Map acquisition, rendering, ledger signature, and fixture setup. Add tests only where Fallow points to uncovered pure branches or CLI surface behavior. Keep fixture code explicit when abstraction would hide the scenario.
 
-**Patterns to follow:** `skills/cli-execution-auditor/src/audit-engine.ts`, `skills/cli-execution-auditor/src/auditor.ts`, `skills/cli-execution-auditor/src/clause-catalog.ts`, and create-cli command-surface proof rules.
+**Patterns to follow:** `skills/cli-execution-auditor/src/audit-engine.ts`, `skills/cli-execution-auditor/src/auditor.ts`, `skills/cli-execution-auditor/src/clause-catalog.ts`, and cli-author command-surface proof rules.
 
 **Test scenarios:**
 
@@ -252,7 +252,7 @@ stateDiagram-v2
 
 **Dependencies:** U2.
 
-**Files:** `skills/bad-practices/**`, `skills/browser-use/**`, `skills/classic-cinema/**`, `skills/test-runner/**`, `skills/record-decision/**`, `runbooks/issue-to-pr-v2/**`, `hooks/skill-feedback-hooks.test.ts`, `CONTEXT.md`, `skills/create-cli/references/cli-command-facade.md`.
+**Files:** `skills/bad-practices/**`, `skills/browser-use/**`, `skills/classic-cinema/**`, `skills/test-runner/**`, `skills/record-decision/**`, `runbooks/issue-to-pr-v2/**`, `hooks/skill-feedback-hooks.test.ts`, `CONTEXT.md`, `skills/cli-author/references/cli-command-facade.md`.
 
 **Approach:** Confirm each path is branch-owned before editing. For skill docs, edit canonical markdown/source files and YAML-parse touched `SKILL.md` files. For generated ideation HTML, leave output alone unless no source exists. For test duplication findings, extract only when it names a reusable concept instead of hiding scenario clarity.
 
@@ -343,7 +343,7 @@ stateDiagram-v2
 - `skills/skill-feedback/docs/brainstorms/2026-06-15-deterministic-cli-branch-confidence-requirements.md`
 - `docs/ideation/2026-06-13-repo-workability-improvements-ideation.html`
 - `skills/create-skill/references/skill-roles.md`
-- `skills/create-cli/references/cli-command-facade.md`
+- `skills/cli-author/references/cli-command-facade.md`
 - `runtime/cli-command-facade/AGENTS.md`
 - `runtime/cli-command-facade/tests/station-map.test.ts`
 - `runtime/cli-command-facade/tests/process-testing.test.ts`

@@ -15,7 +15,7 @@ convergence: converged
 - Research explains loop shape only.
 - Findings require local source evidence.
 - Repair source through `skills/create-skill/SKILL.md`.
-- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/create-cli/SKILL.md` first.
+- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/cli-author/SKILL.md` first.
 
 ## Driver Commands
 

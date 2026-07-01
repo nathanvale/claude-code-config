@@ -154,7 +154,7 @@ Run at least these mental or practical probes. Return findings; do not patch.
 
 3. New runtime-backed skill:
    - Prompt shape: "create a skill that wraps a CLI with JSON output and durable writes."
-   - Expected behavior: route to `create-cli`, owner paths before prose contracts, safety gate before mutation.
+   - Expected behavior: route to `cli-author`, owner paths before prose contracts, safety gate before mutation.
 
 4. Review existing bloated skill:
    - Target: `skills/skill-feedback/SKILL.md`.
