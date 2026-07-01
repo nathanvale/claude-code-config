@@ -3,7 +3,7 @@
 Audit command:
 
 ```sh
-rg -n 'create-cli|Create CLI|create cli|create-cli-scripts|skills/create-cli|/create-cli'
+rg -n 'cli-author|CLI Author|cli author|cli-author-scripts|skills/cli-author|/cli-author'
 ```
 
 ## Stable Patterns

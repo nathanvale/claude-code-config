@@ -283,7 +283,7 @@ flowchart TB
 - 2026-06-30 ICA implementation handoff for candidates 1 and 2.
 - 2026-06-30 ICA architecture report at baseline commit `a50bbeeb`.
 - `context/code-style.md` pressure gate.
-- `skills/create-cli/SKILL.md`, `skills/create-cli/references/cli-guidelines.md`, and `skills/create-cli/references/agent-native-cli-design.md` for the `review --plain` output contract path.
+- `skills/cli-author/SKILL.md`, `skills/cli-author/references/cli-guidelines.md`, and `skills/cli-author/references/agent-native-cli-design.md` for the `review --plain` output contract path.
 - `skills/skill-feedback/AGENTS.md` package source owners, doc drift gate, and verification commands.
 - `skills/skill-feedback/ARCHITECTURE.md` current module map and review ledger flow.
 - `skills/skill-feedback/CONTEXT.md` vocabulary for Review decision surface, Command facade contract, ReviewResultData Facade, HealthResultData Interface, and Open signal.

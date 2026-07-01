@@ -14,7 +14,7 @@ execution: code
 
 | Field | Value |
 |---|---|
-| Objective | Rename the CLI design skill from `create-cli` to `cli-author` across source, workspace metadata, and repo references. |
+| Objective | Rename the CLI design skill from `cli-author` to `cli-author` across source, workspace metadata, and repo references. |
 | Authority | `skills/skill-author/SKILL.md` owns skill rename and routing behavior; `skills/cli-author/SKILL.md` owns the renamed CLI-authoring workflow after the move. |
 | Execution profile | Standard refactor; preserve unrelated dirty work and use small mechanical passes with verification after each broad replacement. |
 | Stop conditions | Stop if a replacement would rewrite public facade API names, corrupt provenance that must remain literal, or touch unrelated dirty `skills/skill-feedback` work. |
@@ -26,19 +26,19 @@ execution: code
 
 ### Summary
 
-The repo should expose the skill as `cli-author`, not `create-cli`.
+The repo should expose the skill as `cli-author`, not `cli-author`.
 All active owner paths, workspace metadata, skill routing, generated links, and local references should point at the new slug.
 
 ### Problem Frame
 
-`create-cli` now describes a broader authoring workflow for CLI surfaces.
+`cli-author` now describes a broader authoring workflow for CLI surfaces.
 The old verb-first name reads like a generator command and leaks into many owner-path references.
 A rename reduces trigger ambiguity, but only if the repo's discovery surfaces and references move together.
 
 ### Requirements
 
 - R1. The skill directory, frontmatter name, visible title, package metadata, workspace entry, and lockfile identity use `cli-author`.
-- R2. Active owner references that point to `skills/create-cli` point to `skills/cli-author`.
+- R2. Active owner references that point to `skills/cli-author` point to `skills/cli-author`.
 - R3. Textual skill invocations and route names use `cli-author`, including slash-command references.
 - R4. Historical docs, ADRs, plans, audits, and scratch files are migrated consistently enough that repo-local links still resolve after the move.
 - R5. Public facade runtime APIs named `createCli*` are not renamed in this refactor.
@@ -85,7 +85,7 @@ A rename reduces trigger ambiguity, but only if the repo's discovery surfaces an
 - KTD7. Separate public runtime APIs from runtime fixture strings.
   CamelCase `createCli*` helpers stay stable; hyphenated strings such as command examples, executable names, and test fixture command names are ordinary old-slug references unless a local test explains why they are provenance.
 - KTD8. Keep historical filenames provenance-first.
-  Historical ADR, brainstorm, and plan filenames can retain `create-cli` when the old slug is part of the recorded historical subject; rename those paths only when the inventory marks the file as an active canonical artifact that must move.
+  Historical ADR, brainstorm, and plan filenames can retain `cli-author` when the old slug is part of the recorded historical subject; rename those paths only when the inventory marks the file as an active canonical artifact that must move.
 
 ### High-Level Technical Design
 
@@ -124,19 +124,19 @@ This keeps path failures obvious and avoids editing files that will move in a la
 - **Requirements:** R1, R6.
 - **Dependencies:** None.
 - **Files:**
-  - `skills/create-cli/**`
+  - `skills/cli-author/**`
   - `skills/cli-author/**`
   - `skills/cli-author/SKILL.md`
   - `skills/cli-author/package.json`
-- **Approach:** Use `git mv skills/create-cli skills/cli-author`.
+- **Approach:** Use `git mv skills/cli-author skills/cli-author`.
   Update frontmatter `name`, heading, package `name`, package description, and script names from the old slug to `cli-author`.
   Keep `references/behavior-regression-checklist.md` content intact except for renamed prompts and paths.
-- **Patterns to follow:** `skills/skill-author/SKILL.md` rename ownership; current `skills/create-cli/SKILL.md` thin-router shape.
+- **Patterns to follow:** `skills/skill-author/SKILL.md` rename ownership; current `skills/cli-author/SKILL.md` thin-router shape.
 - **Test scenarios:**
   - Parse `skills/cli-author/SKILL.md` frontmatter and confirm `name: cli-author`.
   - Run the moved behavior checklist mentally or mechanically and confirm existing lane probes still route.
   - Confirm `git diff --find-renames` shows a move rather than delete plus unrelated rewrite.
-- **Verification:** The moved skill still contains the second patch behavior and has no `skills/create-cli` path refs inside its active files.
+- **Verification:** The moved skill still contains the second patch behavior and has no `skills/cli-author` path refs inside its active files.
 
 ### U2. Update workspace metadata and lockfile
 
@@ -154,7 +154,7 @@ This keeps path failures obvious and avoids editing files that will move in a la
 - **Test scenarios:**
   - `bun --filter cli-author-scripts typecheck` resolves the moved package.
   - `bun --filter cli-author-scripts smoke` runs the moved smoke script.
-  - `rg 'create-cli-scripts|skills/create-cli' package.json bun.lock` returns no unapproved hits.
+  - `rg 'cli-author-scripts|skills/cli-author' package.json bun.lock` returns no unapproved hits.
 - **Verification:** Bun workspace filters and scripts work under the new package name.
 
 ### U3. Replace active owner paths and skill routes
@@ -175,13 +175,13 @@ This keeps path failures obvious and avoids editing files that will move in a la
   - `skills/skill-self-audit-loop/SKILL.md`
   - `skills/cli-execution-auditor/SKILL.md`
   - `skills/cli-execution-auditor/references/lane-contract-clauses.md`
-- **Approach:** Use `rg -l 'create-cli|skills/create-cli|/create-cli|Create CLI|create cli'` and apply a scoped replacement to active source and instruction files first.
+- **Approach:** Use `rg -l 'cli-author|skills/cli-author|/cli-author|CLI Author|cli author'` and apply a scoped replacement to active source and instruction files first.
   Preserve semantics: `skill-author` still owns skill creation and editing; `cli-author` owns CLI surface design.
 - **Patterns to follow:** Current `skill-author` route table; `AGENTS.md` rule that CLI surface changes use the owner skill.
 - **Test scenarios:**
   - `Update cli-author routing` routes to `skill-author` before the no-purpose guard.
   - `create a skill that wraps a CLI with JSON output and durable writes` keeps skill creation with `skill-author` and routes only the CLI surface to `cli-author`.
-  - Owner-path check reports no missing `skills/create-cli` paths.
+  - Owner-path check reports no missing `skills/cli-author` paths.
 - **Verification:** Active startup and skill references no longer point to the old path.
 
 ### U4. Inventory and migrate repo-local references
@@ -191,16 +191,16 @@ This keeps path failures obvious and avoids editing files that will move in a la
 - **Dependencies:** U1, U3.
 - **Files:**
   - `skills/cli-author/references/rename-leftovers-allowlist.md`
-  - `docs/adr/0007-create-cli-stays-verbatim-upstream-not-forked.md`
-  - `docs/adr/0009-create-cli-uses-bounded-local-extension.md`
-  - `docs/skill-audits/create-cli/self-audit-loop.md`
-  - `docs/scratch/2026-07-01-create-cli-rubric-review-handoff.md`
+  - `docs/adr/0007-cli-author-stays-verbatim-upstream-not-forked.md`
+  - `docs/adr/0009-cli-author-uses-bounded-local-extension.md`
+  - `docs/skill-audits/cli-author/self-audit-loop.md`
+  - `docs/scratch/2026-07-01-cli-author-rubric-review-handoff.md`
   - `runtime/cli-command-facade/CONTEXT.md`
   - `runtime/cli-command-facade/src/command-contract.ts`
   - `runtime/cli-command-facade/tests/command-facade.test.ts`
   - `runtime/cli-command-facade/tests/command-metadata.test.ts`
-  - `skills/cli-author/playgrounds/create-cli-explorer.html`
-  - `skills/cli-author/playgrounds/create-cli-skill.html`
+  - `skills/cli-author/playgrounds/cli-author-explorer.html`
+  - `skills/cli-author/playgrounds/cli-author-skill.html`
   - Every additional repo file returned by the strict old-slug `rg` audit, inventoried in `rename-leftovers-allowlist.md` before editing.
 - **Approach:** Start by writing `rename-leftovers-allowlist.md` as an inventory with one row per exact old-slug `rg -n` hit or stable pattern.
   Each row records path, hit or pattern, classification, action, owner, and reason.
@@ -210,7 +210,7 @@ This keeps path failures obvious and avoids editing files that will move in a la
   Rename repo-local files and directories whose basename includes the old slug only when the inventory marks them as path moves.
   Keep historical ADR, brainstorm, and plan filenames when the old slug is part of the recorded historical subject; update links only when the inventory intentionally moves the path.
   Update links and prose in docs, plans, audits, scratch handoffs, playground HTML, runtime comments, and runtime test fixture strings.
-  Treat hyphenated runtime command examples such as `create-cli runtime inspect` as rename candidates, not public API.
+  Treat hyphenated runtime command examples such as `cli-author runtime inspect` as rename candidates, not public API.
   Where a historical sentence needs to mention the former name, use a short provenance sentence and keep that exact hit in the final allowlist rather than hiding the history.
 - **Patterns to follow:** Existing ADR and plan naming conventions; `docs/skill-audits/*/self-audit-loop.md` path shape.
 - **Test scenarios:**
@@ -218,7 +218,7 @@ This keeps path failures obvious and avoids editing files that will move in a la
   - File-level grouping appears only when every hit in that file shares one classification, action, owner, and reason.
   - `skills/skill-feedback/**` old-name hits are deferred-owner rows unless scope is explicitly expanded.
   - Historical ADR, brainstorm, plan, and audit-loop links resolve whether retained as provenance filenames or intentionally renamed.
-  - Runtime facade tests no longer use `create-cli` as a live executable or command example unless that exact fixture row is allowlisted.
+  - Runtime facade tests no longer use `cli-author` as a live executable or command example unless that exact fixture row is allowlisted.
   - Playground HTML still labels the skill as `cli-author`.
   - Final `rg` old-slug audit shows only approved allowlist classifications.
 - **Verification:** There are no unclassified old-slug hits, no broken repo-local links caused by the rename, and no hyphenated runtime fixture strings outside the inventory outcome.
@@ -253,9 +253,9 @@ This keeps path failures obvious and avoids editing files that will move in a la
 
 | Gate | Applies to | Done signal |
 |---|---|---|
-| Old slug audit | U1-U5 | `rg -n 'create-cli|Create CLI|create cli|create-cli-scripts|skills/create-cli|/create-cli'` returns only hits recorded as exact hits or stable patterns in `skills/cli-author/references/rename-leftovers-allowlist.md`. |
+| Old slug audit | U1-U5 | `rg -n 'cli-author|CLI Author|cli author|cli-author-scripts|skills/cli-author|/cli-author'` returns only hits recorded as exact hits or stable patterns in `skills/cli-author/references/rename-leftovers-allowlist.md`. |
 | Runtime API exclusion audit | U3-U5 | `rg -n 'createCli' runtime skills` shows only facade API/helper usage, not renamed skill slug leftovers. |
-| Runtime fixture string audit | U4-U5 | `rg -n 'create-cli|Create CLI|/create-cli' runtime/cli-command-facade` returns only hits recorded in `skills/cli-author/references/rename-leftovers-allowlist.md`. |
+| Runtime fixture string audit | U4-U5 | `rg -n 'cli-author|CLI Author|/cli-author' runtime/cli-command-facade` returns only hits recorded in `skills/cli-author/references/rename-leftovers-allowlist.md`. |
 | YAML parse | U1, U5 | `skills/cli-author/SKILL.md` frontmatter parses with `name: cli-author`. |
 | Owner path check | U3-U5 | `bun run skills/skill-author/scripts/check-owner-paths.ts --json` passes. |
 | Description audit | U1, U5 | `bun run skills/skill-author/scripts/skill-description-audit.ts --json` passes. |
@@ -298,6 +298,6 @@ This keeps path failures obvious and avoids editing files that will move in a la
 
 - `skills/skill-author/SKILL.md` defines skill edit and owner-routing behavior.
 - `skills/skill-author/references/skill-design-decision-runbook.md` defines thin-router, owner-path, and verification rules.
-- `skills/create-cli/SKILL.md` and `skills/create-cli/references/behavior-regression-checklist.md` define the current rename target and routing probes.
+- `skills/cli-author/SKILL.md` and `skills/cli-author/references/behavior-regression-checklist.md` define the current rename target and routing probes.
 - `package.json` and `bun.lock` define workspace package discovery.
 - Initial `rg` search found about 139 files with old slug, title, package, or path references.

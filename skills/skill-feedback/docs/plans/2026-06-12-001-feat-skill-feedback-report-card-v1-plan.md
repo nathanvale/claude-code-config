@@ -228,7 +228,7 @@ Keep runtime telemetry behind an allowlist. Name every agent-authored string pat
 
 **Execution note:** Start with contract tests for v0 normalization, complete v1 records, partial v1 records, and unsafe agent-authored fields.
 
-**Patterns to follow:** v0 `Receipt` and `SoftwareLearningReport` in `skills/skill-feedback/src/command-contract.ts`; report vocabulary in `skills/skill-feedback/CONTEXT.md`; facade boundary rule in `skills/create-cli/references/cli-command-facade.md`.
+**Patterns to follow:** v0 `Receipt` and `SoftwareLearningReport` in `skills/skill-feedback/src/command-contract.ts`; report vocabulary in `skills/skill-feedback/CONTEXT.md`; facade boundary rule in `skills/cli-author/references/cli-command-facade.md`.
 
 **Test scenarios:**
 
@@ -267,13 +267,13 @@ Keep runtime telemetry behind an allowlist. Name every agent-authored string pat
 - `skills/skill-feedback/package.json`
 - `skills/skill-feedback/SKILL.md`
 
-**Approach:** Use `create-cli`'s facade-backed lane before changing the public command surface. Add a dedicated `closeout` command that reads one structured receipt from stdin, validates it, writes a v1 closeout report, starts the pilot marker when absent, and emits a facade success or error envelope. Keep `record` capture-owned and exclude engine-read telemetry flags from public closeout input.
+**Approach:** Use `cli-author`'s facade-backed lane before changing the public command surface. Add a dedicated `closeout` command that reads one structured receipt from stdin, validates it, writes a v1 closeout report, starts the pilot marker when absent, and emits a facade success or error envelope. Keep `record` capture-owned and exclude engine-read telemetry flags from public closeout input.
 
 Package-owned `data` names the report-card result: report id, optional `skill_run_id`, correlation status, evidence gaps, redaction count, written path, and closeout coverage contribution. The facade envelope carries run correlation, diagnostics, hints, continuation, and operational repair guidance.
 
 **Execution note:** Treat the Command Surface Alignment Proof as a ship gate.
 
-**Patterns to follow:** `skills/create-cli/references/cli-command-facade.md`; `runtime/cli-command-facade/src/`; facade command tests in `skills/fallow/src/command-contract.ts`; public argv tests in `skills/skill-feedback/src/skill-feedback.test.ts`.
+**Patterns to follow:** `skills/cli-author/references/cli-command-facade.md`; `runtime/cli-command-facade/src/`; facade command tests in `skills/fallow/src/command-contract.ts`; public argv tests in `skills/skill-feedback/src/skill-feedback.test.ts`.
 
 **Test scenarios:**
 
@@ -311,7 +311,7 @@ Package-owned `data` names the report-card result: report id, optional `skill_ru
 
 **Execution note:** Read `skills/create-skill/references/skill-design-decision-runbook.md` before editing `SKILL.md`.
 
-**Patterns to follow:** `skills/skill-feedback/SKILL.md` owner-path style; `skills/skill-feedback/references/report-shape.md`; `skills/create-cli/references/agent-native-cli-design.md`.
+**Patterns to follow:** `skills/skill-feedback/SKILL.md` owner-path style; `skills/skill-feedback/references/report-shape.md`; `skills/cli-author/references/agent-native-cli-design.md`.
 
 **Test scenarios:**
 
@@ -504,7 +504,7 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - Keep exact CLI envelope shape in `@side-quest/cli-command-facade`.
 - Keep `skill-feedback` result vocabulary in `skills/skill-feedback/src/command-contract.ts`.
 - Keep exact CLI surface and schema contracts in code, help, and tests.
-- Run `create-cli` before public surface changes.
+- Run `cli-author` before public surface changes.
 - Run `cli-execution-auditor` before shipping facade changes.
 - Keep purge documentation as a future gated workflow until a purge command exists.
 - Keep implementation-pilot and daily-pilot language aligned with `skills/skill-feedback/CONTEXT.md` and the pilot decision log.
@@ -542,8 +542,8 @@ Review surfaces observations and touched surfaces as evidence. It does not deriv
 - `skills/skill-feedback/references/report-shape.md`
 - `skills/skill-feedback/references/redaction.md`
 - `skills/context-advisor/references/storage-routing.md`
-- `skills/create-cli/references/cli-command-facade.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
+- `skills/cli-author/references/cli-command-facade.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
 - `runtime/cli-command-facade/src/`
 - `skills/fallow/src/command-contract.ts`
 - `skills/cli-execution-auditor/src/command-contract.ts`

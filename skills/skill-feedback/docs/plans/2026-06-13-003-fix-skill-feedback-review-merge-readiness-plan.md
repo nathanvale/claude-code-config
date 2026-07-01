@@ -169,7 +169,7 @@ flowchart TB
 
 **Execution note:** Start with failing forged-input tests before changing reducer logic.
 
-**Patterns to follow:** Existing facade-backed contract tests in `command-contract.test.ts`; existing capture telemetry tests in `skill-feedback.test.ts`; create-cli facade proof rules in `skills/create-cli/references/cli-command-facade.md`.
+**Patterns to follow:** Existing facade-backed contract tests in `command-contract.test.ts`; existing capture telemetry tests in `skill-feedback.test.ts`; cli-author facade proof rules in `skills/cli-author/references/cli-command-facade.md`.
 
 **Test scenarios:**
 
@@ -270,7 +270,7 @@ flowchart TB
 
 **Command surface:** `skill-feedback purge [--lane primary|low-signal|all] (--older-than DURATION | --keep-latest COUNT) [--execute]`. Default is preview and deletes nothing. `--execute` without one retention selector returns an error envelope with a repair hint. `--lane` defaults to `all`.
 
-**Patterns to follow:** Existing inbox directory safety in `prepareSkillFeedbackInbox`; create-cli safety gates for destructive commands; current retention warnings in `retentionSummary`.
+**Patterns to follow:** Existing inbox directory safety in `prepareSkillFeedbackInbox`; cli-author safety gates for destructive commands; current retention warnings in `retentionSummary`.
 
 **Test scenarios:**
 
@@ -487,5 +487,5 @@ flowchart TB
 - Anchor owner: `skills/skill-feedback/src/ledger-anchor-adapter.ts`.
 - Redaction owner: `skills/skill-feedback/src/redaction.ts`.
 - Hook owners: `hooks/skill-feedback-codex-stop.ts`, `hooks/skill-feedback-runtime.ts`, and `hooks/skill-feedback-stop.ts`.
-- CLI design references: `skills/create-cli/references/agent-native-cli-design.md` and `skills/create-cli/references/cli-command-facade.md`.
+- CLI design references: `skills/cli-author/references/agent-native-cli-design.md` and `skills/cli-author/references/cli-command-facade.md`.
 - Staff evidence: current-session smoke handoff and current-session Tier 2 code review.

@@ -47,7 +47,7 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
 
 - **Operate inbox** -> `SKILL.md` Intent Classification.
 - **Explain to a human** -> `README.md`, then `CONTEXT.md`.
-- **Change CLI contract** -> `create-cli`, Source Owners, Change Recipes,
+- **Change CLI contract** -> `cli-author`, Source Owners, Change Recipes,
   Verification.
 - **Change review, health, purge, or correlate behavior** -> `ARCHITECTURE.md`,
   Source Owners, Change Recipes, Verification.
@@ -126,7 +126,7 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
 
 ## Change Recipes
 
-- **New or changed command:** run `create-cli`; update `command-contract.ts`,
+- **New or changed command:** run `cli-author`; update `command-contract.ts`,
   runner parsing/dispatch, help/discovery tests, runtime tests, and branch
   stations.
 - **Result contract:** update `command-contract.ts`; update runner emitters and
@@ -257,7 +257,7 @@ Before new modules, command families, or structural changes:
 
 - Run the `context/code-style.md` pressure gate.
 - Use `improve-codebase-architecture`.
-- Use `create-cli` for CLI surface changes.
+- Use `cli-author` for CLI surface changes.
 
 After source ownership changes:
 

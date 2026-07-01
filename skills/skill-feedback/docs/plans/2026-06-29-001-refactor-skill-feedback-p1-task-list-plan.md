@@ -51,7 +51,7 @@ That shape slows future agents because a small behavior change requires reading 
 
 - R3. Keep Codex Trusted skill identity deferred unless current official Codex docs expose an engine-owned skill invocation source that can replace the watchpoint.
 - R4. Decide native skill-attributed cost from current source evidence: either keep `cost_unavailable` by design, or name a trusted runtime source plus owner tests.
-- R5. Decide the `report:<id>` resolver from downstream usage evidence: keep documented JSON lookup when enough, or run `create-cli` before adding a command.
+- R5. Decide the `report:<id>` resolver from downstream usage evidence: keep documented JSON lookup when enough, or run `cli-author` before adding a command.
 
 **Architecture P1s**
 
@@ -111,7 +111,7 @@ That shape slows future agents because a small behavior change requires reading 
 - KTD1. **Close decisions before refactors.** Codex lifecycle, cost, and resolver P1s can resolve to documented no-build outcomes; doing that first prevents architecture work from carrying dead branches.
 - KTD2. **Codex remains a watchpoint.** The official Codex manual fetched on 2026-06-29 documents skills and hooks, including `Stop`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SubagentStart`, and `SubagentStop`, but no `PreSkillUse`, `PostSkillUse`, or equivalent engine-owned skill invocation event. Refresh docs and keep the defer decision unless this changes.
 - KTD3. **Cost stays unavailable unless a trusted source is named.** Existing docs and code intentionally keep cost as `cost_unavailable`; usage or transcript-derived estimates do not become native skill-attributed cost.
-- KTD4. **Resolver command stays deferred unless usage proves it.** Decision 40 already says documented JSON lookup is enough for now. A command is additive only after real downstream friction appears and `create-cli` produces the facade-backed contract.
+- KTD4. **Resolver command stays deferred unless usage proves it.** Decision 40 already says documented JSON lookup is enough for now. A command is additive only after real downstream friction appears and `cli-author` produces the facade-backed contract.
 - KTD5. **Use plain modules, not named patterns.** Pressure gate result: the pressure is duplicate safe-read and witness workflow logic across four commands. The seam is earned by multiple consumers, but no Strategy, Factory, or registry is earned. Use flat modules with exported functions and focused tests.
 - KTD6. **Extract report normalization before the read model.** Moving `normalizeReport` and persisted report parsing out of `command-contract.ts` gives the Inbox Read Model a narrow dependency and lets command catalog tests stay facade-focused.
 - KTD7. **Make the Inbox Read Model the command read owner.** Route `review`, `health`, `purge`, and `correlate` through projections from one safe read owner rather than repeat raw-read, proof, duplicate, and low-signal logic.
@@ -242,7 +242,7 @@ flowchart TB
 - **Dependencies:** U2, U3, U4.
 - **Files:** `skills/skill-feedback/src/command-contract.ts`, `skills/skill-feedback/src/command-contract.test.ts`, `skills/skill-feedback/src/branch-station-catalog.ts`, `skills/skill-feedback/src/branch-station-catalog.test.ts`, `skills/skill-feedback/src/branch-station-evidence.ts`, `skills/skill-feedback/src/skill-feedback.integration.test.ts`, `skills/skill-feedback/SKILL.md`, `skills/skill-feedback/AGENTS.md`, `skills/skill-feedback/ARCHITECTURE.md`, `skills/skill-feedback/references/report-shape.md`.
 - **Approach:** Remove remaining report-mechanics exports from the facade owner where callers can import the new owners directly. Keep command discovery metadata, rendered help, parser accept/reject behavior, result contract ids, schema versions, and output modes in `command-contract.ts`. Refresh branch station evidence only for behavior that remains public.
-- **Patterns to follow:** `create-cli` facade-backed lane, existing Command Surface Alignment Proof in `SKILL.md`, and current Branch Station catalog tests.
+- **Patterns to follow:** `cli-author` facade-backed lane, existing Command Surface Alignment Proof in `SKILL.md`, and current Branch Station catalog tests.
 - **Test scenarios:**
   - Discovery metadata still lists record, closeout, review, health, purge, and correlate with correct result contracts.
   - Rendered help stays unchanged except for owner wording if docs moved.
@@ -286,7 +286,7 @@ flowchart TB
 ## Definition of Done
 
 - Every P0/P1 item present in `skills/skill-feedback/TASKS.md` at plan time is closed, archived, or deliberately transformed into a lower-priority follow-up with source evidence.
-- No public command is added for native cost attribution or `report:<id>` resolution unless U1 finds evidence that changes the accepted decision and `create-cli` is run for the new surface.
+- No public command is added for native cost attribution or `report:<id>` resolution unless U1 finds evidence that changes the accepted decision and `cli-author` is run for the new surface.
 - `command-contract.ts` reads as the Command facade contract owner, not the persisted report mechanics owner.
 - `skill-feedback-runner.ts` keeps CLI dispatch, envelope rendering, and command orchestration while read-model and witness workflow behavior live in narrower modules.
 - `review`, `health`, `purge`, and `correlate` consume the same inbox read owner for safe reads and report normalization.

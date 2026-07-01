@@ -19,7 +19,7 @@ Included:
 Not copied:
 
 - decisions, ADRs, research, and reviews,
-- broader repo-workability or create-cli docs that only mention skill-feedback as
+- broader repo-workability or cli-author docs that only mention skill-feedback as
   one signal.
 
 Those adjacent docs are linked below.
