@@ -11,8 +11,11 @@ safety, and validation depth.
 
 ## Do This First
 
-- Read `references/cli-guidelines.md`; apply it as the default Basic CLI
-  rubric.
+- If there are no args, no command purpose, or only "make a CLI", ask the
+  numbered router below; do not invent a spec.
+- If the request is to create or edit a skill that wraps a CLI,
+  `skills/skill-author/SKILL.md` owns the skill workflow; use this skill only
+  for the CLI surface.
 - Classify the lane:
   1. Basic CLI: humans first; scripts welcome; no advanced agent/runtime signal.
   2. Agent-native CLI: explicit agent-native, machine-readable, repairable,
@@ -26,10 +29,12 @@ safety, and validation depth.
 - If intent is clear, route directly.
 - If intent is ambiguous, ask which lane fits: humans only, agents/scripts too,
   reusable runtime validation, or not sure.
+- After lane selection, read only the lane reference named below.
 
 ## Minimum CLI Design Brief
 
-Capture this before lane-specific depth:
+Capture this before lane-specific depth. Fill only fields that change behavior
+for the selected lane:
 
 - Command name and one-sentence purpose.
 - Target users: humans, scripts, agents, or mixed.
@@ -48,6 +53,8 @@ Capture this before lane-specific depth:
 ## Lane Depth
 
 - Basic CLI:
+  - Read `references/cli-guidelines.md`; apply it as the default Basic CLI
+    rubric.
   - Stay human-first and script-friendly.
   - Ask only the minimum questions needed.
   - Produce a compact CLI spec.
@@ -69,47 +76,17 @@ Capture this before lane-specific depth:
     and catalog-driven integration tests. See Testing Strategy in
     `references/cli-command-facade.md`.
 
-## Output Skeleton
-
-Fill what matters; drop irrelevant sections:
-
-- Lane: Basic CLI, Agent-native CLI, or Facade-backed CLI.
-- Name:
-- Purpose:
-- Users:
-- Usage:
-- Commands:
-- Args and flags:
-- I/O contract:
-- Exit codes:
-- Errors and recovery:
-- Safety:
-- Config/env:
-- Non-interactive behavior:
-- Examples:
-- Owners: required for Agent-native and Facade-backed.
-- Validation/proof: required for Facade-backed.
-
-## Defaults
-
-- `-h/--help` shows help and ignores other args.
-- `--version` prints version to stdout.
-- Primary data goes to stdout.
-- Diagnostics and errors go to stderr.
-- Prompts require TTY unless explicitly allowed.
-- `--no-input` disables prompts.
-- Destructive operations need confirmation; non-interactive execution needs
-  `--force` or an explicit confirmation token.
-- Respect `NO_COLOR` and `TERM=dumb`; provide `--no-color` when color exists.
-- Handle Ctrl-C with fast exit and bounded cleanup.
-
 ## Next Safe Action
 
 - Lane unclear → re-run the numbered router in Do This First.
-- Design complete → hand the Output Skeleton to the implementer.
+- Basic or Agent-native implementation → prove help, parser acceptance,
+  stdout/stderr separation, exit semantics, and the smoke command at the
+  smallest useful level.
 - Facade-backed → run the Command Surface Alignment Proof before shipping.
 - Facade-backed → scaffold catalog-driven integration test alongside Branch
   Station catalog.
+- Design complete → hand the filled Minimum CLI Design Brief and lane-specific
+  proof path to the implementer.
 - Skill edit → run `references/behavior-regression-checklist.md` before and after.
 
 ## Notes

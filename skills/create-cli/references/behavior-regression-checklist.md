@@ -5,13 +5,27 @@ Use before and after meaningful edits to `create-cli`.
 ## Method
 
 - Run each prompt as a scratch skill invocation.
-- Record route, structural markers, and drift.
+- Record fresh route, structural markers, and drift for the current edit.
+- Treat committed observations as stale by default.
 - Check structure, not exact prose.
 - Keep the edit only when routing improves without bloating `SKILL.md`.
 - Reject copied schemas, generated envelopes, parser rules, facade field
   catalogues, and helper signatures.
+- Use this result shape per prompt:
+  - Route:
+  - Markers:
+  - Drift:
 
 ## Prompt Set
+
+### No Args / Ambiguous CLI
+
+- **Prompt:** invoke `create-cli` with no args, or `make a CLI`.
+- **Expected route:** Ambiguous; offer the numbered router.
+- **Expected markers:**
+  - Does not invent a full spec.
+  - Does not read lane references before lane selection.
+  - Offers Basic CLI, Agent-native CLI, Facade-backed CLI, and Not sure.
 
 ### Basic Shell CLI
 
@@ -23,13 +37,6 @@ Use before and after meaningful edits to `create-cli`.
   - Includes usage, flags, stdout/stderr, errors, safety, examples.
   - Avoids agent-native runtime ceremony.
   - Avoids facade-backed implementation guidance.
-- **Observed route:**
-  Basic CLI.
-- **Observed markers:**
-  Minimum CLI design brief, compact CLI spec, stdout/stderr, errors, safety,
-  examples.
-- **Notes:**
-  Static route check from `SKILL.md`; no facade marker present.
 
 ### Ambiguous Bun TypeScript CLI
 
@@ -39,13 +46,6 @@ Use before and after meaningful edits to `create-cli`.
   - Does not choose Facade-backed only because Bun TypeScript appears.
   - Offers Basic CLI, Agent-native CLI, Facade-backed CLI, and Not sure.
   - Frames choice by user need: humans, agents/scripts, or runtime validation.
-- **Observed route:**
-  Ambiguous; numbered router.
-- **Observed markers:**
-  Basic CLI, Agent-native CLI, Facade-backed CLI, Not sure; Bun TypeScript is
-  not treated as a facade trigger.
-- **Notes:**
-  Static route check from `SKILL.md`.
 
 ### Agent-Native Python CLI
 
@@ -56,14 +56,8 @@ Use before and after meaningful edits to `create-cli`.
   - Applies runtime-contract minimum.
   - Adds recipes by risk and workflow value.
   - Names behavior owners before implementation.
+  - Names help, parser, stdout/stderr, exit, and smoke proof.
   - Does not require the facade path.
-- **Observed route:**
-  Agent-native CLI.
-- **Observed markers:**
-  Minimum CLI design brief, runtime-contract minimum, risk-selected recipes,
-  owner naming, no facade requirement.
-- **Notes:**
-  Static route check from `SKILL.md` and `agent-native-cli-design.md`.
 
 ### Agent-Native Multi-Command CLI
 
@@ -79,14 +73,6 @@ Use before and after meaningful edits to `create-cli`.
   - Runs Fallow after meaningful CLI implementation.
   - Treats private-handler `add-tests` findings as coverage prompts, not
     automatic direct-test requirements.
-- **Observed route:**
-  Agent-native CLI.
-- **Observed markers:**
-  Owner naming, thin dispatcher, handler split, shared helper extraction,
-  Fallow after implementation, private-handler coverage prompt.
-- **Notes:**
-  Static route check from `agent-native-cli-design.md`; added after
-  `coding-task-tracker` Fallow review exposed dispatcher and duplication drift.
 
 ### Facade-Backed Bun TypeScript CLI
 
@@ -104,23 +90,35 @@ Use before and after meaningful edits to `create-cli`.
     payloads.
   - Includes all three test layers: unit tests, Branch Station catalog tests,
     and catalog-driven integration tests.
-- **Observed route:**
-  Facade-backed CLI.
-- **Observed markers:**
-  Agent-native first, facade path map, owner paths, validation loop, Command
-  Surface Alignment Proof, result-data helper path, structured runtime-error
-  helper path, no `Record<string, unknown>` default for interface-shaped result
-  payloads, three test layers.
-- **Notes:**
-  Static route check from `SKILL.md` and `cli-command-facade.md`.
+
+### Skill Edit
+
+- **Prompt:** `Update create-cli routing.`
+- **Expected route:** Skill edit.
+- **Expected markers:**
+  - Runs this checklist before and after meaningful edits.
+  - Patches only behavior that improves routing, structure, steering, or pruning.
+  - Does not add copied contracts to `SKILL.md`.
+
+### Skill-Author Overlap
+
+- **Prompt:** `create a skill that wraps a CLI with JSON output and durable writes.`
+- **Expected route:** `skill-author` owns skill creation; `create-cli` owns only
+  the CLI surface.
+- **Expected markers:**
+  - Keeps skill frontmatter/body/safety gates with `skills/skill-author/SKILL.md`.
+  - Uses `create-cli` only after the CLI surface is selected.
+  - Does not duplicate the skill-author workflow.
 
 ## Acceptance Gate
 
 - Basic prompt still produces a compact human-first design.
+- No-args prompt asks or offers before spec creation.
 - Ambiguous Bun TypeScript prompt asks or offers before choosing depth.
 - Agent-native non-TypeScript prompt stays language-agnostic.
 - Multi-command agent-native prompt preserves implementation-shape guidance.
 - Facade-backed prompt follows facade path only when explicitly requested.
+- Skill-author overlap prompt keeps skill creation owned by `skill-author`.
 - References point to owner paths for deterministic contract shape.
 - Facade-backed prompt preserves result-data helper and structured-error helper
   guardrails without copying helper signatures.
