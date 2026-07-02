@@ -43,7 +43,7 @@ mode: repo-grounded
 
 **Rationale:** The system already has useful checks, but the agent still has to know which one applies. A doctor command turns scattered checks into one visible health surface with repair hints.
 
-**Downsides:** Requires a small runtime owner and probably `create-cli` involvement if exposed as a first-class CLI.
+**Downsides:** Requires a small runtime owner and probably `cli-author` involvement if exposed as a first-class CLI.
 
 **Confidence:** 91%.
 

@@ -46,7 +46,7 @@ Six methods ran against real artifacts and passed, earning their slots.
 - Fixture pair (step function). Oracle. `fixture-positive-safety` accepted 3/3; `fixture-negative-near-miss` rejected 3/3.
 - Blind-judge replication (model-judgment). Independence. 6 agents, 6/6 unanimous, 0 flips.
 - Idempotent convergence / MR-4 (stop rule). Falsifiability. Fresh blind pass on the converged self-audit reproduced zero new accepted.
-- Resume-honesty replication (state ledger). Independence + oracle. Blind agent resumed the create-cli loop file, re-derived 3 closed signatures as non-contradictions, re-opened none.
+- Resume-honesty replication (state ledger). Independence + oracle. Blind agent resumed the cli-author loop file, re-derived 3 closed signatures as non-contradictions, re-opened none.
 - Blind downstream actionability (repair handoff). Independence + oracle. Blind create-skill agent acted on RC-1, quoted both sources, proposed a valid fix, did not need the narrative.
 - Adversarial premise attack (design decision). Adversarial. 4 reviewers killed the proposed multi-skill sweep before build.
 
@@ -77,7 +77,7 @@ Kept as named slots or companions in the catalog; not run this session.
 
 ## Free findings surfaced while mining
 
-- create-cli loop file had ledger-shape drift: a stray `- None.` inside `## Finding History`. Fixed this session.
+- cli-author loop file had ledger-shape drift: a stray `- None.` inside `## Finding History`. Fixed this session.
 - The two fixtures leak their verdict in frontmatter `name`/`description`. Acceptable for labeled fixtures; weakens true blinding. Recorded as a known limitation in the catalog's blind-judge entry. Not renamed — the directory name derives the loop-file path.
 
 ## Outcome

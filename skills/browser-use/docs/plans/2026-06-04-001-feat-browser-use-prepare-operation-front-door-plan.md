@@ -48,7 +48,7 @@ The accepted operation decisions also expose a deeper abstraction leak. The skil
 
 - R13. Add a `browser-use` CLI surface separate from `browser-adapter-router`.
 - R14. Expose `browser-use targets list`, `browser-use targets select`, `browser-use targets status`, and `browser-use operate`.
-- R15. Build new and changed CLI surfaces through `@side-quest/cli-command-facade` and the repo's `create-cli` contract path.
+- R15. Build new and changed CLI surfaces through `@side-quest/cli-command-facade` and the repo's `cli-author` contract path.
 - R16. Prove command discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift.
 - R17. Cross-link `browser-adapter-router` and `browser-use` through help text and continuation action ids.
 
@@ -335,7 +335,7 @@ Operation capability mapping:
 
 ## Risks And Dependencies
 
-- `create-cli` contract path is required for new and changed CLI surfaces.
+- `cli-author` contract path is required for new and changed CLI surfaces.
 - `@side-quest/cli-command-facade` owns generic envelope mechanics; `browser-use` owns package-specific result contracts, recovery ids, and operation semantics.
 - Route success shape changes may require careful migration in existing Router tests.
 - Sharing `mcporter` command-vector handling can touch Browser Adapter Proof; parity tests are acceptable if extraction increases risk.

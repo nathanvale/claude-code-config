@@ -90,26 +90,43 @@ describe("contract acquisition (KTD6)", () => {
 		}
 	});
 
-	test("front-door-local contracts merge into one acquired command map", async () => {
+	test("front-door-local contracts keep per-front-door command surfaces", async () => {
 		const outcome = await runStaticAudit({
 			targetRoot: fixture("good-front-door-local"),
 			only: null,
 		});
 		expect(outcome.findings).toEqual([]);
 		expect(Object.keys(outcome.contracts ?? {}).sort()).toEqual(["admin", "app"]);
+		expect(outcome.commandFrontDoors).toEqual({
+			admin: "admin",
+			app: "app",
+		});
+		expect(
+			outcome.contractSurfaces?.map((surface) => ({
+				frontDoor: surface.frontDoor,
+				commands: Object.keys(surface.contracts).sort(),
+			})),
+		).toEqual([
+			{ frontDoor: "admin", commands: ["admin"] },
+			{ frontDoor: "app", commands: ["app"] },
+		]);
 	});
 
-	test("duplicate front-door-local command names fail acquisition", async () => {
+	test("same command name is allowed across separate front doors", async () => {
 		const outcome = await runStaticAudit({
 			targetRoot: fixture("bad-front-door-duplicate-command"),
 			only: null,
 		});
-		expect(outcome.findings).toHaveLength(1);
-		const summary = outcome.findings[0]?.summary ?? "";
-		expect(summary).toContain("duplicate command contract for check");
-		// The repair hint names BOTH colliding files, not just the command.
-		expect(summary).toContain("src/front-doors/admin/command-contract.ts");
-		expect(summary).toContain("src/front-doors/app/command-contract.ts");
+		expect(outcome.findings).toEqual([]);
+		expect(
+			outcome.contractSurfaces?.map((surface) => ({
+				frontDoor: surface.frontDoor,
+				commands: Object.keys(surface.contracts).sort(),
+			})),
+		).toEqual([
+			{ frontDoor: "admin", commands: ["check"] },
+			{ frontDoor: "app", commands: ["check"] },
+		]);
 	});
 
 	test("findContractByShape finds the contract export by shape, not by name", () => {
@@ -326,6 +343,15 @@ describe("surface audit — each clause fires", () => {
 		expect(outcome.findings).toEqual([]);
 	});
 
+	test("shared command names across front doors are clean under the full audit", async () => {
+		const outcome = await runFullAudit({
+			targetRoot: fixture("good-front-door-shared-command"),
+			only: null,
+		});
+		expect(outcome.laneDetected).toBe(true);
+		expect(outcome.findings).toEqual([]);
+	});
+
 	test("a facade CLI with a .sh entrypoint is exercised, not false-flagged", async () => {
 		// good-sh-entrypoint fronts its facade CLI with a shell script (like the real
 		// test-runner: "test-runner": "./src/test-runner.sh"). A .ts-only resolver
@@ -426,11 +452,12 @@ describe("surface audit — each clause fires", () => {
 			only: null,
 		});
 		expect(outcome.laneDetected).toBe(true);
-		const finding = outcome.findings.find(
-			(f) => f.clauseId === "runnable-resolves" && f.summary.includes("legacy"),
-		);
-		expect(finding).toBeDefined();
-		expect(finding?.summary).toContain("goes unaudited");
+		const findings = outcome.findings.filter((f) => f.clauseId === "runnable-resolves");
+		expect(findings.map((finding) => finding.frontDoor).sort()).toEqual([
+			"legacy",
+			"legacy/users",
+		]);
+		expect(findings.map((finding) => finding.summary).join("\n")).toContain("goes unaudited");
 	});
 
 	test("a broken --json failure envelope fires json-valid-under-failure", async () => {

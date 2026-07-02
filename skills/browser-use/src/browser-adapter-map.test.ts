@@ -35,7 +35,7 @@ function expectNoUnknownOption(result: {
 }
 
 describe("Browser Adapter Map command contract", () => {
-	test("declares create-cli facade contract for check and status", () => {
+	test("declares cli-author facade contract for check and status", () => {
 		expect(BROWSER_ADAPTER_MAP_ADAPTERS).toEqual(["chrome-devtools"]);
 		expect(browserAdapterMapContracts.check.sideEffects).toEqual(["check"]);
 		expect(browserAdapterMapContracts.status.alias).toEqual({

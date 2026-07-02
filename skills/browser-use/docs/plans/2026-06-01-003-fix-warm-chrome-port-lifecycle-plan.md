@@ -28,7 +28,7 @@ This fixes issue #149 by collapsing the defaults into resolver-owned candidates 
 
 Current branch delivered the first runtime-proof slice, not the full resolver/hint plan:
 
-- Browser Adapter Proof CLI scaffolded with create-cli contract.
+- Browser Adapter Proof CLI scaffolded with cli-author contract.
 - Warm Chrome preflight composed before adapter proof.
 - `chrome-devtools` proof implemented through `bunx mcporter`.
 - Live smoke green against fixed CDP port `9222`.

@@ -158,7 +158,7 @@ flowchart TB
 - **Dependencies:** U1, U2.
 - **Files:** `scripts/command-entrypoint.integration.test.ts`.
 - **Approach:** Use silent package-cwd mode for JSON assertions and workspace-filter mode for version probes only. Parse JSON envelopes from stdout, assert stable envelope fields, and keep assertions to command-owned behavior fields. Invalid command tests assert non-zero exits and structured error envelopes without full text snapshots.
-- **Patterns to follow:** `skills/worktree/src/worktree.ts` for `WORKTREE_CONTRACT_ID` envelope data; `runtime/agent-worktree/src/cli.ts` for `AGENT_WORKTREE_CONTRACT_ID` envelope data; `skills/create-cli/references/cli-command-facade.md` for wrapper limitations.
+- **Patterns to follow:** `skills/worktree/src/worktree.ts` for `WORKTREE_CONTRACT_ID` envelope data; `runtime/agent-worktree/src/cli.ts` for `AGENT_WORKTREE_CONTRACT_ID` envelope data; `skills/cli-author/references/cli-command-facade.md` for wrapper limitations.
 - **Test scenarios:**
   - `worktree --version`, `agent-worktree --version`, and `agent-worktree --version` work through package scripts.
   - Workspace-filter version probes for `worktree`, `agent-worktree`, and `agent-worktree` exit `0` and contain the expected version substring in combined output.

@@ -15,7 +15,7 @@ repair candidate, and withholds convergence.
 
 ## Owner Paths
 
-- Repair owner: `skills/create-skill/SKILL.md`.
+- Repair owner: `skills/skill-author/SKILL.md`.
 
 ## Workflow
 

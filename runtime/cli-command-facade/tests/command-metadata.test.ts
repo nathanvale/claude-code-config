@@ -12,7 +12,7 @@ type TestCommand = "inspect" | "inspect:json" | "verify:check";
 
 // Legacy-shaped compatibility fixtures (BA-style / Memory OS-style). These keep
 // the older command shapes honest through migration; the greenfield
-// `createCliContracts` fixture below is the first-class create-cli evidence path
+// `createCliContracts` fixture below is the first-class cli-author evidence path
 // (KTD2, R3). Both fixtures now satisfy Baseline Exit Semantics (0/1/2) and
 // Write Preview Capability so they survive the runtime-backed slice.
 const contracts: Record<TestCommand, CommandFacadeContract<TestCommand>> = {
@@ -79,7 +79,7 @@ const contracts: Record<TestCommand, CommandFacadeContract<TestCommand>> = {
 	},
 };
 
-// Greenfield create-cli-style command set: a read command, a write command with
+// Greenfield cli-author-style command set: a read command, a write command with
 // a `dry_run` preview path, and a diagnostic-capability command whose route name
 // is NOT `doctor` (proving Diagnostic Capability is a role, not a route spelling,
 // per KTD5). This is the first-class evidence path for the runtime-backed
@@ -155,16 +155,16 @@ describe("command metadata", () => {
 
 	// Secondary compatibility scan: the legacy-shaped fixtures stay drift-free so
 	// migrating consumers keep a known-good shape, but they are no longer the
-	// baseline evidence — the greenfield create-cli fixture below is (KTD2, R3).
+	// baseline evidence — the greenfield cli-author fixture below is (KTD2, R3).
 	test("keeps legacy-shaped command contracts drift-free for compatibility", () => {
 		expect(findCommandFacadeMetadataDrift(contracts)).toEqual([]);
 	});
 
-	// First-class evidence: a greenfield create-cli-style command set (read,
+	// First-class evidence: a greenfield cli-author-style command set (read,
 	// write-with-dry_run, diagnostic readiness) is the primary proof for the
 	// runtime-backed candidates. It must pass with no metadata drift, including
 	// when write-implying mutations are declared (Write Preview Capability).
-	test("treats the greenfield create-cli contract as first-class drift-free evidence", () => {
+	test("treats the greenfield cli-author contract as first-class drift-free evidence", () => {
 		expect(
 			findCommandFacadeMetadataDrift(createCliContracts, {
 				writeImplyingMutations: createCliWriteImplyingMutations,
@@ -1432,7 +1432,7 @@ describe("command metadata", () => {
 		expect(unsafe[0]?.action).toContain("command-example");
 	});
 
-	// U7: Source candidate traceability (R4, R10, R11). The create-cli brainstorm,
+	// U7: Source candidate traceability (R4, R10, R11). The cli-author brainstorm,
 	// emission plan, and design layer fixed the candidate set; this slice does NOT
 	// re-open it. This ledger records each source candidate's disposition for THIS
 	// slice. The runtime-backed rows name a live owner symbol, so removing or

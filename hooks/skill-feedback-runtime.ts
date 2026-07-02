@@ -1,5 +1,12 @@
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import {
+	createDefaultSkillFeedbackRuntime,
+	finalizeSkillFeedbackCorrelationWitness,
+	recordSkillFeedbackReceipt,
+	type CorrelationCloseoutCandidate,
+	type FinalizeCorrelationWitnessResult,
+} from '../skills/skill-feedback/src/skill-feedback-runner'
+
+export type { CorrelationCloseoutCandidate }
 
 export type SkillFeedbackOutcome = 'confirmed' | 'failed' | 'ambiguous'
 export type SkillFeedbackSource = 'claude-stop' | 'codex-stop' | 'codex-notify'
@@ -24,18 +31,14 @@ export type SkillIdentityProvenance = {
 }
 
 /**
- * Engine-read telemetry lifted from the transcript alongside the skill
- * detection. v0 carries only `model` (the id from the skill-launch entry).
- * `usage` is intentionally absent: the Stop hook fires after the skill runs
- * inline, so the transcript holds no skill-scoped token total — only
- * whole-session counts. v0 leaves usage an explicit record gap; v1 sources a
- * real per-skill cost from OTel counters, not transcript summing.
- *
- * `model` is engine-read (KTD2a) — passed to the runner over stdin, never a CLI
- * flag, so an agent cannot author it.
+ * Hook-owned telemetry lifted alongside skill detection. `model` is
+ * engine-read; trust-bearing capture fields are passed through the direct
+ * runner seam, not public `record` stdin. `usage` is intentionally absent:
+ * the Stop hook sees whole-session counts, not skill-scoped token totals.
  */
 export interface DetectionTelemetry {
 	model?: string
+	detection_id?: string
 	capture_runtime?: CaptureRuntime
 	skill_identity_provenance?: SkillIdentityProvenance
 }
@@ -62,19 +65,21 @@ export interface HookRunResult {
 	exitCode: number
 	stdout: string
 	stderr: string
+	reportPath?: string
+}
+
+export interface CorrelationWitnessRequest {
+	cwd: string
+	skill: string
+	hookReportId: string
+	hookWrittenPath?: string
+	skillRunId: string
+	generatedTs: string
+	candidates: readonly CorrelationCloseoutCandidate[]
+	closeoutDiagnostics?: readonly string[]
 }
 
 const DEFAULT_HOOK_PROCESS_TIMEOUT_MS = 6_000
-
-const HOOK_DIR = dirname(fileURLToPath(import.meta.url))
-const CONFIG_ROOT = dirname(HOOK_DIR)
-const SKILL_FEEDBACK_RUNNER = join(
-	CONFIG_ROOT,
-	'skills',
-	'skill-feedback',
-	'src',
-	'skill-feedback-runner.ts',
-)
 
 export function buildRecordRequest(
 	cwd: string,
@@ -150,33 +155,69 @@ export async function resolveGitRoot(cwd: string): Promise<string> {
 export async function runSkillFeedbackRecord(
 	request: RecordRequest,
 ): Promise<HookRunResult> {
-	const args = [
-		'bun',
-		'run',
-		SKILL_FEEDBACK_RUNNER,
-		'record',
-		'--skill',
-		request.skill,
-		'--goal',
-		request.goal,
-		'--outcome',
-		request.outcome,
-		'--friction',
-		request.friction,
-		'--generated-ts',
-		request.generatedTs,
-	]
-	if (request.explanation) {
-		args.push('--explanation', request.explanation)
+	const telemetry = request.telemetry ?? {}
+	const result = await recordSkillFeedbackReceipt(
+		{
+			skill: request.skill,
+			outcome: request.outcome,
+			goal: request.goal,
+			friction: request.friction,
+			generated_ts: request.generatedTs,
+			...(request.explanation ? { explanation: request.explanation } : {}),
+		},
+		{
+			runtime: createDefaultSkillFeedbackRuntime({
+				repoRoot: () => request.cwd,
+				readStdinTelemetry: async () => ({}),
+			}),
+			internalTelemetry: {
+				...(telemetry.model ? { model: telemetry.model } : {}),
+				captureMetadata: {
+					...(telemetry.capture_runtime
+						? { capture_runtime: telemetry.capture_runtime }
+						: {}),
+					...(telemetry.skill_identity_provenance
+						? { skill_identity_provenance: telemetry.skill_identity_provenance }
+						: {}),
+				},
+				...(telemetry.detection_id
+					? { detectionId: telemetry.detection_id }
+					: {}),
+			},
+		},
+	)
+	return {
+		exitCode: result.exitCode,
+		stdout: result.stdout,
+		stderr: result.stderr,
+		...(result.reportPath ? { reportPath: result.reportPath } : {}),
 	}
-	// Engine-read telemetry (model/usage) flows over stdin, never as a flag
-	// (KTD2a): there is deliberately no --model/--usage flag for an agent to
-	// smuggle a secret through the redactor's trusted side. An empty stdin is a
-	// valid "no telemetry" signal that degrades the record rather than blocking.
-	const stdin = request.telemetry
-		? JSON.stringify(request.telemetry)
-		: ''
-	return runBufferedProcess(args, { cwd: request.cwd, stdin })
+}
+
+export async function runSkillFeedbackCorrelationWitness(
+	request: CorrelationWitnessRequest,
+): Promise<FinalizeCorrelationWitnessResult> {
+	return finalizeSkillFeedbackCorrelationWitness(
+		{
+			skill: request.skill,
+			hookReportId: request.hookReportId,
+			...(request.hookWrittenPath
+				? { hookWrittenPath: request.hookWrittenPath }
+				: {}),
+			skillRunId: request.skillRunId,
+			createdTs: request.generatedTs,
+			candidates: request.candidates,
+			...(request.closeoutDiagnostics
+				? { closeoutDiagnostics: request.closeoutDiagnostics }
+				: {}),
+		},
+		{
+			runtime: createDefaultSkillFeedbackRuntime({
+				repoRoot: () => request.cwd,
+				readStdinTelemetry: async () => ({}),
+			}),
+		},
+	)
 }
 
 export async function runBufferedProcess(

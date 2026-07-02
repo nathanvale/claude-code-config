@@ -30,19 +30,19 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 - `skill`: skill id.
 - `outcome`: `confirmed`, `failed`, or `ambiguous`.
 - `goal`: what the skill run tried to accomplish.
-- `friction.category`: one seeded friction category.
+- `friction.category`: `none`, `missing_context`, `unclear_ownership`, `tool_failure`, `verification_tax`, `bad_guidance`, `scope_mismatch`, or `other`.
 - `friction.note`: short evidence note.
 - `verification_burden.level`: `none`, `light`, `moderate`, or `heavy`.
 - `verification_burden.note`: short evidence note.
 
 ## Optional Lanes
 
-- `skill_run_id`: explicit trusted run id when available.
 - `touched_surfaces`: owner paths or labels; max 5.
 - `observations`: evidence-only notes; max 3.
+- `observations[].kind`: `friction`, `verification_gap`, `missing_context`, `ownership_gap`, `tool_failure`, `bad_guidance`, `scope_mismatch`, `runtime_signal`, `product_signal`, or `other`.
 - `observations[].target`: owner path or label.
 - `observations[].summary`: short evidence summary.
-- `observations[].evidence_basis`: structured basis.
+- `observations[].evidence_basis`: `driver_observed`, `verification_step`, `tool_result`, `missing_source`, or `other`.
 
 ## Forbidden Content
 
@@ -56,12 +56,27 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 - Put no severity on observations.
 - Put no next action on observations.
 - Put no repair instruction on observations.
+- Put no `skill_run_id` in the receipt.
+- Put no `skill_run_id_provenance` in the receipt.
+- Put no `witness_id` in the receipt.
+- Put no trust, proof, or correlation fields in the receipt.
+
+## Trust Boundary
+
+- The writer may attach `writer_proof` after validation.
+- The receipt cannot self-assert proof, run identity, or correlation.
+- Driver closeout remains evidence.
+- A separate signed witness may link closeout to a runtime-owned Claude Stop hook report.
+- Review creates `correlation_owned` only after witness verification succeeds.
+- Review checks the witness, linked report proofs, skill match, writer key, and hook runtime run id.
+- Correlate repair may write a missing private witness after preview and current-evidence validation.
+- Receipt evidence alone does not create `corroborated`.
 
 ## Example
 
 ```json
 {
-	"skill": "create-skill",
+	"skill": "skill-author",
 	"outcome": "confirmed",
 	"goal": "Repair the skill authoring route.",
 	"friction": {
@@ -73,14 +88,14 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < receipt.js
 		"note": "YAML parse and owner-path checks were enough."
 	},
 	"touched_surfaces": [
-		{ "type": "path", "value": "skills/create-skill/SKILL.md" }
+		{ "type": "path", "value": "skills/skill-author/SKILL.md" }
 	],
 	"observations": [
 		{
 			"kind": "missing_context",
 			"target": {
 				"type": "path",
-				"value": "skills/create-skill/references/skill-design-decision-runbook.md"
+				"value": "skills/skill-author/references/skill-design-decision-runbook.md"
 			},
 			"summary": "The route was ambiguous without the owner runbook.",
 			"evidence_basis": "driver_observed"

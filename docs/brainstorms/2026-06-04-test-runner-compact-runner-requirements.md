@@ -37,7 +37,7 @@ The product question is whether a local skill-owned script can keep the useful c
 - **Local proof before distribution:** Build this as a local skill-owned workflow first. Defer package publication and MCP server work.
 - **Plain-first, JSON-backed output:** Agents consume compact plain text by default. JSON backs tests, benchmark checks, and future automation.
 - **Durable Runner Benchmark Harness before MCP deprecation:** Do not replace `context/bun-runner.md` or `rules/code-quality.md` until token, runtime, exit-code, and failure-fidelity gates justify it. Score token reduction and repair fidelity together so a tiny but useless red-run envelope cannot win. Keep the harness reusable for later token-optimization A/B tests.
-- **Facade-backed agent-native CLI:** Treat the runner as an agent-native CLI surface because agents are primary users and output can become token-heavy. Apply `create-cli` agent-native guidance, then use facade-backed support for structured recovery diagnostics.
+- **Facade-backed agent-native CLI:** Treat the runner as an agent-native CLI surface because agents are primary users and output can become token-heavy. Apply `cli-author` agent-native guidance, then use facade-backed support for structured recovery diagnostics.
 - **Facade dependency preflight:** Resolve the facade runtime from the skill script package before implementation; ask before adding a dependency if it is missing.
 - **One result model, two renderers:** Build one script-owned result model, then render compact plain output and JSON from that model so agent-facing and machine-facing paths do not drift.
 - **Dedicated command contract owner:** Use `scripts/command-contract.ts` as the local source for facade-backed command metadata, discovery, and result vocabulary.
@@ -141,7 +141,7 @@ flowchart TB
 - R26. The implementation names owners for skill prose, script contract, help, parser, runtime behavior, tests, and Runner Benchmark Harness.
 - R26a. Facade-backed implementation names contract, result model, parser or engine, help or discovery, CLI, tests, and benchmark owners.
 - R26b. `skills/test-runner/scripts/command-contract.ts` owns command contract and discovery metadata.
-- R27. New or changed CLI/runtime surfaces follow `create-cli` agent-native and facade-backed guidance before implementation.
+- R27. New or changed CLI/runtime surfaces follow `cli-author` agent-native and facade-backed guidance before implementation.
 - R28. V1 uses facade-backed support for structured recovery diagnostics.
 - R29. If facade-backed implementation needs a new dependency, ask before adding it.
 - R29a. U2 preflights `@side-quest/cli-command-facade` availability before implementing the facade-backed contract.
@@ -209,7 +209,7 @@ flowchart TB
 - Do not replace `context/bun-runner.md` or `rules/code-quality.md` until benchmark gates justify a preference change.
 - Do not copy script-owned flags, schemas, parser rules, state machines, or output contracts into `SKILL.md`.
 - Do not add a facade runtime dependency without maintainer confirmation during implementation.
-- Do not change unrelated browser-use, create-cli, or runner surfaces.
+- Do not change unrelated browser-use, cli-author, or runner surfaces.
 - Do not implement until explicitly asked.
 
 ---
@@ -222,7 +222,7 @@ flowchart TB
 - Lint and typecheck MCP guidance remain current only until their own local replacement proofs exist.
 - Test fixtures can simulate representative pass, assertion failure, multi-failure, invalid cwd, pass-through arg, and timeout cases locally.
 - The local script can call Bun directly as an implementation detail even while repo instructions continue to steer agents away from raw shell Bun usage.
-- `create-cli` remains the owner for new or changed CLI/runtime-surface design.
+- `cli-author` remains the owner for new or changed CLI/runtime-surface design.
 
 ---
 
@@ -250,10 +250,10 @@ flowchart TB
 - Skill philosophy: `context/skill-design-philosophy.md`
 - Current runner guidance: `context/bun-runner.md`
 - Claude enforcement rule: `rules/code-quality.md`
-- Create CLI skill: `skills/create-cli/SKILL.md`
-- Agent-native CLI reference: `skills/create-cli/references/agent-native-cli-design.md`
-- Facade-backed CLI reference: `skills/create-cli/references/cli-command-facade.md`
-- CLI guidelines reference: `skills/create-cli/references/cli-guidelines.md`
-- Prior product-shape brainstorm: `docs/brainstorms/2026-06-04-create-cli-product-shape-requirements.md`
+- CLI Author skill: `skills/cli-author/SKILL.md`
+- Agent-native CLI reference: `skills/cli-author/references/agent-native-cli-design.md`
+- Facade-backed CLI reference: `skills/cli-author/references/cli-command-facade.md`
+- CLI guidelines reference: `skills/cli-author/references/cli-guidelines.md`
+- Prior product-shape brainstorm: `docs/brainstorms/2026-06-04-cli-author-product-shape-requirements.md`
 - Ideation artifact: `docs/ideation/2026-06-04-test-runner-compact-runner-ideation.md`
 - Bun docs: `/oven-sh/bun` via Context7

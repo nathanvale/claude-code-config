@@ -1,7 +1,7 @@
 # `worktree` — Agent-Native Worktree Workspace Renderer
 
 **Date:** 2026-06-14
-**Status:** Requirements (ready for `create-cli` → `ce-plan`)
+**Status:** Requirements (ready for `cli-author` → `ce-plan`)
 **Owner repo:** `claude-code-config` (lives under `skills/`)
 
 ---
@@ -44,7 +44,7 @@ Nathan: ADHD, visual learner, works across many repos under `~/code`, each with 
 | Rendered artifact | `<repo>.code-workspace`, generated, header-stamped | "Generated output names its source; edit source not output" |
 | Multi-repo | One workspace per repo; registry repo-keyed | Matches how VS Code workspaces actually work (per-project); keeps each focused |
 | Drift policy | Header banner + overwrite, **warn + diff** when manual edits detected | Honest about the one place the generated-file model meets VS Code writing to the file itself |
-| Contract ownership | `create-cli` owns the CLI contract path | Discovery metadata, rendered help, parser acceptance, runtime semantics must not drift |
+| Contract ownership | `cli-author` owns the CLI contract path | Discovery metadata, rendered help, parser acceptance, runtime semantics must not drift |
 
 ---
 
@@ -93,7 +93,7 @@ Each is emitted into the `.code-workspace` JSON by `worktree sync`:
 }
 ```
 
-Branch-keyed so prefs are tied to **intent**, not the disposable worktree path. Exact format (JSON vs YAML), field names, and color palette are `create-cli` / `ce-plan` decisions.
+Branch-keyed so prefs are tied to **intent**, not the disposable worktree path. Exact format (JSON vs YAML), field names, and color palette are `cli-author` / `ce-plan` decisions.
 
 ### Drift safety
 
@@ -131,11 +131,11 @@ Branch-keyed so prefs are tied to **intent**, not the disposable worktree path. 
 
 ## Build sequence
 
-1. **`create-cli`** — design the `worktree` command contract (discovery metadata, rendered help, parser acceptance, runtime semantics; prove they cannot drift). The front-door + delegation split is the contract's spine.
+1. **`cli-author`** — design the `worktree` command contract (discovery metadata, rendered help, parser acceptance, runtime semantics; prove they cannot drift). The front-door + delegation split is the contract's spine.
 2. **`ce-plan`** — implementation plan: registry format, renderer, delegation shims, drift-hash, launcher.
 3. **Build** — CLI under `skills/worktree/src/` + thin `SKILL.md`; `.code-workspace` becomes generated output.
 
-## CLI contract (locked via `create-cli`, 2026-06-14)
+## CLI contract (locked via `cli-author`, 2026-06-14)
 
 **Lane:** Facade-backed (`@side-quest/cli-command-facade`) — forced by three signals: it delegates to another CLI (`@side-quest/git worktree`) whose contract coupling needs drift-checking; the repo already runs this lane (`test-runner`, `browser-use`, `record-decision` carry `command-contract.ts`); it's a mixed human+agent write surface needing previewable writes + structured failures.
 

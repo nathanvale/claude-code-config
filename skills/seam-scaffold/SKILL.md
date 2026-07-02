@@ -65,4 +65,4 @@ Return:
 ## Verification
 
 - YAML-parse this frontmatter after edits.
-- Run `bun run skills/create-skill/scripts/check-owner-paths.ts --json` after owner-path edits.
+- Run `bun run skills/skill-author/scripts/check-owner-paths.ts --json` after owner-path edits.

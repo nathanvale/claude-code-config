@@ -147,7 +147,7 @@ flowchart TB
 
 - AE1. **Safe add across MVP targets**
   - **Covers R5, R8, R9, R14.**
-  - **Given:** `create-cli` exists in the selected source and is absent from `codex` and `claude-code`.
+  - **Given:** `cli-author` exists in the selected source and is absent from `codex` and `claude-code`.
   - **When:** A caller plans and then executes an add for both targets.
   - **Then:** Skillport adds the skill through the provider and records Skillport ownership for both target installs.
 
@@ -211,8 +211,8 @@ flowchart TB
 - The `skills` package remains the first provider and supports source listing, add, remove, list, lock behavior, and agent target selection.
 - Provider-supported agent ids include `codex`, `claude-code`, and a broad set of other harness ids.
 - `@side-quest/cli-command-facade` is available for the CLI front door or can be published/consumed by Skillport.
-- The published placeholder package is `@side-quest/skill-port`.
-- The CLI binary may expose both `skillport` and `skill-port` aliases.
+- The published package is `@side-quest/skill-porter` (placeholder `0.0.0`). The prior `@side-quest/skill-port@0.0.0` is retired.
+- The CLI binary is `skillporter` (single name, no alias).
 
 ---
 
@@ -221,4 +221,4 @@ flowchart TB
 - Context7 documentation for `vercel-labs/skills`, including supported agent ids and `--agent` behavior.
 - Context7 documentation for `vercel-labs/skills` add/remove/list command flows and non-interactive flags.
 - Temporary Skillport seam report and logic prototype verdict.
-- Create CLI references: `skills/create-cli/references/agent-native-cli-design.md` and `skills/create-cli/references/cli-command-facade.md`.
+- CLI Author references: `skills/cli-author/references/agent-native-cli-design.md` and `skills/cli-author/references/cli-command-facade.md`.

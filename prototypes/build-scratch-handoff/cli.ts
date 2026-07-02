@@ -4,7 +4,7 @@
 //   bun prototypes/build-scratch-handoff/cli.ts clean-login --dry-run
 //   bun prototypes/build-scratch-handoff/cli.ts leaky-login    # exits 2, names entry
 //
-// This sketches the arg/flag/help/output/error/dry-run surface (create-cli
+// This sketches the arg/flag/help/output/error/dry-run surface (cli-author
 // conventions). In real life the positional is a path to a handoff JSON file;
 // here it's a fixture key so the prototype is self-contained.
 

@@ -8,7 +8,7 @@ timezone: Australia/Melbourne
 owner: skills/gof-pressure-lens
 source:
   - docs/ideation/2026-06-13-gof-pressure-lens-skill-ideation.html
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/skill-feedback/CONTEXT.md
   - "2026-06-13 Codex session: GoF pressure lens v1"
 decision_metadata_format: fenced-yaml-per-decision
@@ -44,7 +44,7 @@ decision: "Create v1 gof-pressure-lens as a pattern-referee skill with a pressur
 owner: skills/gof-pressure-lens
 source:
   - docs/ideation/2026-06-13-gof-pressure-lens-skill-ideation.html
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/skill-feedback/CONTEXT.md
   - "2026-06-13 Codex session: GoF pressure lens v1"
 ```
@@ -95,7 +95,7 @@ owner: skills/gof-pressure-lens
 decision_mode: standard
 source:
   - docs/ideation/2026-06-13-gof-pressure-lens-skill-ideation.html
-  - docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
+  - skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md
   - skills/improve-codebase-architecture/LANGUAGE.md
   - skills/create-skill/references/skill-design-decision-runbook.md
   - "2026-06-13 Codex session: GoF pressure lens v1 grill"
@@ -120,7 +120,7 @@ Rationale:
 - Four routing labels cover accepted use cases without creating four workflows.
 - The six-field pressure gate makes `No pressure -> no pattern` executable in prose.
 - The output shape forces agents to show why each pattern name survived.
-- An ICA envelope is useful, but it changes CLI/runtime ownership and needs `create-cli` facade-backed proof.
+- An ICA envelope is useful, but it changes CLI/runtime ownership and needs `cli-author` facade-backed proof.
 
 Consequences:
 
@@ -138,6 +138,6 @@ Next:
 
 V2 Ideas:
 
-- Add an ICA-owned `ArchitecturePressureResult`-style envelope through `create-cli`.
+- Add an ICA-owned `ArchitecturePressureResult`-style envelope through `cli-author`.
 - Add a runtime validator for the pressure gate if prose output drifts.
 - Add an ICA reference overlay if standalone invocation causes duplicate-review behavior.

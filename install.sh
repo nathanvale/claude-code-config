@@ -55,6 +55,7 @@ prune_stale_codex_skill_links() {
 # This loop means new skills are picked up automatically: no per-skill edits.
 for skill_dir in "${SCRIPT_DIR}"/skills/*/; do
 	skill_name="$(basename "$skill_dir")"
+	[[ "$skill_name" == "archive" ]] && continue
 	codex_link="${CODEX_HOME}/skills/${skill_name}"
 	# Adopt the name only if it is absent, or already a symlink INTO this repo
 	# (a managed link we may be refreshing). Skip real dirs and foreign links.

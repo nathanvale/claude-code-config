@@ -1,0 +1,14 @@
+{
+	"name": "fixture-good-front-door-shared-command",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-good facade CLI fixture with the same command name under two front doors.",
+	"scripts": {
+		"admin": "bun run src/front-doors/admin/cli.ts",
+		"app": "bun run src/front-doors/app/cli.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

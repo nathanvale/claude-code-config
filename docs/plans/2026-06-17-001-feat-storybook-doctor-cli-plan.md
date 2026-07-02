@@ -216,7 +216,7 @@ The implementation translates this seed set into `skills/storybook/src/branch-st
 
 **Execution note:** Start with contract validation and discovery tests before implementing runtime probes.
 
-**Patterns to follow:** `skills/record-decision/src/command-contract.ts`, `skills/browser-use/src/command-contract.ts`, `skills/create-cli/references/cli-command-facade.md`.
+**Patterns to follow:** `skills/record-decision/src/command-contract.ts`, `skills/browser-use/src/command-contract.ts`, `skills/cli-author/references/cli-command-facade.md`.
 
 **Test scenarios:**
 - Contract validation accepts all Storybook command contracts.
@@ -405,7 +405,7 @@ The implementation translates this seed set into `skills/storybook/src/branch-st
 
 - `skills/storybook/CONTEXT.md` defines Storybook Doctor, Storybook readiness proof, process owner, and MCP endpoint vocabulary.
 - `skills/storybook/SKILL.md` and `skills/storybook/references/tips-and-tricks.md` define current Storybook MCP and hanging-process troubleshooting behavior.
-- `skills/create-cli/references/agent-native-cli-design.md` and `skills/create-cli/references/cli-command-facade.md` define agent-native and facade-backed CLI expectations.
+- `skills/cli-author/references/agent-native-cli-design.md` and `skills/cli-author/references/cli-command-facade.md` define agent-native and facade-backed CLI expectations.
 - `runtime/cli-command-facade/src/index.ts` and `runtime/cli-command-facade/src/station-map.ts` export command facade and Station Map helpers.
 - `skills/record-decision/src/record-decision.ts` and `skills/record-decision/src/record-decision.test.ts` show a compact facade-backed CLI and discovery proof.
 - `skills/browser-use/src/preflight-warm-chrome.ts` and `skills/browser-use/src/preflight-warm-chrome.test.ts` show readiness proof and command-surface alignment patterns.

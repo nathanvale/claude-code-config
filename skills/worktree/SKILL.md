@@ -30,7 +30,7 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 - `runtime/agent-worktree`: hard dependency for live worktree discovery, main-owner resolution, lifecycle verbs, cleanup preview, and recovery vocabulary.
 - `code` on PATH (or `defaults.codeBin`): needed only by `worktree open <name>`. Other verbs do not launch VS Code.
 - `codex` on PATH: needed by `worktree app <branch>` and best-effort thread archival during `worktree rm`. App launch absence → `codex_app_not_found`; removal still completes with partial cleanup metadata.
-- `create-cli`: hard dependency before changing the CLI contract surface.
+- `cli-author`: hard dependency before changing the CLI contract surface.
 
 ## Safety
 
@@ -52,7 +52,7 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `runtime/
 3. Treat the front door as two jobs: VS Code sync (`status`/`sync`/`open`) and worktree CRUD (`new`/`status`/`sync`/`rm`).
 4. Choose the verb: create (`new`), read (`status`), update (`sync`/`focus`/`color`), delete (`rm`), launch (`open`/`app`), or preview cleanup (`clean`).
 5. For owned render verbs, let the engine read worktree state, use the main worktree as the durable owner, and guard manual edits through the drift gate.
-6. For lifecycle verbs, let `worktree` call `runtime/agent-worktree`, clean Codex app project state after `rm`, then re-render when state changes.
+6. For lifecycle verbs, let `worktree` call `runtime/agent-worktree`, register/deregister Codex app sidebar on `create`/`rm`/`sync`, then re-render when state changes.
 7. On `drift_blocked`, review the diff; port real changes into `worktree.config.json`, then rerun with `--force`.
 8. On `clean` with dirty worktrees, follow the Safety rules above — preserve
    uncommitted work before removal.

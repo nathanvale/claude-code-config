@@ -3,13 +3,17 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import {
 	type HookRunResult,
+	type CorrelationCloseoutCandidate,
+	type CorrelationWitnessRequest,
+	type FinalizeCorrelationWitnessResult,
 	type RecordRequest,
 	type SkillDetection,
 	buildRecordRequest,
 	resolveGitRoot,
+	runSkillFeedbackCorrelationWitness,
 	runSkillFeedbackRecord,
 } from './skill-feedback-runtime'
 
@@ -29,10 +33,19 @@ export interface SkillFeedbackStopRuntime {
 	resolveGitRoot: (cwd: string) => Promise<string>
 	nowIso: () => string
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
+	finalizeCorrelationWitness?: (
+		request: CorrelationWitnessRequest,
+	) => Promise<FinalizeCorrelationWitnessResult>
 }
 
 export interface ClaudeSkillDetection extends SkillDetection {
 	detectionId: string
+}
+
+export interface ClaudeTranscriptSkillFeedbackAnalysis {
+	detection: ClaudeSkillDetection | null
+	closeoutCandidates: readonly CorrelationCloseoutCandidate[]
+	diagnostics: readonly string[]
 }
 
 function isStopHookInput(value: unknown): value is StopHookInput {
@@ -53,8 +66,17 @@ function isStopHookInput(value: unknown): value is StopHookInput {
 export function detectSkillFromClaudeTranscriptText(
 	text: string,
 ): ClaudeSkillDetection | null {
+	return analyzeSkillFeedbackClaudeTranscriptText(text).detection
+}
+
+export function analyzeSkillFeedbackClaudeTranscriptText(
+	text: string,
+): ClaudeTranscriptSkillFeedbackAnalysis {
 	let latest: ClaudeSkillDetection | null = null
+	let closeoutCandidates: CorrelationCloseoutCandidate[] = []
+	let diagnostics: string[] = []
 	const modelByToolUseId = new Map<string, string>()
+	let closeoutCommandToolUseIds = new Set<string>()
 	for (const line of text.split('\n')) {
 		const trimmed = line.trim()
 		if (!trimmed) continue
@@ -83,9 +105,24 @@ export function detectSkillFromClaudeTranscriptText(
 			latest = model
 				? { ...detection, telemetry: { ...detection.telemetry, model } }
 				: detection
+			closeoutCandidates = []
+			diagnostics = []
+			closeoutCommandToolUseIds = new Set<string>()
+		}
+		if (latest) {
+			for (const toolUseId of readCloseoutCommandToolUseIds(parsed)) {
+				closeoutCommandToolUseIds.add(toolUseId)
+			}
+			for (const result of readCloseoutCandidates(
+				parsed,
+				closeoutCommandToolUseIds,
+			)) {
+				if (result.kind === 'candidate') closeoutCandidates.push(result.candidate)
+				else diagnostics.push(result.diagnostic)
+			}
 		}
 	}
-	return latest
+	return { detection: latest, closeoutCandidates, diagnostics }
 }
 
 function detectSkillFromClaudeTranscriptEntry(
@@ -121,7 +158,7 @@ function readMatchedSkillToolResultId(
 	for (const item of content) {
 		const object = objectFrom(item)
 		if (!object || object.type !== 'tool_result') continue
-		const text = stringFrom(object.content)
+		const text = textFromToolResultContent(object.content)
 		const expected = `Launching skill: ${commandName}`
 		const matches =
 			text === expected || (text?.startsWith(`${expected}\n`) ?? false)
@@ -158,10 +195,108 @@ function readSkillLaunchModels(
 	return launches
 }
 
+type CloseoutParseResult =
+	| { kind: 'candidate'; candidate: CorrelationCloseoutCandidate }
+	| { kind: 'diagnostic'; diagnostic: string }
+
+function readCloseoutCommandToolUseIds(entry: unknown): string[] {
+	const message = objectFrom(objectFrom(entry)?.message)
+	if (!message || message.role !== 'assistant') return []
+	const content = Array.isArray(message.content) ? message.content : []
+	const ids: string[] = []
+	for (const item of content) {
+		const object = objectFrom(item)
+		if (object?.type !== 'tool_use') continue
+		const id = stringFrom(object.id)
+		if (id && isSkillFeedbackCloseoutCommand(object)) ids.push(id)
+	}
+	return ids
+}
+
+function isSkillFeedbackCloseoutCommand(
+	toolUse: Record<string, unknown>,
+): boolean {
+	const input = objectFrom(toolUse.input)
+	const command = stringFrom(input?.command)?.trim()
+	if (!command) return false
+	if (/[;\n\r`]|&&|\|\||\||\$\(/.test(command)) return false
+	const tokens = command.split(/\s+/)
+	const [runtime, run, script, subcommand, ...rest] = tokens
+	const runnerPaths = new Set([
+		'skills/skill-feedback/src/skill-feedback-runner.ts',
+		'./skills/skill-feedback/src/skill-feedback-runner.ts',
+	])
+	if (runtime !== 'bun' || run !== 'run' || !script || !runnerPaths.has(script)) {
+		return false
+	}
+	if (subcommand !== 'closeout') return false
+	if (rest.length === 0) return true
+	if (rest.length === 2 && rest[0] === '<') return rest[1].trim() !== ''
+	return false
+}
+
+function readCloseoutCandidates(
+	entry: unknown,
+	closeoutCommandToolUseIds: ReadonlySet<string>,
+): CloseoutParseResult[] {
+	const message = objectFrom(objectFrom(entry)?.message)
+	if (!message) return []
+	const content = Array.isArray(message.content) ? message.content : []
+	const results: CloseoutParseResult[] = []
+	for (const item of content) {
+		const object = objectFrom(item)
+		if (object?.type !== 'tool_result') continue
+		const toolUseId = stringFrom(object.tool_use_id)
+		if (!toolUseId || !closeoutCommandToolUseIds.has(toolUseId)) continue
+		const text = textFromToolResultContent(object.content)
+		if (!text) continue
+		for (const payload of jsonObjectsFromToolResultText(text)) {
+			const candidate = closeoutCandidateFromEnvelope(payload)
+			if (candidate) results.push(candidate)
+		}
+	}
+	return results
+}
+
+function jsonObjectsFromToolResultText(text: string): unknown[] {
+	const trimmed = text.trim()
+	if (!trimmed.startsWith('{')) return []
+	try {
+		return [JSON.parse(trimmed)]
+	} catch {
+		return trimmed.includes('skill-feedback.closeout')
+			? [{ malformedCloseoutEnvelope: true }]
+			: []
+	}
+}
+
+function closeoutCandidateFromEnvelope(payload: unknown): CloseoutParseResult | null {
+	const envelope = objectFrom(payload)
+	if (!envelope) return null
+	if (envelope.malformedCloseoutEnvelope === true) {
+		return { kind: 'diagnostic', diagnostic: 'closeout_envelope_malformed_json' }
+	}
+	if (envelope.status !== 'ok') return null
+	const data = objectFrom(envelope.data)
+	if (!data || data.contract !== 'skill-feedback.closeout') return null
+	const reportId = stringFrom(data.report_id)
+	const writtenPath = stringFrom(data.written_path)
+	const proofStatus = stringFrom(data.proof_status)
+	if (!reportId || !writtenPath || !proofStatus) return null
+	return {
+		kind: 'candidate',
+		candidate: { reportId, writtenPath, proofStatus },
+	}
+}
+
 export async function handleSkillFeedbackStop(
 	input: StopHookInput,
 	runtime: SkillFeedbackStopRuntime = createDefaultStopRuntime(),
-): Promise<{ captured: boolean; detection?: SkillDetection }> {
+): Promise<{
+	captured: boolean
+	detection?: SkillDetection
+	correlation?: FinalizeCorrelationWitnessResult
+}> {
 	if (input.stop_hook_active) return { captured: false }
 	let transcript = ''
 	try {
@@ -169,7 +304,8 @@ export async function handleSkillFeedbackStop(
 	} catch {
 		return { captured: false }
 	}
-	const detection = detectSkillFromClaudeTranscriptText(transcript)
+	const analysis = analyzeSkillFeedbackClaudeTranscriptText(transcript)
+	const detection = analysis.detection
 	if (!detection) return { captured: false }
 	if (
 		(await runtime.readLastDetectionId(input.transcript_path)) ===
@@ -178,17 +314,51 @@ export async function handleSkillFeedbackStop(
 		return { captured: false, detection }
 	}
 	const cwd = await runtime.resolveGitRoot(input.cwd)
+	const generatedTs = runtime.nowIso()
 	const result = await runtime.runRecord(
-		buildRecordRequest(cwd, detection, runtime.nowIso()),
+		buildRecordRequest(
+			cwd,
+			{
+				...detection,
+				telemetry: {
+					...detection.telemetry,
+					detection_id: detection.detectionId,
+				},
+			},
+			generatedTs,
+		),
 	)
 	if (result.exitCode !== 0) {
 		return { captured: false, detection }
+	}
+	const recordData = hookRecordDataFromStdout(result.stdout)
+	let correlation: FinalizeCorrelationWitnessResult | undefined
+	if (!recordData) {
+		await runtime.writeLastDetectionId(
+			input.transcript_path,
+			detection.detectionId,
+		)
+		return { captured: true, detection }
+	}
+	if (recordData?.skillRunId) {
+		correlation = await finalizeCorrelationWitnessSafe(runtime, {
+			cwd,
+			skill: detection.skill,
+			hookReportId: recordData.reportId,
+			...(result.reportPath
+				? { hookWrittenPath: relative(cwd, result.reportPath) }
+				: {}),
+			skillRunId: recordData.skillRunId,
+			generatedTs,
+			candidates: analysis.closeoutCandidates,
+			closeoutDiagnostics: analysis.diagnostics,
+		})
 	}
 	await runtime.writeLastDetectionId(
 		input.transcript_path,
 		detection.detectionId,
 	)
-	return { captured: true, detection }
+	return { captured: true, detection, ...(correlation ? { correlation } : {}) }
 }
 
 function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
@@ -199,6 +369,41 @@ function createDefaultStopRuntime(): SkillFeedbackStopRuntime {
 		resolveGitRoot,
 		nowIso: () => new Date().toISOString(),
 		runRecord: runSkillFeedbackRecord,
+		finalizeCorrelationWitness: runSkillFeedbackCorrelationWitness,
+	}
+}
+
+async function finalizeCorrelationWitnessSafe(
+	runtime: SkillFeedbackStopRuntime,
+	request: CorrelationWitnessRequest,
+): Promise<FinalizeCorrelationWitnessResult> {
+	try {
+		const finalize =
+			runtime.finalizeCorrelationWitness ?? runSkillFeedbackCorrelationWitness
+		return await finalize(request)
+	} catch {
+		return {
+			status: 'blocked',
+			diagnostics: ['correlation_witness_finalization_failed'],
+		}
+	}
+}
+
+function hookRecordDataFromStdout(
+	stdout: string,
+): { reportId: string; skillRunId?: string } | null {
+	try {
+		const envelope = objectFrom(JSON.parse(stdout))
+		const data = objectFrom(envelope?.data)
+		const reportId = stringFrom(data?.report_id)
+		if (!reportId) return null
+		const skillRunId = stringFrom(data?.skill_run_id)
+		return {
+			reportId,
+			...(skillRunId ? { skillRunId } : {}),
+		}
+	} catch {
+		return null
 	}
 }
 
@@ -248,6 +453,20 @@ function objectFrom(value: unknown): Record<string, unknown> | null {
 
 function stringFrom(value: unknown): string | null {
 	return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+function textFromToolResultContent(value: unknown): string | null {
+	const direct = stringFrom(value)
+	if (direct) return direct
+	if (!Array.isArray(value)) return null
+	const text = value
+		.map((item) => {
+			const object = objectFrom(item)
+			return object?.type === 'text' ? stringFrom(object.text) : null
+		})
+		.filter((part): part is string => part !== null)
+		.join('\n')
+	return text.trim() === '' ? null : text
 }
 
 if (import.meta.main) {

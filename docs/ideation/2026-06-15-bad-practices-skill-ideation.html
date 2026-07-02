@@ -323,7 +323,7 @@
             <li>Thin wrapper shape keeps ownership clear.</li>
             <li>Architecture and testing references stay one level down.</li>
             <li>Entry shape includes bad practice, failure mode, better substitute, evidence class, and downstream skill.</li>
-            <li>Owner paths point to ICA, seam-scaffold, GoF pressure, create-cli, and test-runner instead of copying their contracts.</li>
+            <li>Owner paths point to ICA, seam-scaffold, GoF pressure, cli-author, and test-runner instead of copying their contracts.</li>
             <li>Positive-substitute framing avoids pure complaint taxonomy.</li>
           </ul>
         </div>
@@ -474,9 +474,9 @@
           Add <code>references/cli-runtime.md</code> for command-surface smells: help/parser drift, prose-only schemas, stdout-as-contract without JSON, non-interactive command prompts, exit-code-only tests, wrapper-output assertions, and missing repair hints.
         </p>
         <p class="field"><strong>Axis:</strong> Domain Coverage</p>
-        <p class="field"><strong>Basis:</strong> direct: repo startup instructions route CLI contracts to <code>create-cli</code>; current testing entries already include wrapper-output and exit-code-only smells.</p>
+        <p class="field"><strong>Basis:</strong> direct: repo startup instructions route CLI contracts to <code>cli-author</code>; current testing entries already include wrapper-output and exit-code-only smells.</p>
         <p class="field"><strong>Rationale:</strong> CLI/runtime surfaces are where agent workflows become mechanical. A bad-practice catalog that misses this layer leaves review and scaffold work underpowered.</p>
-        <p class="field"><strong>Downsides:</strong> Some entries may belong in <code>create-cli</code> instead; the skill needs owner-first wording.</p>
+        <p class="field"><strong>Downsides:</strong> Some entries may belong in <code>cli-author</code> instead; the skill needs owner-first wording.</p>
         <div class="tags">
           <span class="tag green">confidence 78%</span>
           <span class="tag amber">complexity Medium</span>
@@ -537,7 +537,7 @@
           </tr>
           <tr>
             <td>3</td>
-            <td>Copy ICA, DDD, GoF, create-cli, or test-runner contracts into this skill</td>
+            <td>Copy ICA, DDD, GoF, cli-author, or test-runner contracts into this skill</td>
             <td>Duplicates owner contracts and creates drift. The skill should link owners and translate smell packets.</td>
           </tr>
           <tr>
