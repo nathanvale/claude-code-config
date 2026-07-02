@@ -8,7 +8,40 @@ allowed-tools: Bash, Read, AskUserQuestion, Write
 
 # Classic Cinema
 
-Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a conversational booking flow, generates a ticket-style HTML email, and sends it via `gog`. Does NOT purchase tickets or reserve seats — Nathan buys at the box office.
+Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a
+conversational booking flow, generates a ticket-style HTML email, and sends it
+via `gog`. Does NOT purchase tickets or reserve seats — Nathan buys at the box
+office.
+
+## Run Card
+
+- Scope: browse movies, pick session, choose seats, generate + send reminder email.
+- Defaults: 1 adult ticket, zone picker for seats, Elsternwick venue.
+- First safe action: classify intent, then fetch listing or parse args.
+- Visible state: availability emoji on every session, seat count, email preview before send.
+- Verify: `heal-skill check` after any src/ change.
+- Publish: confirmation email sent via `gog`, booking-log entry appended.
+- Fallback: API down → report and stop. Email send fails → show the HTML and stop.
+
+## Intent Classification
+
+Classify and proceed. Do NOT show a menu unless intent is genuinely ambiguous.
+
+| Signal | Route | Action |
+|--------|-------|--------|
+| Args with movie name + time | Express | Parse args ([arg-parsing.md](references/arg-parsing.md)), proceed to booking flow |
+| Movie name only, no time | Express | Show that movie's sessions, ask which |
+| No args / "what's on" / "what's showing" | **Browse** | **Fetch listing immediately and show the table** |
+| Ambiguous | Fallback | Show the menu below |
+
+### Ambiguous-only menu
+
+Present only when intent classification returns Fallback:
+
+1. **What's on** — fetch listing, pick from the table.
+2. Quick book — `/classic-cinema <movie> <time> [tickets] [zone]`.
+3. Movie details — look up a specific movie.
+4. Health check — `bun run skills/classic-cinema/src/heal-skill.ts check`.
 
 ## Owner
 
@@ -22,17 +55,6 @@ Personal reminder-email generator for Classic Cinemas Elsternwick. Walks a conve
 - Booking log shape: `skills/classic-cinema/references/booking-log.md`.
 - Skill health doctor: `skills/classic-cinema/src/heal-skill.ts` (run `heal-skill check` when a booking fails or output looks wrong).
 - Legacy Python scripts under `scripts/*.py` are superseded by `src/*.ts`; retirement criteria: `skills/classic-cinema/references/retirement-criteria.md`.
-
-## Intent Classification
-
-Classify and proceed. Do NOT show a mode menu unless intent is genuinely ambiguous.
-
-| Signal | Mode | Action |
-|--------|------|--------|
-| Args with movie name or time | Express | Parse args ([arg-parsing.md](references/arg-parsing.md)), proceed |
-| "what's on", "what's showing", no movie | Browse | Show listing |
-| Movie name only, no time | Express | Show that movie's sessions, ask which |
-| Ambiguous | Fallback | "🎬 Quick pick or browse what's on?" |
 
 ## Express Mode (3 questions max)
 
@@ -49,12 +71,35 @@ Full choreography in [booking-flow.md](references/booking-flow.md).
 ## Browse Mode
 
 1. Fetch movie listing via API (instant)
-2. After showing the listing, prompt: "Anything catch your eye? Pick a movie to see sessions, or I can pull up a YouTube trailer or synopsis first."
+2. Show the listing table, then present **Next Safe Actions (post-listing)**
 3. **Movie details** — when Nathan asks about a movie, use the API data first (`summary`, `trailer` URL). Supplement with WebSearch only if Nathan wants more (reviews, cast, etc).
-4. Nathan picks a movie → show sessions with availability emoji
+4. Nathan picks a movie → show sessions with availability emoji, then present **Next Safe Actions (post-sessions)**
 5. Nathan picks a session → converge with Express at Q2 (Tickets)
 
 Full choreography in [booking-flow.md](references/booking-flow.md).
+
+## Next Safe Actions
+
+DX lens: present choices as a short numbered list so the user can reply by
+number. Bold the recommended default. Never present more than 4 options.
+
+### Post-listing (after showing tonight's movies)
+
+1. **Pick a movie** (reply by number or name) — see sessions + availability.
+2. Movie details — trailer, synopsis, or reviews for a specific title.
+3. Quick book — `/classic-cinema <movie> <time> [tickets] [zone]`.
+4. Nothing tonight — done.
+
+### Post-sessions (after showing a movie's sessions with availability)
+
+1. **Pick a session** (reply by number or time) — check tickets + seats.
+2. Back to listing — see all movies again.
+3. Movie details — trailer, synopsis, or reviews.
+
+### Post-booking (after email sent)
+
+1. **Done** — booking logged.
+2. Book another — back to listing.
 
 ## Availability UX
 

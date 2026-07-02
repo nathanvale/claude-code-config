@@ -10,6 +10,7 @@ import { delimiter, join, resolve } from "node:path";
 import {
 	type CliWriter,
 	CliUsageError,
+	createCommandResultData,
 	renderCommandUsage,
 	usageError,
 } from "@side-quest/cli-command-facade";
@@ -37,6 +38,7 @@ import {
 	type FallowStderrCategory,
 	type FallowWriteEffect,
 	fallowRunnerContracts,
+	fallowRunnerResultContract,
 } from "./command-contract";
 import {
 	type TraceFailureReason,
@@ -82,6 +84,7 @@ type ParsedCommand = {
 	maxOutputBytes: number;
 	outputMode: OutputMode;
 	baseRef?: string;
+	noCache: boolean;
 	applyAuthorized: boolean;
 	file?: string;
 	exportName?: string;
@@ -998,9 +1001,7 @@ function envelopeByteLength(envelope: FallowRunnerEnvelope): number {
 }
 
 function makeEnvelope(input: FallowEnvelopeInput): FallowRunnerEnvelope {
-	return {
-		contract_id: FALLOW_RUNNER_CONTRACT_ID,
-		schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
+	return createCommandResultData({ resultContract: fallowRunnerResultContract }, {
 		status: input.status,
 		mode: input.mode,
 		run_id: input.runId,
@@ -1023,7 +1024,7 @@ function makeEnvelope(input: FallowEnvelopeInput): FallowRunnerEnvelope {
 		},
 		summary: input.summary ?? emptySummary(),
 		repair_hints: input.repairHints ?? [],
-	};
+		});
 }
 
 function emptySummary(): FallowRunnerSummary {
@@ -1805,6 +1806,7 @@ function parseCommandOptions(
 		includeRawOutput: false,
 		maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
 		outputMode: "json",
+		noCache: false,
 		applyAuthorized: false,
 	};
 	const allowedFlags = new Set(Object.keys(fallowRunnerContracts[command].flags));
@@ -1848,6 +1850,13 @@ function parseCommandOptions(
 				throw usageError(`${name} does not accept a value`);
 			}
 			parsed.applyAuthorized = true;
+			continue;
+		}
+		if (name === "--no-cache") {
+			if (inlineValue !== undefined) {
+				throw usageError(`${name} does not accept a value`);
+			}
+			parsed.noCache = true;
 			continue;
 		}
 
@@ -1928,6 +1937,9 @@ function fallowArgsFor(parsed: ParsedCommand): string[] {
 	const args = [parsed.command] as string[];
 	if (parsed.command === "audit" && parsed.baseRef) {
 		args.push("--base", parsed.baseRef);
+	}
+	if (parsed.command === "audit" && parsed.noCache) {
+		args.push("--no-cache");
 	}
 	args.push("--format", "json", "--quiet");
 	return args;
@@ -2222,6 +2234,7 @@ function emitUsageError(
 				includeRawOutput: false,
 				maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
 				outputMode: "json",
+				noCache: false,
 				applyAuthorized: false,
 			}
 		: undefined;

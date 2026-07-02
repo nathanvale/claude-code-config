@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
 	type CliWriter,
 	type RuntimeActionGuidance,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	writeJsonEnvelope,
@@ -52,6 +53,7 @@ import {
 	readAdapterProofFacts,
 	readRouteFacts,
 } from "./browser-use-discovery";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
 // Browser Target Selection (plan U6).
@@ -1270,16 +1272,15 @@ function emitSelectionFailure(input: {
 			data: { command, result_kind: "browser_targets" },
 			runtime_actions: [selectionAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: failure.code,
 				message: redactUnsafeText(failure.message),
 				exit_code: failure.exitCode,
 				severity: "error",
-				recoverability: failure.recoverability,
-				retryable: failure.recoverability === "retry",
+				...retryabilityForRecoverability(failure.recoverability),
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);

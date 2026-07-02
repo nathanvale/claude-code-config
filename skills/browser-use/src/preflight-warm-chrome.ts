@@ -12,6 +12,7 @@ import {
 	type RuntimeContinuationGuidance,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	emitCliDiagnostic,
@@ -37,6 +38,7 @@ import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
 } from "./cli-diagnostics-bootstrap";
+import { structuredRuntimeErrorInput } from "./runtime-error-retryability";
 
 const VERSION = "0.2.0";
 const DEFAULT_PORT = "9222";
@@ -149,9 +151,9 @@ type VerifyWarmChromeOptions = {
 
 type PreflightRuntimeErrorOptions = {
 	exitCode?: number;
-	recoverability?: "none" | "retry" | "change_input" | "repair_state";
+	recoverability?: "none" | "change_input" | "repair_state";
 	hintSummary?: string;
-	hintAction?: "retry" | "change_input" | "repair_state";
+	hintAction?: "change_input" | "repair_state";
 	hintDocsUrl?: string;
 	severity?: "warning" | "error" | "fatal";
 	failureDomain?: WarmChromeFailureDomain;
@@ -1422,21 +1424,22 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: error.exitCode,
-			error: {
-				run_id: input.runId,
-				code: error.code,
-				message: error.message,
-				exit_code: error.exitCode,
-				severity: error.severity,
-				recoverability: error.recoverability,
-				retryable: false,
-				failure_domain: guidance.failureDomain,
-				hint: {
-					summary: error.hintSummary,
-					action: error.hintAction,
-					...(error.hintDocsUrl ? { docs_url: error.hintDocsUrl } : {}),
-				},
-			},
+			error: createCliRuntimeError(
+				structuredRuntimeErrorInput({
+					run_id: input.runId,
+					code: error.code,
+					message: error.message,
+					exit_code: error.exitCode,
+					severity: error.severity,
+					recoverability: error.recoverability,
+					failure_domain: guidance.failureDomain,
+					hint: {
+						summary: error.hintSummary,
+						action: error.hintAction,
+						...(error.hintDocsUrl ? { docs_url: error.hintDocsUrl } : {}),
+					},
+				}),
+			),
 			runtime_actions: guidance.runtimeActions,
 			continuation: guidance.continuation,
 		}),
@@ -1469,9 +1472,9 @@ function normalizeError(error: unknown): {
 	message: string;
 	exitCode: number;
 	severity: "warning" | "error" | "fatal";
-	recoverability: "none" | "retry" | "change_input" | "repair_state";
+	recoverability: "none" | "change_input" | "repair_state";
 	hintSummary: string;
-	hintAction: "retry" | "change_input" | "repair_state" | undefined;
+	hintAction: "change_input" | "repair_state" | undefined;
 	hintDocsUrl?: string;
 	failureDomain: WarmChromeFailureDomain;
 	primaryActionId?: "inspect_listener";
@@ -1589,9 +1592,9 @@ function hasSensitiveOptionName(value: string): boolean {
 
 function hintForPreflightError(error: PreflightRuntimeError): {
 	summary: string;
-	action: "retry" | "change_input" | "repair_state" | undefined;
+	action: "change_input" | "repair_state" | undefined;
 	docsUrl?: string;
-	recoverability: "none" | "retry" | "change_input" | "repair_state";
+	recoverability: "none" | "change_input" | "repair_state";
 } {
 	switch (error.code) {
 		case "unsupported_platform":

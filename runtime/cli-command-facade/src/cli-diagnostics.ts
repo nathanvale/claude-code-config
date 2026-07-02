@@ -9,11 +9,7 @@ import {
 	type Sink,
 	withContext,
 } from "@logtape/logtape";
-import {
-	type CliWriter,
-	CliWriterContractError,
-	writeJson,
-} from "./cli-writer";
+import type { CliWriter, CliWriterContractError } from "./cli-writer";
 import { usageError } from "./usage";
 
 export const CLI_DIAGNOSTIC_FLAGS = [

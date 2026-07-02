@@ -1,0 +1,56 @@
+# Consolidation Map
+
+Use when moving scattered skill-authoring material into `skills/skill-author/`.
+
+## Working Folder Shape
+
+```text
+skills/skill-author/
+  SKILL.md
+  CONTEXT.md
+  references/
+    agent-native-skill-design.md
+    archive-cleanup.md
+    community-skill-research-sources.md
+    consolidation-map.md
+    mcporter-skill-design.md
+    numbered-router-helper.md
+    research-portability.md
+    run-card-template.md
+    runtime-portability.md
+    skill-body-shape-gate.md
+    skill-dependency-rules.md
+    skill-design-decision-runbook.md
+    skill-frontmatter-gate.md
+    skill-io-shape-examples.md
+    skill-owner-path-gate.md
+    skill-review-rubric.md
+    skill-safety-gate.md
+    skill-verification-gate.md
+    skill-workflow-fitness-probes.md
+  scripts/
+    check-gotcha-decision.ts
+    check-owner-paths.ts
+    skill-description-audit.ts
+```
+
+- Project tracker owner: `skills/coding-task-tracker/SKILL.md`.
+- `TASKS.md` is not part of the reusable folder shape unless imported as historical local state.
+
+## Portable Export Payload
+
+- Owner: `references/research-portability.md#export-surface`.
+- Use this file for folder shape and consolidation rules only.
+
+## Extraction Queue
+
+- None currently.
+
+## Consolidation Rules
+
+- Move one owner path at a time.
+- Remove stale owner-path redirects instead of preserving compatibility wrappers.
+- Keep exact contracts in scripts, tests, generated docs, and CLI help.
+- Keep research sources as source notes, not rules.
+- Run `bun run skills/skill-author/scripts/skill-description-audit.ts` after description changes.
+- Run startup checks after moving owner paths.

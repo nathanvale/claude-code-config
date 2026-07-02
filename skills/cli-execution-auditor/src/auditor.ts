@@ -9,6 +9,7 @@
 //
 // Commands:
 //   audit <target> [--only <clause>] [--ledger <path>] [--json]
+//   station-map <target> [--ledger <path>] [--json]
 //
 // Exit codes (per contract):
 //   0 target clean — all lane clauses pass
@@ -18,8 +19,10 @@
 import {
 	type CliWriter,
 	type ParsedCliDiagnosticArgv,
+	createCliRepairStateRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	createCliUsageRuntimeError,
 	parseCliDiagnosticArgv,
 	parseCliDiagnosticFallbackArgv,
 	renderCommandUsage,
@@ -30,15 +33,21 @@ import { resolve } from "node:path";
 import { runFullAudit } from "./audit-engine.ts";
 import { AUDIT_CLAUSE_IDS, getClause } from "./clause-catalog.ts";
 import { auditorContracts } from "./command-contract.ts";
+import { ROOT_FRONT_DOOR } from "./command-contract-discovery.ts";
 import { readLedgerFile, upsertFinding, writeLedgerFile } from "./ledger/index.ts";
+import {
+	runStationMapAudit,
+	type StationFinding,
+	type StationMapOutcome,
+} from "./station-map.ts";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 // --- parsed command shape ---
 
 type OutputMode = "plain" | "json";
 
-type ParsedAuditCommand =
+type ParsedAuditorCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| {
@@ -46,6 +55,12 @@ type ParsedAuditCommand =
 			outputMode: OutputMode;
 			target: string;
 			only: string | null;
+			ledger: string | null;
+	  }
+	| {
+			kind: "station-map";
+			outputMode: OutputMode;
+			target: string;
 			ledger: string | null;
 	  };
 
@@ -72,14 +87,15 @@ function parseClauseId(flag: string, value: string): string {
 
 // --- argv parsing (validated against the contract's flags) ---
 
-function parseAuditorArgv(argv: readonly string[]): ParsedAuditCommand {
+function parseAuditorArgv(argv: readonly string[]): ParsedAuditorCommand {
 	if (argv.includes("--version")) return { kind: "version" };
 	if (argv.includes("--help") || argv.includes("-h")) return { kind: "help" };
 
 	const args = [...argv];
-	// The first non-flag token is the command; "audit" is the only command and
-	// also the default, so a bare `auditor <target>` is accepted.
-	if (args[0] === "audit") args.shift();
+	const command = args[0] === "station-map" ? "station-map" : "audit";
+	// The first non-flag token is the command; "audit" is also the default, so a
+	// bare `auditor <target>` is accepted.
+	if (args[0] === "audit" || args[0] === "station-map") args.shift();
 	if (args[0] === "help") return { kind: "help" };
 
 	let outputMode: OutputMode = "plain";
@@ -94,6 +110,7 @@ function parseAuditorArgv(argv: readonly string[]): ParsedAuditCommand {
 				outputMode = "json";
 				break;
 			case "--only":
+				if (command === "station-map") throw usageError("unknown option: --only");
 				only = parseClauseId("--only", requireNext(args, index, "--only"));
 				index += 1;
 				break;
@@ -103,6 +120,7 @@ function parseAuditorArgv(argv: readonly string[]): ParsedAuditCommand {
 				break;
 			default:
 				if (arg.startsWith("--only=")) {
+					if (command === "station-map") throw usageError("unknown option: --only");
 					only = parseClauseId("--only", requireInlineValue(arg, "--only"));
 				} else if (arg.startsWith("--ledger=")) {
 					ledger = requireInlineValue(arg, "--ledger");
@@ -117,7 +135,14 @@ function parseAuditorArgv(argv: readonly string[]): ParsedAuditCommand {
 	}
 
 	if (target === null) {
-		throw usageError("audit requires a target: audit <target> [--only <clause>] [--json]");
+		throw usageError(
+			command === "audit"
+				? "audit requires a target: audit <target> [--only <clause>] [--json]"
+				: "station-map requires a target: station-map <target> [--json]",
+		);
+	}
+	if (command === "station-map") {
+		return { kind: "station-map", outputMode, target, ledger };
 	}
 	return { kind: "audit", outputMode, target, only, ledger };
 }
@@ -131,6 +156,8 @@ export interface AuditFinding {
 	summary: string;
 	/** Invocation that surfaced it; [] for a static clause. */
 	argv: readonly string[];
+	/** CLI Front Door that owns this finding. */
+	frontDoor?: string;
 }
 
 /** The engine's result for one target. */
@@ -140,16 +167,75 @@ export interface AuditOutcome {
 	skipReason?: string;
 	findings: AuditFinding[];
 	ledgerPath?: string;
+	ledgerPaths?: string[];
 }
 
 export type AuditorRuntime = {
 	now: () => number;
 	audit: (input: { target: string; only: string | null; ledger: string | null }) => Promise<AuditOutcome>;
+	stationMap: (input: { target: string; ledger: string | null }) => Promise<StationMapOutcome>;
 };
 
-/** Default ledger path for a target: docs/cli-audits/<cli-name>/audit.md. */
-function defaultLedgerPath(targetRoot: string, cliName: string): string {
-	return resolve(targetRoot, "docs", "cli-audits", cliName, "audit.md");
+/** Default ledger path for one target front door. */
+function defaultLedgerPath(targetRoot: string, cliName: string, frontDoor: string): string {
+	return resolve(targetRoot, "docs", "cli-audits", cliName, ...frontDoor.split("/"), "audit.md");
+}
+
+function frontDoorLedgerName(cliName: string, frontDoor: string): string {
+	return frontDoor === ROOT_FRONT_DOOR ? `${cliName}/${ROOT_FRONT_DOOR}` : `${cliName}/${frontDoor}`;
+}
+
+function groupByFrontDoor<T extends { frontDoor?: string }>(
+	items: readonly T[],
+	frontDoors: readonly string[],
+): Map<string, T[]> {
+	const grouped = new Map<string, T[]>();
+	for (const frontDoor of frontDoors) grouped.set(frontDoor, []);
+	for (const item of items) {
+		const frontDoor = item.frontDoor ?? ROOT_FRONT_DOOR;
+		grouped.set(frontDoor, [...(grouped.get(frontDoor) ?? []), item]);
+	}
+	if (grouped.size === 0) grouped.set(ROOT_FRONT_DOOR, []);
+	return new Map([...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+async function writeAuditLedger(input: {
+	ledgerPath: string;
+	ledgerName: string;
+	findings: readonly AuditFinding[];
+}): Promise<void> {
+	const ledgerState = await readLedgerFile(input.ledgerPath, input.ledgerName);
+	for (const finding of input.findings) {
+		upsertFinding(ledgerState, {
+			clauseId: finding.clauseId,
+			kind: finding.kind,
+			summary: finding.summary,
+			argv: finding.argv,
+			frontDoor: finding.frontDoor,
+		});
+	}
+	await writeLedgerFile(input.ledgerPath, ledgerState);
+}
+
+async function writeStationLedger(input: {
+	ledgerPath: string;
+	ledgerName: string;
+	findings: readonly StationFinding[];
+}): Promise<void> {
+	const ledgerState = await readLedgerFile(input.ledgerPath, input.ledgerName);
+	for (const finding of input.findings) {
+		upsertFinding(ledgerState, {
+			clauseId: "station-map",
+			kind: "station",
+			summary: finding.summary,
+			station: {
+				stationId: finding.stationId,
+				command: finding.command,
+				findingKind: finding.findingKind,
+			},
+		});
+	}
+	await writeLedgerFile(input.ledgerPath, ledgerState);
 }
 
 /**
@@ -181,24 +267,82 @@ export function createDefaultAuditorRuntime(
 			// preserve finding history across runs (never-delete, R6) — then upsert
 			// this run's findings and persist. Writing fresh would lose prior
 			// history and make cross-run dedupe a no-op.
-			const ledgerPath = ledger ?? defaultLedgerPath(targetRoot, outcome.target);
-			const ledgerState = await readLedgerFile(ledgerPath, outcome.target);
-			for (const finding of outcome.findings) {
-				upsertFinding(ledgerState, {
-					clauseId: finding.clauseId,
-					kind: finding.kind,
-					summary: finding.summary,
-					argv: finding.argv,
+			const commandFrontDoors = outcome.commandFrontDoors ?? {};
+			const attributedFindings = outcome.findings.map((finding) => ({
+				...finding,
+				frontDoor:
+					finding.frontDoor ??
+					(finding.argv[0] ? commandFrontDoors[finding.argv[0]] : undefined) ??
+					ROOT_FRONT_DOOR,
+			}));
+			if (ledger) {
+				await writeAuditLedger({
+					ledgerPath: ledger,
+					ledgerName: outcome.target,
+					findings: attributedFindings,
 				});
+				return {
+					target: outcome.target,
+					laneDetected: true,
+					skipReason: outcome.skipReason,
+					findings: attributedFindings,
+					ledgerPath: ledger,
+				};
 			}
-			await writeLedgerFile(ledgerPath, ledgerState);
+			const frontDoors = [
+				...new Set([...Object.values(commandFrontDoors), ...attributedFindings.map((f) => f.frontDoor)]),
+			].sort();
+			const ledgerPaths: string[] = [];
+			for (const [frontDoor, findings] of groupByFrontDoor(attributedFindings, frontDoors)) {
+				const ledgerPath = defaultLedgerPath(targetRoot, outcome.target, frontDoor);
+				await writeAuditLedger({
+					ledgerPath,
+					ledgerName: frontDoorLedgerName(outcome.target, frontDoor),
+					findings,
+				});
+				ledgerPaths.push(ledgerPath);
+			}
 
 			return {
 				target: outcome.target,
 				laneDetected: true,
 				skipReason: outcome.skipReason,
-				findings: outcome.findings,
-				ledgerPath,
+				findings: attributedFindings,
+				...(ledgerPaths.length === 1 ? { ledgerPath: ledgerPaths[0] } : {}),
+				ledgerPaths,
+			};
+		},
+		stationMap: async ({ target, ledger }) => {
+			const targetRoot = resolve(target);
+			const outcome = await runStationMapAudit({ targetRoot });
+			if (!outcome.catalogDetected) return outcome;
+
+			if (ledger) {
+				await writeStationLedger({
+					ledgerPath: ledger,
+					ledgerName: outcome.target,
+					findings: outcome.findings,
+				});
+				return { ...outcome, ledgerPath: ledger };
+			}
+			const frontDoors = outcome.frontDoors ?? [
+				...new Set(outcome.findings.map((finding) => finding.frontDoor ?? ROOT_FRONT_DOOR)),
+			];
+			const ledgerPaths: string[] = [];
+			for (const [frontDoor, findings] of groupByFrontDoor(outcome.findings, frontDoors)) {
+				const ledgerPath = defaultLedgerPath(targetRoot, outcome.target, frontDoor);
+				await writeStationLedger({
+					ledgerPath,
+					ledgerName: frontDoorLedgerName(outcome.target, frontDoor),
+					findings,
+				});
+				ledgerPaths.push(ledgerPath);
+			}
+
+			return {
+				...outcome,
+				...(ledgerPaths.length === 1 ? { ledgerPath: ledgerPaths[0] } : {}),
+				ledgerPaths,
 			};
 		},
 		...overrides,
@@ -208,6 +352,7 @@ export function createDefaultAuditorRuntime(
 // --- command result ---
 
 interface AuditResult {
+	report_kind: "audit";
 	run_id: string;
 	duration_ms: number;
 	exit_code: number;
@@ -217,10 +362,30 @@ interface AuditResult {
 	skip_reason?: string;
 	findings: AuditFinding[];
 	ledger_path?: string;
+	ledger_paths?: string[];
+}
+
+interface StationMapResult {
+	report_kind: "station-map";
+	run_id: string;
+	duration_ms: number;
+	exit_code: number;
+	action: string;
+	target: string;
+	lane_detected: boolean;
+	catalog_detected: boolean;
+	skip_reason?: string;
+	catalog_path?: string;
+	evidence_path?: string;
+	completeness_claim?: string;
+	station_map?: StationMapOutcome["stationMap"];
+	findings: StationFinding[];
+	ledger_path?: string;
+	ledger_paths?: string[];
 }
 
 async function runAudit(input: {
-	parsed: Extract<ParsedAuditCommand, { kind: "audit" }>;
+	parsed: Extract<ParsedAuditorCommand, { kind: "audit" }>;
 	runtime: AuditorRuntime;
 	runId: string;
 	startedAt: number;
@@ -232,6 +397,7 @@ async function runAudit(input: {
 	});
 	const hasFinding = outcome.findings.length > 0;
 	return {
+		report_kind: "audit",
 		run_id: input.runId,
 		duration_ms: input.runtime.now() - input.startedAt,
 		exit_code: hasFinding ? 1 : 0,
@@ -245,6 +411,42 @@ async function runAudit(input: {
 		skip_reason: outcome.skipReason,
 		findings: outcome.findings,
 		ledger_path: outcome.ledgerPath,
+		ledger_paths: outcome.ledgerPaths,
+	};
+}
+
+async function runStationMapCommand(input: {
+	parsed: Extract<ParsedAuditorCommand, { kind: "station-map" }>;
+	runtime: AuditorRuntime;
+	runId: string;
+	startedAt: number;
+}): Promise<StationMapResult> {
+	const outcome = await input.runtime.stationMap({
+		target: input.parsed.target,
+		ledger: input.parsed.ledger,
+	});
+	const hasFinding = outcome.findings.length > 0;
+	return {
+		report_kind: "station-map",
+		run_id: input.runId,
+		duration_ms: input.runtime.now() - input.startedAt,
+		exit_code: hasFinding ? 1 : 0,
+		action: hasFinding
+			? "station_findings_present"
+			: outcome.skipReason
+				? "station_map_skipped"
+				: "declared_branch_coverage_clean",
+		target: outcome.target,
+		lane_detected: outcome.laneDetected,
+		catalog_detected: outcome.catalogDetected,
+		skip_reason: outcome.skipReason,
+		catalog_path: outcome.catalogPath,
+		evidence_path: outcome.evidencePath,
+		completeness_claim: outcome.stationMap?.completeness_claim,
+		station_map: outcome.stationMap,
+		findings: outcome.findings,
+		ledger_path: outcome.ledgerPath,
+		ledger_paths: outcome.ledgerPaths,
 	};
 }
 
@@ -254,7 +456,7 @@ function clauseKindLabel(clauseId: string): string {
 	return getClause(clauseId)?.kind ?? "?";
 }
 
-function renderPlain(result: AuditResult): string {
+function renderPlainAudit(result: AuditResult): string {
 	if (result.skip_reason && result.findings.length === 0) {
 		return `• ${result.target}: ${result.skip_reason}\n`;
 	}
@@ -265,11 +467,42 @@ function renderPlain(result: AuditResult): string {
 	for (const f of result.findings) {
 		lines.push(`  [${clauseKindLabel(f.clauseId)}] ${f.clauseId}: ${f.summary}`);
 	}
-	if (result.ledger_path) lines.push(`  ledger: ${result.ledger_path}`);
+	for (const ledgerPath of result.ledger_paths ?? (result.ledger_path ? [result.ledger_path] : [])) {
+		lines.push(`  ledger: ${ledgerPath}`);
+	}
 	return `${lines.join("\n")}\n`;
 }
 
-function writeResult(stdout: CliWriter, result: AuditResult, outputMode: OutputMode): void {
+function renderPlainStationMap(result: StationMapResult): string {
+	if (result.skip_reason && result.findings.length === 0) {
+		return `• ${result.target}: ${result.skip_reason}\n`;
+	}
+	if (result.findings.length === 0) {
+		return `${result.target}: Station Map clean (${result.completeness_claim ?? "no catalog"})\n`;
+	}
+	const lines: string[] = [`${result.target}: ${result.findings.length} station finding(s)`];
+	for (const finding of result.findings) {
+		lines.push(`  [${finding.findingKind}] ${finding.stationId}: ${finding.summary}`);
+	}
+	for (const ledgerPath of result.ledger_paths ?? (result.ledger_path ? [result.ledger_path] : [])) {
+		lines.push(`  ledger: ${ledgerPath}`);
+	}
+	return `${lines.join("\n")}\n`;
+}
+
+type AuditorCommandResult = AuditResult | StationMapResult;
+
+function renderPlain(result: AuditorCommandResult): string {
+	return result.report_kind === "audit"
+		? renderPlainAudit(result)
+		: renderPlainStationMap(result);
+}
+
+function writeResult(
+	stdout: CliWriter,
+	result: AuditorCommandResult,
+	outputMode: OutputMode,
+): void {
 	if (outputMode === "json") {
 		if (result.exit_code === 0) {
 			writeJsonEnvelope(
@@ -281,18 +514,19 @@ function writeResult(stdout: CliWriter, result: AuditResult, outputMode: OutputM
 		}
 		writeJsonEnvelope(
 			stdout,
-			createCliRuntimeErrorEnvelope({
-				run_id: result.run_id,
-				process_exit_code: result.exit_code,
-				error: {
+				createCliRuntimeErrorEnvelope({
 					run_id: result.run_id,
-					code: "findings_present",
-					message: "Lane-contract findings present; see findings[] and the ledger.",
-					exit_code: result.exit_code,
-					severity: "warning",
-					recoverability: "repair_state",
-					retryable: false,
-				},
+					process_exit_code: result.exit_code,
+					error: createCliRepairStateRuntimeError({
+						run_id: result.run_id,
+						code: "findings_present",
+					message:
+						result.report_kind === "audit"
+							? "Lane-contract findings present; see findings[] and the ledger."
+							: "Station Map findings present; see findings[] and the ledger.",
+						exit_code: result.exit_code,
+						severity: "warning",
+				}),
 				data: result,
 			}),
 			{ runId: result.run_id, durationMs: result.duration_ms },
@@ -300,6 +534,15 @@ function writeResult(stdout: CliWriter, result: AuditResult, outputMode: OutputM
 		return;
 	}
 	stdout.write(renderPlain(result));
+}
+
+function renderAuditorHelp(): string {
+	return [
+		renderCommandUsage(auditorContracts.audit).trimEnd(),
+		"",
+		renderCommandUsage(auditorContracts["station-map"]).trimEnd(),
+		"",
+	].join("\n");
 }
 
 function inferOutputMode(argv: readonly string[]): OutputMode {
@@ -321,15 +564,12 @@ function emitUsageError(input: {
 			createCliRuntimeErrorEnvelope({
 				run_id: input.runId,
 				process_exit_code: 2,
-				error: {
+				error: createCliUsageRuntimeError({
 					run_id: input.runId,
 					code: "usage_error",
 					message,
 					exit_code: 2,
-					severity: "error",
-					recoverability: "change_input",
-					retryable: false,
-				},
+				}),
 			}),
 			{ runId: input.runId, durationMs: input.durationMs },
 		);
@@ -371,7 +611,7 @@ export async function runAuditorCli(
 	const runId = parsedDiagnostics.options.runId;
 	const startedAt = parsedDiagnostics.options.startedAtMs;
 
-	let parsed: ParsedAuditCommand;
+	let parsed: ParsedAuditorCommand;
 	try {
 		parsed = parseAuditorArgv(parsedDiagnostics.argv);
 	} catch (error) {
@@ -390,13 +630,16 @@ export async function runAuditorCli(
 		return 0;
 	}
 	if (parsed.kind === "help") {
-		stdout.write(renderCommandUsage(auditorContracts.audit));
+		stdout.write(renderAuditorHelp());
 		return 0;
 	}
 
-	let result: AuditResult;
+	let result: AuditorCommandResult;
 	try {
-		result = await runAudit({ parsed, runtime, runId, startedAt });
+		result =
+			parsed.kind === "audit"
+				? await runAudit({ parsed, runtime, runId, startedAt })
+				: await runStationMapCommand({ parsed, runtime, runId, startedAt });
 	} catch (error) {
 		return emitUsageError({
 			error,

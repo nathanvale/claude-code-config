@@ -65,6 +65,7 @@ type CommandCall = {
 	args: string[];
 	cwd: string;
 };
+type TestCommandResult = Awaited<ReturnType<typeof runForTest>>;
 
 afterEach(async () => {
 	await Promise.all(
@@ -133,6 +134,20 @@ function parseJson(stdout: string): Record<string, unknown> {
 	return JSON.parse(stdout) as Record<string, unknown>;
 }
 
+function expectedFallowArgsFor(command: FallowRunnerCommand): string[] {
+	return [command, "--format", "json", "--quiet"];
+}
+
+function expectInputFailure(
+	result: TestCommandResult,
+	message: string,
+): void {
+	expect(result.exitCode).toBe(2);
+	const envelope = expectEnvelope(result);
+	expect(envelope.failure_category).toBe("input");
+	expect(JSON.stringify(envelope)).toContain(message);
+}
+
 function readyRuntime(
 	root: string,
 	overrides: Partial<FallowRunnerRuntime> & {
@@ -189,6 +204,18 @@ function readyExecutionRuntime(
 	});
 
 	return { runtime, calls };
+}
+
+async function readyCleanFallowExecution(): Promise<{
+	root: string;
+	runtime: FallowRunnerRuntime;
+	calls: CommandCall[];
+}> {
+	const root = await makeRepo({ localFallow: true });
+	const { runtime, calls } = readyExecutionRuntime(root, [
+		{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
+	]);
+	return { root, runtime, calls };
 }
 
 function readinessOf(envelope: Record<string, unknown>) {
@@ -266,14 +293,20 @@ describe("U2 command contract", () => {
 		}
 	});
 
-	test("audit owns base-ref and non-audit commands do not", () => {
+	test("audit owns base-ref and no-cache; non-audit commands do not", () => {
 		expect(Object.keys(fallowRunnerContracts.audit.flags)).toContain(
 			"--base-ref",
+		);
+		expect(Object.keys(fallowRunnerContracts.audit.flags)).toContain(
+			"--no-cache",
 		);
 
 		for (const command of ALL_COMMANDS.filter((item) => item !== "audit")) {
 			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
 				"--base-ref",
+			);
+			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
+				"--no-cache",
 			);
 		}
 	});
@@ -655,31 +688,26 @@ describe("U4 discovery and doctor runtime", () => {
 describe("U5 Fallow execution and summary semantics", () => {
 	test("evidence subcommands execute the expected Fallow command path", async () => {
 		for (const command of ["audit", "dead-code", "dupes", "health"] as const) {
-			const root = await makeRepo({ localFallow: true });
-			const { runtime, calls } = readyExecutionRuntime(root, [
-				{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
-			]);
+			const { root, runtime, calls } = await readyCleanFallowExecution();
 
 			const result = await runForTest([command], runtime);
 
 			expect(result.exitCode).toBe(0);
 			const fallowCall = calls.find((call) => call.command !== "git");
+			const expectedArgs = expectedFallowArgsFor(command);
 			expect(fallowCall).toEqual({
 				command: join(root, "node_modules", ".bin", "fallow"),
-				args: [command, "--format", "json", "--quiet"],
+				args: expectedArgs,
 				cwd: root,
 			});
 			expect(expectEnvelope(result).command).toEqual([
 				join(root, "node_modules", ".bin", "fallow"),
-				command,
-				"--format",
-				"json",
-				"--quiet",
+				...expectedArgs,
 			]);
 		}
 	});
 
-	test("audit omits base by default and maps public base-ref to Fallow base", async () => {
+	test("audit uses reusable cache by default and maps public base-ref to Fallow base", async () => {
 		const defaultRoot = await makeRepo({ localFallow: true });
 		const defaultRuntime = readyExecutionRuntime(defaultRoot, [
 			{ exitCode: 0, stdout: JSON.stringify({ findings: [] }), stderr: "" },
@@ -711,6 +739,21 @@ describe("U5 Fallow execution and summary semantics", () => {
 			"--quiet",
 		]);
 		expect(expectEnvelope(explicit).command).toContain("origin/main");
+	});
+
+	test("audit accepts explicit no-cache and forwards the raw flag", async () => {
+		const { runtime, calls } = await readyCleanFallowExecution();
+
+		const result = await runForTest(["audit", "--no-cache"], runtime);
+
+		expect(result.exitCode).toBe(0);
+		expect(calls.find((call) => call.command !== "git")?.args).toEqual([
+			"audit",
+			"--no-cache",
+			"--format",
+			"json",
+			"--quiet",
+		]);
 	});
 
 	test("no findings return clean analyzer status and omit raw output", async () => {
@@ -1970,7 +2013,7 @@ describe("U3 parser, help, and discovery alignment", () => {
 					"--watch",
 					"--baseline",
 					"--generate-ci",
-					...(command === "audit" ? [] : ["--base-ref"]),
+					...(command === "audit" ? [] : ["--base-ref", "--no-cache"]),
 				],
 			});
 		}
@@ -2070,16 +2113,13 @@ describe("U3 parser, help, and discovery alignment", () => {
 	test("global plain output flag is rejected", async () => {
 		const result = await runForTest(["--plain", "audit"], makeRuntime());
 
-		expect(result.exitCode).toBe(2);
-		const envelope = expectEnvelope(result);
-		expect(envelope.failure_category).toBe("input");
-		expect(JSON.stringify(envelope)).toContain("flags must follow the subcommand");
+		expectInputFailure(result, "flags must follow the subcommand");
 	});
 
-	test("audit accepts base-ref and non-audit commands reject it", async () => {
+	test("audit accepts audit-only flags and non-audit commands reject them", async () => {
 		const root = await makeJsRepo();
 		const audit = await runForTest(
-			["audit", "--root", root, "--base-ref", "origin/main"],
+			["audit", "--root", root, "--base-ref", "origin/main", "--no-cache"],
 			makeRuntime(),
 		);
 
@@ -2087,14 +2127,16 @@ describe("U3 parser, help, and discovery alignment", () => {
 		expect(expectEnvelope(audit).mode).toBe("audit");
 
 		for (const command of ALL_COMMANDS.filter((item) => item !== "audit")) {
-			const result = await runForTest(
-				[command, "--root", root, "--base-ref", "origin/main"],
-				makeRuntime(),
-			);
-			expect(result.exitCode).toBe(2);
-			const envelope = expectEnvelope(result);
-			expect(envelope.failure_category).toBe("input");
-			expect(JSON.stringify(envelope)).toContain("unknown option: --base-ref");
+			for (const auditOnlyFlag of [
+				["--base-ref", "origin/main"],
+				["--no-cache"],
+			]) {
+				const result = await runForTest(
+					[command, "--root", root, ...auditOnlyFlag],
+					makeRuntime(),
+				);
+				expectInputFailure(result, `unknown option: ${auditOnlyFlag[0]}`);
+			}
 		}
 	});
 
@@ -2104,12 +2146,7 @@ describe("U3 parser, help, and discovery alignment", () => {
 			makeRuntime(),
 		);
 
-		expect(result.exitCode).toBe(2);
-		const envelope = expectEnvelope(result);
-		expect(envelope.failure_category).toBe("input");
-		expect(JSON.stringify(envelope)).toContain(
-			"--base-ref value cannot start with '-'",
-		);
+		expectInputFailure(result, "--base-ref value cannot start with '-'");
 	});
 
 	test("root accepts valid paths and rejects invalid paths", async () => {

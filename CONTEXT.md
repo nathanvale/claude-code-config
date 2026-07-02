@@ -35,6 +35,18 @@ _Avoid_: backup copy, duplicated policy, rendered summary, startup restatement
 A confirmation rule for high-consequence action classes, not a blanket pause before implementation. It preserves agent autonomy for concrete requested work; low-risk ambiguity gets reasonable assumptions, high-risk ambiguity gets a question.
 _Avoid_: ask before everything, implement only after confirmation, blanket confirmation
 
+**Skill Catalog**:
+Authored collection of skills that acts as the source for agent-runtime visibility.
+_Avoid_: skill registry, skill source, global skills
+
+**Skill Catalog Entry**:
+Direct child skill directory identity inside a Skill Catalog, used for visibility decisions, projection state, ignore rules, and change tracking. Frontmatter describes and validates the entry; it does not replace the directory identity.
+_Avoid_: frontmatter name, provider id, filesystem path
+
+**Projection Root**:
+Generated agent-runtime skill location derived from a Skill Catalog. It is not an authored source.
+_Avoid_: target folder, provider root, copied skills
+
 ### Cross-cutting governance
 **Tracker owner binding**:
 The owner-path-scoped association between a durable work owner and the external task tracker that runtime-backed task commands may read or mutate. Owners may be repo roots, workspace packages, skills, or other durable owner paths.
@@ -68,8 +80,47 @@ _Avoid_: task, phase, horizontal slice, generic plan step
 A condition that moves CLI design into a separate MCP pass because clients need typed remote discovery, server-mediated auth, session transport, or MCP-native tool orchestration. It is not a reason to weaken the CLI contract.
 _Avoid_: MCP by default, CLI replacement, transport-first design, generic integration idea
 
+**CLI Front Door**:
+Package-owned public CLI Interface seam. Use `src/front-doors/<cli-name>/` only when a package has multiple public CLI interfaces or one interface grows enough adapter files to need an owner folder.
+_Avoid_: front-door skill role, universal CLI folder, facade-owned topology
+
+**No-Arg CLI Front Door**:
+The behavior of a public CLI when invoked without subcommands or operands. Default to help or get-started output for stateless CLIs; use a bounded dashboard only when the CLI owns meaningful current state, recent activity, health, or a work queue.
+_Avoid_: CLI Front Door layout, dashboard for every CLI, report dump, personal-productivity helper
+
+**CLI Design Lane**:
+The user-facing design choice between a human-first Basic CLI and an Agent-native CLI. It answers who the interface is shaped for before any runtime enforcement choice.
+_Avoid_: facade-backed lane, implementation language, runtime backend
+
+**Facade-backed Enforcement**:
+Optional runtime-backed enforcement for an Agent-native CLI when reusable facade validation is requested or an existing surface is facade-owned. It is not a separate design lane.
+_Avoid_: Facade-backed CLI lane, generic runtime validation, TypeScript default, Bun default
+
+**Command Contract Locator**:
+Tooling-owned discovery seam that finds package command contracts without making the facade runtime own consumer folders. Current conventional locations are `src/command-contract.ts` and `src/front-doors/*/command-contract.ts`.
+_Avoid_: package manifest by default, nested package metadata, runtime-owned consumer topology
+
+**Command Entrypoint Integration Test**:
+A process-boundary test that proves a command can be invoked through its repo-local command entrypoints while preserving the expected machine contract.
+_Avoid_: smoke test, front door smoke, command surface proof
+
+**Branch Station**:
+A package-owned named command branch that represents one stable success, failure, diagnostic, repair, continuation, or observability outcome worth proving. It is the CLI analogue of a Playwright user-flow checkpoint, except the user is an agent making runtime decisions.
+_Avoid_: code branch, test case, clause, route
+
+**Branch Station Catalog**:
+A package-owned catalog of Branch Stations for one CLI surface, kept beside the command contract and expressed in package vocabulary. It declares the agent-visible outcomes that tests and station maps must prove.
+_Avoid_: package branch catalog, station catalog, shared branch registry
+
+**Station Map**:
+A deterministic report that reconciles command discovery, Branch Station Catalogs, and station evidence into a declared coverage view.
+_Avoid_: branch coverage report, test matrix, whole-program coverage
+
+**Declared Branch Coverage**:
+The completeness claim that every declared Branch Station is covered, missing, drifted, skipped, or declared unreachable.
+_Avoid_: full branch coverage, TypeScript branch coverage, all possible paths
+
 ## Example Dialogue
 
 Dev: "Is `/ce-plan` producing implementation tasks or candidate batches?"
 Domain expert: "It produces implementation slices for human planning, represented as candidate batches once the runtime parses and validates them."
-

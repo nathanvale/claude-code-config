@@ -5,7 +5,7 @@ decision logs. Co-located here per the `**/docs/` placement rule (see
 `skills/context-advisor/references/storage-routing.md`).
 
 ADRs stay in repo-root `docs/adr/` — they are cross-referenced by other domains
-(create-cli, prototypes) and bind repo-wide architecture, so they are root-level
+(cli-author, prototypes) and bind repo-wide architecture, so they are root-level
 records. They are linked below but not moved.
 
 ---

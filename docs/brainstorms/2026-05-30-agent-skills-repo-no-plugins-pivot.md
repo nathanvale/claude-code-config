@@ -90,7 +90,7 @@ for "simplicity + no lock-in," dropping plugins is *strictly leaner*, not a sacr
 The boundary that actually matters: **does a skill spawn sub-agents or call `mcp__` tools?**
 
 **Portable tier** — base `SKILL.md`, works Codex + Claude Code + Cursor:
-browser-use, one-password, create-cli, draft-message, context7-mcp, confluence-pages, capture,
+browser-use, one-password, cli-author, draft-message, context7-mcp, confluence-pages, capture,
 work-style-convert, and most domain/utility skills.
 
 **Claude-dependent tier** — sub-agents or `mcp__`, degrades on Codex without a converter:

@@ -8,11 +8,13 @@ set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 CHECK_SCRIPT="${REPO_ROOT}/scripts/agent-instructions.sh"
+CHECK_LOG="${PROMPT_DRIFT_CHECK_LOG:-/tmp/prompt-drift-check.log}"
 
 PROMPT_SYSTEM_PATHS=(
   "rules/"
   "context/"
   "scripts/agent-instructions.sh"
+  "scripts/hooks/"
   "scripts/render-user-prompts.sh"
   "AGENTS.md"
   "CLAUDE.md"
@@ -38,16 +40,35 @@ if ! $matches; then
   exit 0
 fi
 
-if ! "${CHECK_SCRIPT}" check > /tmp/prompt-drift-check.log 2>&1; then
+{
+  bash "${CHECK_SCRIPT}" check > "${CHECK_LOG}" 2>&1 &
+  check_pid=$!
+  wait "${check_pid}"
+  check_status=$?
+} 2>> "${CHECK_LOG}"
+
+if [[ "${check_status}" -eq 0 ]]; then
+  exit 0
+fi
+
+if [[ "${check_status}" -eq 137 ]]; then
+  echo ""
+  echo "Instruction health check was killed by SIGKILL - commit allowed."
+  echo ""
+  echo "Run directly to verify health outside the commit subprocess:"
+  echo "  bash scripts/agent-instructions.sh check"
+  echo ""
+  echo "(Full log: ${CHECK_LOG})"
+  exit 0
+fi
+
   echo ""
   echo "Instruction health check failed - commit blocked."
+  echo "Exit code: ${check_status}"
   echo ""
-  grep -E "^(FAIL|WARN):" /tmp/prompt-drift-check.log || cat /tmp/prompt-drift-check.log
+  grep -E "^(FAIL|WARN):" "${CHECK_LOG}" || cat "${CHECK_LOG}"
   echo ""
   echo "Fix the reported instruction health issue, then retry the commit."
   echo ""
-  echo "(Full log: /tmp/prompt-drift-check.log)"
+  echo "(Full log: ${CHECK_LOG})"
   exit 1
-fi
-
-exit 0

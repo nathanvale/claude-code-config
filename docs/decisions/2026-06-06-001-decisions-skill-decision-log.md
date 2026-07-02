@@ -29,7 +29,7 @@ Use this log for accepted decisions made while hardening the skills system.
 - Candidate helper: an agent-native CLI for parsing Markdown decision logs with fenced YAML.
 - Candidate commands: create a log, append a decision, parse a log, search decisions, and emit a machine-readable projection.
 - Keep the CLI surface stable if storage later moves from Markdown to JSON or a database.
-- Use `create-cli` before designing or implementing the helper.
+- Use `cli-author` before designing or implementing the helper.
 - Treat exact parser rules, command contracts, output envelopes, and storage adapters as runtime-owned if the helper is built.
 - Current skill-authoring owner paths are set by the latest accepted decisions.
 - Historical entries before current owner-path consolidation may name old `context/` owners.
@@ -250,7 +250,7 @@ Rationale:
 
 Consequences:
 
-- Use `create-cli` before designing any helper command surface.
+- Use `cli-author` before designing any helper command surface.
 - Keep exact parser rules, output contracts, and diagnostics in code if the helper is built.
 
 Next:
@@ -864,7 +864,7 @@ Rationale:
 Consequences:
 
 - Treat the helper as an Agent-native CLI surface.
-- Use `create-cli` before implementation.
+- Use `cli-author` before implementation.
 - Keep exact parser rules, output shape, and diagnostics in code.
 
 Next:
@@ -1181,7 +1181,7 @@ Decision:
 
 - Create `skills/decisions/SKILL.md`.
 - Move stable detail into `skills/decisions/references/operating-manual.md`.
-- Keep helper implementation as a later `create-cli`-gated slice.
+- Keep helper implementation as a later `cli-author`-gated slice.
 
 Rationale:
 
@@ -1199,7 +1199,7 @@ Next:
 
 V2 Ideas:
 
-- Implement `decisions check` after a `create-cli` pass.
+- Implement `decisions check` after a `cli-author` pass.
 
 ## Decision 30: Use Facade Runtime Envelopes For V2 CLI Output
 
@@ -1551,7 +1551,7 @@ Rationale:
 Consequences:
 
 - Future agents use `create-agent-native-skill` when creating or redesigning skills with helper commands, machine-readable output, durable writes, or runtime recovery behavior.
-- `create-agent-native-skill` points to `create-cli` for command-surface design instead of copying CLI contracts.
+- `create-agent-native-skill` points to `cli-author` for command-surface design instead of copying CLI contracts.
 - Exact TypeScript input contracts and facade output envelope details stay in runtime code, help, and tests.
 
 Next:
@@ -2829,7 +2829,7 @@ Decision:
 
 - Keep `skills/create-agent-native-skill/SKILL.md` as a one-file skill for now.
 - Add `references/` only after repeated use exposes reusable detail that would bloat `SKILL.md`.
-- Continue delegating depth to existing owner paths: skill philosophy, `create-cli` references, I/O shape examples, and the decisions operating manual.
+- Continue delegating depth to existing owner paths: skill philosophy, `cli-author` references, I/O shape examples, and the decisions operating manual.
 
 Rationale:
 
@@ -3297,7 +3297,7 @@ Decision:
   - `browser-domain-memory`
   - `browser-use`
   - `choose-skill-memory-store`
-  - `create-cli`
+  - `cli-author`
   - `create-skill`
   - `decision-mode`
   - `decisions`
@@ -3723,7 +3723,7 @@ Decision:
 - Treat it as protected, not ordinary active routing and not archive-safe.
 - Do not extract material into `create-skill` now.
 - Keep it one-file until repeated use exposes reusable detail that would bloat `SKILL.md`.
-- Route command-surface design through `create-cli`.
+- Route command-surface design through `cli-author`.
 
 Rationale:
 
@@ -3736,7 +3736,7 @@ Consequences:
 
 - `create-agent-native-skill` moves out of consolidation candidates.
 - `create-skill` remains the ordinary skill-authoring owner.
-- `create-cli` remains the CLI contract owner.
+- `cli-author` remains the CLI contract owner.
 
 Next:
 
@@ -3771,13 +3771,13 @@ Decision:
 - Route every skill-creation request type through `create-skill`.
 - Move runtime-backed skill design guidance to `skills/create-skill/references/agent-native-skill-design.md`.
 - Keep `skills/create-agent-native-skill/SKILL.md` only as a temporary bridge.
-- Keep `create-cli` as the owner for CLI contract design.
+- Keep `cli-author` as the owner for CLI contract design.
 
 Rationale:
 
 - One skill runbook reduces routing scatter.
 - Runtime-backed skill creation is a chapter of skill creation, not a separate owner.
-- `create-cli` already owns command-surface contracts, so `create-skill` can route without copying CLI contracts.
+- `cli-author` already owns command-surface contracts, so `create-skill` can route without copying CLI contracts.
 
 Consequences:
 
@@ -3819,7 +3819,7 @@ Decision:
 - Keep runtime-backed skill design guidance in `skills/create-skill/references/agent-native-skill-design.md`.
 - Archive `skills/create-agent-native-skill/` without a bridge.
 - Do not preserve an unused skill name as a compatibility route.
-- Keep `create-cli` as the owner for CLI contract design.
+- Keep `cli-author` as the owner for CLI contract design.
 
 Rationale:
 
@@ -4295,7 +4295,7 @@ Rationale:
 
 Consequences:
 
-- `create-skill`, `create-cli`, and `browser-domain-memory` now use `role: main-entry`.
+- `create-skill`, `cli-author`, and `browser-domain-memory` now use `role: main-entry`.
 - Future role checks reject `front-door`.
 - Historical decisions keep their original wording.
 
@@ -4887,7 +4887,7 @@ Rationale:
 
 Consequences:
 
-- `browser-use`, `test-runner`, `fallow`, and `create-cli` script packages have a shared migration tracker.
+- `browser-use`, `test-runner`, `fallow`, and `cli-author` script packages have a shared migration tracker.
 - Future package dependency edits should update the tracker.
 - Runtime portability rules now include facade migration tracking.
 
@@ -5040,41 +5040,41 @@ V2 Ideas:
 
 - Add `skills/*/scripts` workspace coverage only when migrating the first consumer package.
 
-## Decision 117: Migrate Create CLI Scripts To Workspace Facade
+## Decision 117: Migrate CLI Author Scripts To Workspace Facade
 
 ```yaml
 id: decisions-skill-117
 status: accepted
 decided_at: "2026-06-08"
-decision: Migrate create-cli scripts to workspace facade
-owner: skills/create-cli/scripts/package.json
+decision: Migrate cli-author scripts to workspace facade
+owner: skills/cli-author/scripts/package.json
 scope: first facade-backed consumer migration
 source:
-  - "chat: 2026-06-08 create-cli workspace facade migration"
+  - "chat: 2026-06-08 cli-author workspace facade migration"
 decision_mode:
   question: Which facade-backed script package should migrate first?
-  option: migrate create-cli first because it is closest to the facade concept
+  option: migrate cli-author first because it is closest to the facade concept
   confidence: strong
 ```
 
 Decision:
 
-- Add `skills/create-cli/scripts` to root Bun workspaces.
-- Change `skills/create-cli/scripts` from local `file:` facade dependency to `workspace:*`.
+- Add `skills/cli-author/scripts` to root Bun workspaces.
+- Change `skills/cli-author/scripts` from local `file:` facade dependency to `workspace:*`.
 - Add a focused facade resolution smoke script for the package.
 - Add `typescript` as a package-local dev dependency so `typecheck` has an owned executable.
-- Remove stale local install artifacts from `skills/create-cli/scripts`.
+- Remove stale local install artifacts from `skills/cli-author/scripts`.
 - Keep the other three facade-backed script packages on local development portability until migrated separately.
 
 Rationale:
 
-- `create-cli` is the closest consumer to the facade design surface.
+- `cli-author` is the closest consumer to the facade design surface.
 - A single consumer migration proves the workspace pattern without widening blast radius.
 - Package-owned smoke and typecheck commands make future verification obvious.
 
 Consequences:
 
-- `create-cli` scripts now resolve `@side-quest/cli-command-facade` through the workspace graph.
+- `cli-author` scripts now resolve `@side-quest/cli-command-facade` through the workspace graph.
 - Root `bun.lock` owns the migrated package dependency state.
 - `browser-use`, `test-runner`, and `fallow` still need migration from `file:` to `workspace:*`.
 
@@ -5098,7 +5098,7 @@ scope: second facade-backed consumer migration
 source:
   - "chat: 2026-06-08 fallow workspace facade migration"
 decision_mode:
-  question: Which facade-backed script package should migrate after create-cli?
+  question: Which facade-backed script package should migrate after cli-author?
   option: migrate fallow because it has focused test and typecheck verification
   confidence: strong
 ```
@@ -5569,7 +5569,7 @@ Consequences:
 
 Next:
 
-- Design the setup and CRUD CLI changes with `create-cli`.
+- Design the setup and CRUD CLI changes with `cli-author`.
 
 V2 Ideas:
 
@@ -5665,12 +5665,12 @@ id: decisions-skill-131
 status: accepted
 decided_at: "2026-06-09"
 decision: Govern agent-native CLI implementation shape
-owner: skills/create-cli/references/agent-native-cli-design.md
+owner: skills/cli-author/references/agent-native-cli-design.md
 scope: runtime-backed CLI implementation guidance
 source:
   - "chat: 2026-06-09 coding-task-tracker Fallow refactor review"
   - skills/coding-task-tracker/src/coding-task-tracker.ts
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
 ```
 
 Decision:
@@ -5691,8 +5691,8 @@ Rationale:
 
 Consequences:
 
-- `create-cli` owns the implementation-shape guidance.
-- `create-skill` points runtime-backed skill work to `create-cli` and keeps skill prose thin.
+- `cli-author` owns the implementation-shape guidance.
+- `create-skill` points runtime-backed skill work to `cli-author` and keeps skill prose thin.
 - Runtime code and tests still own exact handler names, helper signatures, and output contracts.
 
 Next:
@@ -5735,3 +5735,40 @@ Consequences:
 Next:
 
 - Split further root vocabulary only when a stable scoped owner boundary is evident (carries Decision 61's V2 idea forward).
+
+## Decision 133: Resolve Startup Owner From Main Worktree When Linked Worktrees Lack The Relative Target
+
+```yaml
+id: decisions-skill-133
+status: accepted
+decided_at: "2026-06-14"
+decision: Resolve startup owner from main worktree when linked worktrees lack the relative target
+owner: scripts/agent-instructions.sh
+scope: agent-instructions.config
+source:
+  - "chat: 2026-06-14 VS Code commit blocked by instruction health check in Codex worktree"
+```
+
+Decision:
+
+- Keep `startup_owner` as the configured checkout owner.
+- Resolve relative `startup_owner` from the current checkout first.
+- If that target has no startup files and Git exposes a different main worktree, retry the same relative value from the main worktree.
+- Run the pre-commit health script through `bash` so Git does not depend on worktree-local shebang execution metadata.
+- Keep the projection check strict after owner resolution.
+
+Rationale:
+
+- Linked Codex worktrees can share one global startup owner with the main checkout.
+- `startup_owner=../claude-code-config` resolves correctly in the main checkout but not under `.codex/worktrees/<id>/claude-code-config`.
+- Failing projection checks in those worktrees blocks unrelated skill/doc commits even when home symlinks point at the intended owner.
+
+Consequences:
+
+- Worktree commits validate the configured shared startup owner instead of the transient worktree path.
+- Missing or wrong home symlinks still fail after resolution.
+- Absolute owner config remains unnecessary.
+
+Next:
+
+- Prefer repo-owned relative config; add a specific config value only if another checkout topology cannot be inferred from Git worktree state.

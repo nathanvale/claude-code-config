@@ -1,0 +1,14 @@
+{
+	"name": "fixture-good-front-door-local-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Known-good facade CLI fixture with front-door-local command contracts.",
+	"scripts": {
+		"app": "bun run src/front-doors/app/app.ts",
+		"admin": "bun run src/front-doors/admin/admin.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}

@@ -310,6 +310,10 @@ const auditFlags = {
 		type: "string",
 		description: "Optional audit base ref.",
 	},
+	"--no-cache": {
+		type: "boolean",
+		description: "Disable Fallow's reusable audit cache for this run.",
+	},
 } as const satisfies FallowRunnerCommandContract["flags"];
 
 const applyFlags = {
@@ -332,11 +336,13 @@ const whyFlags = {
 	},
 } as const satisfies FallowRunnerCommandContract["flags"];
 
-const resultContract = {
+export const fallowRunnerResultContract = {
 	id: FALLOW_RUNNER_CONTRACT_ID,
 	kind: "Fallow runner evidence envelope.",
 	schema_version: FALLOW_RUNNER_SCHEMA_VERSION,
 } as const satisfies NonNullable<FallowRunnerCommandContract["resultContract"]>;
+
+const resultContract = fallowRunnerResultContract;
 
 const exitCodes = {
 	"0": "Fallow runner produced usable evidence.",
@@ -392,7 +398,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "fallow-runner",
 			summary: "Run Fallow changed-code risk evidence.",
 			usage: [
-				"audit [--root <repo>] [--base-ref <ref>] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"audit [--root <repo>] [--base-ref <ref>] [--no-cache] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "agent",

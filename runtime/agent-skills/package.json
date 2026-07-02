@@ -1,0 +1,29 @@
+{
+	"name": "agent-skills",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Repo-local agent skill projection runtime.",
+	"sideQuest": {
+		"sourceLinkedBin": true
+	},
+	"bin": {
+		"agent-skills": "./src/cli.ts"
+	},
+	"exports": {
+		".": "./src/index.ts",
+		"./cli": "./src/cli.ts"
+	},
+	"scripts": {
+		"agent-skills": "bun run src/cli.ts",
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Skill Feedback Review Pivot</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8f5;
+      --paper: #ffffff;
+      --ink: #202421;
+      --muted: #5f665f;
+      --line: #d9ded6;
+      --accent: #245c73;
+      --accent-soft: #e2f0f4;
+      --green: #2f6a4f;
+      --green-soft: #e6f2eb;
+      --gold: #7a5a13;
+      --gold-soft: #f5ecd1;
+      --red: #8a3d37;
+      --red-soft: #f3dfdc;
+      --code: #eef1ed;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 24px;
+      margin-bottom: 28px;
+    }
+
+    h1 {
+      font-size: 34px;
+      line-height: 1.15;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 22px;
+      line-height: 1.25;
+      margin: 34px 0 14px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 18px;
+      line-height: 1.3;
+      margin: 0 0 10px;
+      letter-spacing: 0;
+    }
+
+    p {
+      max-width: 76ch;
+      margin: 0 0 12px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    code {
+      background: var(--code);
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .metadata {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      margin: 18px 0 4px;
+    }
+
+    .summary-card,
+    .idea-card,
+    .note-card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .summary-card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+    }
+
+    .axis-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+
+    .axis-list li {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .jump-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 16px;
+    }
+
+    .jump-list a {
+      background: var(--accent-soft);
+      border: 1px solid #bfd9e2;
+      border-radius: 999px;
+      padding: 6px 10px;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .idea-card {
+      margin: 14px 0;
+    }
+
+    .idea-head {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .rank {
+      display: inline-grid;
+      place-items: center;
+      min-width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .idea-title {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin: 0;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: #fbfcfa;
+    }
+
+    .tag.high {
+      background: var(--green-soft);
+      border-color: #b8d8c6;
+      color: var(--green);
+    }
+
+    .tag.medium {
+      background: var(--gold-soft);
+      border-color: #e5d19a;
+      color: var(--gold);
+    }
+
+    .tag.low {
+      background: var(--red-soft);
+      border-color: #e2b9b3;
+      color: var(--red);
+    }
+
+    .field {
+      margin: 10px 0;
+    }
+
+    .field b {
+      color: var(--muted);
+    }
+
+    .diagram {
+      margin: 14px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      padding: 10px;
+      overflow-x: auto;
+    }
+
+    .diagram svg {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 0 auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+    }
+
+    th {
+      background: #eef2ed;
+      color: #3f473f;
+      font-size: 13px;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .sources ul {
+      padding-left: 20px;
+    }
+
+    footer {
+      margin-top: 36px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>Ideation: Skill Feedback Review Pivot</h1>
+      <p>Angles for the pivot from category-first review toward evidence tiers, exact ledger anchors, and runtime-aware observability across Codex and Claude Code.</p>
+      <div class="metadata">
+        <span class="pill">Date: <time datetime="2026-06-13">2026-06-13</time></span>
+        <span class="pill">Topic: skill-feedback-review-pivot</span>
+        <span class="pill">Mode: repo-grounded</span>
+        <span class="pill">Raw ideas: 40</span>
+        <span class="pill">Survivors: 7</span>
+      </div>
+    </header>
+
+    <section aria-labelledby="grounding">
+      <h2 id="grounding">Grounding Context</h2>
+      <div class="summary-grid">
+        <div class="summary-card">
+          <strong>Current pivot</strong>
+          <p>Decision 20 moves active v2 work to a closeout-first anchor ledger. Driver closeouts can build review value now. Trusted skill identity stays a separate readiness claim.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Key invariant</strong>
+          <p><code>review_unit_key</code> answers same-run coalescing. <code>ledger_anchor_key</code> answers recurring stable surface. Evidence source, runtime, tier, friction, open reason, report id, and <code>skill_run_id</code> do not form the ledger key.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Runtime split</strong>
+          <p>Codex Stop is Stop-detected turn evidence. Claude Code can reach Stop-detected skill when supported evidence names a completed skill run. Neither proves Codex trusted skill identity.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Implementation reality</strong>
+          <p>The current code is still v1-shaped: <code>ReviewResultData</code> has <code>capture_readiness</code>, <code>open_items</code>, no ledger entries, no evidence tiers, and no weak-anchor fields yet.</p>
+        </div>
+        <div class="summary-card">
+          <strong>External pattern</strong>
+          <p>OpenTelemetry, OpenInference, incident review, trace context, and provenance systems all point in the same direction: trace/provenance first, categories later.</p>
+        </div>
+        <div class="summary-card">
+          <strong>Product stance</strong>
+          <p>The artifact is the instrument. Prefer mutation-free review output and inspectable local state before dashboards, background automation, or new category models.</p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="axes">
+      <h2 id="axes">Topic Axes</h2>
+      <ul class="axis-list">
+        <li>Contract migration</li>
+        <li>Anchor reliability</li>
+        <li>Runtime identity boundary</li>
+        <li>Review output workflow</li>
+        <li>Future-category pressure valve</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="ideas">
+      <h2 id="ideas">Ranked Ideas</h2>
+      <nav class="jump-list" aria-label="Ranked idea links">
+        <a href="#idea-1">1. Reducer + vectors</a>
+        <a href="#idea-2">2. Two keys</a>
+        <a href="#idea-3">3. Claim badges</a>
+        <a href="#idea-4">4. Weak anchors</a>
+        <a href="#idea-5">5. Readiness ladder</a>
+        <a href="#idea-6">6. Review order</a>
+        <a href="#idea-7">7. Category pressure</a>
+      </nav>
+
+      <article class="idea-card" id="idea-1">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">1</span> Replayable Ledger Reducer With Golden Vectors</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Contract migration</span>
+          <span class="tag high">Confidence: 91%</span>
+          <span class="tag medium">Complexity: Medium</span>
+        </div>
+        <p><b>Description:</b> Build v2 as a pure reducer over normalized reports: review units in, ledger entries plus weak-anchor telemetry out. Pair it with golden vectors that prove key behavior before rendering gets persuasive. JSON, plain output, tests, and future category proposals consume the same reducer.</p>
+        <div class="diagram" aria-label="Reducer shape">
+          <svg viewBox="0 0 760 170" role="img" aria-labelledby="reducer-title">
+            <title id="reducer-title">Reducer flow</title>
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#245c73"></path>
+              </marker>
+            </defs>
+            <rect x="20" y="40" width="155" height="70" rx="7" fill="#e2f0f4" stroke="#245c73"></rect>
+            <text x="97" y="70" text-anchor="middle" font-size="14" fill="#202421">Normalized</text>
+            <text x="97" y="90" text-anchor="middle" font-size="14" fill="#202421">reports</text>
+            <line x1="175" y1="75" x2="270" y2="75" stroke="#245c73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="270" y="28" width="190" height="94" rx="7" fill="#e6f2eb" stroke="#2f6a4f"></rect>
+            <text x="365" y="62" text-anchor="middle" font-size="14" fill="#202421">Replayable</text>
+            <text x="365" y="82" text-anchor="middle" font-size="14" fill="#202421">ledger reducer</text>
+            <text x="365" y="102" text-anchor="middle" font-size="12" fill="#5f665f">golden vectors guard drift</text>
+            <line x1="460" y1="75" x2="555" y2="75" stroke="#245c73" stroke-width="2" marker-end="url(#arrow)"></line>
+            <rect x="555" y="18" width="170" height="114" rx="7" fill="#fff" stroke="#d9ded6"></rect>
+            <text x="640" y="48" text-anchor="middle" font-size="14" fill="#202421">Ledger entries</text>
+            <text x="640" y="72" text-anchor="middle" font-size="14" fill="#202421">weak-anchor telemetry</text>
+            <text x="640" y="96" text-anchor="middle" font-size="14" fill="#202421">plain + JSON</text>
+          </svg>
+        </div>
+        <p class="field"><b>Basis:</b> direct: the v2 plan requires review-unit keys, ledger anchor keys, exact grouping, weak-anchor reasons, and renderer vocabulary in the command contract; the current code still exposes only v1-shaped review output.</p>
+        <p class="field"><b>Rationale:</b> This is the smallest structural move that makes "simple and reliable" true. One reducer becomes the source of truth instead of letting plain output, JSON, and tests each reinterpret reports.</p>
+        <p class="field"><b>Downsides:</b> Requires disciplined contract-first implementation. It may feel slower than adding a renderer, but it prevents the renderer from inventing behavior.</p>
+      </article>
+
+      <article class="idea-card" id="idea-2">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">2</span> Two Keys, Two Claims</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Anchor reliability</span>
+          <span class="tag high">Confidence: 90%</span>
+          <span class="tag low">Complexity: Low</span>
+        </div>
+        <p><b>Description:</b> Make the mental model explicit everywhere: <code>review_unit_key</code> means "same run"; <code>ledger_anchor_key</code> means "same stable surface." Neither key is allowed to imply the other's claim. This should appear in contract names, tests, plain labels, and docs.</p>
+        <div class="diagram" aria-label="Two keys diagram">
+          <svg viewBox="0 0 760 190" role="img" aria-labelledby="keys-title">
+            <title id="keys-title">Two keys and their claims</title>
+            <rect x="40" y="30" width="290" height="120" rx="8" fill="#e2f0f4" stroke="#245c73"></rect>
+            <text x="185" y="62" text-anchor="middle" font-size="16" fill="#202421">review_unit_key</text>
+            <text x="185" y="90" text-anchor="middle" font-size="14" fill="#202421">same trusted run id</text>
+            <text x="185" y="118" text-anchor="middle" font-size="13" fill="#5f665f">can support corroboration</text>
+            <rect x="430" y="30" width="290" height="120" rx="8" fill="#f5ecd1" stroke="#7a5a13"></rect>
+            <text x="575" y="62" text-anchor="middle" font-size="16" fill="#202421">ledger_anchor_key</text>
+            <text x="575" y="90" text-anchor="middle" font-size="14" fill="#202421">same canonical path set</text>
+            <text x="575" y="118" text-anchor="middle" font-size="13" fill="#5f665f">can support recurrence</text>
+            <line x1="330" y1="90" x2="430" y2="90" stroke="#8a3d37" stroke-width="2" stroke-dasharray="6 6"></line>
+            <text x="380" y="82" text-anchor="middle" font-size="12" fill="#8a3d37">no implication</text>
+          </svg>
+        </div>
+        <p class="field"><b>Basis:</b> direct: the plan says same <code>ledger_anchor_key</code> alone never upgrades to <code>corroborated</code>, and <code>skill_run_id</code> is excluded from the ledger key.</p>
+        <p class="field"><b>Rationale:</b> This catches the most tempting false merge in the system. It is also a teachable phrase that future agents can remember.</p>
+        <p class="field"><b>Downsides:</b> Naming has to stay strict. If later code aliases the keys or hides them behind one helper, the distinction will decay.</p>
+      </article>
+
+      <article class="idea-card" id="idea-3">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">3</span> Claim Budget Badges</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Runtime identity boundary</span>
+          <span class="tag high">Confidence: 86%</span>
+          <span class="tag medium">Complexity: Medium</span>
+        </div>
+        <p><b>Description:</b> Render each ledger entry with the claims it is allowed to make: repeated anchor, mixed runtime evidence, same trusted run, or trusted engine identity. Treat evidence tiers as the underlying data, but give humans and agents claim-scoped wording they can safely repeat.</p>
+        <p class="field"><b>Basis:</b> direct: Decision 20 preserves Codex Stop as runtime evidence, Claude Stop-detected skill as stronger runtime-specific evidence, and Trusted skill identity as a separate gated claim. external: digital forensics and SLSA-style provenance separate evidence custody from claim strength.</p>
+        <p class="field"><b>Rationale:</b> Tier enums are precise but easy to overread. Claim badges turn tier state into safe language and make false readiness harder to create.</p>
+        <p class="field"><b>Downsides:</b> Adds renderer vocabulary. The badges must be generated from contract-owned states, not ad hoc copy.</p>
+      </article>
+
+      <article class="idea-card" id="idea-4">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">4</span> Weak-Anchor Quarantine</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Future-category pressure valve</span>
+          <span class="tag high">Confidence: 84%</span>
+          <span class="tag medium">Complexity: Medium</span>
+        </div>
+        <p><b>Description:</b> Make weak anchors a named lane rather than leftovers. Label-only, missing, out-of-repo, or unverifiable anchors stay standalone. They get a weak-anchor reason, attempted target, source mix, open-signal facets, and anchor-miss telemetry outside merged ledger counts.</p>
+        <p class="field"><b>Basis:</b> direct: the active plan keeps weak anchors standalone and emits telemetry without merging it. external: flaky-test quarantine preserves signal while protecting the main result set.</p>
+        <p class="field"><b>Rationale:</b> This keeps the no-false-merge rule while still learning from messy evidence. It is the pressure valve that lets v2 stay simple without becoming blind.</p>
+        <p class="field"><b>Downsides:</b> Needs careful plain output so the quarantine lane does not become the loudest section.</p>
+      </article>
+
+      <article class="idea-card" id="idea-5">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">5</span> Readiness Ladder And Stop Observability Panel</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Runtime identity boundary</span>
+          <span class="tag medium">Confidence: 82%</span>
+          <span class="tag medium">Complexity: Medium</span>
+        </div>
+        <p><b>Description:</b> Replace one Codex gate with ladder rungs: runtime capture observed, hook config trusted, approval observable or attested, close detection present, shared trusted run id, trusted skill identity proven. A Stop observability panel shows Codex Stop-detected turn counts, Claude Stop-detected skill counts, active hook source-set state, and blocked identity reasons.</p>
+        <p class="field"><b>Basis:</b> direct: current readiness still couples implementation readiness to trusted Codex Stop identity, while the active plan separates runtime capture, trusted identity, and daily pilot. external: trace and observability systems show partial progress as explicit state rather than one binary flag.</p>
+        <p class="field"><b>Rationale:</b> This lets Codex Stop become useful evidence without pretending it proves skill identity. It also keeps Claude Code's stronger Stop evidence visible without polluting Codex readiness.</p>
+        <p class="field"><b>Downsides:</b> More states mean more renderer responsibility. The ladder must stay sparse and test-backed.</p>
+      </article>
+
+      <article class="idea-card" id="idea-6">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">6</span> Coverage First, Anchor Second, Exceptions Last</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Review output workflow</span>
+          <span class="tag medium">Confidence: 78%</span>
+          <span class="tag low">Complexity: Low</span>
+        </div>
+        <p><b>Description:</b> Make plain review follow a fixed reading order: coverage and no-action health first, readiness boundaries second, anchor ledger third, weak-anchor lane fourth, open exceptions last. Open reasons remain facets inside entries, not the organizing principle.</p>
+        <p class="field"><b>Basis:</b> direct: v1 review already leads with coverage, opens only high-signal items, and stays mutation-free. The v2 plan appends ledger detail after existing triage and excludes open reason from the ledger key.</p>
+        <p class="field"><b>Rationale:</b> Output order is the product doctrine in miniature. This keeps human reading simple and prevents v1 open reasons from sneaking back into category-like grouping.</p>
+        <p class="field"><b>Downsides:</b> Could bury urgent exceptions if the first sections grow too long. Needs length caps and terse plain rendering.</p>
+      </article>
+
+      <article class="idea-card" id="idea-7">
+        <div class="idea-head">
+          <h3 class="idea-title"><span class="rank">7</span> Category Pressure Valve</h3>
+        </div>
+        <div class="tags">
+          <span class="tag">Axis: Future-category pressure valve</span>
+          <span class="tag medium">Confidence: 76%</span>
+          <span class="tag medium">Complexity: Medium</span>
+        </div>
+        <p><b>Description:</b> Assume v2 never gets product-native categories unless ledger data earns them. Review can emit a non-grouping category-pressure section or separate proposal artifact that cites repeated strong anchors, repeated weak-anchor telemetry, examples, and the decision needed to accept a future category view.</p>
+        <p class="field"><b>Basis:</b> direct: Decision 20 removes category-first scope but leaves future category work possible only after real ledger data proves the need. external: library authority control separates stable item records from evolving subject headings.</p>
+        <p class="field"><b>Rationale:</b> This makes "not now" durable. It gives category pressure somewhere to go without letting it leak back into v2 grouping.</p>
+        <p class="field"><b>Downsides:</b> This is mostly a follow-up mechanism. It should not distract from shipping the reducer and golden vectors first.</p>
+      </article>
+    </section>
+
+    <section aria-labelledby="rejections">
+      <h2 id="rejections">Rejection Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Cut Idea</th>
+            <th>Reason Rejected</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Anchor Compiler, Not Classifier</td>
+            <td>Folded into the reducer and golden vectors. As a standalone idea it is useful, but weaker than the test-backed implementation shape.</td>
+          </tr>
+          <tr>
+            <td>Snap-To-Road Anchor Canonicalizer</td>
+            <td>Rejected because the metaphor can imply fuzzy snapping. V2 needs deterministic repo-path canonicalization only.</td>
+          </tr>
+          <tr>
+            <td>Trace-First Review Unit</td>
+            <td>Rejected because it can over-center runtime traces and weaken the closeout-first pivot.</td>
+          </tr>
+          <tr>
+            <td>No-Action As A First-Class Result</td>
+            <td>Sound but already covered by the review-output workflow. It does not need a separate ideation direction.</td>
+          </tr>
+          <tr>
+            <td>Contract Stratigraphy Guard</td>
+            <td>Useful but belongs inside contract migration and self-diagnosis, not as a standalone product direction.</td>
+          </tr>
+          <tr>
+            <td>Accepted Proof Upgrade Path</td>
+            <td>Valid but too future-facing for the immediate pivot. Keep it as a later extension after the reducer exists.</td>
+          </tr>
+          <tr>
+            <td>Runtime Identity Ladder Lints</td>
+            <td>Sound but folded into Readiness Ladder and Claim Budget Badges.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="sources" aria-labelledby="sources">
+      <h2 id="sources">Sources And References</h2>
+      <ul>
+        <li><a href="../plans/2026-06-12-002-feat-skill-feedback-pattern-ledger-v2-plan.md">Active v2 plan</a></li>
+        <li><a href="../research/2026-06-13-codex-stop-hooks-skill-observability-community-signal.md">Codex Stop hooks and skill observability research</a></li>
+        <li><a href="../decisions/2026-06-12-001-skill-feedback-pilot-decision-log.md">Decision 20 in skill-feedback pilot decision log</a></li>
+        <li><a href="../../skills/skill-feedback/CONTEXT.md">Skill-feedback context glossary</a></li>
+        <li><a href="../../skills/skill-feedback/references/report-shape.md">Report shape reference</a></li>
+        <li><a href="https://developers.openai.com/codex/hooks">OpenAI Codex hooks</a></li>
+        <li><a href="https://code.claude.com/docs/en/hooks">Claude Code hooks</a></li>
+        <li><a href="https://arize-ai.github.io/openinference/spec/">OpenInference specification</a></li>
+        <li><a href="https://www.w3.org/TR/trace-context/">W3C Trace Context</a></li>
+        <li><a href="https://slsa.dev/spec/draft/build-provenance">SLSA build provenance</a></li>
+      </ul>
+    </section>
+
+    <footer class="composition-signal">
+      Composed 2026-06-13 by ce-ideate from the linked source docs above.
+    </footer>
+  </main>
+</body>
+</html>

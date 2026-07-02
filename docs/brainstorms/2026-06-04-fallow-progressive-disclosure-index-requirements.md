@@ -254,7 +254,7 @@ User ask
 - `skills/fallow/scripts/command-contract.ts`
 - `skills/fallow/scripts/fallow-runner.test.ts`
 - `context/skill-design-philosophy.md`
-- `skills/create-cli/SKILL.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
-- `docs/brainstorms/2026-06-04-create-cli-product-shape-requirements.md`
+- `skills/cli-author/SKILL.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
+- `docs/brainstorms/2026-06-04-cli-author-product-shape-requirements.md`
 - External handoff: `fallow-skill-frontdoor-handoff.md`

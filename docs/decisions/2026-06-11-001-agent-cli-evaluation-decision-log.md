@@ -152,7 +152,7 @@ Consequences:
 
 Next:
 
-- Apply this as a default constraint when designing new helper CLIs with `create-cli`.
+- Apply this as a default constraint when designing new helper CLIs with `cli-author`.
 
 V2 Ideas:
 
@@ -276,7 +276,7 @@ Consequences:
 
 Next:
 
-- Include missing-capability stubs in future `create-cli` designs when the capability boundary is known.
+- Include missing-capability stubs in future `cli-author` designs when the capability boundary is known.
 
 V2 Ideas:
 
@@ -315,7 +315,7 @@ Consequences:
 Next:
 
 - Add discovery/registry checks to the evaluation rubric for the next agent CLI tool.
-- Use `create-cli` to define the exact command contract before implementing any new discovery surface.
+- Use `cli-author` to define the exact command contract before implementing any new discovery surface.
 
 V2 Ideas:
 
@@ -350,7 +350,7 @@ Consequences:
 
 - Future tool reviews should cite the rubric before extracting decisions.
 - Candidate patterns stay as notes until accepted.
-- `create-cli` remains the handoff before implementing any adopted CLI surface.
+- `cli-author` remains the handoff before implementing any adopted CLI surface.
 
 Next:
 
@@ -391,12 +391,12 @@ Consequences:
 
 - Future CLI designs should name a command discovery owner.
 - Help output and discovery output should share command metadata where practical.
-- `create-cli` should treat command discovery as a first-class recipe when command trees grow.
+- `cli-author` should treat command discovery as a first-class recipe when command trees grow.
 
 Next:
 
 - Include command discovery in the proposed CLI seam contract.
-- Use `create-cli` before implementing the exact `discover --json` surface.
+- Use `cli-author` before implementing the exact `discover --json` surface.
 
 V2 Ideas:
 
@@ -496,7 +496,7 @@ source:
   - "2026-06-11 Nathan request: CLI seam contract and architecture guidance"
   - docs/research/2026-06-11-playwright-cli-rubric-evaluation.md
   - docs/research/2026-06-11-agent-cli-evaluation-rubric.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
 ```
 
 Decision:
@@ -514,19 +514,19 @@ Rationale:
 Consequences:
 
 - The next artifact should be a synthesis/contract document, not another isolated tool evaluation.
-- Exact deterministic contracts should land in code, generated docs, CLI help, or checks after `create-cli`.
+- Exact deterministic contracts should land in code, generated docs, CLI help, or checks after `cli-author`.
 - The research pass can use DDD and ICA-style seam language without turning the decision log into policy prose.
 
 Next:
 
 - Draft `docs/research/2026-06-11-agent-cli-seam-contract.md`.
 - Include a proposed file tree and naming guidance.
-- Use `create-cli` before converting the contract into helper CLI behavior.
+- Use `cli-author` before converting the contract into helper CLI behavior.
 - Use architecture review skills after the draft if the contract proposes durable file structure rules.
 
 V2 Ideas:
 
-- Promote the contract into `create-cli` references after it survives one implementation.
+- Promote the contract into `cli-author` references after it survives one implementation.
 - Add a mechanical checker only after repeated drift appears.
 
 ## Decision 13: Accept CLI Seam Principles And Ownership Surfaces
@@ -539,7 +539,7 @@ decision: Accept CLI seam principles and ownership surfaces while keeping exact 
 owner: agent-cli-evaluation
 source:
   - docs/research/2026-06-11-agent-cli-seam-contract.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
   - "2026-06-11 Codex session: CLI seam contract grilling"
 decision_mode:
   question: What should the seam contract become after grilling?
@@ -569,11 +569,11 @@ Next:
 
 - Continue grilling the candidate decisions one at a time.
 - Record only accepted decisions in this log.
-- Leave exact contract shape in code, generated docs, CLI help, or checks after `create-cli`.
+- Leave exact contract shape in code, generated docs, CLI help, or checks after `cli-author`.
 
 V2 Ideas:
 
-- Promote proven parts of the seam contract into `create-cli` references after a real implementation validates them.
+- Promote proven parts of the seam contract into `cli-author` references after a real implementation validates them.
 - Add mechanical checks only after repeated drift appears.
 
 ## Decision 14: Require Alignment Proof When Public CLI Surfaces Can Drift
@@ -586,8 +586,8 @@ decision: Require command-surface alignment proof when public CLI surfaces can d
 owner: agent-cli-evaluation
 source:
   - docs/research/2026-06-11-agent-cli-seam-contract.md
-  - skills/create-cli/references/agent-native-cli-design.md
-  - skills/create-cli/references/cli-guidelines.md
+  - skills/cli-author/references/agent-native-cli-design.md
+  - skills/cli-author/references/cli-guidelines.md
   - "2026-06-11 Codex session: CLI seam contract grilling"
 decision_mode:
   question: When should command-surface alignment proof be required?
@@ -599,7 +599,7 @@ Decision:
 
 - Require a command-surface alignment proof when parser behavior, rendered help, discovery metadata, machine output, or runtime semantics can drift.
 - Do not require the proof for tiny CLI changes with no meaningful drift surface.
-- Keep exact proof mechanics in code, generated docs, CLI help, or checks after `create-cli`.
+- Keep exact proof mechanics in code, generated docs, CLI help, or checks after `cli-author`.
 
 Rationale:
 
@@ -610,7 +610,7 @@ Rationale:
 Consequences:
 
 - Future non-trivial CLI work should name the surfaces that can drift before implementation.
-- `create-cli` should carry the proof path for new or changed command surfaces.
+- `cli-author` should carry the proof path for new or changed command surfaces.
 - Reviews should reject prose-only claims that parser, help, discovery, output, and runtime behavior stay aligned.
 
 Next:
@@ -632,8 +632,8 @@ decision: Require read-only machine diagnostics and explicit mutating repair spl
 owner: agent-cli-evaluation
 source:
   - docs/research/2026-06-11-agent-cli-seam-contract.md
-  - skills/create-cli/references/agent-native-cli-design.md
-  - skills/create-cli/references/cli-guidelines.md
+  - skills/cli-author/references/agent-native-cli-design.md
+  - skills/cli-author/references/cli-guidelines.md
   - "2026-06-11 Codex session: CLI seam contract grilling"
 decision_mode:
   question: How should we standardize `doctor --json`?
@@ -646,7 +646,7 @@ Decision:
 - Require read-only machine-readable diagnostics when readiness depends on environment, auth, config, service reachability, local dependencies, installed artifacts, caches, registries, protocols, or similar runtime state.
 - Require mutating repair to be explicit and separate from diagnostic reporting.
 - Treat `doctor --json` as the default example, not the only accepted command spelling.
-- Keep exact command names, flags, fields, repair actions, and diagnostics in the implementation contract after `create-cli`.
+- Keep exact command names, flags, fields, repair actions, and diagnostics in the implementation contract after `cli-author`.
 
 Rationale:
 
@@ -664,7 +664,7 @@ Consequences:
 
 Next:
 
-- Apply this requirement through `create-cli` when planning eligible CLI surfaces.
+- Apply this requirement through `cli-author` when planning eligible CLI surfaces.
 - Keep exact diagnostic and repair contracts in code, generated docs, CLI help, or checks.
 
 V2 Ideas:
@@ -683,7 +683,7 @@ owner: agent-cli-evaluation
 source:
   - docs/research/2026-06-11-agent-cli-seam-contract.md
   - docs/research/2026-06-11-agent-cli-evaluation-rubric.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
   - "2026-06-11 Codex session: CLI seam contract grilling"
 decision_mode:
   question: How should command discovery metadata be standardized beyond existing Decision 9?
@@ -707,7 +707,7 @@ Rationale:
 
 Consequences:
 
-- Future non-trivial CLI plans should name the discovery owner and threshold during `create-cli`.
+- Future non-trivial CLI plans should name the discovery owner and threshold during `cli-author`.
 - Reviews should reject prose-only command catalogs once the threshold applies.
 - Exact metadata shape, command name, flag name, and validation live in runtime code, generated docs, CLI help, or checks.
 
@@ -732,7 +732,7 @@ owner: agent-cli-evaluation
 source:
   - docs/research/2026-06-11-agent-cli-seam-contract.md
   - docs/research/2026-06-11-agent-cli-evaluation-rubric.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
   - "2026-06-11 Codex session: CLI seam contract grilling"
 decision_mode:
   question: How should structured failure coverage be standardized beyond existing Decision 10?
@@ -745,7 +745,7 @@ Decision:
 - Require structured failure coverage when a CLI exposes machine output or agent-facing surfaces.
 - Preserve structured failure output for parser, config, trust, auth-readiness, dependency, missing-capability, interrupted, and pre-runtime failures under machine mode.
 - Require structured failures to include category, retry safety, changed-state stance, diagnostics pointer when useful, and next safe action.
-- Keep exact field names, categories, and envelope shape in implementation contracts after `create-cli`.
+- Keep exact field names, categories, and envelope shape in implementation contracts after `cli-author`.
 
 Rationale:
 
@@ -761,7 +761,7 @@ Consequences:
 
 Next:
 
-- Apply this gate during `create-cli` planning for machine-output and agent-facing CLIs.
+- Apply this gate during `cli-author` planning for machine-output and agent-facing CLIs.
 - Keep exact failure contracts in code, generated docs, CLI help, or checks.
 
 V2 Ideas:
@@ -780,7 +780,7 @@ owner: agent-cli-evaluation
 source:
   - docs/research/2026-06-11-agent-cli-seam-contract.md
   - docs/research/2026-06-11-agent-cli-evaluation-rubric.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/agent-native-cli-design.md
   - "2026-06-11 Codex session: CLI seam contract grilling"
 decision_mode:
   question: When should run correlation be mandatory?
@@ -793,7 +793,7 @@ Decision:
 - Require run correlation for agent-facing machine output.
 - Require run correlation for event streams, diagnostic surfaces, and persisted support artifacts.
 - Do not require run correlation for every tiny human-only CLI invocation.
-- Keep exact identifier names, propagation rules, storage behavior, and redaction policy in implementation contracts after `create-cli`.
+- Keep exact identifier names, propagation rules, storage behavior, and redaction policy in implementation contracts after `cli-author`.
 
 Rationale:
 
@@ -810,7 +810,7 @@ Consequences:
 
 Next:
 
-- Apply this requirement during `create-cli` planning for agent-facing machine surfaces.
+- Apply this requirement during `cli-author` planning for agent-facing machine surfaces.
 - Keep exact correlation contracts in code, generated docs, CLI help, or checks.
 
 V2 Ideas:
@@ -868,16 +868,16 @@ decision: "Govern write-preview-plus-execute CLI adoption"
 owner: "agent-cli-evaluation"
 source:
   - "docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md"
-  - "skills/create-cli/SKILL.md"
-  - "skills/create-cli/references/agent-native-cli-design.md"
+  - "skills/cli-author/SKILL.md"
+  - "skills/cli-author/references/agent-native-cli-design.md"
   - "runtime/cli-command-facade/CONTEXT.md"
   - "2026-06-11 Codex session: record-decision governance follow-up"
 ```
 
 Decision:
 
-- Govern the write-preview-plus-execute pattern through `create-cli` planning guidance.
-- Treat `create-cli` as the adoption owner for deciding when a CLI needs dry-run preview, explicit execute intent, discovery metadata, structured failures, and drift proof.
+- Govern the write-preview-plus-execute pattern through `cli-author` planning guidance.
+- Treat `cli-author` as the adoption owner for deciding when a CLI needs dry-run preview, explicit execute intent, discovery metadata, structured failures, and drift proof.
 - Treat `runtime/cli-command-facade` as the shared owner for generic contract projection, discovery output, error envelopes, and reusable alignment checks.
 - Treat each CLI package as the owner for domain-specific runtime semantics, mutation safety, fixtures, and end-to-end dry-run/execute parity tests.
 - Do not make every CLI support `--execute`; require explicit execute intent for local mutation surfaces where a dry-run preview exists.
@@ -891,14 +891,14 @@ Rationale:
 
 Consequences:
 
-- New or changed agent-facing CLIs use `create-cli` to route the contract path.
+- New or changed agent-facing CLIs use `cli-author` to route the contract path.
 - Create-cli guidance needs to name this pattern explicitly for mutation-capable CLIs.
 - Facade improvements should focus on generic drift proof surfaces that many CLIs can reuse.
 - Record-decision remains the first proving implementation, not the template for every CLI.
 
 Next:
 
-- Update `skills/create-cli` guidance so future CLI work routes mutation-capable surfaces through this pattern.
+- Update `skills/cli-author` guidance so future CLI work routes mutation-capable surfaces through this pattern.
 - Consider facade-level alignment helpers only after another CLI needs the same proof.
 
 V2 Ideas:
@@ -948,7 +948,7 @@ Rationale:
 
 Consequences:
 
-- `create-cli` remains the design owner for deciding when a CLI front-door folder is warranted.
+- `cli-author` remains the design owner for deciding when a CLI front-door folder is warranted.
 - `create-skill` runtime portability guidance needs to stop treating flat `src/<command-name>.ts` as the only multi-command package shape.
 - Tooling must learn package-level and front-door-local contract locations before front-door contract placement becomes enforceable.
 - `record-decision` stays flat until it grows another CLI front door or a complex public Interface seam.
@@ -957,7 +957,7 @@ Consequences:
 Next:
 
 - Design the smallest Command Contract Locator that lets auditors and workspace checks find package-level and front-door-local command contracts.
-- Update `create-cli` and runtime portability guidance after the locator decision.
+- Update `cli-author` and runtime portability guidance after the locator decision.
 - Resolve the durable vocabulary owner for `CLI Front Door`.
 
 V2 Ideas:
@@ -965,3 +965,57 @@ V2 Ideas:
 - Add an import-direction check after the first front-door migration proves the shape.
 - Add a topology check for package scripts, bins, front doors, contracts, and tests after locator support exists.
 - Prove the folder shape on a low-noise package before migrating a large package such as `browser-use`.
+
+## Decision 22: Use Conventional Command Contract Locator Discovery
+
+```yaml
+id: agent-cli-evaluation-022
+status: accepted
+decided_at: "2026-06-11"
+decision: "Use conventional Command Contract Locator discovery"
+owner: "agent-cli-evaluation"
+source:
+  - "docs/decisions/2026-06-11-001-agent-cli-evaluation-decision-log.md"
+  - "skills/cli-execution-auditor/src/audit-engine.ts"
+  - "scripts/check-workspace-facade-invariants.ts"
+  - "2026-06-11 Codex session: Command Contract Locator implementation"
+```
+
+Decision:
+
+- Use a tooling-owned conventional Command Contract Locator.
+- Discover package-level contracts at `src/command-contract.ts`.
+- Discover CLI Front Door contracts at `src/front-doors/*/command-contract.ts`.
+- Keep package-level contracts first, then sort CLI Front Door contracts.
+- Merge discovered contract maps for audit.
+- Fail acquisition when two discovered contracts define the same command name.
+- Resolve surface audit runnables from each command's own `script` value.
+- Do not add package manifest metadata for this slice.
+- Do not make `runtime/cli-command-facade` own consuming package folder topology.
+
+Rationale:
+
+- Existing packages already use the package-level contract convention.
+- CLI Front Door contracts need mechanical discovery before placement can be enforced.
+- Conventional discovery is enough for the two accepted locations.
+- Manifest metadata would add package churn before a real package needs non-conventional layout.
+- The facade runtime owns reusable grammar, not consumer topology.
+
+Consequences:
+
+- `cli-execution-auditor` can audit package-level and CLI Front Door contracts.
+- `scripts/check-workspace-facade-invariants.ts` can validate script references in both contract locations.
+- Packages may stay flat when command vocabulary is shared.
+- Packages may put front-door-local contracts under `src/front-doors/<cli-name>/` when vocabulary is distinct.
+- Duplicate command names across discovered contract files are treated as acquisition failure.
+
+Next:
+
+- Update `cli-author` and runtime portability guidance to name both contract locations.
+- Keep `CLI Front Door` and `Command Contract Locator` vocabulary in root `CONTEXT.md`.
+- Add import-direction checks only after a real front-door migration proves the shape.
+
+Future Ideas:
+
+- Add explicit manifest metadata only if a package needs non-conventional contract locations.
+- Add a topology check for bins, package scripts, front-door folders, and contract owners.

@@ -45,6 +45,7 @@ status: graduated
 ```bash
 bun --filter @side-quest/cli-command-facade test
 bun --filter @side-quest/cli-command-facade typecheck
+bun --filter @side-quest/cli-command-facade typecheck:contracts
 ```
 
 ## Testing

@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
+import { discoverCommandContractPaths } from "../skills/cli-execution-auditor/src/command-contract-discovery.ts";
 
 type Workspaces =
 	| string[]
@@ -32,6 +33,9 @@ type PackageJson = {
 	devDependencies?: Record<string, string>;
 	bundleDependencies?: string[] | boolean;
 	bundledDependencies?: string[] | boolean;
+	sideQuest?: {
+		sourceLinkedBin?: boolean;
+	};
 };
 
 type TsconfigJson = {
@@ -207,10 +211,8 @@ function discoverLocalScripts(packageJson: PackageJson | null): Record<string, s
 	return localScripts;
 }
 
-function discoverContractPaths(packagePath: string): string[] {
-	const contractPath = join(packagePath, "src/command-contract.ts");
-
-	return existsSync(repoPath(contractPath)) ? [contractPath] : [];
+async function discoverContractPaths(packagePath: string): Promise<string[]> {
+	return discoverCommandContractPaths(repoPath(packagePath));
 }
 
 function expectedShebangForBinTarget(binTarget: string): string | null {
@@ -241,6 +243,10 @@ function packageBins(packageJson: PackageJson | null): Record<string, string> {
 	}
 
 	return packageJson.bin;
+}
+
+function allowsSourceLinkedBin(packageJson: PackageJson | null): boolean {
+	return packageJson?.sideQuest?.sourceLinkedBin === true;
 }
 
 function hasBlankValue(value: string | undefined): boolean {
@@ -904,6 +910,7 @@ if (!existsSync(rootLockPath)) {
 
 		if (
 			workspacePackage.packageJson?.private !== false &&
+			!allowsSourceLinkedBin(workspacePackage.packageJson) &&
 			packageLockBlock?.includes(`\n      "bin": {`)
 		) {
 			findings.push({
@@ -915,6 +922,9 @@ if (!existsSync(rootLockPath)) {
 		const bins = packageBins(workspacePackage.packageJson);
 
 		for (const [binName, binTarget] of Object.entries(bins)) {
+			if (allowsSourceLinkedBin(workspacePackage.packageJson)) {
+				continue;
+			}
 			const lockBinTarget = binTarget.startsWith("./")
 				? binTarget
 				: `./${binTarget}`;
@@ -940,7 +950,11 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 	checkTypeScriptGovernance(packagePath, packageJson);
 	checkLintPortability(packagePath, packageJson);
 
-	if (packageJson?.private !== false && packageJson?.bin) {
+	if (
+		packageJson?.private !== false &&
+		packageJson?.bin &&
+		!allowsSourceLinkedBin(packageJson)
+	) {
 		findings.push({
 			path: `${packagePath}/package.json`,
 			message: "Private repo-local package declares package bin entries; use package scripts for source-mode commands and reserve bin for published or externally consumed tools.",
@@ -1078,8 +1092,8 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 		continue;
 	}
 
-	for (const contractPath of discoverContractPaths(packagePath)) {
-		const contractText = readFileSync(repoPath(contractPath), "utf8");
+	for (const contractPath of await discoverContractPaths(packagePath)) {
+		const contractText = readFileSync(contractPath, "utf8");
 
 		const scriptValueMatches = contractText.matchAll(/script:\s*"([^"]+)"/g);
 
@@ -1088,7 +1102,7 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 
 			if (!allowedScriptNames.has(scriptValue)) {
 				findings.push({
-					path: contractPath,
+					path: displayPath(contractPath),
 					message: `Command metadata script ${scriptValue} must be a declared local command name for ${packagePath}; contracts name command identity, not bun run, dist, src, or local paths.`,
 				});
 			}

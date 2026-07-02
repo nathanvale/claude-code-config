@@ -47,6 +47,25 @@ export type AgentHint = {
 	docs_url?: string;
 };
 
+type AgentHintActionByRecoverability = {
+	none: "contact_support" | "open_docs";
+	retry: "retry";
+	change_input: "change_input" | "open_docs";
+	authenticate: "authenticate" | "open_docs";
+	repair_state: "repair_state" | "open_docs";
+	contact_support: "contact_support" | "open_docs";
+};
+
+export type AgentHintActionForRecoverability<
+	TRecoverability extends RuntimeErrorRecoverability,
+> = AgentHintActionByRecoverability[TRecoverability];
+
+export type AgentHintForRecoverability<
+	TRecoverability extends RuntimeErrorRecoverability,
+> = Omit<AgentHint, "action"> & {
+	action?: AgentHintActionForRecoverability<TRecoverability>;
+};
+
 export type StructuredRuntimeError = {
 	run_id: string;
 	code: string;
@@ -58,6 +77,61 @@ export type StructuredRuntimeError = {
 	hint?: AgentHint;
 	failure_domain?: string;
 };
+
+/**
+ * Shared input for structured CLI runtime-error helper constructors.
+ *
+ * @example
+ * ```typescript
+ * const input: CliRuntimeErrorBuilderInput = {
+ *   run_id: "run-1",
+ *   code: "config_missing",
+ *   message: "Config is missing.",
+ *   exit_code: 1,
+ * }
+ * ```
+ */
+export type CliRuntimeErrorBuilderInput<
+	TRecoverability extends RuntimeErrorRecoverability = RuntimeErrorRecoverability,
+> = {
+	run_id: string;
+	code: string;
+	message: string;
+	exit_code: number;
+	severity?: RuntimeErrorSeverity;
+	hint?: AgentHintForRecoverability<TRecoverability>;
+	failure_domain?: string;
+};
+
+export type CliUsageRuntimeErrorBuilderInput = Omit<
+	CliRuntimeErrorBuilderInput<"change_input">,
+	"code" | "exit_code"
+> & {
+	code?: string;
+	exit_code?: 2;
+};
+
+/**
+ * Input for callers that own the exact recoverability and retry semantics.
+ *
+ * @example
+ * ```typescript
+ * const input: CliStructuredRuntimeErrorBuilderInput = {
+ *   run_id: "run-1",
+ *   code: "temporary_unavailable",
+ *   message: "Dependency unavailable.",
+ *   exit_code: 1,
+ *   recoverability: "retry",
+ *   retryable: true,
+ * }
+ * ```
+ */
+export type CliStructuredRuntimeErrorBuilderInput = {
+	[TRecoverability in RuntimeErrorRecoverability]: CliRuntimeErrorBuilderInput<TRecoverability> & {
+		recoverability: TRecoverability;
+		retryable: TRecoverability extends "retry" ? true : false;
+	};
+}[RuntimeErrorRecoverability];
 
 export type RuntimeActionGuidance = {
 	id: string;
@@ -141,10 +215,12 @@ export function createCliRuntimeSuccessEnvelope<TData>(input: {
 	const issues = [
 		...validateNonEmptyString("run_id", input.run_id),
 		...validateOptionalRuntimeActions(input.runtime_actions),
-		...validateOptionalRuntimeContinuation(input.continuation, {
-			envelopeStatus: "ok",
-			runtimeActions: input.runtime_actions,
-		}),
+			...validateOptionalRuntimeContinuation(input.continuation, {
+				envelopeStatus: "ok",
+				...(input.runtime_actions !== undefined
+					? { runtimeActions: input.runtime_actions }
+					: {}),
+			}),
 		...validateOptionalDiagnosticTrail(input.diagnostic_trail, {
 			run_id: input.run_id,
 		}),
@@ -183,10 +259,12 @@ export function createCliRuntimeErrorEnvelope<TData = unknown>(input: {
 			process_exit_code: input.process_exit_code,
 		}),
 		...validateOptionalRuntimeActions(input.runtime_actions),
-		...validateOptionalRuntimeContinuation(input.continuation, {
-			envelopeStatus: "error",
-			runtimeActions: input.runtime_actions,
-		}),
+			...validateOptionalRuntimeContinuation(input.continuation, {
+				envelopeStatus: "error",
+				...(input.runtime_actions !== undefined
+					? { runtimeActions: input.runtime_actions }
+					: {}),
+			}),
 		...validateOptionalDiagnosticTrail(input.diagnostic_trail, {
 			run_id: input.run_id,
 		}),
@@ -207,6 +285,113 @@ export function createCliRuntimeErrorEnvelope<TData = unknown>(input: {
 			? { diagnostic_trail: cloneDiagnosticTrail(input.diagnostic_trail) }
 			: {}),
 	};
+}
+
+/**
+ * Create a structured runtime error with package-owned recovery semantics.
+ *
+ * @param input - Complete structured-error builder input
+ * @returns Validated structured runtime error
+ * @throws When the structured error violates the runtime contract
+ *
+ * @example
+ * ```typescript
+ * const error = createCliRuntimeError({
+ *   run_id: "run-1",
+ *   code: "auth_required",
+ *   message: "Authentication is required.",
+ *   exit_code: 1,
+ *   recoverability: "authenticate",
+ *   retryable: false,
+ * })
+ * ```
+ */
+export function createCliRuntimeError(
+	input: CliStructuredRuntimeErrorBuilderInput,
+): StructuredRuntimeError {
+	return createStructuredRuntimeError(input);
+}
+
+/**
+ * Create a structured runtime error for caller-correctable usage failures.
+ *
+ * @param input - Error fields; `code` defaults to `usage_error`
+ * @returns Validated change-input structured runtime error
+ * @throws When the structured error violates the runtime contract
+ *
+ * @example
+ * ```typescript
+ * const error = createCliUsageRuntimeError({
+ *   run_id: "run-1",
+ *   message: "Missing --json.",
+ *   exit_code: 2,
+ * })
+ * ```
+ */
+export function createCliUsageRuntimeError(
+	input: CliUsageRuntimeErrorBuilderInput,
+): StructuredRuntimeError {
+	return createCliRuntimeError({
+		...input,
+		code: input.code ?? "usage_error",
+		exit_code: 2,
+		recoverability: "change_input",
+		retryable: false,
+	});
+}
+
+/**
+ * Create a structured runtime error for repairable local state failures.
+ *
+ * @param input - Error fields for a repair-state failure
+ * @returns Validated repair-state structured runtime error
+ * @throws When the structured error violates the runtime contract
+ *
+ * @example
+ * ```typescript
+ * const error = createCliRepairStateRuntimeError({
+ *   run_id: "run-1",
+ *   code: "config_missing",
+ *   message: "Config is missing.",
+ *   exit_code: 1,
+ * })
+ * ```
+ */
+export function createCliRepairStateRuntimeError(
+	input: CliRuntimeErrorBuilderInput<"repair_state">,
+): StructuredRuntimeError {
+	return createCliRuntimeError({
+		...input,
+		recoverability: "repair_state",
+		retryable: false,
+	});
+}
+
+/**
+ * Create a structured runtime error for safe same-input retry failures.
+ *
+ * @param input - Error fields for a retryable failure
+ * @returns Validated retry structured runtime error
+ * @throws When the structured error violates the runtime contract
+ *
+ * @example
+ * ```typescript
+ * const error = createCliRetryRuntimeError({
+ *   run_id: "run-1",
+ *   code: "temporary_unavailable",
+ *   message: "Dependency unavailable.",
+ *   exit_code: 1,
+ * })
+ * ```
+ */
+export function createCliRetryRuntimeError(
+	input: CliRuntimeErrorBuilderInput<"retry">,
+): StructuredRuntimeError {
+	return createCliRuntimeError({
+		...input,
+		recoverability: "retry",
+		retryable: true,
+	});
 }
 
 export function validateStructuredRuntimeError(
@@ -283,6 +468,26 @@ export function validateStructuredRuntimeError(
 		);
 	}
 	return issues;
+}
+
+function createStructuredRuntimeError(
+	input: CliStructuredRuntimeErrorBuilderInput,
+): StructuredRuntimeError {
+	const error: StructuredRuntimeError = {
+		run_id: input.run_id,
+		code: input.code,
+		message: input.message,
+		exit_code: input.exit_code,
+		severity: input.severity ?? "error",
+		recoverability: input.recoverability,
+		retryable: input.retryable,
+		...(input.hint !== undefined ? { hint: input.hint } : {}),
+		...(input.failure_domain !== undefined
+			? { failure_domain: input.failure_domain }
+			: {}),
+	};
+	throwIfRuntimeContractIssues(validateStructuredRuntimeError(error));
+	return error;
 }
 
 export function validateAgentHint(
@@ -476,14 +681,16 @@ function validateOptionalRuntimeContinuation(
 		if (hasNextAction) {
 			issues.push(`${path}.choices must not be used with ${path}.next_action_id`);
 		}
-		issues.push(
-			...validateRuntimeRecoveryChoices(continuation.choices, {
-				forbiddenActionIds,
-				forbiddenSideEffects,
-				runtimeActions: options.runtimeActions,
-				path,
-			}),
-		);
+			issues.push(
+				...validateRuntimeRecoveryChoices(continuation.choices, {
+					forbiddenActionIds,
+					forbiddenSideEffects,
+					...(options.runtimeActions !== undefined
+						? { runtimeActions: options.runtimeActions }
+						: {}),
+					path,
+				}),
+			);
 	}
 
 	if (

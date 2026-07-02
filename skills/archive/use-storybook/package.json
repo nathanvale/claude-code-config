@@ -1,0 +1,21 @@
+{
+	"name": "use-storybook-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Bun package for the use-storybook skill. CLIs for Storybook readiness proof and durable docs cleanup loops.",
+	"scripts": {
+		"storybook-doctor": "bun run src/front-doors/storybook-doctor/cli.ts",
+		"storybook-docs-loop": "bun run src/front-doors/storybook-docs-loop/cli.ts",
+		"test": "bun test tests",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@side-quest/cli-test-fixtures": "workspace:*",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

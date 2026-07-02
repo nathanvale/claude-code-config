@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	AGENT_HINT_ACTIONS,
 	CliRuntimeContractError,
+	createCliRepairStateRuntimeError,
+	createCliRetryRuntimeError,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	createCliUsageRuntimeError,
 	type DiagnosticTrailReference,
 	type StructuredRuntimeError,
 	validateAgentHint,
@@ -15,6 +20,79 @@ import {
 	listRuntimeContractFixtureLeaks,
 	RUNTIME_CONTRACT_REDACTION_FIXTURES,
 } from "@side-quest/cli-command-facade/testing";
+
+type UsageRuntimeErrorInput = Parameters<typeof createCliUsageRuntimeError>[0];
+type RepairRuntimeErrorInput = Parameters<
+	typeof createCliRepairStateRuntimeError
+>[0];
+type RetryRuntimeErrorInput = Parameters<typeof createCliRetryRuntimeError>[0];
+type StructuredRuntimeErrorInput = Parameters<typeof createCliRuntimeError>[0];
+
+const _usageHintAcceptsOpenDocs = {
+	run_id: "run-test-1",
+	message: "Open the docs.",
+	exit_code: 2,
+	hint: { summary: "Open the docs.", action: "open_docs" },
+} satisfies UsageRuntimeErrorInput;
+
+const _usageHintRejectsRetry = {
+	run_id: "run-test-1",
+	message: "Retry.",
+	exit_code: 2,
+	hint: {
+		summary: "Retry.",
+		// @ts-expect-error retry is incompatible with change_input helpers.
+		action: "retry",
+	},
+} satisfies UsageRuntimeErrorInput;
+
+const _repairHintRejectsRetry = {
+	run_id: "run-test-1",
+	code: "state_missing",
+	message: "Repair state.",
+	exit_code: 1,
+	hint: {
+		summary: "Retry.",
+		// @ts-expect-error retry is incompatible with repair_state helpers.
+		action: "retry",
+	},
+} satisfies RepairRuntimeErrorInput;
+
+const _retryHintRejectsOpenDocs = {
+	run_id: "run-test-1",
+	code: "temporary_unavailable",
+	message: "Retry.",
+	exit_code: 1,
+	hint: {
+		summary: "Open docs.",
+		// @ts-expect-error open_docs is incompatible with retry helpers.
+		action: "open_docs",
+	},
+} satisfies RetryRuntimeErrorInput;
+
+const retryRecoverabilityRequiresRetryableTrueInput = {
+	run_id: "run-test-1",
+	code: "temporary_unavailable",
+	message: "Retry.",
+	exit_code: 1,
+	recoverability: "retry",
+	retryable: false,
+} as const;
+// @ts-expect-error retry recoverability requires retryable=true.
+const _retryRecoverabilityRequiresRetryableTrue: StructuredRuntimeErrorInput =
+	retryRecoverabilityRequiresRetryableTrueInput;
+
+const nonRetryRecoverabilityRejectsRetryableTrueInput = {
+	run_id: "run-test-1",
+	code: "state_missing",
+	message: "Repair state.",
+	exit_code: 1,
+	recoverability: "repair_state",
+	retryable: true,
+} as const;
+// @ts-expect-error non-retry recoverability requires retryable=false.
+const _nonRetryRecoverabilityRejectsRetryableTrue: StructuredRuntimeErrorInput =
+	nonRetryRecoverabilityRejectsRetryableTrueInput;
 
 describe("CLI command facade runtime envelope", () => {
 	test("builds ADR-0010 success envelopes", () => {
@@ -69,6 +147,127 @@ describe("CLI command facade runtime envelope", () => {
 		expect(envelope).not.toHaveProperty("schemaVersion");
 		expect(envelope.error).not.toBe(error);
 		expect(envelope.error.hint).not.toBe(error.hint);
+	});
+
+	test("builds structured runtime errors from facade helpers", () => {
+		expect(
+			createCliUsageRuntimeError({
+				run_id: "run-test-1",
+				message: "Invalid input.",
+			}),
+		).toEqual({
+			run_id: "run-test-1",
+			code: "usage_error",
+			message: "Invalid input.",
+			exit_code: 2,
+			severity: "error",
+			recoverability: "change_input",
+			retryable: false,
+		});
+		expect(
+			createCliUsageRuntimeError({
+				run_id: "run-test-1",
+				code: "custom_usage",
+				message: "Invalid input.",
+				exit_code: 2,
+				hint: { summary: "Open the docs.", action: "open_docs" },
+			}),
+		).toEqual({
+			run_id: "run-test-1",
+			code: "custom_usage",
+			message: "Invalid input.",
+			exit_code: 2,
+			severity: "error",
+			recoverability: "change_input",
+			retryable: false,
+			hint: { summary: "Open the docs.", action: "open_docs" },
+		});
+		expect(
+			createCliRuntimeError({
+				run_id: "run-test-1",
+				code: "fatal_runtime",
+				message: "No recovery is available.",
+				exit_code: 1,
+				severity: "fatal",
+				recoverability: "none",
+				retryable: false,
+			}),
+		).toEqual({
+			run_id: "run-test-1",
+			code: "fatal_runtime",
+			message: "No recovery is available.",
+			exit_code: 1,
+			severity: "fatal",
+			recoverability: "none",
+			retryable: false,
+		});
+		expect(
+			createCliRepairStateRuntimeError({
+				run_id: "run-test-1",
+				code: "config_missing",
+				message: "Config is missing.",
+				exit_code: 1,
+				failure_domain: "workspace_config",
+			}),
+		).toEqual({
+			run_id: "run-test-1",
+			code: "config_missing",
+			message: "Config is missing.",
+			exit_code: 1,
+			severity: "error",
+			recoverability: "repair_state",
+			retryable: false,
+			failure_domain: "workspace_config",
+		});
+		expect(
+			createCliRetryRuntimeError({
+				run_id: "run-test-1",
+				code: "temporary_unavailable",
+				message: "Dependency unavailable.",
+				exit_code: 1,
+				hint: { summary: "Retry the same input.", action: "retry" },
+			}),
+		).toEqual({
+			run_id: "run-test-1",
+			code: "temporary_unavailable",
+			message: "Dependency unavailable.",
+			exit_code: 1,
+			severity: "error",
+			recoverability: "retry",
+			retryable: true,
+			hint: { summary: "Retry the same input.", action: "retry" },
+		});
+		expect(() =>
+			createCliRepairStateRuntimeError({
+				run_id: "run-test-1",
+				code: "bad_hint",
+				message: "Bad hint.",
+				exit_code: 1,
+				hint: { summary: "Retry the same input.", action: "retry" } as never,
+			}),
+		).toThrow(CliRuntimeContractError);
+		expect(() =>
+			createCliRuntimeError({
+				run_id: "run-test-1",
+				code: "bad_hint",
+				message: "Bad hint.",
+				exit_code: 1,
+				recoverability: "repair_state",
+				retryable: false,
+				hint: null as never,
+			}),
+		).toThrow(CliRuntimeContractError);
+		expect(() =>
+			createCliRuntimeError({
+				run_id: "run-test-1",
+				code: "bad_domain",
+				message: "Bad domain.",
+				exit_code: 1,
+				recoverability: "repair_state",
+				retryable: false,
+				failure_domain: "",
+			}),
+		).toThrow(CliRuntimeContractError);
 	});
 
 	test("carries package-owned data on error envelopes", () => {
@@ -384,6 +583,15 @@ describe("CLI command facade runtime envelope", () => {
 				docs_url: "file:///tmp/runtime-contract",
 			}),
 		).toContain("hint.docs_url must use http or https");
+		expect(
+			validateAgentHint({ summary: "Detonate the cluster.", action: "detonate" }),
+		).toContain(
+			`hint.action must be one of: ${AGENT_HINT_ACTIONS.join(", ")}`,
+		);
+		expect(validateAgentHint(null)).toEqual(["hint must be an object"]);
+		expect(validateStructuredRuntimeError("nope")).toEqual([
+			"error must be an object",
+		]);
 	});
 
 	test("rejects invalid runtime envelopes", () => {
@@ -407,6 +615,24 @@ describe("CLI command facade runtime envelope", () => {
 		).toContain(
 			"runtime_actions must be omitted when no runtime actions are present",
 		);
+		expect(
+			captureRuntimeContractIssues(() =>
+				createCliRuntimeSuccessEnvelope({
+					run_id: "run-test-1",
+					data: { ok: true },
+					runtime_actions: "bad" as never,
+				}),
+			),
+		).toContain("runtime_actions must be an array");
+		expect(
+			captureRuntimeContractIssues(() =>
+				createCliRuntimeErrorEnvelope({
+					run_id: "run-test-1",
+					error: createTestRuntimeError({ exit_code: 2 }),
+					process_exit_code: -1 as never,
+				}),
+			),
+		).toContain("process_exit_code must be a non-negative integer");
 		expect(
 			captureRuntimeContractIssues(() =>
 				createCliRuntimeSuccessEnvelope({
@@ -997,6 +1223,59 @@ describe("CLI command facade runtime envelope", () => {
 				}),
 			),
 		).toContain("continuation.constraints.1.id must be unique");
+	});
+
+	test("rejects duplicate runtime_actions ids", () => {
+		expect(
+			captureRuntimeContractIssues(() =>
+				createCliRuntimeSuccessEnvelope({
+					run_id: "run-test-1",
+					data: { ok: true },
+					runtime_actions: [
+						{ id: "inspect", summary: "Inspect.", side_effects: ["check"] },
+						{ id: "inspect", summary: "Inspect again.", side_effects: ["check"] },
+					],
+					continuation: { next_action_id: "inspect" },
+				}),
+			),
+		).toContain("runtime_actions.1.id must be unique");
+	});
+
+	test("rejects duplicate continuation choice ids", () => {
+		expect(
+			captureRuntimeContractIssues(() =>
+				createCliRuntimeErrorEnvelope({
+					run_id: "run-test-1",
+					error: createTestRuntimeError({
+						recoverability: "repair_state",
+						retryable: false,
+					}),
+					process_exit_code: 2,
+					continuation: {
+						requires_operator: true,
+						constraints: [
+							{ id: "needs-human", summary: "An operator must choose." },
+						],
+						choices: [
+							{
+								id: "dup",
+								label: "First choice",
+								summary: "Best when this is the default option.",
+								recoverability: "repair_state",
+								side_effects: ["check"],
+							},
+							{
+								id: "dup",
+								label: "Second choice",
+								summary: "Best when the first option does not apply.",
+								recoverability: "repair_state",
+								side_effects: ["check"],
+							},
+						],
+					},
+				}),
+			),
+		).toContain("continuation.choices.1.id must be unique");
 	});
 
 	test("rejects an unknown forbidden_side_effects value", () => {

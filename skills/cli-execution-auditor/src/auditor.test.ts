@@ -10,6 +10,7 @@ import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/tes
 import {
 	AUDITOR_CONTRACT_ID,
 	AUDITOR_SCHEMA_VERSION,
+	AUDITOR_STATION_MAP_CONTRACT_ID,
 	auditorContracts,
 } from "./command-contract";
 import { type AuditorRuntime, createDefaultAuditorRuntime, runForTest } from "./auditor";
@@ -25,6 +26,12 @@ function parseEnvelope(result: { stdout: string }): any {
 function stubRuntime(overrides: Partial<AuditorRuntime>): AuditorRuntime {
 	return createDefaultAuditorRuntime({
 		audit: async ({ target }) => ({ target, laneDetected: true, findings: [] }),
+		stationMap: async ({ target }) => ({
+			target,
+			laneDetected: true,
+			catalogDetected: true,
+			findings: [],
+		}),
 		...overrides,
 	});
 }
@@ -32,7 +39,7 @@ function stubRuntime(overrides: Partial<AuditorRuntime>): AuditorRuntime {
 // --- drift surface 1: contract parse (no drift) ---
 
 describe("auditor command contract", () => {
-	test("declares a valid facade contract for the audit command", () => {
+	test("declares valid facade contracts for audit and station-map", () => {
 		const parsed = parseCommandFacadeContract(auditorContracts, {
 			path: "skills/cli-execution-auditor/src/command-contract.ts",
 			writeImplyingMutations: new Set(["write", "destructive"]),
@@ -40,11 +47,21 @@ describe("auditor command contract", () => {
 
 		expect(parsed.ok).toBe(true);
 		expect(auditorContracts.audit.resultContract?.id).toBe(AUDITOR_CONTRACT_ID);
+		expect(auditorContracts["station-map"].resultContract?.id).toBe(
+			AUDITOR_STATION_MAP_CONTRACT_ID,
+		);
+		expect(AUDITOR_SCHEMA_VERSION).toBe("2");
 		expect(auditorContracts.audit.resultContract?.schema_version).toBe(AUDITOR_SCHEMA_VERSION);
+		expect(auditorContracts["station-map"].resultContract?.schema_version).toBe(
+			AUDITOR_SCHEMA_VERSION,
+		);
 		expect(auditorContracts.audit.flags).toHaveProperty("--only");
 		expect(auditorContracts.audit.flags).toHaveProperty("--ledger");
+		expect(auditorContracts["station-map"].flags).toHaveProperty("--ledger");
+		expect(auditorContracts["station-map"].flags).not.toHaveProperty("--only");
 		for (const flag of CLI_DIAGNOSTIC_FLAGS) {
 			expect(auditorContracts.audit.flags).not.toHaveProperty(flag);
+			expect(auditorContracts["station-map"].flags).not.toHaveProperty(flag);
 		}
 	});
 
@@ -58,6 +75,17 @@ describe("auditor command contract", () => {
 			contract: auditorContracts.audit,
 			help: help.stdout,
 		});
+		assertCommandHelpFlagSurface({
+			command: "station-map",
+			contract: auditorContracts["station-map"],
+			help: help.stdout,
+		});
+	});
+
+	test("version names the source API break release", async () => {
+		const version = await runForTest(["--version"]);
+		expect(version.exitCode).toBe(0);
+		expect(version.stdout).toBe("auditor 0.2.0\n");
 	});
 });
 
@@ -84,6 +112,16 @@ describe("auditor argv surface", () => {
 		expect(result.stderr).toContain("--only must be one of");
 	});
 
+	test("rejects empty inline flag values", async () => {
+		const only = await runForTest(["some-target", "--only="], stubRuntime({}));
+		expect(only.exitCode).toBe(2);
+		expect(only.stderr).toContain("--only requires a value");
+
+		const ledger = await runForTest(["some-target", "--ledger="], stubRuntime({}));
+		expect(ledger.exitCode).toBe(2);
+		expect(ledger.stderr).toContain("--ledger requires a value");
+	});
+
 	test("accepts a bare target (audit is the default command)", async () => {
 		const result = await runForTest(["some-target"], stubRuntime({}));
 		expect(result.exitCode).toBe(0);
@@ -91,6 +129,22 @@ describe("auditor argv surface", () => {
 
 	test("accepts the explicit audit command form", async () => {
 		const result = await runForTest(["audit", "some-target"], stubRuntime({}));
+		expect(result.exitCode).toBe(0);
+	});
+
+	test("rejects invalid station-map flags with a structured usage error", async () => {
+		const result = await runForTest(
+			["station-map", "some-target", "--only", "exit-floor", "--json"],
+			stubRuntime({}),
+		);
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result);
+		expect(envelope.error.code).toBe("usage_error");
+		expect(envelope.error.message).toContain("unknown option: --only");
+	});
+
+	test("accepts the explicit station-map command form", async () => {
+		const result = await runForTest(["station-map", "some-target"], stubRuntime({}));
 		expect(result.exitCode).toBe(0);
 	});
 });
@@ -163,6 +217,78 @@ describe("auditor runtime (injected)", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain("lane contract clean");
 	});
+
+	test("station-map clean target exits 0 with Declared Branch Coverage envelope", async () => {
+		const result = await runForTest(
+			["station-map", "some-target", "--json"],
+			stubRuntime({
+				stationMap: async ({ target }) => ({
+					target,
+					laneDetected: true,
+					catalogDetected: true,
+					stationMap: {
+						completeness_claim: "declared_branch_coverage",
+						commands: {},
+						stations: [],
+						drift: [],
+						findings: [],
+					},
+					findings: [],
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data.report_kind).toBe("station-map");
+		expect(envelope.data.completeness_claim).toBe("declared_branch_coverage");
+	});
+
+	test("station-map findings exit 1 with station finding data", async () => {
+		const result = await runForTest(
+			["station-map", "some-target", "--json"],
+			stubRuntime({
+				stationMap: async ({ target }) => ({
+					target,
+					laneDetected: true,
+					catalogDetected: true,
+					findings: [
+						{
+							kind: "station",
+							frontDoor: "root",
+							stationId: "check.success",
+							command: "check",
+							findingKind: "missing",
+							summary: "check.success is missing for declared_branch_coverage.",
+						},
+					],
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error.code).toBe("findings_present");
+		expect(envelope.data.action).toBe("station_findings_present");
+		expect(envelope.data.findings[0].stationId).toBe("check.success");
+	});
+
+	test("station-map no-catalog target is informational, exit 0", async () => {
+		const result = await runForTest(
+			["station-map", "some-target"],
+			stubRuntime({
+				stationMap: async ({ target }) => ({
+					target,
+					laneDetected: true,
+					catalogDetected: false,
+					skipReason: "no Branch Station Catalog found at src/branch-station-catalog.ts",
+					findings: [],
+				}),
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("no Branch Station Catalog");
+	});
 });
 
 // --- U8: end-to-end with the real engine + ledger ---
@@ -170,13 +296,22 @@ describe("auditor runtime (injected)", () => {
 describe("auditor end-to-end (real engine + ledger)", () => {
 	const FIXTURES = join(import.meta.dir, "fixtures");
 	const tempLedgers: string[] = [];
+	const generatedFixtureDocs: string[] = [];
 	function tempLedger(): string {
 		const path = join(mkdtempSync(join(tmpdir(), "auditor-ledger-")), "audit.md");
 		tempLedgers.push(path);
 		return path;
 	}
+	function fixtureTargetForDefaultLedger(fixtureName: string): string {
+		const target = join(FIXTURES, fixtureName);
+		const docsPath = join(target, "docs");
+		rmSync(docsPath, { recursive: true, force: true });
+		generatedFixtureDocs.push(docsPath);
+		return target;
+	}
 	afterAll(() => {
 		for (const path of tempLedgers) rmSync(join(path, ".."), { recursive: true, force: true });
+		for (const path of generatedFixtureDocs) rmSync(path, { recursive: true, force: true });
 	});
 
 	test("audit good-baseline → exit 0, quiet success, no findings", async () => {
@@ -221,6 +356,78 @@ describe("auditor end-to-end (real engine + ledger)", () => {
 		const bare = await runForTest([join(FIXTURES, "good-baseline"), "--ledger", ledger]);
 		const explicit = await runForTest(["audit", join(FIXTURES, "good-baseline"), "--ledger", ledger]);
 		expect(bare.exitCode).toBe(explicit.exitCode);
+	});
+
+	test("audit default ledgers are partitioned per front door", async () => {
+		const target = fixtureTargetForDefaultLedger("good-front-door-local");
+		const result = await runForTest([target, "--json"]);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.ledger_path).toBeUndefined();
+		expect(envelope.data.ledger_paths.map((path: string) => path.replace(`${target}/`, ""))).toEqual([
+			"docs/cli-audits/good-front-door-local/admin/audit.md",
+			"docs/cli-audits/good-front-door-local/app/audit.md",
+		]);
+		const adminLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/admin/audit.md")).text();
+		const appLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/app/audit.md")).text();
+		expect(adminLedger).toContain("target_cli: good-front-door-local/admin");
+		expect(appLedger).toContain("target_cli: good-front-door-local/app");
+	});
+
+	test("station-map covered fixture exits 0 and writes a clean ledger", async () => {
+		const ledger = tempLedger();
+		const result = await runForTest([
+			"station-map",
+			join(FIXTURES, "good-station-map-covered"),
+			"--ledger",
+			ledger,
+			"--json",
+		]);
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.completeness_claim).toBe("declared_branch_coverage");
+		expect(envelope.data.station_map.stations.map((station: { station_id: string }) => station.station_id)).toEqual([
+			"check.alpha",
+			"check.zeta",
+		]);
+		const ledgerText = await Bun.file(ledger).text();
+		expect(ledgerText).toContain("## Open Findings");
+		expect(ledgerText).toContain("- None yet.");
+	});
+
+	test("station-map missing fixture exits 1 and stores station findings in the ledger", async () => {
+		const ledger = tempLedger();
+		const result = await runForTest([
+			"station-map",
+			join(FIXTURES, "bad-station-map-missing"),
+			"--ledger",
+			ledger,
+			"--json",
+		]);
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.findings[0].stationId).toBe("check.success");
+		const ledgerText = await Bun.file(ledger).text();
+		expect(ledgerText).toContain("**station-map** (station)");
+		expect(ledgerText).toContain("recheck: station=check.success command=check finding=missing");
+	});
+
+	test("station-map default ledgers are partitioned per front door", async () => {
+		const target = fixtureTargetForDefaultLedger("good-front-door-local");
+		const result = await runForTest(["station-map", target, "--json"]);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.ledger_path).toBeUndefined();
+		expect(envelope.data.ledger_paths.map((path: string) => path.replace(`${target}/`, ""))).toEqual([
+			"docs/cli-audits/good-front-door-local/admin/audit.md",
+			"docs/cli-audits/good-front-door-local/app/audit.md",
+		]);
+		const adminLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/admin/audit.md")).text();
+		const appLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/app/audit.md")).text();
+		expect(adminLedger).toContain("target_cli: good-front-door-local/admin");
+		expect(appLedger).toContain("target_cli: good-front-door-local/app");
 	});
 });
 

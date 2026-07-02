@@ -1,0 +1,6728 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with command scenario fixtures; package runner invokes this file without static imports.
+import {
+	chmod,
+	mkdtemp,
+	mkdir,
+	readFile,
+	readdir,
+	realpath,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { afterEach, describe, expect, test } from "bun:test";
+import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
+import type {
+	CloseoutReceipt,
+	HealthResultData,
+	Receipt,
+	ReviewResultData,
+	SkillFeedbackCorrelateResultData,
+} from "./command-contract";
+import {
+	SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+	SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_DECISION_READINESS_SURFACES,
+	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+	SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+	createCorrelationWitness,
+	skillFeedbackContracts,
+} from "./command-contract";
+import {
+	closeoutSkillFeedbackReceipt,
+	correlateSkillFeedbackInbox,
+	createDefaultSkillFeedbackRuntime,
+	finalizeSkillFeedbackCorrelationWitness,
+	healthSkillFeedbackInbox,
+	parseCorrelateArgs,
+	parseHealthArgs,
+	parsePurgeArgs,
+	parseRecordFlags,
+	parseReviewArgs,
+	parseStdinTelemetry,
+	purgeSkillFeedbackInbox,
+	recordSkillFeedbackReceipt,
+	reviewSkillFeedbackInbox,
+	resolveSkillFeedbackReadTarget,
+	runProcessForTest,
+	type SkillFeedbackGitResult,
+	type SkillFeedbackGitRunner,
+	type InternalRecordTelemetry,
+	type SkillFeedbackRuntime,
+} from "./skill-feedback-runner";
+
+const cleanupPaths: string[] = [];
+const GENERATED_TS = "2026-06-11T09:00:00.000Z";
+const RUNNER_PATH = new URL("./skill-feedback-runner.ts", import.meta.url)
+	.pathname;
+const REPO_ROOT = new URL("../../..", import.meta.url).pathname;
+
+type TestProcessResult = {
+	command: readonly string[];
+	cwd?: string;
+	stdout: string;
+	stderr: string;
+	exitCode: number;
+};
+
+type V1CloseoutReportInput = {
+	reportId: string;
+	generatedTs: string;
+	skill?: string;
+	evidenceSource?: "driver_closeout" | "hook_capture";
+	captureRuntime?: "claude_stop" | "codex_stop";
+	correlationStatus?: "linked" | "unlinked";
+	skillRunId?: string;
+	skillRunIdProvenance?:
+		| "runtime_owned"
+		| "correlation_owned"
+		| "report_authored";
+};
+
+type ReviewEnvelopeData = Pick<
+	ReviewResultData,
+	"coverage" | "inbox_status" | "read_target"
+>;
+
+const BASE_RECEIPT: Receipt = {
+	skill: "create-skill",
+	goal: "Repair the skill route.",
+	outcome: "confirmed",
+	friction: "Clean run.",
+	explanation: "No extra explanation.",
+	skill_version: "create-skill@0.1.0",
+	git_sha: "1234567890abcdef1234567890abcdef12345678",
+	model: "gpt-5-codex",
+	usage: {
+		input_tokens: 100,
+		output_tokens: 30,
+		cache_read_tokens: 12,
+	},
+	generated_ts: GENERATED_TS,
+};
+
+const BASE_CLOSEOUT: CloseoutReceipt = {
+	skill: "create-skill",
+	outcome: "confirmed",
+	goal: "Repair the skill route.",
+	friction: {
+		category: "none",
+		note: "Clean closeout.",
+	},
+	verification_burden: {
+		level: "light",
+		note: "Focused verification only.",
+	},
+	touched_surfaces: [{ type: "path", value: "skills/create-skill/SKILL.md" }],
+	observations: [],
+};
+
+afterEach(removeCreatedRoots);
+
+async function removeCreatedRoots(): Promise<void> {
+	const createdRoots = cleanupPaths.splice(0);
+	await Promise.all(createdRoots.map(removeRoot));
+}
+
+async function removeRoot(root: string): Promise<void> {
+	await rm(root, { recursive: true, force: true });
+}
+
+async function makeRoot(): Promise<string> {
+	const root = await mkdtemp(join(tmpdir(), "skill-feedback-test-"));
+	cleanupPaths.push(root);
+	return root;
+}
+
+async function makeIgnoredGitRoot(): Promise<string> {
+	const root = await makeRoot();
+	await run(["git", "init"], root);
+	await writeFile(join(root, ".gitignore"), ".skill-feedback/\n", "utf-8");
+	return root;
+}
+
+function stubRuntime(
+	root: string,
+	overrides: Partial<SkillFeedbackRuntime> = {},
+): SkillFeedbackRuntime {
+	return createDefaultSkillFeedbackRuntime({
+		repoRoot: () => root,
+		resolveReadTarget: async (targetPath) => ({
+			ok: true,
+			explicit: targetPath !== undefined,
+			seedPath: targetPath ?? root,
+			repoRoot: root,
+			inboxPath: join(root, ".skill-feedback"),
+		}),
+		checkIgnored: async () => 0,
+		readGitSha: async () => BASE_RECEIPT.git_sha,
+		readSkillVersion: async (skill) => `${skill}@0.1.0`,
+		readStdinTelemetry: async () => ({}),
+		...overrides,
+	});
+}
+
+function stubInboxLstatPermissionDeniedRuntime(
+	root: string,
+	code: "EACCES" | "EPERM",
+): SkillFeedbackRuntime {
+	const baseRuntime = stubRuntime(root);
+	return stubRuntime(root, {
+		lstatPath: async (path) => {
+			if (path === join(root, ".skill-feedback")) {
+				throw Object.assign(new Error("permission denied"), { code });
+			}
+			return baseRuntime.lstatPath(path);
+		},
+	});
+}
+
+function expectPermissionDeniedEnvelope(
+	result: Pick<TestProcessResult, "exitCode" | "stdout">,
+	expected: {
+		errorCode: string;
+		contract: string;
+		schemaVersion: string;
+	},
+): void {
+	expect(result.exitCode).toBe(1);
+	const envelope = parseEnvelope(result.stdout);
+	expect((envelope.error as { code: string }).code).toBe(expected.errorCode);
+	expect(envelope.data).toMatchObject({
+		contract: expected.contract,
+		schema_version: expected.schemaVersion,
+		changed_state: "none",
+	});
+}
+
+async function writeRecord(
+	receipt: Partial<Receipt>,
+	runtimeOverrides: Partial<SkillFeedbackRuntime> = {},
+	internalTelemetry?: InternalRecordTelemetry,
+) {
+	const root = await makeRoot();
+	const runtime = stubRuntime(root, runtimeOverrides);
+	const result = await recordSkillFeedbackReceipt(receipt, {
+		runtime,
+		...(internalTelemetry ? { internalTelemetry } : {}),
+		runId: "skill-feedback-test",
+	});
+	const disk = result.reportPath
+		? await readFile(result.reportPath, "utf-8")
+		: "";
+	return { root, result, disk };
+}
+
+async function writeCloseout(
+	closeout: Partial<CloseoutReceipt>,
+	runtimeOverrides: Partial<SkillFeedbackRuntime> = {},
+) {
+	const root = await makeRoot();
+	const runtime = stubRuntime(root, {
+		nowIso: () => GENERATED_TS,
+		...runtimeOverrides,
+	});
+	const result = await closeoutSkillFeedbackReceipt(closeout, {
+		runtime,
+		runId: "skill-feedback-closeout-test",
+	});
+	const disk = result.reportPath
+		? await readFile(result.reportPath, "utf-8")
+		: "";
+	return { root, result, disk };
+}
+
+async function writeInboxReport(root: string, name: string, value: unknown) {
+	const inbox = join(root, ".skill-feedback");
+	await mkdir(inbox, { recursive: true });
+	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeCorrelationDiagnostic(
+	root: string,
+	name: string,
+	value: unknown,
+) {
+	const directory = join(root, ".skill-feedback", ".correlation");
+	await mkdir(directory, { recursive: true });
+	await chmod(directory, 0o700);
+	const path = join(directory, name);
+	await writeFile(path, `${JSON.stringify(value, null, "\t")}\n`);
+	await chmod(path, 0o600);
+}
+
+async function writeLowSignalInboxReport(
+	root: string,
+	name: string,
+	value: unknown,
+) {
+	const inbox = join(root, ".skill-feedback", "low-signal");
+	await mkdir(inbox, { recursive: true });
+	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeLowSignalReportBatch(
+	root: string,
+	count: number,
+	reportIdPrefix: string,
+): Promise<void> {
+	for (let index = 0; index < count; index += 1) {
+		await writeLowSignalInboxReport(
+			root,
+			`low-${index}.json`,
+			v1CloseoutReport({
+				reportId: `${reportIdPrefix}-${index}`,
+				generatedTs: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+				skill: "unknown-skill",
+				evidenceSource: "hook_capture",
+				captureRuntime: "codex_stop",
+			}),
+		);
+	}
+}
+
+function v1CloseoutReport(input: V1CloseoutReportInput) {
+	return {
+		schema_version: "1",
+		report_id: input.reportId,
+		untrusted_evidence: true,
+		generated_ts: input.generatedTs,
+		evidence_source: input.evidenceSource ?? "driver_closeout",
+		capture_runtime: input.captureRuntime,
+		correlation_status: input.correlationStatus ?? "unlinked",
+		skill_run_id: input.skillRunId,
+		skill_run_id_provenance: input.skillRunIdProvenance,
+		runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+		report_card: {
+			...BASE_CLOSEOUT,
+			skill: input.skill ?? BASE_CLOSEOUT.skill,
+		},
+		evidence_gaps: [],
+	};
+}
+
+async function writeV1CloseoutInboxReport(
+	root: string,
+	name: string,
+	input: V1CloseoutReportInput,
+): Promise<void> {
+	await writeInboxReport(root, name, v1CloseoutReport(input));
+}
+
+function describeProcessResult(result: TestProcessResult): string {
+	return [
+		`command=${result.command.join(" ")}`,
+		...(result.cwd ? [`cwd=${result.cwd}`] : []),
+		`exit=${result.exitCode}`,
+		`stdout=${JSON.stringify(result.stdout)}`,
+		`stderr=${JSON.stringify(result.stderr)}`,
+	].join("\n");
+}
+
+function parseEnvelope(
+	result: TestProcessResult | string,
+): Record<string, unknown> {
+	const stdout = typeof result === "string" ? result : result.stdout;
+	try {
+		return JSON.parse(stdout) as Record<string, unknown>;
+	} catch (error) {
+		const context =
+			typeof result === "string"
+				? `stdout=${JSON.stringify(stdout)}`
+				: describeProcessResult(result);
+		throw new Error(`Could not parse JSON envelope:\n${context}`, {
+			cause: error,
+		});
+	}
+}
+
+function expectReviewCoverage(
+	stdout: string,
+	expected: {
+		total_reports: number;
+		closeout_count: number;
+		capture_only_count: number;
+		closeout_rate: number;
+		low_coverage: boolean;
+	},
+): void {
+	const data = parseEnvelope(stdout).data as {
+		coverage: {
+			total_reports: number;
+			closeout_count: number;
+			capture_only_count: number;
+			closeout_rate: number;
+			low_coverage: boolean;
+		};
+	};
+	expect(data.coverage).toMatchObject(expected);
+}
+
+function parseReviewEnvelopeData(result: TestProcessResult): ReviewEnvelopeData {
+	return parseEnvelope(result).data as ReviewEnvelopeData;
+}
+
+function parseHealthEnvelopeData(
+	result: { stdout: string },
+): HealthResultData {
+	return parseEnvelope(result.stdout).data as HealthResultData;
+}
+
+async function runCliHealth(root: string): Promise<{
+	result: TestProcessResult;
+	data: HealthResultData;
+}> {
+	const result = await runCli(["health"], { cwd: root });
+	return { result, data: parseHealthEnvelopeData(result) };
+}
+
+function expectReviewTotalReports(
+	result: TestProcessResult,
+	totalReports: number,
+): ReviewEnvelopeData {
+	expect(result.exitCode).toBe(0);
+	const data = parseReviewEnvelopeData(result);
+	expect(data.coverage.total_reports).toBe(totalReports);
+	return data;
+}
+
+function expectReadTargetResolutionFailure(
+	result: TestProcessResult,
+	expected: {
+		explicit: boolean;
+		targetPath: string;
+		changedState?: string;
+		contract?: string;
+		schemaVersion?: string;
+	},
+): void {
+	expect(result.exitCode).toBe(1);
+	const envelope = parseEnvelope(result);
+	expect((envelope.error as { code: string }).code).toBe(
+		"read_target_resolution_failed",
+	);
+	expect(envelope.data).toMatchObject({
+		...(expected.changedState ? { changed_state: expected.changedState } : {}),
+		contract: expected.contract ?? SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+		...(expected.schemaVersion
+			? { schema_version: expected.schemaVersion }
+			: {}),
+		read_target_failure: {
+			explicit: expected.explicit,
+			target_path: expected.targetPath,
+		},
+	});
+	expect((envelope.data as Record<string, unknown>).read_target).toBeUndefined();
+}
+
+async function run(
+	command: readonly string[],
+	cwd: string,
+): Promise<TestProcessResult> {
+	const child = Bun.spawn([...command], {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const result = await collectCliResult(child, command, cwd);
+	if (result.exitCode !== 0) {
+		throw new Error(`Test setup command failed:\n${describeProcessResult(result)}`);
+	}
+	return result;
+}
+
+async function runCli(
+	args: readonly string[],
+	options: { stdin?: string; cwd?: string } = {},
+): Promise<TestProcessResult> {
+	const stdin = options.stdin ?? "";
+	const child = Bun.spawn(
+		[process.execPath, RUNNER_PATH, ...args],
+		{
+			cwd: options.cwd,
+			stdin: stdin === "" ? undefined : "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	if (stdin !== "" && child.stdin) {
+		child.stdin.write(stdin);
+		child.stdin.end();
+	}
+	return collectCliResult(
+		child,
+		[process.execPath, RUNNER_PATH, ...args],
+		options.cwd,
+	);
+}
+
+async function collectCliResult(child: {
+	stdout: ReadableStream<Uint8Array>;
+	stderr: ReadableStream<Uint8Array>;
+	exited: Promise<number>;
+}, command: readonly string[], cwd?: string): Promise<TestProcessResult> {
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	return { command, cwd, stdout, stderr, exitCode };
+}
+
+function fakeGitRunner(
+	outputs: Record<string, SkillFeedbackGitResult | string>,
+): SkillFeedbackGitRunner & { calls: Array<{ args: readonly string[]; cwd: string }> } {
+	const calls: Array<{ args: readonly string[]; cwd: string }> = [];
+	const runner = async (
+		args: readonly string[],
+		options: { cwd: string },
+	): Promise<SkillFeedbackGitResult> => {
+		calls.push({ args: [...args], cwd: options.cwd });
+		const output = outputs[args.join(" ")];
+		if (output === undefined) {
+			return { ok: false, stdout: "", stderr: "missing fake output", code: 1 };
+		}
+		if (typeof output === "string") {
+			return { ok: true, stdout: output, stderr: "", code: 0 };
+		}
+		return output;
+	};
+	return Object.assign(runner, { calls });
+}
+
+function syntheticSecretFixtures(): Array<readonly [string, string]> {
+	const lower = "a".repeat(26);
+	const lowerShort = "b".repeat(16);
+	const digits = "1".repeat(12);
+	const alphaNumeric = "A1".repeat(8);
+	const jwtPart = (seed: string) => `eyJ${seed.repeat(8)}`;
+	return [
+		["bearer", `Bearer ${"token".repeat(4)}`],
+		["jwt", `${jwtPart("a")}.${jwtPart("b")}.${"signature".repeat(2)}`],
+		[
+			"pem",
+			`-----BEGIN PRIVATE KEY-----\n${"x".repeat(12)}\n-----END PRIVATE KEY-----`,
+		],
+		["dsn", `postgresql://user:${"pw".repeat(8)}@localhost/db`],
+		["ghp", `ghp_${lower}`],
+		["github_pat", `github_pat_${lower}`],
+		["xoxb", `xoxb-${digits}-${lowerShort}`],
+		["xoxp", `xoxp-${digits}-${lowerShort}`],
+		["akia", `AKIA${alphaNumeric}`],
+		["sk", `sk-${lower}`],
+		["sk-proj", `sk-proj-${lower}`],
+		["glpat", `glpat-${lower}`],
+	];
+}
+
+describe("skill-feedback test harness helpers", () => {
+	test("setup command failures include process context", async () => {
+		const root = await makeRoot();
+
+		await expect(run(["git", "not-a-real-skill-feedback-test-command"], root))
+			.rejects.toThrow(/command=git not-a-real-skill-feedback-test-command[\s\S]*cwd=/);
+	});
+
+	test("JSON envelope parse failures include command context", () => {
+		expect(() =>
+			parseEnvelope({
+				command: ["skill-feedback-runner", "review"],
+				cwd: "/tmp/skill-feedback-fixture",
+				exitCode: 1,
+				stdout: "not json",
+				stderr: "diagnostic stderr",
+			}),
+		).toThrow(/stdout="not json"[\s\S]*stderr="diagnostic stderr"/);
+	});
+
+	test("fake git runner records cwd and branches by argv key", async () => {
+		const git = fakeGitRunner({
+			"git rev-parse --show-toplevel": "/repo\n",
+		});
+
+		const result = await git(["git", "rev-parse", "--show-toplevel"], {
+			cwd: "/repo/package",
+		});
+
+		expect(result).toMatchObject({ ok: true, stdout: "/repo\n", code: 0 });
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "rev-parse", "--show-toplevel"],
+				cwd: "/repo/package",
+			},
+		]);
+	});
+});
+
+describe("skill-feedback U6 redaction and write gate", () => {
+	for (const [label, secret] of syntheticSecretFixtures()) {
+		test(`redacts ${label} secret from written friction bytes`, async () => {
+			const { result, disk } = await writeRecord({
+				...BASE_RECEIPT,
+				friction: `Observed ${secret} while closing.`,
+			});
+
+			expect(result.exitCode).toBe(0);
+			expect(disk).not.toContain(secret);
+			expect(parseEnvelope(result.stdout).data).toHaveProperty("redactions");
+			expect(
+				(parseEnvelope(result.stdout).data as { redactions: number }).redactions,
+			).toBeGreaterThanOrEqual(1);
+		});
+	}
+
+	test("http credential URL keeps scheme but strips query token on disk", async () => {
+		const scheme = "https://";
+		const queryToken = "SECRET-query-token-value";
+		const url = `https://user:pw@api.example.com/path?token=${queryToken}`;
+		const { result, disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Observed ${url} while closing.`,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(disk).toContain(scheme);
+		expect(disk).not.toContain(queryToken);
+		expect(disk).not.toContain("pw@");
+	});
+
+	test("redacts narrated goal and explanation fields before writing", async () => {
+		const goalSecret = "ghp_goal1234567890abcdefghijklmnop";
+		const explanationSecret = "sk-explanation1234567890abcdefghijk";
+		const { disk } = await writeRecord({
+			...BASE_RECEIPT,
+			goal: `Goal had ${goalSecret}`,
+			explanation: `Explanation had ${explanationSecret}`,
+		});
+
+		expect(disk).not.toContain(goalSecret);
+		expect(disk).not.toContain(explanationSecret);
+	});
+
+	test("does not over-redact a legitimate 40-character hash in friction", async () => {
+		const hash = "abcdef1234567890abcdef1234567890abcdef12";
+		const { disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Need to inspect commit ${hash}.`,
+		});
+
+		expect(disk).toContain(hash);
+		expect(disk).toContain('"redactions": 0');
+	});
+
+	test("schema rejection does not echo a raw token in error output", async () => {
+		const secret = "ghp_error1234567890abcdefghijklmnop";
+		const { result } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Do not echo ${secret}`,
+			unknown: "field",
+		} as Partial<Receipt>);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stdout).not.toContain(secret);
+		expect(result.stderr).not.toContain(secret);
+	});
+
+	test("unknown-field error hint names the offending field", async () => {
+		const { result } = await writeRecord({
+			...BASE_RECEIPT,
+			surprise: "value",
+		} as Partial<Receipt>);
+
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result.stdout);
+		const error = envelope.error as Record<string, unknown>;
+		expect(error.code).toBe("unknown_receipt_field");
+		const hint = error.hint as Record<string, unknown>;
+		expect(hint.summary).toContain("surprise");
+	});
+
+	test("invalid-field error hint names the offending field", async () => {
+		const { result } = await writeRecord({
+			...BASE_RECEIPT,
+			goal: 42 as unknown as string,
+		});
+
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result.stdout);
+		const error = envelope.error as Record<string, unknown>;
+		expect(error.code).toBe("invalid_receipt_field");
+		const hint = error.hint as Record<string, unknown>;
+		expect(hint.summary).toContain("goal");
+	});
+
+	test("clean free text passes through unchanged with zero redactions", async () => {
+		const { disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: "Selector wording was ambiguous but secret-free.",
+		});
+
+		expect(disk).toContain("Selector wording was ambiguous but secret-free.");
+		expect(disk).toContain('"redactions": 0');
+	});
+
+	for (const [label, checkIgnored] of [
+		["complete path", async () => 1],
+		["degraded path", async () => 1],
+		["error status", async () => 128],
+		["timeout status", async () => 124],
+	] as const) {
+		test(`gitignore gate fail-closed blocks writes on ${label}`, async () => {
+			const receipt =
+				label === "degraded path"
+					? {
+							skill: BASE_RECEIPT.skill,
+							goal: BASE_RECEIPT.goal,
+							outcome: BASE_RECEIPT.outcome,
+							generated_ts: BASE_RECEIPT.generated_ts,
+						}
+					: BASE_RECEIPT;
+			const { root, result } = await writeRecord(receipt, { checkIgnored });
+
+			expect(result.exitCode).toBe(1);
+			expect(result.reportPath).toBeUndefined();
+			expect(result.stdout).toContain("gitignore_gate_refused");
+			expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
+		});
+	}
+
+	test("gitignore negation is refused by real git check-ignore", async () => {
+		const root = await makeRoot();
+		await run(["git", "init"], root);
+		await writeFile(
+			join(root, ".gitignore"),
+			".skill-feedback/\n!.skill-feedback/\n",
+			"utf-8",
+		);
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+			runId: "negation",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.reportPath).toBeUndefined();
+	});
+
+	test("real git integration writes only when the inbox is ignored", async () => {
+		const root = await makeRoot();
+		await run(["git", "init"], root);
+		const refused = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+			runId: "not-ignored",
+		});
+		expect(refused.exitCode).toBe(1);
+
+		await writeFile(join(root, ".gitignore"), ".skill-feedback/\n", "utf-8");
+		const written = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+			runId: "ignored",
+		});
+		expect(written.exitCode).toBe(0);
+		expect(written.reportPath).toBeTruthy();
+	});
+
+	test("successful writes create restrictive inbox and file permissions", async () => {
+		const { root, result } = await writeRecord(BASE_RECEIPT);
+		if (!result.reportPath) throw new Error("expected report path");
+
+		const dirMode = (await stat(join(root, ".skill-feedback"))).mode & 0o777;
+		const fileMode = (await stat(result.reportPath)).mode & 0o777;
+		expect(dirMode).toBe(0o700);
+		expect(fileMode).toBe(0o600);
+	});
+
+	test("closeout write keeps unlinked correlation out of persisted evidence gaps", async () => {
+		const { result } = await writeCloseout(BASE_CLOSEOUT);
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			evidence_gaps: Array<{ code: string }>;
+		};
+
+		expect(data.evidence_gaps.map((gap) => gap.code)).not.toContain(
+			"unlinked_correlation",
+		);
+	});
+
+	test("record attaches writer proof and Claude runtime run id without exposing detection id", async () => {
+		const detectionId = "session:raw-detection-id";
+		const { root, result, disk } = await writeRecord(
+			BASE_RECEIPT,
+			{},
+			{
+				model: "claude-opus-4-8",
+				detectionId,
+				captureMetadata: {
+					capture_runtime: "claude_stop",
+					skill_identity_provenance: {
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
+					},
+				},
+			},
+		);
+		if (!result.reportPath) throw new Error("expected report path");
+
+		const report = JSON.parse(disk) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		const envelopeData = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(envelopeData.proof_status).toBe("attached");
+		expect(envelopeData.proof_diagnostics).toEqual([]);
+		expect(report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(report.skill_run_id).not.toBe(detectionId);
+		expect(report.skill_run_id_provenance).toBe("runtime_owned");
+		expect(disk).not.toContain(detectionId);
+		expect(result.stdout).not.toContain(detectionId);
+		expect(result.stderr).not.toContain(detectionId);
+
+		const trustDirMode =
+			(await stat(join(root, ".skill-feedback", ".trust"))).mode & 0o777;
+		const keyMode =
+			(await stat(join(root, ".skill-feedback", ".trust", "key"))).mode &
+			0o777;
+		expect(trustDirMode).toBe(0o700);
+		expect(keyMode).toBe(0o600);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-proof-preserved",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health).toMatchObject({
+			verified_count: 1,
+			evidence_only_count: 0,
+		});
+		expect(data.review_units[0]).toMatchObject({
+			trusted_run: true,
+			trusted_skill_run_id: report.skill_run_id,
+		});
+	});
+
+	test("correlation finalizer writes one signed witness for matching Claude hook and closeout", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlation-run",
+				captureMetadata: {
+					capture_runtime: "claude_stop",
+					skill_identity_provenance: {
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
+					},
+				},
+			},
+			runId: "record-correlation-hook",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlation",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+			const result = await finalizeSkillFeedbackCorrelationWitness(
+				{
+					skill: BASE_RECEIPT.skill,
+					hookReportId: hookData.report_id,
+					skillRunId: hookData.skill_run_id,
+					createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+
+		expect(result.status).toBe("written");
+		if (result.status !== "written") throw new Error("expected witness");
+		expect(result.witnessPath).toMatch(
+			/^\.skill-feedback\/\.correlation\/witness_[0-9a-f]{16}\.json$/,
+		);
+		const witnessDisk = await readFile(join(root, result.witnessPath), "utf-8");
+		const witness = JSON.parse(witnessDisk) as Record<string, unknown>;
+		expect(witness).toMatchObject({
+			schema_version: "1",
+			witness_id: result.witnessId,
+			skill: BASE_RECEIPT.skill,
+			runtime_source: "claude_stop",
+			hook_report_id: hookData.report_id,
+			closeout_report_id: closeoutData.report_id,
+			skill_run_id: hookData.skill_run_id,
+			correlation_proof: { algorithm: "hmac-sha256" },
+		});
+		expect(witnessDisk).not.toContain(closeoutData.written_path);
+		const dirMode =
+			(await stat(join(root, ".skill-feedback", ".correlation"))).mode & 0o777;
+		const fileMode = (await stat(join(root, result.witnessPath))).mode & 0o777;
+		expect(dirMode).toBe(0o700);
+		expect(fileMode).toBe(0o600);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-correlation-witness",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData.review_units).toHaveLength(1);
+		expect(reviewData.review_units[0]).toMatchObject({
+			trusted_run: true,
+			trusted_skill_run_id: hookData.skill_run_id,
+		});
+		expect(reviewData.ledger_entries[0]?.allowed_claims).toEqual(
+			expect.arrayContaining(["same_trusted_run", "corroborated"]),
+		);
+		expect(reviewData.ledger_entries[0]?.evidence_tier).toBe("corroborated");
+		expect(reviewData.correlation_witnesses).toMatchObject({
+			verified_count: 1,
+			blocked_count: 0,
+			orphan_count: 0,
+			diagnostics: [],
+		});
+	});
+
+	test("correlation finalizer blocks invalid closeout proof and persists diagnostics", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:invalid-closeout-proof",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-invalid-closeout-proof",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-invalid-proof",
+		});
+		if (!closeout.reportPath) throw new Error("expected closeout report");
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+		const pathMismatch = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: ".skill-feedback/not-the-closeout-report.json",
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(pathMismatch).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_closeout_path_mismatch"],
+		});
+
+		const rawCloseout = JSON.parse(await readFile(closeout.reportPath, "utf-8"));
+		rawCloseout.report_card.goal = "Tampered after signing.";
+		await writeFile(closeout.reportPath, `${JSON.stringify(rawCloseout, null, "\t")}\n`);
+
+		const invalidProof = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+
+		expect(invalidProof).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_closeout_proof_invalid"],
+		});
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-correlation-validation-diagnostics",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+		expect(healthData.correlation_witnesses).toMatchObject({
+			blocked_count: 2,
+		});
+		expect(healthData.correlation_witnesses.diagnostics).toEqual(
+			expect.arrayContaining([
+				"correlation_closeout_path_mismatch",
+				"correlation_closeout_proof_invalid",
+			]),
+		);
+	});
+
+		test("correlation finalizer writes one eligible candidate and diagnoses rejected candidates", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:mixed-closeout-candidates",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-mixed-closeout-candidates",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-mixed-closeout-candidates",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+		const result = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+					{
+						reportId: "missing-closeout",
+						writtenPath: ".skill-feedback/missing-closeout.json",
+						proofStatus: "attached",
+					},
+				],
+			},
+			{ runtime },
+		);
+
+		expect(result).toMatchObject({
+			status: "written",
+			diagnostics: ["correlation_closeout_report_missing"],
+		});
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-mixed-closeout-candidates",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData.correlation_witnesses).toMatchObject({
+			verified_count: 1,
+			blocked_count: 1,
+			diagnostics: ["correlation_closeout_report_missing"],
+		});
+			expect(reviewData.ledger_entries[0]?.allowed_claims).toEqual(
+				expect.arrayContaining(["same_trusted_run", "corroborated"]),
+			);
+		});
+
+		test("correlation finalizer fails closed on malformed candidate report", async () => {
+			const root = await makeRoot();
+			const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+			const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+				runtime,
+				internalTelemetry: {
+					model: "claude-opus-4-8",
+					detectionId: "session:malformed-closeout-report",
+					captureMetadata: { capture_runtime: "claude_stop" },
+				},
+				runId: "record-malformed-closeout-report",
+			});
+			const hookData = parseEnvelope(capture.stdout).data as {
+				report_id: string;
+				skill_run_id: string;
+			};
+			const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+				runtime,
+				runId: "closeout-malformed-closeout-report",
+			});
+			if (!closeout.reportPath) throw new Error("expected closeout report");
+			const closeoutData = parseEnvelope(closeout.stdout).data as {
+				report_id: string;
+				written_path: string;
+				proof_status: string;
+			};
+			await writeFile(closeout.reportPath, "{not json}\n");
+
+			const result = await finalizeSkillFeedbackCorrelationWitness(
+				{
+					skill: BASE_RECEIPT.skill,
+					hookReportId: hookData.report_id,
+					skillRunId: hookData.skill_run_id,
+					createdTs: GENERATED_TS,
+					candidates: [
+						{
+							reportId: closeoutData.report_id,
+							writtenPath: closeoutData.written_path,
+							proofStatus: closeoutData.proof_status,
+						},
+					],
+				},
+				{ runtime },
+			);
+
+			expect(result).toEqual({
+				status: "blocked",
+				diagnostics: ["correlation_report_invalid_json"],
+			});
+		});
+
+		test("correlation finalizer fails closed on malformed hook report", async () => {
+			const root = await makeRoot();
+			const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+			const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+				runtime,
+				internalTelemetry: {
+					model: "claude-opus-4-8",
+					detectionId: "session:malformed-hook-report",
+					captureMetadata: { capture_runtime: "claude_stop" },
+				},
+				runId: "record-malformed-hook-report",
+			});
+			if (!capture.reportPath) throw new Error("expected hook report");
+			const hookData = parseEnvelope(capture.stdout).data as {
+				report_id: string;
+				skill_run_id: string;
+			};
+			const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+				runtime,
+				runId: "closeout-malformed-hook-report",
+			});
+			const closeoutData = parseEnvelope(closeout.stdout).data as {
+				report_id: string;
+				written_path: string;
+				proof_status: string;
+			};
+			await writeFile(capture.reportPath, "{not json}\n");
+
+			const result = await finalizeSkillFeedbackCorrelationWitness(
+				{
+					skill: BASE_RECEIPT.skill,
+					hookReportId: hookData.report_id,
+					hookWrittenPath: relative(root, capture.reportPath),
+					skillRunId: hookData.skill_run_id,
+					createdTs: GENERATED_TS,
+					candidates: [
+						{
+							reportId: closeoutData.report_id,
+							writtenPath: closeoutData.written_path,
+							proofStatus: closeoutData.proof_status,
+						},
+					],
+				},
+				{ runtime },
+			);
+
+			expect(result).toEqual({
+				status: "blocked",
+				diagnostics: ["correlation_report_invalid_json"],
+			});
+		});
+
+			test("correlation finalizer blocks multiple eligible candidates", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:eligible-closeout-ambiguous",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-eligible-closeout-ambiguous",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const first = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-eligible-one",
+		});
+		const firstData = parseEnvelope(first.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		const second = await closeoutSkillFeedbackReceipt(
+			{ ...BASE_CLOSEOUT, goal: "Repair the skill route again." },
+			{
+				runtime,
+				runId: "closeout-eligible-two",
+			},
+		);
+		const secondData = parseEnvelope(second.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+		const duplicate = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: firstData.report_id,
+						writtenPath: firstData.written_path,
+						proofStatus: firstData.proof_status,
+					},
+					{
+						reportId: secondData.report_id,
+						writtenPath: secondData.written_path,
+						proofStatus: secondData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(duplicate).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_candidate_ambiguous"],
+		});
+		const diagnosticFiles = (
+			await readdir(join(root, ".skill-feedback", ".correlation"))
+		).filter((entry) => entry.startsWith("diagnostic_"));
+		expect(diagnosticFiles).toHaveLength(1);
+		const diagnosticDisk = await readFile(
+			join(root, ".skill-feedback", ".correlation", diagnosticFiles[0] ?? ""),
+			"utf-8",
+		);
+		expect(diagnosticDisk).toContain("correlation_candidate_ambiguous");
+		expect(diagnosticDisk).not.toContain(firstData.report_id);
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-correlation-candidate-diagnostic",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+			expect(healthData.correlation_witnesses).toMatchObject({
+				blocked_count: 1,
+				diagnostics: ["correlation_candidate_ambiguous"],
+			});
+			const preview = await correlateSkillFeedbackInbox({
+				runtime,
+				runId: "correlate-correlation-candidate-diagnostic",
+			});
+			const previewData = parseEnvelope(preview.stdout)
+				.data as SkillFeedbackCorrelateResultData;
+			expect(previewData.counts).toMatchObject({
+				ambiguous_count: 1,
+				repairable_count: 0,
+			});
+			expect(previewData.next_action.action_id).toBe("inspect_repair_blockers");
+		});
+
+	test("correlation finalizer writes missing-candidate diagnostics", async () => {
+			const root = await makeRoot();
+			const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:missing-closeout-candidate",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-missing-closeout-candidate",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+
+		const result = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime },
+		);
+
+		expect(result).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_candidate_missing"],
+		});
+		const diagnosticFiles = (
+			await readdir(join(root, ".skill-feedback", ".correlation"))
+		).filter((entry) => entry.startsWith("diagnostic_"));
+		expect(diagnosticFiles).toHaveLength(1);
+		const diagnosticDisk = await readFile(
+			join(root, ".skill-feedback", ".correlation", diagnosticFiles[0] ?? ""),
+			"utf-8",
+		);
+		expect(diagnosticDisk).toContain("correlation_candidate_missing");
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-correlation-missing-candidate",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+		expect(healthData.correlation_witnesses).toMatchObject({
+			blocked_count: 1,
+			diagnostics: ["correlation_candidate_missing"],
+		});
+	});
+
+	test("correlate executes repair candidates from finalizer diagnostics", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const blockedRuntime = stubRuntime(root, {
+			nowIso: () => GENERATED_TS,
+			checkIgnored: async () => 1,
+		});
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-finalizer-source",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-finalizer-source",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-finalizer-source",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+
+		const blocked = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				hookWrittenPath: relative(root, capture.reportPath),
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime: blockedRuntime },
+		);
+
+		expect(blocked).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_gitignore_gate_refused"],
+		});
+		const diagnosticFiles = (
+			await readdir(join(root, ".skill-feedback", ".correlation"))
+		).filter((entry) => entry.startsWith("diagnostic_"));
+		expect(diagnosticFiles).toHaveLength(1);
+		const diagnostic = JSON.parse(
+			await readFile(
+				join(root, ".skill-feedback", ".correlation", diagnosticFiles[0] ?? ""),
+				"utf-8",
+			),
+		) as { repair_candidates?: unknown[] };
+		expect(diagnostic.repair_candidates).toHaveLength(1);
+
+		const repairRuntime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const execute = await correlateSkillFeedbackInbox({
+			runtime: repairRuntime,
+			runId: "correlate-finalizer-source-execute",
+			execute: true,
+		});
+
+		expect(execute.exitCode).toBe(0);
+		const data = parseEnvelope(execute.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.counts).toMatchObject({
+			repairable_count: 1,
+			written_count: 1,
+			failed_count: 0,
+		});
+		expect(
+			(await readdir(join(root, ".skill-feedback", ".correlation"))).filter(
+				(entry) => entry.startsWith("witness_"),
+			),
+		).toHaveLength(1);
+	});
+
+	test("correlate execute dedupes duplicate repair diagnostics in one run", async () => {
+		const root = await makeIgnoredGitRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-duplicate-repair",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-duplicate-repair",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-duplicate-repair",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		const diagnosticBody = {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(root, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		} as const;
+		await writeCorrelationDiagnostic(
+			root,
+			"diagnostic_dededededededede.json",
+			diagnosticBody,
+		);
+		await writeCorrelationDiagnostic(
+			root,
+			"diagnostic_eeeeeeeeeeeeeeee.json",
+			diagnosticBody,
+		);
+
+		const execute = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-duplicate-repair-execute",
+			execute: true,
+		});
+
+		expect(execute.exitCode).toBe(0);
+		const data = parseEnvelope(execute.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.counts).toMatchObject({
+			candidate_count: 2,
+			repairable_count: 1,
+			already_linked_count: 1,
+			written_count: 1,
+			failed_count: 0,
+		});
+		expect(
+			(await readdir(join(root, ".skill-feedback", ".correlation"))).filter(
+				(entry) => entry.startsWith("witness_"),
+			),
+		).toHaveLength(1);
+	});
+
+	test("correlate preview keeps sparse missing-candidate diagnostics evidence-only", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-sparse",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-sparse",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime },
+		);
+		const before = await readdir(join(root, ".skill-feedback", ".correlation"));
+
+		const preview = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-sparse-preview",
+		});
+
+		expect(preview.exitCode).toBe(0);
+		const data = parseEnvelope(preview.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.mode).toBe("preview");
+		expect(data.counts).toMatchObject({
+			diagnostic_count: 1,
+			candidate_count: 1,
+			repairable_count: 0,
+			insufficient_evidence_count: 1,
+			written_count: 0,
+		});
+		expect(data.candidates[0]).toMatchObject({
+			class: "insufficient_evidence",
+			hook_report_ref: `report:${hookData.report_id}`,
+			reason_ids: ["correlation_candidate_missing"],
+		});
+		expect(data.next_action.action_id).toBe("no_repair_available");
+		expect(await readdir(join(root, ".skill-feedback", ".correlation"))).toEqual(
+			before,
+		);
+	});
+
+	test("correlate preview marks one durable same-boundary candidate repairable", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-repairable",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-repairable",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-repairable",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		await writeCorrelationDiagnostic(root, "diagnostic_aaaaaaaaaaaaaaaa.json", {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(root, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		});
+
+		const preview = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-repairable-preview",
+		});
+
+		expect(preview.exitCode).toBe(0);
+		const data = parseEnvelope(preview.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.counts).toMatchObject({
+			repairable_count: 1,
+			blocked_count: 0,
+			written_count: 0,
+		});
+		expect(data.candidates[0]).toMatchObject({
+			class: "repairable",
+			hook_report_ref: `report:${hookData.report_id}`,
+			closeout_report_refs: [`report:${closeoutData.report_id}`],
+			reason_ids: ["repairable_candidate"],
+		});
+		expect(data.next_action).toMatchObject({
+			action_id: "execute_repair",
+			side_effects: ["write"],
+		});
+		expect(
+			(await readdir(join(root, ".skill-feedback", ".correlation"))).filter(
+				(entry) => entry.startsWith("witness_"),
+			),
+		).toEqual([]);
+	});
+
+	test("correlate preview reports existing valid witnesses as already linked", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-already-linked",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-already-linked",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-already-linked",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime },
+		);
+		await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+
+		const preview = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-already-linked-preview",
+		});
+
+		const data = parseEnvelope(preview.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.counts).toMatchObject({
+			already_linked_count: 1,
+			repairable_count: 0,
+		});
+		expect(data.candidates[0]).toMatchObject({
+			class: "already_linked",
+			closeout_report_refs: [`report:${closeoutData.report_id}`],
+			reason_ids: ["existing_valid_witness"],
+		});
+	});
+
+	test("correlate execute writes one witness and repeat execute is idempotent", async () => {
+		const root = await makeIgnoredGitRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-execute",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-execute",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-execute",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		await writeCorrelationDiagnostic(root, "diagnostic_cccccccccccccccc.json", {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(root, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		});
+
+		const execute = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-execute",
+			execute: true,
+		});
+
+		expect(execute.exitCode).toBe(0);
+		const executeData = parseEnvelope(execute.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(executeData.mode).toBe("execute");
+		expect(executeData.counts).toMatchObject({
+			repairable_count: 1,
+			written_count: 1,
+			failed_count: 0,
+		});
+		const witnessFiles = (
+			await readdir(join(root, ".skill-feedback", ".correlation"))
+		).filter((entry) => entry.startsWith("witness_"));
+		expect(witnessFiles).toHaveLength(1);
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-correlate-execute",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData.ledger_entries[0]?.allowed_claims).toEqual(
+			expect.arrayContaining(["same_trusted_run", "corroborated"]),
+		);
+
+		const repeat = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-execute-repeat",
+			execute: true,
+		});
+		const repeatData = parseEnvelope(repeat.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(repeatData.counts).toMatchObject({
+			already_linked_count: 1,
+			written_count: 0,
+		});
+		expect(
+			(await readdir(join(root, ".skill-feedback", ".correlation"))).filter(
+				(entry) => entry.startsWith("witness_"),
+			),
+		).toHaveLength(1);
+	});
+
+	test("correlate execute writes witnesses to explicit repo target", async () => {
+		const callerRoot = await makeIgnoredGitRoot();
+		const targetRoot = await makeIgnoredGitRoot();
+		const targetRuntime = stubRuntime(targetRoot, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: targetRuntime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-explicit-target",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-explicit-target",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: targetRuntime,
+			runId: "closeout-correlate-explicit-target",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		await writeCorrelationDiagnostic(targetRoot, "diagnostic_1212121212121212.json", {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(targetRoot, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		});
+		const runtime = stubRuntime(callerRoot, {
+			nowIso: () => GENERATED_TS,
+			resolveReadTarget: async (targetPath) => ({
+				ok: true,
+				explicit: true,
+				seedPath: targetPath ?? callerRoot,
+				repoRoot: targetRoot,
+				inboxPath: join(targetRoot, ".skill-feedback"),
+			}),
+		});
+
+		const execute = await correlateSkillFeedbackInbox({
+			runtime,
+			runId: "correlate-explicit-target-execute",
+			targetPath: targetRoot,
+			execute: true,
+		});
+
+		expect(execute.exitCode).toBe(0);
+		const data = parseEnvelope(execute.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: targetRoot,
+			inbox_path: join(targetRoot, ".skill-feedback"),
+		});
+		expect(data.counts).toMatchObject({
+			repairable_count: 1,
+			written_count: 1,
+		});
+		expect(
+			(
+				await readdir(join(targetRoot, ".skill-feedback", ".correlation"))
+			).filter((entry) => entry.startsWith("witness_")),
+		).toHaveLength(1);
+		await expect(readdir(join(callerRoot, ".skill-feedback"))).rejects.toThrow();
+	});
+
+	test("correlate execute reports partial changed state after a later write fails", async () => {
+		const root = await makeIgnoredGitRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		for (const suffix of ["one", "two", "three"]) {
+			const capture = await recordSkillFeedbackReceipt(
+				{ ...BASE_RECEIPT, goal: `Repair ${suffix}.` },
+				{
+					runtime,
+					internalTelemetry: {
+						model: "claude-opus-4-8",
+						detectionId: `session:partial-${suffix}`,
+						captureMetadata: { capture_runtime: "claude_stop" },
+					},
+					runId: `record-partial-${suffix}`,
+				},
+			);
+			if (!capture.reportPath) throw new Error("expected hook report");
+			const hookData = parseEnvelope(capture.stdout).data as {
+				report_id: string;
+				skill_run_id: string;
+			};
+			const closeout = await closeoutSkillFeedbackReceipt(
+				{ ...BASE_CLOSEOUT, goal: `Repair ${suffix}.` },
+				{
+					runtime,
+					runId: `closeout-partial-${suffix}`,
+				},
+			);
+			const closeoutData = parseEnvelope(closeout.stdout).data as {
+				report_id: string;
+				written_path: string;
+				proof_status: string;
+			};
+			await writeCorrelationDiagnostic(
+				root,
+				`diagnostic_${
+					suffix === "one"
+						? "dddddddddddddddd"
+						: suffix === "two"
+							? "eeeeeeeeeeeeeeee"
+							: "ffffffffffffffff"
+				}.json`,
+				{
+					schema_version: "1",
+					kind: "correlation_diagnostic",
+					created_ts: GENERATED_TS,
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					diagnostics: ["correlation_candidate_missing"],
+					repair_candidates: [
+						{
+							source: "correlation_finalizer",
+							skill: BASE_RECEIPT.skill,
+							hook_report_id: hookData.report_id,
+							hook_written_path: relative(root, capture.reportPath),
+							closeout_report_id: closeoutData.report_id,
+							closeout_written_path: closeoutData.written_path,
+							closeout_proof_status: closeoutData.proof_status,
+							skill_run_id: hookData.skill_run_id,
+						},
+					],
+				},
+			);
+		}
+		const baseRuntime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		let witnessWrites = 0;
+		const failingRuntime = stubRuntime(root, {
+			nowIso: () => GENERATED_TS,
+			writePrivateFile: async (path, content, mode) => {
+				if (path.includes("/.correlation/witness_")) {
+					witnessWrites += 1;
+					if (witnessWrites === 2) throw new Error("planned witness failure");
+				}
+				await baseRuntime.writePrivateFile(path, content, mode);
+			},
+		});
+
+		const result = await correlateSkillFeedbackInbox({
+			runtime: failingRuntime,
+			runId: "correlate-partial-failure",
+			execute: true,
+		});
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.error).toMatchObject({
+			code: "correlate_repair_state_error",
+		});
+		expect(envelope.data).toMatchObject({ changed_state: "partial" });
+			expect((envelope.data as { diagnostics: string[] }).diagnostics).toContain(
+				"correlation_witness_write_failed",
+			);
+			expect((envelope.data as { diagnostics: string[] }).diagnostics).toContain(
+				"correlation_partial_write_failed",
+			);
+		const partial = (envelope.data as { result: SkillFeedbackCorrelateResultData })
+			.result;
+		expect(partial.counts).toMatchObject({
+			diagnostic_count: 3,
+			candidate_count: 3,
+			written_count: 1,
+			failed_count: 1,
+		});
+	});
+
+	test("correlation finalizer refuses diagnostics when inbox is unsafe", async () => {
+		const root = await makeRoot();
+		const outside = await makeRoot();
+		await symlink(outside, join(root, ".skill-feedback"), "dir");
+		const result = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: "hook-report",
+				skillRunId: "run-id",
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime: stubRuntime(root, { nowIso: () => GENERATED_TS }) },
+		);
+
+		expect(result).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_inbox_unreadable"],
+		});
+		expect(await readdir(outside)).not.toContain(".correlation");
+	});
+
+	test("correlation finalizer persists malformed closeout diagnostics", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:malformed-closeout-output",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-malformed-closeout-output",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+
+		const result = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+				closeoutDiagnostics: ["closeout_envelope_malformed_json"],
+			},
+			{ runtime },
+		);
+
+		expect(result).toEqual({
+			status: "blocked",
+			diagnostics: ["closeout_envelope_malformed_json"],
+		});
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-malformed-closeout-output",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+		expect(healthData.correlation_witnesses).toMatchObject({
+			blocked_count: 1,
+			diagnostics: ["closeout_envelope_malformed_json"],
+		});
+	});
+
+	test("health reports orphan witnesses even when no reports exist", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:orphan-witness",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-orphan-witness-key",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			skill_run_id: string;
+		};
+		await rm(capture.reportPath);
+		const keyHex = (
+			await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf-8")
+		).trim();
+		const witness = createCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				runtime_source: "claude_stop",
+				hook_report_id: "missing-hook-report",
+				closeout_report_id: "missing-closeout-report",
+				skill_run_id: hookData.skill_run_id,
+				created_ts: GENERATED_TS,
+			},
+			Buffer.from(keyHex, "hex"),
+			"0".repeat(32),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await chmod(witnessDir, 0o700);
+		const witnessPath = join(witnessDir, `${witness.witness_id}.json`);
+		await writeFile(witnessPath, `${JSON.stringify(witness, null, "\t")}\n`);
+		await chmod(witnessPath, 0o600);
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-orphan-only-witness",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+
+		expect(health.exitCode).toBe(0);
+		expect(healthData.counts.primary).toBe(0);
+		expect(healthData.correlation_witnesses).toMatchObject({
+			verified_count: 0,
+			blocked_count: 1,
+			orphan_count: 1,
+			diagnostics: ["correlation_witness_orphan_report"],
+		});
+	});
+
+	test("health reports mixed valid invalid diagnostic and orphan correlation artifacts", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:mixed-witnesses",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-mixed-witnesses",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-mixed-witnesses",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		const written = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: closeoutData.report_id,
+						writtenPath: closeoutData.written_path,
+						proofStatus: closeoutData.proof_status,
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(written.status).toBe("written");
+		const diagnostic = await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [
+					{
+						reportId: "ambiguous-one",
+						writtenPath: ".skill-feedback/ambiguous-one.json",
+						proofStatus: "attached",
+					},
+					{
+						reportId: "ambiguous-two",
+						writtenPath: ".skill-feedback/ambiguous-two.json",
+						proofStatus: "attached",
+					},
+				],
+			},
+			{ runtime },
+		);
+		expect(diagnostic).toEqual({
+			status: "blocked",
+			diagnostics: ["correlation_closeout_report_missing"],
+		});
+		const keyHex = (
+			await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf-8")
+		).trim();
+		const orphan = createCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				runtime_source: "claude_stop",
+				hook_report_id: "missing-hook-report",
+				closeout_report_id: "missing-closeout-report",
+				skill_run_id: hookData.skill_run_id,
+				created_ts: GENERATED_TS,
+			},
+			Buffer.from(keyHex, "hex"),
+			"1".repeat(32),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		const orphanPath = join(witnessDir, `${orphan.witness_id}.json`);
+		await writeFile(orphanPath, `${JSON.stringify(orphan, null, "\t")}\n`);
+		await chmod(orphanPath, 0o600);
+		const invalidPath = join(witnessDir, "witness_aaaaaaaaaaaaaaaa.json");
+		await writeFile(invalidPath, "{not json}\n");
+		await chmod(invalidPath, 0o600);
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-mixed-correlation-artifacts",
+		});
+		const healthData = parseEnvelope(health.stdout).data as HealthResultData;
+
+		expect(healthData.correlation_witnesses).toMatchObject({
+			verified_count: 1,
+			blocked_count: 3,
+			orphan_count: 1,
+		});
+		expect(healthData.correlation_witnesses.diagnostics).toEqual(
+			expect.arrayContaining([
+				"correlation_closeout_report_missing",
+				"correlation_witness_invalid_json",
+				"correlation_witness_orphan_report",
+			]),
+		);
+	});
+
+	test("review blocks duplicate witnesses for one closeout", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:duplicate-closeout-witness",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-duplicate-closeout-witness",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const secondCapture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:duplicate-closeout-witness-second-hook",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-duplicate-closeout-witness-second-hook",
+		});
+		const secondHookData = parseEnvelope(secondCapture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-duplicate-witness",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+		};
+		const keyHex = (
+			await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf-8")
+		).trim();
+		const witnessSeed = {
+			skill: BASE_RECEIPT.skill,
+			runtime_source: "claude_stop" as const,
+			hook_report_id: hookData.report_id,
+			closeout_report_id: closeoutData.report_id,
+			skill_run_id: hookData.skill_run_id,
+			created_ts: GENERATED_TS,
+		};
+		const firstWitness = createCorrelationWitness(
+			witnessSeed,
+			Buffer.from(keyHex, "hex"),
+			"2".repeat(32),
+		);
+		const secondWitness = createCorrelationWitness(
+			{
+				...witnessSeed,
+				hook_report_id: secondHookData.report_id,
+				skill_run_id: secondHookData.skill_run_id,
+				created_ts: "2026-06-11T09:00:01.000Z",
+			},
+			Buffer.from(keyHex, "hex"),
+			"3".repeat(32),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await chmod(witnessDir, 0o700);
+		for (const witness of [firstWitness, secondWitness]) {
+			const witnessPath = join(witnessDir, `${witness.witness_id}.json`);
+			await writeFile(witnessPath, `${JSON.stringify(witness, null, "\t")}\n`);
+			await chmod(witnessPath, 0o600);
+		}
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-duplicate-closeout-witness",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+
+		expect(reviewData.correlation_witnesses).toMatchObject({
+			verified_count: 0,
+			blocked_count: 2,
+			orphan_count: 0,
+			diagnostics: ["correlation_witness_duplicate_closeout"],
+		});
+		expect(reviewData.review_units).toHaveLength(3);
+		expect(
+			reviewData.review_units.filter((unit) => unit.trusted_run === true),
+		).toHaveLength(2);
+		expect(
+			reviewData.ledger_entries[0]?.allowed_claims,
+		).not.toContain("same_trusted_run");
+		expect(reviewData.ledger_entries[0]?.allowed_claims).not.toContain(
+			"corroborated",
+		);
+	});
+
+	test("review blocks duplicate witnesses for one hook", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:duplicate-hook-witness",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-duplicate-hook-witness",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const firstCloseout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-duplicate-hook-first",
+		});
+		const firstCloseoutData = parseEnvelope(firstCloseout.stdout).data as {
+			report_id: string;
+		};
+		const secondCloseout = await closeoutSkillFeedbackReceipt(
+			{ ...BASE_CLOSEOUT, goal: "Repair the skill route again." },
+			{
+				runtime,
+				runId: "closeout-duplicate-hook-second",
+			},
+		);
+		const secondCloseoutData = parseEnvelope(secondCloseout.stdout).data as {
+			report_id: string;
+		};
+		const keyHex = (
+			await readFile(join(root, ".skill-feedback", ".trust", "key"), "utf-8")
+		).trim();
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await chmod(witnessDir, 0o700);
+		const witnesses = [
+			createCorrelationWitness(
+				{
+					skill: BASE_RECEIPT.skill,
+					runtime_source: "claude_stop",
+					hook_report_id: hookData.report_id,
+					closeout_report_id: firstCloseoutData.report_id,
+					skill_run_id: hookData.skill_run_id,
+					created_ts: GENERATED_TS,
+				},
+				Buffer.from(keyHex, "hex"),
+				"4".repeat(32),
+			),
+			createCorrelationWitness(
+				{
+					skill: BASE_RECEIPT.skill,
+					runtime_source: "claude_stop",
+					hook_report_id: hookData.report_id,
+					closeout_report_id: secondCloseoutData.report_id,
+					skill_run_id: hookData.skill_run_id,
+					created_ts: "2026-06-11T09:00:01.000Z",
+				},
+				Buffer.from(keyHex, "hex"),
+				"5".repeat(32),
+			),
+		];
+		for (const witness of witnesses) {
+			const witnessPath = join(witnessDir, `${witness.witness_id}.json`);
+			await writeFile(witnessPath, `${JSON.stringify(witness, null, "\t")}\n`);
+			await chmod(witnessPath, 0o600);
+		}
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-duplicate-hook-witness",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+
+		expect(reviewData.correlation_witnesses).toMatchObject({
+			verified_count: 0,
+			blocked_count: 2,
+			orphan_count: 0,
+			diagnostics: ["correlation_witness_duplicate_hook"],
+		});
+		expect(
+			reviewData.ledger_entries.some((entry) =>
+				entry.allowed_claims.includes("corroborated"),
+			),
+		).toBe(false);
+	});
+
+	test("review keeps duplicate report id occurrences separate", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"a-capture.json",
+			v1CloseoutReport({
+				reportId: "report-duplicate",
+				generatedTs: "2026-06-11T10:00:00.000Z",
+				evidenceSource: "hook_capture",
+				captureRuntime: "claude_stop",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"b-closeout.json",
+			v1CloseoutReport({
+				reportId: "report-duplicate",
+				generatedTs: "2026-06-11T10:01:00.000Z",
+				evidenceSource: "driver_closeout",
+			}),
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-duplicate-report-id-occurrences",
+		});
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+
+		expect(reviewData.coverage).toMatchObject({
+			total_reports: 2,
+			closeout_count: 1,
+			capture_only_count: 1,
+		});
+	});
+
+	test("Claude detection-derived run ids contribute to hook report ids", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root);
+		const writeCapture = async (detectionId: string) => {
+			const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+				runtime,
+				internalTelemetry: {
+					model: "claude-opus-4-8",
+					detectionId,
+					captureMetadata: { capture_runtime: "claude_stop" },
+				},
+				runId: `record-${detectionId}`,
+			});
+			expect(result.exitCode).toBe(0);
+			if (!result.reportPath) throw new Error("expected report path");
+			const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+				report_id: string;
+				skill_run_id?: string;
+			};
+			return { report, result };
+		};
+
+		const first = await writeCapture("session:report-id-one");
+		const second = await writeCapture("session:report-id-two");
+
+		expect(first.report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(second.report.skill_run_id).toMatch(/^[0-9a-f]{64}$/);
+		expect(first.report.skill_run_id).not.toBe(second.report.skill_run_id);
+		expect(first.report.report_id).not.toBe(second.report.report_id);
+		expect(first.result.reportPath).not.toBe(second.result.reportPath);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-distinct-hook-report-ids",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).not.toContain("duplicate_report_id");
+		expect(data.review_units.every((unit) => unit.trusted_run === true)).toBe(
+			true,
+		);
+	});
+
+	test("whitespace-only detection id cannot derive a runtime-owned run id", async () => {
+		const { result, disk } = await writeRecord(
+			BASE_RECEIPT,
+			{},
+			{
+				model: "claude-opus-4-8",
+				detectionId: " \t\n ",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		const report = JSON.parse(disk) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		expect(report.skill_run_id).toBeUndefined();
+		expect(report.skill_run_id_provenance).toBeUndefined();
+	});
+
+	test("record reports proof-unavailable when proof payload canonicalization fails", async () => {
+		const { result, disk } = await writeRecord(BASE_RECEIPT, {}, {
+			captureMetadata: {
+				skill_identity_provenance: {
+					source: "none",
+					trusted: false,
+					extra: () => "not-json",
+				} as unknown as InternalRecordTelemetry["captureMetadata"] extends {
+					skill_identity_provenance?: infer Provenance;
+				}
+					? Provenance
+					: never,
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		const report = JSON.parse(disk) as { writer_proof?: unknown };
+		expect(data.proof_status).toBe("unavailable");
+		expect(data.proof_diagnostics).toEqual([
+			"writer_proof_canonicalization_failed",
+		]);
+		expect(report.writer_proof).toBeUndefined();
+	});
+
+	test("review degrades signed reports when trust key is unusable", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:lost-key",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-bad-proof-key",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_key_unusable");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("health counts every correlation witness blocked by unusable proof key", async () => {
+		const root = await makeRoot();
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await chmod(witnessDir, 0o700);
+		for (const witnessId of ["witness_aaaaaaaaaaaaaaaa", "witness_bbbbbbbbbbbbbbbb"]) {
+			await writeFile(
+				join(witnessDir, `${witnessId}.json`),
+				`${JSON.stringify({ witness_id: witnessId }, null, "\t")}\n`,
+			);
+		}
+		await mkdir(join(root, ".skill-feedback", ".trust"), { recursive: true });
+		await writeFile(join(root, ".skill-feedback", ".trust", "key"), "bad\n");
+
+		const health = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-correlation-proof-key-unusable",
+		});
+		const data = parseEnvelope(health.stdout).data as HealthResultData;
+
+		expect(data.correlation_witnesses).toMatchObject({
+			blocked_count: 2,
+		});
+		expect(data.correlation_witnesses.diagnostics).toContain(
+			"correlation_writer_proof_key_unusable",
+		);
+	});
+
+	test("review reports replay diagnostics for copied signed reports", async () => {
+		const { root, disk } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:duplicate-proof",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await writeInboxReport(root, "copy.json", JSON.parse(disk));
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-duplicate-proof",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.replay_diagnostics_count).toBe(2);
+		expect(data.proof_health.diagnostics).toEqual(
+			expect.arrayContaining([
+				"duplicate_report_id",
+				"duplicate_writer_proof_nonce",
+			]),
+		);
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("first proof-capable write reuses a concurrently created trust key", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		const racedKey = "ab".repeat(32);
+		const keyPath = join(root, ".skill-feedback", ".trust", "key");
+		let raced = false;
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path === keyPath && !raced) {
+						raced = true;
+						await baseRuntime.writePrivateFile(path, `${racedKey}\n`, mode);
+						throw Object.assign(new Error("key already exists"), {
+							code: "EEXIST",
+						});
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			internalTelemetry: {
+				detectionId: "session:race-proof",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "trust-key-race",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.reportPath).toBeTruthy();
+		expect(await readFile(keyPath, "utf-8")).toBe(`${racedKey}\n`);
+		const report = JSON.parse(
+			await readFile(result.reportPath ?? "", "utf-8"),
+		) as { writer_proof?: unknown };
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+	});
+
+	test("first proof-capable write degrades when a raced trust key is unreadable", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		const keyPath = join(root, ".skill-feedback", ".trust", "key");
+		let raced = false;
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path === keyPath && !raced) {
+						raced = true;
+						await baseRuntime.writePrivateFile(path, "bad\n", mode);
+						throw Object.assign(new Error("key already exists"), {
+							code: "EEXIST",
+						});
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			internalTelemetry: {
+				detectionId: "session:race-unreadable-proof",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "trust-key-race-unreadable",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(data.proof_status).toBe("unavailable");
+		expect(data.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
+		expect(await readFile(keyPath, "utf-8")).toBe("bad\n");
+		if (!result.reportPath) throw new Error("expected report path");
+		const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.writer_proof).toBeUndefined();
+		expect(report.skill_run_id).toBeUndefined();
+		expect(report.skill_run_id_provenance).toBeUndefined();
+	});
+
+	test("record degrades to evidence-only when trust directory is unsafe", async () => {
+		const root = await makeRoot();
+		const inbox = join(root, ".skill-feedback");
+		const outside = await makeRoot();
+		await mkdir(inbox, { recursive: true, mode: 0o700 });
+		await symlink(outside, join(inbox, ".trust"));
+
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: stubRuntime(root),
+			internalTelemetry: {
+				detectionId: "session:unsafe-trust-dir",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "unsafe-trust-dir",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).not.toContain(".trust/key");
+		expect(result.stderr).not.toContain(".trust/key");
+		if (!result.reportPath) throw new Error("expected report path");
+		const report = JSON.parse(await readFile(result.reportPath, "utf-8")) as {
+			writer_proof?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+		};
+		const data = parseEnvelope(result.stdout).data as {
+			proof_status?: string;
+			proof_diagnostics?: string[];
+		};
+		expect(data.proof_status).toBe("unavailable");
+		expect(data.proof_diagnostics).toEqual(["trust_store_key_unusable"]);
+		expect(report.writer_proof).toBeUndefined();
+		expect(report.skill_run_id).toBeUndefined();
+		expect(report.skill_run_id_provenance).toBeUndefined();
+	});
+
+	test("review degrades to evidence-only when trust key path is unsafe", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:key-symlink",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		const keyPath = join(root, ".skill-feedback", ".trust", "key");
+		await rm(keyPath);
+		await symlink(join(root, "outside-key"), keyPath);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-key-symlink",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_key_unusable");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+		expect(review.stdout).not.toContain(".trust/key");
+		expect(review.stderr).not.toContain(".trust/key");
+	});
+
+	test("review degrades when trust directory permissions are not private", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:world-readable-trust",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await chmod(join(root, ".skill-feedback", ".trust"), 0o777);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-trust-dir-permissions",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_key_unusable");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("review reports an initialized trust directory with missing key", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT, {}, {
+			detectionId: "session:missing-trust-key",
+			captureMetadata: { capture_runtime: "claude_stop" },
+		});
+		await rm(join(root, ".skill-feedback", ".trust", "key"));
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-missing-trust-key",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.proof_health.diagnostics).toContain("trust_store_not_initialized");
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("review skips trust store json files as non-report artifacts", async () => {
+		const { root } = await writeRecord(BASE_RECEIPT);
+		await writeFile(
+			join(root, ".skill-feedback", ".trust", "not-a-report.json"),
+			'{"schema_version":"2"}\n',
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-trust-skip",
+		});
+		const data = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(data.inbox_health.primary_count).toBe(1);
+		expect(data.inbox_health.invalid_count).toBe(0);
+	});
+
+	test("record write failure returns an envelope and rolls back final paths", async () => {
+		const root = await makeRoot();
+		const finalPaths: string[] = [];
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: stubRuntime(root, {
+				writePrivateFile: async (path) => {
+					finalPaths.push(path);
+					await writeFile(path, "{partial");
+					throw new Error("write failed");
+				},
+			}),
+			runId: "record-write-failed",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"record_write_failed",
+		);
+		expect(envelope.data).toMatchObject({ changed_state: "none" });
+		expect(result.stdout).not.toContain("write failed");
+		const reportPath = finalPaths.find((path) => !path.includes(".trust"));
+		expect(reportPath).toBeTruthy();
+		await expect(readFile(reportPath ?? "", "utf-8")).rejects.toThrow();
+	});
+
+	test("closeout write failure returns an envelope with no changed state", async () => {
+		const { result } = await writeCloseout(BASE_CLOSEOUT, {
+			writePrivateFile: async () => {
+				throw new Error("closeout write failed");
+			},
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"closeout_write_failed",
+		);
+		expect(envelope.data).toMatchObject({
+			contract: "skill-feedback.closeout",
+			changed_state: "none",
+		});
+		expect(result.stdout).not.toContain("closeout write failed");
+	});
+
+	test("review reports partial temp files as inbox health", async () => {
+		const root = await makeRoot();
+		await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		await writeFile(
+			join(root, ".skill-feedback", "partial.json.tmp-fixture"),
+			"{partial",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-temp-health",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { total_reports: number };
+			inbox_health: { invalid_count: number };
+		};
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_health.invalid_count).toBe(1);
+	});
+
+	test("runner subprocess helper returns after its timeout", async () => {
+		const root = await makeRoot();
+		const start = Date.now();
+		const result = await runProcessForTest(["/bin/sleep", "1"], root, 50);
+
+		expect(result.exitCode).toBe(124);
+		expect(result.stderr).toContain("timed out after 50ms");
+		expect(Date.now() - start).toBeLessThan(900);
+	});
+
+	test("malformed or missing generated_ts is rejected before write", async () => {
+		const malformed = await writeRecord({
+			...BASE_RECEIPT,
+			generated_ts: "not an iso timestamp",
+		});
+		expect(malformed.result.exitCode).toBe(2);
+		expect(malformed.result.reportPath).toBeUndefined();
+
+		const missing = await writeRecord({
+			...BASE_RECEIPT,
+			generated_ts: undefined,
+		});
+		expect(missing.result.exitCode).toBe(2);
+		expect(missing.result.reportPath).toBeUndefined();
+	});
+
+	test("CLI help renders the record command usage", async () => {
+		const result = await runCli(["--help"]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		for (const flag of [
+			"--skill",
+			"--goal",
+			"--outcome",
+			"--friction",
+			"--explanation",
+			"--generated-ts",
+		]) {
+			expect(result.stdout).toContain(flag);
+		}
+		for (const engineReadFlag of ["--model", "--git-sha", "--skill-version"]) {
+			expect(result.stdout).not.toContain(engineReadFlag);
+		}
+
+		const closeoutHelp = await runCli(["closeout", "--help"]);
+		expect(closeoutHelp.exitCode).toBe(0);
+		expect(closeoutHelp.stderr).toBe("");
+		expect(closeoutHelp.stdout).toContain("closeout < receipt.json");
+		assertCommandHelpFlagSurface({
+			command: "closeout",
+			contract: skillFeedbackContracts.closeout,
+			help: closeoutHelp.stdout,
+			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
+		});
+
+		const dashboardHelp = await runCli(["dashboard", "--help"]);
+		expect(dashboardHelp.exitCode).toBe(0);
+		expect(dashboardHelp.stderr).toBe("");
+		expect(dashboardHelp.stdout).toContain("dashboard [--repo <path>]");
+		assertCommandHelpFlagSurface({
+			command: "dashboard",
+			contract: skillFeedbackContracts.dashboard,
+			help: dashboardHelp.stdout,
+			absentFlags: ["--plain", "--goal", "--friction", "--model"],
+		});
+
+		const reviewHelp = await runCli(["review", "--help"]);
+		expect(reviewHelp.exitCode).toBe(0);
+		expect(reviewHelp.stderr).toBe("");
+		expect(reviewHelp.stdout).toContain("review [--plain]");
+		assertCommandHelpFlagSurface({
+			command: "review",
+			contract: skillFeedbackContracts.review,
+			help: reviewHelp.stdout,
+			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
+		});
+
+		const healthHelp = await runCli(["health", "--help"]);
+		expect(healthHelp.exitCode).toBe(0);
+		expect(healthHelp.stderr).toBe("");
+		expect(healthHelp.stdout).toContain("health [--plain]");
+		assertCommandHelpFlagSurface({
+			command: "health",
+			contract: skillFeedbackContracts.health,
+			help: healthHelp.stdout,
+			absentFlags: ["--goal", "--friction", "--model", "--skill-version"],
+		});
+
+		const purgeHelp = await runCli(["purge", "--help"]);
+		expect(purgeHelp.exitCode).toBe(0);
+		expect(purgeHelp.stderr).toBe("");
+		expect(purgeHelp.stdout).toContain("purge [--lane");
+		expect(purgeHelp.stdout).toContain("Default: all");
+		assertCommandHelpFlagSurface({
+			command: "purge",
+			contract: skillFeedbackContracts.purge,
+			help: purgeHelp.stdout,
+			absentFlags: [
+				"--plain",
+				"--goal",
+				"--friction",
+				"--model",
+				"--skill-version",
+			],
+		});
+
+		const correlateHelp = await runCli(["correlate", "--help"]);
+		expect(correlateHelp.exitCode).toBe(0);
+		expect(correlateHelp.stderr).toBe("");
+		expect(correlateHelp.stdout).toContain("correlate [--plain]");
+		assertCommandHelpFlagSurface({
+			command: "correlate",
+			contract: skillFeedbackContracts.correlate,
+			help: correlateHelp.stdout,
+			absentFlags: [
+				"--hook-report-id",
+				"--closeout-report-id",
+				"--skill-run-id",
+				"--proof-status",
+			],
+		});
+	});
+
+	test("runner front door renders help", async () => {
+		const result = await runCli(["--help"], { cwd: REPO_ROOT });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("skill-feedback                  Show read-only dashboard");
+		expect(result.stdout).toContain("dashboard [--repo <path>]");
+		expect(result.stdout).toContain("reports [--json]");
+		expect(result.stdout).toContain("report <report:id|id>");
+		expect(result.stdout).toContain("usage [--json]");
+		expect(result.stdout).toContain("queue [--json]");
+		expect(result.stdout).toContain("record --skill");
+		expect(result.stdout).toContain("health [--plain]");
+		expect(result.stdout).toContain("purge [--lane");
+		expect(result.stdout).toContain("correlate [--plain]");
+	});
+
+	test("runner zero-arg front door renders a read-only human dashboard", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli([], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
+		expect(result.stdout).toContain("skill-feedback usage");
+		expect(result.stdout).toContain("skill-feedback queue");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
+	});
+
+	test("runner dashboard command mirrors the zero-arg front door", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli(["dashboard"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("runner dashboard usage errors return a dashboard contract envelope", async () => {
+		const result = await runCli(["dashboard", "--plain"]);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("runner dashboard renders populated inbox checks", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(root, "dashboard-populated.json", {
+			reportId: "report-dashboard-populated",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["dashboard"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+		expect(result.stdout).toContain(
+			"Open latest report - `skill-feedback report report:report-dashboard-populated`.",
+		);
+		expect(result.stdout).toContain("Recent:");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("runner dashboard --repo resolves the explicit target", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller-a.json", {
+			reportId: "report-dashboard-caller-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(caller, "caller-b.json", {
+			reportId: "report-dashboard-caller-b",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+		await writeV1CloseoutInboxReport(target, "target.json", {
+			reportId: "report-dashboard-target",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["dashboard", "--repo", nestedTarget], {
+			cwd: caller,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+		expect(result.stdout).not.toContain("Reports: primary=2");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
+	test("runner dashboard routes blocked witness diagnostics to correlate", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:dashboard-correlate-preview",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-dashboard-correlate-preview",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime },
+		);
+
+		const result = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "dashboard-correlate-preview",
+			dashboard: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("skill-feedback correlate --plain");
+		expect(result.stdout).toContain("skill-feedback reports");
+	});
+
+	test("runner dashboard routes retention warnings to purge help", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 100; index += 1) {
+			await writeV1CloseoutInboxReport(root, `dashboard-old-${index}.json`, {
+				reportId: `report-dashboard-old-${index}`,
+				generatedTs: "2026-05-20T00:00:00.000Z",
+				correlationStatus: "linked",
+				skillRunId: `run-dashboard-old-${index}`,
+				skillRunIdProvenance: "correlation_owned",
+			});
+		}
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "dashboard-retention",
+			dashboard: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Reports: primary=100 low-signal=0");
+		expect(result.stdout).toContain("skill-feedback purge --help");
+		expect(result.stdout).toContain("skill-feedback reports");
+	});
+
+	test("runner dashboard exits nonzero for unsafe inbox roots", async () => {
+		for (const setup of ["symlink", "file"] as const) {
+			const root = await makeIgnoredGitRoot();
+			if (setup === "symlink") {
+				const outside = await makeRoot();
+				await symlink(outside, join(root, ".skill-feedback"));
+			} else {
+				await writeFile(join(root, ".skill-feedback"), "not a directory");
+			}
+
+			const result = await runCli(["dashboard"], { cwd: root });
+
+			expect(result.exitCode, setup).toBe(1);
+			expect(result.stderr, setup).toBe("");
+			expect(result.stdout, setup).toContain("Skill Feedback");
+			expect(result.stdout, setup).toContain("Signal: inbox is unsafe");
+			expect(result.stdout, setup).toContain("skill-feedback health --plain");
+			expect(() => JSON.parse(result.stdout)).toThrow();
+		}
+	});
+
+	test("CLI usage errors return JSON without writing", async () => {
+		const result = await runCli(["record", "--unknown", "value"]);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.status).toBe("error");
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+	});
+
+	test("correlate public argv previews repair candidates without writing", async () => {
+		const root = await makeIgnoredGitRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:correlate-cli-preview",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-correlate-cli-preview",
+		});
+		if (!capture.reportPath) throw new Error("expected hook report");
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime,
+			runId: "closeout-correlate-cli-preview",
+		});
+		const closeoutData = parseEnvelope(closeout.stdout).data as {
+			report_id: string;
+			written_path: string;
+			proof_status: string;
+		};
+		await writeCorrelationDiagnostic(root, "diagnostic_bbbbbbbbbbbbbbbb.json", {
+			schema_version: "1",
+			kind: "correlation_diagnostic",
+			created_ts: GENERATED_TS,
+			skill: BASE_RECEIPT.skill,
+			hook_report_id: hookData.report_id,
+			diagnostics: ["correlation_candidate_missing"],
+			repair_candidates: [
+				{
+					source: "correlation_finalizer",
+					skill: BASE_RECEIPT.skill,
+					hook_report_id: hookData.report_id,
+					hook_written_path: relative(root, capture.reportPath),
+					closeout_report_id: closeoutData.report_id,
+					closeout_written_path: closeoutData.written_path,
+					closeout_proof_status: closeoutData.proof_status,
+					skill_run_id: hookData.skill_run_id,
+				},
+			],
+		});
+
+		const result = await runCli(["correlate"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const data = parseEnvelope(result.stdout)
+			.data as SkillFeedbackCorrelateResultData;
+		expect(data.counts.repairable_count).toBe(1);
+		expect(data.next_action.action_id).toBe("execute_repair");
+		expect(
+			(await readdir(join(root, ".skill-feedback", ".correlation"))).filter(
+				(entry) => entry.startsWith("witness_"),
+			),
+		).toEqual([]);
+
+		const plain = await runCli(["correlate", "--plain"], { cwd: root });
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stderr).toBe("");
+		expect(plain.stdout).toContain("Skill Feedback Correlate");
+		expect(plain.stdout).toContain("repairable=1");
+		expect(plain.stdout).toContain(
+			`Next action: ${data.next_action.action_id} - ${data.next_action.summary}`,
+		);
+
+		const invalid = await runCli(["correlate", "--hook-report-id", "x"], {
+			cwd: root,
+		});
+		expect(invalid.exitCode).toBe(2);
+		expect(invalid.stderr).toBe("");
+		expect(parseEnvelope(invalid.stdout).error).toMatchObject({
+			code: "usage_error",
+		});
+	});
+
+	test("valid closeout stdin writes a v1 report and starts the pilot marker", async () => {
+		const root = await makeRoot();
+		await run(["git", "init"], root);
+		await writeFile(join(root, ".gitignore"), ".skill-feedback/\n", "utf-8");
+		const result = await runCli(
+			["closeout"],
+			{
+				cwd: root,
+				stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({
+			correlation_status: "unlinked",
+			closeout_coverage_contribution: "material_closeout",
+		});
+		const data = envelope.data as {
+			written_path: string;
+			report_id: string;
+			redactions: number;
+			proof_status?: string;
+		};
+		const reportPath = join(root, data.written_path);
+		const disk = await readFile(reportPath, "utf-8");
+		expect(disk).toContain(`"report_id": "${data.report_id}"`);
+		const report = JSON.parse(disk) as {
+			redactions?: number;
+			writer_proof?: unknown;
+			skill_run_id_provenance?: string;
+		};
+		expect(report.redactions).toBe(data.redactions);
+		expect(report.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		expect(report.skill_run_id_provenance).toBeUndefined();
+		expect(data.proof_status).toBe("attached");
+		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
+		const markerBefore = await readFile(markerPath, "utf-8");
+		expect(markerBefore.trim()).not.toBe("");
+		expect((await stat(markerPath)).mode & 0o777).toBe(0o600);
+		expect((await stat(reportPath)).mode & 0o777).toBe(0o600);
+
+		const second = await runCli(["closeout"], {
+			cwd: root,
+			stdin: `${JSON.stringify({ ...BASE_CLOSEOUT, goal: "Second closeout." })}\n`,
+		});
+		expect(second.exitCode).toBe(0);
+		expect(await readFile(markerPath, "utf-8")).toBe(markerBefore);
+	});
+
+	test("closeout rejects argv receipt fields and malformed stdin without leaking raw input", async () => {
+		const secret = "ghp_closeout1234567890abcdefghijklmnop";
+		const argvResult = await runCli(["closeout", "--goal", secret], {
+			stdin: `${JSON.stringify(BASE_CLOSEOUT)}\n`,
+		});
+		expect(argvResult.exitCode).toBe(2);
+		expect(argvResult.stdout).not.toContain(secret);
+
+		const emptyResult = await runCli(["closeout"], { stdin: " " });
+		expect(emptyResult.exitCode).toBe(2);
+		expect(emptyResult.stderr).toBe("");
+		expect(emptyResult.stdout).not.toContain(secret);
+		const emptyEnvelope = parseEnvelope(emptyResult.stdout);
+		expect(emptyEnvelope.status).toBe("error");
+		expect(emptyEnvelope.error).toMatchObject({
+			code: "closeout_stdin_empty",
+			hint: {
+				action: "change_input",
+				docs_url:
+					"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md",
+			},
+		});
+		const emptyHint = emptyEnvelope.error as {
+			hint: { summary: string };
+		};
+		expect(emptyHint.hint.summary).toContain("empty stdin");
+		expect(emptyHint.hint.summary).not.toContain("bun ");
+		expect(emptyHint.hint.summary).not.toContain("skills/");
+		expect(emptyHint.hint.summary).not.toContain("/Users/");
+
+		for (const stdin of [
+			`{"goal":"${secret}"`,
+			"x".repeat(65_001),
+		] as const) {
+			const result = await runCli(["closeout"], { stdin });
+			expect(result.exitCode).toBe(2);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).not.toContain(secret);
+			expect(parseEnvelope(result.stdout).status).toBe("error");
+			expect(result.stdout).toContain("closeout");
+		}
+	});
+
+	test("closeout redacts v1 agent-authored report-card lanes", async () => {
+		const frictionSecret = "ghp_friction1234567890abcdefghijklmnop";
+		const surfaceSecret = "sk-surface1234567890abcdefghijklmnop";
+		const summarySecret = "Bearer closeout-summary-token";
+		const { result, disk } = await writeCloseout({
+			...BASE_CLOSEOUT,
+			friction: {
+				category: "tool_failure",
+				note: `Tool output exposed ${frictionSecret}.`,
+			},
+			touched_surfaces: [{ type: "label", value: `label ${surfaceSecret}` }],
+			observations: [
+				{
+					kind: "tool_failure",
+					summary: `Observed ${summarySecret}.`,
+					evidence_basis: "driver_observed",
+				},
+			],
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(disk).not.toContain(frictionSecret);
+		expect(disk).not.toContain(surfaceSecret);
+		expect(disk).not.toContain(summarySecret);
+		const data = parseEnvelope(result.stdout).data as { redactions: number };
+		expect(data.redactions).toBeGreaterThanOrEqual(3);
+	});
+
+	test("record and closeout refuse symlinked inbox directories before writing", async () => {
+		const recordRoot = await makeRoot();
+		const recordOutside = await makeRoot();
+		await symlink(recordOutside, join(recordRoot, ".skill-feedback"));
+		const record = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: stubRuntime(recordRoot),
+			runId: "record-symlink-inbox",
+		});
+		expect(record.exitCode).toBe(1);
+		expect(record.reportPath).toBeUndefined();
+		expect(record.stdout).toContain("skill_feedback_inbox_symlink_refused");
+		expect(await readdir(recordOutside)).toEqual([]);
+
+		const closeoutRoot = await makeRoot();
+		const closeoutOutside = await makeRoot();
+		await symlink(closeoutOutside, join(closeoutRoot, ".skill-feedback"));
+		const closeout = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: stubRuntime(closeoutRoot),
+			runId: "closeout-symlink-inbox",
+		});
+		expect(closeout.exitCode).toBe(1);
+		expect(closeout.reportPath).toBeUndefined();
+		expect(closeout.stdout).toContain("skill_feedback_inbox_symlink_refused");
+		expect(await readdir(closeoutOutside)).toEqual([]);
+	});
+
+	test("closeout refuses pilot marker symlink paths before writing", async () => {
+		const root = await makeRoot();
+		const inbox = join(root, ".skill-feedback");
+		await mkdir(inbox, { recursive: true });
+		await symlink(join(root, "outside-marker"), join(inbox, "pilot_started_at"));
+		const result = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: stubRuntime(root),
+			runId: "symlink-marker",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.reportPath).toBeUndefined();
+		expect(result.stdout).toContain("pilot_marker_symlink_refused");
+	});
+
+	test("closeout rolls back the report when first pilot marker write fails", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		const result = await closeoutSkillFeedbackReceipt(BASE_CLOSEOUT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path.endsWith("pilot_started_at")) {
+						throw Object.assign(new Error("marker blocked"), { code: "EACCES" });
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			runId: "marker-write-fails",
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.reportPath).toBeUndefined();
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.data).toMatchObject({ changed_state: "none" });
+		expect(result.stdout).toContain("pilot_marker_write_failed");
+		const inboxEntries = await readdir(join(root, ".skill-feedback"));
+		expect(inboxEntries.filter((entry) => entry.endsWith(".json"))).toEqual([]);
+	});
+
+	test("review returns no-action output for an empty inbox", async () => {
+		const root = await makeRoot();
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-empty",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result.stdout);
+		expect(envelope.status).toBe("ok");
+		expect(envelope.data).toMatchObject({
+			open_items: [],
+			inbox_status: "missing",
+			counts: {
+				primary: 0,
+				low_signal: 0,
+			},
+			read_target: {
+				explicit: false,
+				repo_root: root,
+				inbox_path: join(root, ".skill-feedback"),
+			},
+			next_action: {
+				action_id: "confirm-capture-path",
+			},
+			no_action: {
+				rationale: "No skill-feedback reports found.",
+			},
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-empty-plain",
+			plain: true,
+		});
+		expect(plain.exitCode).toBe(0);
+		expect(plain.stdout.indexOf("Review health:")).toBeLessThan(
+			plain.stdout.indexOf("No action:"),
+		);
+		expect(plain.stdout).toContain(
+			"Proof: verified=0 evidence-only=0 replay=0",
+		);
+		expect(plain.stdout).toContain(`repo_root=${root}`);
+		expect(plain.stdout).toContain(
+			`inbox_path=${join(root, ".skill-feedback")}`,
+		);
+		expect(plain.stdout).toContain("No action: No skill-feedback reports found.");
+	});
+
+	test("review failure envelope uses the review result schema version", async () => {
+		const root = await makeRoot();
+		await writeFile(join(root, ".skill-feedback"), "not a directory");
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-failure-contract",
+		});
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("review_inbox_unsafe");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+			inbox_status: "unsafe",
+		});
+	});
+
+	test("review resolves the containing git root from a nested package cwd", async () => {
+		const root = await makeIgnoredGitRoot();
+		const packageCwd = join(root, "skills", "skill-feedback");
+		await mkdir(packageCwd, { recursive: true });
+		await writeV1CloseoutInboxReport(root, "root-report.json", {
+			reportId: "report-at-root",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["review"], { cwd: packageCwd });
+
+		const data = expectReviewTotalReports(result, 1);
+		expect(data.read_target).toBeUndefined();
+	});
+
+	test("review --repo resolves an explicit target without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller-a.json", {
+			reportId: "report-caller-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(caller, "caller-b.json", {
+			reportId: "report-caller-b",
+			generatedTs: "2026-06-12T00:00:00.000Z",
+		});
+		const target = await makeIgnoredGitRoot();
+		const realTarget = await realpath(target);
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+		await writeV1CloseoutInboxReport(target, "target.json", {
+			reportId: "report-target",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["review", "--repo", nestedTarget], { cwd: caller });
+
+		const data = expectReviewTotalReports(result, 1);
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: realTarget,
+			inbox_path: join(realTarget, ".skill-feedback"),
+			target_path: nestedTarget,
+		});
+	});
+
+	test("review --repo failure does not fall back to caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const outsideGit = await makeRoot();
+
+		const result = await runCli(["review", "--repo", outsideGit], { cwd: caller });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: true,
+			targetPath: outsideGit,
+			changedState: "none",
+		});
+	});
+
+	test("review outside git returns a repair-state envelope", async () => {
+		const outsideGit = await makeRoot();
+		const realOutsideGit = await realpath(outsideGit);
+
+		const result = await runCli(["review"], { cwd: outsideGit });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: false,
+			targetPath: realOutsideGit,
+		});
+	});
+
+	test("review resolves a linked worktree top-level instead of the main checkout", async () => {
+		const main = await makeIgnoredGitRoot();
+		await run(["git", "config", "user.name", "Skill Feedback Test"], main);
+		await run(["git", "config", "user.email", "skill-feedback@example.test"], main);
+		await run(["git", "add", ".gitignore"], main);
+		await run(["git", "commit", "-m", "chore: seed repo"], main);
+		const linkedParent = await makeRoot();
+		const linked = join(linkedParent, "linked");
+		await run(["git", "worktree", "add", "-b", "feat/linked", linked], main);
+		await writeV1CloseoutInboxReport(main, "main-a.json", {
+			reportId: "report-main-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(main, "main-b.json", {
+			reportId: "report-main-b",
+			generatedTs: "2026-06-12T00:00:00.000Z",
+		});
+		await writeV1CloseoutInboxReport(linked, "linked.json", {
+			reportId: "report-linked",
+			generatedTs: GENERATED_TS,
+		});
+
+		const result = await runCli(["review"], { cwd: linked });
+
+		const data = expectReviewTotalReports(result, 1);
+		expect(data.read_target).toBeUndefined();
+	});
+
+	test("review and health resolve the same containing root from nested cwd", async () => {
+		const root = await makeIgnoredGitRoot();
+		const packageCwd = join(root, "skills", "skill-feedback");
+		await mkdir(packageCwd, { recursive: true });
+		await writeV1CloseoutInboxReport(root, "root-report.json", {
+			reportId: "report-shared-root",
+			generatedTs: GENERATED_TS,
+			correlationStatus: "linked",
+			skillRunId: "run-shared-root",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const review = await runCli(["review"], { cwd: packageCwd });
+		const health = await runCli(["health"], { cwd: packageCwd });
+
+		expectReviewTotalReports(review, 1);
+		const healthData = parseHealthEnvelopeData(health);
+		expect(health.exitCode).toBe(0);
+		expect(healthData.counts.primary).toBe(1);
+		expect(healthData.read_target).toBeUndefined();
+	});
+
+	test("review --repo can point at an empty target repo without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+
+		const result = await runCli(["review", "--repo", nestedTarget], { cwd: caller });
+
+		expect(result.exitCode).toBe(0);
+		const data = parseReviewEnvelopeData(result);
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_status).toBe("missing");
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			target_path: nestedTarget,
+		});
+	});
+
+	test("health reports a missing inbox in a valid repo without exposing local paths", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli(["health"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const data = parseHealthEnvelopeData(result);
+		expect(data).toMatchObject({
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			inbox_status: "missing",
+			counts: {
+				primary: 0,
+				low_signal: 0,
+				invalid: 0,
+				skipped_unsafe: 0,
+				unlinked_primary: 0,
+			},
+			next_action: {
+				action_id: "confirm-capture-path",
+			},
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"inbox_missing",
+		);
+		expect(result.stdout).not.toContain(root);
+		expect(result.stdout).not.toContain("repo_root");
+		expect(result.stdout).not.toContain("inbox_path");
+	});
+
+		test("health reports an empty inbox as exit-zero ready state", async () => {
+			const root = await makeIgnoredGitRoot();
+			await mkdir(join(root, ".skill-feedback"));
+
+			const { data, result } = await runCliHealth(root);
+
+			expect(result.exitCode).toBe(0);
+			expect(data.inbox_status).toBe("empty");
+			expect(data.counts.primary).toBe(0);
+			expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"inbox_empty",
+		);
+	});
+
+	test("health omits diagnostic target paths for healthy populated default reads", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(root, "healthy.json", {
+			reportId: "report-healthy",
+			generatedTs: GENERATED_TS,
+			correlationStatus: "linked",
+			skillRunId: "run-healthy",
+				skillRunIdProvenance: "correlation_owned",
+			});
+
+			const { data, result } = await runCliHealth(root);
+
+			expect(result.exitCode).toBe(0);
+			expect(data.inbox_status).toBe("populated");
+			expect(data.read_target).toBeUndefined();
+			expect(result.stdout).not.toContain("repo_root");
+		expect(result.stdout).not.toContain("inbox_path");
+	});
+
+	test("health --plain renders status, counts, warnings, readiness, correlation, and action", async () => {
+		const root = await makeIgnoredGitRoot();
+
+		const result = await runCli(["health", "--plain"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback Health");
+		expect(result.stdout).toContain("Inbox status: missing");
+		expect(result.stdout).toContain("Counts: primary=0 low-signal=0");
+		expect(result.stdout).toContain("Proof: verified=0 evidence-only=0 replay=0");
+		expect(result.stdout).toContain("Warnings:");
+		expect(result.stdout).toContain("- inbox_missing:");
+		expect(result.stdout).toContain("Readiness:");
+		for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
+			expect(result.stdout).toContain(`- ${surface.label}:`);
+		}
+		expect(result.stdout).toContain("Correlation: none linked=0 unlinked=0");
+		expect(result.stdout).toContain("Next action: confirm-capture-path");
+	});
+
+	test("health usage errors return the health envelope contract", async () => {
+		const result = await runCli(["health", "--execute"]);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("health outside git returns a repair-state envelope", async () => {
+		const outsideGit = await makeRoot();
+		const realOutsideGit = await realpath(outsideGit);
+
+		const result = await runCli(["health"], { cwd: outsideGit });
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: false,
+			targetPath: realOutsideGit,
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changedState: "none",
+		});
+	});
+
+	test("health --repo resolves the explicit target without reading caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const target = await makeIgnoredGitRoot();
+		const realTarget = await realpath(target);
+		const nestedTarget = join(target, "nested", "package");
+		await mkdir(nestedTarget, { recursive: true });
+
+		const result = await runCli(["health", "--repo", nestedTarget], {
+			cwd: caller,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.inbox_status).toBe("missing");
+		expect(data.counts.primary).toBe(0);
+		expect(data.read_target).toMatchObject({
+			explicit: true,
+			repo_root: realTarget,
+			inbox_path: join(realTarget, ".skill-feedback"),
+			target_path: nestedTarget,
+		});
+		expect(result.stdout).not.toContain(caller);
+	});
+
+	test("health --repo failure does not fall back to caller cwd", async () => {
+		const caller = await makeIgnoredGitRoot();
+		await writeV1CloseoutInboxReport(caller, "caller.json", {
+			reportId: "report-caller",
+			generatedTs: GENERATED_TS,
+		});
+		const outsideGit = await makeRoot();
+
+		const result = await runCli(["health", "--repo", outsideGit], {
+			cwd: caller,
+		});
+
+		expectReadTargetResolutionFailure(result, {
+			explicit: true,
+			targetPath: outsideGit,
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			changedState: "none",
+		});
+	});
+
+	test("health exits nonzero for unsafe inbox roots", async () => {
+		for (const setup of ["symlink", "file"] as const) {
+			const root = await makeRoot();
+			if (setup === "symlink") {
+				const outside = await makeRoot();
+				await symlink(outside, join(root, ".skill-feedback"));
+			} else {
+				await writeFile(join(root, ".skill-feedback"), "not a directory");
+			}
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+				runId: `health-unsafe-${setup}`,
+			});
+
+			expect(result.exitCode, setup).toBe(1);
+			const envelope = parseEnvelope(result.stdout);
+			expect((envelope.error as { code: string }).code).toBe(
+				"health_inbox_unsafe",
+			);
+			expect(envelope.data).toMatchObject({
+				contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+				schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+				inbox_status: "unsafe",
+				counts: {
+					primary: 0,
+					skipped_unsafe: 1,
+				},
+			});
+		}
+	});
+
+	test("review and health map inbox permission errors to unsafe diagnostics", async () => {
+		const root = await makeRoot();
+		await mkdir(join(root, ".skill-feedback"));
+		const baseRuntime = stubRuntime(root);
+		const runtime = stubRuntime(root, {
+			realpathPath: async (path) => {
+				if (path === join(root, ".skill-feedback")) {
+					throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+				}
+				return baseRuntime.realpathPath(path);
+			},
+		});
+
+		const health = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-permission-denied",
+		});
+		const review = await reviewSkillFeedbackInbox({
+			runtime,
+			runId: "review-permission-denied",
+		});
+
+		expect(health.exitCode).toBe(1);
+		expect(review.exitCode).toBe(1);
+		const healthEnvelope = parseEnvelope(health.stdout);
+		const reviewEnvelope = parseEnvelope(review.stdout);
+		expect((healthEnvelope.error as { code: string }).code).toBe(
+			"health_inbox_unsafe",
+		);
+		expect((reviewEnvelope.error as { code: string }).code).toBe(
+			"review_inbox_unsafe",
+		);
+		expect(healthEnvelope.data).toMatchObject({
+			inbox_status: "unsafe",
+			counts: { skipped_unsafe: 1 },
+		});
+		expect(reviewEnvelope.data).toMatchObject({
+			inbox_status: "unsafe",
+			counts: { skipped_unsafe: 1 },
+		});
+	});
+
+	test("health maps inbox lstat EACCES to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EACCES"),
+			runId: "health-inbox-lstat-permission-denied",
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "health_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+		});
+	});
+
+	test("review maps inbox lstat EPERM to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EPERM"),
+			runId: "review-inbox-lstat-permission-denied",
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "review_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION,
+		});
+	});
+
+	test("health reports partial readability while review remains allowed", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "valid.json", {
+			reportId: "report-valid",
+			generatedTs: GENERATED_TS,
+		});
+		await writeFile(join(root, ".skill-feedback", "invalid.json"), "{nope");
+		await writeFile(join(root, ".skill-feedback", "partial.json.tmp"), "{}");
+
+		const health = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-partial",
+		});
+
+		expect(health.exitCode).toBe(0);
+		const healthData = parseHealthEnvelopeData(health);
+		expect(healthData).toMatchObject({
+			inbox_status: "partially_readable",
+			counts: {
+				primary: 1,
+				invalid: 2,
+			},
+			next_action: {
+				action_id: "repair-inbox-state",
+			},
+		});
+		expect(healthData.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-after-health-partial",
+		});
+		expect(review.exitCode).toBe(0);
+		const reviewData = parseEnvelope(review.stdout).data as ReviewResultData;
+		expect(reviewData).toMatchObject({
+			inbox_status: "partially_readable",
+			counts: {
+				primary: 1,
+				invalid: 2,
+			},
+			next_action: {
+				action_id: "repair-inbox-state",
+			},
+		});
+		expect(reviewData.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
+		expectReviewCoverage(review.stdout, {
+			total_reports: 1,
+			closeout_count: 1,
+			capture_only_count: 0,
+			closeout_rate: 1,
+			low_coverage: false,
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-after-health-partial-plain",
+			plain: true,
+		});
+		const healthIndex = plain.stdout.indexOf("Review health:");
+		const reportsIndex = plain.stdout.indexOf("Reports:");
+		expect(healthIndex).toBeGreaterThan(-1);
+		expect(healthIndex).toBeLessThan(reportsIndex);
+		const healthBlock = plain.stdout.slice(healthIndex, reportsIndex);
+		expect(healthBlock).toContain("inbox_status=partially_readable");
+		expect(healthBlock).toContain("top_warning=partial_readability");
+		expect(healthBlock).not.toContain("trusted skill identity");
+		expect(healthBlock).not.toContain("Correlation:");
+		});
+
+	test("health summarizes all-unlinked primary reports as report-level evidence", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "a.json", {
+			reportId: "report-unlinked-a",
+			generatedTs: GENERATED_TS,
+		});
+		await writeV1CloseoutInboxReport(root, "b.json", {
+			reportId: "report-unlinked-b",
+			generatedTs: "2026-06-12T00:00:00.000Z",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-all-unlinked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.unlinked_primary).toBe(2);
+		expect(data.correlation).toMatchObject({
+			status: "all_unlinked",
+			linked_primary_count: 0,
+			unlinked_primary_count: 2,
+		});
+		expect(data.next_action.action_id).toBe("inspect-report-correlation");
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"unlinked_primary_reports",
+		);
+	});
+
+	test("health routes blocked witness diagnostics to correlate preview", async () => {
+		const root = await makeRoot();
+		const runtime = stubRuntime(root, { nowIso: () => GENERATED_TS });
+		const capture = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime,
+			internalTelemetry: {
+				model: "claude-opus-4-8",
+				detectionId: "session:health-correlate-preview",
+				captureMetadata: { capture_runtime: "claude_stop" },
+			},
+			runId: "record-health-correlate-preview",
+		});
+		const hookData = parseEnvelope(capture.stdout).data as {
+			report_id: string;
+			skill_run_id: string;
+		};
+		await finalizeSkillFeedbackCorrelationWitness(
+			{
+				skill: BASE_RECEIPT.skill,
+				hookReportId: hookData.report_id,
+				skillRunId: hookData.skill_run_id,
+				createdTs: GENERATED_TS,
+				candidates: [],
+			},
+			{ runtime },
+		);
+
+		const result = await healthSkillFeedbackInbox({
+			runtime,
+			runId: "health-correlate-preview",
+		});
+
+		const data = parseHealthEnvelopeData(result);
+		expect(data.correlation_witnesses).toMatchObject({
+			blocked_count: 1,
+			diagnostics: ["correlation_candidate_missing"],
+		});
+		expect(data.next_action).toMatchObject({
+			action_id: "preview-correlation-repair",
+			summary:
+				"Run correlate preview to classify blocked correlation witness diagnostics.",
+		});
+	});
+
+	test("health chooses newest timestamps by time, not lexicographic order", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "early-offset.json", {
+			reportId: "report-early-offset",
+			generatedTs: "2026-06-13T09:30:00.000+11:00",
+			correlationStatus: "linked",
+			skillRunId: "run-early-offset",
+			skillRunIdProvenance: "correlation_owned",
+		});
+		await writeV1CloseoutInboxReport(root, "newer-utc.json", {
+			reportId: "report-newer-utc",
+			generatedTs: "2026-06-13T00:00:00.000Z",
+			correlationStatus: "linked",
+			skillRunId: "run-newer-utc",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-newest-chronological",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.newest.primary_generated_ts).toBe("2026-06-13T00:00:00.000Z");
+	});
+
+	test("health keeps the last same-instant timestamp by inbox order", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "a-offset.json", {
+			reportId: "report-offset",
+			generatedTs: "2026-06-13T11:00:00.000+11:00",
+			correlationStatus: "linked",
+			skillRunId: "run-offset",
+			skillRunIdProvenance: "correlation_owned",
+		});
+		await writeV1CloseoutInboxReport(root, "b-utc.json", {
+			reportId: "report-utc",
+			generatedTs: "2026-06-13T00:00:00.000Z",
+			correlationStatus: "linked",
+			skillRunId: "run-utc",
+			skillRunIdProvenance: "correlation_owned",
+		});
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-newest-same-instant",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.newest.primary_generated_ts).toBe("2026-06-13T00:00:00.000Z");
+	});
+
+	test("health treats unknown-skill Codex Stop as runtime evidence while identity stays blocked", async () => {
+		const root = await makeRoot();
+		await writeLowSignalInboxReport(
+			root,
+			"codex-stop-low.json",
+			v1CloseoutReport({
+				reportId: "report-codex-stop-low",
+				generatedTs: GENERATED_TS,
+				skill: "unknown-skill",
+				evidenceSource: "hook_capture",
+				captureRuntime: "codex_stop",
+			}),
+		);
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "health-codex-low",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.inbox_status).toBe("populated");
+		expect(data.counts.primary).toBe(0);
+		expect(data.counts.low_signal).toBe(1);
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
+	});
+
+		test("health does not warn below the low-signal threshold", async () => {
+			const root = await makeRoot();
+			await writeLowSignalReportBatch(root, 9, "report-low-below");
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+			runId: "health-low-signal-below-threshold",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.low_signal).toBe(9);
+		expect(data.warnings.map((warning) => warning.reason_id)).not.toContain(
+			"low_signal_threshold",
+		);
+	});
+
+		test("health warns on low-signal volume without deleting reports", async () => {
+			const root = await makeRoot();
+			await writeLowSignalReportBatch(root, 10, "report-low");
+
+			const result = await healthSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+			runId: "health-low-signal-volume",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts).toMatchObject({
+			primary: 0,
+			low_signal: 10,
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"low_signal_threshold",
+		);
+		expect(data.next_action.action_id).toBe("inspect-capture-identity");
+		expect(await readdir(join(root, ".skill-feedback", "low-signal"))).toHaveLength(
+			10,
+		);
+	});
+
+	test("health emits retention preview guidance without deleting reports", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 100; index += 1) {
+			await writeV1CloseoutInboxReport(root, `old-${index}.json`, {
+				reportId: `report-old-${index}`,
+				generatedTs: "2026-05-20T00:00:00.000Z",
+				correlationStatus: "linked",
+				skillRunId: `run-old-${index}`,
+				skillRunIdProvenance: "correlation_owned",
+			});
+		}
+
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "health-retention",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.counts.primary).toBe(100);
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"retention_preview_recommended",
+		);
+		expect(data.next_action.action_id).toBe("preview-purge");
+		expect(await readdir(join(root, ".skill-feedback"))).toHaveLength(100);
+	});
+
+	test("read-target resolver passes full git argv and cwd to the runner", async () => {
+		const git = fakeGitRunner({
+			"git -C /repo/package rev-parse --show-toplevel": "/repo\n",
+		});
+
+		const resolution = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: git,
+		});
+
+		expect(resolution).toMatchObject({
+			ok: true,
+			explicit: true,
+			seedPath: "/repo/package",
+			repoRoot: "/repo",
+			inboxPath: "/repo/.skill-feedback",
+		});
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "-C", "/repo/package", "rev-parse", "--show-toplevel"],
+				cwd: "/repo/package",
+			},
+		]);
+	});
+
+	test("read-target resolver resolves relative targets from the injected cwd", async () => {
+		const git = fakeGitRunner({
+			"git -C /caller/package rev-parse --show-toplevel": "/caller\n",
+		});
+
+		const resolution = await resolveSkillFeedbackReadTarget({
+			targetPath: "package",
+			cwd: "/caller",
+			runGit: git,
+		});
+
+		expect(resolution).toMatchObject({
+			ok: true,
+			explicit: true,
+			seedPath: "/caller/package",
+			repoRoot: "/caller",
+			inboxPath: "/caller/.skill-feedback",
+		});
+		expect(git.calls).toEqual([
+			{
+				args: ["git", "-C", "/caller/package", "rev-parse", "--show-toplevel"],
+				cwd: "/caller/package",
+			},
+		]);
+	});
+
+	test("read-target resolver reports git, empty-output, and thrown failures", async () => {
+		const gitFailure = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: fakeGitRunner({
+				"git -C /repo/package rev-parse --show-toplevel": {
+					ok: false,
+					stdout: "",
+					stderr: "fatal: not a git repository",
+					code: 128,
+				},
+			}),
+		});
+		expect(gitFailure).toMatchObject({
+			ok: false,
+			explicit: true,
+			seedPath: "/repo/package",
+			code: "read_target_resolution_failed",
+			gitExitCode: 128,
+		});
+
+		const emptyOutput = await resolveSkillFeedbackReadTarget({
+			cwd: "/caller",
+			runGit: fakeGitRunner({
+				"git -C /caller rev-parse --show-toplevel": "\n",
+			}),
+		});
+		expect(emptyOutput).toMatchObject({
+			ok: false,
+			explicit: false,
+			seedPath: "/caller",
+			code: "read_target_resolution_failed",
+			gitExitCode: 0,
+		});
+
+		const thrown = await resolveSkillFeedbackReadTarget({
+			targetPath: "/repo/package",
+			cwd: "/caller",
+			runGit: async () => {
+				throw new Error("git unavailable");
+			},
+		});
+		expect(thrown).toMatchObject({
+			ok: false,
+			explicit: true,
+			seedPath: "/repo/package",
+			code: "read_target_resolution_failed",
+		});
+		expect(thrown).not.toHaveProperty("gitExitCode");
+	});
+
+	test("review treats low-signal mixed v0 and v1 reports as no-action", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "v1-low.json", {
+			schema_version: "1",
+			report_id: "report-low",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-low",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+			},
+			evidence_gaps: [],
+		});
+		await recordSkillFeedbackReceipt(
+			BASE_RECEIPT,
+			{ runtime: stubRuntime(root), runId: "review-v0" },
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-low-signal",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { low_coverage: boolean; capture_only_count: number };
+			open_items: unknown[];
+			no_action?: { rationale: string };
+		};
+		expect(data.coverage.capture_only_count).toBe(1);
+		expect(data.open_items).toEqual([]);
+		expect(data.no_action?.rationale).toContain("No high-signal");
+	});
+
+		test("record routes unknown-skill Codex Stop capture to the low-signal lane", async () => {
+			const { result, disk } = await writeRecord(
+				{
+					...BASE_RECEIPT,
+					skill: "unknown-skill",
+				},
+				{},
+				{
+					model: "gpt-5-codex",
+					captureMetadata: {
+						capture_runtime: "codex_stop",
+						skill_identity_provenance: {
+							source: "none",
+							trusted: false,
+							reason: "codex_stop_payload_has_no_trusted_skill_identity",
+						},
+					},
+				},
+			);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.reportPath).toContain(join(".skill-feedback", "low-signal"));
+		expect(disk).toContain('"capture_runtime": "codex_stop"');
+	});
+
+	test("review reports low-signal lane and legacy unknown-skill health without ledger entries", async () => {
+		const root = await makeRoot();
+		const lowSignal = {
+			schema_version: "1",
+			report_id: "report-low-signal",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "hook_capture",
+			capture_runtime: "codex_stop",
+			skill_identity_provenance: {
+				source: "none",
+				trusted: false,
+				reason: "codex_stop_payload_has_no_trusted_skill_identity",
+			},
+			correlation_status: "unlinked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				skill: "unknown-skill",
+			},
+			evidence_gaps: [],
+		};
+		const lowSignalInbox = join(root, ".skill-feedback", "low-signal");
+		await mkdir(lowSignalInbox, { recursive: true });
+		await writeFile(
+			join(lowSignalInbox, "new-low.json"),
+			`${JSON.stringify(lowSignal, null, "\t")}\n`,
+		);
+		await writeFile(
+			join(lowSignalInbox, "lane-only-low.json"),
+			`${JSON.stringify(
+				{
+					schema_version: "1",
+					report_id: "report-lane-only-low-signal",
+					untrusted_evidence: true,
+					generated_ts: "2026-06-09T09:00:00.000Z",
+					evidence_source: "driver_closeout",
+					correlation_status: "linked",
+					runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+					report_card: {
+						...BASE_CLOSEOUT,
+						skill: "create-skill",
+					},
+					evidence_gaps: [],
+				},
+				null,
+				"\t",
+			)}\n`,
+		);
+		await writeInboxReport(root, "legacy-low.json", {
+			...lowSignal,
+			report_id: "report-legacy-low-signal",
+			generated_ts: "2026-06-10T09:00:00.000Z",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-low-signal-health",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { total_reports: number };
+			inbox_health: {
+				low_signal_count: number;
+				low_signal_newest_generated_ts?: string;
+				low_signal_reason_ids: string[];
+			};
+			ledger_entries: unknown[];
+			open_items: unknown[];
+		};
+		expect(data.coverage.total_reports).toBe(0);
+		expect(data.inbox_health.low_signal_count).toBe(3);
+		expect(data.inbox_health.low_signal_newest_generated_ts).toBe(GENERATED_TS);
+		expect(data.inbox_health.low_signal_reason_ids).toEqual([
+			"low_signal_lane_report",
+			"unknown_skill_codex_stop",
+		]);
+		expect(data.ledger_entries).toEqual([]);
+		expect(data.open_items).toEqual([]);
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-low-signal-health-plain",
+			plain: true,
+			});
+			expect(plain.stdout).toContain("Review health:");
+			expect(plain.stdout).toContain("counts primary=0 low-signal=3");
+		});
+
+	test("review reports unsafe and invalid artifacts as inbox health", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "valid.json", {
+			schema_version: "1",
+			report_id: "report-valid",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: BASE_CLOSEOUT,
+			evidence_gaps: [],
+		});
+		await writeFile(join(root, ".skill-feedback", "invalid.json"), "{nope");
+		const outside = join(root, "outside.json");
+		await writeFile(outside, "{}");
+		await symlink(outside, join(root, ".skill-feedback", "unsafe.json"));
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-health-invalid",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as ReviewResultData;
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.inbox_health.primary_count).toBe(1);
+		expect(data.inbox_health.skipped_unsafe_count).toBe(1);
+		expect(data.inbox_health.invalid_count).toBe(1);
+		expect(data.inbox_status).toBe("partially_readable");
+		expect(data.counts).toMatchObject({
+			primary: 1,
+			skipped_unsafe: 1,
+			invalid: 1,
+		});
+		expect(data.warnings.map((warning) => warning.reason_id)).toContain(
+			"partial_readability",
+		);
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-health-invalid-plain",
+			plain: true,
+		});
+		expect(plain.stdout).toContain("Review health:");
+		expect(plain.stdout).toContain(
+			"counts primary=1 low-signal=0 invalid=1 skipped=1",
+		);
+		});
+
+	test("purge preview lists old safe candidates without deleting", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"new.json",
+			v1CloseoutReport({
+				reportId: "report-new",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+			}),
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-preview",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			mode: string;
+			candidate_count: number;
+			deleted_count: number;
+			candidate_paths: string[];
+		};
+		expect(data.mode).toBe("preview");
+		expect(data.candidate_count).toBe(1);
+		expect(data.deleted_count).toBe(0);
+		expect(data.candidate_paths).toEqual([".skill-feedback/old.json"]);
+		await expect(readFile(join(root, ".skill-feedback", "old.json"), "utf-8"))
+			.resolves.toContain("report-old");
+	});
+
+	test("purge preview ignores private correlation witness and diagnostic files", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const witnessDir = join(root, ".skill-feedback", ".correlation");
+		await mkdir(witnessDir, { recursive: true });
+		await writeFile(
+			join(witnessDir, "witness_1111111111111111.json"),
+			`${JSON.stringify({ schema_version: "1", witness_id: "witness_1111111111111111" })}\n`,
+		);
+		await writeFile(
+			join(witnessDir, "diagnostic_1111111111111111.json"),
+			`${JSON.stringify({ schema_version: "1", kind: "correlation_diagnostic" })}\n`,
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-preview-witness-skip",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			candidate_paths: string[];
+		};
+		expect(data.candidate_count).toBe(1);
+		expect(data.candidate_paths).toEqual([".skill-feedback/old.json"]);
+		await expect(
+			readFile(join(witnessDir, "witness_1111111111111111.json"), "utf-8"),
+		).resolves.toContain("witness_1111111111111111");
+		await expect(
+			readFile(join(witnessDir, "diagnostic_1111111111111111.json"), "utf-8"),
+		).resolves.toContain("correlation_diagnostic");
+	});
+
+	test("purge keeps interrupted temp artifacts as invalid-health evidence", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old-temp",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const tempPath = join(root, ".skill-feedback", "partial.json.tmp-fixture");
+		await writeFile(tempPath, "{}");
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-temp-invalid-evidence",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		const data = parseEnvelope(result.stdout).data as {
+			deleted_count: number;
+			invalid_count: number;
+			invalid_paths: string[];
+		};
+		expect(data.deleted_count).toBe(1);
+		expect(data.invalid_count).toBe(1);
+		expect(data.invalid_paths).toEqual([
+			".skill-feedback/partial.json.tmp-fixture",
+		]);
+		await expect(readFile(tempPath, "utf-8")).resolves.toBe("{}");
+	});
+
+	test("purge execute deletes selected low-signal reports only", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old-primary.json",
+			v1CloseoutReport({
+				reportId: "report-old-primary",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const lowSignalInbox = join(root, ".skill-feedback", "low-signal");
+		await mkdir(lowSignalInbox, { recursive: true });
+		await writeFile(
+			join(lowSignalInbox, "old-low.json"),
+			`${JSON.stringify(
+				v1CloseoutReport({
+					reportId: "report-old-low",
+					generatedTs: "2026-05-19T00:00:00.000Z",
+					skill: "unknown-skill",
+					evidenceSource: "hook_capture",
+					captureRuntime: "codex_stop",
+				}),
+				null,
+				"\t",
+			)}\n`,
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-execute",
+			purge: {
+				lane: "low-signal",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			mode: string;
+			candidate_count: number;
+			deleted_count: number;
+			deleted_paths: string[];
+		};
+		expect(data.mode).toBe("execute");
+		expect(data.candidate_count).toBe(1);
+		expect(data.deleted_count).toBe(1);
+		expect(data.deleted_paths).toEqual([
+			".skill-feedback/low-signal/old-low.json",
+		]);
+		await expect(
+			readFile(join(root, ".skill-feedback", "old-primary.json"), "utf-8"),
+		).resolves.toContain("report-old-primary");
+		await expect(
+			readFile(join(lowSignalInbox, "old-low.json"), "utf-8"),
+		).rejects.toThrow();
+	});
+
+	test("purge delete failure reports partial state and deleted paths", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old-a.json",
+			v1CloseoutReport({
+				reportId: "report-old-a",
+				generatedTs: "2026-05-19T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"old-b.json",
+			v1CloseoutReport({
+				reportId: "report-old-b",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		let deleteCount = 0;
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+				removeFile: async (path) => {
+					deleteCount += 1;
+					if (deleteCount === 1) {
+						await rm(path);
+						return;
+					}
+					throw new Error("simulated delete failure");
+				},
+			}),
+			runId: "purge-partial-delete",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"purge_delete_failed",
+		);
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+			changed_state: "partial",
+			deleted_paths: [".skill-feedback/old-a.json"],
+		});
+		await expect(
+			readFile(join(root, ".skill-feedback", "old-a.json"), "utf-8"),
+		).rejects.toThrow();
+		await expect(
+			readFile(join(root, ".skill-feedback", "old-b.json"), "utf-8"),
+		).resolves.toContain("report-old-b");
+	});
+
+	test("purge execute lane all spans primary and low-signal reports", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old-primary.json",
+			v1CloseoutReport({
+				reportId: "report-old-primary",
+				generatedTs: "2026-05-19T00:00:00.000Z",
+			}),
+		);
+		const lowSignalInbox = join(root, ".skill-feedback", "low-signal");
+		await mkdir(lowSignalInbox, { recursive: true });
+		await writeFile(
+			join(lowSignalInbox, "old-low.json"),
+			`${JSON.stringify(
+				v1CloseoutReport({
+					reportId: "report-old-low",
+					generatedTs: "2026-05-20T00:00:00.000Z",
+					skill: "unknown-skill",
+					evidenceSource: "hook_capture",
+					captureRuntime: "codex_stop",
+				}),
+				null,
+				"\t",
+			)}\n`,
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-all-execute",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			deleted_count: number;
+			deleted_paths: string[];
+		};
+		expect(data.candidate_count).toBe(2);
+		expect(data.deleted_count).toBe(2);
+		expect(data.deleted_paths).toEqual([
+			".skill-feedback/old-primary.json",
+			".skill-feedback/low-signal/old-low.json",
+		]);
+	});
+
+	test("purge keep-latest execute keeps newest selected-lane report", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"oldest.json",
+			v1CloseoutReport({
+				reportId: "report-oldest",
+				generatedTs: "2026-05-19T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"middle.json",
+			v1CloseoutReport({
+				reportId: "report-middle",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"newest.json",
+			v1CloseoutReport({
+				reportId: "report-newest",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+			}),
+		);
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-keep-latest",
+			purge: {
+				lane: "primary",
+				execute: true,
+				retention: { kind: "keep_latest", count: 1 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_paths: string[];
+			deleted_paths: string[];
+		};
+		expect(data.candidate_paths).toEqual([
+			".skill-feedback/oldest.json",
+			".skill-feedback/middle.json",
+		]);
+		expect(data.deleted_paths).toEqual(data.candidate_paths);
+		await expect(
+			readFile(join(root, ".skill-feedback", "newest.json"), "utf-8"),
+		).resolves.toContain("report-newest");
+	});
+
+	test("purge execute leaves the pilot marker manual and source-owned", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old-pilot-marker",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
+		await writeFile(markerPath, "2026-06-01T00:00:00.000Z\n", "utf-8");
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-keeps-pilot-marker",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		const data = parseEnvelope(result.stdout).data as {
+			deleted_count: number;
+			deleted_paths: string[];
+		};
+		expect(data.deleted_count).toBe(1);
+		expect(data.deleted_paths).toEqual([".skill-feedback/old.json"]);
+		await expect(readFile(markerPath, "utf-8")).resolves.toBe(
+			"2026-06-01T00:00:00.000Z\n",
+		);
+	});
+
+	test("purge reports unsafe and invalid artifacts without following them", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		await writeFile(join(root, ".skill-feedback", "invalid.json"), "{nope");
+		const outside = join(root, "outside.json");
+		await writeFile(outside, "{}");
+		await symlink(outside, join(root, ".skill-feedback", "unsafe.json"));
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-health",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			skipped_unsafe_count: number;
+			invalid_count: number;
+			skipped_paths: string[];
+			invalid_paths: string[];
+		};
+		expect(data.candidate_count).toBe(1);
+		expect(data.skipped_unsafe_count).toBe(1);
+		expect(data.invalid_count).toBe(1);
+		expect(data.skipped_paths).toEqual([".skill-feedback/unsafe.json"]);
+		expect(data.invalid_paths).toEqual([".skill-feedback/invalid.json"]);
+	});
+
+	test("purge public argv rejects execute without a retention selector", async () => {
+		const root = await makeRoot();
+		const result = await runCli(["purge", "--execute"], { cwd: root });
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("review treats raw inbox skill_run_id provenance as evidence-only", async () => {
+		const root = await makeRoot();
+		const linkedReport = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			correlation_status: "linked",
+			skill_run_id: "run-linked",
+			skill_run_id_provenance: "correlation_owned",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+			},
+			evidence_gaps: [],
+		};
+		await writeInboxReport(root, "capture-linked.json", {
+			...linkedReport,
+			report_id: "report-capture-linked",
+			evidence_source: "hook_capture",
+		});
+		await writeInboxReport(root, "closeout-linked.json", {
+			...linkedReport,
+			report_id: "report-closeout-linked",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-linked-coverage",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: {
+				total_reports: number;
+				closeout_count: number;
+				capture_only_count: number;
+				closeout_rate: number;
+				low_coverage: boolean;
+			};
+			review_units: Array<{ trusted_run: boolean }>;
+			ledger_entries: Array<{ allowed_claims: string[]; evidence_tier: string }>;
+		};
+		expect(data.coverage).toMatchObject({
+			total_reports: 2,
+			closeout_count: 1,
+			capture_only_count: 1,
+			closeout_rate: 0.5,
+			low_coverage: false,
+		});
+		expect(data.review_units).toHaveLength(2);
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(true);
+		expect(data.ledger_entries).toHaveLength(1);
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"mixed_evidence_sources",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"same_trusted_run",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain("corroborated");
+		expect(data.ledger_entries[0]?.evidence_tier).not.toBe("corroborated");
+	});
+
+	test("public record stdin cannot mint trusted runtime proof", async () => {
+		const root = await makeIgnoredGitRoot();
+		const capture = await runCli(
+			[
+				"record",
+				"--skill",
+				"fallow",
+				"--goal",
+				"Harness hook observed a completed skill run.",
+				"--outcome",
+				"ambiguous",
+				"--friction",
+				"Hook captured no transcript payload.",
+				"--generated-ts",
+				"2026-06-11T10:00:00.000Z",
+			],
+			{
+				cwd: root,
+				stdin: JSON.stringify({
+					model: "claude-opus-4-8",
+					detection_id: "agent-authored-detection",
+					capture_runtime: "claude_stop",
+					skill_identity_provenance: {
+						source: "claude_transcript_skill_tool_result",
+						trusted: true,
+						field: "toolUseResult.commandName",
+						reason: "claude_transcript_detection",
+					},
+				}),
+			},
+		);
+		expect(capture.exitCode).toBe(0);
+		const captureData = parseEnvelope(capture.stdout).data as {
+			capture_runtime?: string;
+			skill_identity_provenance?: unknown;
+			skill_run_id?: string;
+			skill_run_id_provenance?: string;
+			writer_proof?: unknown;
+		};
+		expect(captureData.writer_proof).toMatchObject({ algorithm: "hmac-sha256" });
+		expect(captureData.capture_runtime).toBeUndefined();
+		expect(captureData.skill_identity_provenance).toBeUndefined();
+		expect(captureData.skill_run_id).toBeUndefined();
+		expect(captureData.skill_run_id_provenance).toBeUndefined();
+
+		const review = await runCli(["review"], { cwd: root });
+		expect(review.exitCode).toBe(0);
+		const reviewData = parseEnvelope(review.stdout).data as {
+			review_units: Array<{ trusted_run: boolean }>;
+			proof_health: { verified_count: number };
+		};
+		expect(reviewData.proof_health.verified_count).toBe(1);
+		expect(reviewData.review_units.every((unit) => unit.trusted_run === false)).toBe(
+			true,
+		);
+	});
+
+	test("internal Codex Stop capture stays low-signal beside closeout", async () => {
+		const root = await makeIgnoredGitRoot();
+		const capture = await recordSkillFeedbackReceipt(
+			{
+				skill: "unknown-skill",
+				goal: "Harness hook observed a completed skill run.",
+				outcome: "ambiguous",
+				friction: "Hook captured no transcript payload.",
+				generated_ts: "2026-06-11T10:00:00.000Z",
+			},
+			{
+				runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+				internalTelemetry: {
+					model: "gpt-5-codex",
+					captureMetadata: {
+						capture_runtime: "codex_stop",
+						skill_identity_provenance: {
+							source: "none",
+							trusted: false,
+							reason: "codex_stop_payload_has_no_trusted_skill_identity",
+						},
+					},
+				},
+			},
+		);
+		expect(capture.exitCode).toBe(0);
+
+		const closeout = await runCli(["closeout"], {
+			cwd: root,
+			stdin: `${JSON.stringify({
+				...BASE_CLOSEOUT,
+				skill: "fallow",
+				touched_surfaces: [{ type: "path", value: "skills/fallow/SKILL.md" }],
+			})}\n`,
+		});
+		expect(closeout.exitCode).toBe(0);
+
+		const review = await runCli(["review"], { cwd: root });
+
+		expect(review.exitCode).toBe(0);
+		const data = parseEnvelope(review.stdout).data as {
+			schema_version: string;
+			coverage: { total_reports: number };
+			inbox_health: { primary_count: number; low_signal_count: number };
+			ledger_entries: Array<{ owner_paths: string[]; allowed_claims: string[] }>;
+			claim_readiness: {
+				runtime_capture: { status: string };
+				claude_daily_pilot: { status: string };
+				codex_trusted_skill_identity: { status: string };
+			};
+		};
+		expect(data.schema_version).toBe(SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION);
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.inbox_health.primary_count).toBe(1);
+		expect(data.inbox_health.low_signal_count).toBe(1);
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
+		expect(data.ledger_entries).toHaveLength(1);
+		expect(data.ledger_entries[0]?.owner_paths).toEqual([
+			"skills/fallow/SKILL.md",
+		]);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"corroborated",
+		);
+	});
+
+	test("internal Claude Stop capture stays in the primary lane", async () => {
+		const root = await makeIgnoredGitRoot();
+		const capture = await recordSkillFeedbackReceipt(
+			{
+				skill: "fallow",
+				goal: "Harness hook observed a completed skill run.",
+				outcome: "ambiguous",
+				friction: "Hook captured no transcript payload.",
+				generated_ts: "2026-06-11T10:00:00.000Z",
+			},
+			{
+				runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+				internalTelemetry: {
+					model: "claude-opus-4-8",
+					captureMetadata: {
+						capture_runtime: "claude_stop",
+						skill_identity_provenance: {
+							source: "claude_transcript_skill_tool_result",
+							trusted: true,
+							field: "toolUseResult.commandName",
+							reason: "claude_transcript_detection",
+						},
+					},
+				},
+			},
+		);
+		expect(capture.exitCode).toBe(0);
+
+		const review = await runCli(["review"], { cwd: root });
+
+		expect(review.exitCode).toBe(0);
+		const data = parseEnvelope(review.stdout).data as {
+			coverage: { total_reports: number; capture_only_count: number };
+			inbox_health: { low_signal_count: number };
+			claim_readiness: {
+				claude_daily_pilot: { status: string; reason_ids: string[] };
+				codex_trusted_skill_identity: { status: string };
+			};
+		};
+		expect(data.coverage.total_reports).toBe(1);
+		expect(data.coverage.capture_only_count).toBe(1);
+		expect(data.inbox_health.low_signal_count).toBe(0);
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("ready");
+		expect(data.claim_readiness.claude_daily_pilot.reason_ids).toContain(
+			"decision_44_claude_supported",
+		);
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
+	});
+
+	test("primary hook capture and closeout with one strong anchor show mixed evidence only", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"capture.json",
+			v1CloseoutReport({
+				reportId: "report-primary-capture",
+				generatedTs: "2026-06-11T10:00:00.000Z",
+				skill: "fallow",
+				evidenceSource: "hook_capture",
+				captureRuntime: "claude_stop",
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"closeout.json",
+			v1CloseoutReport({
+				reportId: "report-primary-closeout",
+				generatedTs: "2026-06-11T10:01:00.000Z",
+				skill: "fallow",
+				evidenceSource: "driver_closeout",
+			}),
+		);
+
+		const review = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-primary-mixed",
+		});
+
+		expect(review.exitCode).toBe(0);
+		const data = parseEnvelope(review.stdout).data as {
+			inbox_health: { low_signal_count: number };
+			ledger_entries: Array<{ allowed_claims: string[] }>;
+		};
+		expect(data.inbox_health.low_signal_count).toBe(0);
+		expect(data.ledger_entries).toHaveLength(1);
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"repeated_anchor",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"mixed_evidence_sources",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"corroborated",
+		);
+	});
+
+	test("review keeps untrusted shared skill_run_id reports separate", async () => {
+		const root = await makeRoot();
+		const rawLinkedReport = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			correlation_status: "linked",
+			skill_run_id: "run-untrusted",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+			},
+			evidence_gaps: [],
+		};
+		await writeInboxReport(root, "capture-raw-linked.json", {
+			...rawLinkedReport,
+			report_id: "report-capture-raw-linked",
+			evidence_source: "hook_capture",
+		});
+		await writeInboxReport(root, "closeout-raw-linked.json", {
+			...rawLinkedReport,
+			report_id: "report-closeout-raw-linked",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-raw-linked-coverage",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expectReviewCoverage(result.stdout, {
+			total_reports: 2,
+			closeout_count: 1,
+			capture_only_count: 1,
+			closeout_rate: 0.5,
+			low_coverage: false,
+		});
+	});
+
+	test("review treats expected closeout telemetry gaps as no-action", async () => {
+		const { root } = await writeCloseout(BASE_CLOSEOUT);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-clean-closeout",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			coverage: { evidence_gap_count: number; unlinked_count: number };
+			open_items: unknown[];
+			no_action?: { rationale: string };
+		};
+		expect(data.coverage.evidence_gap_count).toBeGreaterThan(0);
+		expect(data.coverage.unlinked_count).toBe(1);
+		expect(data.open_items).toEqual([]);
+		expect(data.no_action?.rationale).toContain("No high-signal");
+	});
+
+	test("review opens high verification burden, repeated friction, gaps, and owner-path observations", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			report_id: "report-heavy",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-1",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: "heavy",
+					note: "Needed full focused and hook suites.",
+				},
+				observations: [
+					{
+						kind: "tool_failure",
+						target: {
+							type: "path",
+							value: "skills/skill-feedback/SKILL.md",
+						},
+						summary: "The owner path needed inspection.",
+						evidence_basis: "driver_observed",
+					},
+				],
+			},
+			evidence_gaps: [
+				{
+					code: "missing_runtime_git_sha",
+					path: "runtime.git_sha",
+					message: "No git SHA source.",
+				},
+			],
+		};
+		await writeInboxReport(root, "one.json", report);
+		await writeInboxReport(root, "two.json", {
+			...report,
+			report_id: "report-repeat",
+			skill_run_id: "run-2",
+			report_card: {
+				...report.report_card,
+				verification_burden: { level: "light", note: "Focused check." },
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			open_items: Array<{ open_reason: string }>;
+		};
+		const reasons = data.open_items.map((item) => item.open_reason);
+		expect(reasons).toEqual(
+			expect.arrayContaining([
+				"high_verification_burden",
+				"repeated_friction",
+				"evidence_gap",
+				"owner_path_observation",
+			]),
+		);
+	});
+
+	test("review open actions use stable refs instead of prose or inbox order", async () => {
+		const makeReport = (reportId: string, skillRunId: string) => ({
+			schema_version: "1",
+			report_id: reportId,
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: skillRunId,
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: reportId === "report-heavy" ? "heavy" : "light",
+					note: "Focused check.",
+				},
+				observations:
+					reportId === "report-heavy"
+						? [
+								{
+									kind: "tool_failure",
+									target: {
+										type: "path",
+										value: "skills/skill-feedback/SKILL.md",
+									},
+									summary: "The owner path needed inspection.",
+									evidence_basis: "driver_observed",
+								},
+							]
+						: [],
+			},
+			evidence_gaps:
+				reportId === "report-heavy"
+					? [
+							{
+								code: "missing_runtime_git_sha",
+								path: "runtime.git_sha",
+								message: "No git SHA source.",
+							},
+						]
+					: [],
+		});
+		const readActionSummary = async (
+			files: Array<{ name: string; value: unknown }>,
+		) => {
+			const root = await makeRoot();
+			for (const file of files) {
+				await writeInboxReport(root, file.name, file.value);
+			}
+			const result = await reviewSkillFeedbackInbox({
+				runtime: stubRuntime(root),
+				runId: "review-actions-stable",
+			});
+			expect(result.exitCode).toBe(0);
+			const data = parseEnvelope(result.stdout).data as {
+				open_actions: Array<{
+					action_key: string;
+					open_reason: string;
+					evidence_refs: string[];
+				}>;
+			};
+			return data.open_actions
+				.map((action) => ({
+					key: action.action_key,
+					reason: action.open_reason,
+					refs: [...action.evidence_refs].sort(),
+				}))
+				.sort((left, right) => left.key.localeCompare(right.key));
+		};
+		const heavy = makeReport("report-heavy", "run-heavy");
+		const repeat = makeReport("report-repeat", "run-repeat");
+
+		const first = await readActionSummary([
+			{ name: "a-heavy.json", value: heavy },
+			{ name: "b-repeat.json", value: repeat },
+		]);
+		const second = await readActionSummary([
+			{ name: "a-repeat.json", value: repeat },
+			{ name: "b-heavy.json", value: heavy },
+		]);
+
+		expect(second).toEqual(first);
+		for (const action of first) {
+			expect(action.refs.every((ref) => ref.startsWith("report:"))).toBe(true);
+			expect(action.refs.join(" ")).not.toContain("owner path needed");
+			expect(action.refs.join(" ")).not.toContain("Tool failed");
+		}
+	});
+
+	test("review open actions rank actionable evidence before correlation context", async () => {
+		const root = await makeRoot();
+		const report = (input: {
+			reportId: string;
+			heavy?: boolean;
+			ownerPath?: boolean;
+		}) => ({
+			schema_version: "1",
+			report_id: input.reportId,
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "unlinked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "tool_failure", note: "Tool failed twice." },
+				verification_burden: {
+					level: input.heavy ? "heavy" : "light",
+					note: "Focused check.",
+				},
+				observations: input.ownerPath
+					? [
+							{
+								kind: "tool_failure",
+								target: {
+									type: "path",
+									value: "skills/skill-feedback/SKILL.md",
+								},
+								summary: "The owner path needed inspection.",
+								evidence_basis: "driver_observed",
+							},
+						]
+					: [],
+			},
+			evidence_gaps: input.heavy
+				? [
+						{
+							code: "missing_runtime_git_sha",
+							path: "runtime.git_sha",
+							message: "No git SHA source.",
+						},
+					]
+				: [],
+		});
+		await writeInboxReport(
+			root,
+			"heavy.json",
+			report({ reportId: "report-heavy", heavy: true, ownerPath: true }),
+		);
+		await writeInboxReport(root, "repeat.json", report({ reportId: "report-repeat" }));
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-actions-ranked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as ReviewResultData;
+		expect(data.open_actions.map((action) => action.open_reason)).toEqual([
+			"owner_path_observation",
+			"high_verification_burden",
+			"repeated_friction",
+			"evidence_gap",
+			"unlinked_correlation_spike",
+		]);
+		expect(data.open_actions.at(-1)?.open_reason).toBe(
+			"unlinked_correlation_spike",
+		);
+	});
+
+	async function writePlainReviewCloseoutReport(
+		root: string,
+		name: string,
+		input: {
+			reportId: string;
+			reportCard?: Partial<CloseoutReceipt>;
+			evidenceGaps?: unknown[];
+			generatedTs?: string;
+			skillRunId?: string;
+		},
+	): Promise<void> {
+		await writeInboxReport(root, name, {
+			schema_version: "1",
+			report_id: input.reportId,
+			untrusted_evidence: true,
+			generated_ts: input.generatedTs ?? GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			...(input.skillRunId ? { skill_run_id: input.skillRunId } : {}),
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "light", note: "Focused check." },
+				observations: [],
+				...input.reportCard,
+			},
+			evidence_gaps: input.evidenceGaps ?? [],
+		});
+	}
+
+	test("review --plain renders open actions, retention, and pilot checkpoint", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writePlainReviewCloseoutReport(root, "plain-heavy.json", {
+			reportId: "report-plain-heavy",
+			generatedTs: "2020-01-01T00:00:00.000Z",
+			skillRunId: "run-plain",
+			reportCard: {
+				friction: { category: "tool_failure", note: "Tool failed." },
+				verification_burden: {
+					level: "heavy",
+					note: "Needed full verification.",
+				},
+			},
+			evidenceGaps: [
+				{
+					code: "missing_runtime_git_sha",
+					path: "runtime.git_sha",
+					message: "No git SHA source.",
+				},
+			],
+		});
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2020-01-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const direct = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-plain-direct",
+			plain: true,
+		});
+		expect(direct.exitCode).toBe(0);
+		expect(direct.stderr).toBe("");
+		expect(direct.stdout).toContain("Open actions:");
+
+		const result = await runCli(["review", "--plain"], { cwd: root });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback Review");
+		expect(result.stdout).toContain("Reports: 1");
+		expect(result.stdout).toContain("Open actions:");
+		expect(result.stdout).toContain("Engineering signals:");
+		expect(result.stdout.indexOf("top_warning=")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("- next_action=")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("Engineering signals:")).toBeLessThan(
+			result.stdout.indexOf("Readiness:"),
+		);
+		expect(result.stdout.indexOf("Readiness:")).toBeLessThan(
+			result.stdout.indexOf("Open actions:"),
+		);
+		expect(result.stdout.indexOf("Open actions:")).toBeLessThan(
+			result.stdout.indexOf("Ledger:"),
+		);
+		expect(result.stdout).toContain("- action=action:");
+		expect(result.stdout).toContain(
+			"next=Inspect the verification burden note against source and tests.",
+		);
+		expect(result.stdout).toContain("evidence=report:report-plain-heavy");
+		expect(result.stdout).toContain("reason=high_verification_burden");
+		expect(result.stdout).toContain("owner=skills/create-skill/SKILL.md");
+		expect(result.stdout).toContain("full_evidence=json");
+		expect(result.stdout).toContain(
+			"Retention: Inbox is ready for a future gated purge workflow.",
+		);
+		expect(result.stdout).toContain("Pilot checkpoint:");
+	});
+
+	test("review --plain caps open actions while JSON keeps complete evidence", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 11; index += 1) {
+			await writePlainReviewCloseoutReport(root, `action-${index}.json`, {
+				reportId: `report-action-${index}`,
+				reportCard: {
+					observations: [
+						{
+							kind: "tool_failure",
+							target: {
+								type: "path",
+								value: `skills/skill-feedback/action-${index}.md`,
+							},
+							summary: `Owner path ${index} needs inspection.`,
+							evidence_basis: "driver_observed",
+						},
+					],
+				},
+			});
+		}
+
+		const json = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open-action-cap-json",
+		});
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-open-action-cap-plain",
+			plain: true,
+		});
+
+		const data = parseEnvelope(json.stdout).data as ReviewResultData;
+		expect(data.open_actions).toHaveLength(11);
+		const actionLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- action="));
+		expect(actionLines).toHaveLength(10);
+		expect(actionLines[0]?.startsWith("- action=action:")).toBe(true);
+		expect(actionLines[0]).toContain(" next=Inspect the owner path");
+		expect(actionLines[0]).toContain(" evidence=report:");
+		expect(plain.stdout).toContain("truncated_open_actions=1");
+		expect(plain.stdout).toContain("full_evidence=json");
+	});
+
+	test("review --plain caps ledger anchors while JSON ledger stays complete", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 21; index += 1) {
+			await writePlainReviewCloseoutReport(root, `ledger-${index}.json`, {
+				reportId: `report-ledger-${index}`,
+				reportCard: {
+					touched_surfaces: [
+						{
+							type: "path",
+							value: `skills/skill-feedback/ledger-${index}.md`,
+						},
+					],
+					observations: [],
+				},
+			});
+		}
+
+		const json = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-cap-json",
+		});
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-cap-plain",
+			plain: true,
+		});
+
+		const data = parseEnvelope(json.stdout).data as ReviewResultData;
+		expect(data.ledger_entries).toHaveLength(21);
+		const ledgerLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- owner="));
+		expect(ledgerLines).toHaveLength(20);
+		expect(ledgerLines[0]?.startsWith("- owner=skills/skill-feedback/")).toBe(
+			true,
+		);
+		expect(plain.stdout).toContain("truncated_ledger_entries=1");
+		expect(plain.stdout).not.toContain("truncated_open_actions=");
+		expect(plain.stdout).toContain("full_evidence=json");
+	});
+
+	test("review --plain caps per-row evidence refs and reports omitted counts", async () => {
+		const root = await makeRoot();
+		for (let index = 0; index < 5; index += 1) {
+			await writePlainReviewCloseoutReport(root, `repeat-${index}.json`, {
+				reportId: `repeat-${index}`,
+				reportCard: {
+					friction: {
+						category: "tool_failure",
+						note: "Tool failed during verification.",
+					},
+					touched_surfaces: [
+						{ type: "path", value: "skills/skill-feedback/shared.md" },
+					],
+					observations: [],
+				},
+			});
+		}
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-evidence-ref-cap",
+			plain: true,
+		});
+
+		const actionLine = plain.stdout
+			.split("\n")
+			.find((line) => line.includes("reason=repeated_friction"));
+		expect(actionLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(actionLine ?? "").toContain("evidence_refs_omitted=2");
+		const signalLine = plain.stdout
+			.split("\n")
+			.find((line) => line.includes("reason=repeated_anchor"));
+		expect(signalLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(signalLine ?? "").toContain("evidence_refs_omitted=2");
+		const ledgerLine = plain.stdout
+			.split("\n")
+			.find((line) => line.startsWith("- owner=skills/skill-feedback/shared.md"));
+		expect(ledgerLine ?? "").toContain(
+			"evidence=report:repeat-0,report:repeat-1,report:repeat-2",
+		);
+		expect(ledgerLine ?? "").toContain("evidence_refs_omitted=2");
+	});
+
+	test("review --plain ranks open ledger anchors before no-action unknown owners", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "label.json", {
+			schema_version: "1",
+			report_id: "label-only",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				touched_surfaces: [{ type: "label", value: "runtime" }],
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+		await writeInboxReport(root, "path.json", {
+			schema_version: "1",
+			report_id: "path-owned",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: {
+				...BASE_CLOSEOUT,
+				touched_surfaces: [
+					{ type: "path", value: "skills/skill-feedback/open.md" },
+				],
+				observations: [],
+			},
+			evidence_gaps: [],
+		});
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-ledger-rank-owner",
+			plain: true,
+		});
+
+		const ledgerLines = plain.stdout
+			.split("\n")
+			.filter((line) => line.startsWith("- owner="));
+		expect(
+			ledgerLines[0]?.startsWith("- owner=skills/skill-feedback/open.md"),
+		).toBe(true);
+		expect(ledgerLines).toContainEqual(
+			expect.stringContaining("- owner=unknown evidence=report:label-only"),
+		);
+	});
+
+	test("review pilot density counts closeouts with open signal when action exists", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: "2026-06-01T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			evidence_gaps: [],
+		};
+		await writeInboxReport(root, "heavy.json", {
+			...report,
+			report_id: "report-heavy-density",
+			skill_run_id: "run-heavy-density",
+			report_card: {
+				...BASE_CLOSEOUT,
+				verification_burden: {
+					level: "heavy",
+					note: "Needed broad verification.",
+				},
+			},
+		});
+		await writeInboxReport(root, "clean.json", {
+			...report,
+			report_id: "report-clean-density",
+			skill_run_id: "run-clean-density",
+			report_card: {
+				...BASE_CLOSEOUT,
+				goal: "Clean closeout.",
+				verification_burden: {
+					level: "light",
+					note: "Focused check.",
+				},
+			},
+		});
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2026-06-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot-density",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			pilot_checkpoint?: {
+				actionable_feedback_numerator: number;
+				material_closeout_denominator: number;
+				density: number;
+			};
+		};
+		expect(data.pilot_checkpoint).toMatchObject({
+			actionable_feedback_numerator: 1,
+			material_closeout_denominator: 2,
+			density: 0.5,
+		});
+	});
+
+	test("review pilot density counts grouped repeated friction open signal", async () => {
+		const root = await makeRoot();
+		const report = {
+			schema_version: "1",
+			untrusted_evidence: true,
+			generated_ts: "2026-06-01T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			evidence_gaps: [],
+		};
+		for (const [fileName, reportId, skillRunId] of [
+			["one.json", "report-friction-one", "run-friction-one"],
+			["two.json", "report-friction-two", "run-friction-two"],
+		] as const) {
+			await writeInboxReport(root, fileName, {
+				...report,
+				report_id: reportId,
+				skill_run_id: skillRunId,
+				report_card: {
+					...BASE_CLOSEOUT,
+					friction: {
+						category: "tool_failure",
+						note: "Tool failed during closeout.",
+					},
+					verification_burden: {
+						level: "light",
+						note: "Focused check.",
+					},
+				},
+			});
+		}
+		await writeFile(
+			join(root, ".skill-feedback", "pilot_started_at"),
+			"2026-06-01T00:00:00.000Z\n",
+			"utf-8",
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot-repeated-friction",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			open_items: Array<{ open_reason: string }>;
+			pilot_checkpoint?: {
+				actionable_feedback_numerator: number;
+				material_closeout_denominator: number;
+				density: number;
+			};
+		};
+		expect(data.open_items.map((item) => item.open_reason)).toContain(
+			"repeated_friction",
+		);
+		expect(data.pilot_checkpoint).toMatchObject({
+			actionable_feedback_numerator: 2,
+			material_closeout_denominator: 2,
+			density: 1,
+		});
+	});
+
+	test("review emits a pilot checkpoint after seven days without mutating marker", async () => {
+		const { root } = await writeCloseout(BASE_CLOSEOUT, {
+			nowIso: () => "2026-06-01T00:00:00.000Z",
+		});
+		const markerPath = join(root, ".skill-feedback", "pilot_started_at");
+		const markerBefore = await readFile(markerPath, "utf-8");
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-pilot",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			pilot_checkpoint?: {
+				age_days: number;
+				density: number;
+				next_action: string;
+			};
+		};
+		expect(data.pilot_checkpoint).toMatchObject({
+			age_days: 7,
+			density: 1,
+			next_action:
+				"Review pilot density; keep the marker as manual source evidence.",
+		});
+		expect(await readFile(markerPath, "utf-8")).toBe(markerBefore);
+	});
+
+	test("review ignores symlinked pilot marker paths", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"closeout.json",
+			v1CloseoutReport({
+				reportId: "report-symlink-marker",
+				generatedTs: GENERATED_TS,
+			}),
+		);
+		const outsideMarker = join(root, "outside-pilot-started-at");
+		await writeFile(outsideMarker, "2026-06-01T00:00:00.000Z\n", "utf-8");
+		await symlink(
+			outsideMarker,
+			join(root, ".skill-feedback", "pilot_started_at"),
+		);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-symlink-marker",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			pilot_checkpoint?: unknown;
+		};
+		expect(data.pilot_checkpoint).toBeUndefined();
+	});
+
+	test("review emits retention warning without deleting old reports", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "old.json", {
+			schema_version: "1",
+			report_id: "report-old",
+			untrusted_evidence: true,
+			generated_ts: "2026-05-25T00:00:00.000Z",
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			skill_run_id: "run-old",
+			runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+			report_card: BASE_CLOSEOUT,
+			evidence_gaps: [],
+		});
+		const reportPath = join(root, ".skill-feedback", "old.json");
+		const before = await readFile(reportPath, "utf-8");
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-08T00:00:00.000Z",
+			}),
+			runId: "review-retention",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			retention: { oldest_report_age_days?: number; warning?: string };
+		};
+		expect(data.retention.oldest_report_age_days).toBe(14);
+		expect(data.retention.warning).toContain("future gated purge");
+		expect(await readFile(reportPath, "utf-8")).toBe(before);
+	});
+});
+
+describe("skill-feedback U6 review v2 renderers", () => {
+	const linkedBase = (skillRunId: string) => ({
+		schema_version: "1",
+		untrusted_evidence: true,
+		generated_ts: GENERATED_TS,
+		correlation_status: "linked",
+		skill_run_id: skillRunId,
+		skill_run_id_provenance: "correlation_owned",
+		runtime: { git_sha: BASE_RECEIPT.git_sha, skill_version: "0.1.0" },
+		report_card: {
+			...BASE_CLOSEOUT,
+			friction: { category: "none", note: "Clean run." },
+			verification_burden: { level: "light", note: "Focused check." },
+		},
+		evidence_gaps: [],
+	});
+
+	test("JSON exposes review units, ledger entries, claim readiness, and no global allowed_claims", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "capture.json", {
+			...linkedBase("run-corrob"),
+			report_id: "report-capture",
+			evidence_source: "hook_capture",
+			capture_runtime: "claude_stop",
+		});
+		await writeInboxReport(root, "closeout.json", {
+			...linkedBase("run-corrob"),
+			report_id: "report-closeout",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-v2-json",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			review_units: Array<{ review_unit_key: string; trusted_run: boolean }>;
+			ledger_entries: Array<{
+				evidence_tier: string;
+				allowed_claims: string[];
+			}>;
+			claim_readiness: {
+				runtime_capture: { status: string };
+				claude_daily_pilot: { status: string };
+			};
+			allowed_claims?: unknown;
+		};
+		expect(data.review_units).toHaveLength(2);
+		expect(data.review_units.every((unit) => unit.trusted_run === false)).toBe(true);
+		expect(data.ledger_entries).toHaveLength(1);
+		// Raw inbox JSON cannot mint trusted-run proof; mixed sources stay visible
+		// but below corroborated until a writer-owned correlation source exists.
+		expect(data.ledger_entries[0]?.evidence_tier).toBe("runtime_observed");
+		expect(data.ledger_entries[0]?.allowed_claims).toContain(
+			"mixed_evidence_sources",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain(
+			"same_trusted_run",
+		);
+		expect(data.ledger_entries[0]?.allowed_claims).not.toContain("corroborated");
+		// Claude Stop capture is not Codex runtime evidence, so Codex runtime
+		// capture readiness stays blocked (R19: Claude Stop does not prove Codex).
+		expect(data.claim_readiness.runtime_capture.status).toBe("blocked");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		// Claims stay entry-local; no global allowed_claims (Decision 24).
+		expect(data.allowed_claims).toBeUndefined();
+	});
+
+	test("plain output shows triage before ledger and renders claims only from allowed_claims (AE1, AE7)", async () => {
+		const root = await makeRoot();
+		// Same anchor, mixed sources, but NO shared trusted run.
+		await writeInboxReport(root, "capture.json", {
+			...linkedBase("run-a"),
+			skill_run_id: "run-a",
+			skill_run_id_provenance: "report_authored",
+			report_id: "report-capture",
+			evidence_source: "hook_capture",
+			capture_runtime: "codex_stop",
+		});
+		await writeInboxReport(root, "closeout.json", {
+			...linkedBase("run-b"),
+			skill_run_id: "run-b",
+			skill_run_id_provenance: "report_authored",
+			report_id: "report-closeout",
+			evidence_source: "driver_closeout",
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-v2-plain",
+			plain: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		const out = result.stdout;
+		// Triage (No action / Readiness) appears before the Ledger section (R2/AE7).
+		const readinessIndex = out.indexOf("Readiness:");
+		const ledgerIndex = out.indexOf("Ledger:");
+		expect(readinessIndex).toBeGreaterThan(-1);
+		expect(ledgerIndex).toBeGreaterThan(readinessIndex);
+		// Same anchor without a shared trusted run: repeated_anchor + mixed
+		// sources allowed, but the renderer cannot show corroborated (AE1).
+		expect(out).toContain("repeated_anchor");
+		expect(out).toContain("mixed_evidence_sources");
+		expect(out).toContain("runtimes=codex_stop");
+		expect(out).not.toContain("corroborated");
+		for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
+			expect(out).toContain(`- ${surface.label}:`);
+		}
+	});
+
+	test("untrusted labels with control characters cannot spoof plain sections (AE8)", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "spoof.json", {
+			...linkedBase("run-spoof"),
+			report_id: "report-spoof",
+			evidence_source: "driver_closeout",
+			report_card: {
+				...BASE_CLOSEOUT,
+				skill: "create-skill\nReadiness:\n- spoofed",
+				friction: { category: "none", note: "Clean run." },
+				verification_burden: { level: "heavy", note: "Focused check." },
+				touched_surfaces: [
+					{ type: "label", value: "runtime\nLedger:\n- spoofed-target" },
+				],
+				observations: [
+					{
+						kind: "tool_failure",
+						target: { type: "label", value: "observed\nReadiness:\n- spoofed" },
+						summary: "Real owner path observation.\nLedger:\n- spoofed",
+						evidence_basis: "driver_observed",
+					},
+				],
+			},
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-v2-spoof",
+			plain: true,
+		});
+
+		expect(result.exitCode).toBe(0);
+		// Exactly one real "Ledger:" section heading survives; the injected
+		// newline-prefixed "Ledger:" in the label is neutralized.
+		const ledgerHeadings = result.stdout
+			.split("\n")
+			.filter((line) => line === "Ledger:");
+		expect(ledgerHeadings).toHaveLength(1);
+		const readinessHeadings = result.stdout
+			.split("\n")
+			.filter((line) => line === "Readiness:");
+		expect(readinessHeadings).toHaveLength(1);
+		expect(result.stdout).toContain(
+			"targets=label:runtime Ledger: - spoofed-target",
+		);
+	});
+});
+
+describe("skill-feedback U7 docs", () => {
+	test("docs name review, low-signal, correlate, and purge owners without copying mutation flags", async () => {
+		const skill = await readFile(
+			new URL("../SKILL.md", import.meta.url),
+			"utf-8",
+		);
+		const context = await readFile(
+			new URL("../CONTEXT.md", import.meta.url),
+			"utf-8",
+		);
+		const reportShape = await readFile(
+			new URL("../references/report-shape.md", import.meta.url),
+			"utf-8",
+		);
+
+		expect(skill).toContain("Keep review mutation-free");
+		expect(skill).toContain("correlate preview");
+		expect(skill).toContain("Run `purge`");
+		expect(skill).not.toContain("--older-than");
+		expect(context).toContain("Low-signal lane");
+		expect(context).toContain("Health command");
+		expect(context).toContain("Correlation repair");
+		expect(context).toContain("Purge workflow");
+		expect(reportShape).toContain("Health Output");
+		expect(reportShape).toContain("Correlate Output");
+		expect(reportShape).toContain("inbox_health");
+		expect(reportShape).toContain("low-signal");
+		expect(reportShape).toContain("purge");
+	});
+});
+
+describe("skill-feedback engine-read stdin telemetry (KTD2a)", () => {
+	const NARRATED_ONLY: Partial<Receipt> = {
+		skill: "fallow",
+		goal: "Close the fallow run.",
+		outcome: "confirmed",
+		friction: "Clean run.",
+		explanation: "Captured by claude-stop.",
+		generated_ts: GENERATED_TS,
+	};
+
+	test("stdin model merges in; usage stays an explicit gap (v0)", async () => {
+		const { result, disk } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({ model: "claude-opus-4-8" }),
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			runtime: { model?: string; usage?: unknown };
+			evidence_gaps: Array<{ code: string }>;
+		};
+		expect(data.runtime.model).toBe("claude-opus-4-8");
+		expect(data.runtime.usage).toBeUndefined();
+		expect(data.evidence_gaps.map((gap) => gap.code)).not.toContain(
+			"missing_runtime_model",
+		);
+		expect(data.evidence_gaps.map((gap) => gap.code)).toContain(
+			"cost_unavailable",
+		);
+		expect(disk).toContain("claude-opus-4-8");
+	});
+
+	test("absent stdin telemetry degrades model and usage, never crashes", async () => {
+		const { result } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({}),
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			runtime: { model?: string; usage?: unknown };
+			evidence_gaps: Array<{ code: string }>;
+		};
+		expect(data.runtime.model).toBeUndefined();
+		expect(data.runtime.usage).toBeUndefined();
+		expect(data.evidence_gaps.map((gap) => gap.code)).toContain(
+			"missing_runtime_model",
+		);
+		expect(data.evidence_gaps.map((gap) => gap.code)).toContain(
+			"cost_unavailable",
+		);
+	});
+
+	for (const [label, raw] of [
+		["not json", "}{ broken"],
+		["json array", "[1,2,3]"],
+		["json null", "null"],
+		["no model key", '{"other":"x"}'],
+	] as const) {
+		test(`garbled stdin (${label}) degrades to no model`, () => {
+			const telemetry = parseStdinTelemetry(raw);
+			expect(telemetry.model).toBeUndefined();
+		});
+	}
+
+	test("stdin telemetry extracts model only, ignoring stray keys", () => {
+		const telemetry = parseStdinTelemetry(
+			'{"model":"claude-opus-4-8","usage":{"input_tokens":1},"goal":"x"}',
+		);
+		expect(telemetry).toEqual({ model: "claude-opus-4-8" });
+	});
+
+	test("stdin telemetry ignores trust-bearing capture provenance", () => {
+		const telemetry = parseStdinTelemetry(
+			JSON.stringify({
+				model: "gpt-5-codex",
+				detection_id: "agent-authored",
+				capture_runtime: "codex_stop",
+				skill_identity_provenance: {
+					source: "none",
+					trusted: false,
+					reason: "codex_stop_payload_has_no_trusted_skill_identity",
+				},
+				transcript_path: "/tmp/should-not-persist",
+			}),
+		);
+
+		expect(telemetry).toEqual({ model: "gpt-5-codex" });
+	});
+
+	test("Codex Stop evidence without trusted identity blocks readiness", async () => {
+		const { root, disk } = await writeRecord(
+			NARRATED_ONLY,
+			{},
+			{
+				model: "gpt-5-codex",
+				captureMetadata: {
+					capture_runtime: "codex_stop",
+					skill_identity_provenance: {
+						source: "none",
+						trusted: false,
+						reason: "codex_stop_payload_has_no_trusted_skill_identity",
+					},
+				},
+			},
+		);
+		expect(disk).toContain('"capture_runtime": "codex_stop"');
+		expect(disk).not.toContain("transcript_path");
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-stop-blocked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			claim_readiness: {
+				runtime_capture: { status: string; reason_ids: string[] };
+				trusted_skill_identity: { status: string };
+				daily_pilot: { status: string };
+				claude_daily_pilot: { status: string };
+				codex_trusted_skill_identity: { status: string };
+			};
+		};
+		// Codex Stop evidence is runtime_observed only (R18): runtime capture is
+		// evidence_only; Codex identity and the Claude pilot stay separate.
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
+		expect(data.claim_readiness.runtime_capture.reason_ids).toContain(
+			"hook_approval_state_not_machine_observable",
+		);
+
+		const plain = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-stop-blocked-plain",
+			plain: true,
+		});
+		expect(plain.stdout).toContain("runtime capture: evidence_only");
+		expect(plain.stdout).toContain("Claude daily pilot: blocked");
+		expect(plain.stdout).toContain("Codex Trusted skill identity: blocked");
+	});
+
+	test("trusted Codex Stop provenance with placeholder runtime stays evidence-only", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(root, "placeholder-codex-stop.json", {
+			schema_version: "1",
+			report_id: "report-placeholder-codex-stop",
+			untrusted_evidence: true,
+			generated_ts: GENERATED_TS,
+			evidence_source: "hook_capture",
+			capture_runtime: "codex_stop",
+			skill_identity_provenance: {
+				source: "codex_stop_payload",
+				trusted: true,
+				field: "skill.name",
+				reason: "trusted_codex_stop_payload_identity",
+			},
+			correlation_status: "unlinked",
+			runtime: {
+				git_sha: BASE_RECEIPT.git_sha,
+				skill_version: "unknown",
+				model: "unknown",
+			},
+			report_card: {
+				...BASE_CLOSEOUT,
+				skill: "unknown-skill",
+			},
+			evidence_gaps: [],
+		});
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-placeholder-blocked",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			claim_readiness: {
+				runtime_capture: { status: string };
+				trusted_skill_identity: { status: string };
+				codex_trusted_skill_identity: { status: string };
+			};
+		};
+		// Placeholder runtime values cannot prove trusted skill identity; runtime
+		// capture is still evidence_only, identity stays blocked.
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
+	});
+
+		test("trusted Codex Stop identity stays evidence-only, never ready (R18)", async () => {
+			const { root } = await writeRecord(
+				NARRATED_ONLY,
+				{},
+				{
+					model: "gpt-5-codex",
+					captureMetadata: {
+						capture_runtime: "codex_stop",
+						skill_identity_provenance: {
+							source: "codex_stop_payload",
+							trusted: true,
+							field: "skill.name",
+							reason: "trusted_codex_stop_payload_identity",
+						},
+					},
+				},
+			);
+
+		const result = await reviewSkillFeedbackInbox({
+			runtime: stubRuntime(root),
+			runId: "review-codex-stop-ready",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			claim_readiness: {
+				runtime_capture: { status: string; reason_ids: string[] };
+				trusted_skill_identity: { status: string };
+				daily_pilot: { status: string };
+				claude_daily_pilot: { status: string };
+				codex_trusted_skill_identity: { status: string };
+			};
+			coverage: { evidence_gap_count: number };
+		};
+		// Even trusted-provenance Codex Stop evidence cannot reach `ready`: it is
+		// runtime_observed only (R18). Runtime capture is evidence_only; Codex
+		// identity and the Claude pilot stay blocked. This is the readiness
+		// collapse U5 prevents.
+		expect(data.claim_readiness.runtime_capture.status).toBe("evidence_only");
+		expect(data.claim_readiness.trusted_skill_identity.status).toBe("blocked");
+		expect(data.claim_readiness.daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.claude_daily_pilot.status).toBe("blocked");
+		expect(data.claim_readiness.codex_trusted_skill_identity.status).toBe(
+			"blocked",
+		);
+		expect(data.claim_readiness.runtime_capture.reason_ids).toContain(
+			"hook_approval_state_not_machine_observable",
+		);
+		expect(data.coverage.evidence_gap_count).toBeGreaterThan(0);
+	});
+
+	test("public stdin telemetry cannot persist a secret-shaped model unredacted", async () => {
+		const secretShapedModel = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+		const { disk } = await writeRecord(NARRATED_ONLY, {
+			readStdinTelemetry: async () => ({ model: secretShapedModel }),
+		});
+
+		expect(disk).not.toContain(secretShapedModel);
+		expect(disk).toContain("[redacted]");
+	});
+});
+
+describe("skill-feedback parseRecordFlags", () => {
+	test("parses narrated record flags into a partial receipt", () => {
+		const result = parseRecordFlags([
+			"record",
+			"--skill",
+			"create-skill",
+			"--goal",
+			"ship the contract",
+			"--outcome",
+			"confirmed",
+			"--friction",
+			"none",
+			"--explanation",
+			"clean run",
+			"--generated-ts",
+			GENERATED_TS,
+		]);
+
+		expect(result).toEqual({
+			ok: true,
+			receipt: {
+				skill: "create-skill",
+				goal: "ship the contract",
+				outcome: "confirmed",
+				friction: "none",
+				explanation: "clean run",
+				generated_ts: GENERATED_TS,
+			},
+		});
+	});
+
+	test("treats a leading record subcommand as optional", () => {
+		const withSubcommand = parseRecordFlags(["record", "--skill", "fallow"]);
+		const withoutSubcommand = parseRecordFlags(["--skill", "fallow"]);
+
+		expect(withSubcommand).toEqual({ ok: true, receipt: { skill: "fallow" } });
+		expect(withoutSubcommand).toEqual({ ok: true, receipt: { skill: "fallow" } });
+	});
+
+	test("rejects non-flag tokens, missing values, and unknown flags", () => {
+		expect(parseRecordFlags(["create-skill"])).toEqual({
+			ok: false,
+			message: "Expected a record flag.",
+		});
+		expect(parseRecordFlags(["--skill"])).toEqual({
+			ok: false,
+			message: "--skill requires a value.",
+		});
+		expect(parseRecordFlags(["--skill", "--goal"])).toEqual({
+			ok: false,
+			message: "--skill requires a value.",
+		});
+		expect(parseRecordFlags(["--unknown", "value"])).toEqual({
+			ok: false,
+			message: "Unknown flag --unknown.",
+		});
+	});
+
+	test("rejects an invalid outcome enum", () => {
+		expect(parseRecordFlags(["--outcome", "maybe"])).toEqual({
+			ok: false,
+			message: "--outcome is invalid.",
+		});
+	});
+});
+
+for (const { command, parse } of [
+	{ command: "review", parse: parseReviewArgs },
+	{ command: "health", parse: parseHealthArgs },
+] as const) {
+	describe(`skill-feedback parse ${command} args`, () => {
+		test("parses plain and explicit repo flags", () => {
+			expect(parse([command, "--plain", "--repo", "/repo"])).toEqual({
+				ok: true,
+				options: {
+					plain: true,
+					targetPath: "/repo",
+				},
+			});
+		});
+
+		test("parses empty args and rejects positional inputs", () => {
+			expect(parse([])).toEqual({
+				ok: true,
+				options: { plain: false, targetPath: undefined },
+			});
+			expect(parse([command])).toEqual({
+				ok: true,
+				options: { plain: false, targetPath: undefined },
+			});
+			expect(parse(["/repo"])).toMatchObject({
+				ok: false,
+				message: `Expected a ${command} flag.`,
+			});
+		});
+
+		test("rejects missing repo values and unknown flags", () => {
+			expect(parse(["--repo"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--repo", "--plain"])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--repo", ""])).toMatchObject({
+				ok: false,
+				message: "--repo requires a value.",
+			});
+			expect(parse(["--execute"])).toMatchObject({
+				ok: false,
+				message: "Unknown flag --execute.",
+			});
+		});
+	});
+}
+
+describe("skill-feedback parseCorrelateArgs", () => {
+	test("parses preview, plain, repo, and execute flags", () => {
+		expect(parseCorrelateArgs(["correlate"])).toEqual({
+			ok: true,
+			options: { plain: false, targetPath: undefined, execute: false },
+		});
+		expect(
+			parseCorrelateArgs([
+				"--plain",
+				"--repo",
+				"/repo",
+				"--execute",
+			]),
+		).toEqual({
+			ok: true,
+			options: { plain: true, targetPath: "/repo", execute: true },
+		});
+	});
+
+	test("rejects positional inputs, missing repo values, and trust-bearing flags", () => {
+		expect(parseCorrelateArgs(["report:abc"])).toEqual({
+			ok: false,
+			message: "Expected a correlate flag.",
+		});
+		expect(parseCorrelateArgs(["--repo"])).toEqual({
+			ok: false,
+			message: "--repo requires a value.",
+		});
+		expect(parseCorrelateArgs(["--hook-report-id", "report:abc"])).toEqual({
+			ok: false,
+			message: "Unknown flag --hook-report-id.",
+		});
+	});
+});
+
+describe("skill-feedback parsePurgeArgs", () => {
+	test("parses preview and execute purge flags", () => {
+		expect(parsePurgeArgs(["purge", "--older-than", "14d"])).toEqual({
+			ok: true,
+			options: {
+				lane: "all",
+				execute: false,
+				retention: {
+					kind: "older_than",
+					raw: "14d",
+					durationMs: 1_209_600_000,
+				},
+			},
+		});
+		expect(
+			parsePurgeArgs([
+				"--lane",
+				"low-signal",
+				"--keep-latest",
+				"5",
+				"--execute",
+			]),
+		).toEqual({
+			ok: true,
+			options: {
+				lane: "low-signal",
+				execute: true,
+				retention: { kind: "keep_latest", count: 5 },
+			},
+		});
+	});
+
+	test("rejects unsafe or ambiguous purge selectors", () => {
+		expect(parsePurgeArgs(["--execute"])).toEqual({
+			ok: false,
+			message: "Purge requires exactly one retention selector.",
+		});
+		expect(parsePurgeArgs(["--older-than", "14d", "--keep-latest", "5"])).toEqual({
+			ok: false,
+			message: "Purge requires exactly one retention selector.",
+		});
+		expect(parsePurgeArgs(["--older-than", "0d"])).toEqual({
+			ok: false,
+			message: "--older-than must use a positive duration such as 14d or 48h.",
+		});
+		expect(parsePurgeArgs(["--lane", "archive", "--older-than", "14d"])).toEqual({
+			ok: false,
+			message: "--lane is invalid.",
+		});
+	});
+});

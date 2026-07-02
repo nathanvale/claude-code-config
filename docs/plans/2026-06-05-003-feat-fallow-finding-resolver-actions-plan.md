@@ -286,8 +286,8 @@ flowchart TB
 - `docs/plans/2026-06-05-001-feat-fallow-agent-actionability-plan.md`
 - `docs/plans/2026-06-05-002-feat-fallow-why-subcommand-plan.md`
 - `skills/fallow/scripts/prototype-why-symbol/NOTES.md`
-- `skills/create-cli/references/cli-guidelines.md`
-- `skills/create-cli/references/agent-native-cli-design.md`
+- `skills/cli-author/references/cli-guidelines.md`
+- `skills/cli-author/references/agent-native-cli-design.md`
 - `context/skill-design-philosophy.md`
 - [Fallow documentation index](https://docs.fallow.tools/llms.txt)
 - [Fallow quick start](https://docs.fallow.tools/quickstart)

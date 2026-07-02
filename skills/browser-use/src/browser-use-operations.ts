@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:pa
 import {
 	type CliWriter,
 	type RuntimeActionGuidance,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	writeJsonEnvelope,
@@ -73,6 +74,7 @@ import {
 	resolveStatePath,
 	runScopedKey,
 } from "./browser-use-selection";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
 // Browser Operations (plan U7).
@@ -1022,16 +1024,15 @@ function emitOperationFailure(input: {
 			},
 			runtime_actions: [operationAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: failure.code,
 				message: redactUnsafeText(failure.message),
 				exit_code: failure.exitCode,
 				severity: "error",
-				recoverability: failure.recoverability,
-				retryable: failure.recoverability === "retry",
+				...retryabilityForRecoverability(failure.recoverability),
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1215,5 +1216,3 @@ function boundSnapshotText(text: string): {
 		truncated,
 	};
 }
-
-

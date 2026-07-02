@@ -11,6 +11,7 @@
 import {
 	type CliWriter,
 	type RuntimeActionGuidance,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	writeJsonEnvelope,
@@ -53,6 +54,7 @@ import {
 	runBrowserUseMcporter,
 } from "./browser-use-transport";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
 // Browser Target Discovery (plan U5).
@@ -790,16 +792,15 @@ function emitTargetDiscoveryFailure(input: {
 			data: { command: "targets-list", result_kind: "browser_targets" },
 			runtime_actions: [targetDiscoveryAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: failure.code,
 				message: redactUnsafeText(failure.message),
 				exit_code: failure.exitCode,
 				severity: "error",
-				recoverability: failure.recoverability,
-				retryable: failure.recoverability === "retry",
+				...retryabilityForRecoverability(failure.recoverability),
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -828,4 +829,3 @@ function parseAdapterCapabilities(
 	}
 	return capabilities;
 }
-

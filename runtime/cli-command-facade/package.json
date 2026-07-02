@@ -18,13 +18,14 @@
 	},
 	"scripts": {
 		"test": "bun test ./tests/*.test.ts",
-		"typecheck": "tsc --noEmit -p tsconfig.json"
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"typecheck:contracts": "tsc --noEmit -p tsconfig.type-tests.json && tsc --noEmit -p tsconfig.type-tests.loose.json"
 	},
 	"dependencies": {
 		"@logtape/logtape": "^2.0.2"
 	},
 	"devDependencies": {
-		"@types/node": "catalog:",
+		"@types/bun": "catalog:",
 		"typescript": "catalog:"
 	},
 	"// stability": "Pre-1.0. Production consumers must import from @side-quest/cli-command-facade. Test code may import package-agnostic fixtures from @side-quest/cli-command-facade/testing. Other deep imports are not public and may break in v2."

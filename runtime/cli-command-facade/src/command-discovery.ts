@@ -98,7 +98,7 @@ export function projectCommandDiscoveryActionAffordances(
 
 export function projectCommandDiscoveryTree<
 	TCommand extends string,
-	TContract extends CommandFacadeContract<TCommand, string, string>,
+	TContract extends CommandFacadeContract<string, string, string>,
 	TExtra extends CommandDiscoveryAugment = Record<never, never>,
 >(
 	contracts: readonly (readonly [TCommand, TContract])[],
@@ -179,7 +179,12 @@ export function projectCommandDiscoveryTree<
 							Object.entries(contract.flags).map(([flag, metadata]) => [
 								flag,
 								projectCommandDiscoveryFlag(metadata, {
-									includeDescription: options.includeFlagDescriptions,
+									...(options.includeFlagDescriptions !== undefined
+										? {
+												includeDescription:
+													options.includeFlagDescriptions,
+											}
+										: {}),
 								}),
 							]),
 						),

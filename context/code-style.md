@@ -2,11 +2,50 @@
 
 ## Patterns
 
-- Functional → pure functions, immutability, composition
-- Factory patterns → for object creation
-- Dependency injection → for testability
-- Small modules → single responsibility
-- Abstraction → well-structured over "simple but messy"
+### Pressure gate (run before naming a pattern)
+
+Before reaching for a GoF or design-pattern name, name the pressure that earns it. No pressure → no pattern. A pattern name is a translation *after* evidence, not a prescription *before* code.
+
+This gate owns the *pre-code* moment only. Once modules exist, the same vocabulary continues elsewhere:
+
+- Existing code, find seams → `improve-codebase-architecture` (ICA) runs the deletion test on live modules.
+- A pattern name gets claimed → `gof-pressure-lens` referees whether it is earned. GoF names are never an entry point; reach them only *through* this evidence, never as a recommendation.
+
+For any candidate pattern, state:
+
+- Pressure source → what varies, grows, or repeats.
+- Seam → where behavior gets swapped without editing in place.
+- Deletion-test consequence → delete the module; does complexity vanish (pass-through, drop it) or reappear across callers (earns its keep)?
+- Locality or leverage gain → bugs concentrate in one place, or one interface pays back across N callers.
+- Second adapter → the real variant that makes the seam real. One adapter is hypothetical; two is earned.
+
+If a field is absent, write the plain module first. Reach for the pattern name when the pressure arrives.
+
+### Default plain — abstract only on proof
+
+Costs are asymmetric. Under-design (plain module → registry when a second variant lands) is a local refactor the first repetition tells you to make. Over-design (speculative Strategy/Factory/DI) taxes every read, and removing it means tearing out the abstraction *and* the code that bent around it. When uncertain, err toward plain.
+
+One question decides it, before any code:
+
+> Can I name the second adapter right now, from the plan?
+
+- Yes → the variant is on the plan (two providers in the spec, prod client + test fake, three importers one shape). Build the seam now; no refactor, not speculation.
+- No → "might grow", "for flexibility", "for testability" with one impl. Deletion test fails; the abstraction is dead weight. Write the plain module; wait for the first real repetition to pull the pattern out.
+
+"Name the second adapter" is falsifiable. "Might this grow?" is not — it always answers yes, which is how slop gets in.
+
+Timing: this decision lives at planning time, where the fan-out is visible — see Vertical Slice First below and `to-issues` tracer-bullet slices. If two slices are "the same shape with different X", the second adapter showed up before you wrote either.
+
+### Baseline (no pressure gate needed)
+
+- Functional → pure functions, immutability, composition.
+- Small modules → single interface, behavior concentrated behind it.
+
+### Named patterns — defer until pressure
+
+- Strategy / registry → only when variants grow and each owns distinct behavior. See Switch vs Registry below; it is the worked example of this gate.
+- Dependency injection → only when a second adapter exists (e.g. real client in prod, in-memory fake in tests). One mocked seam is a hypothetical, not a reason.
+- Factory → only when construction itself varies across a seam. A function that returns a value is just a module; do not label it.
 
 ### Switch vs Registry
 
@@ -26,6 +65,15 @@
 - Pick the slice that retires the most uncertainty (newest toolchain, riskiest assumption), not the easiest one.
 - Surface the working slice for review before fanning out; course-correction is cheapest there.
 - Planning-time counterpart: `to-issues` "tracer-bullet vertical slices" splits a plan into slices; this applies the same shape at implementation time.
+
+### Agent-Native CLI Helper Shape
+
+- For facade-backed CLI front doors, centralize result metadata and structured runtime errors in facade helpers instead of hand-built literals.
+- Use named structured result payload types; avoid `Record<string, unknown>` when the payload is an interface-shaped object without an index signature.
+- Keep `contract_id` and `schema_version` helper-owned; package payloads own the remaining result vocabulary.
+- Use lifecycle or error-owned result contracts for generic failure data; do not stamp generic error payloads with a command-specific success contract.
+- Settle the facade helper API and prove one consumer before fanning out across similar CLIs.
+- Keep exact helper signatures, envelope fields, parser rules, and validator categories in runtime code, CLI help, generated docs, or tests; prose only points at owner paths.
 
 ## Style
 

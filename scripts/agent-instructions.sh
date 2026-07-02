@@ -17,11 +17,7 @@ load_config() {
 	while IFS='=' read -r key value; do
 		case "$key" in
 		startup_owner)
-			if [[ "$value" == /* ]]; then
-				STARTUP_OWNER="$value"
-			else
-				STARTUP_OWNER="$SCRIPT_DIR/$value"
-			fi
+			STARTUP_OWNER="$(resolve_startup_owner "$value")"
 			;;
 		'' | \#*)
 			;;
@@ -30,6 +26,76 @@ load_config() {
 			;;
 		esac
 	done < "$CONFIG_FILE"
+}
+
+startup_owner_has_files() {
+	local owner="$1"
+	[[ -f "$owner/AGENTS.md" || -f "$owner/CLAUDE.md" ]]
+}
+
+main_worktree_path() {
+	git -C "$SCRIPT_DIR" worktree list --porcelain 2>/dev/null |
+		awk 'NR == 1 && $1 == "worktree" { print substr($0, 10); exit }'
+}
+
+explicit_self_startup_owner() {
+	local value="${1%/}"
+	if [[ "$value" == *..* ]]; then
+		return 1
+	fi
+	while [[ "$value" == ./* ]]; do
+		value="${value#./}"
+		value="${value%/}"
+	done
+	[[ "$value" == "." ]]
+}
+
+resolve_startup_owner() {
+	local value="$1"
+	if [[ "$value" == /* ]]; then
+		canonical_path "$value"
+		return
+	fi
+
+	local candidate
+	candidate="$(canonical_path "$SCRIPT_DIR/$value")"
+	local current_worktree
+	current_worktree="$(canonical_path "$SCRIPT_DIR")"
+	if explicit_self_startup_owner "$value"; then
+		printf "%s" "$current_worktree"
+		return
+	fi
+
+	local main_worktree
+	main_worktree="$(main_worktree_path || true)"
+	if [[ -n "$main_worktree" ]]; then
+		main_worktree="$(canonical_path "$main_worktree")"
+	fi
+
+	local main_candidate=""
+	if [[ -n "$main_worktree" && "$main_worktree" != "$current_worktree" ]]; then
+		main_candidate="$(canonical_path "$main_worktree/$value")"
+		if [[ "$candidate" == "$current_worktree" ]] &&
+			! explicit_self_startup_owner "$value" &&
+			startup_owner_has_files "$main_candidate"; then
+			printf "%s" "$main_candidate"
+			return
+		fi
+	fi
+
+	if startup_owner_has_files "$candidate"; then
+		canonical_path "$candidate"
+		return
+	fi
+
+	if [[ -n "$main_candidate" ]] &&
+		! explicit_self_startup_owner "$value" &&
+		startup_owner_has_files "$main_candidate"; then
+		canonical_path "$main_candidate"
+		return
+	fi
+
+	canonical_path "$candidate"
 }
 
 if [[ $# -gt 0 ]]; then
@@ -62,9 +128,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-failures=()
-warnings=()
-passes=()
+declare -a failures=()
+declare -a warnings=()
+declare -a passes=()
 
 add_pass() {
 	passes+=("$1")
@@ -154,9 +220,9 @@ check_owner_paths() {
 	local required=(
 			"skills/productivity-connectors/SKILL.md"
 			"context/bun-runner.md"
-			"skills/create-skill/SKILL.md"
-			"skills/create-skill/CONTEXT.md"
-			"skills/create-skill/references/skill-design-decision-runbook.md"
+			"skills/skill-author/SKILL.md"
+			"skills/skill-author/CONTEXT.md"
+			"skills/skill-author/references/skill-design-decision-runbook.md"
 		"context/personal.md"
 		"context/comms-style.md"
 		"docs/git/conventions.md"
@@ -259,6 +325,36 @@ check_projection_drift() {
 	fi
 }
 
+# Fail when a deploy target holds a real directory whose name also exists as a
+# repo skill: a drifted duplicate of the canonical source. Codex-only dirs (no
+# repo twin) are ignored automatically, so the check is self-maintaining — no
+# allowlist to grow. Repair: back up the copy and symlink it, or run install.sh.
+check_skill_deploy_drift() {
+	local repo_skills="$STARTUP_OWNER/skills"
+	local drift_found=false
+	local target entry name
+	for target in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
+		[[ -d "$target" ]] || continue
+		# A whole-folder symlink (Claude's model) is the source itself — its
+		# children are repo skills, not per-skill drift. Only scan real
+		# directories that mix sources (Codex's model).
+		[[ -L "$target" ]] && continue
+		for entry in "$target"/*/; do
+			[[ -d "$entry" ]] || continue
+			entry="${entry%/}"
+			[[ -L "$entry" ]] && continue
+			name="$(basename "$entry")"
+			if [[ -d "$repo_skills/$name" ]]; then
+				drift_found=true
+				add_fail "Skill deploy drift: ${target/#$HOME/~}/$name is a real directory shadowing skills/$name; back it up and symlink, or run ./install.sh"
+			fi
+		done
+	done
+	if [[ "$drift_found" == false ]]; then
+		add_pass "no skill deploy drift in ~/.claude/skills or ~/.codex/skills"
+	fi
+}
+
 run_checks() {
 	load_config
 	check_line_budget "AGENTS.md" "$SCRIPT_DIR/AGENTS.md" 120
@@ -271,6 +367,7 @@ run_checks() {
 	check_owner_paths
 	check_appendices
 	check_projection_drift
+	check_skill_deploy_drift
 }
 
 json_array() {
@@ -291,31 +388,31 @@ json_array() {
 
 print_report() {
 	local status="ok"
-	if (( ${#failures[@]} > 0 )); then
+	if (( ${#failures[*]} > 0 )); then
 		status="fail"
-	elif (( ${#warnings[@]} > 0 )); then
+	elif (( ${#warnings[*]} > 0 )); then
 		status="warn"
 	fi
 
 	if [[ "$FORMAT" == "json" ]]; then
 		printf '{"status":"%s",' "$status"
-		json_array "passes" "${passes[@]}"
+		json_array "passes" ${passes[@]+"${passes[@]}"}
 		printf ','
-		json_array "warnings" "${warnings[@]}"
+		json_array "warnings" ${warnings[@]+"${warnings[@]}"}
 		printf ','
-		json_array "failures" "${failures[@]}"
+		json_array "failures" ${failures[@]+"${failures[@]}"}
 		printf '}\n'
 		return
 	fi
 
 	echo "Agent instruction health: $status"
-	for item in "${failures[@]}"; do
+	for item in ${failures[@]+"${failures[@]}"}; do
 		echo "FAIL: $item"
 	done
-	for item in "${warnings[@]}"; do
+	for item in ${warnings[@]+"${warnings[@]}"}; do
 		echo "WARN: $item"
 	done
-	for item in "${passes[@]}"; do
+	for item in ${passes[@]+"${passes[@]}"}; do
 		echo "OK: $item"
 	done
 }
@@ -364,13 +461,13 @@ case "$COMMAND" in
 check)
 	run_checks
 	print_report
-	if (( ${#failures[@]} > 0 )); then
+	if (( ${#failures[*]} > 0 )); then
 		exit 1
 	fi
 	;;
 status)
 	print_status
-	if (( ${#failures[@]} > 0 )); then
+	if (( ${#failures[*]} > 0 )); then
 		exit 1
 	fi
 	;;

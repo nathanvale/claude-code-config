@@ -13,8 +13,8 @@ source:
   - docs/research/2026-06-11-aider-cli-rubric-evaluation.md
   - docs/research/2026-06-11-claude-tap-cli-rubric-evaluation.md
   - docs/research/2026-06-02-agent-native-cli-best-practices-research.md
-  - skills/create-cli/references/cli-guidelines.md
-  - skills/create-cli/references/agent-native-cli-design.md
+  - skills/cli-author/references/cli-guidelines.md
+  - skills/cli-author/references/agent-native-cli-design.md
   - context/code-style.md
   - https://www.domainlanguage.com/ddd/reference/
   - https://teamtopologies.com/key-concepts-content/team-interaction-modeling-with-team-topologies
@@ -317,7 +317,7 @@ Use different names when the repo already has stronger owner terms.
 
 ## Adoption Sequence
 
-- Start with `create-cli`.
+- Start with `cli-author`.
 - Classify the lane before implementation.
 - Name contract, model, engine, discovery, CLI, runtime, protocol, observability, generated, docs, and test owners.
 - Pick one vertical slice.

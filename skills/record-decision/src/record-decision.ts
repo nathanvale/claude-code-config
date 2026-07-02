@@ -2,9 +2,13 @@
 
 import {
 	type CliWriter,
+	type CommandResultPayload,
 	type ParsedCliDiagnosticArgv,
+	createCliRepairStateRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	createCliUsageRuntimeError,
+	createCommandResultData,
 	parseCliDiagnosticArgv,
 	parseCliDiagnosticFallbackArgv,
 	projectCommandDiscoveryTree,
@@ -14,10 +18,11 @@ import {
 } from "@side-quest/cli-command-facade";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { recordDecisionContracts } from "./command-contract.ts";
 import {
-	RECORD_DECISION_CONTRACT_ID,
-	RECORD_DECISION_SCHEMA_VERSION,
+	type RecordDecisionCommand,
+	recordDecisionContracts,
+} from "./command-contract.ts";
+import {
 	type PreparedDecisionRecord,
 	type RecordDecisionExecuteResult,
 	type RecordDecisionPlan,
@@ -279,11 +284,7 @@ function writePlan(
 		stdout,
 		createCliRuntimeSuccessEnvelope({
 			run_id: runId,
-			data: {
-				contract_id: RECORD_DECISION_CONTRACT_ID,
-				schema_version: RECORD_DECISION_SCHEMA_VERSION,
-				...plan,
-			},
+			data: resultData("plan", plan),
 		}),
 		{ runId, durationMs },
 	);
@@ -299,11 +300,7 @@ function writeExecuteResult(
 		stdout,
 		createCliRuntimeSuccessEnvelope({
 			run_id: runId,
-			data: {
-				contract_id: RECORD_DECISION_CONTRACT_ID,
-				schema_version: RECORD_DECISION_SCHEMA_VERSION,
-				...result,
-			},
+			data: resultData("plan", result),
 		}),
 		{ runId, durationMs },
 	);
@@ -318,7 +315,7 @@ function writeDiscovery(
 		stdout,
 		createCliRuntimeSuccessEnvelope({
 			run_id: runId,
-			data: discoveryPayload(),
+			data: resultData("commands", discoveryPayload()),
 		}),
 		{ runId, durationMs },
 	);
@@ -342,20 +339,29 @@ function emitError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: error.exitCode,
-			error: {
-				run_id: input.runId,
-				code: error.code,
-				message: error.message,
-				exit_code: error.exitCode,
-				severity: "error",
-				recoverability: error.recoverability,
-				retryable: error.retryable,
-				failure_domain: error.failureDomain,
-				hint: {
-					action: error.hintAction,
-					summary: error.nextSafeAction,
-				},
-			},
+			error:
+				error.recoverability === "change_input"
+					? createCliUsageRuntimeError({
+							run_id: input.runId,
+							code: error.code,
+							message: error.message,
+							hint: {
+								action: "change_input",
+								summary: error.nextSafeAction,
+							},
+							failure_domain: error.failureDomain,
+						})
+					: createCliRepairStateRuntimeError({
+							run_id: input.runId,
+							code: error.code,
+							message: error.message,
+							exit_code: error.exitCode,
+							hint: {
+								action: "repair_state",
+								summary: error.nextSafeAction,
+							},
+							failure_domain: error.failureDomain,
+						}),
 			data: {
 				changed_state: error.changedState,
 				retry_safe: error.retrySafe,
@@ -365,6 +371,13 @@ function emitError(input: {
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
 	return error.exitCode;
+}
+
+function resultData<TData extends object>(
+	command: RecordDecisionCommand,
+	data: CommandResultPayload<TData>,
+): Record<string, unknown> {
+	return createCommandResultData(recordDecisionContracts[command], data);
 }
 
 function normalizeError(error: unknown): {

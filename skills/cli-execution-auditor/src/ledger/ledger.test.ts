@@ -25,6 +25,17 @@ const surfaceInput: FindingInput = {
 	argv: ["check", "--json"],
 };
 
+const stationInput: FindingInput = {
+	clauseId: "station-map",
+	kind: "station",
+	summary: "check.success is missing for declared_branch_coverage.",
+	station: {
+		stationId: "check.success",
+		command: "check",
+		findingKind: "missing",
+	},
+};
+
 describe("ledger — upsert + dedupe", () => {
 	test("a new finding upsert assigns status open", () => {
 		const ledger = createLedger("classic-cinema");
@@ -48,6 +59,56 @@ describe("ledger — upsert + dedupe", () => {
 		upsertFinding(ledger, surfaceInput);
 		upsertFinding(ledger, { ...surfaceInput, clauseId: "declared-coverage-runs" });
 		expect(openFindings(ledger)).toHaveLength(2);
+	});
+
+	test("front-door ownership partitions clause finding signatures", () => {
+		const ledger = createLedger("front-door-shared");
+		upsertFinding(ledger, { ...surfaceInput, frontDoor: "admin" });
+		upsertFinding(ledger, { ...surfaceInput, frontDoor: "app" });
+		const open = openFindings(ledger);
+		expect(open).toHaveLength(2);
+		expect(
+			open.map((finding) => {
+				if ("station" in finding.recheck) throw new Error("expected clause recheck");
+				return finding.recheck.frontDoor;
+			}).sort(),
+		).toEqual(["admin", "app"]);
+	});
+
+	test("station findings dedupe by station anchor, not argv", () => {
+		const ledger = createLedger("classic-cinema");
+		upsertFinding(ledger, stationInput);
+		upsertFinding(ledger, {
+			...stationInput,
+			summary: "refreshed station summary",
+		});
+		const open = openFindings(ledger);
+		expect(open).toHaveLength(1);
+		expect(open[0].summary).toBe("refreshed station summary");
+		if (!("station" in open[0].recheck)) throw new Error("expected station recheck");
+		expect(open[0].recheck.station).toEqual(stationInput.station);
+	});
+
+	test("rejects invalid kind and recheck anchor combinations at runtime", () => {
+		const ledger = createLedger("classic-cinema");
+		expect(() =>
+			upsertFinding(ledger, {
+				...stationInput,
+				argv: ["local", "noise"],
+			} as unknown as FindingInput),
+		).toThrow("station finding cannot include argv");
+		expect(() =>
+			upsertFinding(ledger, {
+				...surfaceInput,
+				station: stationInput.station,
+			} as unknown as FindingInput),
+		).toThrow("clause finding cannot include a station anchor");
+		expect(() =>
+			upsertFinding(ledger, {
+				...surfaceInput,
+				kind: "unknown",
+			} as unknown as FindingInput),
+		).toThrow("finding kind must be static, surface, or station");
 	});
 });
 
@@ -95,6 +156,49 @@ describe("ledger — signature stability (R7)", () => {
 		const b = signature({ clauseId: "json-valid-under-failure", argv: ["repair"] });
 		expect(a).not.toBe(b);
 	});
+
+	test("signature differs when the front door differs", () => {
+		const a = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "admin",
+		});
+		const b = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "app",
+		});
+		expect(a).not.toBe(b);
+	});
+
+	test("signature marks clause fields so scoped and unscoped tokens cannot collide", () => {
+		const scoped = signature({
+			clauseId: "json-valid-under-failure",
+			argv: ["check"],
+			frontDoor: "admin",
+		});
+		const unscopedWithMatchingTokens = signature({
+			clauseId: "frontDoor",
+			argv: ["admin", "json-valid-under-failure", "check"],
+		});
+		expect(scoped).not.toBe(unscopedWithMatchingTokens);
+	});
+
+	test("station signature ignores invocation and keys by station identity", () => {
+		const station = {
+			stationId: "check.success",
+			command: "check",
+			findingKind: "missing",
+		};
+		const a = signature({ clauseId: "station-map", argv: ["noise"], station });
+		const b = signature({ clauseId: "different-display-id", argv: [], station });
+		const c = signature({
+			clauseId: "station-map",
+			station: { ...station, findingKind: "drifted" },
+		});
+		expect(a).toBe(b);
+		expect(a).not.toBe(c);
+	});
 });
 
 describe("ledger — Markdown round-trip + format compatibility (R6)", () => {
@@ -104,6 +208,19 @@ describe("ledger — Markdown round-trip + format compatibility (R6)", () => {
 		const md = renderLedger(ledger);
 		expect(md).toContain("recheck: clause=json-valid-under-failure");
 		expect(md).toContain("invocation=`check --json`");
+	});
+
+	test("front-door clause rechecks serialize and parse", () => {
+		const ledger = createLedger("front-door-shared");
+		upsertFinding(ledger, { ...surfaceInput, frontDoor: "admin/users" });
+		const md = renderLedger(ledger);
+		expect(md).toContain("recheck: frontDoor=admin%2Fusers clause=json-valid-under-failure");
+
+		const reparsed = parseLedger("front-door-shared", md);
+		const [finding] = openFindings(reparsed);
+		if ("station" in finding.recheck) throw new Error("expected clause recheck");
+		expect(finding.recheck.frontDoor).toBe("admin/users");
+		expect(finding.recheck.argv).toEqual(["check", "--json"]);
 	});
 
 	test("a static finding renders its recheck with the no-invocation marker", () => {
@@ -134,6 +251,45 @@ describe("ledger — Markdown round-trip + format compatibility (R6)", () => {
 		expect(reHistory.status).toBe("resolved");
 		expect(reHistory.resolution).toBe("envelope fixed");
 		expect(reHistory.recheck.argv).toEqual(["check", "--json"]);
+	});
+
+	test("station findings render and parse their station recheck anchor", () => {
+		const ledger = createLedger("classic-cinema");
+		upsertFinding(ledger, stationInput);
+		const md = renderLedger(ledger);
+		expect(md).toContain("recheck: station=check.success command=check finding=missing");
+
+		const reparsed = parseLedger("classic-cinema", md);
+		const open = openFindings(reparsed);
+		expect(open).toHaveLength(1);
+		expect(open[0].kind).toBe("station");
+		if (!("station" in open[0].recheck)) throw new Error("expected station recheck");
+		expect(open[0].recheck.station).toEqual(stationInput.station);
+	});
+
+	test("station recheck anchors with spaces round-trip through markdown", () => {
+		const input: FindingInput = {
+			clauseId: "station-map",
+			kind: "station",
+			summary: "interactive review success is missing.",
+			station: {
+				stationId: "review success",
+				command: "review command",
+				findingKind: "declared unreachable",
+			},
+		};
+		const ledger = createLedger("classic-cinema");
+		upsertFinding(ledger, input);
+
+		const md = renderLedger(ledger);
+		expect(md).toContain(
+			"recheck: station=review%20success command=review%20command finding=declared%20unreachable",
+		);
+
+		const reparsed = parseLedger("classic-cinema", md);
+		const [finding] = openFindings(reparsed);
+		if (!("station" in finding.recheck)) throw new Error("expected station recheck");
+		expect(finding.recheck.station).toEqual(input.station);
 	});
 
 	test("renders the findings-table sections the audit-loop template documents", () => {

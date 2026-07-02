@@ -1,0 +1,15 @@
+{
+	"name": "fixture-bad-front-door-uncovered",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "A facade CLI whose legacy front door ships a script but no command-contract.ts — its surface goes unaudited (adversarial finding A).",
+	"scripts": {
+		"app": "bun run src/front-doors/app/app.ts",
+		"legacy": "bun run src/front-doors/legacy/legacy.ts",
+		"legacy-users": "bun run src/front-doors/legacy/users/users.ts"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	}
+}
