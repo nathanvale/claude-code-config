@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -105,48 +105,126 @@ describe("agent-skills entrypoint", () => {
 		);
 	});
 
-	test("sync links configured imports before claude projection", async () => {
-		const root = await tempRepo("imports");
-		await mkdir(join(root, ".agents/skills"), { recursive: true });
-		await writeFile(
-			join(root, ".agent-skills.yml"),
-			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\nimports:\n  - storybook-matrix\n",
-		);
-
-		const result = await runJsonCli(["sync", "--json"], root);
-
-		expect(result.exitCode).toBe(0);
-		expect(result.envelope.status).toBe("ok");
-		expect(lstatSync(join(root, ".agents/skills/storybook-matrix")).isSymbolicLink()).toBe(
-			true,
-		);
-		expect(lstatSync(join(root, ".claude/skills/storybook-matrix")).isSymbolicLink()).toBe(
-			true,
-		);
-		expect(realpathSync(join(root, ".claude/skills/storybook-matrix"))).toBe(
-			realpathSync(join(root, ".agents/skills/storybook-matrix")),
-		);
-	});
-
-	test("sync cleans up a dropped import instead of wedging on a foreign blocker", async () => {
-		const root = await tempRepo("imports-dropped");
+	test("imports config fails repairably for status and sync with the migration hint", async () => {
+		const root = await tempRepo("imports-removed");
 		await writeFile(
 			join(root, ".agent-skills.yml"),
 			"catalog: ./skills\nimports:\n  - storybook-matrix\n",
 		);
-		expect((await runJsonCli(["sync", "--json"], root)).exitCode).toBe(0);
-		expect(lstatSync(join(root, "skills/storybook-matrix")).isSymbolicLink()).toBe(
+
+		const status = await runJsonCli(["status", "--json"], root);
+		const sync = await runJsonCli(["sync", "--json"], root);
+
+		expect(status.exitCode).toBe(1);
+		expect(status.envelope.status).toBe("error");
+		expect(status.envelope.error?.code).toBe("invalid_config");
+		expect(status.envelope.error?.message).toContain("bunx skills add");
+		expect(sync.exitCode).toBe(1);
+		expect(sync.envelope.error?.code).toBe("invalid_config");
+	});
+
+	test("lockfile-managed installs read clean across status, sync, and unlink", async () => {
+		const root = await tempRepo("external-clean");
+		await writeSkill(join(root, "skills"), "fallow");
+		await seedProjection(root);
+		await writeSkill(join(root, ".agents/skills"), "frontend-design");
+		await symlink(
+			join(root, ".agents/skills/frontend-design"),
+			join(root, ".claude/skills/frontend-design"),
+		);
+		await writeLock(root, {
+			version: 1,
+			skills: {
+				"frontend-design": {
+					source: "anthropics/skills",
+					computedHash: "abc123",
+				},
+			},
+		});
+
+		const status = await runJsonCli(["status", "--json"], root);
+		const syncCheck = await runJsonCli(["sync", "--check", "--json"], root);
+		const unlink = await runTextCli(["unlink"], root);
+
+		expect(status.exitCode).toBe(0);
+		expect(status.envelope.data).toMatchObject({
+			health: "clean",
+			external_count: 2,
+		});
+		expect(syncCheck.exitCode).toBe(0);
+		expect(unlink.exitCode).toBe(0);
+		expect(lstatSync(join(root, ".agents/skills/frontend-design")).isDirectory()).toBe(
 			true,
 		);
+		expect(
+			lstatSync(join(root, ".claude/skills/frontend-design")).isSymbolicLink(),
+		).toBe(true);
+	});
 
-		await writeFile(join(root, ".agent-skills.yml"), "catalog: ./skills\n");
-		const result = await runJsonCli(["sync", "--json"], root);
+	test("status human output counts externals and names missing ones with the restore hint", async () => {
+		const root = await tempRepo("external-missing");
+		await writeSkill(join(root, "skills"), "fallow");
+		await seedProjection(root);
+		await writeLock(root, {
+			version: 1,
+			skills: { "frontend-design": { source: "anthropics/skills" } },
+		});
+
+		const result = await runTextCli(["status"], root);
 
 		expect(result.exitCode).toBe(0);
-		expect(result.envelope.status).toBe("ok");
-		expect(existsSync(join(root, "skills/storybook-matrix"))).toBe(false);
-		expect(existsSync(join(root, ".claude/skills/storybook-matrix"))).toBe(false);
-		expect(existsSync(join(root, ".agents/skills/storybook-matrix"))).toBe(false);
+		expect(result.output).toContain("external: 0");
+		expect(result.output).toContain("missing external: 1");
+		expect(result.output).toContain("bunx skills experimental_install");
+	});
+
+	test("corrupt lock names the parse failure and entries fall back to blockers", async () => {
+		const root = await tempRepo("external-corrupt-lock");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, ".agents/skills"), "frontend-design");
+		await writeFile(join(root, "skills-lock.json"), "{not json", "utf8");
+
+		const status = await runTextCli(["status"], root);
+		const sync = await runTextCli(["sync"], root);
+
+		expect(status.exitCode).toBe(0);
+		expect(status.output).toContain("blocker: .agents/skills/frontend-design (real_entry)");
+		expect(status.output).toContain("note: skills-lock.json could not be read");
+		expect(sync.exitCode).toBe(1);
+		expect(sync.stderr).toContain("skills-lock.json could not be read");
+	});
+
+	test("list --why names the lockfile and source for an external skill", async () => {
+		const root = await tempRepo("external-list-why");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, ".agents/skills"), "frontend-design");
+		await writeLock(root, {
+			version: 1,
+			skills: { "frontend-design": { source: "anthropics/skills" } },
+		});
+
+		const result = await runTextCli(["list", "--why", "frontend-design"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("frontend-design\texternal");
+		expect(result.output).toContain("skills-lock.json");
+		expect(result.output).toContain("anthropics/skills");
+	});
+
+	test("catalog conflict blocks sync and names both sources in stderr", async () => {
+		const root = await tempRepo("external-conflict");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeLock(root, {
+			version: 1,
+			skills: { fallow: { source: "anthropics/skills" } },
+		});
+
+		const result = await runTextCli(["sync"], root);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("(catalog_conflict)");
+		expect(result.stderr).toContain("skills-lock.json");
+		expect(result.stderr).toContain("rename the catalog skill id");
 	});
 
 	test("sync failure names unmanaged blockers in human output", async () => {
@@ -350,6 +428,14 @@ async function writeSkill(catalog: string, id: string): Promise<void> {
 	await writeFile(
 		join(dir, "SKILL.md"),
 		`---\nname: ${id}\ndescription: "Test skill."\n---\n\n# ${id}\n`,
+	);
+}
+
+async function writeLock(root: string, value: unknown): Promise<void> {
+	await writeFile(
+		join(root, "skills-lock.json"),
+		JSON.stringify(value, null, 2),
+		"utf8",
 	);
 }
 

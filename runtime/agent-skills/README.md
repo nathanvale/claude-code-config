@@ -26,9 +26,14 @@ flowchart LR
 
 The catalog is source. Projection roots are generated local runtime views.
 
-Configured imports are symlinked into the target catalog during sync. This lets
-a target repo include one CCC-owned skill without importing the whole CCC
-catalog.
+`agent-skills` is a projector, not a package manager. External skills are
+acquired by the community `skills` CLI (`bunx skills add <source> -s <skill>`),
+which writes hash-pinned copies into `.agents/skills/`, dedup symlinks into
+agent dirs, and records them in a git-tracked `skills-lock.json`. Entries whose
+id appears in that lockfile classify as `external`: counted by `status`,
+explained by `list --why`, and never created, modified, or removed by `sync` or
+`unlink`. The lock is read-only input; `agent-skills` never writes it. A catalog
+id colliding with a lock id fails closed as a `catalog_conflict` blocker.
 
 Default catalog:
 
@@ -115,8 +120,6 @@ ignore:
 projection_roots:
   - .agents/skills
   - .claude/skills
-imports:
-  - storybook-matrix
 ```
 
 Rules:
@@ -124,10 +127,11 @@ Rules:
 - `catalog` is a string path.
 - `ignore` is a list of direct catalog-entry id globs.
 - `projection_roots` is a list of repo-relative paths.
-- `imports` is a list of CCC-owned skill ids symlinked into `catalog`.
 - Absolute projection roots are rejected.
 - `..` projection roots are rejected.
 - Unsupported config keys are rejected.
+- `imports` is removed; the config fails with a migration error naming
+  `bunx skills add <source> -s <skill>` as the replacement.
 
 When `.agent-skills.yml` is absent and `./skills` exists, the CLI uses the
 catalog-repo auto-default:
@@ -168,14 +172,11 @@ Use this when `.agents/skills` is tracked source and Claude needs local links.
 catalog: ./.agents/skills
 projection_roots:
   - ./.claude/skills
-imports:
-  - storybook-matrix
 ```
 
 This keeps Codex-readable skills as source and generates Claude Code links only.
-For the CCC-owned Storybook skill, `agent-skills sync` links
-`experience-sdk/.agents/skills/storybook-matrix` to the CCC skill source, then
-links `.claude/skills/storybook-matrix` to the same source.
+External skills (including CCC-owned ones) install with
+`bunx skills add <source> -s <skill>`.
 
 Expected status:
 
@@ -249,6 +250,9 @@ Stable fields include:
 - `visible_count`
 - `ignored_count`
 - `invalid_count`
+- `external_count`
+- `externals`
+- `missing_external_ids`
 - `health`
 - `station`
 - `changes`
@@ -297,6 +301,13 @@ Blocker reasons:
 
 - `real_entry`: a real file or directory exists where a managed symlink would go.
 - `foreign_symlink`: a symlink points outside the configured catalog.
+- `catalog_conflict`: a catalog skill id collides with a `skills-lock.json`
+  entry; rename the catalog skill id or remove the external install with the
+  skills CLI.
+
+Entries named by `skills-lock.json` are `external`, not blockers, whatever
+their disk shape. A present-but-unparseable lock degrades to no external
+entries plus a named parse-failure note, so triage points at the lockfile.
 
 Repair path:
 
@@ -396,8 +407,6 @@ Experience SDK setup proved why `projection_roots` exists:
 
 - `.agents/skills` can be tracked source.
 - `.claude/skills` can be generated local projection.
-- CCC-owned imports need managed symlinks owned by `agent-skills`, not manual
-  backwards links.
 - Worktree setup does not require deleting tracked skill catalogs.
 - Agents need `sync --check --json`; humans need `status`.
 

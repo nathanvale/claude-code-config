@@ -25,7 +25,6 @@ describe("agent-skills config", () => {
 			".agents/skills",
 			".claude/skills",
 		]);
-		expect(loaded.config.imports).toEqual([]);
 		expect(loaded.config.autoDefault).toBe(true);
 	});
 
@@ -59,7 +58,7 @@ describe("agent-skills config", () => {
 		const root = await tempRoot("projection-roots");
 		await writeFile(
 			join(root, ".agent-skills.yml"),
-			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\nimports:\n  - storybook-matrix\n",
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\n",
 		);
 
 		const loaded = await loadAgentSkillsConfig(root);
@@ -68,7 +67,6 @@ describe("agent-skills config", () => {
 		if (!loaded.ok) return;
 		expect(loaded.config.catalogRoot).toBe(join(root, ".agents/skills"));
 		expect(loaded.config.projectionRoots).toEqual([".claude/skills"]);
-		expect(loaded.config.imports).toEqual(["storybook-matrix"]);
 	});
 
 	test("rejects projection roots outside the repo", async () => {
@@ -98,9 +96,12 @@ describe("agent-skills config", () => {
 		});
 	});
 
-	test("rejects invalid import ids", async () => {
-		const root = await tempRoot("imports-invalid");
-		await writeFile(join(root, ".agent-skills.yml"), "imports:\n  - ../bad\n");
+	test("imports key fails with a repairable migration error naming bunx skills add", async () => {
+		const root = await tempRoot("imports-removed");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./skills\nimports:\n  - storybook-matrix\n",
+		);
 
 		const loaded = await loadAgentSkillsConfig(root);
 
@@ -108,6 +109,8 @@ describe("agent-skills config", () => {
 			ok: false,
 			error: { code: "invalid_config" },
 		});
+		if (loaded.ok) return;
+		expect(loaded.error.message).toContain("bunx skills add");
 	});
 
 	test("resolves the .git root even from nested package directories", async () => {
@@ -161,7 +164,6 @@ describe("agent-skills config", () => {
 		expect(updated.ok).toBe(true);
 		expect(text).toContain("catalog: ./skills");
 		expect(text).toContain("projection_roots");
-		expect(text).toContain("imports");
 		expect(text).toContain("experimental-*");
 	});
 

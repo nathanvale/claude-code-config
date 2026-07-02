@@ -12,7 +12,6 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { StaleImportLink } from "./catalog.ts";
 import {
 	AGENT_SKILLS_CONTRACT_ID,
 	AGENT_SKILLS_NOISE_THRESHOLD,
@@ -21,10 +20,12 @@ import {
 	AGENT_SKILLS_SNAPSHOT_PATH,
 	type AgentSkillsSnapshot,
 	type AgentSkillsStatus,
+	type ExternalProjectionEntry,
 	type ProjectionBlocker,
 	type ProjectionChanges,
 	type SkillVisibility,
 } from "./model.ts";
+import { SKILLS_LOCK_FILE, type SkillsLockReadResult } from "./skills-lock.ts";
 
 /**
  * Projection plan computed before any filesystem writes.
@@ -36,29 +37,14 @@ export interface AgentSkillsProjectionPlan {
 	visibleTargets: Readonly<Record<string, string>>;
 	/** Repo-relative projection roots this plan may read or write. */
 	projectionRoots: readonly string[];
-	/** Imported skills symlinked into the local catalog before projection. */
-	importLinks: readonly ImportLink[];
-	/** Stale catalog import symlinks removed on sync. */
-	staleImportLinks: readonly StaleImportLink[];
-}
-
-/**
- * Imported skill catalog symlink operation.
- */
-export interface ImportLink {
-	/** Catalog entry id. */
-	id: string;
-	/** Absolute source skill directory. */
-	sourcePath: string;
-	/** Absolute local catalog symlink path. */
-	targetPath: string;
 }
 
 interface ProjectionEntry {
 	id: string;
 	root: string;
 	path: string;
-	state: "managed" | "broken" | "blocker";
+	state: "managed" | "broken" | "blocker" | "external";
+	shape: "real_entry" | "symlink";
 	target?: string;
 	blockerReason?: ProjectionBlocker["reason"];
 }
@@ -119,22 +105,16 @@ export async function planProjection(input: {
 	catalogRoot: string;
 	visibility: readonly SkillVisibility[];
 	projectionRoots?: readonly string[];
-	importLinks?: readonly ImportLink[];
-	/** Extra roots whose targets stay managed even when no longer imported. */
-	managedSourceRoots?: readonly string[];
-	staleImportLinks?: readonly StaleImportLink[];
+	/** Read-only skills-lock view used to recognize external entries. */
+	lock?: SkillsLockReadResult;
 }): Promise<AgentSkillsProjectionPlan> {
 	const catalogRoot = existsSync(input.catalogRoot)
 		? await realpath(input.catalogRoot)
 		: resolve(input.catalogRoot);
 	const projectionRoots = input.projectionRoots ?? AGENT_SKILLS_PROJECTION_ROOTS;
-	const importLinks = await resolveImportLinks(input.importLinks ?? []);
-	const staleImportLinks = input.staleImportLinks ?? [];
-	const managedTargets = [
-		catalogRoot,
-		...(await resolveManagedRoots(input.managedSourceRoots ?? [])),
-		...importLinks.map((link) => link.resolvedSourcePath),
-	];
+	const managedTargets = [catalogRoot];
+	const lock = input.lock ?? { entries: [] };
+	const lockRecords = new Map(lock.entries.map((entry) => [entry.id, entry]));
 	const visible = input.visibility.filter((entry) => entry.state === "visible");
 	const ignored = input.visibility.filter((entry) => entry.state === "ignored");
 	const invalid = input.visibility.filter((entry) => entry.state === "invalid");
@@ -150,39 +130,39 @@ export async function planProjection(input: {
 	const entries = (
 		await Promise.all(
 			projectionRoots.map((root) =>
-				readProjectionRoot(input.repoRoot, root, managedTargets),
+				readProjectionRoot(input.repoRoot, root, managedTargets, lockRecords),
 			),
 		)
 	).flat();
-	const importBlockers = await findImportBlockers(input.repoRoot, importLinks);
-	const blockers = [
+	const externals: ExternalProjectionEntry[] = entries
+		.filter((entry) => entry.state === "external")
+		.map((entry) => {
+			const record = lockRecords.get(entry.id);
+			return {
+				root: entry.root,
+				id: entry.id,
+				path: entry.path,
+				shape: entry.shape,
+				source: record?.source,
+				has_hash: record?.computedHash !== undefined,
+			};
+		});
+	const externalIdsOnDisk = new Set(externals.map((entry) => entry.id));
+	const missingExternalIds = [...lockRecords.keys()]
+		.filter((id) => !externalIdsOnDisk.has(id))
+		.sort();
+	const blockers: ProjectionBlocker[] = [
+		...catalogConflictBlockers(input.repoRoot, input.visibility, lockRecords),
 		...entries
 			.filter((entry) => entry.state === "blocker")
 			.map((entry) => ({
 				root: entry.root,
 				id: entry.id,
 				path: entry.path,
-				reason: entry.blockerReason ?? "real_entry",
+				reason: entry.blockerReason ?? ("real_entry" as const),
 			})),
-		...importBlockers,
 	];
-	const blockedImportTargets = new Set(
-		importBlockers.map((blocker) => blocker.path),
-	);
-	const plannedChanges = await planChanges(
-		entries,
-		visibleTargets,
-		projectionRoots,
-		input.repoRoot,
-		importLinks.filter((link) => !blockedImportTargets.has(link.targetPath)),
-	);
-	const changes = {
-		...plannedChanges,
-		remove: [
-			...plannedChanges.remove,
-			...staleImportLinks.map((link) => relative(input.repoRoot, link.path)),
-		].sort(),
-	};
+	const changes = planChanges(entries, visibleTargets, projectionRoots);
 	const lastProjected = snapshot?.projected_ids ?? [];
 	const visibleIds = Object.keys(visibleTargets).sort();
 	const newlyVisible = snapshot
@@ -212,8 +192,6 @@ export async function planProjection(input: {
 
 	return {
 		projectionRoots,
-		importLinks,
-		staleImportLinks,
 		visibleTargets,
 		status: {
 			contract_id: AGENT_SKILLS_CONTRACT_ID,
@@ -224,6 +202,10 @@ export async function planProjection(input: {
 			visible_count: visible.length,
 			ignored_count: ignored.length,
 			invalid_count: invalid.length,
+			external_count: externals.length,
+			externals,
+			missing_external_ids: missingExternalIds,
+			lock_parse_failure: lock.parseFailure,
 			last_projected_at: snapshot?.projected_at,
 			health,
 			station:
@@ -265,20 +247,6 @@ export async function applyProjection(
 
 	for (const root of plan.projectionRoots) {
 		await mkdir(join(plan.status.repo_root, root), { recursive: true });
-	}
-	for (const staleLink of plan.staleImportLinks) {
-		// Stale import links are symlinks by construction; never recurse.
-		const stats = await lstat(staleLink.path);
-		if (stats.isSymbolicLink()) {
-			await rm(staleLink.path, { force: true });
-		}
-	}
-	for (const importLink of plan.importLinks) {
-		await mkdir(dirname(importLink.targetPath), { recursive: true });
-		// Plan-time blocker detection guarantees any existing entry here is a
-		// symlink; never remove recursively so a real directory can't be lost.
-		await rm(importLink.targetPath, { force: true });
-		await symlink(importLink.sourcePath, importLink.targetPath);
 	}
 
 	for (const change of plan.status.changes.remove) {
@@ -331,19 +299,17 @@ export async function unlinkManagedProjections(
 	catalogRoot: string,
 	check: boolean,
 	projectionRoots: readonly string[] = AGENT_SKILLS_PROJECTION_ROOTS,
-	managedSourceRoots: readonly string[] = [],
+	lock: SkillsLockReadResult = { entries: [] },
 ): Promise<readonly string[]> {
 	const resolvedCatalogRoot = existsSync(catalogRoot)
 		? await realpath(catalogRoot)
 		: resolve(catalogRoot);
-	const managedTargets = [
-		resolvedCatalogRoot,
-		...(await resolveManagedRoots(managedSourceRoots)),
-	];
+	const managedTargets = [resolvedCatalogRoot];
+	const lockRecords = new Map(lock.entries.map((entry) => [entry.id, entry]));
 	const entries = (
 		await Promise.all(
 			projectionRoots.map((root) =>
-				readProjectionRoot(repoRoot, root, managedTargets),
+				readProjectionRoot(repoRoot, root, managedTargets, lockRecords),
 			),
 		)
 	).flat();
@@ -358,13 +324,11 @@ export async function unlinkManagedProjections(
 	return managed.map((entry) => relative(repoRoot, entry.path)).sort();
 }
 
-async function planChanges(
+function planChanges(
 	entries: readonly ProjectionEntry[],
 	visibleTargets: Readonly<Record<string, string>>,
 	projectionRoots: readonly string[],
-	repoRoot: string,
-	importLinks: readonly ResolvedImportLink[],
-): Promise<ProjectionChanges> {
+): ProjectionChanges {
 	const createOrUpdate = new Set<string>();
 	const removeChanges = new Set<string>();
 	const broken = new Set<string>();
@@ -386,12 +350,6 @@ async function planChanges(
 		}
 	}
 
-	for (const importLink of importLinks) {
-		if (await importLinkNeedsUpdate(importLink)) {
-			createOrUpdate.add(relative(repoRoot, importLink.targetPath));
-		}
-	}
-
 	for (const entry of entries) {
 		if (entry.state !== "managed" && entry.state !== "broken") continue;
 		if (!visibleIds.has(entry.id)) {
@@ -410,6 +368,7 @@ async function readProjectionRoot(
 	repoRoot: string,
 	root: string,
 	managedTargets: readonly string[],
+	lockRecords: ReadonlyMap<string, unknown> = new Map(),
 ): Promise<ProjectionEntry[]> {
 	const absoluteRoot = join(repoRoot, root);
 	if (!existsSync(absoluteRoot)) return [];
@@ -419,20 +378,38 @@ async function readProjectionRoot(
 	for (const id of children) {
 		const path = join(absoluteRoot, id);
 		const stats = await lstat(path);
-		if (!stats.isSymbolicLink()) {
-			entries.push({ id, root, path, state: "blocker", blockerReason: "real_entry" });
+		const shape = stats.isSymbolicLink()
+			? ("symlink" as const)
+			: ("real_entry" as const);
+		// Recognition is by lock evidence, not disk shape (ownership-by-record,
+		// ADR 0016): real dirs, canonical-copy symlinks, and dangling links whose
+		// id the lock names are all external and never touched.
+		if (lockRecords.has(id)) {
+			entries.push({ id, root, path, state: "external", shape });
+			continue;
+		}
+		if (shape === "real_entry") {
+			entries.push({
+				id,
+				root,
+				path,
+				state: "blocker",
+				shape,
+				blockerReason: "real_entry",
+			});
 			continue;
 		}
 		try {
 			const target = await realpath(path);
 			if (isManagedTarget(managedTargets, target)) {
-				entries.push({ id, root, path, state: "managed", target });
+				entries.push({ id, root, path, state: "managed", shape, target });
 			} else {
 				entries.push({
 					id,
 					root,
 					path,
 					state: "blocker",
+					shape,
 					blockerReason: "foreign_symlink",
 				});
 			}
@@ -441,13 +418,14 @@ async function readProjectionRoot(
 			// symlink stays unmanaged instead of being repaired or unlinked.
 			const rawTarget = await danglingLinkTarget(path);
 			if (rawTarget !== undefined && isManagedTarget(managedTargets, rawTarget)) {
-				entries.push({ id, root, path, state: "broken" });
+				entries.push({ id, root, path, state: "broken", shape });
 			} else {
 				entries.push({
 					id,
 					root,
 					path,
 					state: "blocker",
+					shape,
 					blockerReason: "foreign_symlink",
 				});
 			}
@@ -457,24 +435,26 @@ async function readProjectionRoot(
 	return entries;
 }
 
-async function findImportBlockers(
+function catalogConflictBlockers(
 	repoRoot: string,
-	importLinks: readonly ResolvedImportLink[],
-): Promise<ProjectionBlocker[]> {
-	const blockers: ProjectionBlocker[] = [];
-	for (const link of importLinks) {
-		if (!existsSync(link.targetPath)) continue;
-		const stats = await lstat(link.targetPath);
-		if (!stats.isSymbolicLink()) {
-			blockers.push({
-				root: relative(repoRoot, dirname(link.targetPath)),
-				id: link.id,
-				path: link.targetPath,
-				reason: "real_entry",
-			});
-		}
-	}
-	return blockers;
+	visibility: readonly SkillVisibility[],
+	lockRecords: ReadonlyMap<string, { source?: string }>,
+): ProjectionBlocker[] {
+	// A catalog id colliding with a lock id must fail closed with a distinct
+	// reason: raw `skills add` overwrites foreign same-name skills, so a silent
+	// winner on this side would reproduce that hazard in reverse.
+	return visibility
+		.filter((entry) => lockRecords.has(entry.id))
+		.map((entry) => {
+			const source = lockRecords.get(entry.id)?.source;
+			return {
+				root: relative(repoRoot, dirname(entry.path)),
+				id: entry.id,
+				path: entry.path,
+				reason: "catalog_conflict" as const,
+				why: `catalog skill '${entry.id}' (${entry.path}) collides with ${SKILLS_LOCK_FILE} entry '${entry.id}'${source ? ` (source: ${source})` : ""}; rename the catalog skill id, or remove the external install with the skills CLI (bunx skills).`,
+			};
+		});
 }
 
 async function danglingLinkTarget(path: string): Promise<string | undefined> {
@@ -490,44 +470,6 @@ async function danglingLinkTarget(path: string): Promise<string | undefined> {
 		}
 	} catch {
 		return undefined;
-	}
-}
-
-interface ResolvedImportLink extends ImportLink {
-	resolvedSourcePath: string;
-}
-
-async function resolveManagedRoots(
-	roots: readonly string[],
-): Promise<readonly string[]> {
-	return Promise.all(
-		roots.map(async (root) =>
-			existsSync(root) ? await realpath(root) : resolve(root),
-		),
-	);
-}
-
-async function resolveImportLinks(
-	importLinks: readonly ImportLink[],
-): Promise<readonly ResolvedImportLink[]> {
-	return Promise.all(
-		importLinks.map(async (link) => ({
-			...link,
-			resolvedSourcePath: existsSync(link.sourcePath)
-				? await realpath(link.sourcePath)
-				: resolve(link.sourcePath),
-		})),
-	);
-}
-
-async function importLinkNeedsUpdate(link: ResolvedImportLink): Promise<boolean> {
-	if (!existsSync(link.targetPath)) return true;
-	try {
-		const stats = await lstat(link.targetPath);
-		if (!stats.isSymbolicLink()) return true;
-		return (await realpath(link.targetPath)) !== link.resolvedSourcePath;
-	} catch {
-		return true;
 	}
 }
 

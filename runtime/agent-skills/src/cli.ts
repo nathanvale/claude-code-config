@@ -9,13 +9,7 @@ import {
 	renderCommandUsage,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
-import {
-	applyVisibility,
-	bundledCatalogRoot,
-	discoverCatalog,
-	discoverImportedCatalog,
-	findStaleImportLinks,
-} from "./catalog.ts";
+import { applyVisibility, discoverCatalog } from "./catalog.ts";
 import {
 	addIgnorePattern,
 	loadAgentSkillsConfig,
@@ -37,9 +31,9 @@ import {
 	applyProjection,
 	planProjection,
 	unlinkManagedProjections,
-	type ImportLink,
 	type AgentSkillsProjectionPlan,
 } from "./projection.ts";
+import { readSkillsLock, SKILLS_LOCK_FILE } from "./skills-lock.ts";
 import {
 	renderIgnore,
 	renderList,
@@ -219,6 +213,11 @@ export async function main(
 		stderr.write(`${result.message}\n`);
 		for (const blocker of failureBlockers(result.data)) {
 			stderr.write(`blocker: ${blocker.root}/${blocker.id} (${blocker.reason})\n`);
+			if (blocker.why) stderr.write(`  why: ${blocker.why}\n`);
+		}
+		const lockNote = result.data?.lock_parse_failure;
+		if (typeof lockNote === "string") {
+			stderr.write(`note: ${lockNote}\n`);
 		}
 		stderr.write(`next: ${result.action}\n`);
 	}
@@ -360,7 +359,7 @@ export async function runCommand(
 					state.plan.status.catalog_root,
 					invocation.check,
 					state.plan.projectionRoots,
-					[bundledCatalogRoot()],
+					await readSkillsLock(state.plan.status.repo_root),
 				);
 				const result: AgentSkillsUnlinkResult = {
 					check: invocation.check,
@@ -390,7 +389,6 @@ async function loadProjectionState(cwd: string): Promise<
 			ok: true;
 			plan: AgentSkillsProjectionPlan;
 			visibility: readonly SkillVisibility[];
-			importLinks: readonly ImportLink[];
 	  }
 	| { ok: false; error: CommandFailure }
 > {
@@ -406,41 +404,39 @@ async function loadProjectionState(cwd: string): Promise<
 			),
 		};
 	}
-	const localEntries = await discoverCatalog(loaded.config.catalogRoot);
-	const importedEntries = await discoverImportedCatalog(
-		loaded.config.catalogRoot,
-		loaded.config.imports,
-	);
-	const staleImportLinks = await findStaleImportLinks(
-		loaded.config.catalogRoot,
-		loaded.config.imports,
-	);
-	const importedIds = new Set(importedEntries.map((entry) => entry.id));
-	const staleIds = new Set(staleImportLinks.map((link) => link.id));
-	const entries = [
-		...localEntries.filter(
-			(entry) => !importedIds.has(entry.id) && !staleIds.has(entry.id),
-		),
-		...importedEntries,
-	];
+	const entries = await discoverCatalog(loaded.config.catalogRoot);
 	const visibility = applyVisibility(entries, loaded.config.ignore);
-	const importLinks = importedEntries
-		.filter((entry) => entry.importLinkPath && entry.valid)
-		.map((entry) => ({
-			id: entry.id,
-			sourcePath: entry.path,
-			targetPath: entry.importLinkPath as string,
-		}));
+	const lock = await readSkillsLock(loaded.config.repoRoot);
 	const plan = await planProjection({
 		repoRoot: loaded.config.repoRoot,
 		catalogRoot: loaded.config.catalogRoot,
 		visibility,
 		projectionRoots: loaded.config.projectionRoots,
-		importLinks,
-		managedSourceRoots: [bundledCatalogRoot()],
-		staleImportLinks,
+		lock,
 	});
-	return { ok: true, plan, visibility, importLinks };
+	return {
+		ok: true,
+		plan,
+		visibility: [...visibility, ...externalVisibility(plan)],
+	};
+}
+
+function externalVisibility(
+	plan: AgentSkillsProjectionPlan,
+): readonly SkillVisibility[] {
+	const seen = new Set<string>();
+	const records: SkillVisibility[] = [];
+	for (const external of plan.status.externals) {
+		if (seen.has(external.id)) continue;
+		seen.add(external.id);
+		records.push({
+			id: external.id,
+			path: external.path,
+			state: "external",
+			reason: `external skill managed by ${SKILLS_LOCK_FILE}${external.source ? ` (source: ${external.source})` : ""}`,
+		});
+	}
+	return records;
 }
 
 async function runIgnore(
@@ -585,11 +581,11 @@ function runtimeFailure(
 
 function failureBlockers(
 	data: Record<string, unknown> | undefined,
-): Array<{ root: string; id: string; reason: string }> {
+): Array<{ root: string; id: string; reason: string; why?: string }> {
 	const blockers = data?.blockers;
 	if (!Array.isArray(blockers)) return [];
 	return blockers.filter(
-		(entry): entry is { root: string; id: string; reason: string } =>
+		(entry): entry is { root: string; id: string; reason: string; why?: string } =>
 			typeof entry === "object" &&
 			entry !== null &&
 			typeof (entry as { root?: unknown }).root === "string" &&

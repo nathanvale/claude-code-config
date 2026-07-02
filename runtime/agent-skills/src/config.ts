@@ -17,8 +17,6 @@ export interface AgentSkillsConfig {
 	ignore: readonly string[];
 	/** Repo-relative projection roots generated from the catalog. */
 	projectionRoots: readonly string[];
-	/** CCC-owned skill ids symlinked into the repo catalog before projection. */
-	imports: readonly string[];
 	/** Whether config came from the catalog-repo auto-default. */
 	autoDefault: boolean;
 }
@@ -46,11 +44,10 @@ type RawAgentSkillsConfig = {
 	catalog?: unknown;
 	ignore?: unknown;
 	projection_roots?: unknown;
-	imports?: unknown;
 };
 
 const CONFIG_FILE = ".agent-skills.yml";
-const SUPPORTED_KEYS = new Set(["catalog", "ignore", "projection_roots", "imports"]);
+const SUPPORTED_KEYS = new Set(["catalog", "ignore", "projection_roots"]);
 const DEFAULT_PROJECTION_ROOTS = [...AGENT_SKILLS_PROJECTION_ROOTS];
 
 /**
@@ -122,7 +119,6 @@ export async function loadAgentSkillsConfig(
 				catalog: "./skills",
 				ignore: [],
 				projectionRoots: DEFAULT_PROJECTION_ROOTS,
-				imports: [],
 				autoDefault: true,
 			},
 		};
@@ -147,7 +143,6 @@ export async function loadAgentSkillsConfig(
 			projectionRoots:
 				parsed.config.projection_roots?.map(normalizeProjectionRoot) ??
 				DEFAULT_PROJECTION_ROOTS,
-			imports: parsed.config.imports ?? [],
 			autoDefault: false,
 		},
 	};
@@ -228,13 +223,11 @@ function updatedConfig(
 	catalog: string;
 	ignore: readonly string[];
 	projection_roots: readonly string[];
-	imports: readonly string[];
 } {
 	return {
 		catalog: config.catalog,
 		ignore: update([...config.ignore]),
 		projection_roots: config.projectionRoots,
-		imports: config.imports,
 	};
 }
 
@@ -248,7 +241,6 @@ function parseConfigText(
 				catalog?: string;
 				ignore?: string[];
 				projection_roots?: string[];
-				imports?: string[];
 			};
 	  }
 	| {
@@ -269,6 +261,12 @@ function parseConfigText(
 
 	const raw = parsed as RawAgentSkillsConfig;
 	for (const key of Object.keys(raw)) {
+		if (key === "imports") {
+			return invalidConfig(
+				path,
+				"imports is no longer supported; install external skills with: bunx skills add <source> -s <skill>",
+			);
+		}
 		if (!SUPPORTED_KEYS.has(key)) {
 			return invalidConfig(path, `Unsupported config key: ${key}.`);
 		}
@@ -303,14 +301,6 @@ function parseConfigText(
 			);
 		}
 	}
-	if (
-		raw.imports !== undefined &&
-		(!Array.isArray(raw.imports) ||
-			!raw.imports.every((entry) => isValidImportId(entry)))
-	) {
-		return invalidConfig(path, "imports must be a list of skill ids.");
-	}
-
 	return {
 		ok: true,
 		config: {
@@ -319,7 +309,6 @@ function parseConfigText(
 			projection_roots: (raw.projection_roots as string[] | undefined)?.map(
 				normalizeProjectionRoot,
 			),
-			imports: raw.imports as string[] | undefined,
 		},
 	};
 }
@@ -336,13 +325,6 @@ function isValidProjectionRoot(entry: string): boolean {
 
 function normalizeProjectionRoot(entry: string): string {
 	return normalize(entry);
-}
-
-function isValidImportId(entry: unknown): entry is string {
-	return (
-		typeof entry === "string" &&
-		/^[a-z0-9][a-z0-9-]*$/.test(entry)
-	);
 }
 
 function invalidConfig(
@@ -365,7 +347,6 @@ async function writeConfig(
 		catalog: string;
 		ignore: readonly string[];
 		projection_roots: readonly string[];
-		imports: readonly string[];
 	},
 ): Promise<void> {
 	await mkdir(repoRoot, { recursive: true });

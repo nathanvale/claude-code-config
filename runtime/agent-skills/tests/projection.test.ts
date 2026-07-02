@@ -15,6 +15,7 @@ import {
 	planProjection,
 	unlinkManagedProjections,
 } from "../src/projection.ts";
+import type { SkillsLockEntry } from "../src/skills-lock.ts";
 
 describe("agent-skills projection", () => {
 	test("sync creates links in both projection roots and writes snapshot", async () => {
@@ -149,37 +150,6 @@ describe("agent-skills projection", () => {
 		expect(plan.status.removed_since_snapshot).toEqual([]);
 	});
 
-	test("real directory at an import target blocks sync and survives", async () => {
-		const root = await tempRepo("import-collision");
-		const source = await mkdtemp(join(tmpdir(), "agent-skills-import-src-"));
-		await writeSkill(source, "fallow");
-		await writeSkill(join(root, "skills"), "fallow");
-		await writeFile(join(root, "skills/fallow/notes.txt"), "precious\n");
-		const catalogRoot = join(root, "skills");
-		const visibility = applyVisibility(await discoverCatalog(catalogRoot), []);
-		const plan = await planProjection({
-			repoRoot: root,
-			catalogRoot,
-			visibility,
-			importLinks: [
-				{
-					id: "fallow",
-					sourcePath: join(source, "fallow"),
-					targetPath: join(catalogRoot, "fallow"),
-				},
-			],
-		});
-
-		expect(plan.status.health).toBe("blocked");
-		expect(plan.status.blockers).toMatchObject([
-			{ id: "fallow", reason: "real_entry" },
-		]);
-		await expect(
-			applyProjection(plan, "2026-06-16T00:00:00.000Z"),
-		).rejects.toThrow("unmanaged_blocker");
-		expect(existsSync(join(root, "skills/fallow/notes.txt"))).toBe(true);
-	});
-
 	test("dangling foreign symlink is an unmanaged blocker, not a broken projection", async () => {
 		const root = await tempRepo("dangling-foreign");
 		await writeSkill(join(root, "skills"), "fallow");
@@ -217,6 +187,137 @@ describe("agent-skills projection", () => {
 		expect(plan.status.noise_hint).toContain("ignore suggest");
 	});
 
+	test("lockfile-managed real dir classifies external and stays untouched", async () => {
+		const root = await tempRepo("external-real-dir");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, ".agents/skills"), "frontend-design");
+		const lock = {
+			entries: [
+				{ id: "frontend-design", source: "anthropics/skills", computedHash: "abc" },
+			],
+		};
+
+		const plan = await statusPlan(root, lock);
+
+		expect(plan.status.blockers).toEqual([]);
+		expect(plan.status.external_count).toBe(1);
+		expect(plan.status.externals).toMatchObject([
+			{
+				root: ".agents/skills",
+				id: "frontend-design",
+				shape: "real_entry",
+				source: "anthropics/skills",
+				has_hash: true,
+			},
+		]);
+		await applyProjection(plan, "2026-07-02T00:00:00.000Z");
+		expect(lstatSync(join(root, ".agents/skills/frontend-design")).isDirectory()).toBe(
+			true,
+		);
+		const after = await statusPlan(root, lock);
+		expect(after.status.health).toBe("clean");
+		const removed = await unlinkManagedProjections(
+			root,
+			join(root, "skills"),
+			false,
+			[".agents/skills", ".claude/skills"],
+			lock,
+		);
+		expect(removed).not.toContain(".agents/skills/frontend-design");
+		expect(existsSync(join(root, ".agents/skills/frontend-design"))).toBe(true);
+	});
+
+	test("lockfile-managed canonical-copy symlink is external, not foreign", async () => {
+		const root = await tempRepo("external-symlink");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, ".agents/skills"), "frontend-design");
+		await mkdir(join(root, ".claude/skills"), { recursive: true });
+		await symlink(
+			join(root, ".agents/skills/frontend-design"),
+			join(root, ".claude/skills/frontend-design"),
+		);
+		const lock = { entries: [{ id: "frontend-design" }] };
+
+		const plan = await statusPlan(root, lock);
+
+		expect(plan.status.blockers).toEqual([]);
+		expect(plan.status.external_count).toBe(2);
+		expect(
+			plan.status.externals.find((entry) => entry.root === ".claude/skills"),
+		).toMatchObject({ id: "frontend-design", shape: "symlink" });
+	});
+
+	test("real dir without a lock entry stays a fail-closed blocker", async () => {
+		const root = await tempRepo("external-miss");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, ".agents/skills"), "squatter");
+		const lock = { entries: [{ id: "frontend-design" }] };
+
+		const plan = await statusPlan(root, lock);
+
+		expect(plan.status.health).toBe("blocked");
+		expect(plan.status.blockers).toMatchObject([
+			{ id: "squatter", reason: "real_entry" },
+		]);
+		await expect(
+			applyProjection(plan, "2026-07-02T00:00:00.000Z"),
+		).rejects.toThrow("unmanaged_blocker");
+		expect(existsSync(join(root, ".claude/skills/fallow"))).toBe(false);
+	});
+
+	test("catalog id colliding with a lock id fails closed as catalog_conflict", async () => {
+		const root = await tempRepo("catalog-conflict");
+		await writeSkill(join(root, "skills"), "fallow");
+		const lock = { entries: [{ id: "fallow", source: "anthropics/skills" }] };
+
+		const plan = await statusPlan(root, lock);
+
+		expect(plan.status.health).toBe("blocked");
+		expect(plan.status.blockers).toMatchObject([
+			{ id: "fallow", reason: "catalog_conflict" },
+		]);
+		expect(plan.status.blockers[0]?.why).toContain("skills-lock.json");
+		expect(plan.status.blockers[0]?.why).toContain("anthropics/skills");
+		expect(plan.status.blockers[0]?.why).toContain("rename the catalog skill id");
+		expect(plan.status.blockers[0]?.why).toContain("skills CLI");
+		await expect(
+			applyProjection(plan, "2026-07-02T00:00:00.000Z"),
+		).rejects.toThrow("unmanaged_blocker");
+		expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(false);
+		expect(existsSync(join(root, ".claude/skills/fallow"))).toBe(false);
+	});
+
+	test("lock id with no disk entry is informational, never a blocker", async () => {
+		const root = await tempRepo("missing-external");
+		await writeSkill(join(root, "skills"), "fallow");
+		await applyProjection(await statusPlan(root), "2026-07-02T00:00:00.000Z");
+		const lock = { entries: [{ id: "frontend-design" }] };
+
+		const plan = await statusPlan(root, lock);
+
+		expect(plan.status.health).toBe("clean");
+		expect(plan.status.blockers).toEqual([]);
+		expect(plan.status.missing_external_ids).toEqual(["frontend-design"]);
+	});
+
+	test("lock parse failure travels on status and entries fall back to blockers", async () => {
+		const root = await tempRepo("lock-parse-failure");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, ".agents/skills"), "frontend-design");
+		const lock = {
+			entries: [],
+			parseFailure: "skills-lock.json could not be read (invalid JSON)",
+		};
+
+		const plan = await statusPlan(root, lock);
+
+		expect(plan.status.lock_parse_failure).toContain("skills-lock.json");
+		expect(plan.status.health).toBe("blocked");
+		expect(plan.status.blockers).toMatchObject([
+			{ id: "frontend-design", reason: "real_entry" },
+		]);
+	});
+
 	test("unlink removes only managed links", async () => {
 		const root = await tempRepo("unlink");
 		const outside = await mkdtemp(join(tmpdir(), "agent-skills-foreign-"));
@@ -232,10 +333,13 @@ describe("agent-skills projection", () => {
 	});
 });
 
-async function statusPlan(root: string) {
+async function statusPlan(
+	root: string,
+	lock?: { entries: readonly SkillsLockEntry[]; parseFailure?: string },
+) {
 	const catalogRoot = join(root, "skills");
 	const visibility = applyVisibility(await discoverCatalog(catalogRoot), []);
-	return planProjection({ repoRoot: root, catalogRoot, visibility });
+	return planProjection({ repoRoot: root, catalogRoot, visibility, lock });
 }
 
 async function tempRepo(name: string): Promise<string> {

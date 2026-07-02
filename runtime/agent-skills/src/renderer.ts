@@ -61,16 +61,33 @@ export function renderStatus(plan: AgentSkillsProjectionPlan): string {
 		`visible: ${status.visible_count}`,
 		`ignored: ${status.ignored_count}`,
 		`invalid: ${status.invalid_count}`,
+		`external: ${status.external_count}`,
 		`health: ${status.health}`,
 		`last projected: ${status.last_projected_at ?? "none"}`,
 		`changes: +${status.newly_visible.length} -${status.removed_since_snapshot.length} write:${status.changes.create_or_update.length + status.changes.remove.length + status.changes.broken.length}`,
 		`roots: ${status.checked_roots.join(", ")}`,
 	];
+	if (status.missing_external_ids.length > 0) {
+		lines.push(
+			`missing external: ${status.missing_external_ids.length} (${status.missing_external_ids.join(", ")}); restore with: bunx skills experimental_install`,
+		);
+	}
 	for (const broken of status.changes.broken) {
 		lines.push(`broken: ${broken}`);
 	}
 	for (const blocker of status.blockers) {
 		lines.push(`blocker: ${blocker.root}/${blocker.id} (${blocker.reason})`);
+		if (blocker.why) lines.push(`  why: ${blocker.why}`);
+	}
+	if (status.lock_parse_failure) {
+		lines.push(`note: ${status.lock_parse_failure}`);
+	}
+	for (const external of status.externals) {
+		if (external.shape === "real_entry" && !external.has_hash) {
+			lines.push(
+				`note: external ${external.root}/${external.id} has no content hash in skills-lock.json`,
+			);
+		}
 	}
 	if (status.noise_hint) {
 		lines.push(`note: ${status.noise_hint}`);
