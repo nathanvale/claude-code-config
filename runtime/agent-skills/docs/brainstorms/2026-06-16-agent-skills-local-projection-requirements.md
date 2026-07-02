@@ -21,8 +21,8 @@ Current repo evidence:
 
 - `AGENTS.md` says skills are authored in `skills/`, while deploy targets can drift.
 - `install.sh` currently links skills into global user locations.
-- `docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md` already points toward `.agents/skills/` as the repo-level projection target.
-- `docs/ideation/2026-06-16-agent-skills-adhd-inventory-ideation.html` ranks the calm inventory ideas this requirements doc promotes.
+- `runtime/agent-skills/docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md` already points toward `.agents/skills/` as the repo-level projection target.
+- `runtime/agent-skills/docs/ideation/2026-06-16-agent-skills-adhd-inventory-ideation.html` ranks the calm inventory ideas this requirements doc promotes.
 
 ---
 
@@ -57,7 +57,7 @@ Current repo evidence:
 
 ## Ideation Capture
 
-The requirements preserve all seven ranked ideas from `docs/ideation/2026-06-16-agent-skills-adhd-inventory-ideation.html`:
+The requirements preserve all seven ranked ideas from `runtime/agent-skills/docs/ideation/2026-06-16-agent-skills-adhd-inventory-ideation.html`:
 
 | Rank | Idea | Captured by |
 |---|---|---|
@@ -315,10 +315,10 @@ Outside v1 identity:
 
 ## Sources / Research
 
-- `docs/ideation/2026-06-16-agent-skills-adhd-inventory-ideation.html`
+- `runtime/agent-skills/docs/ideation/2026-06-16-agent-skills-adhd-inventory-ideation.html`
 - `AGENTS.md`
 - `install.sh`
-- `docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md`
+- `runtime/agent-skills/docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md`
 - `skills/adhd-helper/SKILL.md`
 - `skills/create-cli/SKILL.md`
 - `skills/create-cli/references/agent-native-cli-design.md`

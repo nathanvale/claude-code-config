@@ -9,17 +9,8 @@ health, repairs private correlation witnesses, and purges retained reports.
 ## Always Read
 
 Read `CONTEXT.md` first. It defines the trust, capture, review, and correlation
-language used across docs, CLI output, and plans.
-
-Read only the extra file your intent needs:
-
-- Operate the skill workflow: `SKILL.md`.
-- Interpret report or review output: `references/report-shape.md`.
-- File driver closeout: `references/closeout-receipt.md`.
-- Change redaction: `references/redaction.md`.
-- Change source or command behavior: `ARCHITECTURE.md`.
-- Read source docs and plans: `skills/skill-feedback/docs/INDEX.md`.
-- Pick or file project work: `TASKS.md`.
+language used across docs, CLI output, and plans. Then read only the file the
+Intent Gate routes to.
 
 Front door:
 
@@ -47,10 +38,12 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
 
 - **Operate inbox** -> `SKILL.md` Intent Classification.
 - **Explain to a human** -> `README.md`, then `CONTEXT.md`.
-- **Change CLI contract** -> `cli-author`, Source Owners, Change Recipes,
-  Verification.
+- **Interpret report or review output** -> `references/report-shape.md`.
+- **File driver closeout** -> `references/closeout-receipt.md`.
+- **Change redaction** -> `references/redaction.md`.
+- **Change CLI contract** -> `cli-author`, Change Recipes, Verification.
 - **Change review, health, purge, or correlate behavior** -> `ARCHITECTURE.md`,
-  Source Owners, Change Recipes, Verification.
+  Change Recipes, Verification.
 - **Change vocabulary** -> `CONTEXT.md`; keep schemas and enum values in code.
 - **Review plan history** -> `skills/skill-feedback/docs/INDEX.md`, `PROVENANCE.md`,
   `TASKS.archive.md`.
@@ -58,77 +51,18 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
 
 ## Source Owners
 
-**CLI surface**
-
-- `package.json` - package script names.
-- `src/command-contract.ts` - command metadata, result contracts, parser rules,
-  help/discovery contracts, schema versions, enums.
-- `src/runtime-contract.ts` - runtime and read-target interfaces.
-- `src/runtime-file-safety.ts` - shared filesystem containment, mode, and
-  Node error-code helpers.
-- `src/raw-object.ts` - shared unknown JSON object field and duplicate-string
-  helpers.
-- `src/skill-feedback-runner.ts` - CLI dispatch, argv parsing, process result
-  rendering, default runtime, command orchestration.
-
-**Capture and closeout**
-
-- `src/skill-feedback-runner.ts` - `record`, `closeout`, report writes, writer
-  proof, trust store, pilot marker.
-- `src/report-normalizer.ts` - persisted report parsing, proof-context
-  application, cost-unavailable projection.
-- `src/capture-adapters.ts` - Claude OTel and Codex JSON adapter seams.
-- `src/redaction.ts` - agent-authored field redaction.
-- `references/closeout-receipt.md` - driver closeout receipt guidance.
-
-**Review and health**
-
-- `src/review-ledger-reducer.ts` - review units, ledger entries, evidence tiers,
-  entry-local allowed claims.
-- `src/ledger-anchor-adapter.ts` - repo-contained owner path anchors.
-- `src/inbox-read-model.ts` - safe inbox scans, raw report reads, duplicate and
-  proof facts, low-signal classification, health facts, purge candidates.
-- `src/decision-surface.ts` - review and health result assembly, warnings,
-  next action, readiness, retention, pilot checkpoint, and read-target projection.
-- `src/skill-feedback-runner.ts` - health, review, process envelopes, plain
-  renderers.
-- `references/report-shape.md` - result-shape reading rules.
-
-**Correlation and retention**
-
-- `src/command-contract.ts` - writer proof and correlation witness contracts.
-- `src/correlation-witness-artifacts.ts` - witness and diagnostic artifact IO,
-  safe correlation directory reads, artifact classification.
-- `src/correlation-witness-workflow.ts` - finalization, verification overlay,
-  repair classification, execute orchestration.
-- `src/inbox-read-model.ts` - purge candidate projection and safe report reads.
-- `src/skill-feedback-runner.ts` - correlate and purge CLI envelopes, renderers,
-  explicit purge deletion.
-- `src/branch-station-catalog.ts` - command branch coverage catalog.
-- `src/branch-station-evidence.ts` - station evidence projection helpers.
-
-**Tests**
-
-- `src/command-contract.test.ts` - discovery and contract drift.
-- `src/report-normalizer.test.ts` - persisted report normalization.
-- `src/correlation-witness-artifacts.test.ts` - artifact IO and
-  repair-candidate classification.
-- `src/correlation-witness-workflow.test.ts` - workflow-owned witness behavior.
-- `src/skill-feedback.test.ts` - help, parser, runtime semantics.
-- `src/decision-surface.test.ts` - review and health decision projection.
-- `src/runtime-file-safety.test.ts` - shared filesystem safety helpers.
-- `src/raw-object.test.ts` - shared raw object helpers.
-- `src/skill-feedback.integration.test.ts` - process-boundary stations.
-- `src/review-ledger-reducer.test.ts` - ledger and claim rules.
-- `src/ledger-anchor-adapter.test.ts` - owner path anchors.
-- `src/capture-adapters.test.ts` - adapter normalization.
-- `src/branch-station-catalog.test.ts` - station map drift.
+`ARCHITECTURE.md` Module Map is the only per-module owner list.
+`src/docs-drift.test.ts` fails when a `src` module and that map disagree in
+either direction. Reference owners: `references/closeout-receipt.md` (driver
+closeout guidance), `references/report-shape.md` (result-shape reading rules),
+`references/redaction.md` (redaction policy).
 
 ## Change Recipes
 
-- **New or changed command:** run `cli-author`; update `command-contract.ts`,
-  runner parsing/dispatch, help/discovery tests, runtime tests, and branch
-  stations.
+- **New or changed command:** run `cli-author`; add the failing Branch Station
+  catalog test or process-boundary scenario row before the command branch; then
+  update `command-contract.ts`, runner parsing/dispatch, help/discovery tests,
+  and runtime tests.
 - **Result contract:** update `command-contract.ts`; update runner emitters and
   `references/report-shape.md`; prove JSON/plain output where exposed.
 - **Review claim rule:** update `review-ledger-reducer.ts`; keep claim language
@@ -143,10 +77,10 @@ Use `--repo <path>` with `review`, `health`, and `correlate`.
   safety checks, preview/execute tests, and docs.
 - **Vocabulary:** update `CONTEXT.md`; use full names when `Facade` could mean
   CLI facade or `ReviewResultData Facade`.
-- **Source owner split or move:** update `ARCHITECTURE.md` Module Map, Source
-  Owners here, `README.md` file map, `references/report-shape.md` when output
-  or report semantics moved, and `SKILL.md` only when workflow ownership
-  changed.
+- **Source owner split or move:** update `ARCHITECTURE.md` Module Map (the
+  docs-drift test enforces completeness), `references/report-shape.md` when
+  output or report semantics moved, and `SKILL.md` only when workflow
+  ownership changed.
 
 ## Doc Drift Gate
 
@@ -164,13 +98,19 @@ Check these package docs in the same pass:
 - `skills/skill-feedback/TASKS.md`
 - `skills/skill-feedback/TASKS.archive.md`
 
-Use runnable probes. Treat `find` and `rg` as inspection aids; treat the
-owner-path command as a pass/fail gate.
+Pass/fail gates:
 
 ```bash
-find skills/skill-feedback/src -maxdepth 1 -type f | sort
-rg -n 'bun --filter skill-feedback-scripts skill-feedback-runner|Active Follow-Up|Active v2|reason ids only|runtime abstraction|witness read' skills/skill-feedback
+skills/test-runner/src/test-runner.sh run --cwd skills/skill-feedback -- src/docs-drift.test.ts
 bun run skills/skill-author/scripts/check-owner-paths.ts --json skills/skill-feedback/README.md skills/skill-feedback/ARCHITECTURE.md skills/skill-feedback/AGENTS.md skills/skill-feedback/SKILL.md skills/skill-feedback/CONTEXT.md skills/skill-feedback/references/report-shape.md skills/skill-feedback/docs/INDEX.md skills/skill-feedback/TASKS.md skills/skill-feedback/TASKS.archive.md
+```
+
+The docs-drift test proves `src` modules and the `ARCHITECTURE.md` Module Map
+agree in both directions; the owner-path check proves every backticked local
+path in these docs exists. Stale-phrase inspection aid:
+
+```bash
+rg -n 'Active Follow-Up|Active v2|reason ids only|runtime abstraction|witness read' skills/skill-feedback
 ```
 
 ## Drift Anti-Patterns
@@ -218,53 +158,6 @@ bun run skills/skill-author/scripts/check-owner-paths.ts --json skills/skill-fee
 - Keep public input closed to trust, proof, witness, and run-id authority.
 - Resolve `report:<id>` by `report_id`, never by filename.
 - Keep `.trust/` and `.correlation/` private evidence, not report lanes.
-
-## Manage Tasks
-
-`TASKS.md` is the active dashboard. Keep it short. Move completed detail to
-`TASKS.archive.md`.
-
-When `TASKS.md` closes a queue item, archive the completed detail in
-`TASKS.archive.md` during the same pass.
-
-Leave historical plan docs unchanged unless `skills/skill-feedback/docs/INDEX.md`
-or archive wording misleads current agents.
-
-Task shape:
-
-```markdown
-- [ ] P0/P1/P2 Title Lane: Review Ledger. Done when: observable command, test,
-      or doc result. Next: `bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain`.
-```
-
-Use these lanes:
-
-- CLI Contract
-- Capture Runtime
-- Closeout
-- Review Ledger
-- Correlation
-- Inbox Retention
-- Redaction Trust
-- Docs Language
-- Verification
-
-## Manage Architecture
-
-`ARCHITECTURE.md` is the module map and flow source of truth.
-
-Before new modules, command families, or structural changes:
-
-- Run the `context/code-style.md` pressure gate.
-- Use `improve-codebase-architecture`.
-- Use `cli-author` for CLI surface changes.
-
-After source ownership changes:
-
-- Update `ARCHITECTURE.md` Module Map.
-- Update Source Owners here.
-- Update `CONTEXT.md` only for new domain language.
-- Update `TASKS.md` when the change creates follow-up work.
 
 ## Verification
 

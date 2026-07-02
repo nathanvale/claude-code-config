@@ -37,11 +37,13 @@ Rules:
 | 2026-06-29 | correlation backfill shipped | `correlate` preview/execute, durable finalizer-authored candidate source, verified on main | Codex lifecycle watch; Trusted skill identity deferred |
 | 2026-06-29 | Claude daily-pilot readiness scoped | Claude readiness separated from Codex Trusted skill identity | Codex lifecycle watch |
 | 2026-06-29 | P0/P1 ownership refactor closed | Normalizer, inbox read, and witness workflow owners split from runner/catalog | P2 renderer and harness work later closed |
+| 2026-06-29 | ICA + GoF pressure review | Six non-GoF patterns kept for agent maintainability: Inbox Read Model, Contract Catalog split, Correlation Witness Workflow, Report Normalizer, Decision Surface Renderer, Branch Station Scenario Harness | Pattern names live in `ARCHITECTURE.md` |
 | 2026-06-30 | Decision Surface Renderer | Plain readiness labels are contract-owned; correlate action text stays result-owned | Branch Station scenario harness later closed |
 | 2026-06-30 | P2 queue closed | Station helpers and retention no-build contracts pinned by tests | No open P2 tasks |
 | 2026-06-30 | Dirty-tree review follow-ups closed | Artifact and runtime ownership split; plan directives made imperative | One P3 purge output parity question remains |
 | 2026-06-30 | Decision surface and bounded review plain closed | Review/health assembly owner split; plain review bounded around next action | One P3 purge output parity question remains |
 | 2026-06-30 | Inherited Fallow cleanup closed | Audit, dead-code, dupes, and health clean for skill-feedback | One P3 purge output parity question remains |
+| 2026-06-30 | CLI smoke matrix | Help, JSON contracts (health 4, review 7, correlate 1, purge 1), read-only live smokes, and exit-2 usage envelopes verified across commands | P3 purge plain parity question in `TASKS.md` |
 | 2026-07-02 | Human dashboard MVP | Reports, detail, usage, and queue commands give humans safe read paths | Review findings patched; current queue lives in `TASKS.md` |
 
 ## 2026-07-02 - Human Dashboard MVP

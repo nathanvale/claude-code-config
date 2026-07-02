@@ -2,6 +2,12 @@
 
 Repo-local skill projection runtime for Codex, Claude Code, humans, and CI.
 
+Package docs: `AGENTS.md` routes maintainers, `CONTEXT.md` owns vocabulary,
+`ARCHITECTURE.md` owns the module map and flows, `PROVENANCE.md` traces
+source lineage, `TASKS.md` tracks active work, and
+`runtime/agent-skills/docs/INDEX.md` indexes source brainstorms, ideation,
+and plans.
+
 `agent-skills` reads one skill catalog, writes local projection links for agent
 runtimes, and reports projection health through a small facade-backed CLI.
 
@@ -361,15 +367,7 @@ config so ownership is explicit.
 
 ## Implementation Owners
 
-- CLI front door: `src/cli.ts`
-- Command contract: `src/command-contract.ts`
-- Result model: `src/model.ts`
-- Config parsing: `src/config.ts`
-- Catalog discovery: `src/catalog.ts`
-- Projection planner/writer: `src/projection.ts`
-- Human renderers: `src/renderer.ts`
-- Branch Station catalog: `src/branch-station-catalog.ts`
-- Tests: `tests/*.test.ts`
+Per-module owners live in `ARCHITECTURE.md` Module Map.
 
 ## Verification
 

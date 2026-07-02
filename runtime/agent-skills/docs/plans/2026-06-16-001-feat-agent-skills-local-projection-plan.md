@@ -2,7 +2,7 @@
 title: "feat: Add agent-skills local projection CLI"
 type: feat
 date: 2026-06-16
-origin: docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md
+origin: runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md
 ---
 
 # feat: Add agent-skills local projection CLI
@@ -216,7 +216,7 @@ Root integration also touches `package.json`, `.gitignore`, `scripts/command-ent
 - **Goal:** Remove old tracked projection links, add ignore rules, and document the setup/startup fallback route without turning setup scripts into v1 scope.
 - **Requirements:** R2, R14.
 - **Dependencies:** U3-U5.
-- **Files:** `.gitignore`, `.agents/skills/*`, `AGENTS.md`, `docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md`, `docs/git/worktree.md`.
+- **Files:** `.gitignore`, `.agents/skills/*`, `AGENTS.md`, `runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md`, `docs/git/worktree.md`.
 - **Approach:** Add ignore entries for generated projection state and snapshot state. Remove tracked `.agents/skills/*` links from source control as part of the migration. Keep `./setup.sh` repo-specific and out of scope; document that setup scripts may call `agent-skills sync --check --json` and route repair to `agent-skills sync`. Add a short startup fallback route only if it stays concise and points to CLI diagnostics.
 - **Patterns to follow:** `.gitignore` generated-state comments, `docs/git/worktree.md`, `AGENTS.md` startup routing style.
 - **Test scenarios:**
@@ -263,8 +263,8 @@ Root integration also touches `package.json`, `.gitignore`, `scripts/command-ent
 
 ## Sources And Research
 
-- Origin requirements: `docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md`.
-- Prior pivot: `docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md`.
+- Origin requirements: `runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md`.
+- Prior pivot: `runtime/agent-skills/docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md`.
 - CLI design: `skills/create-cli/SKILL.md`, `skills/create-cli/references/agent-native-cli-design.md`, `skills/create-cli/references/cli-command-facade.md`.
 - Facade runtime: `runtime/cli-command-facade/CONTEXT.md`, `runtime/cli-command-facade/AGENTS.md`.
 - Existing runtime pattern: `runtime/agent-worktree/`.

@@ -13,7 +13,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** Make the community `skills` CLI (`npx skills`, skills.sh) the owner of external skill acquisition and `runtime/agent-skills` the owner of repo-local live projection, so both tools coexist in the shared `.agents/skills/` root without agent-skills flagging lockfile-managed installs as blockers.
-- **Authority hierarchy:** This plan > ADR 0016 lock-boundary rules > agent-skills v1 requirements (`docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md`). Where this plan is silent, the v1 requirements hold.
+- **Authority hierarchy:** This plan > ADR 0016 lock-boundary rules > agent-skills v1 requirements (`runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md`). Where this plan is silent, the v1 requirements hold.
 - **Stop conditions:** Stop if `skills-lock.json` recognition would require *writing* the lock (ADR 0016 forbids a second writer), or if coexistence cannot preserve fail-closed sync for non-lockfile entries.
 - **Execution profile:** Standard plan, 5 units, single repo, no external service dependencies. Tests run through `skills/test-runner/src/test-runner.sh`; lint/types through the Biome/tsc MCP runners.
 - **Tail ownership:** Implementer runs the Verification Contract and updates the decision records in U5; no post-merge operational steps.
@@ -223,4 +223,4 @@ The classifier is the only new decision point; everything downstream (fail-close
 - First-hand: `skills@1.5.14` source read (`installSkillForAgent`, `uniqueDirs.size <= 1` copy downgrade, canonical-copy symlink topology) and live probes (local/GitHub × single/multi-agent installs; lockfile shapes).
 - Context7 `/vercel-labs/skills` docs: install API, source formats, symlink-vs-copy modes.
 - Prior art: `docs/adr/0016-ownership-ledger-grain-and-lock-boundary.md` (lock read-only, dual-shape normalization), `docs/adr/0018-result-vocabulary-two-layers.md`, `docs/plans/2026-06-18-001-feat-skillporter-mvp-plan.md`, `docs/research/2026-06-17-skillport-mvp-architecture.md` (foreign same-name overwrite proof).
-- Constraints: `docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md` (R8-R10, R59-R60, scope identity), `docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md` (no marketplace machinery; hash-pin mitigation), `docs/adr/0011-lean-startup-instructions.md` (AGENTS.md canonical, 120-line budget).
+- Constraints: `runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md` (R8-R10, R59-R60, scope identity), `runtime/agent-skills/docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md` (no marketplace machinery; hash-pin mitigation), `docs/adr/0011-lean-startup-instructions.md` (AGENTS.md canonical, 120-line budget).
