@@ -35,6 +35,13 @@ Sync creates, repairs, and removes only these; everything else is external or
 a blocker.
 _Avoid_: copy, install, foreign symlink, unmanaged entry
 
+**Broken managed link**:
+A managed symlink whose target is stale or dangling but whose raw path still
+points into the configured catalog. Broken links are repairable by sync,
+reported as the `broken` change category and the `broken` health value, and
+are never blockers.
+_Avoid_: foreign symlink, blocker, external entry
+
 **Projector**:
 agent-skills' role in the division of labor: live-symlink the repo's own
 catalog into projection roots so worktree edits are instantly visible. The
@@ -44,7 +51,10 @@ _Avoid_: package manager, installer, updater, marketplace client
 **External entry**:
 A projection-root entry whose id appears in the repo's `skills-lock.json`.
 Externals are counted by `status`, explained by `list --why`, and never
-created, modified, or removed by `sync` or `unlink`.
+created, modified, or removed by `sync` or `unlink`. Each external carries an
+informational disk shape, `real_entry` or `symlink`; the shape reuses the
+`real_entry` spelling from the blocker vocabulary but never makes an external
+a blocker.
 _Avoid_: unmanaged blocker, catalog entry, agent-skills-owned link
 
 **Skills lock**:
@@ -55,10 +65,11 @@ entering the external set.
 _Avoid_: agent-skills state, snapshot, writable config
 
 **Lock parse failure**:
-The named diagnostic when `skills-lock.json` exists but yields zero parseable
-entries. Classification degrades to no external entries so triage points at
-the lockfile, not at deleting entries.
-_Avoid_: crash, silent empty, blocker
+The named diagnostic when `skills-lock.json` is present but unreadable, or its
+raw records yield zero valid ids. A validly empty lock is not a parse failure.
+Classification degrades to no external entries so triage points at the
+lockfile, not at deleting entries.
+_Avoid_: crash, silent empty, blocker, validly empty lock
 
 **Missing external**:
 A lock id with no disk entry in any projection root. Informational count with
@@ -127,7 +138,14 @@ _Avoid_: silent ignore, legacy support, soft warning
 The single package-owned recommendation in every status result: `none`,
 `sync`, `inspect_blocker`, or `fix_config`, plus a one-line summary. Agents
 follow it instead of inferring repair from raw fields.
-_Avoid_: instruction list, freeform advice, exit code
+_Avoid_: instruction list, freeform advice, exit code, failure action
+
+**Failure action**:
+The `action` field on CLI failure envelopes: `help`, `fix_config`,
+`inspect_blocker`, or `inspect_error`, rendered with the same `next:` label
+as status next actions. It is facade-error vocabulary, not the status Next
+action; only `fix_config` and `inspect_blocker` overlap the two enums.
+_Avoid_: next action, status field, exit code
 
 **Noise hint**:
 The soft warning added when the visible set exceeds the noise threshold (40).
