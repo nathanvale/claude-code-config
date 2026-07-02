@@ -1,0 +1,405 @@
+# agent-skills
+
+Repo-local skill projection runtime for Codex, Claude Code, humans, and CI.
+
+`agent-skills` reads one skill catalog, writes local projection links for agent
+runtimes, and reports projection health through a small facade-backed CLI.
+
+It solves the worktree problem:
+
+- Skills live in the repo or target repo, not in a global hidden folder.
+- Worktrees can repair missing local skill links with one command.
+- Agents get JSON with current state and next action.
+- Humans get terse status and list output.
+- Existing repos can keep tracked skill catalogs without deleting them.
+
+## Mental Model
+
+```mermaid
+flowchart LR
+  A["Skill catalog"] --> B["agent-skills"]
+  B --> C[".agents/skills"]
+  B --> D[".claude/skills"]
+  B --> E[".agents/agent-skills-snapshot.json"]
+  E --> F["new/removed skill summaries"]
+```
+
+The catalog is source. Projection roots are generated local runtime views.
+
+Configured imports are symlinked into the target catalog during sync. This lets
+a target repo include one CCC-owned skill without importing the whole CCC
+catalog.
+
+Default catalog:
+
+```text
+./skills
+```
+
+Default projection roots:
+
+```text
+.agents/skills
+.claude/skills
+```
+
+Snapshot:
+
+```text
+.agents/agent-skills-snapshot.json
+```
+
+## Commands
+
+Run from the target repo or worktree.
+
+```bash
+agent-skills status
+agent-skills status --json
+```
+
+Show catalog counts, projection health, blockers, and one next action.
+
+```bash
+agent-skills sync --check --json
+agent-skills sync
+```
+
+Preview or repair local projection links.
+
+```bash
+agent-skills list
+agent-skills list --new
+agent-skills list --why <skill>
+```
+
+List catalog skills and explain visibility.
+
+```bash
+agent-skills ignore list
+agent-skills ignore add <pattern>
+agent-skills ignore remove <pattern>
+agent-skills ignore suggest
+```
+
+Inspect or edit repo ignore rules.
+
+```bash
+agent-skills unlink --check
+agent-skills unlink
+```
+
+Remove managed projection links. Unmanaged real directories and foreign
+symlinks are left alone.
+
+```bash
+agent-skills commands --json
+```
+
+Emit machine-readable command discovery metadata.
+
+## Config
+
+Config file:
+
+```text
+.agent-skills.yml
+```
+
+Supported keys:
+
+```yaml
+catalog: ./skills
+ignore:
+  - fixture-*
+projection_roots:
+  - .agents/skills
+  - .claude/skills
+imports:
+  - storybook-matrix
+```
+
+Rules:
+
+- `catalog` is a string path.
+- `ignore` is a list of direct catalog-entry id globs.
+- `projection_roots` is a list of repo-relative paths.
+- `imports` is a list of CCC-owned skill ids symlinked into `catalog`.
+- Absolute projection roots are rejected.
+- `..` projection roots are rejected.
+- Unsupported config keys are rejected.
+
+When `.agent-skills.yml` is absent and `./skills` exists, the CLI uses the
+catalog-repo auto-default:
+
+```yaml
+catalog: ./skills
+projection_roots:
+  - .agents/skills
+  - .claude/skills
+```
+
+When both config and `./skills` are absent, the CLI returns `missing_config`.
+
+## Common Setups
+
+### Normal Repo
+
+Use this when source skills live in `./skills`.
+
+```yaml
+catalog: ./skills
+projection_roots:
+  - .agents/skills
+  - .claude/skills
+```
+
+Run:
+
+```bash
+agent-skills sync
+```
+
+### Experience SDK Shape
+
+Use this when `.agents/skills` is tracked source and Claude needs local links.
+
+```yaml
+catalog: ./.agents/skills
+projection_roots:
+  - ./.claude/skills
+imports:
+  - storybook-matrix
+```
+
+This keeps Codex-readable skills as source and generates Claude Code links only.
+For the CCC-owned Storybook skill, `agent-skills sync` links
+`experience-sdk/.agents/skills/storybook-matrix` to the CCC skill source, then
+links `.claude/skills/storybook-matrix` to the same source.
+
+Expected status:
+
+```text
+catalog: <repo>/.agents/skills
+roots: <repo>/.claude/skills
+health: clean
+```
+
+### Worktrees
+
+A new worktree may have source files but missing generated links. Run:
+
+```bash
+agent-skills sync --check --json
+agent-skills sync
+```
+
+Recommended repo startup instruction:
+
+```text
+Repo-local skill visibility: humans inspect with agent-skills status;
+agents/CI gate with agent-skills sync --check --json; repair with
+agent-skills sync.
+```
+
+Repo `setup.sh` can call `agent-skills sync`. Also name the command in startup
+instructions so agents can self-repair worktrees where setup has not run.
+
+## Global Link For Local Dogfood
+
+Until the package is published, link it from this repo:
+
+```bash
+cd runtime/agent-skills
+npm link
+```
+
+Verify:
+
+```bash
+which agent-skills
+agent-skills --version
+```
+
+The package is private but explicitly declares:
+
+```json
+{
+  "sideQuest": {
+    "sourceLinkedBin": true
+  }
+}
+```
+
+That is a temporary local-consumption contract. The workspace facade invariant
+allows this package to expose a source-linked bin while continuing to reject
+accidental private package bins elsewhere.
+
+## JSON Contract
+
+Use `--json` for agents and CI.
+
+Stable fields include:
+
+- `contract_id`
+- `schema_version`
+- `repo_root`
+- `catalog_root`
+- `checked_roots`
+- `visible_count`
+- `ignored_count`
+- `invalid_count`
+- `health`
+- `station`
+- `changes`
+- `blockers`
+- `newly_visible`
+- `removed_since_snapshot`
+- `next_action`
+- `next_action_summary`
+
+Health values:
+
+- `clean`
+- `needs_sync`
+- `broken`
+- `blocked`
+
+Station values:
+
+- `clean`
+- `needs_sync`
+- `synced`
+- `unmanaged_blocker`
+- `invalid_config`
+- `invalid_usage`
+
+Exact model owner:
+
+```text
+runtime/agent-skills/src/model.ts
+```
+
+Exact command contract owner:
+
+```text
+runtime/agent-skills/src/command-contract.ts
+```
+
+Do not duplicate exact schema or facade envelope details in other docs.
+
+## Blockers
+
+Sync refuses to write when a configured projection root contains unmanaged
+entries.
+
+Blocker reasons:
+
+- `real_entry`: a real file or directory exists where a managed symlink would go.
+- `foreign_symlink`: a symlink points outside the configured catalog.
+
+Repair path:
+
+```bash
+agent-skills status --json
+```
+
+Inspect `blockers`, then either:
+
+- move real source to the configured catalog,
+- change `projection_roots` so source roots are not treated as generated roots,
+- remove stale unmanaged links after confirming they are generated state.
+
+The CLI does not delete unmanaged entries.
+
+## Ignore Rules
+
+Ignore rules hide catalog entries by direct id.
+
+Example:
+
+```yaml
+ignore:
+  - fixture-*
+```
+
+Patterns are anchored to the whole id. They do not match paths, nested files, or
+frontmatter names.
+
+Use:
+
+```bash
+agent-skills ignore add fixture-*
+agent-skills sync --check --json
+agent-skills sync
+```
+
+## Git Hygiene
+
+Generated projection state usually belongs outside git:
+
+```gitignore
+.agents/agent-skills-snapshot.json
+.claude/skills/
+```
+
+Do not ignore `.agents/skills/` if that directory is tracked source in the repo.
+
+Do not remove or overwrite unmanaged entries just to make sync pass. Change the
+config so ownership is explicit.
+
+## Implementation Owners
+
+- CLI front door: `src/cli.ts`
+- Command contract: `src/command-contract.ts`
+- Result model: `src/model.ts`
+- Config parsing: `src/config.ts`
+- Catalog discovery: `src/catalog.ts`
+- Projection planner/writer: `src/projection.ts`
+- Human renderers: `src/renderer.ts`
+- Branch Station catalog: `src/branch-station-catalog.ts`
+- Tests: `tests/*.test.ts`
+
+## Verification
+
+Package checks:
+
+```bash
+bun --filter agent-skills test
+bun --filter agent-skills typecheck
+```
+
+Facade drift checks:
+
+```bash
+bun test scripts/command-entrypoint.integration.test.ts
+bun run check:workspace-facade
+```
+
+Dogfood smoke:
+
+```bash
+agent-skills --version
+agent-skills status --json
+agent-skills sync --check --json
+```
+
+Expected healthy sync-check exit:
+
+- exit `0` when clean.
+- exit `1` when changes are needed or blockers exist.
+- exit `2` for usage or input errors.
+
+## Current Dogfood Notes
+
+Experience SDK setup proved why `projection_roots` exists:
+
+- `.agents/skills` can be tracked source.
+- `.claude/skills` can be generated local projection.
+- CCC-owned imports need managed symlinks owned by `agent-skills`, not manual
+  backwards links.
+- Worktree setup does not require deleting tracked skill catalogs.
+- Agents need `sync --check --json`; humans need `status`.
+
+The package is globally linked locally for now. Publish readiness is separate
+work.

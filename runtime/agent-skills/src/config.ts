@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { AGENT_SKILLS_PROJECTION_ROOTS } from "./model.ts";
 
 /**
  * Supported v1 repo config.
@@ -14,6 +15,10 @@ export interface AgentSkillsConfig {
 	catalog: string;
 	/** Ignore globs matched against direct Skill Catalog Entry ids. */
 	ignore: readonly string[];
+	/** Repo-relative projection roots generated from the catalog. */
+	projectionRoots: readonly string[];
+	/** CCC-owned skill ids symlinked into the repo catalog before projection. */
+	imports: readonly string[];
 	/** Whether config came from the catalog-repo auto-default. */
 	autoDefault: boolean;
 }
@@ -40,10 +45,13 @@ export type AgentSkillsConfigResult =
 type RawAgentSkillsConfig = {
 	catalog?: unknown;
 	ignore?: unknown;
+	projection_roots?: unknown;
+	imports?: unknown;
 };
 
 const CONFIG_FILE = ".agent-skills.yml";
-const SUPPORTED_KEYS = new Set(["catalog", "ignore"]);
+const SUPPORTED_KEYS = new Set(["catalog", "ignore", "projection_roots", "imports"]);
+const DEFAULT_PROJECTION_ROOTS = [...AGENT_SKILLS_PROJECTION_ROOTS];
 
 /**
  * Resolve a repo root from a cwd by walking toward the filesystem root.
@@ -109,6 +117,8 @@ export async function loadAgentSkillsConfig(
 				catalogRoot: defaultCatalog,
 				catalog: "./skills",
 				ignore: [],
+				projectionRoots: DEFAULT_PROJECTION_ROOTS,
+				imports: [],
 				autoDefault: true,
 			},
 		};
@@ -130,6 +140,10 @@ export async function loadAgentSkillsConfig(
 			catalogRoot,
 			catalog,
 			ignore: parsed.config.ignore ?? [],
+			projectionRoots:
+				parsed.config.projection_roots?.map(normalizeProjectionRoot) ??
+				DEFAULT_PROJECTION_ROOTS,
+			imports: parsed.config.imports ?? [],
 			autoDefault: false,
 		},
 	};
@@ -188,34 +202,50 @@ async function updateIgnorePatterns(
 		const config = {
 			catalog: "./skills",
 			ignore: update([]),
+			projection_roots: DEFAULT_PROJECTION_ROOTS,
+			imports: [],
 		};
 		await writeConfig(repoRoot, config);
 		return loadAgentSkillsConfig(cwd);
 	}
-	if (loaded.config.autoDefault) {
-		const config = {
-			catalog: loaded.config.catalog,
-			ignore: update([...loaded.config.ignore]),
-		};
-		await writeConfig(loaded.config.repoRoot, config);
-		return loadAgentSkillsConfig(cwd);
-	}
-
-	const config = {
-		catalog: loaded.config.catalog,
-		ignore: update([...loaded.config.ignore]),
-	};
-	await writeConfig(loaded.config.repoRoot, config);
+	await writeConfig(loaded.config.repoRoot, updatedConfig(loaded.config, update));
 	return loadAgentSkillsConfig(cwd);
+}
+
+function updatedConfig(
+	config: AgentSkillsConfig,
+	update: (patterns: string[]) => string[],
+): {
+	catalog: string;
+	ignore: readonly string[];
+	projection_roots: readonly string[];
+	imports: readonly string[];
+} {
+	return {
+		catalog: config.catalog,
+		ignore: update([...config.ignore]),
+		projection_roots: config.projectionRoots,
+		imports: config.imports,
+	};
 }
 
 function parseConfigText(
 	text: string,
 	path: string,
-): { ok: true; config: { catalog?: string; ignore?: string[] } } | {
-	ok: false;
-	error: AgentSkillsConfigError;
-} {
+):
+	| {
+			ok: true;
+			config: {
+				catalog?: string;
+				ignore?: string[];
+				projection_roots?: string[];
+				imports?: string[];
+			};
+	  }
+	| {
+			ok: false;
+			error: AgentSkillsConfigError;
+	  } {
 	let parsed: unknown;
 	try {
 		parsed = Bun.YAML.parse(text);
@@ -247,14 +277,63 @@ function parseConfigText(
 	) {
 		return invalidConfig(path, "ignore must be a list of strings.");
 	}
+	if (raw.projection_roots !== undefined) {
+		if (
+			!Array.isArray(raw.projection_roots) ||
+			!raw.projection_roots.every((entry) => typeof entry === "string")
+		) {
+			return invalidConfig(path, "projection_roots must be a list of strings.");
+		}
+		const invalidRoot = raw.projection_roots.find(
+			(entry) => !isValidProjectionRoot(entry),
+		);
+		if (invalidRoot !== undefined) {
+			return invalidConfig(
+				path,
+				`projection_roots entry must be a repo-relative path: ${invalidRoot}`,
+			);
+		}
+	}
+	if (
+		raw.imports !== undefined &&
+		(!Array.isArray(raw.imports) ||
+			!raw.imports.every((entry) => isValidImportId(entry)))
+	) {
+		return invalidConfig(path, "imports must be a list of skill ids.");
+	}
 
 	return {
 		ok: true,
 		config: {
 			catalog: raw.catalog,
 			ignore: raw.ignore as string[] | undefined,
+			projection_roots: (raw.projection_roots as string[] | undefined)?.map(
+				normalizeProjectionRoot,
+			),
+			imports: raw.imports as string[] | undefined,
 		},
 	};
+}
+
+function isValidProjectionRoot(entry: string): boolean {
+	const normalized = normalizeProjectionRoot(entry);
+	return (
+		entry.trim().length > 0 &&
+		!isAbsolute(entry) &&
+		normalized !== "." &&
+		!normalized.startsWith("..")
+	);
+}
+
+function normalizeProjectionRoot(entry: string): string {
+	return normalize(entry);
+}
+
+function isValidImportId(entry: unknown): entry is string {
+	return (
+		typeof entry === "string" &&
+		/^[a-z0-9][a-z0-9-]*$/.test(entry)
+	);
 }
 
 function invalidConfig(
@@ -273,7 +352,12 @@ function invalidConfig(
 
 async function writeConfig(
 	repoRoot: string,
-	config: { catalog: string; ignore: readonly string[] },
+	config: {
+		catalog: string;
+		ignore: readonly string[];
+		projection_roots: readonly string[];
+		imports: readonly string[];
+	},
 ): Promise<void> {
 	await mkdir(repoRoot, { recursive: true });
 	await writeFile(join(repoRoot, CONFIG_FILE), Bun.YAML.stringify(config), "utf8");

@@ -51,6 +51,36 @@ describe("agent-skills projection", () => {
 		);
 	});
 
+	test("configured projection roots leave catalog roots untouched", async () => {
+		const root = await tempRepo("configured-roots");
+		await writeSkill(join(root, ".agents/skills"), "fallow");
+		const visibility = applyVisibility(
+			await discoverCatalog(join(root, ".agents/skills")),
+			[],
+		);
+		const plan = await planProjection({
+			repoRoot: root,
+			catalogRoot: join(root, ".agents/skills"),
+			visibility,
+			projectionRoots: [".claude/skills"],
+		});
+
+		expect(plan.status.health).toBe("needs_sync");
+		expect(plan.status.changes.create_or_update).toEqual([
+			".claude/skills/fallow",
+		]);
+		expect(plan.status.blockers).toEqual([]);
+
+		await applyProjection(plan, "2026-06-16T00:00:00.000Z");
+
+		expect(lstatSync(join(root, ".agents/skills/fallow")).isDirectory()).toBe(
+			true,
+		);
+		expect(lstatSync(join(root, ".claude/skills/fallow")).isSymbolicLink()).toBe(
+			true,
+		);
+	});
+
 	test("current projections are clean", async () => {
 		const root = await tempRepo("clean");
 		await writeSkill(join(root, "skills"), "fallow");

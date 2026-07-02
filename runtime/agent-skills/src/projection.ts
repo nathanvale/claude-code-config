@@ -31,6 +31,22 @@ export interface AgentSkillsProjectionPlan {
 	status: AgentSkillsStatus;
 	/** Visible skill ids and target paths. */
 	visibleTargets: Readonly<Record<string, string>>;
+	/** Repo-relative projection roots this plan may read or write. */
+	projectionRoots: readonly string[];
+	/** Imported skills symlinked into the local catalog before projection. */
+	importLinks: readonly ImportLink[];
+}
+
+/**
+ * Imported skill catalog symlink operation.
+ */
+export interface ImportLink {
+	/** Catalog entry id. */
+	id: string;
+	/** Absolute source skill directory. */
+	sourcePath: string;
+	/** Absolute local catalog symlink path. */
+	targetPath: string;
 }
 
 interface ProjectionEntry {
@@ -97,10 +113,18 @@ export async function planProjection(input: {
 	repoRoot: string;
 	catalogRoot: string;
 	visibility: readonly SkillVisibility[];
+	projectionRoots?: readonly string[];
+	importLinks?: readonly ImportLink[];
 }): Promise<AgentSkillsProjectionPlan> {
 	const catalogRoot = existsSync(input.catalogRoot)
 		? await realpath(input.catalogRoot)
 		: resolve(input.catalogRoot);
+	const projectionRoots = input.projectionRoots ?? AGENT_SKILLS_PROJECTION_ROOTS;
+	const importLinks = await resolveImportLinks(input.importLinks ?? []);
+	const managedTargets = [
+		catalogRoot,
+		...importLinks.map((link) => link.resolvedSourcePath),
+	];
 	const visible = input.visibility.filter((entry) => entry.state === "visible");
 	const ignored = input.visibility.filter((entry) => entry.state === "ignored");
 	const invalid = input.visibility.filter((entry) => entry.state === "invalid");
@@ -115,8 +139,8 @@ export async function planProjection(input: {
 	const snapshot = await readSnapshot(input.repoRoot);
 	const entries = (
 		await Promise.all(
-			AGENT_SKILLS_PROJECTION_ROOTS.map((root) =>
-				readProjectionRoot(input.repoRoot, root, catalogRoot),
+			projectionRoots.map((root) =>
+				readProjectionRoot(input.repoRoot, root, managedTargets),
 			),
 		)
 	).flat();
@@ -128,7 +152,13 @@ export async function planProjection(input: {
 			path: entry.path,
 			reason: entry.blockerReason ?? "real_entry",
 		}));
-	const changes = planChanges(entries, visibleTargets);
+	const changes = await planChanges(
+		entries,
+		visibleTargets,
+		projectionRoots,
+		input.repoRoot,
+		importLinks,
+	);
 	const lastProjected = snapshot?.projected_ids ?? [];
 	const visibleIds = Object.keys(visibleTargets).sort();
 	const newlyVisible = snapshot
@@ -153,15 +183,15 @@ export async function planProjection(input: {
 				: "sync";
 
 	return {
+		projectionRoots,
+		importLinks,
 		visibleTargets,
 		status: {
 			contract_id: AGENT_SKILLS_CONTRACT_ID,
 			schema_version: AGENT_SKILLS_SCHEMA_VERSION,
 			repo_root: input.repoRoot,
 			catalog_root: catalogRoot,
-			checked_roots: AGENT_SKILLS_PROJECTION_ROOTS.map((root) =>
-				join(input.repoRoot, root),
-			),
+			checked_roots: projectionRoots.map((root) => join(input.repoRoot, root)),
 			visible_count: visible.length,
 			ignored_count: ignored.length,
 			invalid_count: invalid.length,
@@ -198,8 +228,15 @@ export async function applyProjection(
 		throw new Error("unmanaged_blocker");
 	}
 
-	for (const root of AGENT_SKILLS_PROJECTION_ROOTS) {
+	for (const root of plan.projectionRoots) {
 		await mkdir(join(plan.status.repo_root, root), { recursive: true });
+	}
+	for (const importLink of plan.importLinks) {
+		await mkdir(dirname(importLink.targetPath), { recursive: true });
+		if (existsSync(importLink.targetPath)) {
+			await rm(importLink.targetPath, { recursive: true, force: true });
+		}
+		await symlink(importLink.sourcePath, importLink.targetPath);
 	}
 
 	for (const change of plan.status.changes.remove) {
@@ -251,14 +288,15 @@ export async function unlinkManagedProjections(
 	repoRoot: string,
 	catalogRoot: string,
 	check: boolean,
+	projectionRoots: readonly string[] = AGENT_SKILLS_PROJECTION_ROOTS,
 ): Promise<readonly string[]> {
 	const resolvedCatalogRoot = existsSync(catalogRoot)
 		? await realpath(catalogRoot)
 		: resolve(catalogRoot);
 	const entries = (
 		await Promise.all(
-			AGENT_SKILLS_PROJECTION_ROOTS.map((root) =>
-				readProjectionRoot(repoRoot, root, resolvedCatalogRoot),
+			projectionRoots.map((root) =>
+				readProjectionRoot(repoRoot, root, [resolvedCatalogRoot]),
 			),
 		)
 	).flat();
@@ -273,10 +311,13 @@ export async function unlinkManagedProjections(
 	return managed.map((entry) => relative(repoRoot, entry.path)).sort();
 }
 
-function planChanges(
+async function planChanges(
 	entries: readonly ProjectionEntry[],
 	visibleTargets: Readonly<Record<string, string>>,
-): ProjectionChanges {
+	projectionRoots: readonly string[],
+	repoRoot: string,
+	importLinks: readonly ResolvedImportLink[],
+): Promise<ProjectionChanges> {
 	const createOrUpdate = new Set<string>();
 	const removeChanges = new Set<string>();
 	const broken = new Set<string>();
@@ -287,7 +328,7 @@ function planChanges(
 			.map((entry) => `${entry.root}/${entry.id}`),
 	);
 
-	for (const root of AGENT_SKILLS_PROJECTION_ROOTS) {
+	for (const root of projectionRoots) {
 		for (const [id, target] of Object.entries(visibleTargets)) {
 			const key = `${root}/${id}`;
 			const entry = entries.find(
@@ -300,6 +341,12 @@ function planChanges(
 			} else if (entry.state === "managed" && entry.target !== target) {
 				createOrUpdate.add(key);
 			}
+		}
+	}
+
+	for (const importLink of importLinks) {
+		if (await importLinkNeedsUpdate(importLink)) {
+			createOrUpdate.add(relative(repoRoot, importLink.targetPath));
 		}
 	}
 
@@ -322,7 +369,7 @@ function planChanges(
 async function readProjectionRoot(
 	repoRoot: string,
 	root: string,
-	catalogRoot: string,
+	managedTargets: readonly string[],
 ): Promise<ProjectionEntry[]> {
 	const absoluteRoot = join(repoRoot, root);
 	if (!existsSync(absoluteRoot)) return [];
@@ -338,7 +385,7 @@ async function readProjectionRoot(
 		}
 		try {
 			const target = await realpath(path);
-			if (isInside(catalogRoot, target)) {
+			if (isManagedTarget(managedTargets, target)) {
 				entries.push({ id, root, path, state: "managed", target });
 			} else {
 				entries.push({
@@ -355,6 +402,40 @@ async function readProjectionRoot(
 	}
 
 	return entries;
+}
+
+interface ResolvedImportLink extends ImportLink {
+	resolvedSourcePath: string;
+}
+
+async function resolveImportLinks(
+	importLinks: readonly ImportLink[],
+): Promise<readonly ResolvedImportLink[]> {
+	return Promise.all(
+		importLinks.map(async (link) => ({
+			...link,
+			resolvedSourcePath: existsSync(link.sourcePath)
+				? await realpath(link.sourcePath)
+				: resolve(link.sourcePath),
+		})),
+	);
+}
+
+async function importLinkNeedsUpdate(link: ResolvedImportLink): Promise<boolean> {
+	if (!existsSync(link.targetPath)) return true;
+	try {
+		const stats = await lstat(link.targetPath);
+		if (!stats.isSymbolicLink()) return true;
+		return (await realpath(link.targetPath)) !== link.resolvedSourcePath;
+	} catch {
+		return true;
+	}
+}
+
+function isManagedTarget(managedTargets: readonly string[], target: string): boolean {
+	return managedTargets.some(
+		(root) => target === resolve(root) || isInside(root, target),
+	);
 }
 
 function isInside(root: string, child: string): boolean {

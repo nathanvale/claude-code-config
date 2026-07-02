@@ -9,7 +9,11 @@ import {
 	renderCommandUsage,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
-import { applyVisibility, discoverCatalog } from "./catalog.ts";
+import {
+	applyVisibility,
+	discoverCatalog,
+	discoverImportedCatalog,
+} from "./catalog.ts";
 import {
 	addIgnorePattern,
 	loadAgentSkillsConfig,
@@ -31,6 +35,7 @@ import {
 	applyProjection,
 	planProjection,
 	unlinkManagedProjections,
+	type ImportLink,
 	type AgentSkillsProjectionPlan,
 } from "./projection.ts";
 import {
@@ -177,7 +182,7 @@ export async function main(
 						severity: result.exitCode === 2 ? "warning" : "error",
 						recoverability:
 							result.action === "help" ? "change_input" : "repair_state",
-						retryable: result.action !== "help",
+						retryable: false,
 						hint: {
 							summary: result.message,
 							action:
@@ -333,6 +338,7 @@ export async function runCommand(
 					state.plan.status.repo_root,
 					state.plan.status.catalog_root,
 					invocation.check,
+					state.plan.projectionRoots,
 				);
 				const result: AgentSkillsUnlinkResult = {
 					check: invocation.check,
@@ -358,6 +364,7 @@ async function loadProjectionState(cwd: string): Promise<
 			ok: true;
 			plan: AgentSkillsProjectionPlan;
 			visibility: readonly SkillVisibility[];
+			importLinks: readonly ImportLink[];
 	  }
 	| { ok: false; error: CommandFailure }
 > {
@@ -373,14 +380,32 @@ async function loadProjectionState(cwd: string): Promise<
 			),
 		};
 	}
-	const entries = await discoverCatalog(loaded.config.catalogRoot);
+	const localEntries = await discoverCatalog(loaded.config.catalogRoot);
+	const importedEntries = await discoverImportedCatalog(
+		loaded.config.catalogRoot,
+		loaded.config.imports,
+	);
+	const importedIds = new Set(importedEntries.map((entry) => entry.id));
+	const entries = [
+		...localEntries.filter((entry) => !importedIds.has(entry.id)),
+		...importedEntries,
+	];
 	const visibility = applyVisibility(entries, loaded.config.ignore);
+	const importLinks = importedEntries
+		.filter((entry) => entry.importLinkPath && entry.valid)
+		.map((entry) => ({
+			id: entry.id,
+			sourcePath: entry.path,
+			targetPath: entry.importLinkPath as string,
+		}));
 	const plan = await planProjection({
 		repoRoot: loaded.config.repoRoot,
 		catalogRoot: loaded.config.catalogRoot,
 		visibility,
+		projectionRoots: loaded.config.projectionRoots,
+		importLinks,
 	});
-	return { ok: true, plan, visibility };
+	return { ok: true, plan, visibility, importLinks };
 }
 
 async function runIgnore(

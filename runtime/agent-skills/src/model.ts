@@ -92,6 +92,8 @@ export interface SkillCatalogEntry {
 	id: string;
 	/** Absolute path to the catalog entry directory. */
 	path: string;
+	/** Absolute local catalog symlink path when this entry is imported. */
+	importLinkPath?: string;
 	/** Frontmatter name when present. */
 	name?: string;
 	/** Frontmatter description when present. */

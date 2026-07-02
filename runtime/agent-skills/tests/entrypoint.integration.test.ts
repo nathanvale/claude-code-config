@@ -1,4 +1,4 @@
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +82,52 @@ describe("agent-skills entrypoint", () => {
 		);
 	});
 
+	test("sync supports tracked .agents catalog with claude-only projections", async () => {
+		const root = await tempRepo("legacy-catalog");
+		await writeSkill(join(root, ".agents/skills"), "fallow");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\n",
+		);
+
+		const result = await runJsonCli(["sync", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(result.envelope.data?.checked_roots).toEqual([
+			join(root, ".claude/skills"),
+		]);
+		expect(lstatSync(join(root, ".agents/skills/fallow")).isDirectory()).toBe(
+			true,
+		);
+		expect(lstatSync(join(root, ".claude/skills/fallow")).isSymbolicLink()).toBe(
+			true,
+		);
+	});
+
+	test("sync links configured imports before claude projection", async () => {
+		const root = await tempRepo("imports");
+		await mkdir(join(root, ".agents/skills"), { recursive: true });
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\nimports:\n  - storybook-matrix\n",
+		);
+
+		const result = await runJsonCli(["sync", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(lstatSync(join(root, ".agents/skills/storybook-matrix")).isSymbolicLink()).toBe(
+			true,
+		);
+		expect(lstatSync(join(root, ".claude/skills/storybook-matrix")).isSymbolicLink()).toBe(
+			true,
+		);
+		expect(realpathSync(join(root, ".claude/skills/storybook-matrix"))).toBe(
+			realpathSync(join(root, ".agents/skills/storybook-matrix")),
+		);
+	});
+
 	test("list --new shows skills added after the last snapshot", async () => {
 		const root = await tempRepo("list-new");
 		await writeSkill(join(root, "skills"), "fallow");
@@ -129,6 +175,20 @@ describe("agent-skills entrypoint", () => {
 		expect(result.exitCode).toBe(2);
 		expect(result.envelope.status).toBe("error");
 		expect(result.envelope.error?.message).toContain("Use --help");
+	});
+
+	test("missing config json error satisfies facade runtime contract", async () => {
+		const root = await mkdtemp(join(tmpdir(), "agent-skills-entrypoint-missing-config-"));
+
+		const result = await runJsonCli(["status", "--json"], root);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.envelope.status).toBe("error");
+		expect(result.envelope.error).toMatchObject({
+			code: "missing_config",
+			recoverability: "repair_state",
+			retryable: false,
+		});
 	});
 
 	test("unlink removes managed local projections and leaves foreign links", async () => {

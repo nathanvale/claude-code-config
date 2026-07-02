@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ideation: Agent Skills ADHD Inventory</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17201b;
+      --muted: #5b665f;
+      --paper: #faf8f2;
+      --panel: #ffffff;
+      --line: #d9d2c2;
+      --accent: #0f6b5f;
+      --accent-2: #8b3f34;
+      --soft: #edf5f1;
+      --warn: #fff3d8;
+      --code: #26322d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+    }
+    h1, h2, h3 { line-height: 1.2; margin: 0; }
+    h1 { font-size: 34px; letter-spacing: 0; }
+    h2 { font-size: 22px; margin-top: 34px; margin-bottom: 12px; }
+    h3 { font-size: 17px; margin-bottom: 8px; }
+    p { max-width: 72ch; margin: 8px 0; }
+    a { color: var(--accent); }
+    code {
+      background: #eef0ea;
+      color: var(--code);
+      border: 1px solid #dfe3da;
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-size: 0.92em;
+    }
+    ul { margin-top: 8px; }
+    li { margin: 4px 0; }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      padding: 4px 10px;
+    }
+    .callout {
+      background: var(--soft);
+      border: 1px solid #c7ded6;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin: 16px 0;
+    }
+    .idea-nav {
+      display: grid;
+      gap: 6px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin: 12px 0 18px;
+      padding: 0;
+      list-style: none;
+    }
+    .idea-nav a {
+      display: block;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      text-decoration: none;
+    }
+    .idea-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      margin: 14px 0;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+    }
+    .idea-card h3 {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .rank {
+      color: var(--accent-2);
+      font-weight: 700;
+    }
+    .fields {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .field strong {
+      color: var(--accent);
+      display: inline-block;
+      min-width: 88px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f0ede4; }
+    tr:last-child td { border-bottom: 0; }
+    .mini-map {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+      max-width: 760px;
+      margin: 16px 0;
+    }
+    .box {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .arrow {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    footer {
+      margin-top: 36px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Ideation: Agent Skills ADHD Inventory</h1>
+    <div class="meta">
+      <span class="pill">date: <time datetime="2026-06-16">2026-06-16</time></span>
+      <span class="pill">topic: agent-skills-adhd-inventory</span>
+      <span class="pill">focus: repo-local skill projections, blacklist defaults, calm inventory</span>
+      <span class="pill">mode: repo-grounded</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Grounding Context</h2>
+    <p>This repo has 58 top-level skill directories. That validates the user concern: default-open plus blacklist can become invisible abundance unless the product explains what is visible.</p>
+    <p>Repo rules say skills are authored only in <code>skills/</code>, and that deploy targets can drift from git visibility. Current <code>install.sh</code> still wires user-global skill surfaces, including <code>~/.claude/skills</code> and per-skill <code>~/.codex/skills</code> links. Earlier repo research already points toward <code>.agents/skills/</code> as the cross-client projection target and says per-vendor symlinks should be fallback, not primary.</p>
+    <p>The ADHD lens from <code>adhd-helper</code> emphasizes tiny visible actions, reduced decision load, triage buckets, and preserving momentum. External grounding agrees that repo-local skill discovery matters: OpenAI documents Codex scanning repository <code>.agents/skills</code>; Claude documents project-local skill directories; the public skill ecosystem is also growing, with large collections and small composable repos coexisting.</p>
+    <div class="mini-map" aria-label="Product mental model">
+      <div class="box"><strong>Catalog</strong><br><code>skills/</code></div>
+      <div class="arrow">to</div>
+      <div class="box"><strong>Calm filter</strong><br>ignore list plus preview</div>
+      <div class="arrow">to</div>
+      <div class="box"><strong>Local projections</strong><br><code>.agents/skills</code><br><code>.claude/skills</code></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Topic Axes</h2>
+    <ul>
+      <li>Inventory legibility</li>
+      <li>Change awareness</li>
+      <li>Noise control</li>
+      <li>Repair confidence</li>
+      <li>Decision load</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Ranked Ideas</h2>
+    <ul class="idea-nav">
+      <li><a href="#idea-1">1. Status as a Calm Inventory Map</a></li>
+      <li><a href="#idea-2">2. New Since Last Sync</a></li>
+      <li><a href="#idea-3">3. Skill Groups Without Profiles</a></li>
+      <li><a href="#idea-4">4. Explain Why Visible</a></li>
+      <li><a href="#idea-5">5. Ignore Suggestions</a></li>
+      <li><a href="#idea-6">6. Repair Script That Says One Thing</a></li>
+      <li><a href="#idea-7">7. Attention Budget Preview</a></li>
+    </ul>
+
+    <article class="idea-card" id="idea-1">
+      <h3><span class="rank">1.</span> Status as a Calm Inventory Map</h3>
+      <p>Make <code>agent-skills status</code> the first-class answer to “what am I getting?” It should show counts, groups, ignored patterns, projection health, and one next action in under one screen.</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Inventory legibility</div>
+        <div class="field"><strong>Basis:</strong> direct: this checkout has 58 top-level skill directories; <code>adhd-helper</code> asks for a first visible action and clear mode; OpenAI documents repo skill discovery through <code>.agents/skills</code>.</div>
+        <div class="field"><strong>Rationale:</strong> Blacklist defaults are only calm if the visible set is explainable without opening config or reading symlink trees.</div>
+        <div class="field"><strong>Downsides:</strong> Needs grouping heuristics and concise output discipline.</div>
+        <div class="field"><strong>Confidence:</strong> 92%</div>
+        <div class="field"><strong>Complexity:</strong> Medium</div>
+      </div>
+    </article>
+
+    <article class="idea-card" id="idea-2">
+      <h3><span class="rank">2.</span> New Since Last Sync</h3>
+      <p>Keep a small local snapshot of the last projected visible set. On status, show newly visible, removed, and newly ignored skills before the full list.</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Change awareness</div>
+        <div class="field"><strong>Basis:</strong> reasoned: ADHD overwhelm spikes when change is silent; a snapshot turns a 58-item inventory into a small diff.</div>
+        <div class="field"><strong>Rationale:</strong> The user does not need to inspect the whole catalog every time. They need to know what changed since the last known calm state.</div>
+        <div class="field"><strong>Downsides:</strong> A lockfile-like snapshot needs clear wording so it is not mistaken for source of truth.</div>
+        <div class="field"><strong>Confidence:</strong> 88%</div>
+        <div class="field"><strong>Complexity:</strong> Medium</div>
+      </div>
+    </article>
+
+    <article class="idea-card" id="idea-3">
+      <h3><span class="rank">3.</span> Skill Groups Without Profiles</h3>
+      <p>Group visible skills by lightweight derived buckets such as core, coding, review, product, personal, archive, and fixtures. Do not add user profiles in v1.</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Decision load</div>
+        <div class="field"><strong>Basis:</strong> direct: the repo contains active skills, archived skills, fixtures, and workflow families under one catalog; <code>adhd-helper</code> favors triage buckets.</div>
+        <div class="field"><strong>Rationale:</strong> Groups make abundance scan-friendly while avoiding profile management, which would recreate hidden global state in a different form.</div>
+        <div class="field"><strong>Downsides:</strong> Auto-grouping will be imperfect unless skills later grow explicit categories.</div>
+        <div class="field"><strong>Confidence:</strong> 82%</div>
+        <div class="field"><strong>Complexity:</strong> Low</div>
+      </div>
+    </article>
+
+    <article class="idea-card" id="idea-4">
+      <h3><span class="rank">4.</span> Explain Why Visible</h3>
+      <p>Add <code>agent-skills list --why</code>. Each row says whether a skill is visible because it matched the default catalog, was not ignored, and has a valid <code>SKILL.md</code>.</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Repair confidence</div>
+        <div class="field"><strong>Basis:</strong> direct: AGENTS.md says real deploy-target directories can drift and become invisible to git; current install logic has many implicit symlink ownership rules.</div>
+        <div class="field"><strong>Rationale:</strong> “Why can the agent see this?” and “why can’t it see that?” should be explainable without knowing the implementation.</div>
+        <div class="field"><strong>Downsides:</strong> Adds a second output mode to keep terse and stable.</div>
+        <div class="field"><strong>Confidence:</strong> 80%</div>
+        <div class="field"><strong>Complexity:</strong> Medium</div>
+      </div>
+    </article>
+
+    <article class="idea-card" id="idea-5">
+      <h3><span class="rank">5.</span> Ignore Suggestions</h3>
+      <p>Make <code>status</code> suggest likely ignore patterns for archived skills, fixtures, broken skill dirs, and obsolete aliases. The user decides; the tool does not silently curate.</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Noise control</div>
+        <div class="field"><strong>Basis:</strong> direct: this repo has <code>skills/archive</code> and fixture skills under the catalog; the user explicitly wants blacklist behavior, not allowlist maintenance.</div>
+        <div class="field"><strong>Rationale:</strong> Suggestions make the blacklist easier to start without turning the tool into an opinionated gatekeeper.</div>
+        <div class="field"><strong>Downsides:</strong> Needs conservative suggestions to avoid hiding useful skills by accident.</div>
+        <div class="field"><strong>Confidence:</strong> 78%</div>
+        <div class="field"><strong>Complexity:</strong> Low</div>
+      </div>
+    </article>
+
+    <article class="idea-card" id="idea-6">
+      <h3><span class="rank">6.</span> Repair Script That Says One Thing</h3>
+      <p>When projections are broken, print exactly one repair command, usually <code>agent-skills sync</code>. Details move behind <code>--verbose</code>.</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Repair confidence</div>
+        <div class="field"><strong>Basis:</strong> direct: current install status can surface many symlink states at once; <code>adhd-helper</code> says preserve momentum and end with one visible action.</div>
+        <div class="field"><strong>Rationale:</strong> Diagnostics should reduce panic, not display every possible cause. The top-level command should be a recovery baton.</div>
+        <div class="field"><strong>Downsides:</strong> Some advanced debugging detail moves one command farther away.</div>
+        <div class="field"><strong>Confidence:</strong> 76%</div>
+        <div class="field"><strong>Complexity:</strong> Low</div>
+      </div>
+    </article>
+
+    <article class="idea-card" id="idea-7">
+      <h3><span class="rank">7.</span> Attention Budget Preview</h3>
+      <p>Show a soft warning when the visible skill set crosses a chosen threshold, for example “Visible skills: 58. This may be noisy. Consider <code>agent-skills ignore suggest</code>.”</p>
+      <div class="fields">
+        <div class="field"><strong>Axis:</strong> Noise control</div>
+        <div class="field"><strong>Basis:</strong> external: large public skill collections now exist, while Matt Pocock's repo positions skills as small and composable; abundance needs a scanning aid.</div>
+        <div class="field"><strong>Rationale:</strong> The tool can acknowledge cognitive cost without forcing a hard cap or requiring allowlists.</div>
+        <div class="field"><strong>Downsides:</strong> Thresholds can feel arbitrary; keep it advisory and local-configurable only if needed later.</div>
+        <div class="field"><strong>Confidence:</strong> 70%</div>
+        <div class="field"><strong>Complexity:</strong> Low</div>
+      </div>
+    </article>
+  </section>
+
+  <section>
+    <h2>Rejection Summary</h2>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Switch back to allowlist</td><td>Solves visibility by adding ongoing inventory maintenance; worse fit for default-open skill growth.</td></tr>
+        <tr><td>2</td><td>Global user profiles</td><td>Reintroduces hidden state and branch ownership confusion.</td></tr>
+        <tr><td>3</td><td>Interactive setup wizard</td><td>Too much ceremony for a sync/status tool; easy to defer behind list and ignore commands.</td></tr>
+        <tr><td>4</td><td>Automatic skill ranking by usage</td><td>No trustworthy usage data yet; would imply precision the tool does not have.</td></tr>
+        <tr><td>5</td><td>Hard cap visible skills</td><td>Arbitrary cap could hide useful workflows and create “where did it go?” anxiety.</td></tr>
+        <tr><td>6</td><td>Provider-specific dashboards</td><td>Scope overrun; v1 should make local projections legible, not build a provider console.</td></tr>
+        <tr><td>7</td><td>Detailed HTML report for status</td><td>Too heavy for everyday command-line recovery; keep rich docs for ideation, not basic status.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>References</h2>
+    <ul>
+      <li><a href="https://developers.openai.com/codex/skills">OpenAI Codex skills documentation</a></li>
+      <li><a href="https://code.claude.com/docs/en/skills">Claude Code skills documentation</a></li>
+      <li><a href="https://github.com/mattpocock/skills">mattpocock/skills</a></li>
+      <li><code>AGENTS.md:58</code> skill authoring source rule</li>
+      <li><code>install.sh:51</code> current global Codex skill linking behavior</li>
+      <li><code>docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md:115</code> prior projection research</li>
+      <li><code>skills/adhd-helper/SKILL.md:26</code> Moment Map</li>
+    </ul>
+  </section>
+
+  <footer class="composition-signal">
+    Composed 2026-06-16T00:00:00+10:00 by ce-ideate from the current conversation about repo-local agent-skill visibility and ADHD-friendly inventory.
+  </footer>
+</main>
+</body>
+</html>

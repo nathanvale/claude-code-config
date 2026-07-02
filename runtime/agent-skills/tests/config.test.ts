@@ -20,6 +20,11 @@ describe("agent-skills config", () => {
 		if (!loaded.ok) return;
 		expect(loaded.config.catalog).toBe("./skills");
 		expect(loaded.config.ignore).toEqual([]);
+		expect(loaded.config.projectionRoots).toEqual([
+			".agents/skills",
+			".claude/skills",
+		]);
+		expect(loaded.config.imports).toEqual([]);
 		expect(loaded.config.autoDefault).toBe(true);
 	});
 
@@ -49,9 +54,52 @@ describe("agent-skills config", () => {
 		expect(loaded.config.ignore).toEqual(["experimental-*"]);
 	});
 
+	test("loads configured projection roots for legacy catalog layouts", async () => {
+		const root = await tempRoot("projection-roots");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\nimports:\n  - storybook-matrix\n",
+		);
+
+		const loaded = await loadAgentSkillsConfig(root);
+
+		expect(loaded.ok).toBe(true);
+		if (!loaded.ok) return;
+		expect(loaded.config.catalogRoot).toBe(join(root, ".agents/skills"));
+		expect(loaded.config.projectionRoots).toEqual([".claude/skills"]);
+		expect(loaded.config.imports).toEqual(["storybook-matrix"]);
+	});
+
+	test("rejects projection roots outside the repo", async () => {
+		const root = await tempRoot("projection-roots-invalid");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"projection_roots:\n  - ../outside\n",
+		);
+
+		const loaded = await loadAgentSkillsConfig(root);
+
+		expect(loaded).toMatchObject({
+			ok: false,
+			error: { code: "invalid_config" },
+		});
+	});
+
 	test("rejects unsupported config shape without guessing", async () => {
 		const root = await tempRoot("invalid");
 		await writeFile(join(root, ".agent-skills.yml"), "catalog:\n  - ./skills\n");
+
+		const loaded = await loadAgentSkillsConfig(root);
+
+		expect(loaded).toMatchObject({
+			ok: false,
+			error: { code: "invalid_config" },
+		});
+	});
+
+	test("rejects invalid import ids", async () => {
+		const root = await tempRoot("imports-invalid");
+		await writeFile(join(root, ".agent-skills.yml"), "imports:\n  - ../bad\n");
 
 		const loaded = await loadAgentSkillsConfig(root);
 
@@ -70,6 +118,8 @@ describe("agent-skills config", () => {
 
 		expect(updated.ok).toBe(true);
 		expect(text).toContain("catalog: ./skills");
+		expect(text).toContain("projection_roots");
+		expect(text).toContain("imports");
 		expect(text).toContain("experimental-*");
 	});
 
