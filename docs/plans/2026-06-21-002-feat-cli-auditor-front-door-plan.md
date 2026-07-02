@@ -90,7 +90,7 @@ Facade-backed packages can host multiple CLIs under `src/front-doors/<name>/`. `
 - Do not change `audit` or `station-map` flags, help, result contract ids, schema version, or exit codes.
 - Do not rewrite `SKILL.md` or reference docs.
 - Do not add the inline `--flag=value` clause in this change.
-- Do not run `/create-cli`; the auditor CLI surface is unchanged.
+- Do not run `/cli-author`; the auditor CLI surface is unchanged.
 
 ---
 

@@ -70,7 +70,7 @@ Planning should keep these as implementation units or closely aligned units.
 ## Suggested Skills
 
 - `compound-engineering:ce-plan` — primary next skill; plan implementation from the requirements doc.
-- `create-cli` — required for facade-backed CLI contract and command surface proof.
+- `cli-author` — required for facade-backed CLI contract and command surface proof.
 - `improve-codebase-architecture` — use if implementation-unit seams become unclear.
 - `gof-pressure-lens` — use only if pattern names drift during planning.
 - `tdd` — use once planning turns into implementation.

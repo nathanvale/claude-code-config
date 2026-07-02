@@ -45,7 +45,7 @@ gates, and output-channel expectations.
 _Avoid_: global JSON envelope, CLI framework, package recovery policy
 
 **Agent-Native CLI Runtime Lifecycle Helper** is a helper category for
-package-agnostic CLI invocation mechanics that **create-cli** needs to emit
+package-agnostic CLI invocation mechanics that **cli-author** needs to emit
 repeatable contracts or that consuming packages already share, such as **Run
 Correlation ID** setup, diagnostic context setup, **Command Duration**
 measurement, stdout/stderr discipline, ADR-0010 writer handoff, generic usage
@@ -182,7 +182,7 @@ flushes the current diagnostic context.
 _Avoid_: always-on debug output, buffer keyed only by public `run_id`
 
 **Diagnostic Trail Reference** is the facade-owned runtime narrowing of the
-`create-cli` design-layer Diagnostic trail pointer: one CLI invocation points
+`cli-author` design-layer Diagnostic trail pointer: one CLI invocation points
 to a package-owned **Diagnostic Capability** for the same **Run Correlation ID**.
 _Avoid_: raw log access, trace vendor contract, retention policy, package event
 catalog, persisted diagnostics access
@@ -229,7 +229,7 @@ _Avoid_: every package script as a public route
   command examples, identifiers, sensitive context, and public JSON field names
   local.
 - A future **Agent-Native CLI Runtime Lifecycle Helper** may enter CLI Command
-  Facade only when it owns generic lifecycle mechanics needed by **create-cli**
+  Facade only when it owns generic lifecycle mechanics needed by **cli-author**
   as repeatable contract-emission surface or already shared by consuming
   packages. It must not own command catalogs, route tables, dispatch policy,
   package error families, recovery meaning, diagnostic event names, redaction
@@ -419,14 +419,14 @@ _Avoid_: every package script as a public route
 - **Persisted Diagnostics Access** is a future product decision. This package
   may reserve safe runtime shape for trail references, but it must not decide
   raw log access, trace vendor policy, or protocol-visible exposure rules.
-- The `claude-code-config` create-cli reference is a downstream documentation
+- The `claude-code-config` cli-author reference is a downstream documentation
   consumer of this runtime shape, not an owner. Once these runtime-backed
-  candidates land, the create-cli docs need a sync pass: **Baseline Exit
+  candidates land, the cli-author docs need a sync pass: **Baseline Exit
   Semantics**, **Diagnostic Capability**, the design-layer diagnostic trail
   pointer (now the facade **Diagnostic Trail Reference**), and **Write Preview
   Capability** are now runtime-enforced, superseding the old "declare, don't
   enforce" wording that said the facade does not judge sensible exit codes. That
-  sync is a follow-up in the create-cli repo; this plan does not edit downstream
+  sync is a follow-up in the cli-author repo; this plan does not edit downstream
   docs.
 - ADR-0005 owns the repo decision for facade-owned CLI diagnostics. ADR-0006
   owns the repo decision for facade-owned Result Contract Discovery.

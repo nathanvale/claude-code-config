@@ -159,7 +159,7 @@ Consequences:
 
 Next:
 
-- Use `create-cli` before implementing the command contract.
+- Use `cli-author` before implementing the command contract.
 
 V2 Ideas:
 

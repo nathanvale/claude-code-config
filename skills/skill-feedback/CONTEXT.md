@@ -1,6 +1,18 @@
 # Skill Feedback
 
-The skill-observability feedback loop: durable, structured Software Learning Reports captured at skill closeout and reviewed through agent-native command envelopes. v0 plan: `docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`. v1 plan: `docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`.
+The skill-observability feedback loop: durable, structured Software Learning Reports captured at skill closeout and reviewed through agent-native command envelopes.
+
+Current source map:
+
+- v0 capture package: `skills/skill-feedback/docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`.
+- v1 report card and closeout: `skills/skill-feedback/docs/plans/2026-06-12-001-feat-skill-feedback-report-card-v1-plan.md`.
+- v2 claim-safe review: `skills/skill-feedback/docs/plans/2026-06-13-001-feat-skill-feedback-claim-safe-review-result-v2-plan.md`.
+- Review merge hardening: `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
+- Health command: `skills/skill-feedback/docs/plans/2026-06-15-001-feat-skill-feedback-health-command-plan.md`.
+- Writer proof: `skills/skill-feedback/docs/plans/2026-06-24-001-fix-skill-feedback-capture-trust-run-correlation-plan.md`.
+- Correlation witnesses: `skills/skill-feedback/docs/plans/2026-06-25-001-feat-skill-feedback-correlation-witnesses-plan.md`.
+- Correlation backfill repair: `skills/skill-feedback/docs/plans/2026-06-28-001-fix-skill-feedback-correlation-backfill-plan.md`.
+- P0/P1 ownership refactor: `skills/skill-feedback/docs/plans/2026-06-29-001-refactor-skill-feedback-p1-task-list-plan.md`.
 
 ## Language
 
@@ -44,6 +56,10 @@ _Avoid_: full questionnaire, skill plus outcome only
 The v1 product target that a normal driver can file a useful closeout in about 60 seconds. It shapes schema and guidance; it is not a runtime timer.
 _Avoid_: timeout, stopwatch, mandatory essay, unlimited closeout
 
+**Report card**:
+The closeout evidence lane inside a Software Learning Report: skill, outcome, goal, friction, verification burden, touched surfaces, and observations. It is driver-authored evidence, not a canonical repair plan.
+_Avoid_: instruction, task list, verifier report, raw transcript
+
 **Verification burden**:
 The effort required to prove the skill run's result. V1 stores a sortable level (`none`, `light`, `moderate`, `heavy`) plus a redacted note.
 _Avoid_: tests run, confidence, success
@@ -55,6 +71,10 @@ _Avoid_: complaint, all issues, raw transcript
 **Touched surface**:
 A skill, reference, doc, runtime package, hook, or labeled area the skill run materially used or affected. V1 treats touched surfaces as optional, caps them at 5, and records no gap when absent. Prefer owner paths; use labels only when no path is known.
 _Avoid_: changed file list, transcript topic, vague area
+
+**Owner path**:
+A repo-relative source path that owns the behavior, vocabulary, contract, or evidence under discussion. Review can anchor strong owner-path evidence; labels stay weaker when no path is known.
+_Avoid_: absolute path, filename guess, topic label, display ref
 
 **Observation**:
 An optional driver-authored evidence item captured during closeout. V1 caps observations, redacts summaries and labels, validates target paths as repo-relative owner paths, and excludes confidence, severity, next action, and repair instruction fields.
@@ -69,7 +89,7 @@ The build-phase use of closeout reports during v1 implementation, smoke tests, a
 _Avoid_: daily pilot, launch, production use, Codex end-to-end proof
 
 **Daily pilot**:
-The normal-use phase where skill-feedback reports become part of everyday review and triage. It starts only after review/correlation work and true Codex end-to-end proof satisfy the accepted pilot gate.
+The normal-use phase where skill-feedback reports become part of everyday review and triage. It may run on Claude Code once review/correlation work and the accepted Claude-supported pilot gate pass. Codex remains deferred for Trusted skill identity until an engine-owned skill invocation source exists.
 _Avoid_: implementation pilot, smoke test, proof-of-run, closeout experiment
 
 **Codex capture readiness gate**:
@@ -88,22 +108,62 @@ _Avoid_: cleanup, archive, review-and-delete
 The read-only `skill-feedback health` command that reports inbox operability, readiness, correlation, warnings, and one next action before deeper review. It never deletes, repairs, or exposes healthy repo paths.
 _Avoid_: review ledger, purge preview, cleanup, trust badge
 
+**Front-door dashboard**:
+The zero-arg human output from `skill-feedback`, also available as
+`skill-feedback dashboard`. It is a bounded launch surface over inbox evidence:
+reports, usage, improvement queue, and advanced diagnostics. Use
+`skill-feedback health` for health-first diagnostics.
+_Avoid_: review result, trust badge, repair plan, per-skill verdict, health-only dashboard
+
 **Review decision surface**:
 A command-envelope-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
 _Avoid_: dashboard, raw dump, generic CLI output
+
+**Command facade contract**:
+The CLI Interface in `src/command-contract.ts` that owns command discovery, help metadata, parser rules, result contracts, output modes, side-effect posture, and exit-code meaning. Docs point to it instead of copying flags or schemas.
+_Avoid_: docs schema, runner copy, help prose, generic CLI
 
 **Review unit**:
 The evidence bundle that review classifies as one thing. A linked unit represents a Trusted run proof; missing, untrusted, or placeholder ids produce one report-local unit.
 _Avoid_: report, file, merged row, fuzzy group
 
 **Trusted run proof**:
-Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run` and `corroborated`; it does not prove Trusted skill identity or `trusted_engine_identity`.
+Runtime-owned or correlation-owned evidence that a `skill_run_id` safely links reports for the same skill run. It can support `same_trusted_run`. It supports `corroborated` only when the same trusted review unit has runtime-owned hook capture and a correlation-owned driver closeout. It does not prove Trusted skill identity or `trusted_engine_identity`.
 Raw persisted inbox provenance is evidence-only unless a writer-owned source preserved it through normalization.
 _Avoid_: raw `skill_run_id`, trusted skill identity, assistant claim
 
-**Pattern resolution ledger**:
-The primary review-value model for `skill-feedback review`: recurring evidence is grouped into patterns, and each pattern carries its resolution state, evidence quality, owner paths, verification burden, and next safe action. Pattern entries remain untrusted evidence until confirmed against owner source.
+**Writer proof**:
+Local HMAC proof that the `skill-feedback` writer owned selected persisted report fields at write time. It can let review preserve writer-owned `skill_run_id_provenance`; it does not prove Trusted skill identity, engine-owned identity, hook-to-closeout correlation, or `corroborated` by itself.
+_Avoid_: Trusted run proof, trusted skill identity, keychain proof, correlation proof
+
+**Correlation witness**:
+A private signed link artifact under `.skill-feedback/.correlation/` that can connect one runtime-owned Claude Stop hook report to one driver closeout report. Review verifies the witness, both linked report proofs, skill match, writer key, and hook runtime run id before overlaying `correlation_owned` on the closeout. Public closeout receipts cannot create witnesses or set correlation provenance.
+Blocked witness finalization may write private `diagnostic_*.json` artifacts under the same directory; these carry diagnostics plus optional private repair candidate boundaries. They never act as reports or closeout input.
+_Avoid_: public receipt field, raw transcript match, assistant claim, timestamp match
+
+**Correlation repair**:
+The explicit `skill-feedback correlate` workflow that previews blocked witness diagnostics, classifies repairability, and writes missing private witnesses only with `--execute`. It recomputes current private evidence before writing and never trusts public report ids, run ids, proof fields, or closeout receipt fields.
+_Avoid_: review repair, health mutation, timestamp backfill, manual trust input
+
+**Trust store**:
+The private repo-local `.skill-feedback/.trust/` directory that holds the local writer proof key. Review treats missing, corrupt, unreadable, unsafe, or wrong-permission trust stores as proof-unavailable and keeps reports evidence-only.
+_Avoid_: inbox report, source file, public config, portable key
+
+**Proof health**:
+Review and health diagnostics for writer proof verification, evidence-only fallback, and same-inbox replay detection. It reports reason ids; it never prints signing keys, key paths, signature inputs, or derived key material.
+_Avoid_: readiness badge, trust badge, repair instruction, secret diagnostic
+
+**Review ledger**:
+The primary review-value model for `skill-feedback review`: evidence is grouped into review units and ledger entries, and each entry carries resolution state, evidence quality, owner paths, verification burden, and next safe action. Ledger entries remain untrusted evidence until confirmed against owner source.
 _Avoid_: canonical instruction, repair proposal, chronological report list, evidence-quality dashboard
+
+**Improvement queue**:
+A human-facing list of evidence-backed inspection candidates. It groups by owner path first, defaults to strong or repeated evidence, and uses skill rows only when reports lack a strong owner path. It recommends a next safe action or no-build, not source edits.
+_Avoid_: repair plan, auto-fix queue, task list, scoring model, mixed ranking, weak-evidence default
+
+**Skill usage**:
+A human-facing summary of which skills produced reports and how those skill runs went. It ranks skills only; owner-path candidates belong in the Improvement queue.
+_Avoid_: token usage, cost attribution, owner-path ranking, improvement queue
 
 **Pressure pattern**:
 A design-pattern name used only when a concrete review pressure has already named a seam. In v2, Facade, Adapter, and fixed reducer flow are labels for pressure-tested ownership; Strategy stays deferred until claim-rule variation is proven.
@@ -114,16 +174,24 @@ The claim-safe review result Interface that hides reducer internals from JSON, p
 It also carries minimal inbox status, warning, count, and next-action facts so direct review callers can spot false-empty and degraded-read states before ledger detail.
 _Avoid_: dashboard, renderer copy, generic API, bag of fields
 
+**HealthResultData Interface**:
+The health result Interface that exposes inbox status, counts, warnings, readiness, proof health, correlation health, and one next action without mutating the inbox. It is owned by `src/command-contract.ts` and emitted by the runner.
+_Avoid_: review ledger, purge preview, trust badge, cleanup result
+
+**Branch Station Catalog**:
+The package-owned command-branch coverage map in `src/branch-station-catalog.ts`. It names deterministic public command paths that tests and auditors can prove without copying the runner implementation.
+_Avoid_: task tracker, manual checklist, arbitrary test list, runtime log
+
 **Report ref**:
-A stable review reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
-_Avoid_: file path, content hash, display evidence, prose ref
+A stable navigation reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
+_Avoid_: file path, content hash, display evidence, prose ref, JSON lookup key
 
 **Allowed claim**:
 Entry-local claim language that downstream agents may repeat about one ledger entry. The reducer derives it from trusted review-unit state, anchor facts, evidence tier, source mix, and readiness facts.
 _Avoid_: global claim, badge, renderer copy, inferred language
 
 **Claim readiness**:
-The v2 review facts that split runtime capture, Trusted skill identity, and Daily pilot readiness. Each readiness fact carries status, reason ids, and evidence refs.
+The review stance for whether a readiness claim is safe to repeat. It separates runtime capture, Trusted skill identity, and Daily pilot readiness. Daily-pilot readiness is runtime-scoped: Claude Code can be supported while Codex Trusted skill identity stays deferred.
 _Avoid_: global readiness, capture readiness alias, daily pilot shortcut
 
 **Anchor miss telemetry**:
@@ -163,11 +231,11 @@ A later review-surfaced hypothesis that a skill, reference, context, or runtime 
 _Avoid_: recommendation, instruction, proposal file, source edit
 
 **Correlation status**:
-The link quality between capture evidence and closeout enrichment. It is `linked` when a shared Skill run id exists, and `unlinked` when closeout evidence writes without a link.
+The link quality between capture evidence and closeout enrichment. It is `linked` when review has a trusted run link from runtime-owned or correlation-owned provenance, and `unlinked` when closeout evidence writes without a verified link.
 _Avoid_: match, merge status, certainty
 
 **Correlation health**:
-The review lane that summarizes linked and unlinked closeout evidence. Many unlinked closeouts indicate skill-feedback or runtime-adapter inspection, not a target-skill defect.
+The review lane that summarizes linked and unlinked closeout evidence plus correlation witness diagnostics. Many unlinked closeouts or blocked witnesses indicate skill-feedback or runtime-adapter inspection, not a target-skill defect.
 _Avoid_: skill quality, closeout quality, blame
 
 **Agent-authored fields**:
@@ -207,7 +275,7 @@ The optional correlation id shared by capture evidence and later closeout enrich
 _Avoid_: filename, Claude detection id, session id alone, report id
 
 **Skill run id provenance**:
-The report field that says who owns a `skill_run_id` link claim. Raw persisted values are evidence-only at the inbox boundary; only writer-owned provenance preserved through normalization can coalesce review units.
+The report field that says who owns a `skill_run_id` link claim. Raw persisted values are evidence-only at the inbox boundary; only writer-owned or witness-verified provenance preserved through normalization can coalesce review units. Public receipts cannot set it.
 _Avoid_: raw id trust, assistant claim, timestamp proximity
 
 **Cost attribution**:
@@ -231,7 +299,7 @@ The inbox health field that classifies storage and readability state only. Readi
 _Avoid_: global health, trust badge, report quality, correlation status
 
 **Purge workflow**:
-The explicit mutation command for inbox retention cleanup. It previews first, deletes only through an execute gate, and remains separate from review.
+The explicit mutation command for report retention cleanup. It previews first, deletes only selected safe report files through an execute gate, and remains separate from review.
 _Avoid_: review cleanup, automatic retention, hidden delete, archive
 
 **Retention warning**:
@@ -239,8 +307,8 @@ A review warning emitted when the oldest primary inbox report is at least 14 day
 _Avoid_: purge, deletion, error, archive
 
 **Pilot checkpoint**:
-A seven-day review notice started by the first successful v1 closeout. It reports actionable-feedback numerator, denominator, and density, then asks for pilot review until an explicit cleanup command or workflow removes the local marker.
-_Avoid_: background scheduler, hidden alarm, permanent warning, purge, manual file delete
+A seven-day review notice started by the first successful v1 closeout. It reports actionable-feedback numerator, denominator, and density. Its `pilot_started_at` marker remains manual source evidence and is not part of purge.
+_Avoid_: background scheduler, hidden alarm, permanent warning, purge coupling
 
 **Untrusted evidence**:
 The truth stance on every report: evidence a reader weighs, never an instruction an agent obeys. Marked `untrusted_evidence: true`.

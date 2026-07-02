@@ -335,18 +335,18 @@ glossary (`CONTEXT.md`) still encodes the reversed worldview and is reconciled b
   text/role match-verification, kept orthogonal to mode choice. Do not let format-validation effort
   absorb effort owed to the gates. (adversarial residual risk #2)
 
-- **CLI surface starts with `create-cli`, then lands as a facade CLI.** Invoke the canonical
-  `create-cli` skill/tool first for the browser-memory command surface. Let it guide command syntax,
+- **CLI surface starts with `cli-author`, then lands as a facade CLI.** Invoke the canonical
+  `cli-author` skill/tool first for the browser-memory command surface. Let it guide command syntax,
   output, errors, config, interactivity, and the `CommandFacadeContract` skeleton. Then implement the
   generated contract with `@side-quest/cli-command-facade` exactly like `skills/browser-use/scripts/`:
   script-local `package.json`, `command-contract.ts` handed to `defineCommandFacadeContract`,
   TypeScript `cli.ts`, thin `.sh` wrapper, and focused CLI tests. Do not hand-roll a parallel CLI
   grammar, JSON envelope, exit-code map, or `AgentHint` shape. The facade owns command discovery,
   usage rendering, structured errors, diagnostics, and writer mechanics; browser-domain-memory owns
-  command semantics. This follows ADR-0007: `create-cli` designs the CLI, the facade enforces it.
+  command semantics. This follows ADR-0007: `cli-author` designs the CLI, the facade enforces it.
 
 - **Config is an agent-native route, not a hand-edited file.** The "number router at the front door"
-  (`create-cli`/facade CLI + the skill's consult surface) carries config commands alongside
+  (`cli-author`/facade CLI + the skill's consult surface) carries config commands alongside
   `read`/`capture`/`replay`. `config:explain` returns the current per-domain settings + the allowed
   values + what each does as a facade JSON result, so the LLM can tell the user how to configure a domain
   in plain language; `config:set` writes through the same atomic boundary as the runbooks. The user
@@ -472,7 +472,7 @@ skills/browser-domain-memory/
     browser-domain-memory.sh     # thin bash wrapper, same pattern as browser-use preflight wrapper
     cli.ts                      # facade-backed argv parse + dispatch entry
     cli.test.ts
-    command-contract.ts         # CommandFacadeContract emitted from create-cli
+    command-contract.ts         # CommandFacadeContract emitted from cli-author
     command-contract.test.ts
     README.md                   # finder pointing back to the skill
     lib/
@@ -513,7 +513,7 @@ skills/browser-domain-memory/
 Two new declared deps in root `package.json`: `@puppeteer/replay` for Recorder validation/replay +
 `puppeteer-core` for the deterministic browser runner. `skills/browser-domain-memory/scripts/package.json`
 owns the local `@side-quest/cli-command-facade` dependency exactly as `skills/browser-use/scripts/`
-does, so the implementation does not import through `skills/create-cli/scripts/node_modules`. Root
+does, so the implementation does not import through `skills/cli-author/scripts/node_modules`. Root
 `tsconfig.json` `include` extends to the new `skills/browser-domain-memory/scripts/` tree (U1); the
 script-local `tsconfig.json` typechecks the facade contract directly.
 
@@ -576,21 +576,21 @@ promotion land. Later units extend that CLI; they do not replace it.
   suite holds 108 public CLI tests across command contract, check, repair, launch, status,
   observability, usage failures, and edge recovery.
 
-### U0b. `create-cli` command-surface pass
+### U0b. `cli-author` command-surface pass
 
-- Goal: Let `create-cli` shape the command surface before implementation modules harden around it.
+- Goal: Let `cli-author` shape the command surface before implementation modules harden around it.
 - Requirements: R5b, R21, CLI design path
 - Dependencies: U0
-- Files: no durable contract file yet; update this plan only if `create-cli` exposes a route the plan
+- Files: no durable contract file yet; update this plan only if `cli-author` exposes a route the plan
   forgot.
-- Approach: invoke `create-cli` against the browser-domain-memory command surface before authoring
+- Approach: invoke `cli-author` against the browser-domain-memory command surface before authoring
   `command-contract.ts`. Inputs: first vertical slice (`read`, `status`, `config:get`,
   `config:explain`, `config:set`), later extensions (`capture`, replay, promotion), JSON envelopes,
   safety-confirmation behavior, and config precedence. Treat the generated `CommandFacadeContract`
   skeleton as the U1a/U9 implementation guide. Do not commit a parallel markdown CLI spec as canonical
   truth; the TypeScript command contract becomes the deterministic contract.
 - Test scenarios:
-  - `create-cli` output names command tree, output modes, exit codes, config/env precedence, and
+  - `cli-author` output names command tree, output modes, exit codes, config/env precedence, and
     safety-confirmation behavior.
   - Generated skeleton maps to `@side-quest/cli-command-facade` fields without bespoke grammar.
   - First vertical slice routes are separable from later capture/replay routes.
@@ -606,7 +606,7 @@ promotion land. Later units extend that CLI; they do not replace it.
   `@side-quest/cli-command-facade`. The replay deps are root runtime dependencies, loaded only on the
   deterministic path. The facade package is script-local under
   `skills/browser-domain-memory/scripts/`, matching `skills/browser-use/scripts/`; fail clearly when
-  the private link/package is missing. Do not import through `skills/create-cli/scripts/node_modules`.
+  the private link/package is missing. Do not import through `skills/cli-author/scripts/node_modules`.
 - Test scenarios:
   - Facade package resolves from `skills/browser-domain-memory/scripts/`.
   - Missing facade package produces a clear setup failure, not a TypeScript mystery error.
@@ -678,7 +678,7 @@ promotion land. Later units extend that CLI; they do not replace it.
   `skills/browser-domain-memory/scripts/command-contract.ts` (+ `.test.ts`),
   `skills/browser-domain-memory/scripts/cli.ts` (+ `cli.test.ts`),
   `skills/browser-domain-memory/scripts/README.md`
-- Approach: implement the `create-cli` guided contract for `read`, `status`, `config:get`,
+- Approach: implement the `cli-author` guided contract for `read`, `status`, `config:get`,
   `config:explain`, and `config:set`. Mirror `skills/browser-use/scripts/`: exported
   `runBrowserDomainMemoryCli(argv, { runtime, stdout, stderr })`, injectable runtime for tests,
   facade JSON writers, diagnostic flags via the facade package, and a thin shell wrapper that execs
@@ -687,7 +687,7 @@ promotion land. Later units extend that CLI; they do not replace it.
   not implemented in this slice.
 - Patterns to follow: `skills/browser-use/scripts/package.json`,
   `skills/browser-use/scripts/command-contract.ts`, `skills/browser-use/scripts/preflight-warm-chrome.ts`,
-  `skills/browser-use/scripts/preflight-warm-chrome.sh`, `skills/create-cli/SKILL.md`.
+  `skills/browser-use/scripts/preflight-warm-chrome.sh`, `skills/cli-author/SKILL.md`.
 - Test scenarios:
   - command contract: `defineCommandFacadeContract` accepts the emitted contract.
   - shell wrapper: `browser-domain-memory.sh` is a thin pass-through to Bun + `cli.ts`.
@@ -998,8 +998,8 @@ promotion land. Later units extend that CLI; they do not replace it.
   `needs_browser_entry` is the code-level action for a Browser Entry Handoff; auth failures use
   `authenticate`; non-browser state repair uses `repair_state`. Safety-affecting config and saved
   workflow default writes remain gated by out-of-band human confirmation.
-- Patterns to follow: prototypes `parallel-spike/`; `skills/create-cli/SKILL.md`;
-  `skills/create-cli/references/cli-command-facade.md`; `skills/browser-use/scripts/package.json`;
+- Patterns to follow: prototypes `parallel-spike/`; `skills/cli-author/SKILL.md`;
+  `skills/cli-author/references/cli-command-facade.md`; `skills/browser-use/scripts/package.json`;
   `skills/browser-use/scripts/command-contract.ts`; `skills/browser-use/scripts/preflight-warm-chrome.ts`;
   `skills/browser-use/scripts/preflight-warm-chrome.sh`; ADR-0007.
 - Test scenarios:
@@ -1286,8 +1286,8 @@ crosses a few cross-cutting concerns the units must honor:
 - **Facade dependency/link.** The CLI contract imports `@side-quest/cli-command-facade` from
   `skills/browser-domain-memory/scripts/`. Because that package is currently private / machine-local,
   U9 must add a script-local `package.json` + link/dependency like `skills/browser-use/scripts/`
-  (with `skills/create-cli/scripts/` as the package-link precedent) and fail clearly when the facade is
-  unavailable. This is the implementation path owned by `create-cli`/ADR-0007, not a third runtime
+  (with `skills/cli-author/scripts/` as the package-link precedent) and fail clearly when the facade is
+  unavailable. This is the implementation path owned by `cli-author`/ADR-0007, not a third runtime
   dependency for browser replay.
 - **Engine dependency.** Requires the warm real-Chrome recipe (ADR-0006): real Chrome binary +
   classic `--remote-debugging-port` + dedicated persistent `--user-data-dir`. Pre-flight must
@@ -1311,9 +1311,9 @@ crosses a few cross-cutting concerns the units must honor:
   `success-verify/`, `op-auth/`, `lifecycle/`, `journal-tidy/`, `crash-safety/`, `parallel-spike/`,
   `metrics-real/`, `metrics-telemetry/`, `metrics-effort/`; plus `prototypes/build-scratch-handoff/`
   (redaction + dual-gate builder).
-- CLI design + implementation path: `skills/create-cli/SKILL.md`,
-  `skills/create-cli/references/cli-command-facade.md`, and ADR-0007
-  (`create-cli` stays verbatim-upstream; facade contract emission is the additive implementation
+- CLI design + implementation path: `skills/cli-author/SKILL.md`,
+  `skills/cli-author/references/cli-command-facade.md`, and ADR-0007
+  (`cli-author` stays verbatim-upstream; facade contract emission is the additive implementation
   path).
 - Repo code-shipping precedent: `runbooks/issue-to-pr-v2/` (co-located `*.test.ts` and CLI tests);
   `skills/issue-to-pr/` prose control plane.

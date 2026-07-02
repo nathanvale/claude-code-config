@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication, complexity
+// Bun test entrypoint with reducer evidence fixtures; package runner invokes this file without static imports.
 import { describe, expect, test } from "bun:test";
 import type {
 	CaptureRuntime,
@@ -236,7 +238,7 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 		expect(entry?.allowed_claims).not.toContain("corroborated");
 	});
 
-	test("vector: linked Claude Stop skill + closeout in one trusted run can claim corroborated", () => {
+	test("vector: mixed sources in one correlation-owned trusted run can claim corroborated", () => {
 		const { ledger_entries } = reduceReviewLedger([
 			report({
 				report_id: "r-capture",
@@ -244,7 +246,7 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 				capture_runtime: "claude_stop",
 				touched_surfaces: sharedAnchor,
 				skill_run_id: "run-trusted",
-				skill_run_id_provenance: "correlation_owned",
+				skill_run_id_provenance: "runtime_owned",
 			}),
 			report({
 				report_id: "r-closeout",
@@ -261,6 +263,31 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 		expect(entry?.allowed_claims).toContain("corroborated");
 		expect(entry?.evidence_tier).toBe("corroborated");
 		expect(entry?.allowed_claims).not.toContain("trusted_engine_identity");
+	});
+
+	test("vector: same trusted run without correlation-owned closeout cannot claim corroborated", () => {
+		const { ledger_entries } = reduceReviewLedger([
+			report({
+				report_id: "r-capture",
+				evidence_source: "hook_capture",
+				capture_runtime: "claude_stop",
+				touched_surfaces: sharedAnchor,
+				skill_run_id: "run-trusted",
+				skill_run_id_provenance: "runtime_owned",
+			}),
+			report({
+				report_id: "r-closeout",
+				evidence_source: "driver_closeout",
+				touched_surfaces: sharedAnchor,
+				skill_run_id: "run-trusted",
+				skill_run_id_provenance: "runtime_owned",
+			}),
+		]);
+
+		const entry = ledger_entries[0];
+		expect(entry?.allowed_claims).not.toContain("same_trusted_run");
+		expect(entry?.allowed_claims).not.toContain("corroborated");
+		expect(entry?.evidence_tier).toBe("runtime_observed");
 	});
 
 	test("vector: repeated strong-anchor review units merge into one ledger entry", () => {

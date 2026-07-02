@@ -44,7 +44,7 @@ Classify from args and **stop at the first matching row**. Do NOT launch a workf
 ## Owner Paths
 
 - Workflow template: `references/workflow-template.js`
-- Pattern: `references/skill-design-decision-runbook.md#write-something-skill-io-example`
+- Pattern: `skills/skill-author/references/skill-io-shape-examples.md#skill-io-example`
 - Findings artifact: `/tmp/pr-review-loop/<runId>/findings.json` (written by the generated workflow)
 
 ## Parameters

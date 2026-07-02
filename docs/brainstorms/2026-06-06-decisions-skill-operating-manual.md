@@ -210,7 +210,7 @@ decision_metadata_format: fenced-yaml-per-decision
 - Require top-level `Frame` in each decision log.
 - Use `Frame` for the log boundary, exclusions, and accepted constraints.
 - If v1 adds machinery, keep it to a parser/checker.
-- Use `create-cli` before designing any helper command surface.
+- Use `cli-author` before designing any helper command surface.
 - Treat the v1 helper as an Agent-native CLI surface.
 - Keep primary data parseable.
 - Keep diagnostics on stderr.
@@ -332,8 +332,8 @@ flowchart TD
 ## Helper CLI Gate
 
 - `decisions check <file> --json` is the accepted helper intent, not the final CLI contract.
-- Run `create-cli` before implementation.
-- Let `create-cli` finalize:
+- Run `cli-author` before implementation.
+- Let `cli-author` finalize:
   - command name
   - args and flags
   - help behavior

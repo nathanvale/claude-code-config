@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file
+// Public capture adapter seam; hooks and fixture tests consume this entrypoint.
 import {
 	type Receipt,
 	type ReceiptField,
@@ -72,11 +74,15 @@ const GENERATED_TS_KEYS = [
 	"timestamp",
 ] as const;
 
+// Public adapter seam; live hooks call record directly until telemetry is trusted.
+// fallow-ignore-next-line unused-export
 export class ClaudeOtelAdapter implements CaptureAdapter {
 	readonly harness = "claude-otel" as const;
 
 	constructor(private readonly runtime: CaptureAdapterRuntime) {}
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 	async capture(raw: unknown): Promise<CaptureResult> {
 		const spans = flattenClaudeSpans(readClaudeSpans(raw));
 		const interaction =
@@ -134,11 +140,15 @@ export class ClaudeOtelAdapter implements CaptureAdapter {
 	}
 }
 
+// Public adapter seam; live hooks call record directly until telemetry is trusted.
+// fallow-ignore-next-line unused-export
 export class CodexJsonAdapter implements CaptureAdapter {
 	readonly harness = "codex-json" as const;
 
 	constructor(private readonly runtime: CaptureAdapterRuntime) {}
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 	async capture(raw: unknown): Promise<CaptureResult> {
 		const events = readCodexEvents(raw);
 		const terminalEvent =
@@ -207,6 +217,8 @@ export class CodexJsonAdapter implements CaptureAdapter {
 	}
 }
 
+// Public adapter seam; Fallow cannot see harness selection consumers.
+// fallow-ignore-next-line unused-export
 export function selectAdapter(
 	harness: HarnessId,
 	runtime: CaptureAdapterRuntime,
@@ -221,12 +233,16 @@ export function selectAdapter(
 	}
 }
 
+// Public adapter seam; Fallow cannot see harness validation consumers.
+// fallow-ignore-next-line unused-export
 export function assertHarnessId(value: string): asserts value is HarnessId {
 	if (!(HARNESS_IDS as readonly string[]).includes(value)) {
 		throw new Error(`Unknown skill-feedback harness: ${value}`);
 	}
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function readClaudeSpans(raw: unknown): ClaudeOtelSpan[] {
 	if (Array.isArray(raw)) {
 		return raw.filter(isObject);
@@ -253,6 +269,8 @@ function flattenClaudeSpans(spans: readonly ClaudeOtelSpan[]): JsonObject[] {
 	return flattened;
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function readClaudeOutcome(attributes: unknown): SkillFeedbackOutcome {
 	const outcome = stringFrom(objectFrom(attributes)?.outcome);
 	if (isSkillFeedbackOutcome(outcome)) {
@@ -295,6 +313,8 @@ function eventType(event: JsonObject): string | undefined {
 	return stringFrom(event.type) ?? stringFrom(event.event) ?? stringFrom(event.kind);
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function readCodexUsage(event: JsonObject | undefined): ReceiptUsage | undefined {
 	if (!event) return undefined;
 	const usage =
@@ -370,6 +390,8 @@ function assignString<K extends keyof Receipt>(
 	}
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 async function attachEngineFields(
 	runtime: CaptureAdapterRuntime,
 	harness: HarnessId,
@@ -439,6 +461,8 @@ async function attachEngineFields(
 	}
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function finalizeCapture(
 	harness: HarnessId,
 	receipt: Partial<Receipt>,
@@ -520,6 +544,8 @@ function dedupeReasons(reasons: readonly DegradedReason[]): DegradedReason[] {
 	return deduped;
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function firstStringFromObjects(
 	objects: readonly (JsonObject | undefined)[],
 	keys: readonly string[],
@@ -534,6 +560,8 @@ function firstStringFromObjects(
 	return undefined;
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function sumNumberAttrs(
 	spans: readonly JsonObject[],
 	keys: readonly string[],

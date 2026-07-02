@@ -136,7 +136,7 @@ flowchart TB
 - Published package.
 - Lint or typecheck runner coverage.
 - Immediate replacement of `context/bun-runner.md` or `rules/code-quality.md`.
-- Browser-use or create-cli changes.
+- Browser-use or cli-author changes.
 - Skill reference docs unless implementation proves `SKILL.md` would otherwise bloat.
 
 ---
@@ -181,7 +181,7 @@ flowchart TB
   - `skills/test-runner/scripts/package.json`
 - **Approach:** Start by resolving `@side-quest/cli-command-facade` from `skills/test-runner/scripts`; if missing, stop and ask before editing `package.json`. Then execute Bun tests as a child process, capture output, classify pass/fail/invocation errors, and render compact plain or JSON from one result model. Use facade-backed support for structured recovery diagnostics. Include run correlation in JSON and diagnostics. Keep raw Bun output transient by default, with optional debug artifacts when needed. Keep exact output shape in tests and help, not in `SKILL.md`.
 - **Owners:** Contract and discovery owner: `skills/test-runner/scripts/command-contract.ts`; result model owner: `skills/test-runner/scripts/test-runner.ts`; parser or engine owner: runner core inside `skills/test-runner/scripts/test-runner.ts` unless implementation extracts a module; CLI owner: `skills/test-runner/scripts/test-runner.ts`; tests owner: `skills/test-runner/scripts/test-runner.test.ts`.
-- **Patterns to Follow:** `skills/create-cli/references/agent-native-cli-design.md`; `skills/create-cli/references/cli-command-facade.md`; `skills/create-cli/references/cli-guidelines.md`; existing Bun script packages under `skills/browser-use/scripts` and `skills/people-enrich/scripts`.
+- **Patterns to Follow:** `skills/cli-author/references/agent-native-cli-design.md`; `skills/cli-author/references/cli-command-facade.md`; `skills/cli-author/references/cli-guidelines.md`; existing Bun script packages under `skills/browser-use/scripts` and `skills/people-enrich/scripts`.
 - **Test Scenarios:**
   - Covers R4/R6/R8. Passing fixture emits tiny plain output and exits `0`.
   - Covers R5. JSON mode parses for pass and failure fixtures.
@@ -204,7 +204,7 @@ flowchart TB
   - `skills/test-runner/scripts/test-runner.test.ts`
 - **Approach:** Use the shell entrypoint as the stable command agents can run from the skill. Check `command -v bun` before invoking TypeScript. Emit a minimal missing-Bun diagnostic in plain and JSON modes from the wrapper. Keep help concise, route exact flags to the script, and keep diagnostics on stderr where appropriate.
 - **Owners:** Shell entrypoint owner: `skills/test-runner/scripts/test-runner.sh`; help or discovery owner: `skills/test-runner/scripts/command-contract.ts` plus `skills/test-runner/scripts/test-runner.ts`; parser acceptance owner: `skills/test-runner/scripts/test-runner.test.ts`.
-- **Patterns to Follow:** `skills/create-cli/SKILL.md`; `skills/create-cli/references/cli-command-facade.md`; `skills/create-cli/references/cli-guidelines.md`.
+- **Patterns to Follow:** `skills/cli-author/SKILL.md`; `skills/cli-author/references/cli-command-facade.md`; `skills/cli-author/references/cli-guidelines.md`.
 - **Test Scenarios:**
   - Covers R20/R22. Help renders accepted modes and usage without requiring `SKILL.md` to copy the contract.
   - Covers R9. Invalid usage exits non-zero with recovery guidance.
@@ -221,7 +221,7 @@ flowchart TB
   - `skills/test-runner/PROVENANCE.md`
 - **Approach:** Write a terse proof-only skill with quoted `description`, owner paths, command pointer, safety notes, and the next safe action. State that normal test runs still use current MCP guidance until U5 passes and guidance is updated. Name script/help/tests as owners for exact behavior.
 - **Owners:** Skill prose owner: `skills/test-runner/SKILL.md`; deterministic contract owners: `skills/test-runner/scripts/command-contract.ts`, `skills/test-runner/scripts/test-runner.ts`, `skills/test-runner/scripts/test-runner.sh`, and `skills/test-runner/scripts/test-runner.test.ts`. No reference doc in v1 unless implementation proves prose bloat.
-- **Patterns to Follow:** `context/skill-design-philosophy.md`; `skills/summarize/SKILL.md`; `skills/create-cli/SKILL.md`; repo work style.
+- **Patterns to Follow:** `context/skill-design-philosophy.md`; `skills/summarize/SKILL.md`; `skills/cli-author/SKILL.md`; repo work style.
 - **Test Scenarios:**
   - Covers R19/R19a. The skill tells agents when to use the runner for proof work and keeps normal test runs on current MCP guidance until U5.
   - Covers R20. The skill does not copy output schemas, flags, parser states, or exit tables.
@@ -274,9 +274,9 @@ flowchart TB
 - Skill philosophy: `context/skill-design-philosophy.md`
 - Current runner guidance: `context/bun-runner.md`
 - Claude enforcement rule: `rules/code-quality.md`
-- Create CLI skill: `skills/create-cli/SKILL.md`
-- Agent-native CLI reference: `skills/create-cli/references/agent-native-cli-design.md`
-- Facade-backed CLI reference: `skills/create-cli/references/cli-command-facade.md`
-- CLI guidelines reference: `skills/create-cli/references/cli-guidelines.md`
-- Prior create-cli plan: `docs/plans/2026-06-04-002-docs-create-cli-product-shape-rewrite-plan.md`
+- CLI Author skill: `skills/cli-author/SKILL.md`
+- Agent-native CLI reference: `skills/cli-author/references/agent-native-cli-design.md`
+- Facade-backed CLI reference: `skills/cli-author/references/cli-command-facade.md`
+- CLI guidelines reference: `skills/cli-author/references/cli-guidelines.md`
+- Prior cli-author plan: `docs/plans/2026-06-04-002-docs-cli-author-product-shape-rewrite-plan.md`
 - Bun docs: `/oven-sh/bun` via Context7

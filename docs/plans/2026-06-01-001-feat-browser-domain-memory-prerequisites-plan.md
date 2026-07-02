@@ -130,7 +130,7 @@ The preflight owns only prerequisite truth. It proves sources and packages are a
   - `skills/browser-domain-memory/scripts/README.md` (create or update)
 - **Approach:** Add a minimal script-local package so prerequisites can be tested and run without pretending the full browser-domain-memory CLI exists. The preflight returns a small machine-readable result with checks for prototype evidence, root replay deps, and script-local facade availability. The shell wrapper mirrors `skills/browser-use/scripts/preflight-warm-chrome.sh`: thin, predictable, and not a second CLI framework.
 - **Execution Note:** Characterization-first against the failure shapes: write missing-prototype and missing-package tests before adding happy-path polish.
-- **Patterns to Follow:** `skills/browser-use/scripts/preflight-warm-chrome.ts`, `skills/browser-use/scripts/preflight-warm-chrome.sh`, `skills/browser-use/scripts/package.json`, `skills/create-cli/scripts/package.json`.
+- **Patterns to Follow:** `skills/browser-use/scripts/preflight-warm-chrome.ts`, `skills/browser-use/scripts/preflight-warm-chrome.sh`, `skills/browser-use/scripts/package.json`, `skills/cli-author/scripts/package.json`.
 - **Test Scenarios:**
   - Happy path: all prerequisites present returns success and lists checked surfaces.
   - Missing prototype: preflight exits non-zero and names the missing source.
@@ -156,7 +156,7 @@ The preflight owns only prerequisite truth. It proves sources and packages are a
   - Both deps present: preflight reports versions and success.
   - `@puppeteer/replay` missing: preflight fails with a setup diagnostic naming root `package.json`.
   - `puppeteer-core` missing: preflight fails with a setup diagnostic explaining that `puppeteer` is an optional peer and no driver exists without `puppeteer-core`.
-  - Import surface: a dynamic import check resolves from repo root, not from `skills/create-cli/scripts/node_modules`.
+  - Import surface: a dynamic import check resolves from repo root, not from `skills/cli-author/scripts/node_modules`.
   - Lockfile: dependency install updates `bun.lock` consistently with `package.json`.
 - **Verification:** Root runtime can import both replay packages before U2/U3 deterministic code in the active plan imports them.
 
@@ -170,15 +170,15 @@ The preflight owns only prerequisite truth. It proves sources and packages are a
   - `skills/browser-domain-memory/scripts/tsconfig.json` (modify)
   - `skills/browser-domain-memory/scripts/preflight-prerequisites.ts` (modify)
   - `skills/browser-domain-memory/scripts/preflight-prerequisites.test.ts` (modify)
-- **Approach:** Add `@side-quest/cli-command-facade` to `skills/browser-domain-memory/scripts/package.json`, not root and not via `skills/create-cli/scripts/node_modules`. Treat it as a private machine-local package for now. The preflight checks that the package resolves from `skills/browser-domain-memory/scripts/`, reads its package metadata, and confirms public imports used by the facade contract path are available. If the package is absent, point to the script-local package surface and private-link repair, not to a generic package manager failure.
-- **Patterns to Follow:** `skills/browser-use/scripts/package.json`, `skills/create-cli/scripts/package.json`, `skills/create-cli/references/cli-command-facade.md`, ADR-0007.
+- **Approach:** Add `@side-quest/cli-command-facade` to `skills/browser-domain-memory/scripts/package.json`, not root and not via `skills/cli-author/scripts/node_modules`. Treat it as a private machine-local package for now. The preflight checks that the package resolves from `skills/browser-domain-memory/scripts/`, reads its package metadata, and confirms public imports used by the facade contract path are available. If the package is absent, point to the script-local package surface and private-link repair, not to a generic package manager failure.
+- **Patterns to Follow:** `skills/browser-use/scripts/package.json`, `skills/cli-author/scripts/package.json`, `skills/cli-author/references/cli-command-facade.md`, ADR-0007.
 - **Test Scenarios:**
   - Facade present: preflight resolves `@side-quest/cli-command-facade` from `skills/browser-domain-memory/scripts/`.
   - Facade absent: preflight fails with a clear setup diagnostic and no TypeScript stack.
-  - Wrong surface: a facade found only in `skills/create-cli/scripts/node_modules` does not satisfy readiness.
+  - Wrong surface: a facade found only in `skills/cli-author/scripts/node_modules` does not satisfy readiness.
   - Public API: `defineCommandFacadeContract` and the public package entry resolve; no deep imports required.
   - Typecheck readiness: script-local TypeScript config includes the node/Bun types needed to follow the facade import edge.
-- **Verification:** U1a can create `command-contract.ts` under `skills/browser-domain-memory/scripts/` without inventing a new dependency surface or borrowing create-cli's package link.
+- **Verification:** U1a can create `command-contract.ts` under `skills/browser-domain-memory/scripts/` without inventing a new dependency surface or borrowing cli-author's package link.
 
 ### U5. Readiness Wiring and Documentation
 
@@ -214,7 +214,7 @@ The preflight owns only prerequisite truth. It proves sources and packages are a
 
 - **Branch/source mismatch:** Issue #134 says the active `2026-05-31` master plan is on `main`, but a fresh fetch of `origin/main` did not include that path. The current branch contains the plan and the issue comment names it as source of truth. Reconcile branch policy before committing if this matters for merge destination.
 - **Dependency approval boundary:** The active plan and #134 approve the need for `@puppeteer/replay`, `puppeteer-core`, and the facade package posture. If implementation happens outside that issue context, ask before mutating package manifests.
-- **Private facade link:** `@side-quest/cli-command-facade` resolves locally for `skills/browser-use/scripts/` and `skills/create-cli/scripts/` through a symlink to `side-quest-engineering`. The browser-domain-memory script package needs its own surface and diagnostic.
+- **Private facade link:** `@side-quest/cli-command-facade` resolves locally for `skills/browser-use/scripts/` and `skills/cli-author/scripts/` through a symlink to `side-quest-engineering`. The browser-domain-memory script package needs its own surface and diagnostic.
 - **Bun/Node compatibility:** `@puppeteer/replay` and `puppeteer-core` must resolve under the repo's Bun/TypeScript setup before deterministic replay code lands. This issue checks import readiness only; the warm-Chrome replay spike remains active plan U3.
 - **Prototype retention choice:** Tracking the restored prototypes is simplest. Choosing an external immutable artifact path instead adds discovery friction for future agents and must include enough contents to lift behavior without re-deriving it.
 
@@ -225,7 +225,7 @@ The preflight owns only prerequisite truth. It proves sources and packages are a
 - Issue: `https://github.com/nathanvale/claude-code-config/issues/134`.
 - Active plan: `docs/plans/2026-05-31-001-feat-browser-domain-memory-plan.md`.
 - Browser-domain-memory stub: `skills/browser-domain-memory/SKILL.md`, `skills/browser-domain-memory/PROVENANCE.md`.
-- Facade patterns: `skills/browser-use/scripts/`, `skills/create-cli/scripts/`, `skills/create-cli/references/cli-command-facade.md`, ADR-0007.
+- Facade patterns: `skills/browser-use/scripts/`, `skills/cli-author/scripts/`, `skills/cli-author/references/cli-command-facade.md`, ADR-0007.
 - Warm Chrome boundary: `skills/browser-use/SKILL.md`, `skills/browser-use/references/warm-chrome.md`, ADR-0006.
 - Restored local prototype evidence: `prototypes/browser-use-uplift/`, `prototypes/build-scratch-handoff/` (57 files present on 2026-06-01).
 - Package metadata checked 2026-06-01 with `bun pm view`: `@puppeteer/replay` 4.0.2, `puppeteer-core` 25.1.0, `@puppeteer/replay` optional peers include `puppeteer >=25.0.0` and `lighthouse >=13.0.0`.
