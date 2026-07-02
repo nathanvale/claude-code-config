@@ -7,9 +7,9 @@ date: "2026-07-02"
 timezone: Australia/Melbourne
 owner: agent-skills
 source:
-  - docs/plans/2026-07-02-002-feat-npx-skills-division-of-labor-plan.md
+  - runtime/agent-skills/docs/plans/2026-07-02-002-feat-npx-skills-division-of-labor-plan.md
   - docs/adr/0016-ownership-ledger-grain-and-lock-boundary.md
-  - docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md
+  - runtime/agent-skills/docs/brainstorms/2026-06-16-agent-skills-local-projection-requirements.md
 decision_metadata_format: fenced-yaml-per-decision
 ---
 
@@ -37,7 +37,7 @@ decided_at: "2026-07-02"
 decision: npx skills owns external skill acquisition; agent-skills owns repo-local live projection; agent-skills recognizes lockfile-managed entries as a third external class
 owner: agent-skills
 source:
-  - docs/plans/2026-07-02-002-feat-npx-skills-division-of-labor-plan.md
+  - runtime/agent-skills/docs/plans/2026-07-02-002-feat-npx-skills-division-of-labor-plan.md
 ```
 
 Decision:

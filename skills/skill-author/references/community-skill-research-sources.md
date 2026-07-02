@@ -36,7 +36,7 @@ Keep accepted rules in the owning `skill-author` reference. Keep source freshnes
 - SkillOpt paper: `https://arxiv.org/abs/2605.23904`
   - Checked: 2026-06-08.
   - Use for evidence-loop framing: bounded edits, validation score, rejected edits, and skill optimization from observed runs.
-- Local research: `docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md`
+- Local research: `runtime/agent-skills/docs/brainstorms/2026-05-30-agent-skills-repo-no-plugins-pivot.md`
   - Use for harness-agnostic skill distribution trade-offs.
 - Local research: `docs/research/2026-05-30-skill-composability-handoff-observability.md`
   - Use for composition, handoff, and observability context.
