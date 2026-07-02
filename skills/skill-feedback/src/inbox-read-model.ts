@@ -71,7 +71,7 @@ export type RawInboxReport = {
  */
 export type RawInboxReadFailure = {
 	file: SafeInboxJsonFile;
-	reason: "permission" | "invalid_json";
+	reason: "permission" | "invalid_json" | "missing";
 };
 
 /**
@@ -198,7 +198,7 @@ export async function readReviewInbox(input: {
 	const rawRead = await readRawInboxReports(scan.files, input.runtime);
 	for (const failure of rawRead.failures) {
 		if (failure.reason === "permission") state.skippedUnsafeCount += 1;
-		else state.invalidCount += 1;
+		else if (failure.reason === "invalid_json") state.invalidCount += 1;
 	}
 	const normalizedRead = normalizeRawInboxReports({
 		rawReports: rawRead.reports,
@@ -327,7 +327,11 @@ export async function readRawInboxReports(
 		} catch (error) {
 			failures.push({
 				file,
-				reason: isPermissionErrorCode(error) ? "permission" : "invalid_json",
+				reason: isPermissionErrorCode(error)
+					? "permission"
+					: isNodeErrorCode(error, "ENOENT")
+						? "missing"
+						: "invalid_json",
 			});
 		}
 	}
@@ -399,8 +403,15 @@ export async function scanPurgeCandidates(input: {
 			: ({ ok: false, diagnostics: [] } satisfies WriterProofKeyRead);
 	const candidates: SkillFeedbackPurgeCandidate[] = [];
 	const invalidPaths: string[] = [...scan.invalidPaths];
+	const skippedUnsafePaths: string[] = [...scan.skippedUnsafePaths];
 	const rawRead = await readRawInboxReports(scan.files, input.runtime);
-	invalidPaths.push(...rawRead.failures.map((failure) => failure.file.relativePath));
+	for (const failure of rawRead.failures) {
+		if (failure.reason === "permission") {
+			skippedUnsafePaths.push(failure.file.relativePath);
+		} else if (failure.reason === "invalid_json") {
+			invalidPaths.push(failure.file.relativePath);
+		}
+	}
 	const normalizedRead = normalizeRawInboxReports({
 		rawReports: rawRead.reports,
 		proofKey,
@@ -427,8 +438,8 @@ export async function scanPurgeCandidates(input: {
 	}
 	return {
 		candidates,
-		skippedUnsafeCount: scan.skippedUnsafeCount,
-		skippedUnsafePaths: scan.skippedUnsafePaths,
+		skippedUnsafeCount: skippedUnsafePaths.length,
+		skippedUnsafePaths,
 		invalidPaths,
 	};
 }
@@ -499,7 +510,7 @@ export function deriveInboxHealth(
 	const lowSignalAges = lowSignalReports
 		.map((entry) => entry.report.generated_ts)
 		.filter((value) => Number.isFinite(Date.parse(value)))
-		.sort();
+		.sort((left, right) => Date.parse(left) - Date.parse(right));
 	const lowSignalReasonIds = uniqueSorted(
 		lowSignalReports.map((entry) => entry.reasonId),
 	);

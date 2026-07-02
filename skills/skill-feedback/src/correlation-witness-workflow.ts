@@ -377,7 +377,6 @@ export async function executeCorrelationRepairCandidates(input: {
 		);
 		candidates.push(blocked);
 		if (
-			writtenCount > 0 ||
 			result.diagnostics.includes("correlation_witness_write_failed") ||
 			result.diagnostics.includes("correlation_diagnostic_write_failed")
 		) {

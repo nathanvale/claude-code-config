@@ -149,6 +149,27 @@ describe("skill-feedback report normalizer", () => {
 		expect(normalized.report.runtime.usage).toBeUndefined();
 	});
 
+	test("normalizes missing v0 generated_ts as a timestamp gap", () => {
+		const { generated_ts: _generatedTs, ...missingTimestampReceipt } =
+			COMPLETE_RECEIPT;
+		const v0 = usableReport(missingTimestampReceipt);
+		const normalized = normalizeReport(v0);
+
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.evidence_gaps).toContainEqual(
+			expect.objectContaining({
+				code: "missing_generated_ts",
+				path: "generated_ts",
+			}),
+		);
+		expect(
+			normalized.report.evidence_gaps.filter(
+				(gap) => gap.path === "generated_ts",
+			),
+		).not.toContainEqual(expect.objectContaining({ code: "cost_unavailable" }));
+	});
+
 	test("normalizes v1 reports without treating optional lanes as gaps", () => {
 		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
 		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
@@ -225,6 +246,22 @@ describe("skill-feedback report normalizer", () => {
 		expect(normalized.report.skill_run_id).toBeUndefined();
 		expect(normalized.report.skill_run_id_provenance).toBeUndefined();
 		expect(normalized.report.skill).toBe(COMPLETE_CLOSEOUT.skill);
+	});
+
+	test("normalizes schema 2 top-level skill when report-card skill is blank", () => {
+		const normalized = normalizeReport(
+			schema2Report({
+				skill: "top-level-skill",
+				report_card: {
+					...COMPLETE_CLOSEOUT,
+					skill: "",
+				},
+			}),
+		);
+
+		expect(normalized.kind).toBe("ok");
+		if (normalized.kind !== "ok") throw new Error("expected normalized report");
+		expect(normalized.report.skill).toBe("top-level-skill");
 	});
 
 	test("normalizes capture provenance fields and rejects invalid values", () => {
@@ -498,6 +535,12 @@ describe("skill-feedback report normalizer", () => {
 				reason: "expected_string",
 			},
 			{
+				name: "loose generated timestamp",
+				overrides: { generated_ts: "not-a-date" },
+				path: "generated_ts",
+				reason: "invalid_timestamp",
+			},
+			{
 				name: "skill",
 				overrides: { skill: 7 },
 				path: "skill",
@@ -537,6 +580,40 @@ describe("skill-feedback report normalizer", () => {
 				},
 				path: "report_card.friction",
 				reason: "expected_object",
+			},
+			{
+				name: "negative usage",
+				overrides: {
+					runtime: {
+						git_sha: COMPLETE_RECEIPT.git_sha,
+						skill_version: COMPLETE_RECEIPT.skill_version,
+						model: COMPLETE_RECEIPT.model,
+						usage: {
+							input_tokens: -1,
+							output_tokens: 1,
+							cache_read_tokens: 0,
+						},
+					},
+				},
+				path: "runtime.usage",
+				reason: "invalid_usage",
+			},
+			{
+				name: "fractional usage",
+				overrides: {
+					runtime: {
+						git_sha: COMPLETE_RECEIPT.git_sha,
+						skill_version: COMPLETE_RECEIPT.skill_version,
+						model: COMPLETE_RECEIPT.model,
+						usage: {
+							input_tokens: 1.5,
+							output_tokens: 1,
+							cache_read_tokens: 0,
+						},
+					},
+				},
+				path: "runtime.usage",
+				reason: "invalid_usage",
 			},
 			{
 				name: "evidence gaps",

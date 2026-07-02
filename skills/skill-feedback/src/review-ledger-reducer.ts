@@ -156,10 +156,10 @@ function buildReviewUnits(
 	const reportIdTotals = countReportIds(reports);
 	const reportIdOccurrences = new Map<string, number>();
 	for (const report of reports) {
+		const occurrence = reportIdOccurrences.get(report.report_id) ?? 0;
+		reportIdOccurrences.set(report.report_id, occurrence + 1);
 		const trustedRunId = trustedSkillRunId(report);
 		if (!trustedRunId) {
-			const occurrence = reportIdOccurrences.get(report.report_id) ?? 0;
-			reportIdOccurrences.set(report.report_id, occurrence + 1);
 			units.push({
 				review_unit_key:
 					(reportIdTotals.get(report.report_id) ?? 0) > 1

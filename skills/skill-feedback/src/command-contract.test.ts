@@ -778,6 +778,23 @@ describe("skill-feedback U2 command contract", () => {
 			field: "usage",
 			reason: "expected { input_tokens, output_tokens, cache_read_tokens }",
 		});
+		for (const usage of [
+			{ input_tokens: -1, output_tokens: 1, cache_read_tokens: 0 },
+			{ input_tokens: 1.5, output_tokens: 1, cache_read_tokens: 0 },
+		]) {
+			expect(parseReceipt({ ...COMPLETE_RECEIPT, usage })).toEqual({
+				kind: "invalid",
+				field: "usage",
+				reason: "expected { input_tokens, output_tokens, cache_read_tokens }",
+			});
+		}
+		expect(
+			parseReceipt({ ...COMPLETE_RECEIPT, generated_ts: "not-a-date" }),
+		).toEqual({
+			kind: "invalid",
+			field: "generated_ts",
+			reason: "expected ISO string",
+		});
 	});
 
 	test("uses passed-in timestamps deterministically", async () => {

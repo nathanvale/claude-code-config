@@ -393,6 +393,37 @@ describe("reduceReviewLedger golden vectors (U4)", () => {
 		expect(entry?.review_unit_keys).toHaveLength(2);
 	});
 
+	test("duplicate report_id cannot route untrusted evidence into a trusted unit", () => {
+		const { ledger_entries, review_units } = reduceReviewLedger([
+			report({
+				report_id: "dup",
+				evidence_source: "hook_capture",
+				touched_surfaces: sharedAnchor,
+				skill_run_id: "run-a",
+				skill_run_id_provenance: "runtime_owned",
+			}),
+			report({
+				report_id: "dup",
+				evidence_source: "driver_closeout",
+				touched_surfaces: sharedAnchor,
+				skill_run_id: "run-forged",
+				skill_run_id_provenance: "report_authored",
+			}),
+		]);
+
+		expect(review_units.map((unit) => unit.review_unit_key)).toEqual([
+			"run:run-a",
+			"report:dup#2",
+		]);
+		expect(ledger_entries).toHaveLength(1);
+		const entry = ledger_entries[0];
+		expect(entry?.source_mix).toEqual(["hook_capture", "driver_closeout"]);
+		expect(entry?.allowed_claims).toContain("mixed_evidence_sources");
+		expect(entry?.allowed_claims).not.toContain("same_trusted_run");
+		expect(entry?.allowed_claims).not.toContain("corroborated");
+		expect(entry?.evidence_tier).toBe("runtime_observed");
+	});
+
 	test("empty reports produce an empty, valid reducer result", () => {
 		const result = reduceReviewLedger([]);
 		expect(result.review_units).toEqual([]);

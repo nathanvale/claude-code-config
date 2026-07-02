@@ -177,7 +177,10 @@ export class CodexJsonAdapter implements CaptureAdapter {
 			]) ?? receipt.model,
 		);
 
-		const usage = readCodexUsage(terminalEvent ?? completedEvent ?? failedEvent);
+		const usage =
+			readCodexUsage(terminalEvent) ??
+			readCodexUsage(completedEvent) ??
+			readCodexUsage(failedEvent);
 		if (usage) {
 			receipt.usage = usage;
 		} else {
@@ -551,7 +554,9 @@ function firstStringFromObjects(
 	keys: readonly string[],
 ): string | undefined {
 	for (const object of objects) {
-		const source = objectFrom(object?.attributes) ?? object;
+		const attributes = objectFrom(object?.attributes);
+		const source =
+			attributes && Object.keys(attributes).length > 0 ? attributes : object;
 		for (const key of keys) {
 			const value = stringFrom(readPath(source, key));
 			if (value) return value;

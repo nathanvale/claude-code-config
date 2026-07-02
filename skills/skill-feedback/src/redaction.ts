@@ -19,6 +19,11 @@ type RedactionPattern = {
 
 const SECRET_PATTERNS: readonly RedactionPattern[] = [
 	{
+		pattern:
+			/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+		replacement: REDACTION,
+	},
+	{
 		pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi,
 		replacement: `Bearer ${REDACTION}`,
 	},
@@ -27,12 +32,7 @@ const SECRET_PATTERNS: readonly RedactionPattern[] = [
 		replacement: REDACTION,
 	},
 	{
-		pattern:
-			/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-		replacement: REDACTION,
-	},
-	{
-		pattern: /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi,
+		pattern: /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s@]+)@/gi,
 		replacement: (_match, scheme: string) => `${scheme}[redacted-credentials]@`,
 	},
 	{
@@ -40,11 +40,15 @@ const SECRET_PATTERNS: readonly RedactionPattern[] = [
 		replacement: REDACTION,
 	},
 	{
-		pattern: /\bghp_[A-Za-z0-9_]{20,}\b/g,
+		pattern: /\bgh[opusr]_[A-Za-z0-9_]{20,}\b/g,
 		replacement: REDACTION,
 	},
 	{
-		pattern: /\bxox[bapr]-[A-Za-z0-9-]{16,}\b/g,
+		pattern: /\bxox[baprs]-[A-Za-z0-9-]{16,}\b/g,
+		replacement: REDACTION,
+	},
+	{
+		pattern: /\bxapp-[A-Za-z0-9-]{16,}\b/g,
 		replacement: REDACTION,
 	},
 	{
@@ -218,6 +222,11 @@ function redactAuthUrls(
 			parsed.hash = "";
 			changed = true;
 		}
+		if (parsed.username !== "" || parsed.password !== "") {
+			parsed.username = "redacted-credentials";
+			parsed.password = "";
+			changed = true;
+		}
 		if (changed) {
 			countRedactions(1);
 		}
@@ -226,5 +235,7 @@ function redactAuthUrls(
 }
 
 function isSensitiveQueryKey(key: string): boolean {
-	return /token|secret|auth|api[-_]?key|credential|password|passwd/i.test(key);
+	return /token|secret|auth|api[-_]?key|credential|password|passwd|signature|(^|[-_])sig($|[-_])/i.test(
+		key,
+	);
 }

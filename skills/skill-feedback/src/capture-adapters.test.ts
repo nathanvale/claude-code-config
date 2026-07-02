@@ -140,6 +140,67 @@ describe("skill-feedback capture adapters", () => {
 		expect(receipt.usage.output_tokens).toBe(10);
 	});
 
+	test("Codex JSON uses completed usage when a failed terminal event lacks usage", async () => {
+		const adapter = new CodexJsonAdapter(runtime);
+		const result = await adapter.capture({
+			skill: "create-skill",
+			goal: "Repair the skill route.",
+			friction: "The run failed after emitting usage.",
+			generated_ts: GENERATED_TS,
+			events: [
+				{
+					type: "turn.failed",
+					model: "gpt-5-codex",
+				},
+				{
+					type: "turn.completed",
+					usage: {
+						input_tokens: 110,
+						cached_input_tokens: 11,
+						output_tokens: 20,
+						reasoning_output_tokens: 5,
+					},
+				},
+			],
+		});
+
+		const receipt = expectReceipt(result);
+		expect(receipt.outcome).toBe("failed");
+		expect(receipt.usage).toEqual({
+			input_tokens: 110,
+			output_tokens: 25,
+			cache_read_tokens: 11,
+		});
+	});
+
+	test("empty attributes do not hide envelope receipt fields", async () => {
+		const adapter = new CodexJsonAdapter(runtime);
+		const result = await adapter.capture({
+			skill: "create-skill",
+			goal: "Repair the skill route.",
+			friction: "The envelope carried receipt fields.",
+			generated_ts: GENERATED_TS,
+			attributes: {},
+			events: [
+				{
+					type: "turn.completed",
+					model: "gpt-5-codex",
+					usage: {
+						input_tokens: 100,
+						cached_input_tokens: 12,
+						output_tokens: 24,
+						reasoning_output_tokens: 6,
+					},
+				},
+			],
+		});
+
+		const receipt = expectReceipt(result);
+		expect(receipt.skill).toBe("create-skill");
+		expect(receipt.goal).toBe("Repair the skill route.");
+		expect(receipt.friction).toBe("The envelope carried receipt fields.");
+	});
+
 	test("Claude OTel missing token attrs returns degraded capture", async () => {
 		const adapter = new ClaudeOtelAdapter(runtime);
 		const result = await adapter.capture({

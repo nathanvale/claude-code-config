@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash, randomBytes } from "node:crypto";
+import { constants } from "node:fs";
 import type { Stats } from "node:fs";
 import {
 	chmod,
@@ -67,6 +68,7 @@ import {
 	type ReviewClaimReadiness,
 	type ReviewResultData,
 	type SkillFeedbackQueueEvidenceStrength,
+	type SkillFeedbackQueueRow,
 	type SkillFeedbackQueueResultData,
 	type SkillFeedbackPurgeResultData,
 	type SkillFeedbackPurgeLane,
@@ -201,6 +203,7 @@ type SkillFeedbackErrorOptions =
 			data?: Record<string, unknown>;
 	  };
 type SkillFeedbackReadCommand = "review" | "health";
+type ReadOnlyCommandName = SkillFeedbackReadCommand | "dashboard";
 type SkillFeedbackCliOptions = {
 	runtime?: SkillFeedbackRuntime;
 	runId?: string;
@@ -302,7 +305,16 @@ export function createDefaultSkillFeedbackRuntime(
 			const result = await runProcess(["git", "rev-parse", "HEAD"], cwd);
 			return result.exitCode === 0 ? result.stdout.trim() : "";
 		},
-		readSkillVersion: async (skill) => skillVersionFromPackage(skill, repoRoot()),
+		readSkillVersion: async (skill) => {
+			const target = await resolveSkillFeedbackReadTarget({
+				cwd: repoRoot(),
+				runGit,
+			});
+			return skillVersionFromPackage(
+				skill,
+				target.ok ? target.repoRoot : repoRoot(),
+			);
+		},
 		readStdinTelemetry: async () => parseStdinTelemetry(await readStdin()),
 		checkIgnored: async (repoRoot, relativePath) => {
 			const result = await runProcess(
@@ -313,7 +325,7 @@ export function createDefaultSkillFeedbackRuntime(
 		},
 		mkdirPrivate: async (path, mode) => {
 			await mkdir(path, { recursive: true, mode });
-			await chmod(path, mode);
+			await chmodPrivateDirectoryNoFollow(path, mode);
 		},
 		writePrivateFile: writeAtomicPrivateFile,
 		removeFile: async (path) => {
@@ -328,6 +340,21 @@ export function createDefaultSkillFeedbackRuntime(
 	};
 }
 
+async function chmodPrivateDirectoryNoFollow(
+	path: string,
+	mode: number,
+): Promise<void> {
+	const handle = await open(
+		path,
+		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+	);
+	try {
+		await handle.chmod(mode);
+	} finally {
+		await handle.close();
+	}
+}
+
 // Covered by package tests; keep owner-local safety branches explicit.
 // fallow-ignore-next-line complexity
 export async function recordSkillFeedbackReceipt(
@@ -340,144 +367,166 @@ export async function recordSkillFeedbackReceipt(
 ): Promise<SkillFeedbackProcessResult> {
 	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
 	const runId = options.runId ?? "skill-feedback-record";
-	const repoRoot = resolve(runtime.repoRoot());
 
-	const prepared = await prepareReceipt(rawReceipt, runtime, options.internalTelemetry);
-	if (!prepared.ok) {
-		const namesField =
-			prepared.code === "unknown_receipt_field" ||
-			prepared.code === "invalid_receipt_field";
-		return errorResult(runId, USAGE_EXIT_CODE, prepared.code, prepared.message, {
-			recoverability: "change_input",
-			hint: namesField
-				? prepared.message
-				: "Fix the receipt shape and rerun skill-feedback record.",
-		});
-	}
-
-	if (!isStrictIsoTimestamp(prepared.fields.generated_ts)) {
-		return errorResult(
+	try {
+		const target = await resolveMutationRepoRoot({
+			runtime,
 			runId,
-			USAGE_EXIT_CODE,
-			"invalid_generated_ts",
-			"Receipt generated_ts must be a strict ISO timestamp.",
-			{
-				recoverability: "change_input",
-				hint: "Pass generated_ts as an ISO string ending in Z.",
-			},
-		);
-	}
-
-	const parsed = parseReceipt(prepared.fields);
-	if (parsed.kind !== "ok" && parsed.kind !== "degraded") {
-		return errorResult(
-			runId,
-			USAGE_EXIT_CODE,
-			"invalid_receipt",
-			"Receipt did not match the skill-feedback schema.",
-			{
-				recoverability: "change_input",
-				hint: "Remove unknown fields and correct field types.",
-			},
-		);
-	}
-
-	const legacyReport = buildSoftwareLearningReport(
-		parsed,
-		prepared.captureMetadata,
-	);
-	const redactedLegacy = redactSoftwareLearningReport(legacyReport);
-	const report = buildHookCaptureReport(
-		redactedLegacy.value,
-		redactedLegacy.redactions,
-	);
-	const ignoreStatus = await runtime.checkIgnored(repoRoot, `${INBOX_DIR}/`);
-	if (ignoreStatus !== 0) {
-		return errorResult(
-			runId,
-			RUNTIME_FAILURE_EXIT_CODE,
-			"gitignore_gate_refused",
-			"Skill-feedback inbox is not ignored by git.",
-			{
-				recoverability: "repair_state",
-				hint: "Add .skill-feedback/ to the repo gitignore, then rerun.",
-			},
-		);
-	}
-
-	const inbox = await prepareSkillFeedbackInbox(repoRoot, runtime);
-	if (!inbox.ok) {
-		return errorResult(
-			runId,
-			RUNTIME_FAILURE_EXIT_CODE,
-			inbox.code,
-			"Skill-feedback inbox is unsafe.",
-			{
-				recoverability: "repair_state",
-				hint: inbox.hint,
-			},
-		);
-	}
-	const lane = isLowSignalCodexStopReport(report) ? "low-signal" : "primary";
-	const laneInbox =
-		lane === "low-signal"
-			? await prepareSkillFeedbackSubdirectory(
-					inbox.path,
-					LOW_SIGNAL_INBOX_DIR,
-					runtime,
-				)
-			: { ok: true as const, path: inbox.path };
-	if (!laneInbox.ok) {
-		return errorResult(
-			runId,
-			RUNTIME_FAILURE_EXIT_CODE,
-			laneInbox.code,
-			"Skill-feedback low-signal inbox is unsafe.",
-			{
-				recoverability: "repair_state",
-				hint: laneInbox.hint,
-			},
-		);
-	}
-	const inboxPath = laneInbox.path;
-	const proof = await attachWriterProof({
-		report,
-		inboxPath: inbox.path,
-		runtime,
-		detectionId: prepared.detectionId,
-	});
-	const persisted = proof.report;
-	const reportPath = join(inboxPath, reportFileName(persisted));
-	const writeFailure = await writeReportWithRollback({
-		reportPath,
-		report: persisted,
-		runtime,
-		runId,
-		code: "record_write_failed",
-		message: "Skill-feedback record could not be written.",
-		hint: "Inspect inbox ownership and permissions before retrying.",
-	});
-	if (writeFailure) return writeFailure;
-
-	const envelope = createCliRuntimeSuccessEnvelope({
-		run_id: runId,
-		data: {
 			contract: SKILL_FEEDBACK_CONTRACT_ID,
-			...persisted,
-			...writerProofWriteStatus(proof),
-		},
-	}) satisfies CliRuntimeSuccessEnvelope<
-		ReportCardSoftwareLearningReport & {
-			contract: typeof SKILL_FEEDBACK_CONTRACT_ID;
-			schema_version: typeof SKILL_FEEDBACK_SCHEMA_VERSION;
-		} & WriterProofWriteStatus
-	>;
-	return {
-		exitCode: 0,
-		stdout: `${JSON.stringify(envelope)}\n`,
-		stderr: "",
-		reportPath,
-	};
+			commandName: "record",
+		});
+		if (!target.ok) return target.result;
+		const repoRoot = target.repoRoot;
+
+		const prepared = await prepareReceipt(
+			rawReceipt,
+			runtime,
+			options.internalTelemetry,
+		);
+		if (!prepared.ok) {
+			const namesField =
+				prepared.code === "unknown_receipt_field" ||
+				prepared.code === "invalid_receipt_field";
+			return errorResult(
+				runId,
+				USAGE_EXIT_CODE,
+				prepared.code,
+				prepared.message,
+				{
+					recoverability: "change_input",
+					hint: namesField
+						? prepared.message
+						: "Fix the receipt shape and rerun skill-feedback record.",
+				},
+			);
+		}
+
+		if (!isStrictIsoTimestamp(prepared.fields.generated_ts)) {
+			return errorResult(
+				runId,
+				USAGE_EXIT_CODE,
+				"invalid_generated_ts",
+				"Receipt generated_ts must be a strict ISO timestamp.",
+				{
+					recoverability: "change_input",
+					hint: "Pass generated_ts as an ISO string ending in Z.",
+				},
+			);
+		}
+
+		const parsed = parseReceipt(prepared.fields);
+		if (parsed.kind !== "ok" && parsed.kind !== "degraded") {
+			return errorResult(
+				runId,
+				USAGE_EXIT_CODE,
+				"invalid_receipt",
+				"Receipt did not match the skill-feedback schema.",
+				{
+					recoverability: "change_input",
+					hint: "Remove unknown fields and correct field types.",
+				},
+			);
+		}
+
+		const legacyReport = buildSoftwareLearningReport(
+			parsed,
+			prepared.captureMetadata,
+		);
+		const redactedLegacy = redactSoftwareLearningReport(legacyReport);
+		const report = buildHookCaptureReport(
+			redactedLegacy.value,
+			redactedLegacy.redactions,
+		);
+		const ignoreStatus = await runtime.checkIgnored(repoRoot, `${INBOX_DIR}/`);
+		if (ignoreStatus !== 0) {
+			return errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				"gitignore_gate_refused",
+				"Skill-feedback inbox is not ignored by git.",
+				{
+					recoverability: "repair_state",
+					hint: "Add .skill-feedback/ to the repo gitignore, then rerun.",
+				},
+			);
+		}
+
+		const inbox = await prepareSkillFeedbackInbox(repoRoot, runtime);
+		if (!inbox.ok) {
+			return errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				inbox.code,
+				"Skill-feedback inbox is unsafe.",
+				{
+					recoverability: "repair_state",
+					hint: inbox.hint,
+				},
+			);
+		}
+		const lane = isLowSignalCodexStopReport(report) ? "low-signal" : "primary";
+		const laneInbox =
+			lane === "low-signal"
+				? await prepareSkillFeedbackSubdirectory(
+						inbox.path,
+						LOW_SIGNAL_INBOX_DIR,
+						runtime,
+					)
+				: { ok: true as const, path: inbox.path };
+		if (!laneInbox.ok) {
+			return errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				laneInbox.code,
+				"Skill-feedback low-signal inbox is unsafe.",
+				{
+					recoverability: "repair_state",
+					hint: laneInbox.hint,
+				},
+			);
+		}
+		const inboxPath = laneInbox.path;
+		const proof = await attachWriterProof({
+			report,
+			inboxPath: inbox.path,
+			runtime,
+			detectionId: prepared.detectionId,
+		});
+		const persisted = proof.report;
+		const reportPath = join(inboxPath, reportFileName(persisted));
+		const writeFailure = await writeReportWithRollback({
+			reportPath,
+			report: persisted,
+			runtime,
+			runId,
+			code: "record_write_failed",
+			message: "Skill-feedback record could not be written.",
+			hint: "Inspect inbox ownership and permissions before retrying.",
+		});
+		if (writeFailure) return writeFailure;
+
+		const envelope = createCliRuntimeSuccessEnvelope({
+			run_id: runId,
+			data: {
+				contract: SKILL_FEEDBACK_CONTRACT_ID,
+				...persisted,
+				...writerProofWriteStatus(proof),
+			},
+		}) satisfies CliRuntimeSuccessEnvelope<
+			ReportCardSoftwareLearningReport & {
+				contract: typeof SKILL_FEEDBACK_CONTRACT_ID;
+				schema_version: typeof SKILL_FEEDBACK_SCHEMA_VERSION;
+			} & WriterProofWriteStatus
+		>;
+		return {
+			exitCode: 0,
+			stdout: `${JSON.stringify(envelope)}\n`,
+			stderr: "",
+			reportPath,
+		};
+	} catch {
+		return recordFailedError(runId);
+	}
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -491,7 +540,6 @@ export async function closeoutSkillFeedbackReceipt(
 ): Promise<SkillFeedbackProcessResult> {
 	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
 	const runId = options.runId ?? "skill-feedback-closeout";
-	const repoRoot = resolve(runtime.repoRoot());
 
 	const parsed = parseCloseoutReceipt(rawReceipt);
 	if (parsed.kind === "invalid") {
@@ -509,6 +557,14 @@ export async function closeoutSkillFeedbackReceipt(
 	}
 
 	try {
+		const target = await resolveMutationRepoRoot({
+			runtime,
+			runId,
+			contract: SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
+			commandName: "closeout",
+		});
+		if (!target.ok) return target.result;
+		const repoRoot = target.repoRoot;
 		const generatedTs = runtime.nowIso();
 		const receipt = parsed.receipt;
 		const runtimeTelemetry = await closeoutRuntimeTelemetry(receipt, runtime);
@@ -1037,6 +1093,9 @@ export async function healthSkillFeedbackInbox(
 	const runId = options.runId ?? "skill-feedback-health";
 	const readTarget = await runtime.resolveReadTarget(options.targetPath);
 	if (!readTarget.ok) {
+		if (options.dashboard === true) {
+			return dashboardReadTargetError(readTarget);
+		}
 		return healthReadTargetError(runId, readTarget);
 	}
 	return readHealthProcessResult(
@@ -1102,6 +1161,26 @@ function healthReadTargetError(
 	);
 }
 
+function dashboardReadTargetError(
+	readTarget: Extract<ReadTargetResolution, { ok: false }>,
+): SkillFeedbackProcessResult {
+	return {
+		exitCode: RUNTIME_FAILURE_EXIT_CODE,
+		stdout: [
+			"Skill Feedback",
+			"",
+			"Signal: dashboard target could not be resolved.",
+			`Reason: ${plainSafe(readTarget.message)}`,
+			"",
+			"Next Safe Actions:",
+			`1. ${plainSafe(readTarget.hint)}`,
+			"2. Run `skill-feedback health --plain` from the target repository.",
+			"",
+		].join("\n"),
+		stderr: "",
+	};
+}
+
 function readTargetFailureData(
 	readTarget: Extract<ReadTargetResolution, { ok: false }>,
 ) {
@@ -1114,6 +1193,54 @@ function readTargetFailureData(
 				: { git_exit_code: readTarget.gitExitCode }),
 		},
 	};
+}
+
+async function resolveMutationRepoRoot(input: {
+	runtime: SkillFeedbackRuntime;
+	runId: string;
+	contract: SkillFeedbackResultContractId;
+	commandName: string;
+}): Promise<
+	| { ok: true; repoRoot: string }
+	| { ok: false; result: SkillFeedbackProcessResult }
+> {
+	let readTarget: ReadTargetResolution;
+	try {
+		readTarget = await input.runtime.resolveReadTarget();
+	} catch {
+		return {
+			ok: false,
+			result: errorResult(
+				input.runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				"read_target_resolution_failed",
+				`Skill-feedback ${input.commandName} target could not be resolved.`,
+				{
+					recoverability: "repair_state",
+					hint: "Start from inside the intended repository and retry.",
+					contract: input.contract,
+				},
+			),
+		};
+	}
+	if (!readTarget.ok) {
+		return {
+			ok: false,
+			result: errorResult(
+				input.runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				readTarget.code,
+				readTarget.message,
+				{
+					recoverability: "repair_state",
+					hint: readTarget.hint,
+					contract: input.contract,
+					data: readTargetFailureData(readTarget),
+				},
+			),
+		};
+	}
+	return { ok: true, repoRoot: resolve(readTarget.repoRoot) };
 }
 
 function healthProcessResult(
@@ -1214,6 +1341,49 @@ function healthFailedError(
 			recoverability: "repair_state",
 			hint: "Inspect .skill-feedback/ ownership and unreadable artifacts before retrying.",
 			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+		},
+	);
+}
+
+function recordFailedError(runId: string): SkillFeedbackProcessResult {
+	return errorResult(
+		runId,
+		RUNTIME_FAILURE_EXIT_CODE,
+		"record_write_failed",
+		"Skill-feedback record could not be written.",
+		{
+			recoverability: "repair_state",
+			hint: "Inspect .skill-feedback/ ownership, permissions, and gitignore state before retrying.",
+		},
+	);
+}
+
+function purgeFailedError(
+	runId: string,
+	error: unknown,
+): SkillFeedbackProcessResult {
+	if (isPermissionErrorCode(error)) {
+		return errorResult(
+			runId,
+			RUNTIME_FAILURE_EXIT_CODE,
+			"purge_inbox_permission_denied",
+			"Skill-feedback purge could not read the inbox because permissions denied access.",
+			{
+				recoverability: "repair_state",
+				hint: "Inspect .skill-feedback/ ownership and permissions before retrying.",
+				contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			},
+		);
+	}
+	return errorResult(
+		runId,
+		RUNTIME_FAILURE_EXIT_CODE,
+		"purge_failed",
+		"Skill-feedback purge could not safely inspect the inbox.",
+		{
+			recoverability: "repair_state",
+			hint: "Inspect .skill-feedback/ files and unreadable artifacts before retrying.",
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 		},
 	);
 }
@@ -1700,17 +1870,27 @@ function buildQueueResultData(input: {
 	const weakRows = queueOwnerRows(input.review, reportSkillByRef, "weak");
 	const filteredStrongRows = filterQueueRows(strongRows, input.options);
 	const filteredWeakRows = filterQueueRows(weakRows, input.options);
-	const fallbackRows =
+	const allFallbackRows =
 		input.options.ownerPath === undefined && filteredStrongRows.length === 0
 			? filterQueueRows(
-					queueSkillFallbackRows(input.inbox, input.options.includeWeak),
+					queueSkillFallbackRows(input.inbox, true),
 					input.options,
 				)
 			: [];
+	const fallbackRows = input.options.includeWeak
+		? allFallbackRows
+		: allFallbackRows.filter((row) => row.evidence_strength !== "weak");
 	const candidateRows = input.options.includeWeak
 		? [...filteredStrongRows, ...filteredWeakRows, ...fallbackRows]
 		: [...filteredStrongRows, ...fallbackRows];
-	const rows = candidateRows.slice(0, input.options.limit);
+	const rows = uniqueQueueRows(candidateRows)
+		.sort(compareQueueRows)
+		.slice(0, input.options.limit);
+	const weakAvailableCount =
+		uniqueQueueRows([
+			...filteredWeakRows,
+			...allFallbackRows.filter((row) => row.evidence_strength === "weak"),
+		]).length;
 	const filterApplied =
 		input.options.skill !== undefined || input.options.ownerPath !== undefined;
 	const noBuild =
@@ -1735,7 +1915,7 @@ function buildQueueResultData(input: {
 			primary_count: input.inbox.primaryReports.length,
 			low_signal_count: input.inbox.lowSignalReports.length,
 			returned_count: rows.length,
-			weak_available_count: weakRows.length,
+			weak_available_count: weakAvailableCount,
 		},
 		rows,
 		...(noBuild ? { no_build: noBuild } : {}),
@@ -1746,12 +1926,26 @@ function buildQueueResultData(input: {
 }
 
 function filterQueueRows(
-	rows: SkillFeedbackQueueResultData["rows"],
+	rows: readonly SkillFeedbackQueueRow[],
 	options: Pick<SkillFeedbackQueueOptions, "skill" | "ownerPath">,
-): SkillFeedbackQueueResultData["rows"] {
+): SkillFeedbackQueueRow[] {
 	return rows
 		.filter((row) => queueSkillMatches(row, options.skill))
 		.filter((row) => queueOwnerMatches(row, options.ownerPath));
+}
+
+function uniqueQueueRows(
+	rows: readonly SkillFeedbackQueueRow[],
+): SkillFeedbackQueueRow[] {
+	const seen = new Set<string>();
+	const unique: SkillFeedbackQueueRow[] = [];
+	for (const row of rows) {
+		const key = `${row.evidence_strength}:${row.target_type}:${row.target}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(row);
+	}
+	return unique;
 }
 
 function reportEntries(inbox: ReviewInboxRead): SkillFeedbackReportEntry[] {
@@ -2234,95 +2428,106 @@ export async function purgeSkillFeedbackInbox(
 ): Promise<SkillFeedbackProcessResult> {
 	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
 	const runId = options.runId ?? "skill-feedback-purge";
-	const repoRoot = resolve(runtime.repoRoot());
-	const purge = options.purge;
-	const nowIso = runtime.nowIso();
-	const scan = await scanPurgeCandidates({
-		repoRoot,
-		runtime,
-		readWriterProofKey,
-	});
-	const selected = selectPurgeCandidates(scan.candidates, purge, nowIso);
-	const deletedPaths: string[] = [];
-	const skippedPaths = [...scan.skippedUnsafePaths];
-	if (purge.execute) {
-		const inboxPath = join(repoRoot, INBOX_DIR);
-		const inboxReal = await safeRealpath(inboxPath, runtime);
-		if (!inboxReal) {
-			return errorResult(
-				runId,
-				RUNTIME_FAILURE_EXIT_CODE,
-				"purge_inbox_missing",
-				"Skill-feedback inbox is missing during purge.",
-				{
-					recoverability: "repair_state",
-					hint: "Re-run purge after confirming the private inbox exists.",
-					contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-				},
-			);
-		}
-		for (const candidate of selected) {
-			const safe = await assertSafePurgeCandidate(candidate, inboxReal, runtime);
-			if (!safe.ok) {
-				skippedPaths.push(candidate.relativePath);
-				continue;
-			}
-			try {
-				await runtime.removeFile(candidate.path);
-				deletedPaths.push(candidate.relativePath);
-			} catch {
+	try {
+		const target = await resolveMutationRepoRoot({
+			runtime,
+			runId,
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			commandName: "purge",
+		});
+		if (!target.ok) return target.result;
+		const repoRoot = target.repoRoot;
+		const purge = options.purge;
+		const nowIso = runtime.nowIso();
+		const scan = await scanPurgeCandidates({
+			repoRoot,
+			runtime,
+			readWriterProofKey,
+		});
+		const selected = selectPurgeCandidates(scan.candidates, purge, nowIso);
+		const deletedPaths: string[] = [];
+		const skippedPaths = [...scan.skippedUnsafePaths];
+		if (purge.execute && selected.length > 0) {
+			const inboxPath = join(repoRoot, INBOX_DIR);
+			const inboxReal = await safeRealpath(inboxPath, runtime);
+			if (!inboxReal) {
 				return errorResult(
 					runId,
 					RUNTIME_FAILURE_EXIT_CODE,
-					"purge_delete_failed",
-					"Skill-feedback purge could not delete a selected report.",
+					"purge_inbox_missing",
+					"Skill-feedback inbox is missing during purge.",
 					{
 						recoverability: "repair_state",
-						hint: "Inspect inbox ownership and permissions before retrying.",
+						hint: "Re-run purge after confirming the private inbox exists.",
 						contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-						changedState: deletedPaths.length > 0 ? "partial" : "none",
-						data: { deleted_paths: deletedPaths },
 					},
 				);
 			}
+			for (const candidate of selected) {
+				const safe = await assertSafePurgeCandidate(candidate, inboxReal, runtime);
+				if (!safe.ok) {
+					skippedPaths.push(candidate.relativePath);
+					continue;
+				}
+				try {
+					await runtime.removeFile(candidate.path);
+					deletedPaths.push(candidate.relativePath);
+				} catch {
+					return errorResult(
+						runId,
+						RUNTIME_FAILURE_EXIT_CODE,
+						"purge_delete_failed",
+						"Skill-feedback purge could not delete a selected report.",
+						{
+							recoverability: "repair_state",
+							hint: "Inspect inbox ownership and permissions before retrying.",
+							contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+							changedState: deletedPaths.length > 0 ? "partial" : "none",
+							data: { deleted_paths: deletedPaths },
+						},
+					);
+				}
+			}
 		}
+		const data: SkillFeedbackPurgeResultData = {
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+			mode: purge.execute ? "execute" : "preview",
+			lane: purge.lane,
+			retention: purgeRetentionOutput(purge.retention, nowIso),
+			scanned_count: scan.candidates.length,
+			candidate_count: selected.length,
+			deleted_count: deletedPaths.length,
+			skipped_unsafe_count: skippedPaths.length,
+			invalid_count: scan.invalidPaths.length,
+			candidate_paths: selected.map((candidate) => candidate.relativePath),
+			deleted_paths: deletedPaths,
+			skipped_paths: skippedPaths,
+			invalid_paths: scan.invalidPaths,
+		};
+		const actionId = purge.execute ? "purge-complete" : "inspect-purge-preview";
+		const envelope = createCliRuntimeSuccessEnvelope({
+			run_id: runId,
+			data,
+			runtime_actions: [
+				{
+					id: actionId,
+					summary: purge.execute
+						? "Selected safe inbox reports were deleted."
+						: "Inspect selected purge candidates before executing deletion.",
+					side_effects: purge.execute ? ["write"] : ["read"],
+				},
+			],
+			continuation: { next_action_id: actionId },
+		}) satisfies CliRuntimeSuccessEnvelope<SkillFeedbackPurgeResultData>;
+		return {
+			exitCode: 0,
+			stdout: `${JSON.stringify(envelope)}\n`,
+			stderr: "",
+		};
+	} catch (error) {
+		return purgeFailedError(runId, error);
 	}
-	const data: SkillFeedbackPurgeResultData = {
-		contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
-		schema_version: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
-		mode: purge.execute ? "execute" : "preview",
-		lane: purge.lane,
-		retention: purgeRetentionOutput(purge.retention, nowIso),
-		scanned_count: scan.candidates.length,
-		candidate_count: selected.length,
-		deleted_count: deletedPaths.length,
-		skipped_unsafe_count: skippedPaths.length,
-		invalid_count: scan.invalidPaths.length,
-		candidate_paths: selected.map((candidate) => candidate.relativePath),
-		deleted_paths: deletedPaths,
-		skipped_paths: skippedPaths,
-		invalid_paths: scan.invalidPaths,
-	};
-	const actionId = purge.execute ? "purge-complete" : "inspect-purge-preview";
-	const envelope = createCliRuntimeSuccessEnvelope({
-		run_id: runId,
-		data,
-		runtime_actions: [
-			{
-				id: actionId,
-				summary: purge.execute
-					? "Selected safe inbox reports were deleted."
-					: "Inspect selected purge candidates before executing deletion.",
-				side_effects: purge.execute ? ["write"] : ["read"],
-			},
-		],
-		continuation: { next_action_id: actionId },
-	}) satisfies CliRuntimeSuccessEnvelope<SkillFeedbackPurgeResultData>;
-	return {
-		exitCode: 0,
-		stdout: `${JSON.stringify(envelope)}\n`,
-		stderr: "",
-	};
 }
 
 function uniqueSorted<T extends string>(values: readonly T[]): T[] {
@@ -3445,9 +3650,9 @@ async function prepareSkillFeedbackInbox(
 		};
 	}
 
-	const repoReal = await runtime.realpathPath(repoRoot);
-	const inboxReal = await runtime.realpathPath(inboxPath);
-	if (!isContainedPath(repoReal, inboxReal)) {
+	const repoReal = await safeRealpath(repoRoot, runtime);
+	const inboxReal = await safeRealpath(inboxPath, runtime);
+	if (!repoReal || !inboxReal || !isContainedPath(repoReal, inboxReal)) {
 		return {
 			ok: false,
 			code: "skill_feedback_inbox_escape_refused",
@@ -3600,7 +3805,21 @@ async function writeReportWithRollback(input: {
 			0o600,
 		);
 		return undefined;
-	} catch {
+	} catch (error) {
+		if (isNodeErrorCode(error, "EEXIST")) {
+			return errorResult(
+				input.runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				input.code,
+				input.message,
+				{
+					recoverability: "repair_state",
+					hint: input.hint,
+					...(input.contract ? { contract: input.contract } : {}),
+					changedState: "none",
+				},
+			);
+		}
 		const rollback = await rollbackReportPath(input.reportPath, input.runtime);
 		return errorResult(
 			input.runId,
@@ -4276,10 +4495,19 @@ function writeHelp(command: string | undefined): number {
 function skillFeedbackCliHandler(
 	command: string,
 ): SkillFeedbackCliHandler | undefined {
-	if (command === "record" || command.startsWith("--")) {
+	if (command === "record") {
 		return runRecordCommandCli;
 	}
+	if (command.startsWith("--")) {
+		return isDashboardFrontDoorFlag(command)
+			? runDashboardCommandCli
+			: runRecordCommandCli;
+	}
 	return SKILL_FEEDBACK_CLI_HANDLERS[command];
+}
+
+function isDashboardFrontDoorFlag(flag: string): boolean {
+	return flag === "--repo" || flag === "--plain";
 }
 
 // Covered by public dashboard CLI tests; keep runner-local usage branches explicit.
@@ -4288,28 +4516,7 @@ async function runDashboardCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const dashboardUsageMessage =
-		argv[0] !== undefined && !argv[0].startsWith("--")
-			? "Expected a dashboard flag."
-			: argv.includes("--plain")
-				? "Unknown flag --plain."
-				: undefined;
-	if (dashboardUsageMessage) {
-		return writeProcessResult(
-			errorResult(
-				options.runId ?? "skill-feedback-dashboard",
-				USAGE_EXIT_CODE,
-				"usage_error",
-				dashboardUsageMessage,
-				{
-					recoverability: "change_input",
-					hint: "Run skill-feedback dashboard --help and retry with valid flags.",
-					contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
-				},
-			),
-		);
-	}
-	const parsed = parseReadOnlyArgs(argv, "health");
+	const parsed = parseReadOnlyArgs(argv, "dashboard");
 	if (!parsed.ok) {
 		return writeProcessResult(
 			errorResult(
@@ -4339,13 +4546,14 @@ function unknownCommandResult(
 	options: SkillFeedbackCliOptions,
 ): SkillFeedbackProcessResult {
 	return errorResult(
-		options.runId ?? "skill-feedback-record",
+		options.runId ?? "skill-feedback",
 		USAGE_EXIT_CODE,
 		"usage_error",
 		`Unknown command ${command}.`,
 		{
 			recoverability: "change_input",
 			hint: "Run skill-feedback --help and retry with a supported command.",
+			contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
 		},
 	);
 }
@@ -4428,7 +4636,7 @@ async function runPurgeCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const parsed = parsePurgeArgs(argv.slice(1));
+	const parsed = parsePurgeArgs(argv);
 	if (!parsed.ok) return writeProcessResult(purgeUsageError(options, parsed.message));
 	return writeProcessResult(
 		await purgeSkillFeedbackInbox({
@@ -4442,7 +4650,7 @@ async function runCorrelateCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const parsed = parseCorrelateArgs(argv.slice(1));
+	const parsed = parseCorrelateArgs(argv);
 	if (!parsed.ok) {
 		return writeProcessResult(
 			errorResult(
@@ -4472,7 +4680,7 @@ async function runReportsCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const parsed = parseReportsArgs(argv.slice(1));
+	const parsed = parseReportsArgs(argv);
 	if (!parsed.ok) {
 		return writeProcessResult(
 			humanReadUsageError(
@@ -4492,7 +4700,7 @@ async function runReportCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const parsed = parseReportArgs(argv.slice(1));
+	const parsed = parseReportArgs(argv);
 	if (!parsed.ok) {
 		return writeProcessResult(
 			humanReadUsageError(
@@ -4512,7 +4720,7 @@ async function runUsageCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const parsed = parseUsageArgs(argv.slice(1));
+	const parsed = parseUsageArgs(argv);
 	if (!parsed.ok) {
 		return writeProcessResult(
 			humanReadUsageError(
@@ -4532,7 +4740,7 @@ async function runQueueCommandCli(
 	argv: readonly string[],
 	options: SkillFeedbackCliOptions,
 ): Promise<number> {
-	const parsed = parseQueueArgs(argv.slice(1));
+	const parsed = parseQueueArgs(argv);
 	if (!parsed.ok) {
 		return writeProcessResult(
 			humanReadUsageError(
@@ -4591,8 +4799,8 @@ const SKILL_FEEDBACK_CLI_HANDLERS: Partial<Record<string, SkillFeedbackCliHandle
 	usage: runUsageCommandCli,
 	queue: runQueueCommandCli,
 	closeout: runCloseoutCommandCli,
-	review: (argv, options) => runReadCommandCli("review", argv.slice(1), options),
-	health: (argv, options) => runReadCommandCli("health", argv.slice(1), options),
+	review: (argv, options) => runReadCommandCli("review", argv, options),
+	health: (argv, options) => runReadCommandCli("health", argv, options),
 	purge: runPurgeCommandCli,
 	correlate: runCorrelateCommandCli,
 };
@@ -4933,7 +5141,7 @@ export function parseCorrelateArgs(
 
 function parseReadOnlyArgs(
 	argv: readonly string[],
-	commandName: "review" | "health",
+	commandName: ReadOnlyCommandName,
 ):
 	| { ok: true; options: { plain: boolean; targetPath?: string } }
 	| { ok: false; message: string } {
@@ -4950,7 +5158,7 @@ function parseReadOnlyArgs(
 
 function readOnlyArgsWithoutSubcommand(
 	argv: readonly string[],
-	commandName: "review" | "health",
+	commandName: ReadOnlyCommandName,
 ): readonly string[] {
 	if (argv[0] === commandName) return argv.slice(1);
 	return argv;
@@ -5104,13 +5312,15 @@ function isReportSourceFilter(
 function parseReadOnlyFlag(
 	args: readonly string[],
 	index: number,
-	commandName: "review" | "health",
+	commandName: ReadOnlyCommandName,
 ): ParsedReadOnlyFlag {
 	const flag = args[index];
 	if (!flag?.startsWith("--")) {
 		return { ok: false, message: `Expected a ${commandName} flag.` };
 	}
-	if (flag === "--plain") return parsedPlainFlag(index);
+	if (flag === "--plain" && commandName !== "dashboard") {
+		return parsedPlainFlag(index);
+	}
 	if (flag === "--repo") return parseReadOnlyRepoFlag(args, index);
 	return { ok: false, message: `Unknown flag ${flag}.` };
 }
@@ -5272,6 +5482,9 @@ export function parseRecordFlags(
 		if (!flag?.startsWith("--")) {
 			return { ok: false, message: "Expected a record flag." };
 		}
+		if (!isRecordFlag(flag)) {
+			return { ok: false, message: `Unknown flag ${flag}.` };
+		}
 		if (value === undefined || value.startsWith("--")) {
 			return { ok: false, message: `${flag} requires a value.` };
 		}
@@ -5300,11 +5513,20 @@ export function parseRecordFlags(
 			case "--generated-ts":
 				receipt.generated_ts = value;
 				break;
-			default:
-				return { ok: false, message: `Unknown flag ${flag}.` };
 		}
 	}
 	return { ok: true, receipt };
+}
+
+function isRecordFlag(flag: string): boolean {
+	return (
+		flag === "--skill" ||
+		flag === "--goal" ||
+		flag === "--outcome" ||
+		flag === "--friction" ||
+		flag === "--explanation" ||
+		flag === "--generated-ts"
+	);
 }
 
 if (import.meta.main) {
