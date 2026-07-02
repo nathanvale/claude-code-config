@@ -18,7 +18,6 @@ Primary requirements source:
 Supporting visual seam report:
 
 - `docs/research/2026-06-17-skillport-seam-report.html`
-
 ## Architecture Thesis
 
 Skillport is an agent-native safety shell around the existing `skills` provider.
@@ -339,4 +338,3 @@ Attach this architecture support doc and the seam report:
 
 - `docs/research/2026-06-17-skillport-mvp-architecture.md`
 - `docs/research/2026-06-17-skillport-seam-report.html`
-

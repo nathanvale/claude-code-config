@@ -54,6 +54,7 @@ import {
 	runBrowserUseMcporter,
 } from "./browser-use-transport";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
 // Browser Target Discovery (plan U5).
@@ -797,8 +798,7 @@ function emitTargetDiscoveryFailure(input: {
 				message: redactUnsafeText(failure.message),
 				exit_code: failure.exitCode,
 				severity: "error",
-				recoverability: failure.recoverability,
-				retryable: failure.recoverability === "retry",
+				...retryabilityForRecoverability(failure.recoverability),
 				failure_domain: "browser_use",
 			}),
 		}),

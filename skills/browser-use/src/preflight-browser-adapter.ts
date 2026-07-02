@@ -58,6 +58,7 @@ import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
 } from "./cli-diagnostics-bootstrap";
+import { structuredRuntimeErrorInput } from "./runtime-error-retryability";
 
 const VERSION = "0.1.0";
 const DEFAULT_PORT = "9222";
@@ -193,9 +194,9 @@ type AdapterProof = {
 
 type AdapterProofRuntimeErrorOptions = {
 	exitCode?: number;
-	recoverability?: "none" | "retry" | "change_input" | "repair_state";
+	recoverability?: "none" | "change_input" | "repair_state";
 	hintSummary?: string;
-	hintAction?: "retry" | "change_input" | "repair_state";
+	hintAction?: "change_input" | "repair_state";
 	hintDocsUrl?: string;
 	severity?: "warning" | "error" | "fatal";
 	failureDomain?: AdapterProofFailureDomain;
@@ -1633,37 +1634,37 @@ function emitWarmChromeFailure(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: input.warmChrome.exitCode,
-			error: createCliRuntimeError({
-				run_id: input.runId,
-				code:
-					typeof error.code === "string"
-						? error.code
-						: "warm_chrome_preflight_failed",
-				message:
-					typeof error.message === "string"
-						? error.message
-						: "Warm Chrome Preflight failed before adapter proof.",
-				exit_code: input.warmChrome.exitCode,
-				severity:
-					error.severity === "warning" ||
-					error.severity === "error" ||
-					error.severity === "fatal"
-						? error.severity
-						: "error",
-				recoverability:
-					error.recoverability === "none" ||
-					error.recoverability === "retry" ||
-					error.recoverability === "change_input" ||
-					error.recoverability === "repair_state"
-						? error.recoverability
-						: "repair_state",
-				retryable: false,
-				failure_domain:
-					typeof error.failure_domain === "string"
-						? error.failure_domain
-						: "browser_entry_handoff",
-				hint: normalizeWarmChromeHint(error.hint),
-			}),
+			error: createCliRuntimeError(
+				structuredRuntimeErrorInput({
+					run_id: input.runId,
+					code:
+						typeof error.code === "string"
+							? error.code
+							: "warm_chrome_preflight_failed",
+					message:
+						typeof error.message === "string"
+							? error.message
+							: "Warm Chrome Preflight failed before adapter proof.",
+					exit_code: input.warmChrome.exitCode,
+					severity:
+						error.severity === "warning" ||
+						error.severity === "error" ||
+						error.severity === "fatal"
+							? error.severity
+							: "error",
+					recoverability:
+						error.recoverability === "none" ||
+						error.recoverability === "change_input" ||
+						error.recoverability === "repair_state"
+							? error.recoverability
+							: "repair_state",
+					failure_domain:
+						typeof error.failure_domain === "string"
+							? error.failure_domain
+							: "browser_entry_handoff",
+					hint: normalizeWarmChromeHint(error.hint),
+				}),
+			),
 			runtime_actions: Array.isArray(input.warmChrome.envelope.runtime_actions)
 				? input.warmChrome.envelope.runtime_actions
 				: [runtimeAction("inspect_adapter_config")],
@@ -1710,24 +1711,25 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: error.exitCode,
-			error: createCliRuntimeError({
-				run_id: input.runId,
-				code: error.code,
-				message: error.message,
-				exit_code: error.exitCode,
-				severity: error.severity,
-				recoverability: error.recoverability,
-				retryable: false,
-				failure_domain: guidance.failureDomain,
-				hint: {
-					summary: error.hintSummary,
-					action: error.hintAction,
-					...(error.hintDocsUrl &&
-					guidance.failureDomain !== "browser_adapter_proof"
-						? { docs_url: error.hintDocsUrl }
-						: {}),
-				},
-			}),
+			error: createCliRuntimeError(
+				structuredRuntimeErrorInput({
+					run_id: input.runId,
+					code: error.code,
+					message: error.message,
+					exit_code: error.exitCode,
+					severity: error.severity,
+					recoverability: error.recoverability,
+					failure_domain: guidance.failureDomain,
+					hint: {
+						summary: error.hintSummary,
+						action: error.hintAction,
+						...(error.hintDocsUrl &&
+						guidance.failureDomain !== "browser_adapter_proof"
+							? { docs_url: error.hintDocsUrl }
+							: {}),
+					},
+				}),
+			),
 			runtime_actions: guidance.runtimeActions,
 			continuation: guidance.continuation,
 		}),
@@ -1768,9 +1770,9 @@ function normalizeError(error: unknown): {
 	message: string;
 	exitCode: number;
 	severity: "warning" | "error" | "fatal";
-	recoverability: "none" | "retry" | "change_input" | "repair_state";
+	recoverability: "none" | "change_input" | "repair_state";
 	hintSummary: string;
-	hintAction: "retry" | "change_input" | "repair_state" | undefined;
+	hintAction: "change_input" | "repair_state" | undefined;
 	hintDocsUrl?: string;
 	failureDomain: AdapterProofFailureDomain;
 	primaryActionId?: AdapterProofRuntimeActionId;
@@ -1838,9 +1840,9 @@ function failureDomainForAdapterProofError(
 
 function hintForAdapterProofError(error: AdapterProofRuntimeError): {
 	summary: string;
-	action: "retry" | "change_input" | "repair_state" | undefined;
+	action: "change_input" | "repair_state" | undefined;
 	docsUrl?: string;
-	recoverability: "none" | "retry" | "change_input" | "repair_state";
+	recoverability: "none" | "change_input" | "repair_state";
 } {
 	switch (error.code) {
 		case "missing_adapter":

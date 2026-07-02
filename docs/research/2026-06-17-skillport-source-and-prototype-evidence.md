@@ -111,4 +111,3 @@ Planning inference:
 - Planner must generate a ready or blocked plan before Executor mutates.
 - CLI Facade should name changed-state category for every command.
 - Target Projection should validate provider-supported ids before planning.
-

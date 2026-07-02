@@ -228,7 +228,7 @@ function countReportIds(
  */
 export function trustedSkillRunId(
 	report: NormalizedSoftwareLearningReport,
-): string | undefined {	
+): string | undefined {
 	if (!report.skill_run_id) return undefined;
 	switch (report.skill_run_id_provenance) {
 		case "runtime_owned":

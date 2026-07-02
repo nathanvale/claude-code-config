@@ -15,7 +15,8 @@
       "skills/record-decision",
       "skills/skill-feedback",
       "skills/test-runner",
-      "skills/worktree"
+      "skills/worktree",
+      "skills/browser-use/src/prototype-playwright-vocab-map"
     ],
     "catalog": {
       "@types/bun": "1.3.14",

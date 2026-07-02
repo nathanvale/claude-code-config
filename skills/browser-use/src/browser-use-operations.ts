@@ -74,6 +74,7 @@ import {
 	resolveStatePath,
 	runScopedKey,
 } from "./browser-use-selection";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
 // Browser Operations (plan U7).
@@ -1029,8 +1030,7 @@ function emitOperationFailure(input: {
 				message: redactUnsafeText(failure.message),
 				exit_code: failure.exitCode,
 				severity: "error",
-				recoverability: failure.recoverability,
-				retryable: failure.recoverability === "retry",
+				...retryabilityForRecoverability(failure.recoverability),
 				failure_domain: "browser_use",
 			}),
 		}),
@@ -1216,4 +1216,3 @@ function boundSnapshotText(text: string): {
 		truncated,
 	};
 }
-

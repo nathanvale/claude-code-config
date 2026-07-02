@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation — browser-use facade × Chrome DevTools for Agents 1.0</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --ink:#e7ebf0; --muted:#9aa4b2;
+    --line:#2a2f3a; --add:#3fb950; --sub:#d29922; --keep:#58a6ff; --accent:#bc8cff; --star:#ffd479;
+    --chip:#222732;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:40px 22px 90px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:21px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 4px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 8px}
+  .pill{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12.5px;color:var(--muted)}
+  .lead{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:16px 18px;margin:20px 0}
+  .lead strong{color:#fff}
+  .axes{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin:14px 0}
+  .axis{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:13.5px}
+  .axis b{display:block;color:#fff;font-size:13px;margin-bottom:3px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;position:relative}
+  .card.star{border-color:#5a4d22;background:linear-gradient(180deg,#1c1a12,#171a21 60%)}
+  .card .rank{position:absolute;top:-11px;left:16px;background:var(--accent);color:#1a1024;font-weight:700;font-size:13px;border-radius:7px;padding:2px 9px}
+  .card.star .rank{background:var(--star);color:#2a1f02}
+  .tags{display:flex;flex-wrap:wrap;gap:7px;margin:4px 0 10px}
+  .tag{font-size:11.5px;border-radius:6px;padding:2px 8px;border:1px solid var(--line);color:var(--muted)}
+  .t-add{color:var(--add);border-color:#2c5a36}
+  .t-sub{color:var(--sub);border-color:#5a4a1f}
+  .t-keep{color:var(--keep);border-color:#234a73}
+  .t-axis{color:#cdd6e0}
+  .t-conf{color:#fff;background:#222b22}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  .blk{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .blk h4{margin:0 0 5px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .blk p{font-size:13.5px;color:#d6dde6;margin:0}
+  .scenario{background:#13171f;border:1px dashed #34506e;border-radius:8px;padding:9px 12px;margin:10px 0 0;font-size:13px;color:#bcd0e6}
+  .scenario b{color:#8fc3ff}
+  .basis code{color:var(--accent)}
+  .mt{font-style:italic;color:#c9d2dc;margin-top:10px}
+  code{background:#11151c;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .yes{color:var(--add)} .no{color:#f0816a}
+  .reject td:first-child{color:#c9d2dc}
+  .diagram{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0;overflow-x:auto}
+  pre.ascii{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.45;color:#cdd6e0;white-space:pre}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>browser-use as a facade · powered by Chrome DevTools for Agents 1.0</h1>
+  <p class="sub">One stable interface, many swappable browser engines. Ideation on what the facade — and Chrome's new release — buys us.</p>
+  <div class="meta">
+    <span class="pill">2026-06-12</span>
+    <span class="pill">repo-grounded · rev 2 (facade frame)</span>
+    <span class="pill">10 survivors · ~45 raw</span>
+    <span class="pill">5 axes · all covered</span>
+    <span class="pill">weight: lean internals, rich interface</span>
+  </div>
+
+  <div class="lead">
+    <strong>The product is the facade.</strong> browser-use exposes one interface — <code>operate</code> / <code>observe</code> / <code>verify</code> — and runs it on interchangeable engines underneath (chrome-devtools today; playwright and agent-browser staged). The caller never names an engine. <strong>Chrome DevTools for Agents 1.0 is not a reason to collapse this</strong> — it's the strongest <em>implementation</em> to sit behind it, and the yardstick for the facade's capability vocabulary. So the Router, manifests, and adapter-proof are not redundancy: they're the facade's machinery, and they earn their keep the moment N&gt;1 is the plan. The subtraction angle survives, correctly scoped: <em>each adapter</em> should map to Chrome's native surface rather than hand-build it. The exciting angle — your explicit ask — is <strong>what swappability itself buys</strong>: cross-engine verification, graceful failover, cost routing, vendor-independence, and a correctness oracle no single engine can offer.
+  </div>
+
+  <h2>What Chrome DevTools for Agents 1.0 actually buys us <span style="color:var(--muted);font-weight:400;font-size:14px">(the side-research answer)</span></h2>
+  <p class="sub">Ground truth from the release + practitioner reports — separating the real wins from the marketing.</p>
+  <table>
+    <tr><th>Capability</th><th>What it gives the chrome-devtools adapter</th><th>Verdict</th></tr>
+    <tr><td><strong>44 tools / 10 categories</strong></td><td>Native console, network, performance traces, Lighthouse, 8 heap-snapshot tools, emulation, extensions, WebMCP. The adapter <em>maps</em> to these instead of building them.</td><td class="yes">Real win — biggest source of per-adapter subtraction</td></tr>
+    <tr><td><strong>Observability depth</strong></td><td>console + network + perf + heap are debugger-grade and would be expensive to replicate. This is what powers the verify loop and the observe lane.</td><td class="yes">Real win — the headline reason to use it</td></tr>
+    <tr><td><strong><code>--slim</code> 3-tool mode</strong></td><td>Token-budget control built in; our 3 wired op-classes already fit. Adapter defers budget to Chrome instead of owning it.</td><td class="yes">Real win — free token discipline</td></tr>
+    <tr><td><strong>Lighthouse / a11y / perf audits</strong></td><td>One-call quality audits the facade can expose as a high-tier capability.</td><td class="yes">Real win — net-new capability</td></tr>
+    <tr><td><strong>"Session hand-off"</strong></td><td>Marketing implies inheriting your real browser. Reality: real profile blocked since Chrome 136; <code>--autoConnect</code> (144+) flaky on macOS (#1830); default is a throwaway profile + manual pre-auth.</td><td class="no">Overstated — it IS our Warm Chrome pattern, not a replacement</td></tr>
+    <tr><td><strong>WebMCP</strong></td><td>Sites declare structured tools agents call directly. Chrome 149 origin trial, ~zero production today.</td><td class="no">2027+ — do not design around it yet</td></tr>
+    <tr><td><strong>Batching</strong></td><td>No structured batch primitive; batching is JS inside <code>evaluate_script</code>.</td><td class="no">Gap — don't build a batch contract Chrome won't back</td></tr>
+    <tr><td><strong>Post-action verification</strong></td><td>Nothing beyond screenshot + visual reasoning.</td><td class="no">Gap = our moat (idea 4)</td></tr>
+    <tr><td><strong>Secret redaction / MFA / auth walls</strong></td><td>Nothing. CDP is root-equivalent over web identity.</td><td class="no">Gap = our moat (ideas 5, 9)</td></tr>
+  </table>
+  <div class="lead" style="border-left-color:var(--keep)">
+    <strong>Bottom line:</strong> Chrome 1.0 makes one engine genuinely excellent at <em>doing and observing</em> — so the chrome-devtools adapter shrinks to a thin map over 44 native tools. It does <em>not</em> touch the facade-level concerns (verify, redaction, auth, Warm Chrome, swappability), which is exactly where browser-use's durable value lives. <em>Chrome makes the engine cheap; the facade makes the engine fleet valuable.</em>
+  </div>
+
+  <h2>Topic axes</h2>
+  <div class="axes">
+    <div class="axis"><b>1 · Facade contract</b>the common operate/observe/verify interface every engine satisfies</div>
+    <div class="axis"><b>2 · Capability negotiation</b>manifests, Router, proof; floor vs ceiling per engine</div>
+    <div class="axis"><b>3 · Swappability dividends</b>what N interchangeable engines BUY</div>
+    <div class="axis"><b>4 · Per-adapter subtraction</b>what Chrome lets each adapter stop hand-building</div>
+    <div class="axis"><b>5 · Facade-level moat</b>verify, redact, auth, Warm Chrome — shared, engine-agnostic</div>
+  </div>
+
+  <h2>The architecture</h2>
+  <div class="diagram">
+<pre class="ascii">
+                    caller asks for a CAPABILITY, never an engine
+                                   │
+        ┌──────────────────────────────────────────────────────┐
+        │  FACADE  (engine-agnostic, lean — the moat lives here) │
+        │   operate · observe · verify                           │
+        │   + verify-after-operate   + redaction seam            │
+        │   + Warm Chrome precondition + auth/MFA handoff         │
+        │   + domain-memory ledger    + scope→capability resolver │
+        └───────────────┬──────────────────┬───────────────────┘
+              Router / capability negotiation (floor vs ceiling)
+                        │                  │                  │
+              ┌─────────▼──────┐  ┌────────▼────────┐ ┌───────▼────────┐
+              │ chrome-devtools│  │  playwright-cdp │ │  agent-browser │
+              │  ✓ end-to-end  │  │  staged (wire   │ │  staged        │
+              │  maps 44 tools │  │  next)          │ │                │
+              └────────────────┘  └─────────────────┘ └────────────────┘
+                 ADAPTERS = thin maps to native engine power (steipete-lean)
+
+   Subtraction lives HERE ───────────────────────────┘  (map, don't rebuild)
+   Swappability dividends emerge from having ≥2 of these wired ↑
+</pre>
+  </div>
+
+  <h2>Ranked ideas</h2>
+
+  <!-- 1 STAR -->
+  <div class="card star">
+    <span class="rank">★ 1</span>
+    <h3>Differential cross-engine verification — the correctness oracle</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Swappability dividends</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>Run the same <code>observe</code>/<code>verify</code> through two engines and diff the results. Agreement is independent ground truth; disagreement localizes the lie (flaky page, race, or adapter bug). This capability <strong>cannot exist with N=1</strong> — it is the purest answer to "what does swappability buy." Surfaced independently in 4 of 5 frames.</p>
+    <div class="scenario"><b>Scenario:</b> agent submits a payment form. Playwright reports "click succeeded, navigated." chrome-devtools sees a swallowed 402 in the network panel and zero DOM change. The facade flags "action claimed success, observation contradicts," refuses closeout, and attaches both verdicts.</div>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>Differential testing (csmith for compilers, SQLite-vs-Postgres oracles): two independent implementations disagreeing is a bug signal needing no golden output. Requires the floor contract to guarantee comparable output shapes.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>A single engine verifying itself is a tautology. Only N&gt;1 turns verify from self-report into measurement. Thinnest form: a <code>--differential</code> flag on the test-runner, not a standing service.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Can one engine catch another engine lying about success?"</p>
+  </div>
+
+  <!-- 2 STAR -->
+  <div class="card star">
+    <span class="rank">★ 2</span>
+    <h3>Graceful degradation / fallback chains (LiteLLM-style)</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Swappability dividends</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>Declare an ordered engine preference; the Router fails over transparently on capability miss or attachment failure, and the diagnostic envelope carries a <code>servedBy</code> field. When the preferred engine drops mid-run, fall to the next engine that satisfies the <em>subset of capabilities the task still needs</em> — not the full ceiling.</p>
+    <div class="scenario"><b>Scenario:</b> a 20-step flow is on step 12 when Chrome 147 breaks <code>--autoConnect</code> and chrome-devtools can't bind. The remaining steps need only click/type/assert, so the facade hot-swaps to playwright, annotates "steps 12–20 served by fallback," and finishes instead of dying.</div>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · reasoned + direct</h4><p>LiteLLM/OpenRouter fallback chains — ordered provider list, transparent failover, response field naming who served. Maps onto ADR 0012/0013 evidence-first routing, which already does attachment-proof.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Single-engine automation is a single point of failure. Swappability converts an upstream outage into a degraded-but-complete run. This is vendor-independence made operational.</p></div>
+    </div>
+    <p class="mt">Meeting test: "When the best engine dies mid-task, does the task still finish — and does the caller see which engine answered?"</p>
+  </div>
+
+  <!-- 3 -->
+  <div class="card">
+    <span class="rank">3</span>
+    <h3>Capability-addressed calls + a three-verb floor</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Capability negotiation</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>Callers request a capability (<code>verify.network.idle</code>, <code>observe.perf.trace</code>) — the engine name never appears in caller code. Lock the facade to a guaranteed floor (<code>operate</code>/<code>observe</code>/<code>verify</code> every engine must satisfy) and a negotiated ceiling (heap/lighthouse only some engines reach). An engine that can't do the floor isn't selectable; ceiling misses return a typed <code>capability-unavailable</code> with the degradation path — never a silent fake.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Grounding: caller requests capability not engine; scope→capability resolver is facade-level. ADR 0012/0013 exists precisely to reject engine-coupled universal APIs that fake uniformity. OpenGL core-profile + extension-query precedent.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>This is the contract that makes everything else possible — wiring playwright tomorrow touches zero callers only if no caller ever named chrome-devtools. The negotiation IS the value, not a tax.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Show me one caller that names 'chrome-devtools.' If you can't, the facade is real."</p>
+  </div>
+
+  <!-- 4 STAR -->
+  <div class="card star">
+    <span class="rank">★ 4</span>
+    <h3>Verify-after-operate lives in the facade, once</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Facade-level moat</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>Post-action verification (did the click change state? did navigation settle?) is implemented once at the facade and wraps every adapter's <code>operate</code>. Each engine only maps "how do I read state after acting" using its native read tools; the verdict logic is shared. Chrome's #1 documented gap becomes a solved facade feature every engine inherits.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Chrome ships no post-action verification (named gap). It's engine-agnostic by nature. <code>verify</code> is already one of the three facade verbs.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Solving Chrome's biggest gap once for N engines is a moat no single-engine MCP can match. Add engine #4 → it inherits the closed feedback loop for free. Lean: a wrapper over engine read tools, not a subsystem.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Why does Playwright get post-action verification for free when we never wrote verification code for it?"</p>
+  </div>
+
+  <!-- 5 -->
+  <div class="card">
+    <span class="rank">5</span>
+    <h3>Codec-container split: facade owns the moat, adapters own only the codec</h3>
+    <div class="tags"><span class="tag t-sub">SUBTRACT</span><span class="tag t-axis">Facade-level moat</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>An MP4 container handles timing/metadata/muxing identically regardless of codec. Make that split structural: verify, redaction, auth-handoff, Warm Chrome, and selected-target state live <strong>once</strong> in the facade "container"; every adapter implements only the thin "codec" (raw browser ops against its engine). No adapter ever hand-builds redaction or verification — they get it free by sitting inside the container.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · reasoned + direct</h4><p>Video codec containers: container owns muxing uniformly, codec owns frame decode. Grounding already names verify/redact/auth/state as engine-agnostic facade-level layers.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Guarantees every future engine inherits the moat and can't drift on it. "Add an engine" becomes cheap because the engine only writes the codec. This is the structural rule that keeps adapters lean.</p></div>
+    </div>
+    <p class="mt">Meeting test: "When we wire playwright, does it write its own verify+redact, or inherit the facade's?"</p>
+  </div>
+
+  <!-- 6 STAR -->
+  <div class="card star">
+    <span class="rank">★ 6</span>
+    <h3>Record-at-facade, replay-anywhere</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Swappability dividends</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx M</span></div>
+    <p>Capture intent at the interface level (<code>operate "click Submit"</code>, <code>verify "toast shown"</code>) — not engine-specific selectors or CDP calls. A recording made today on chrome-devtools replays tomorrow on playwright unchanged, because intent (not mechanics) was captured. Doubles as the playwright-wiring acceptance test: if the Chrome recording replays clean on playwright, the facade is genuinely engine-neutral.</p>
+    <div class="scenario"><b>Scenario:</b> a flaky CI test recorded against chrome-devtools survives Chrome 147 breaking the engine — the same transcript replays on playwright with zero re-authoring. The test corpus outlives any single engine.</div>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>Stripe idempotency keys / payment intents: capturing intent at the gateway makes execution processor-independent. Engine-neutral only because the floor contract (idea 3) is engine-agnostic — downstream of it.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Recordings tied to one engine die with it; intent-level capture makes the corpus durable. Revives the deferred record/replay thesis at near-zero cost — a transcript file, not a deterministic walker. Carry forward <em>why</em> replay was deferred (LLM variance) before building execution.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Does a recording survive swapping the engine underneath it?"</p>
+  </div>
+
+  <!-- 7 -->
+  <div class="card">
+    <span class="rank">7</span>
+    <h3>Adapters map to Chrome's native verbs — never rebuild them</h3>
+    <div class="tags"><span class="tag t-sub">SUBTRACT</span><span class="tag t-axis">Per-adapter subtraction</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>The correctly-scoped subtraction. For any capability Chrome ships natively (perf-trace, lighthouse, console, network, heap, emulation), the chrome-devtools adapter is a thin map onto the native tool — never a re-implementation. The 7 unwired manifest caps map ~1:1 onto Chrome's categories. Rule: if the engine ships the verb, the adapter binds; it only hand-builds the floor verbs the engine lacks. Defer batching to <code>evaluate_script</code> and token budget to <code>--slim</code>.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>CUPS print drivers: thin glue over native device capability, never reimplementing the device's functions. chrome-devtools-mcp = 44 tools; transport is already a thin <code>${adapter}.verb</code> switch.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Keeps each adapter steipete-lean exactly where lean applies (internals). The interface stays rich; the adapter is the thinnest map to native power, so adding engines stays cheap.</p></div>
+    </div>
+    <p class="mt">Meeting test: "For each Chrome tool we expose, did we map it or rebuild it? Any rebuild is a bug."</p>
+  </div>
+
+  <!-- 8 -->
+  <div class="card">
+    <span class="rank">8</span>
+    <h3>Data-driven capability registry + live-query Chrome's tool list</h3>
+    <div class="tags"><span class="tag t-sub">SUBTRACT</span><span class="tag t-axis">Capability negotiation</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx M</span></div>
+    <p>termcap/terminfo stores capabilities in a queried database, not in code; absence is the honest signal. Replace the 3 hand-declared manifests with one flat registry (cap-id → engines that satisfy it) the Router reads. For chrome-devtools specifically, derive caps from a <strong>live query against Chrome's exposed tool list at attach time</strong> instead of a frozen snapshot — killing the drift that appears the moment Chrome ships tool 45.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · reasoned + direct</h4><p>termcap/terminfo capability DB with graceful absence. Grounding: manifests hand-declare 10 caps, 7 unwired; a hand-maintained snapshot is guaranteed to lie. ADR 0012/0013 was built to prevent false-capability claims.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Self-truing manifest kills a whole class of false-capability bugs. Adding an engine = adding rows, not editing prose in three files. Keeps the negotiation contract honest as engines evolve.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Can the chrome-devtools cap list be a live query at attach, instead of a snapshot we edit by hand?"</p>
+  </div>
+
+  <!-- 9 -->
+  <div class="card">
+    <span class="rank">9</span>
+    <h3>Facade-level Warm Chrome + auth/MFA handoff, shared across CDP engines</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Facade-level moat</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>Warm Chrome (dedicated debug profile + manual pre-auth) becomes a declared facade-level precondition that any CDP-speaking adapter consumes — chrome-devtools and playwright-cdp both attach to the same warmed session instead of each re-solving the Chrome-136 block. Auth-wall/MFA handoff (pause → human → resume) is a facade lifecycle event every engine raises identically. Chrome 1.0 validates this: its "session hand-off" reality <em>is</em> Warm Chrome.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>ADR 0006 Warm Chrome shared precondition; real profile blocked since Chrome 136, <code>--autoConnect</code> flaky (#1830). MFA/auth walls are named Chrome gaps, none engine-specific.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Three CDP adapters would otherwise re-solve the same auth/attach nightmare three times. Solve it once; a new engine inherits the only reliable attach path by declaring it consumes the precondition.</p></div>
+    </div>
+    <p class="mt">Meeting test: "What does playwright-cdp need for reliable Chrome attach? Declare it consumes Warm Chrome — the facade already owns resolution."</p>
+  </div>
+
+  <!-- 10 -->
+  <div class="card">
+    <span class="rank">10</span>
+    <h3>Engine onboarding lifecycle: known → provable → mapped → selectable</h3>
+    <div class="tags"><span class="tag t-add">ADD</span><span class="tag t-axis">Capability negotiation</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx S</span></div>
+    <p>Name the four gates a new engine passes: <em>known</em> (registered), <em>provable</em> (passes adapter-proof attachment), <em>mapped</em> (manifest declares floor+ceiling against the capability vocabulary), <em>selectable</em> (rubric-evaluated, wired end-to-end). playwright and agent-browser sit at <strong>mapped-but-not-selectable</strong> — the lifecycle names exactly what wiring playwright requires next, turning "dead adapters" into a legible pipeline.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Grounding names the lifecycle; 2026-06-11 agent-cli-evaluation is the lane that decides which engines become adapters (playwright already rubric-evaluated). Chrome DvA 1.0 enters as a rubric pass, not a redesign.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Makes the multi-engine roadmap explicit and removes the "is this cruft?" ambiguity that derailed the first ideation pass. Everyone knows the next move.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Where's playwright in the lifecycle?" → "Mapped, not selectable — needs end-to-end wiring."</p>
+  </div>
+
+  <h2>Honourable mentions (not cut — fold into the survivors above)</h2>
+  <table>
+    <tr><th>Idea</th><th>Where it lands</th></tr>
+    <tr><td><strong>ioctl-style <code>raw(engine, op)</code> escape hatch</strong></td><td>The cleanest resolution of floor-vs-ceiling: keep the facade at 3 portable verbs, expose one typed non-portable passthrough for Chrome-only power. Strong candidate to merge into idea 3.</td></tr>
+    <tr><td><strong>Cost/context-aware engine routing</strong></td><td>Cheap engine by default, expensive observability engine only on failure/debug. A routing <em>policy</em> on top of ideas 2+3.</td></tr>
+    <tr><td><strong>Quorum / N-of-M for irreversible actions</strong></td><td>A confidence dial for payments/deletes — extend idea 1 from 2-engine diff to N-engine vote, opt-in for high-stakes steps only.</td></tr>
+    <tr><td><strong>Browser-domain-memory ledger</strong></td><td>Append-only per-domain outcomes feeding facade preflight so every engine inherits site knowledge. Real, but a separate existing thesis — develop in its own skill, wire to the facade later.</td></tr>
+  </table>
+
+  <h2>Rejection summary</h2>
+  <table class="reject">
+    <tr><th>Idea (from rev-1)</th><th>Why cut</th></tr>
+    <tr><td>Delete the two dead adapters</td><td><strong>Inverted</strong> by the corrected vision — they're staged future engines, not cruft. The move is wiring playwright (idea 10), not deleting it.</td></tr>
+    <tr><td>Collapse the Router to direct dispatch</td><td><strong>Inverted</strong> — the Router IS the facade's selection machinery and earns its keep at N&gt;1. Keep and harden it (ideas 3, 8, 10).</td></tr>
+    <tr><td>Fold/delete adapter-proof</td><td><strong>Inverted</strong> — adapter-proof is exactly what proves a <em>second</em> engine actually attached. Essential to swappability.</td></tr>
+    <tr><td>Per-adapter token logic, manifest freshness, batch primitive</td><td>Folded into idea 7 (map to native: <code>--slim</code>, <code>evaluate_script</code>) and idea 8 (live-query registry).</td></tr>
+  </table>
+
+  <h2>Recommendation</h2>
+  <div class="lead">
+    <strong>Foundation first:</strong> lock <strong>idea 3</strong> (capability-addressed floor/ceiling contract) and <strong>idea 5</strong> (codec-container split) — these define what the facade is and make everything downstream cheap. Then <strong>idea 7</strong> (map the chrome-devtools adapter to Chrome's native surface) closes the 7 unwired caps almost for free and proves the lean-adapter rule. <strong>Idea 4</strong> (facade verify) + <strong>idea 9</strong> (shared Warm Chrome/auth) build the moat every engine inherits. Then <strong>wire playwright</strong> (idea 10) — the moment a second engine is live, the dividends (★ ideas 1, 2, 6) become real, not theoretical. Treat <strong>idea 1</strong> (differential oracle) as the flagship demonstration that swappability is the product.
+    <br><br>
+    <strong>On Chrome 1.0 specifically:</strong> adopt it as the best current engine and the capability yardstick — map to its 44 tools, defer budget to <code>--slim</code>, ignore WebMCP until 2027, and never let its "session hand-off" marketing tempt anyone to delete Warm Chrome.
+  </div>
+
+  <p class="foot">
+    Generated by ce-ideate (rev 2, facade reframe) · ~45 raw candidates across 5 frames (swappability dividends, facade contract design, per-adapter subtraction, cross-domain analogy, leverage &amp; moat) → adversarial filter → 10 survivors across 5 axes (all covered).
+    Grounding: live source map of skills/browser-use/, web research on Chrome DevTools for Agents 1.0 (44-tool list, session hand-off mechanics, known gaps), institutional learnings (ADR 0006/0008/0009/0012/0013, 2026-06-11 agent-cli-evaluation).
+    Cross-domain analogies mined: LiteLLM gateways, termcap/terminfo, POSIX ioctl, OpenGL core+extensions, video codec containers, CUPS, Stripe idempotency, differential compiler testing.
+    Run 4349ff75.
+  </p>
+
+</div>
+</body>
+</html>

@@ -9,6 +9,10 @@ skills/fallow/scripts/.fallow/
 # Review-convergence workflow scratch (generated)
 .review/
 
+# playwright-cli runtime dumps (contain live page content / authed URLs — never commit)
+.playwright-cli/
+**/.playwright-cli/
+
 # Skill feedback inbox (generated, evidence-only, never canonical)
 .skill-feedback/
 

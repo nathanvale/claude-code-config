@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation — floor-verb semantics × ADR 0012</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --ink:#e7ebf0; --muted:#9aa4b2;
+    --line:#2a2f3a; --add:#3fb950; --sub:#d29922; --keep:#58a6ff; --accent:#7ee0c0; --star:#ffd479;
+    --chip:#222732;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:40px 22px 90px}
+  h1{font-size:29px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:21px;margin:44px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 4px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 8px}
+  .pill{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12.5px;color:var(--muted)}
+  .lead{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:16px 18px;margin:20px 0}
+  .lead strong{color:#fff}
+  .converge{background:linear-gradient(180deg,#10201b,#171a21 70%);border:1px solid #2c5a4a;border-left:3px solid var(--add);border-radius:10px;padding:16px 18px;margin:20px 0}
+  .axes{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin:14px 0}
+  .axis{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:13.5px}
+  .axis b{display:block;color:#fff;font-size:13px;margin-bottom:3px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;position:relative}
+  .card.star{border-color:#5a4d22;background:linear-gradient(180deg,#1c1a12,#171a21 60%)}
+  .card .rank{position:absolute;top:-11px;left:16px;background:var(--accent);color:#062018;font-weight:700;font-size:13px;border-radius:7px;padding:2px 9px}
+  .card.star .rank{background:var(--star);color:#2a1f02}
+  .tags{display:flex;flex-wrap:wrap;gap:7px;margin:4px 0 10px}
+  .tag{font-size:11.5px;border-radius:6px;padding:2px 8px;border:1px solid var(--line);color:var(--muted)}
+  .t-axis{color:#cdd6e0}
+  .t-conf{color:#fff;background:#222b22}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+  .blk{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .blk h4{margin:0 0 5px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .blk p{font-size:13.5px;color:#d6dde6;margin:0}
+  .basis code{color:var(--accent)}
+  .mt{font-style:italic;color:#c9d2dc;margin-top:10px}
+  code{background:#11151c;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .reject td:first-child{color:#c9d2dc}
+  .diagram{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0;overflow-x:auto}
+  pre.ascii{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.45;color:#cdd6e0;white-space:pre}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+  a{color:var(--keep)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Floor-verb semantics × the ADR 0012 warning</h1>
+  <p class="sub">How the browser-use facade floor should handle same-verb-different-behavior across engines without faking uniformity.</p>
+  <div class="meta">
+    <span class="pill">2026-06-12</span>
+    <span class="pill">repo-grounded · focused</span>
+    <span class="pill">7 survivors · 40 raw</span>
+    <span class="pill">5 frames · strong convergence</span>
+    <span class="pill">feeds the facade-contract brainstorm</span>
+  </div>
+
+  <div class="converge">
+    <strong>Strong convergence — the 40 candidates point at one answer.</strong> Across 5 independent frames (assumption-breaking, verify-as-truth, cross-domain analogy, constraint-flip, failure-modes), the dominant idea is the same: <strong>define floor verbs by their verified post-condition, not their mechanism — and make any behavioral divergence loud and typed at runtime rather than declared in a drift-prone manifest.</strong> This is simultaneously the most ADR-0012-honest answer (a post-condition that's checked can't be a "false capability claim") and the leanest (it reuses <code>adapter_capability_partial</code> and the verify loop the facade already wants). The remaining design space is a clean spectrum from a one-verb lean floor to a strict codec-normalized floor — and a named limit where verification can't reach.
+  </div>
+
+  <div class="lead">
+    <strong>The problem, concretely.</strong> Today a capability asserts a verb <em>class</em> exists (<code>snapshot→snapshot_refs</code>) and says nothing about behavior. But playwright's <code>click</code> auto-waits for actionability while chrome-devtools' CDP click is fire-and-forget at coordinates; playwright's snapshot is locator-based while chrome-devtools' is an a11y tree. Same verb name, different guarantee. ADR 0012 explicitly rejects a "universal browser API" that "makes false capability claims likely" — so the floor must deliver swappability <em>without</em> pretending these behave identically. WebDriver is the cautionary tale: one <code>click</code> across browsers still flaked, because the spec shared the verb name but under-specified timing.
+  </div>
+
+  <h2>Topic axes</h2>
+  <div class="axes">
+    <div class="axis"><b>1 · Floor definition</b>what "an engine satisfies the floor" actually asserts</div>
+    <div class="axis"><b>2 · Divergence handling</b>what the contract does when same-verb-differs</div>
+    <div class="axis"><b>3 · Verification as truth</b>can verify make guarantees observable, not declared?</div>
+    <div class="axis"><b>4 · ADR-0012 fidelity</b>honest (no false uniformity) yet swappable</div>
+    <div class="axis"><b>5 · Codec burden</b>normalization pushed into adapters vs surfaced to callers</div>
+  </div>
+
+  <h2>The spectrum the survivors define</h2>
+  <div class="diagram">
+<pre class="ascii">
+  LEAN ◄─────────────────────────────────────────────────────────► STRICT
+  (caller absorbs divergence)                    (codec absorbs divergence)
+
+  one-verb      zero-flag        ★ POSTCONDITION       facade actionability   Option A:
+  floor    ·    floor + loud  ·  FLOOR (verb =      ·  loop (slow engine   ·  codec MUST
+  (verify       typed            verified outcome,     borrows fast            deliver behavior
+  only)         divergence)      mechanism free)       engine's guarantee)     + guarantee_source tag
+
+                  └── all honest under ADR 0012 ──┘     └─ swappability rises, codec cost rises ─┘
+
+  THE LIMIT (cuts across all): verify-blind verbs — did `type` fire real keystroke
+  handlers? a postcondition can't always tell. → tier verbs: verify-checkable get the
+  outcome-floor; verify-blind fall back to a proxy postcondition, a measured flag, or refuse-in-prose.
+</pre>
+  </div>
+
+  <h2>Ranked ideas</h2>
+
+  <!-- 1 STAR -->
+  <div class="card star">
+    <span class="rank">★ 1</span>
+    <h3>Postcondition floor — a verb is defined by what's true after, not how</h3>
+    <div class="tags"><span class="tag t-axis">Floor definition</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>The floor asserts nothing about mechanism — only the observable post-condition each verb must leave true. <code>click(ref)</code> floor = "after return, ref was actionable and an activation reached it." Engines reach that any way they like (native auto-wait, or fire-and-forget + poll). Swappability becomes <em>outcome-equivalence</em>, not mechanism-equivalence. Surfaced in 4 of 5 frames independently.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>Today's capabilities "assert the verb CLASS exists; say NOTHING about behavior" (<code>browser-adapter-router-engine.ts:81</code>). Inverts the verb from mechanism to post-condition.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Resolves the ADR-0012 tension at the root: a post-condition is <em>verifiable</em>, so it can't be a <em>false</em> claim — if it holds, the floor held, regardless of engine. Test: can two reviewers independently write the same one-sentence post-condition for <code>click</code> without naming an engine? If yes, the floor is real.</p></div>
+    </div>
+    <p class="mt">Meeting test: "The floor doesn't say click waits — it says after click, the element was activated. Prove that or you didn't satisfy the floor."</p>
+  </div>
+
+  <!-- 2 STAR -->
+  <div class="card star">
+    <span class="rank">★ 2</span>
+    <h3>Verify is the leveler — proven, not declared</h3>
+    <div class="tags"><span class="tag t-axis">Verification as truth</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>An engine doesn't <em>declare</em> floor-compliance; it <em>proves</em> it per operation. Every floor verb is <code>operate → verify</code> fused: the verb "succeeds at floor level" only if the bundled verify confirms the post-condition at runtime. There's no static manifest to lie, because the claim and its evidence are the same event. Directly operationalizes ADR 0012's "adapter reports and proof stay runtime-owned."</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>ADR 0012: proof stays runtime-owned, skill prose names workflow not capability truth. The facade already wants verify-after-operate; this makes it the floor's enforcement mechanism, not a separate verb.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Drift becomes structurally impossible — there's nothing static to drift from. One generic verify-wrap replaces N per-behavior codec normalizations. The cleanest ADR-0012 fit available, and it's the natural twin of idea 1.</p></div>
+    </div>
+    <p class="mt">Meeting test: "There's no 'this engine waits' flag. There's only 'this operation verified its post-condition before returning.'"</p>
+  </div>
+
+  <!-- 3 STAR -->
+  <div class="card star">
+    <span class="rank">★ 3</span>
+    <h3>Loud typed divergence — reuse <code>adapter_capability_partial</code>, add <code>behavior_realized</code></h3>
+    <div class="tags"><span class="tag t-axis">Divergence handling</span><span class="tag t-conf">Conf High</span><span class="tag">Cx S</span></div>
+    <p>Don't pre-declare behavioral flags (drift-prone — ADR 0012's rejected "static docs matrix"). Instead each verb result carries a typed <code>behavior_realized</code> field naming the guarantee actually applied this call (<code>click{waited:false}</code>), and when behavior falls below the reference form, emit the <em>existing</em> <code>adapter_capability_partial</code> diagnostic with evidence. The caller learns the real difference exactly when it's load-bearing, from runtime.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>Typed capability diagnostics already exist: <code>adapter_capability_none/unknown/stale/partial</code> (<code>command-contract.ts:628</code>). errno-style: the result carries its own cause class.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Kills the silent-flake failure: a fire-and-forget click is loud in the result, not buried under an identical verb name. Runtime diagnostics can't drift because they're emitted by the code path that has the behavior. Near-zero new surface — the leanest honest mechanism.</p></div>
+    </div>
+    <p class="mt">Meeting test: "When a click lands on a not-yet-actionable element, can the caller see in the result that no actionability wait happened — without reading engine docs?"</p>
+  </div>
+
+  <!-- 4 -->
+  <div class="card">
+    <span class="rank">4</span>
+    <h3>Facade-owned actionability loop — slow engine borrows the fast engine's guarantee</h3>
+    <div class="tags"><span class="tag t-axis">Codec burden</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx M</span></div>
+    <p>When an engine lacks native auto-wait, the facade — not each codec — wraps it in a verify-retry loop: snapshot actionability → dispatch → re-verify → retry-to-deadline. Playwright's native auto-wait and chrome-devtools-plus-facade-loop converge on the same post-condition. The normalization burden lives <strong>once</strong> in the shared layer, keeping codecs thin.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>Concrete divergence: playwright auto-waits, CDP <code>dispatchMouseEvent</code> is fire-and-forget. Hoisting the loop to the facade is what makes "floor = behavior" (idea 1) achievable without heavy per-codec burden.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>This is the bridge between lean and strict: it delivers real behavioral uniformity for the verbs that need it, without duplicating waiting logic in every adapter. Bound it by cost (idea 7).</p></div>
+    </div>
+    <p class="mt">Meeting test: "Run the same click against both engines under load — do both either succeed-with-actionable-target or fail-typed, with no silent coordinate-miss on chrome-devtools?"</p>
+  </div>
+
+  <!-- 5 -->
+  <div class="card">
+    <span class="rank">5</span>
+    <h3>The verify-blind limit — tier verbs by what verification can observe</h3>
+    <div class="tags"><span class="tag t-axis">Verification as truth</span><span class="tag t-conf">Conf High</span><span class="tag">Cx M</span></div>
+    <p>The honest boundary of the whole approach. <code>click</code>/<code>navigate</code> are verify-checkable (DOM/URL state is observable post-hoc). But "did <code>type</code> fire real keystroke handlers?" and "did the page settle via network-idle?" are partially <em>verify-blind</em> — the post-condition isn't fully reconstructable. Classify each verb: verify-checkable verbs get the outcome-floor (ideas 1–2); verify-blind verbs fall back to a <strong>proxy post-condition</strong> (input value + framework-bound mirror updated), a <strong>measured flag</strong>, or explicit <strong>refuse-in-prose</strong>. <em>And</em> verify itself differs per engine (a11y-tree vs screenshot-diff), so <code>verify_method</code> must be typed — or verify becomes the new false-uniformity surface.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct + reasoned</h4><p>Named limit: a post-condition "can't always tell" if type fired handlers. Meta-divergence: "the verify loop itself differs per engine, so 'verified' means different things." testing-library precedent: assert observable consequence, not internal events.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Prevents over-claiming. Without this tiering, ideas 1–2 silently over-promise on verbs they can't actually verify. This is the guardrail that keeps the whole approach honest.</p></div>
+    </div>
+    <p class="mt">Meeting test: "For each floor verb, point at the concrete artifact verify reads to confirm the post-condition. Verbs with no such artifact are tagged verify-blind — no exceptions."</p>
+  </div>
+
+  <!-- 6 -->
+  <div class="card">
+    <span class="rank">6</span>
+    <h3>Conformance suite as admission gate (Khronos / Android CTS)</h3>
+    <div class="tags"><span class="tag t-axis">ADR-0012 fidelity</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx L</span></div>
+    <p>An engine is admitted to the registry as floor-satisfying only by <strong>passing a behavior conformance suite</strong> — a tiny executable spec per verb ("does this click wait for actionability?"). Capability becomes a test verdict, not a hand-declared tri-state; a failing verb downgrades to <code>adapter_capability_partial</code> with the failing test as evidence. The suite <em>is</em> the floor definition, and admission is earned, slotting into the <code>known→provable→mapped→selectable</code> lifecycle.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · reasoned</h4><p>Khronos OpenGL/Vulkan CTS and Android CTS: "you may only call it conformant/Android if you pass the suite." Maps the existing <code>confidence≥75</code> gate onto a proven-behavior verdict; feeds the existing <code>evidence</code> field.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>The strongest anti-drift mechanism — behavior is proven per engine, re-runnable, not asserted. The natural way to make "wiring playwright" produce trustworthy capability claims. Heavier (Cx L), so a phase-2 move after ideas 1–3 land.</p></div>
+    </div>
+    <p class="mt">Meeting test: "When someone adds a new engine, what stops them from registering it as floor-complete without proving a single verb behaves?"</p>
+  </div>
+
+  <!-- 7 -->
+  <div class="card">
+    <span class="rank">7</span>
+    <h3>Refuse-the-route over silent-LCD (+ a refuse-in-prose roster)</h3>
+    <div class="tags"><span class="tag t-axis">ADR-0012 fidelity</span><span class="tag t-conf">Conf Med</span><span class="tag">Cx S</span></div>
+    <p>When a caller invokes a verb whose required behavior an engine can't deliver <em>and</em> can't codec-emulate, the contract refuses with a typed <code>adapter_behavior_unmet</code> naming the unmet guarantee — never silently executing the weaker version. Refusal is per-verb-per-behavior, so tasks that don't need waiting still route fine (avoids the over-strict-floor trap). Pair with a durable roster in SKILL.md naming guarantees deliberately left to agent judgment + prose — extending the existing "re-snapshot before element-ref actions" rule.</p>
+    <div class="grid2">
+      <div class="blk basis"><h4>Basis · direct</h4><p>ADR 0012 rejects "automatic fallback (silently leaves constraints)" — refusal is the honest alternative. SKILL.md already carries behavioral prose rules; the roster makes the refusal explicit and auditable.</p></div>
+      <div class="blk"><h4>Why it matters</h4><p>Splits the false binary between "strict floor rejects engines" and "loose floor permits silent wrong results." Converts a silent omission into a deliberate, visible boundary — the thing reviewers actually fear is <em>accidental</em> false claims.</p></div>
+    </div>
+    <p class="mt">Meeting test: "Does a chrome-devtools click on a slow page get refused with a named reason, or executed as a coin-flip — and does a click on a known-stable element still route?"</p>
+  </div>
+
+  <h2>The poles (decisions for the brainstorm, not separate ideas)</h2>
+  <table>
+    <tr><th>Pole</th><th>What it is</th><th>When it wins</th></tr>
+    <tr><td><strong>Lean: zero-flag floor</strong></td><td>Verb-class existence + <code>behavior_realized</code> + <code>adapter_capability_partial</code> + prose. Ship in a day.</td><td>If playwright is the only near-term engine and the agent can absorb divergence via loud signals.</td></tr>
+    <tr><td><strong>Strict: Option A + <code>guarantee_source</code></strong></td><td>Floor = behavior; codec MUST deliver it (synthesizing where the engine lacks it), tagging <code>native</code> vs <code>codec_emulated</code>. The only option where agent code never changes on swap.</td><td>If genuine write-once-run-anywhere swappability is the actual product goal and codec cost is acceptable.</td></tr>
+    <tr><td><strong>YAGNI: playwright-delta-only</strong></td><td>Hardcode the two known deltas (click-wait, snapshot-model); no general system.</td><td>Tempting for speed — but creates worse drift when engine #3 arrives. Lowest-confidence pole.</td></tr>
+  </table>
+
+  <h2>Rejection summary</h2>
+  <table class="reject">
+    <tr><th>Idea</th><th>Why cut (or folded)</th></tr>
+    <tr><td>Floor = set of guarantees not verbs; equivalence-class with tolerance budget; versioned behavior contract (POSIX)</td><td>Folded into idea 1 — all are framings of "define by outcome." The post-condition framing is the most concrete and testable.</td></tr>
+    <tr><td>Behavioral flags manifest (JDBC DatabaseMetaData); IEEE-754 behavior modes; capability negotiation handshake (HTTP 406)</td><td>These are the declared-flag (Option C) family. Cut in favor of measured/runtime divergence (idea 3) because declared flags drift — the exact failure ADR 0012 names. Negotiation-refuse survives as idea 7.</td></tr>
+    <tr><td>Verify-measured flags; postcondition-evidence-as-capability-evidence (unify channels)</td><td>Folded into idea 2 — "measured not declared" is the same move; confidence becomes a moving average of verify outcomes.</td></tr>
+    <tr><td>Behavior-delta-on-swap diff</td><td>Strong, but a downstream feature once <code>behavior_realized</code> (idea 3) exists — note for the swappability-dividends work, not the contract itself.</td></tr>
+    <tr><td>One-verb floor (verify only)</td><td>Survives as the lean pole, not a standalone idea — too thin to be the whole answer but a useful boundary marker.</td></tr>
+  </table>
+
+  <h2>Recommendation</h2>
+  <div class="lead">
+    <strong>The answer the convergence is handing you:</strong> define floor verbs by <strong>verified post-condition</strong> (idea 1) <strong>enforced by verify-after-operate</strong> (idea 2), with divergence surfaced as <strong>loud typed runtime signals</strong> reusing <code>adapter_capability_partial</code> + a new <code>behavior_realized</code> field (idea 3). Use the <strong>facade-owned actionability loop</strong> (idea 4) to let slow engines meet the post-condition. Bound the whole thing with the <strong>verify-blind tiering</strong> (idea 5) — the one guardrail that keeps it honest. <strong>Refuse-the-route</strong> (idea 7) handles the genuinely-unmeetable case. Defer the <strong>conformance suite</strong> (idea 6) to when playwright actually lands — it's the right anti-drift mechanism but heavier than the first cut needs.
+    <br><br>
+    This maps the three brainstorm options cleanly: it's mostly <strong>Option A done honestly</strong> (behavior is real, via verify + facade loop) but it avoids A's false-claim trap by making the guarantee <em>checked, not declared</em> — and it absorbs Option C's honesty (divergence is visible) without C's drift (signals are runtime, not manifest). Option B (pure LCD) survives only as the lean pole.
+    <br><br>
+    <strong>The WebDriver lesson to carry into the brainstorm:</strong> a shared verb name is not a shared behavior. The floor must spec the post-condition (timing, staleness) explicitly — that's the whole point — or it repeats WebDriver's cross-browser flake.
+  </div>
+
+  <p class="foot">
+    Generated by ce-ideate (focused run) · 40 raw candidates across 5 frames (assumption-breaking, verify-as-truth-source, cross-domain analogy, constraint-flip + steipete-lean, failure-modes) → adversarial filter → 7 survivors + 3 poles across 5 axes.
+    Grounding: verified contract surface (<code>browser-adapter-router-engine.ts</code>, <code>command-contract.ts</code>), ADR 0012/0013, this session's facade grounding. Reused session grounding rather than re-dispatching scan/learnings/web.
+    Cross-domain prior art: Khronos/Android CTS, JDBC DatabaseMetaData, POSIX feature-test, HTTP/gRPC negotiation, IEEE-754, WebDriver capabilities (incl. its failure), SQL dialect emulation.
+    Companion to <code>docs/ideation/2026-06-12-browser-use-chrome-devtools-agents-ideation.html</code>. Run 4349ff75.
+  </p>
+
+</div>
+</body>
+</html>

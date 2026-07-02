@@ -70,6 +70,26 @@ _Avoid_: bunx requirement, npx requirement, prose runner fallback, public packag
 A request from a browser-consuming capability back to `browser-use` when the Warm Chrome environment is missing, wrong, unattached, or otherwise not ready. It stops Browser Adapter work, not the agent, when `browser-use` has a safe recovery path. It is not a CLI runtime or dependency failure.
 _Avoid_: self-repair, direct browser launch, adapter fallback, operator stop
 
+### Architecture patterns (pressure-earned)
+
+Pattern names refereed against live prototype + decision evidence; see `docs/decisions/2026-06-13-001-gof-pattern-naming-decision-log.md` for the verdicts.
+
+**Browser Facade**:
+The `operate` / `observe` / `verify` action surface that hides which Browser Adapter ran. It is a GoF Facade for the action path only — callers never name an engine. It does NOT name the divergence-surfacing layer; the Differential Oracle is its deliberate opposite.
+_Avoid_: facade-as-whole-product, universal browser API, the facade hides divergence
+
+**Differential Oracle**:
+A mechanical Set-diff over N independent Browser Adapters observing one Warm Chrome, producing consensus / confidence / quorum. It is **N-version programming** (independent re-derivations voted in code), not a Facade — its value is to SURFACE per-engine divergence, never hide it. The LLM consumes its verdict; it does not produce it.
+_Avoid_: facade, LLM oracle, model judgment, single-engine check, consensus engine
+
+**Adapter (pattern sense)**:
+Each Browser Adapter is a GoF Adapter — the two-axis mapping layer (parser-per-ref-format + dispatch-per-transport, engine-origin-tagged ref) converts each engine's native vocabulary and dispatch to the Browser Facade contract. Fully pressure-earned: delete the mapping and N collapses to 1.
+_Avoid_: thin wrapper, passthrough, shim
+
+**Evidence-First Selection**:
+The Browser Adapter Router's selection discipline — candidates are presumed invalid until proven (attachment proof + capability match); missing evidence yields recovery, not a route. It is NOT a GoF Strategy (no free swap of interchangeable algorithms); calling it Strategy is decorative.
+_Avoid_: Strategy, algorithm swap, interchangeable engines, automatic fallback
+
 ### Durable browser knowledge
 **browser-domain-memory**:
 The compound browser knowledge capability. It owns durable per-domain browser knowledge — auth pointers, runbooks, gotchas — and browser capture/distillation plus the three playback modes (prose, runbook, deterministic).

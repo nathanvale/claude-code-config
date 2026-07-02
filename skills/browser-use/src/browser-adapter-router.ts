@@ -91,6 +91,7 @@ import {
 	emitWithDiagnostics,
 	quietDiagnosticWriter,
 } from "./cli-diagnostics-bootstrap";
+import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 const VERSION = "0.1.0";
 const ROUTE_FAIL_CLOSED_EXIT_CODE = 20;
@@ -720,8 +721,7 @@ function emitPrepareFailure(input: {
 			message,
 			exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 			severity: "error",
-			recoverability: prepareRecoverabilityForCode(code),
-			retryable: false,
+			...retryabilityForRecoverability(prepareRecoverabilityForCode(code)),
 			failure_domain: "browser_adapter_router",
 		}),
 		runtime_actions: runtimeActions,
@@ -826,8 +826,7 @@ function emitRouteFailure(input: {
 		message: failure.message,
 		exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 		severity: "error",
-		recoverability: recoverabilityForCode(failure.code),
-		retryable: false,
+		...retryabilityForRecoverability(recoverabilityForCode(failure.code)),
 		failure_domain: "browser_adapter_router",
 	});
 	const envelope = createCliRuntimeErrorEnvelope({
@@ -909,8 +908,7 @@ function emitReportFailure(input: {
 				message,
 				exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 				severity: "error",
-				recoverability: recoverabilityForCode(code),
-				retryable: false,
+				...retryabilityForRecoverability(recoverabilityForCode(code)),
 				failure_domain: "browser_adapter_router",
 			}),
 			runtime_actions: [runtimeActionForId(nextAction)],
@@ -958,8 +956,7 @@ function emitRouteEvidenceError(input: {
 				message: input.error.message,
 				exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
 				severity: "error",
-				recoverability: recoverabilityForCode(code),
-				retryable: false,
+				...retryabilityForRecoverability(recoverabilityForCode(code)),
 				failure_domain: "browser_adapter_router",
 			}),
 			runtime_actions: [runtimeActionForId(nextAction)],
