@@ -55,7 +55,17 @@ Use `agent-skills` to project visible catalog skills into each worktree.
 - Agent/CI gate: `agent-skills sync --check --json`.
 - Repair: `agent-skills sync`.
 - Generated state: `.agents/skills/`, `.claude/skills/`, `.agents/agent-skills-snapshot.json`.
-- Source of truth: `skills/` plus `.agent-skills.yml`.
+- Source of truth: `skills/` plus `.agent-skills.yml` plus `skills-lock.json`.
+
+External skills (installed with `bunx skills add`) are hash-pinned copies, not
+projections. The lock is tracked; the copies under `.agents/skills/` are
+gitignored, so a fresh worktree restores them from `skills-lock.json`:
+
+- Restore: `bunx skills experimental_install` (provider-experimental surface;
+  it may rename — `bunx skills@1.5.14 experimental_install` is the pinned
+  fallback when latest breaks).
+- `agent-skills status` reports installed externals and counts missing ones
+  with the restore hint; externals never block `sync`.
 
 ## Owner
 
