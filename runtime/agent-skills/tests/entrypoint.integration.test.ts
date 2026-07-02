@@ -1,0 +1,272 @@
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
+
+import { applyVisibility, discoverCatalog } from "../src/catalog.ts";
+import { main, type AgentSkillsCliRuntime } from "../src/cli.ts";
+import { planProjection, applyProjection } from "../src/projection.ts";
+
+interface MemoryWriter {
+	output: string;
+	write(chunk: string): void;
+}
+
+interface TestJsonEnvelope {
+	status?: string;
+	error?: {
+		code?: string;
+		message?: string;
+		[key: string]: unknown;
+	};
+	data?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
+describe("agent-skills entrypoint", () => {
+	test("status human output shows calm inventory and one next action", async () => {
+		const root = await tempRepo("status-human");
+		await writeSkill(join(root, "skills"), "fallow");
+
+		const result = await runTextCli(["status"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("visible: 1");
+		expect(result.output).toContain("ignored: 0");
+		expect(result.output).toContain("next: Run sync");
+	});
+
+	test("status --json contains the same counts and next action", async () => {
+		const root = await tempRepo("status-json");
+		await writeSkill(join(root, "skills"), "fallow");
+
+		const result = await runJsonCli(["status", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(result.envelope.data).toMatchObject({
+			visible_count: 1,
+			ignored_count: 0,
+			next_action: "sync",
+		});
+	});
+
+	test("sync --check --json exits 1, reports planned changes, and writes nothing", async () => {
+		const root = await tempRepo("sync-check");
+		await writeSkill(join(root, "skills"), "fallow");
+
+		const result = await runJsonCli(["sync", "--check", "--json"], root);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.envelope.status).toBe("ok");
+		expect(result.envelope.data?.changes).toMatchObject({
+			create_or_update: [".agents/skills/fallow", ".claude/skills/fallow"],
+		});
+		expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(false);
+	});
+
+	test("sync writes projections and snapshot", async () => {
+		const root = await tempRepo("sync");
+		await writeSkill(join(root, "skills"), "fallow");
+
+		const result = await runJsonCli(["sync", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(lstatSync(join(root, ".agents/skills/fallow")).isSymbolicLink()).toBe(
+			true,
+		);
+		expect(existsSync(join(root, ".agents/agent-skills-snapshot.json"))).toBe(
+			true,
+		);
+	});
+
+	test("sync supports tracked .agents catalog with claude-only projections", async () => {
+		const root = await tempRepo("legacy-catalog");
+		await writeSkill(join(root, ".agents/skills"), "fallow");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\n",
+		);
+
+		const result = await runJsonCli(["sync", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(result.envelope.data?.checked_roots).toEqual([
+			join(root, ".claude/skills"),
+		]);
+		expect(lstatSync(join(root, ".agents/skills/fallow")).isDirectory()).toBe(
+			true,
+		);
+		expect(lstatSync(join(root, ".claude/skills/fallow")).isSymbolicLink()).toBe(
+			true,
+		);
+	});
+
+	test("sync links configured imports before claude projection", async () => {
+		const root = await tempRepo("imports");
+		await mkdir(join(root, ".agents/skills"), { recursive: true });
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\nimports:\n  - storybook-matrix\n",
+		);
+
+		const result = await runJsonCli(["sync", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(lstatSync(join(root, ".agents/skills/storybook-matrix")).isSymbolicLink()).toBe(
+			true,
+		);
+		expect(lstatSync(join(root, ".claude/skills/storybook-matrix")).isSymbolicLink()).toBe(
+			true,
+		);
+		expect(realpathSync(join(root, ".claude/skills/storybook-matrix"))).toBe(
+			realpathSync(join(root, ".agents/skills/storybook-matrix")),
+		);
+	});
+
+	test("list --new shows skills added after the last snapshot", async () => {
+		const root = await tempRepo("list-new");
+		await writeSkill(join(root, "skills"), "fallow");
+		await seedProjection(root);
+		await writeSkill(join(root, "skills"), "summarize");
+
+		const result = await runTextCli(["list", "--new"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("summarize\tvisible");
+		expect(result.output).not.toContain("fallow\tvisible");
+	});
+
+	test("list --why names the ignore rule for a specific skill", async () => {
+		const root = await tempRepo("list-why");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./skills\nignore:\n  - fallow\n",
+		);
+
+		const result = await runTextCli(["list", "--why", "fallow"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("fallow\tignored\tignored by fallow");
+	});
+
+	test("ignore add prints changed rule and next action", async () => {
+		const root = await tempRepo("ignore-add");
+
+		const result = await runTextCli(["ignore", "add", "fixture-*"], root);
+		const config = await readFile(join(root, ".agent-skills.yml"), "utf8");
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("changed: fixture-*");
+		expect(result.output).toContain("next: Run sync");
+		expect(config).toContain("fixture-*");
+	});
+
+	test("invalid usage exits 2 and points to help", async () => {
+		const root = await tempRepo("usage");
+
+		const result = await runJsonCli(["sync", "--force", "--json"], root);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.envelope.status).toBe("error");
+		expect(result.envelope.error?.message).toContain("Use --help");
+	});
+
+	test("missing config json error satisfies facade runtime contract", async () => {
+		const root = await mkdtemp(join(tmpdir(), "agent-skills-entrypoint-missing-config-"));
+
+		const result = await runJsonCli(["status", "--json"], root);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.envelope.status).toBe("error");
+		expect(result.envelope.error).toMatchObject({
+			code: "missing_config",
+			recoverability: "repair_state",
+			retryable: false,
+		});
+	});
+
+	test("unlink removes managed local projections and leaves foreign links", async () => {
+		const root = await tempRepo("unlink");
+		const outside = await mkdtemp(join(tmpdir(), "agent-skills-entry-foreign-"));
+		await writeSkill(join(root, "skills"), "fallow");
+		await seedProjection(root);
+		await symlink(outside, join(root, ".agents/skills/foreign"));
+
+		const result = await runTextCli(["unlink"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain(".agents/skills/fallow");
+		expect(existsSync(join(root, ".agents/skills/fallow"))).toBe(false);
+		expect(lstatSync(join(root, ".agents/skills/foreign")).isSymbolicLink()).toBe(
+			true,
+		);
+	});
+});
+
+async function runJsonCli(argv: readonly string[], root: string) {
+	const stdout = createMemoryWriter();
+	const exitCode = await main(argv, {
+		stdout,
+		runtime: runtime(root),
+	});
+	return {
+		exitCode,
+		envelope: JSON.parse(stdout.output) as TestJsonEnvelope,
+		output: stdout.output,
+	};
+}
+
+async function runTextCli(argv: readonly string[], root: string) {
+	const stdout = createMemoryWriter();
+	const stderr = createMemoryWriter();
+	const exitCode = await main(argv, {
+		stdout,
+		stderr,
+		runtime: runtime(root),
+	});
+	return { exitCode, output: stdout.output, stderr: stderr.output };
+}
+
+function runtime(root: string): Partial<AgentSkillsCliRuntime> {
+	return {
+		cwd: () => root,
+		now: () => Date.parse("2026-06-16T00:00:00.000Z"),
+	};
+}
+
+function createMemoryWriter(): MemoryWriter {
+	return {
+		output: "",
+		write(chunk: string) {
+			this.output += chunk;
+		},
+	};
+}
+
+async function tempRepo(name: string): Promise<string> {
+	const root = await mkdtemp(join(tmpdir(), `agent-skills-entrypoint-${name}-`));
+	await mkdir(join(root, "skills"), { recursive: true });
+	return root;
+}
+
+async function writeSkill(catalog: string, id: string): Promise<void> {
+	const dir = join(catalog, id);
+	await mkdir(dir, { recursive: true });
+	await writeFile(
+		join(dir, "SKILL.md"),
+		`---\nname: ${id}\ndescription: "Test skill."\n---\n\n# ${id}\n`,
+	);
+}
+
+async function seedProjection(root: string): Promise<void> {
+	const catalogRoot = join(root, "skills");
+	const visibility = applyVisibility(await discoverCatalog(catalogRoot), []);
+	const plan = await planProjection({ repoRoot: root, catalogRoot, visibility });
+	await applyProjection(plan, "2026-06-16T00:00:00.000Z");
+}

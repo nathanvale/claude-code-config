@@ -33,6 +33,9 @@ type PackageJson = {
 	devDependencies?: Record<string, string>;
 	bundleDependencies?: string[] | boolean;
 	bundledDependencies?: string[] | boolean;
+	sideQuest?: {
+		sourceLinkedBin?: boolean;
+	};
 };
 
 type TsconfigJson = {
@@ -240,6 +243,10 @@ function packageBins(packageJson: PackageJson | null): Record<string, string> {
 	}
 
 	return packageJson.bin;
+}
+
+function allowsSourceLinkedBin(packageJson: PackageJson | null): boolean {
+	return packageJson?.sideQuest?.sourceLinkedBin === true;
 }
 
 function hasBlankValue(value: string | undefined): boolean {
@@ -903,6 +910,7 @@ if (!existsSync(rootLockPath)) {
 
 		if (
 			workspacePackage.packageJson?.private !== false &&
+			!allowsSourceLinkedBin(workspacePackage.packageJson) &&
 			packageLockBlock?.includes(`\n      "bin": {`)
 		) {
 			findings.push({
@@ -914,6 +922,9 @@ if (!existsSync(rootLockPath)) {
 		const bins = packageBins(workspacePackage.packageJson);
 
 		for (const [binName, binTarget] of Object.entries(bins)) {
+			if (allowsSourceLinkedBin(workspacePackage.packageJson)) {
+				continue;
+			}
 			const lockBinTarget = binTarget.startsWith("./")
 				? binTarget
 				: `./${binTarget}`;
@@ -939,7 +950,11 @@ for (const [packagePath, workspacePackage] of workspacePackagesByPath) {
 	checkTypeScriptGovernance(packagePath, packageJson);
 	checkLintPortability(packagePath, packageJson);
 
-	if (packageJson?.private !== false && packageJson?.bin) {
+	if (
+		packageJson?.private !== false &&
+		packageJson?.bin &&
+		!allowsSourceLinkedBin(packageJson)
+	) {
 		findings.push({
 			path: `${packagePath}/package.json`,
 			message: "Private repo-local package declares package bin entries; use package scripts for source-mode commands and reserve bin for published or externally consumed tools.",

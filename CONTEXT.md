@@ -35,6 +35,18 @@ _Avoid_: backup copy, duplicated policy, rendered summary, startup restatement
 A confirmation rule for high-consequence action classes, not a blanket pause before implementation. It preserves agent autonomy for concrete requested work; low-risk ambiguity gets reasonable assumptions, high-risk ambiguity gets a question.
 _Avoid_: ask before everything, implement only after confirmation, blanket confirmation
 
+**Skill Catalog**:
+Authored collection of skills that acts as the source for agent-runtime visibility.
+_Avoid_: skill registry, skill source, global skills
+
+**Skill Catalog Entry**:
+Direct child skill directory identity inside a Skill Catalog, used for visibility decisions, projection state, ignore rules, and change tracking. Frontmatter describes and validates the entry; it does not replace the directory identity.
+_Avoid_: frontmatter name, provider id, filesystem path
+
+**Projection Root**:
+Generated agent-runtime skill location derived from a Skill Catalog. It is not an authored source.
+_Avoid_: target folder, provider root, copied skills
+
 ### Cross-cutting governance
 **Tracker owner binding**:
 The owner-path-scoped association between a durable work owner and the external task tracker that runtime-backed task commands may read or mutate. Owners may be repo roots, workspace packages, skills, or other durable owner paths.
@@ -93,11 +105,11 @@ A process-boundary test that proves a command can be invoked through its repo-lo
 _Avoid_: smoke test, front door smoke, command surface proof
 
 **Branch Station**:
-A package-owned named command branch that represents one stable success, failure, diagnostic, repair, continuation, or observability outcome worth proving.
+A package-owned named command branch that represents one stable success, failure, diagnostic, repair, continuation, or observability outcome worth proving. It is the CLI analogue of a Playwright user-flow checkpoint, except the user is an agent making runtime decisions.
 _Avoid_: code branch, test case, clause, route
 
 **Branch Station Catalog**:
-A package-owned catalog of Branch Stations for one CLI surface, kept beside the command contract and expressed in package vocabulary.
+A package-owned catalog of Branch Stations for one CLI surface, kept beside the command contract and expressed in package vocabulary. It declares the agent-visible outcomes that tests and station maps must prove.
 _Avoid_: package branch catalog, station catalog, shared branch registry
 
 **Station Map**:

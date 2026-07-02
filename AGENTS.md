@@ -56,6 +56,7 @@
 ## Skill Authoring
 
 - Create skills in `skills/` only; never in `~/.claude/skills/` or `~/.codex/skills/`. Those are deploy targets symlinked by `install.sh`; a skill written there drifts from the repo and is invisible to git.
+- Repo-local skill visibility: humans inspect with `agent-skills status`; agents/CI gate with `agent-skills sync --check --json`; repair with `agent-skills sync`.
 - Never author, review, heal, or repair a `SKILL.md` before reading `skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
@@ -75,7 +76,7 @@
 
 - Search with `rg`; edit manually with `apply_patch`.
 - Parallel independent reads/checks: `multi_tool_use.parallel`.
-- Research tools: use `context/search-tools.md`.
+- Research tools: use `context/search-tools.md`; Context7 for library/framework/API docs.
 - Claude/Codex MCP keys: use `$HOME/code/dotfiles/bin/with-env`, keychain, or 1Password-backed wrappers; don't rely on ambient shell env.
 - MCP auth checks: never source `.env` or print key prefixes; check wrapper presence, `op`/keychain readiness, and MCP config; if Codex Context7 auth is missing, use `npx -y ctx7 ...` and record the gap.
 - Tests/lint/types: prefer MCP runners; see `context/bun-runner.md`.

@@ -47,6 +47,16 @@ One worktree location serves every tool. Worktrees live in `<repo>/.worktrees/<b
 - **Codex cleanup:** `worktree rm <branch> --force` removes the worktree, deregisters from Codex Desktop, and archives matching threads.
 - **Never** scatter worktrees across `~/.codex/worktrees/`, `<repo>/.claude/worktrees/`, and `<repo>/.worktrees/`.
 
+## Repo-local skills
+
+Use `agent-skills` to project visible catalog skills into each worktree.
+
+- Human check: `agent-skills status`.
+- Agent/CI gate: `agent-skills sync --check --json`.
+- Repair: `agent-skills sync`.
+- Generated state: `.agents/skills/`, `.claude/skills/`, `.agents/agent-skills-snapshot.json`.
+- Source of truth: `skills/` plus `.agent-skills.yml`.
+
 ## Owner
 
 - Skill: `skills/worktree/SKILL.md`
