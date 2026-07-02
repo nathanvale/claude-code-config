@@ -59,10 +59,12 @@ _Avoid_: unmanaged blocker, catalog entry, agent-skills-owned link
 
 **Skills lock**:
 The git-tracked `skills-lock.json` written by the community `skills` CLI.
-agent-skills reads it as read-only input; a second writer would drift
-(ADR 0016). Lock keys are validated as single path-component tokens before
-entering the external set.
-_Avoid_: agent-skills state, snapshot, writable config
+External dependencies only — the npm-lockfile analogy: the repo's own
+`skills/` catalog never appears in it, exactly as `src/` never appears in
+`package-lock.json`. agent-skills reads it as read-only input; a second
+writer would drift (ADR 0016). Lock keys are validated as single
+path-component tokens before entering the external set.
+_Avoid_: agent-skills state, snapshot, writable config, local skill registry
 
 **Lock parse failure**:
 The named diagnostic when `skills-lock.json` is present but unreadable, or its

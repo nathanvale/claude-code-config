@@ -36,9 +36,8 @@ bun run runtime/agent-skills/src/cli.ts status --json
 - **Change classification, blockers, or external recognition** ->
   `ARCHITECTURE.md`, Change Recipes; keep fail-closed sync intact.
 - **Change vocabulary** -> `CONTEXT.md`; keep enums and schemas in code.
-- **Trace source lineage** -> `PROVENANCE.md`.
-- **Review plan history** -> `runtime/agent-skills/docs/INDEX.md`,
-  `PROVENANCE.md`,
+- **Trace source lineage or review plan history** ->
+  `runtime/agent-skills/docs/INDEX.md`,
   `docs/decisions/2026-07-02-npx-skills-division-of-labor.md`.
 - **Choose next work** -> `TASKS.md`.
 
@@ -77,7 +76,6 @@ Check these package docs in the same pass:
 - `runtime/agent-skills/ARCHITECTURE.md`
 - `runtime/agent-skills/AGENTS.md`
 - `runtime/agent-skills/CONTEXT.md`
-- `runtime/agent-skills/PROVENANCE.md`
 - `runtime/agent-skills/docs/INDEX.md`
 - `runtime/agent-skills/TASKS.md`
 
@@ -85,7 +83,7 @@ Pass/fail gates:
 
 ```bash
 skills/test-runner/src/test-runner.sh run --cwd runtime/agent-skills -- tests/docs-drift.test.ts
-bun run skills/skill-author/scripts/check-owner-paths.ts --json runtime/agent-skills/AGENTS.md runtime/agent-skills/ARCHITECTURE.md runtime/agent-skills/README.md runtime/agent-skills/CONTEXT.md runtime/agent-skills/PROVENANCE.md runtime/agent-skills/TASKS.md runtime/agent-skills/docs/INDEX.md
+bun run skills/skill-author/scripts/check-owner-paths.ts --json runtime/agent-skills/AGENTS.md runtime/agent-skills/ARCHITECTURE.md runtime/agent-skills/README.md runtime/agent-skills/CONTEXT.md runtime/agent-skills/TASKS.md runtime/agent-skills/docs/INDEX.md
 ```
 
 The docs-drift test proves `src` modules and the `ARCHITECTURE.md` Module Map

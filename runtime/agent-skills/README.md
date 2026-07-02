@@ -3,10 +3,9 @@
 Repo-local skill projection runtime for Codex, Claude Code, humans, and CI.
 
 Package docs: `AGENTS.md` routes maintainers, `CONTEXT.md` owns vocabulary,
-`ARCHITECTURE.md` owns the module map and flows, `PROVENANCE.md` traces
-source lineage, `TASKS.md` tracks active work, and
-`runtime/agent-skills/docs/INDEX.md` indexes source brainstorms, ideation,
-and plans.
+`ARCHITECTURE.md` owns the module map and flows, `TASKS.md` tracks active
+work, and `runtime/agent-skills/docs/INDEX.md` indexes source brainstorms,
+ideation, plans, and lineage.
 
 `agent-skills` reads one skill catalog, writes local projection links for agent
 runtimes, and reports projection health through a small facade-backed CLI.
