@@ -178,9 +178,7 @@ export class CodexJsonAdapter implements CaptureAdapter {
 		);
 
 		const usage =
-			readCodexUsage(terminalEvent) ??
-			readCodexUsage(completedEvent) ??
-			readCodexUsage(failedEvent);
+			readCodexUsage(failedEvent) ?? readCodexUsage(completedEvent);
 		if (usage) {
 			receipt.usage = usage;
 		} else {

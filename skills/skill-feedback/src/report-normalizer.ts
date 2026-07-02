@@ -343,7 +343,7 @@ function parseNormalizedReportHeader(
 	if (typeof raw.generated_ts !== "string") {
 		return { kind: "invalid", path: "generated_ts", reason: "expected_string" };
 	}
-	if (!isStrictIsoTimestamp(raw.generated_ts)) {
+	if (!isNormalizableIsoTimestamp(raw.generated_ts)) {
 		return { kind: "invalid", path: "generated_ts", reason: "invalid_timestamp" };
 	}
 	return { reportId: raw.report_id, generatedTs: raw.generated_ts };
@@ -728,7 +728,10 @@ function isNonNegativeInteger(value: unknown): value is number {
 	return Number.isInteger(value) && (value as number) >= 0;
 }
 
-function isStrictIsoTimestamp(value: string): boolean {
+// Read-path tolerance: accepts Z or ±HH:mm offsets so previously-written inbox
+// reports stay normalizable; write path (command-contract.ts parseReceipt and
+// the runner pre-check) enforces strict Z-only.
+function isNormalizableIsoTimestamp(value: string): boolean {
 	return (
 		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(?:Z|[+-]\d{2}:\d{2})$/.test(
 			value,
