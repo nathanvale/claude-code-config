@@ -96,8 +96,8 @@ slots), AgentRR (two-level experience store), arXiv 2603.20358 (zero-cost AX-tre
   `side-quest-engineering/docs/brainstorms/2026-05-29-001-two-skill-browser-automation-thesis.md`
 - Research record (field converged on "compiler not interpreter"; Skyvern/Stagehand/Workflow Use
   reference implementations): `side-quest-engineering/docs/research/2026-05-29-lean-record-replay-browser-automation.md`
-- create-cli ↔ cli-command-facade pattern (skill produces spec, package enforces): same repo's
-  `docs/brainstorms/2026-05-29-002-facade-aware-create-cli-integration.md`
+- cli-author ↔ cli-command-facade pattern (skill produces spec, package enforces): same repo's
+  `docs/brainstorms/2026-05-29-002-facade-aware-cli-author-integration.md`
 
 ## Skill choreography — browse + domain-checker + capture-run (Nathan, 2026-05-30; corrected by research)
 

@@ -8,7 +8,7 @@ import { type AgentWorktreeStore, createFileStore } from "../src/store.ts";
 
 describe("agent-worktree store", () => {
 	test("writes and reads run, failure, and worktree records", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-store-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-store-"));
 		const store = createFileStore(root);
 
 		await writeStoreFixture(store, {
@@ -41,7 +41,7 @@ describe("agent-worktree store", () => {
 	});
 
 	test("handoff surfaces latest durable context from the store", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-handoff-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-handoff-"));
 		const store = createFileStore(root);
 		await writeStoreFixture(store, {
 			command: "refresh",

@@ -22,7 +22,7 @@ Use this log for accepted decisions about the repo-local `agent-worktree` packag
 - Rebuild useful SideQuest Git/worktree behavior as a new shared package in this repo.
 - Treat agents as first-class CLI users.
 - Make failure recovery, inspectable state, and continuation hints core product behavior.
-- Keep `wt` as the workflow entry point while moving worktree mechanics into `agent-worktree`.
+- Keep `worktree` as the workflow entry point while moving worktree mechanics into `agent-worktree`.
 - Keep exact flags, schemas, field names, exit codes, and parser contracts in code, CLI help, and tests.
 
 ## Notes
@@ -39,11 +39,11 @@ Use this log for accepted decisions about the repo-local `agent-worktree` packag
 id: agent-worktree-001
 status: accepted
 decided_at: "2026-06-14"
-decision: Name the shared package agent-worktree with agent-worktree as the canonical command and awt as the alias
+decision: Name the shared package agent-worktree with agent-worktree as the canonical command
 owner: agent-worktree
 decision_mode:
   question: "What should the new shared package and CLI be called?"
-  option: "agent-worktree package, agent-worktree command, awt alias"
+  option: "agent-worktree package, agent-worktree command"
   confidence: strong
 source:
   - "chat: 2026-06-14 agent-worktree decision-mode"
@@ -53,19 +53,19 @@ Decision:
 
 - Name the package `agent-worktree`.
 - Use `agent-worktree` as the canonical CLI command.
-- Use `awt` as the short alias.
+- Do not accept a separate alias yet.
 
 Rationale:
 
 - The name says what the package owns without tying it to the old SideQuest implementation.
 - The canonical command is clear for docs, tests, and handoff.
-- The alias keeps repeated CLI use low-friction.
+- Alias decisions need real usage evidence before they add another supported surface.
 
 Consequences:
 
 - Future package, CLI, and decision references should use `agent-worktree`.
-- `wt` remains a workflow entry point, not the new package identity.
-- The command contract must prove canonical and alias behavior cannot drift.
+- `worktree` remains a workflow entry point, not the new package identity.
+- The command contract only needs to prove the accepted canonical command behavior.
 
 Next:
 
@@ -107,7 +107,7 @@ Rationale:
 Consequences:
 
 - Future implementation should name package, CLI, model, engine, discovery, and test owners inside `runtime/agent-worktree`.
-- Existing `wt` skill/workflow should call or route to this owner instead of owning lifecycle mechanics.
+- Existing `worktree` skill/workflow should call or route to this owner instead of owning lifecycle mechanics.
 - SideQuest compatibility is selective: port useful lifecycle behavior, not historical structure by default.
 
 Next:
@@ -138,7 +138,7 @@ source:
 Decision:
 
 - Make v1 a full worktree lifecycle replacement.
-- Include full `wt` migration in v1.
+- Include full `worktree` migration in v1.
 - Port all useful SideQuest worktree lifecycle behavior in v1.
 - Keep `doctor` as the first safety and routing surface.
 - Include read-only `handoff` and `inspect <ref>` in v1.
@@ -159,7 +159,7 @@ Consequences:
 
 Next:
 
-- Use `create-cli` before implementing the command contract.
+- Use `cli-author` before implementing the command contract.
 
 V2 Ideas:
 
@@ -345,7 +345,7 @@ V2 Ideas:
 id: agent-worktree-008
 status: accepted
 decided_at: "2026-06-14"
-decision: Accept the v1 lifecycle defaults for retention, store layout, run identity, doctor semantics, create/delete safety, merge uncertainty, clean classification, and wt migration order
+decision: Accept the v1 lifecycle defaults for retention, store layout, run identity, doctor semantics, create/delete safety, merge uncertainty, clean classification, and worktree migration order
 owner: agent-worktree
 decision_mode:
   question: "Which operating defaults should v1 use after the core command boundaries were accepted?"
@@ -376,14 +376,14 @@ Decision:
 - Squash merge: record separate squash evidence, not plain ancestor-merged.
 - Shallow clone: mark merge evidence `unknown`.
 - Clean candidates: classify registered worktrees, orphan branches, and stale directories separately.
-- `wt` migration: migrate read discovery first, then lifecycle commands.
+- `worktree` migration: migrate read discovery first, then lifecycle commands.
 
 Rationale:
 
 - These defaults keep v1 recovery-first and avoid hidden deletion.
 - Doctor remains a readable state map, not a process-failure proxy.
 - Separating evidence types keeps agents from guessing across merge, cleanup, and delete workflows.
-- Migrating `wt` in read-first order preserves workspace rendering while lifecycle ownership moves.
+- Migrating `worktree` in read-first order preserves workspace rendering while lifecycle ownership moves.
 
 Consequences:
 
@@ -422,7 +422,7 @@ source:
 Decision:
 
 - Adopt these labels for the current architecture: Contract-first CLI, Operation Journal, Evidence Cascade, Durable Continuation, Projection, and Runner Port.
-- Keep the labels in this decision log rather than `skills/wt/CONTEXT.md` unless they become durable domain language.
+- Keep the labels in this decision log rather than `skills/worktree/CONTEXT.md` unless they become durable domain language.
 - Reject these labels for v1: Event Sourcing, Saga, CQRS, Blackboard, Strategy Registry, and full Ports-and-Adapters or Hexagonal Architecture.
 
 Rationale:
@@ -435,7 +435,7 @@ Consequences:
 
 - Future agents should use the adopted labels when explaining the package shape.
 - Future agents should not introduce the rejected labels without a new pressure source, seam owner, deletion test, and second adapter or capability proof.
-- `skills/wt/CONTEXT.md` stays focused on workflow/domain language.
+- `skills/worktree/CONTEXT.md` stays focused on workflow/domain language.
 
 Next:
 
@@ -478,8 +478,8 @@ Decision:
 - Diagnostics: stderr plus durable refs; stdout stays machine JSON.
 - Unknown git evidence: preserve `unknown` with reason and command failure metadata.
 - Timeouts: bound subprocess evidence checks.
-- `wt` error mapping: preserve upstream `failure_domain`, `changed_state`, and `next_safe_action`.
-- Adoption order: doctor, read commands, write commands, then `wt` migration.
+- `worktree` error mapping: preserve upstream `failure_domain`, `changed_state`, and `next_safe_action`.
+- Adoption order: doctor, read commands, write commands, then `worktree` migration.
 
 Rationale:
 
@@ -492,7 +492,7 @@ Consequences:
 
 - Public JSON and CLI help should use these names even if internal TypeScript helpers differ.
 - Read-heavy commands should advertise the projection flags before outputs become context-heavy.
-- Failure records and `wt` wrapping must preserve recovery fields instead of collapsing to generic errors.
+- Failure records and `worktree` wrapping must preserve recovery fields instead of collapsing to generic errors.
 
 Next:
 

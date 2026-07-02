@@ -1,0 +1,23 @@
+{
+	"name": "@side-quest/cli-test-fixtures",
+	"version": "0.1.0",
+	"private": false,
+	"description": "Process-boundary test fixtures for facade-backed CLI integration tests.",
+	"license": "MIT",
+	"type": "module",
+	"files": [
+		"src"
+	],
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"test": "bun test ./tests/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	},
+	"// boundary": "Process-boundary test infrastructure only. No facade contracts, no envelopes, no station maps. Those live in @side-quest/cli-command-facade/testing."
+}

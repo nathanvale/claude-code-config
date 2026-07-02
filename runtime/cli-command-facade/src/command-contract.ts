@@ -1,3 +1,5 @@
+import { validateNonEmptyProjectedText } from "./runtime-text-safety";
+
 export const COMMAND_FACADE_AUDIENCES = [
 	"agent",
 	"operator",
@@ -62,7 +64,7 @@ export type CommandFacadeOutputMode =
  * failure, `2` invalid usage. Additional exit codes remain package-owned. The
  * facade requires these entries by default; it does not judge the message text
  * beyond the existing projected-free-text safety scan. This intentionally
- * supersedes the older create-cli reference wording that said the facade does
+ * supersedes the older cli-author reference wording that said the facade does
  * not judge whether exit codes are sensible.
  */
 export const COMMAND_FACADE_BASELINE_EXIT_CODES = ["0", "1", "2"] as const;
@@ -97,6 +99,62 @@ export type CommandFacadeResultContract = {
 	kind?: string;
 	schema_version?: string | number;
 };
+
+type CommandResultMetadataKey = "contract_id" | "schema_version";
+
+type CommandResultInvalidPayloadBranch<TData extends object> =
+	TData extends (...args: never[]) => unknown
+		? true
+		: TData extends readonly unknown[]
+			? true
+			: keyof TData extends never
+				? true
+				: string extends keyof TData
+					? true
+					: number extends keyof TData
+						? true
+						: symbol extends keyof TData
+							? true
+							: Extract<keyof TData, CommandResultMetadataKey> extends never
+								? false
+								: true;
+
+/**
+ * Package-owned command result payload before facade metadata is attached.
+ *
+ * The generic form accepts named object shapes and rejects facade-owned
+ * metadata keys, broad dictionaries, arrays, functions, and empty objects even
+ * when a consumer does not enable `exactOptionalPropertyTypes`.
+ */
+export type CommandResultPayload<TData extends object> = true extends (
+	TData extends unknown ? CommandResultInvalidPayloadBranch<TData> : never
+)
+	? never
+	: TData;
+
+type CommandResultMetadata<
+	TResultContract extends CommandFacadeResultContract = CommandFacadeResultContract,
+> = {
+	contract_id: TResultContract["id"];
+} & (TResultContract extends { schema_version: infer TSchemaVersion }
+	? { schema_version: TSchemaVersion }
+	: { schema_version?: string | number });
+
+/**
+ * Command result payload after facade-owned metadata is attached.
+ *
+ * @example
+ * ```typescript
+ * type ReportResult = CommandResultData<{ total: number }>
+ * ```
+ */
+export type CommandResultData<
+	TData extends object,
+	TResultContract extends CommandFacadeResultContract = CommandFacadeResultContract,
+> = TData extends unknown
+	? Omit<TData, CommandResultMetadataKey> &
+			CommandResultMetadata<TResultContract>
+	: never;
 
 export type CommandFacadeEnvVar = {
 	name: string;
@@ -151,6 +209,94 @@ export type CommandFacadeContract<
 	exitCodes: Record<string, string>;
 	alias?: CommandFacadeAlias<TCommand>;
 };
+
+/**
+ * Attach result-contract metadata to a package-owned command result payload.
+ *
+ * The helper accepts structured object payloads, reserves facade metadata keys,
+ * and rejects non-plain objects before spreading into the emitted data shape.
+ *
+ * @param contract - Command facade contract that declares `resultContract`
+ * @param data - Package-owned result payload without facade metadata keys
+ * @returns Payload with `contract_id` and optional `schema_version`
+ * @throws When the contract lacks result metadata or data is not plain
+ *
+ * @example
+ * ```typescript
+ * const data = createCommandResultData(reportContract, { total: 1 })
+ * ```
+ */
+export function createCommandResultData<
+	TData extends object,
+	TResultContract extends CommandFacadeResultContract = CommandFacadeResultContract,
+>(
+	contract: { resultContract?: TResultContract },
+	data: CommandResultPayload<TData>,
+): CommandResultData<TData, TResultContract> {
+	const resultContract = contract.resultContract;
+	if (!resultContract) {
+		throw new Error("Command result contract is required.");
+	}
+	assertValidCommandResultContract(resultContract);
+	if (!isPlainCommandResultPayload(data)) {
+		throw new Error("Command result data must be a plain object.");
+	}
+	if (hasOwn(data, "contract_id")) {
+		throw new Error("Command result data must not define contract_id.");
+	}
+	if (hasOwn(data, "schema_version")) {
+		throw new Error("Command result data must not define schema_version.");
+	}
+
+	return {
+		...data,
+		contract_id: resultContract.id,
+		...(resultContract.schema_version !== undefined
+			? { schema_version: resultContract.schema_version }
+			: {}),
+	} as unknown as CommandResultData<TData, TResultContract>;
+}
+
+function assertValidCommandResultContract(
+	resultContract: CommandFacadeResultContract,
+): void {
+	const issues = validateNonEmptyProjectedText(
+		"resultContract.id",
+		resultContract.id,
+	);
+	if (resultContract.schema_version !== undefined) {
+		if (typeof resultContract.schema_version === "string") {
+			issues.push(
+				...validateNonEmptyProjectedText(
+					"resultContract.schema_version",
+					resultContract.schema_version,
+				),
+			);
+		} else if (typeof resultContract.schema_version === "number") {
+			if (!Number.isFinite(resultContract.schema_version)) {
+				issues.push("resultContract.schema_version must be a finite number");
+			}
+		} else {
+			issues.push(
+				"resultContract.schema_version must be a string or number.",
+			);
+		}
+	}
+	if (issues.length > 0) {
+		throw new Error(`Invalid command result contract: ${issues.join("; ")}`);
+	}
+}
+
+function isPlainCommandResultPayload(value: unknown): value is object {
+	if (value === null || typeof value !== "object") return false;
+	if (Array.isArray(value)) return false;
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+}
+
+function hasOwn(value: object, key: string): boolean {
+	return Object.hasOwn(value, key);
+}
 
 export type CommandDiscoveryFlag =
 	| {
@@ -228,7 +374,7 @@ export type CommandDiscoveryAugment = object & {
 
 export type ProjectCommandDiscoveryTreeOptions<
 	TCommand extends string,
-	TContract extends CommandFacadeContract<TCommand, string, string>,
+	TContract extends CommandFacadeContract<string, string, string>,
 	TExtra extends CommandDiscoveryAugment,
 > = {
 	include?: (command: TCommand, contract: TContract) => boolean;

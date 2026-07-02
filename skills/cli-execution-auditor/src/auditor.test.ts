@@ -255,6 +255,7 @@ describe("auditor runtime (injected)", () => {
 					findings: [
 						{
 							kind: "station",
+							frontDoor: "root",
 							stationId: "check.success",
 							command: "check",
 							findingKind: "missing",
@@ -295,13 +296,22 @@ describe("auditor runtime (injected)", () => {
 describe("auditor end-to-end (real engine + ledger)", () => {
 	const FIXTURES = join(import.meta.dir, "fixtures");
 	const tempLedgers: string[] = [];
+	const generatedFixtureDocs: string[] = [];
 	function tempLedger(): string {
 		const path = join(mkdtempSync(join(tmpdir(), "auditor-ledger-")), "audit.md");
 		tempLedgers.push(path);
 		return path;
 	}
+	function fixtureTargetForDefaultLedger(fixtureName: string): string {
+		const target = join(FIXTURES, fixtureName);
+		const docsPath = join(target, "docs");
+		rmSync(docsPath, { recursive: true, force: true });
+		generatedFixtureDocs.push(docsPath);
+		return target;
+	}
 	afterAll(() => {
 		for (const path of tempLedgers) rmSync(join(path, ".."), { recursive: true, force: true });
+		for (const path of generatedFixtureDocs) rmSync(path, { recursive: true, force: true });
 	});
 
 	test("audit good-baseline → exit 0, quiet success, no findings", async () => {
@@ -348,6 +358,23 @@ describe("auditor end-to-end (real engine + ledger)", () => {
 		expect(bare.exitCode).toBe(explicit.exitCode);
 	});
 
+	test("audit default ledgers are partitioned per front door", async () => {
+		const target = fixtureTargetForDefaultLedger("good-front-door-local");
+		const result = await runForTest([target, "--json"]);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.ledger_path).toBeUndefined();
+		expect(envelope.data.ledger_paths.map((path: string) => path.replace(`${target}/`, ""))).toEqual([
+			"docs/cli-audits/good-front-door-local/admin/audit.md",
+			"docs/cli-audits/good-front-door-local/app/audit.md",
+		]);
+		const adminLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/admin/audit.md")).text();
+		const appLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/app/audit.md")).text();
+		expect(adminLedger).toContain("target_cli: good-front-door-local/admin");
+		expect(appLedger).toContain("target_cli: good-front-door-local/app");
+	});
+
 	test("station-map covered fixture exits 0 and writes a clean ledger", async () => {
 		const ledger = tempLedger();
 		const result = await runForTest([
@@ -384,6 +411,23 @@ describe("auditor end-to-end (real engine + ledger)", () => {
 		const ledgerText = await Bun.file(ledger).text();
 		expect(ledgerText).toContain("**station-map** (station)");
 		expect(ledgerText).toContain("recheck: station=check.success command=check finding=missing");
+	});
+
+	test("station-map default ledgers are partitioned per front door", async () => {
+		const target = fixtureTargetForDefaultLedger("good-front-door-local");
+		const result = await runForTest(["station-map", target, "--json"]);
+
+		expect(result.exitCode).toBe(0);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.ledger_path).toBeUndefined();
+		expect(envelope.data.ledger_paths.map((path: string) => path.replace(`${target}/`, ""))).toEqual([
+			"docs/cli-audits/good-front-door-local/admin/audit.md",
+			"docs/cli-audits/good-front-door-local/app/audit.md",
+		]);
+		const adminLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/admin/audit.md")).text();
+		const appLedger = await Bun.file(join(target, "docs/cli-audits/good-front-door-local/app/audit.md")).text();
+		expect(adminLedger).toContain("target_cli: good-front-door-local/admin");
+		expect(appLedger).toContain("target_cli: good-front-door-local/app");
 	});
 });
 

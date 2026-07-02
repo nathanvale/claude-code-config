@@ -258,4 +258,4 @@ The implementation keeps the facade envelope shape stable. Agent-facing specific
 - `skills/browser-use/scripts/command-contract.ts`
 - `skills/browser-use/scripts/preflight-warm-chrome.ts`
 - `skills/browser-use/scripts/preflight-warm-chrome.test.ts`
-- `skills/create-cli/references/cli-command-facade.md`
+- `skills/cli-author/references/cli-command-facade.md`

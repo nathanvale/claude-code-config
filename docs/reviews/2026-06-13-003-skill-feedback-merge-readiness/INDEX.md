@@ -1,6 +1,6 @@
 # Review index - plan 003 skill-feedback merge-readiness
 
-Watch-loop review of `docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
+Watch-loop review of `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
 Another agent implements; this loop reviews each unit as its `## Execution Progress` checkbox flips.
 Findings only - no code edits by the watcher.
 

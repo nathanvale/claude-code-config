@@ -7,6 +7,7 @@ import {
 	type CliWriter,
 	CliUsageError,
 	type ParsedCliDiagnosticArgv,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	parseCliDiagnosticArgv,
@@ -824,7 +825,7 @@ function writeResult(
 		createCliRuntimeErrorEnvelope({
 			run_id: result.run_id,
 			process_exit_code: result.exit_code,
-			error: {
+			error: createCliRuntimeError({
 				run_id: result.run_id,
 				code: result.diagnostic?.code ?? "invocation_error",
 				message: result.diagnostic?.message ?? "Test runner failed.",
@@ -840,7 +841,7 @@ function writeResult(
 						"Inspect the runner diagnostic and rerun with corrected input.",
 					action: diagnosticHintAction(result.diagnostic),
 				},
-			},
+			}),
 			runtime_actions: runtimeActions,
 			continuation: continuationFor(runtimeActions),
 			data: result,
@@ -1709,7 +1710,7 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: isUsage ? "usage_error" : "invocation_error",
 				message,
@@ -1724,7 +1725,7 @@ function emitCliError(input: {
 						: "Inspect runtime diagnostics before retrying.",
 					action: isUsage ? "change_input" : "contact_support",
 				},
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);

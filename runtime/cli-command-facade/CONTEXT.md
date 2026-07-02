@@ -45,7 +45,7 @@ gates, and output-channel expectations.
 _Avoid_: global JSON envelope, CLI framework, package recovery policy
 
 **Agent-Native CLI Runtime Lifecycle Helper** is a helper category for
-package-agnostic CLI invocation mechanics that **create-cli** needs to emit
+package-agnostic CLI invocation mechanics that **cli-author** needs to emit
 repeatable contracts or that consuming packages already share, such as **Run
 Correlation ID** setup, diagnostic context setup, **Command Duration**
 measurement, stdout/stderr discipline, ADR-0010 writer handoff, generic usage
@@ -84,6 +84,18 @@ diagnostics prose
 **Result Contract Discovery** is the optional discovery grammar for a command's
 result contract metadata and safe action affordance shape.
 _Avoid_: schema registry, global result envelope, package action policy
+
+**Result Data Helper** is the package-root facade helper category that attaches
+`resultContract` metadata to package-owned object-shaped command data while
+reserving facade metadata keys.
+_Avoid_: schema validator, generic data envelope, command router, package
+result vocabulary owner
+
+**Result Payload** is the package-owned structured object passed to the
+**Result Data Helper** before facade metadata is attached. It is not a generic
+dictionary and not an array or function.
+_Avoid_: `Record<string, unknown>` default, bare `object` without runtime guard,
+facade-owned result schema
 
 **Action Affordance** is generic discovery metadata for a possible next action:
 id, summary, and facade side-effect classes.
@@ -170,7 +182,7 @@ flushes the current diagnostic context.
 _Avoid_: always-on debug output, buffer keyed only by public `run_id`
 
 **Diagnostic Trail Reference** is the facade-owned runtime narrowing of the
-`create-cli` design-layer Diagnostic trail pointer: one CLI invocation points
+`cli-author` design-layer Diagnostic trail pointer: one CLI invocation points
 to a package-owned **Diagnostic Capability** for the same **Run Correlation ID**.
 _Avoid_: raw log access, trace vendor contract, retention policy, package event
 catalog, persisted diagnostics access
@@ -217,7 +229,7 @@ _Avoid_: every package script as a public route
   command examples, identifiers, sensitive context, and public JSON field names
   local.
 - A future **Agent-Native CLI Runtime Lifecycle Helper** may enter CLI Command
-  Facade only when it owns generic lifecycle mechanics needed by **create-cli**
+  Facade only when it owns generic lifecycle mechanics needed by **cli-author**
   as repeatable contract-emission surface or already shared by consuming
   packages. It must not own command catalogs, route tables, dispatch policy,
   package error families, recovery meaning, diagnostic event names, redaction
@@ -248,6 +260,20 @@ _Avoid_: every package script as a public route
 - Agent-facing payload schema/version meaning belongs in **Result Contract
   Discovery** when discovery is needed, not as mandatory runtime envelope
   metadata.
+- Consuming packages that declare **Result Contract Discovery** use the
+  **Result Data Helper** for command result metadata attachment. The helper owns
+  `contract_id` and `schema_version` placement; package payloads own the
+  remaining result vocabulary.
+- Name **Result Payload** types as structured object types. Do not force
+  interface-shaped payloads through `Record<string, unknown>`, because that
+  turns ordinary object interfaces into dictionary contracts.
+- A broad `object` payload constraint is acceptable only with a runtime
+  plain-object guard. The guard rejects null, arrays, functions, and reserved
+  metadata collisions before helper output is spread or written.
+- Use lifecycle or error-owned result contracts for generic failure data
+  when result metadata is needed. Do not stamp generic error payloads with a
+  command-specific success `resultContract`; that misreports the payload shape
+  to agents and alignment tests.
 - Runtime-contract adopters must provide structured runtime errors; failures
   are the highest-value agent path and must not be left as prose-only output.
 - Runtime-contract adopters must provide redaction fixtures proving sensitive
@@ -262,6 +288,11 @@ _Avoid_: every package script as a public route
   message, exit code, **Runtime Error Severity**, recoverability,
   retryability, and optional agent hint while keeping domain error families and
   recovery meaning package-owned.
+- Construct **Structured Runtime Error** values through facade helper
+  constructors so recoverability, retryability, hint, failure-domain, and unsafe
+  text gates stay centralized. Typed convenience helpers cover common usage,
+  repair-state, and retry failures; the generic structured error builder covers
+  package-owned recovery choices such as `none` or `authenticate`.
 - **Structured Runtime Error** fields use canonical snake_case spelling in the
   facade runtime-contract projection.
 - **Failure Domain** values are package-owned labels. CLI Command Facade
@@ -388,14 +419,14 @@ _Avoid_: every package script as a public route
 - **Persisted Diagnostics Access** is a future product decision. This package
   may reserve safe runtime shape for trail references, but it must not decide
   raw log access, trace vendor policy, or protocol-visible exposure rules.
-- The `claude-code-config` create-cli reference is a downstream documentation
+- The `claude-code-config` cli-author reference is a downstream documentation
   consumer of this runtime shape, not an owner. Once these runtime-backed
-  candidates land, the create-cli docs need a sync pass: **Baseline Exit
+  candidates land, the cli-author docs need a sync pass: **Baseline Exit
   Semantics**, **Diagnostic Capability**, the design-layer diagnostic trail
   pointer (now the facade **Diagnostic Trail Reference**), and **Write Preview
   Capability** are now runtime-enforced, superseding the old "declare, don't
   enforce" wording that said the facade does not judge sensible exit codes. That
-  sync is a follow-up in the create-cli repo; this plan does not edit downstream
+  sync is a follow-up in the cli-author repo; this plan does not edit downstream
   docs.
 - ADR-0005 owns the repo decision for facade-owned CLI diagnostics. ADR-0006
   owns the repo decision for facade-owned Result Contract Discovery.

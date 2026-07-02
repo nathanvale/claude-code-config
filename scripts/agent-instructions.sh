@@ -128,9 +128,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-failures=()
-warnings=()
-passes=()
+declare -a failures=()
+declare -a warnings=()
+declare -a passes=()
 
 add_pass() {
 	passes+=("$1")
@@ -220,9 +220,9 @@ check_owner_paths() {
 	local required=(
 			"skills/productivity-connectors/SKILL.md"
 			"context/bun-runner.md"
-			"skills/create-skill/SKILL.md"
-			"skills/create-skill/CONTEXT.md"
-			"skills/create-skill/references/skill-design-decision-runbook.md"
+			"skills/skill-author/SKILL.md"
+			"skills/skill-author/CONTEXT.md"
+			"skills/skill-author/references/skill-design-decision-runbook.md"
 		"context/personal.md"
 		"context/comms-style.md"
 		"docs/git/conventions.md"

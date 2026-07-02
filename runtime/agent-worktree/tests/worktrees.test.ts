@@ -7,6 +7,8 @@ import {
 	checkWorktree,
 	cleanPreview,
 	deleteWorktree,
+	listWorktrees,
+	matchesWorktreePathPattern,
 	refreshWorktrees,
 	statusWorktrees,
 } from "../src/worktrees.ts";
@@ -15,6 +17,60 @@ import { createFileStore } from "../src/store.ts";
 import { fakeGitRunner, linkedRepoGitOutputs } from "./support.ts";
 
 describe("agent-worktree lifecycle reads", () => {
+	test("daily list and status hide configured worktree path patterns", async () => {
+		const run = fakeGitRunner({
+			["git rev-parse --show-toplevel"]: "/repo\n",
+			["git worktree list --porcelain"]: `worktree /repo
+HEAD abc
+branch refs/heads/main
+
+worktree /tmp/fallow-audit-base-cache-abc-123
+HEAD 123
+detached
+
+worktree /repo/.worktrees/feat-x
+HEAD def
+branch refs/heads/feat/x
+`,
+			["git branch --show-current"]: "main\n",
+			["git symbolic-ref --short refs/remotes/origin/HEAD"]: "origin/main\n",
+			["git status --porcelain"]: "",
+			["git rev-parse --is-shallow-repository"]: "false\n",
+			["git merge-base --is-ancestor main main"]: "",
+			["git rev-list --left-right --count main...main"]: "0 0\n",
+			["git merge-base --is-ancestor feat/x main"]: "",
+			["git rev-list --left-right --count main...feat/x"]: "1 0\n",
+		});
+
+		const ignoredWorktreePathPatterns = ["**/fallow-audit-base-cache-*"];
+		const listed = await listWorktrees({
+			cwd: "/repo",
+			run,
+			ignoredWorktreePathPatterns,
+		});
+		const statuses = await statusWorktrees({
+			cwd: "/repo",
+			run,
+			ignoredWorktreePathPatterns,
+		});
+
+		expect(listed.total).toBe(2);
+		expect(listed.worktrees.map((worktree) => worktree.path)).toEqual([
+			"/repo",
+			"/repo/.worktrees/feat-x",
+		]);
+		expect(statuses.map((status) => status.worktree.path)).toEqual([
+			"/repo",
+			"/repo/.worktrees/feat-x",
+		]);
+		expect(
+			matchesWorktreePathPattern(
+				"/tmp/fallow-audit-base-cache-abc-123",
+				"**/fallow-audit-base-cache-*",
+			),
+		).toBe(true);
+	});
+
 	test("status does not treat cherry output as squash merge proof", async () => {
 		const run = fakeGitRunner({
 			["git rev-parse --show-toplevel"]: "/repo\n",
@@ -95,7 +151,7 @@ branch refs/heads/feat/x
 	});
 
 	test("clean previews orphan branches and stale dirs without destructive git calls", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-clean-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-clean-"));
 		const linked = join(root, ".worktrees", "feat-x");
 		const stale = join(root, ".worktrees", "stale");
 		const staleTwo = join(root, ".worktrees", "stale-two");
@@ -107,6 +163,7 @@ branch refs/heads/feat/x
 		const result = await cleanPreview({
 			cwd: root,
 			limit: 1,
+			ignoredWorktreePathPatterns: ["**/fallow-audit-base-cache-*"],
 			run: async (args, options) => {
 				calls.push(args.join(" "));
 				return fakeGitRunner({
@@ -114,6 +171,10 @@ branch refs/heads/feat/x
 					["git worktree list --porcelain"]: `worktree ${root}
 HEAD abc
 branch refs/heads/main
+
+worktree /tmp/fallow-audit-base-cache-abc-123
+HEAD 123
+detached
 
 worktree ${linked}
 HEAD def
@@ -148,7 +209,7 @@ branch refs/heads/feat/x
 
 	describe("agent-worktree lifecycle writes", () => {
 		test("delete records partial failure with backup ref when branch deletion fails", async () => {
-			const { root, linked } = await createLinkedWorktreeFixture("awt-delete-");
+			const { root, linked } = await createLinkedWorktreeFixture("agent-worktree-delete-");
 
 			const result = await deleteWorktree({
 				...deleteFixtureOptions(
@@ -203,7 +264,7 @@ branch refs/heads/feat/x
 
 		test("delete stops before branch deletion when backup ref creation fails", async () => {
 			const { root, linked } =
-				await createLinkedWorktreeFixture("awt-backup-fail-");
+				await createLinkedWorktreeFixture("agent-worktree-backup-fail-");
 			const calls: string[] = [];
 
 			const result = await deleteWorktree({
@@ -228,7 +289,7 @@ branch refs/heads/feat/x
 
 		test("delete records dirty preflight blocks as durable failure evidence", async () => {
 			const { root, linked } =
-				await createLinkedWorktreeFixture("awt-dirty-block-");
+				await createLinkedWorktreeFixture("agent-worktree-dirty-block-");
 
 			const result = await deleteWorktree({
 				...deleteFixtureOptions(
@@ -256,7 +317,7 @@ branch refs/heads/feat/x
 	});
 
 	test("refresh records path-stable worktree ids when labels collide", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-refresh-ids-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-refresh-ids-"));
 		const first = join(root, "a", "same");
 		const second = join(root, "b", "same");
 

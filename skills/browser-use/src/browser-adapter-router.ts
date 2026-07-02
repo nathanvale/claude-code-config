@@ -21,6 +21,7 @@ import {
 	type StructuredRuntimeError,
 	CliUsageError,
 	configureCliDiagnostics,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	parseCliDiagnosticArgv,
@@ -713,7 +714,7 @@ function emitPrepareFailure(input: {
 			failure_kind: "prepare_failure",
 			missing_facts: input.failure.missing_facts,
 		},
-		error: {
+		error: createCliRuntimeError({
 			run_id: input.runId,
 			code,
 			message,
@@ -722,7 +723,7 @@ function emitPrepareFailure(input: {
 			recoverability: prepareRecoverabilityForCode(code),
 			retryable: false,
 			failure_domain: "browser_adapter_router",
-		},
+		}),
 		runtime_actions: runtimeActions,
 		continuation: { next_action_id: nextAction },
 	});
@@ -819,7 +820,7 @@ function emitRouteFailure(input: {
 		);
 		return ROUTE_FAIL_CLOSED_EXIT_CODE;
 	}
-	const error: StructuredRuntimeError = {
+	const error: StructuredRuntimeError = createCliRuntimeError({
 		run_id: input.runId,
 		code: failure.code,
 		message: failure.message,
@@ -828,7 +829,7 @@ function emitRouteFailure(input: {
 		recoverability: recoverabilityForCode(failure.code),
 		retryable: false,
 		failure_domain: "browser_adapter_router",
-	};
+	});
 	const envelope = createCliRuntimeErrorEnvelope({
 		run_id: input.runId,
 		data: routeFailureData(failure),
@@ -902,7 +903,7 @@ function emitReportFailure(input: {
 	const envelope = createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code,
 				message,
@@ -911,7 +912,7 @@ function emitReportFailure(input: {
 				recoverability: recoverabilityForCode(code),
 				retryable: false,
 				failure_domain: "browser_adapter_router",
-			},
+			}),
 			runtime_actions: [runtimeActionForId(nextAction)],
 			continuation: { next_action_id: nextAction },
 			...(nextAction === "research_adapter_capability"
@@ -951,7 +952,7 @@ function emitRouteEvidenceError(input: {
 		const envelope = createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: ROUTE_FAIL_CLOSED_EXIT_CODE,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code,
 				message: input.error.message,
@@ -960,7 +961,7 @@ function emitRouteEvidenceError(input: {
 				recoverability: recoverabilityForCode(code),
 				retryable: false,
 				failure_domain: "browser_adapter_router",
-			},
+			}),
 			runtime_actions: [runtimeActionForId(nextAction)],
 			continuation: {
 				next_action_id: nextAction,
@@ -1010,7 +1011,7 @@ function emitCliError(input: {
 	const envelope = createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: isUsage ? "usage_error" : "runtime_error",
 				message: safeMessage,
@@ -1019,7 +1020,7 @@ function emitCliError(input: {
 				recoverability: isUsage ? "change_input" : "none",
 				retryable: false,
 				failure_domain: isUsage ? "input" : "runtime_diagnostics",
-			},
+			}),
 			// A usage error is caller-correctable (change input); a fatal runtime
 			// error needs an operator. Either way the envelope carries an explicit
 			// continuation rather than leaving the agent to guess.

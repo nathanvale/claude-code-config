@@ -34,7 +34,7 @@ them.
 - `seam-scaffold`: guardrail, seam packet, or scaffold rule.
 - `improve-codebase-architecture`: architecture review prompt, vocabulary, or report rule.
 - `gof-pressure-lens`: pattern naming gate.
-- `create-cli`: CLI surface or runtime-contract guidance.
+- `cli-author`: CLI surface or runtime-contract guidance.
 - `test-runner`: command execution, test proof, or harness rule.
 - Review skill: later review checklist or bad-practice detector.
 

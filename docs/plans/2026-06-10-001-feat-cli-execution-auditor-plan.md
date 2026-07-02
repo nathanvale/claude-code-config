@@ -70,7 +70,7 @@ The execution machinery exists and is reused: `runCommandSurfaceCases({ cases, r
 
 ### KTD3 — Lane clauses sourced from code constants, not stale prose
 
-The exit-code floor (0/1/2 required) is machine-enforced in `runtime/cli-command-facade/src/command-contract.ts` (baseline-exit drift categories) and supersedes older create-cli prose. Help-flag alignment is enforced by `assertCommandHelpFlagSurface`. Redaction fixtures live in `RUNTIME_CONTRACT_REDACTION_FIXTURES`. **Decision:** every static assertion cites the code-owned constant/validator as its source of truth, never re-states a clause in auditor prose. Agent-native floor clauses (stderr discipline, run correlation, structured failure category, retry safety) come from `skills/create-cli/references/agent-native-cli-design.md` "Runtime-Contract Minimum" — cited by reference.
+The exit-code floor (0/1/2 required) is machine-enforced in `runtime/cli-command-facade/src/command-contract.ts` (baseline-exit drift categories) and supersedes older cli-author prose. Help-flag alignment is enforced by `assertCommandHelpFlagSurface`. Redaction fixtures live in `RUNTIME_CONTRACT_REDACTION_FIXTURES`. **Decision:** every static assertion cites the code-owned constant/validator as its source of truth, never re-states a clause in auditor prose. Agent-native floor clauses (stderr discipline, run correlation, structured failure category, retry safety) come from `skills/cli-author/references/agent-native-cli-design.md` "Runtime-Contract Minimum" — cited by reference.
 
 ### KTD4 — Static-vs-surface classification, tied to behavior not a self-chosen label
 
@@ -367,7 +367,7 @@ Clause ↔ fixture ↔ heal-bug map (reconciles the counts; authoritative source
 
 - **OQ1 (resolved):** `skill-self-audit-loop` is prose-only — no code writes its ledger (confirmed in doc-review). So there is no migration; U2 is a documentation pointer, and the shared-module extraction is deferred (KTD2).
 - **OQ2 (resolved):** Surface exercise + contract acquisition both use **subprocess** (KTD6) — universal, and it sidesteps the import-throw and export-name problems. In-process `runForTest` is not used; determinism is held by pinned cwd/env + canonical ordering (U4/U5).
-- **OQ3 (v2, not v1):** Where the enforcement gate wires in (create-skill verification, create-cli proof, or both) and how the lane marker persists. Origin outstanding question 1.
+- **OQ3 (v2, not v1):** Where the enforcement gate wires in (create-skill verification, cli-author proof, or both) and how the lane marker persists. Origin outstanding question 1.
 - **OQ4 (documented limit, U5):** Interdependent flags (flag A only valid with subcommand B). v1 enumerates per-command flag sets (the contract already scopes flags per command), not a global cross-product. **Completeness claim narrowed:** v1 proves "every advertised (command, flag) is exercised once," NOT "no unexercised branch" — branch-coverage measurement (c8) for the facade lane is a considered-and-deferred alternative, not a v1 oracle. Origin outstanding question 2.
 
 ---
@@ -387,7 +387,7 @@ Clause ↔ fixture ↔ heal-bug map (reconciles the counts; authoritative source
 - **R-risk2 — False positives erode trust.** A checker that over-fires on good CLIs is worse than none. Mitigation: U6 known-good + documented co-fire sets (not "exactly one" assertions that would red-noise on legitimate clause cascades); the corpus is the regression gate.
 - **R-risk3 — Masking-resistance is bounded by clause strength (R11).** A masking-fix that literally satisfies a weak clause still closes the finding. This is NOT fully eliminated — it's bounded: each clause's `maskingNote` (U9) records whether it is resistant or a known limit, and U7 tests the hard case explicitly rather than a strawman. Honest limit, not a guarantee.
 - **R-risk4 — N≈1 evidence; build-now is a deliberate bet.** This is infrastructure on thin recurrence evidence (origin Decision Record; flagged to Nathan this session). It is the ~4th audit/loop meta-skill this session, and it creates maintenance surface (a fixture corpus exists to verify the checker) rather than user-facing capability — competing with user-facing work (control plane, productivity connectors, browser automation, life-hub). **Mitigations:** (1) the v1-tool / v2-gate split keeps the build from over-committing; (2) **early kill-switch** — after U4 (static half), run the static checks against a sample of the ~29 existing facade CLIs as a go/no-go *before* building U5–U8, converting the deferred core-value experiment (unseen-CLI catch) into an early gate; (3) the auditor-local ledger + dropped shared module keep the blast radius to one new skill. If the early kill-switch finds nothing real on unseen CLIs, stop before the heavy units — the sunk cost is U1+U3+U9+U4, not the whole build.
-- **Dependencies:** `runtime/cli-command-facade/` (public + `/testing` API), `skills/create-cli/references/agent-native-cli-design.md` (floor clauses), `skills/skill-self-audit-loop/` (ledger semantics + proof methods, by reference).
+- **Dependencies:** `runtime/cli-command-facade/` (public + `/testing` API), `skills/cli-author/references/agent-native-cli-design.md` (floor clauses), `skills/skill-self-audit-loop/` (ledger semantics + proof methods, by reference).
 
 ---
 
@@ -397,6 +397,6 @@ Clause ↔ fixture ↔ heal-bug map (reconciles the counts; authoritative source
 - Facade testing harness (the spine): `runtime/cli-command-facade/src/testing.ts` — `runCommandSurfaceCases`, `assertCommandHelpFlagSurface`, `assertNoRuntimeContractFixtureLeaks`.
 - Contract parse + drift: `runtime/cli-command-facade/src/command-metadata.ts` (`parseCommandFacadeContract` no-throw, ~30 drift categories; `defineCommandFacadeContract` is the throwing sibling — see KTD6), `command-discovery.ts` (projection helpers), `command-contract.ts` (baseline exit-code floor).
 - Findings-model semantics (by reference, not a shared library): `skills/skill-self-audit-loop/SKILL.md` (states, dedupe, never-delete; the auditor reuses only the findings-table subset), `skills/skill-self-audit-loop/references/loop-proof-methods.md` (trust conditions, earned validation, fixture-pair oracle).
-- Lane floor clauses: `skills/create-cli/references/agent-native-cli-design.md`, `.../cli-command-facade.md`, `.../cli-guidelines.md` (Basic floor).
+- Lane floor clauses: `skills/cli-author/references/agent-native-cli-design.md`, `.../cli-command-facade.md`, `.../cli-guidelines.md` (Basic floor).
 - v1 oracle target (already facade-backed, committed `7b0815b`): `skills/classic-cinema/src/{command-contract.ts,heal-engine.ts,heal-skill.ts}`.
 - Scaffolding precedent: `skills/test-runner/`, `skills/classic-cinema/` (package.json `catalog:` devDeps, tsconfig, workspace entry).

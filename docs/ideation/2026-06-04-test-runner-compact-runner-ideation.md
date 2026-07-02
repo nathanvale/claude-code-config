@@ -13,7 +13,7 @@ mode: repo-grounded
 - `context/bun-runner.md` and `rules/code-quality.md` currently prefer MCP runners over raw `bun test`.
 - `context/skill-design-philosophy.md` says skill prose routes workflow while scripts, help, tests, and generated outputs own deterministic behavior.
 - Bun docs expose compact pass-oriented reporting through `dots`, JUnit output, and `--bail`; they do not provide an agent-focused compact failure envelope by themselves.
-- Recent create-cli docs separate agent-native standards from runtime backends; the same distinction applies here: the compact envelope is the value, not MCP transport.
+- Recent cli-author docs separate agent-native standards from runtime backends; the same distinction applies here: the compact envelope is the value, not MCP transport.
 
 ## Topic Axes
 

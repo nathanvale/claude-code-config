@@ -1,0 +1,4 @@
+{
+  "$schema": "https://fallow.tools/schema.json",
+  "ignoreDependencies": ["@side-quest/cli-command-facade"]
+}

@@ -15,7 +15,7 @@ convergence: converged
 - Research explains loop shape only.
 - Findings require local source evidence.
 - Repair source through `skills/create-skill/SKILL.md`.
-- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/create-cli/SKILL.md` first.
+- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/cli-author/SKILL.md` first.
 
 ## Driver Commands
 
@@ -57,14 +57,14 @@ One-pass fallback:
 - `skills/create-skill/SKILL.md`
 - `skills/create-skill/references/skill-design-decision-runbook.md`
 - `skills/context-advisor/references/storage-routing.md`
-- `skills/create-cli/SKILL.md`
+- `skills/cli-author/SKILL.md`
 - `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md`
 
 ## Skipped Owner Paths
 
-- `skills/create-cli/references/cli-guidelines.md`: skipped because v0 creates no helper or CLI surface.
-- `skills/create-cli/references/agent-native-cli-design.md`: skipped because v0 creates no helper or agent-native CLI surface.
-- `skills/create-cli/references/cli-command-facade.md`: skipped because v0 creates no facade-backed CLI surface.
+- `skills/cli-author/references/cli-guidelines.md`: skipped because v0 creates no helper or CLI surface.
+- `skills/cli-author/references/agent-native-cli-design.md`: skipped because v0 creates no helper or agent-native CLI surface.
+- `skills/cli-author/references/cli-command-facade.md`: skipped because v0 creates no facade-backed CLI surface.
 
 ## Pass Ledger
 

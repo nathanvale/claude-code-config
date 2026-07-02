@@ -100,7 +100,7 @@ function expectNoUnknownOption(result: {
 }
 
 describe("Browser Adapter Proof command contract", () => {
-	test("declares create-cli facade contract for check and status", () => {
+	test("declares cli-author facade contract for check and status", () => {
 		expect(browserAdapterProofContracts.check.sideEffects).toEqual([
 			"check",
 			"network",

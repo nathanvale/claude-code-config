@@ -45,7 +45,7 @@
 - Design failures to expose cause, repair path, or human handoff.
 - Name contract, model, engine, discovery, and CLI owners before implementation.
 - Code-structure choices, a new module, or reaching for a design pattern: run the `context/code-style.md` pressure gate.
-- For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `create-cli` for the contract path.
+- For new or changed CLI surfaces, prove discovery metadata, rendered help, parser acceptance, and runtime semantics cannot drift; use `cli-author` for the contract path.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
@@ -57,7 +57,7 @@
 
 - Create skills in `skills/` only; never in `~/.claude/skills/` or `~/.codex/skills/`. Those are deploy targets symlinked by `install.sh`; a skill written there drifts from the repo and is invisible to git.
 - Repo-local skill visibility: humans inspect with `agent-skills status`; agents/CI gate with `agent-skills sync --check --json`; repair with `agent-skills sync`.
-- Never author, review, heal, or repair a `SKILL.md` before reading `skills/create-skill/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
+- Never author, review, heal, or repair a `SKILL.md` before reading `skills/skill-author/references/skill-design-decision-runbook.md`; skipping it leaks copied contracts and multi-workflow drift.
 - Skills are canonical for tool workflows.
 - New skill/doc needing existing mechanics: thin wrapper; link owner.
 - Skill bodies: terse prose + commands; no copied contracts.

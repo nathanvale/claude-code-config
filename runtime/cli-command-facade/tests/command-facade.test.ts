@@ -17,7 +17,7 @@ type TestCommand = "inspect" | "inspect:json" | "verify:check";
 
 // Legacy-shaped compatibility fixtures (BA-style / Memory OS-style). These keep
 // the older command shapes honest through migration; the greenfield
-// `createCliContracts` fixture below is the first-class create-cli evidence path
+// `createCliContracts` fixture below is the first-class cli-author evidence path
 // (KTD2, R3). Both fixtures now satisfy Baseline Exit Semantics (0/1/2) and
 // Write Preview Capability so they survive the runtime-backed slice.
 const contracts: Record<TestCommand, CommandFacadeContract<TestCommand>> = {
@@ -84,7 +84,7 @@ const contracts: Record<TestCommand, CommandFacadeContract<TestCommand>> = {
 	},
 };
 
-// Greenfield create-cli-style command set: a read command, a write command with
+// Greenfield cli-author-style command set: a read command, a write command with
 // a `dry_run` preview path, and a diagnostic-capability command whose route name
 // is NOT `doctor` (proving Diagnostic Capability is a role, not a route spelling,
 // per KTD5). This is the first-class evidence path for the runtime-backed
@@ -155,7 +155,7 @@ const createCliContracts: Record<
 describe("CLI command facade", () => {
 	// Integration: projecting the greenfield contract into the discovery tree
 	// preserves package-owned command names and produces no discovery drift.
-	test("projects the greenfield create-cli contract without discovery drift", () => {
+	test("projects the greenfield cli-author contract without discovery drift", () => {
 		const tree = projectCommandDiscoveryTree(
 			Object.entries(createCliContracts) as Array<
 				[CreateCliCommand, CommandFacadeContract<CreateCliCommand>]
@@ -333,9 +333,9 @@ describe("CLI command facade", () => {
 						[
 							"runtime:inspect",
 							{
-								executable: "create-cli",
+								executable: "cli-author",
 								route: ["runtime", "inspect"],
-								canonical: "create-cli runtime inspect",
+								canonical: "cli-author runtime inspect",
 							},
 						],
 					]),
@@ -347,7 +347,7 @@ describe("CLI command facade", () => {
 			expect(command.capability_roles).toEqual(["diagnostic"]);
 			expect(command.script).toBe("cli/runtime-inspect.ts");
 			expect(command.unified_route?.canonical).toBe(
-				"create-cli runtime inspect",
+				"cli-author runtime inspect",
 			);
 			expect(findCommandDiscoveryTreeDrift(tree)).toEqual([]);
 		});
@@ -589,12 +589,12 @@ describe("CLI command facade", () => {
 			envVars: [{ name: "API_TOKEN" }] as const,
 		};
 
-		let tree: ReturnType<typeof projectCommandDiscoveryTree> | undefined;
-		expect(() => {
-			tree = projectCommandDiscoveryTree([["x", sensitiveContract]]);
-		}).not.toThrow();
-		expect(tree?.commands.x?.env_vars).toEqual([{ name: "API_TOKEN" }]);
-	});
+			expect(() => {
+				projectCommandDiscoveryTree([["x", sensitiveContract]]);
+			}).not.toThrow();
+			const tree = projectCommandDiscoveryTree([["x", sensitiveContract]]);
+			expect(tree?.commands.x?.env_vars).toEqual([{ name: "API_TOKEN" }]);
+		});
 
 	test("discovery drift backstops a sensitive env-var name", () => {
 		const tree = projectCommandDiscoveryTree([["inspect", contracts.inspect]]);
@@ -726,11 +726,11 @@ describe("CLI command facade", () => {
 			"runtime-backed", // enforced by facade runtime this slice
 			"hardened-boundary", // boundary hardened, not a new runtime field
 			"future-product", // reserved for a later product decision
-			"downstream-sync", // doc-only follow-up in the create-cli repo
+			"downstream-sync", // doc-only follow-up in the cli-author repo
 		] as const;
 		type Disposition = (typeof DISPOSITIONS)[number];
 
-		// Keyed by the create-cli design-layer candidate name. Mirrors the plan's
+		// Keyed by the cli-author design-layer candidate name. Mirrors the plan's
 		// "Candidate Disposition" section; the runtime-backed rows name the live
 		// owner so the link to code is verifiable, not prose-only.
 		const SOURCE_CANDIDATE_DISPOSITIONS: Record<
@@ -772,7 +772,7 @@ describe("CLI command facade", () => {
 			},
 			"persisted diagnostics access": { disposition: "future-product" },
 			"idempotency/checkpoint posture": { disposition: "future-product" },
-			"create-cli docs sync": { disposition: "downstream-sync" },
+			"cli-author docs sync": { disposition: "downstream-sync" },
 		};
 
 		test("every source candidate has exactly one recognized disposition", () => {

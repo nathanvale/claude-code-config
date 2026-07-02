@@ -12,6 +12,7 @@ import {
 	type RuntimeContinuationGuidance,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	emitCliDiagnostic,
@@ -1422,7 +1423,7 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: error.exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: error.code,
 				message: error.message,
@@ -1436,7 +1437,7 @@ function emitCliError(input: {
 					action: error.hintAction,
 					...(error.hintDocsUrl ? { docs_url: error.hintDocsUrl } : {}),
 				},
-			},
+			}),
 			runtime_actions: guidance.runtimeActions,
 			continuation: guidance.continuation,
 		}),

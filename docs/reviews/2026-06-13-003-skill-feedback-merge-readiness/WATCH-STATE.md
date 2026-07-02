@@ -3,7 +3,7 @@
 Goal: every implementation unit (U1-U7) reviewed via ce-code-review (findings only, no code edits by the watcher).
 
 - Done signal: `## Execution Progress` checkbox flips to `- [x]` in
-  `docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
+  `skills/skill-feedback/docs/plans/2026-06-13-003-fix-skill-feedback-review-merge-readiness-plan.md`.
 - Review scope: `ce-code-review mode:agent base:38ab9f7 plan:<003>` (cumulative
   working-tree diff vs HEAD), findings filtered to each unit's owner files.
 - Review base SHA (pre-implementation HEAD): `38ab9f7`.

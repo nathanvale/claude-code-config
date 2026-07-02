@@ -30,6 +30,8 @@ interface ClauseFindingRecheck {
 	clauseId: string;
 	/** Canonical invocation argv; [] for a static clause. */
 	argv: readonly string[];
+	/** CLI Front Door owner, when the clause finding was front-door scoped. */
+	frontDoor?: string;
 }
 
 interface StationFindingRecheck {
@@ -81,6 +83,8 @@ export type FindingInput =
 			summary: string;
 			/** Invocation that surfaced it; [] for a static clause. */
 			argv?: readonly string[];
+			/** CLI Front Door owner for signature partitioning in shared ledgers. */
+			frontDoor?: string;
 			station?: never;
 	  }
 	| {
@@ -88,6 +92,7 @@ export type FindingInput =
 			kind: "station";
 			summary: string;
 			station: StationFindingSignatureInput;
+			frontDoor?: never;
 			argv?: never;
 	  };
 
@@ -114,6 +119,7 @@ function recheckOf(input: FindingInput): FindingRecheck {
 	return {
 		clauseId: input.clauseId,
 		argv: [...(input.argv ?? [])],
+		frontDoor: input.frontDoor,
 	};
 }
 
@@ -131,7 +137,7 @@ export function upsertFinding(ledger: LedgerState, input: FindingInput): Finding
 		clauseId: input.clauseId,
 		...(input.kind === "station"
 			? { station: input.station }
-			: { argv: input.argv ?? [] }),
+			: { argv: input.argv ?? [], frontDoor: input.frontDoor }),
 	});
 	const existing = ledger.findings.get(sig);
 	if (existing) {
@@ -214,7 +220,13 @@ function serializeRecheck(recheck: FindingRecheck): string {
 		return `station=${encodeStationToken(recheck.station.stationId)} command=${encodeStationToken(recheck.station.command)} finding=${encodeStationToken(recheck.station.findingKind)}`;
 	}
 	// A structured reference, not free text: clause id + canonical invocation.
-	return `clause=${recheck.clauseId} invocation=\`${renderInvocation(recheck.argv)}\``;
+	return [
+		recheck.frontDoor ? `frontDoor=${encodeStationToken(recheck.frontDoor)}` : null,
+		`clause=${recheck.clauseId}`,
+		`invocation=\`${renderInvocation(recheck.argv)}\``,
+	]
+		.filter(Boolean)
+		.join(" ");
 }
 
 function isStationRecheck(recheck: FindingRecheck): recheck is StationFindingRecheck {
@@ -312,6 +324,17 @@ export function parseLedger(skillName: string, markdown: string): LedgerState {
 			current.recheck = {
 				clauseId: recheck.groups.c,
 				argv: inv === "(static — no invocation)" ? [] : inv.split(" "),
+			};
+		}
+		const frontDoorRecheck = line.match(
+			/^ {2}- recheck: frontDoor=(?<frontDoor>\S+) clause=(?<c>\S+) invocation=`(?<inv>.*)`$/,
+		);
+		if (frontDoorRecheck?.groups) {
+			const inv = frontDoorRecheck.groups.inv;
+			current.recheck = {
+				clauseId: frontDoorRecheck.groups.c,
+				argv: inv === "(static — no invocation)" ? [] : inv.split(" "),
+				frontDoor: decodeStationToken(frontDoorRecheck.groups.frontDoor),
 			};
 		}
 		const stationRecheck = line.match(

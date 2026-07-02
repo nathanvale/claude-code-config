@@ -1384,7 +1384,7 @@ Consequences:
 - MVP has two CLIs.
 - Skill workflow uses `browser-adapter-router prepare -> route`, then `browser-use targets/operate`.
 - Command-contract tests must prove both CLI surfaces.
-- New and changed CLI surfaces follow `create-cli`.
+- New and changed CLI surfaces follow `cli-author`.
 - Help, command discovery, parser acceptance, and runtime semantics are mechanically checked for both CLIs.
 
 Next:
@@ -1591,7 +1591,7 @@ Decision:
 
 - Define `browser-use.browser-targets` and `browser-use.browser-operation` result contracts in `skills/browser-use/scripts/command-contract.ts`.
 - Version both result contracts.
-- Build new `browser-use` CLI surfaces through `@side-quest/cli-command-facade` and the `create-cli` contract path.
+- Build new `browser-use` CLI surfaces through `@side-quest/cli-command-facade` and the `cli-author` contract path.
 - Cross-link `browser-adapter-router` and `browser-use` through help and continuations.
 - Share `mcporter` command-vector handling with Browser Adapter Proof or prove env/path/argument parity with tests.
 - Add native Chrome DevTools MCP parity checks to the plan.

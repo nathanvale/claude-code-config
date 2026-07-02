@@ -19,6 +19,7 @@ import {
 	CliUsageError,
 	configureCliDiagnostics,
 	createCliDiagnosticContext,
+	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 	parseCliDiagnosticArgv,
@@ -352,7 +353,7 @@ function emitMockFailure(input: {
 			run_id: input.runId,
 			process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
 			data: { command: input.command, result_kind: input.resultKind, mode: "dry_run" },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code,
 				message,
@@ -361,7 +362,7 @@ function emitMockFailure(input: {
 				recoverability: "change_input",
 				retryable: false,
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -392,7 +393,7 @@ function emitNotImplemented(input: {
 			run_id: input.runId,
 			process_exit_code: NOT_IMPLEMENTED_EXIT_CODE,
 			data: { command: input.command, result_kind: input.resultKind },
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code,
 				message,
@@ -401,7 +402,7 @@ function emitNotImplemented(input: {
 				recoverability: "none",
 				retryable: false,
 				failure_domain: "browser_use",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -436,7 +437,7 @@ function emitCliError(input: {
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: {
+			error: createCliRuntimeError({
 				run_id: input.runId,
 				code: isUsage ? "usage_error" : "runtime_error",
 				message: safeMessage,
@@ -445,7 +446,7 @@ function emitCliError(input: {
 				recoverability: isUsage ? "change_input" : "none",
 				retryable: false,
 				failure_domain: isUsage ? "input" : "runtime_diagnostics",
-			},
+			}),
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);

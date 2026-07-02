@@ -76,7 +76,7 @@ The recent doc review, newsroom research, and Harness Engineering reference conv
 - **Committed Codex generated output retires.** Delete `generated/codex-user-agents.md` after migration. U0 must decide Codex delivery from evidence: symlink to root `AGENTS.md` if no composition need exists; managed instruction copy only if Codex needs composition, compatibility protection, or drift-checked projection.
 - **Delivery defaults Pete-simple.** User-scope Claude and Codex instruction files should use root `AGENTS.md` directly where possible. Create an agent runtime appendix only when U0 proves a runtime-specific startup mechanic cannot live in root `AGENTS.md`, config, or runtime docs.
 - **Claude delivery is evidence-gated.** U0 must decide Claude wrapper-vs-symlink from current Claude import and symlink behavior. Target Pete-simple direct use of root `AGENTS.md`; keep `CLAUDE.md` only when evidence proves Claude needs the wrapper.
-- **Instruction topology helper must earn its keep.** U0 decides whether `scripts/agent-instructions.sh` is needed. Create it only if instruction-specific checks, status, or projection are broad enough to deserve a separate create-cli/facade surface; otherwise fold checks into `install.sh`.
+- **Instruction topology helper must earn its keep.** U0 decides whether `scripts/agent-instructions.sh` is needed. Create it only if instruction-specific checks, status, or projection are broad enough to deserve a separate cli-author/facade surface; otherwise fold checks into `install.sh`.
 - **Install helper stays topology installer unless U0 promotes it.** After the cut, `install.sh` should create/remove/status links and surface instruction health. It should not generate prompt content or own broad Codex runtime setup unless U0 proves the need.
 - **Install status shows instruction health plus runtime links.** `install.sh --status` should report Claude/Codex instruction links, instruction health from the selected check owner, and existing runtime links such as context, rules, skills, commands, agents, runbooks, hooks, MCP/settings, and memory.
 - **Install contract is runtime-owned.** `install.sh help`, `install.sh doctor`, structured output, and tests own exact subcommands, flags, records, and exit codes. The plan names intent and scenarios only.
@@ -91,7 +91,7 @@ The recent doc review, newsroom research, and Harness Engineering reference conv
 - **Tool routing keeps a minimal spine, not catalogs.** Startup may name `rg`, `apply_patch`, `multi_tool_use.parallel`, Context7, `productivity-connectors`, and the policy "prefer MCP runners for checks." Exact runner names, exit codes, connector protocols, and compatibility tables move to owning context, skills, or runtime docs.
 - **Tool spine splits intent from mechanics.** Shared startup owns cross-runtime tool intent. Runtime-specific fragments own native tool names and mechanics such as Codex `apply_patch`, `multi_tool_use.parallel`, and tool-discovery details.
 - **Commands early applies after routing.** Global startup keeps early tool defaults, not exact project commands. Repo-local `AGENTS.md`, skills, package docs, and context docs own exact executable commands because command truth is usually repo- or workflow-specific.
-- **Agent-native work stays hot as principle.** Startup tells agents to act as capable collaborators with maps, invariants, owners, next safe actions, legible tools, runtime checks, and inspectable hidden state. CLI-specific mechanics route to `create-cli`, especially `references/agent-native-cli-design.md` and `references/cli-command-facade.md`.
+- **Agent-native work stays hot as principle.** Startup tells agents to act as capable collaborators with maps, invariants, owners, next safe actions, legible tools, runtime checks, and inspectable hidden state. CLI-specific mechanics route to `cli-author`, especially `references/agent-native-cli-design.md` and `references/cli-command-facade.md`.
 - **Diagnosis and domain design fold into Agent-native work.** Startup keeps the reflex: reproduce before theorising, fix causes not symptoms, use domain terms precisely, and route depth to `diagnose`, `improve-codebase-architecture`, and `grill-with-docs`.
 - **Examples live with owners.** Research says examples beat explanation, but global startup instructions stay example-light. Repo-local `AGENTS.md`, skills, context docs, and generated docs own examples after routing earns the extra context.
 - **Budget exceptions require contract change first.** The selected runtime check owner should fail hard when startup instruction outputs exceed hard budgets: shared hard 120, Codex hard 150, Claude wrapper hard 50. No runtime override flag; changing a hard budget is an instruction-topology contract change owned by the runtime check contract and an ADR only when the trade-off changes.
@@ -122,7 +122,7 @@ Startup instructions become a router and behavior shaper. Depth remains availabl
 - Rename north star from shrinking prompts to startup instruction and context engineering.
 - Treat root `AGENTS.md` as rules-forward map: hot rules plus routes to owners.
 - Keep `instruction-appendices/` only if U0 proves an agent-runtime startup mechanic needs it.
-- Let U0 decide whether `agent-instructions.sh` earns a separate create-cli/facade surface.
+- Let U0 decide whether `agent-instructions.sh` earns a separate cli-author/facade surface.
 - Make the selected runtime check owner context-aware: check owner routes, missing docs, appendix bloat, stale projections, path leakage, and line budgets.
 - Promote docs, skills, runtime checks, and generated docs as systems of record.
 - Preserve Harness Engineering link in plan, glossary, and replacement ADR.
@@ -186,7 +186,7 @@ Target shared shape:
 - Treat agents as capable collaborators, not brittle scripts.
 - Give maps, invariants, owners, next safe actions, and inspectable state.
 - Prefer legible tools and runtime checks over prose policy.
-- For CLI/tool design, use `create-cli`; runtime contracts own mechanics.
+- For CLI/tool design, use `cli-author`; runtime contracts own mechanics.
 - For hard bugs, use `diagnose`: reproduce, hypothesise, instrument, fix, prove.
 - Fix root causes, not symptoms; ask what would have prevented the bug.
 - For architecture candidates, use `improve-codebase-architecture`.
@@ -304,7 +304,7 @@ Surface decisions:
   - Guarantee: none today; candidate runtime check owner.
   - Evidence: required checks span startup budgets, owner routes, projections, appendices, stale generated outputs, and runtime delivery health.
   - Fragment option: no separate owner; render script keeps partial checks.
-  - Direct option: create read-only check/status surface with create-cli/facade contract; write/projection commands explicit.
+  - Direct option: create read-only check/status surface with cli-author/facade contract; write/projection commands explicit.
   - Cost/risk: new CLI surface must stay check/status, not prompt authoring.
   - Decision: create in U5 as selected runtime check owner.
 
@@ -373,11 +373,11 @@ Surface decisions:
   - `AGENTS.md`
   - `CLAUDE.md`
   - `generated/codex-user-agents.md`
-- **Approach:** Add a cut matrix to this plan that compares current fragment authoring with Pete-simple direct `AGENTS.md` authoring, with hybrid authoring recorded as a rejected anti-option. Include: surface, guarantee, evidence today, fragment option, direct option, hybrid rejection note, cost, removal risk, and decision. Classify fragments, render script, instruction topology helper candidate, install script, checks, smoke tests, generated files, Codex copy, Claude wrapper, `instruction-appendices/`, Claude runtime symlinks, and Codex runtime surfaces. For Codex, cover instruction topology, project/user config, Starlark rules, `.agents/skills`, and `.codex/agents`; exclude broader MCP/plugin/app audit unless a finding proves it belongs. Decide whether `agent-instructions.sh` earns a separate create-cli/facade surface before implementation. Prepare a replacement ADR after the cut matrix and runtime-check owner are stable.
+- **Approach:** Add a cut matrix to this plan that compares current fragment authoring with Pete-simple direct `AGENTS.md` authoring, with hybrid authoring recorded as a rejected anti-option. Include: surface, guarantee, evidence today, fragment option, direct option, hybrid rejection note, cost, removal risk, and decision. Classify fragments, render script, instruction topology helper candidate, install script, checks, smoke tests, generated files, Codex copy, Claude wrapper, `instruction-appendices/`, Claude runtime symlinks, and Codex runtime surfaces. For Codex, cover instruction topology, project/user config, Starlark rules, `.agents/skills`, and `.codex/agents`; exclude broader MCP/plugin/app audit unless a finding proves it belongs. Decide whether `agent-instructions.sh` earns a separate cli-author/facade surface before implementation. Prepare a replacement ADR after the cut matrix and runtime-check owner are stable.
 - **Runtime check owner contract:**
   - The selected owner checks lean startup instructions across agent runtimes.
   - Runtime stance: context-aware check/status surface, not prompt authoring tool.
-  - If separate from `install.sh`, build with `create-cli` and the facade contract path.
+  - If separate from `install.sh`, build with `cli-author` and the facade contract path.
   - Exact subcommands, flags, output records, output values, and exit codes belong to CLI help, structured output, contract runtime, and tests.
   - Safety invariants: default read-only check/doctor; writes require explicit projection command if projection exists; no overwrite of real files or directories; no prompt content generation from fragments.
 - **Install helper runtime contract:**
@@ -392,7 +392,7 @@ Surface decisions:
   - Every prompt-system surface has a keep/drop/change decision across fragment and direct-authoring options, plus a hybrid rejection note where relevant.
   - Every kept surface names the guarantee it preserves.
   - Every dropped or changed surface names the lean replacement or accepted loss.
-  - U0 decides whether `agent-instructions.sh` earns a separate create-cli/facade surface.
+  - U0 decides whether `agent-instructions.sh` earns a separate cli-author/facade surface.
   - The selected runtime check owner reports line budgets, stale generated outputs, projection drift when projection exists, agent-runtime delivery health, broken context paths, missing owner docs, and appendix bloat.
   - Projection dry-run previews writes without changing files when projection exists.
   - Runtime status emits health plus compact owner map from live sources.
@@ -406,7 +406,7 @@ Surface decisions:
   - Repo-scope install and agent setup CLI scenarios are recorded as follow-up, not U0 acceptance criteria.
   - Wrong symlinks require explicit force semantics; real files or directories fail closed.
   - ADR need is evaluated after the matrix, not assumed before evidence.
-- **Verification:** Review the matrix against existing ADRs, current prompt-system spec, render script behavior, install topology, create-cli/facade guidance, Pete comparator, and AGENTS.md research findings.
+- **Verification:** Review the matrix against existing ADRs, current prompt-system spec, render script behavior, install topology, cli-author/facade guidance, Pete comparator, and AGENTS.md research findings.
 
 ### U1. Startup Instruction Classification
 
@@ -448,7 +448,7 @@ Surface decisions:
 - **Approach:** Merge duplicated workflow and boundaries into one compact section. Remove the unconditional "Implement without confirmation" prohibition and keep scoped ask-first gates. Keep work style as a tiny top block. Reduce skill-authoring to trigger-description/frontmatter/workflow-owner rules and point deeper philosophy to `context/skill-design-philosophy.md`.
 - **Test Scenarios:**
   - Work style remains first visible guidance in `AGENTS.md`.
-  - Agent-native work stays as hot principle without duplicating `create-cli` mechanics.
+  - Agent-native work stays as hot principle without duplicating `cli-author` mechanics.
   - `AGENTS.md` contains no contradiction between autonomous execution and Scoped ask-first gates.
   - Skill authoring still tells agents to keep descriptions short and YAML-parse frontmatter.
   - Communication style keeps ADHD/DX, explain-why cues, timezone, and relationship labels without long personal detail.

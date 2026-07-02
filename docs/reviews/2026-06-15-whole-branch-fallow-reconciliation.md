@@ -2,7 +2,7 @@
 
 Date: 2026-06-15
 
-Branch: `feat/wt-worktree-renderer`
+Branch: `feat/worktree-worktree-renderer`
 
 Base ref: `main`
 
@@ -21,11 +21,11 @@ Tracked dirty files before reconciliation:
 | State | Path |
 | --- | --- |
 | modified | `CONTEXT.md` |
-| modified | `docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md` |
+| modified | `skills/skill-feedback/docs/plans/2026-06-15-002-feat-cli-branch-station-maps-plan.md` |
 | modified | `runtime/cli-command-facade/tests/process-testing.test.ts` |
 | modified | `runtime/cli-command-facade/tests/station-map.test.ts` |
 | modified | `scripts/command-entrypoint.integration.test.ts` |
-| modified | `skills/create-cli/references/cli-command-facade.md` |
+| modified | `skills/cli-author/references/cli-command-facade.md` |
 
 Untracked files before reconciliation:
 
@@ -37,7 +37,7 @@ Untracked files before reconciliation:
 | untracked | `skills/skill-feedback/src/branch-station-catalog.ts` |
 | untracked | `skills/skill-feedback/src/branch-station-evidence.ts` |
 | untracked | `skills/skill-feedback/src/skill-feedback.integration.test.ts` |
-| untracked | `skills/wt/src/wt.integration.test.ts` |
+| untracked | `skills/worktree/src/worktree.integration.test.ts` |
 
 Committed branch diff count: 61 files against `main`.
 
@@ -64,7 +64,7 @@ Whole-branch audit:
 Command:
 
 ```sh
-bun --filter fallow-scripts fallow-runner -- audit --json --root /Users/nathanvale/code/claude-code-config/.worktrees/feat/wt-worktree-renderer --max-output-bytes 1000000
+bun --filter fallow-scripts fallow-runner -- audit --json --root /Users/nathanvale/code/claude-code-config/.worktrees/feat/worktree-worktree-renderer --max-output-bytes 1000000
 ```
 
 Scoped current-task audit:
@@ -82,7 +82,7 @@ Scoped current-task audit:
 Command:
 
 ```sh
-bun --filter fallow-scripts fallow-runner -- audit --json --root /Users/nathanvale/code/claude-code-config/.worktrees/feat/wt-worktree-renderer --base-ref HEAD
+bun --filter fallow-scripts fallow-runner -- audit --json --root /Users/nathanvale/code/claude-code-config/.worktrees/feat/worktree-worktree-renderer --base-ref HEAD
 ```
 
 Interpretation:
@@ -160,7 +160,7 @@ No inherited finding in this baseline names a security or data-risk path.
 2. Triage `remove-export` findings with reachability evidence.
 3. Triage `skill-feedback` Branch Station pilot.
 4. Triage `cli-execution-auditor` Station Map add-test refs.
-5. Triage `wt`, `agent-worktree`, and root sentinel summary-only groups.
+5. Triage `worktree`, `agent-worktree`, and root sentinel summary-only groups.
 6. Triage docs and new-skill summary-only groups.
 7. Rerun whole-branch Fallow and scoped facade guard.
 
@@ -181,12 +181,12 @@ No inherited finding in this baseline names a security or data-risk path.
 | `skills/skill-feedback` | `bun --filter skill-feedback-scripts typecheck` | Pass. |
 | `skills/cli-execution-auditor` | `bun --filter cli-execution-auditor-scripts test --coverage` | Pass: 128 tests. |
 | `skills/cli-execution-auditor` | `bun --filter cli-execution-auditor-scripts typecheck` | Pass. |
-| `skills/wt` | `bun --filter wt-scripts test` | Pass: 70 tests. |
-| `skills/wt` | `bun --filter wt-scripts typecheck` | Pass. |
+| `skills/worktree` | `bun --filter worktree-scripts test` | Pass: 70 tests. |
+| `skills/worktree` | `bun --filter worktree-scripts typecheck` | Pass. |
 | `runtime/agent-worktree` | `bun --filter agent-worktree test` | Pass: 62 tests. |
 | `runtime/agent-worktree` | `bun --filter agent-worktree typecheck` | Pass. |
 | root sentinel | `bun run command-entrypoint:integration` | Pass: 28 tests. |
-| docs/new skills | frontmatter description quote check | Pass: `bad-practices`, `cli-execution-auditor`, `wt`. |
+| docs/new skills | frontmatter description quote check | Pass: `bad-practices`, `cli-execution-auditor`, `worktree`. |
 | touched auditor tests | `bunx biome check --diagnostic-level=error ...` | Pass. |
 
 ## Final Audit

@@ -60,13 +60,14 @@ sections, not every section every time.
 
 ## Output Contract
 
-- **Win**: what this unlocks, clarifies, or makes easier. Keep it short.
-- **Choice**: ask one decision only. Offer 2-3 numbered options with one-line
-  tradeoffs.
+- **Choice**: ask one decision only. Show 2-3 numbered options. Prefer a tiny
+  inline ASCII visual (aligned columns, arrows for flow) over prose when the
+  options differ on a structure, path, or shape; one-line tradeoff per option.
 - **My Pick**: give exactly one option number plus a confidence label, or `Hold`
-  plus the missing information needed before choosing.
+  plus the missing information needed before choosing. State the pick reason in
+  one clause.
 - **Next**: tell the user to reply with an option number, `riff | r`,
-  `visualise | v`, or `why?`.
+  `mermaid | m`, or `why?`.
 
 Confidence labels:
 
@@ -74,7 +75,11 @@ Confidence labels:
 - **Soft Pick**: reasonable default, but context could change it.
 - **Hold**: choosing now may create avoidable entropy.
 
-Optional sections: **Visual** for tiny Mermaid / ASCII / table aids, **Why** for
+Default the inline ASCII visual whenever options compare on 2+ dimensions or a
+flow. Reserve `mermaid | m` for when the user wants a larger rendered diagram
+than inline ASCII can carry.
+
+Optional sections: **Win** (what the choice unlocks, one line), **Why** for
 minimal reasoning or deeper teaching after `why?`, **Explain** for key terms,
 **Exceptions** for material edge cases, and **Drift** for remaining entropy,
 ownership, handoff, or follow-up risk.

@@ -6,7 +6,7 @@ the decision easier.
 ## Response Controls
 
 - `riff` or `r`: explore alternatives briefly.
-- `visualise` or `v`: make the visual model primary.
+- `mermaid` or `m`: render a full Mermaid diagram for the decision.
 - `why?`: teach the reasoning more deeply.
 - Natural-language equivalents count.
 
@@ -14,8 +14,8 @@ When the user replies with a control:
 
 - **`riff` / `r`**: add one or two plausible alternatives, name what would make
   each better, then ask the same decision again.
-- **`visualise` / `v`**: replace most prose with a compact Mermaid diagram,
-  ASCII map, table, or flow. Keep the same decision boundary.
+- **`mermaid` / `m`**: render a full Mermaid diagram (larger than the inline
+  ASCII visual the Choice already carries). Keep the same decision boundary.
 - **`why?`**: expand the reasoning, teach the tradeoff, cite grounded evidence
   when available, then return to the same options.
 

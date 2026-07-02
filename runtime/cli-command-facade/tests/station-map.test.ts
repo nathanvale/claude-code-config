@@ -128,7 +128,7 @@ describe("Station Map projection", () => {
 		for (const { catalog, categories } of cases) {
 			const drift = findBranchStationCatalogDrift({ discovery, catalog });
 
-			expect(drift.map((entry) => entry.category)).toEqual(categories);
+			expect(drift.map((entry) => entry.category)).toEqual([...categories]);
 		}
 	});
 
@@ -228,7 +228,7 @@ describe("Station Map projection", () => {
 				evidence,
 			});
 
-			expect(drift.map((entry) => entry.category)).toEqual(categories);
+			expect(drift.map((entry) => entry.category)).toEqual([...categories]);
 		}
 	});
 

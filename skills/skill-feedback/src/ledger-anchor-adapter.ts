@@ -53,6 +53,8 @@ type CanonicalPathResult =
  * if (facts.anchor_strength === "strong_path") use(facts.ledger_anchor_key)
  * ```
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 export function deriveLedgerAnchorFacts(
 	input: LedgerAnchorInput,
 ): LedgerAnchorFacts {
@@ -114,6 +116,8 @@ function weakAnchorFacts(
 	};
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function canonicalOwnerPath(rawPath: string): CanonicalPathResult {
 	const trimmedPath = rawPath.trim();
 	if (

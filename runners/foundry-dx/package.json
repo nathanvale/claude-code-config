@@ -1,0 +1,19 @@
+{
+  "name": "@side-quest/foundry-dx",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Foundry account routing diagnostics and compaction handoff hooks for Claude Code and Codex.",
+  "type": "module",
+  "bin": {
+    "foundry-dx": "./src/foundry-dx.mjs"
+  },
+  "files": [
+    "src/foundry-dx.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "foundry-dx": "node src/foundry-dx.mjs",
+    "test": "node src/foundry-dx.test.mjs",
+    "typecheck": "node --check src/foundry-dx.mjs && node --check src/foundry-dx.test.mjs"
+  }
+}

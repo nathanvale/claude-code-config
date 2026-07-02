@@ -28,4 +28,4 @@ Codex `notify=agent-turn-complete` remains legacy forwarding evidence. It cannot
 - Review needs capture provenance, such as `capture_runtime`, so Codex Stop and Codex notify evidence cannot collapse into one hook-capture lane.
 - Trusted skill identity remains the gate. If no engine-owned identity source is reachable from Codex Stop or adjacent engine evidence, Codex-led ledger implementation stays blocked.
 - Tests must use the real bare notify shape for dispatcher behavior. Skill-bearing Codex payloads remain fixtures unless they come from a trusted Codex Stop identity source.
-- The plan (`docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`) Scope Boundaries entry "Stop hook (Claude) end-of-run capture — deferred" is superseded by this ADR and must move into v0 scope.
+- The plan (`skills/skill-feedback/docs/plans/2026-06-11-002-feat-skill-feedback-loop-v0-pilot-plan.md`) Scope Boundaries entry "Stop hook (Claude) end-of-run capture — deferred" is superseded by this ADR and must move into v0 scope.

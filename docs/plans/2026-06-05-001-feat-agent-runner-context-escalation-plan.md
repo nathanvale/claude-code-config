@@ -165,7 +165,7 @@ flowchart TB
   - `skills/test-runner/scripts/test-runner.test.ts`
 - **Approach:** Add `Agent Runner` to the domain glossary, then update the command contract to name repair and triage as explicit run modes plus a `detail` command keyed by lookup handle. Decide result-contract versioning before runtime edits: either bump the existing run result schema or introduce separate run/detail result contracts. Keep package-owned result vocabulary near the contract owner. Preserve existing `run` and `status` behavior unless the new surface intentionally supersedes a proof-only path.
 - **Execution note:** Start with contract/help/parser tests so command discovery, rendered help, parser acceptance, and runtime semantics cannot drift.
-- **Patterns to follow:** `skills/create-cli/references/agent-native-cli-design.md`; `skills/create-cli/references/cli-command-facade.md`; `skills/test-runner/scripts/command-contract.ts`; `skills/browser-use/scripts/command-contract.ts`.
+- **Patterns to follow:** `skills/cli-author/references/agent-native-cli-design.md`; `skills/cli-author/references/cli-command-facade.md`; `skills/test-runner/scripts/command-contract.ts`; `skills/browser-use/scripts/command-contract.ts`.
 - **Test scenarios:**
   - Happy path: command contract validation accepts repair mode, triage mode, status, and detail lookup without facade drift findings.
   - Happy path: result contract id and schema version align across command metadata, JSON envelopes, runtime result data, and tests.
@@ -349,7 +349,7 @@ flowchart TB
 - Prior plan: `docs/plans/2026-06-04-003-feat-test-runner-compact-runner-plan.md`.
 - Prior evidence and status: `skills/test-runner/PROVENANCE.md`; `skills/test-runner/scripts/.benchmark-output/u5-fixed-fixed-gate.json`.
 - Current runner owners: `skills/test-runner/SKILL.md`; `skills/test-runner/scripts/command-contract.ts`; `skills/test-runner/scripts/test-runner.ts`; `skills/test-runner/scripts/test-runner.test.ts`; `skills/test-runner/scripts/test-runner.benchmark.ts`.
-- CLI design owners: `skills/create-cli/SKILL.md`; `skills/create-cli/references/agent-native-cli-design.md`; `skills/create-cli/references/cli-command-facade.md`.
+- CLI design owners: `skills/cli-author/SKILL.md`; `skills/cli-author/references/agent-native-cli-design.md`; `skills/cli-author/references/cli-command-facade.md`.
 - Skill design owner: `context/skill-design-philosophy.md`.
 - Adjacent lookup and recovery pattern: `skills/browser-use/SKILL.md`; `skills/browser-use/scripts/browser-adapter-router-recovery.ts`; `docs/adr/0013-router-research-recovery-uses-diagnostic-trail.md`.
 - Current normal runner guidance: `context/bun-runner.md`; `rules/code-quality.md`.

@@ -219,7 +219,11 @@ describe("record-decision discovery", () => {
 			],
 			{ includeFlagDescriptions: true },
 		);
-		expect(envelope.data).toEqual(expected);
+		expect(envelope.data).toEqual({
+			contract_id: "record-decision.commands",
+			schema_version: "1",
+			...expected,
+		});
 	});
 
 	test("requires json mode for discovery output", async () => {

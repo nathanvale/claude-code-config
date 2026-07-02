@@ -55,6 +55,11 @@ Use this research as evidence for the skill-feedback v2 pivot. It is not an acce
 
 ## Verified sources
 
+- 2026-06-29 official Codex manual refresh:
+  - Source: local `openai-docs` Codex manual fetch from `https://developers.openai.com/codex/hooks` and `https://developers.openai.com/codex/skills`.
+  - Hooks listed: `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit`, `SubagentStop`, `Stop`, `SessionStart`, and `SubagentStart`.
+  - Skills docs still describe explicit and implicit skill activation.
+  - No `PreSkillUse`, `PostSkillUse`, or equivalent engine-owned skill invocation event was found.
 - OpenAI Codex hooks support lifecycle events including `Stop`.
   - Source: https://developers.openai.com/codex/hooks
   - Relevant facts:
@@ -125,13 +130,16 @@ Use this research as evidence for the skill-feedback v2 pivot. It is not an acce
 - Codex OTel can help with run/tool/session observability and correlation diagnostics.
 - Codex does not yet provide the public skill lifecycle hook that would make `trusted_engine_identity` straightforward.
 
-## Open decision points
+## Resolved decision points
 
-- Decide whether the v2 plan explicitly supersedes the origin gate that blocked all new feature work until Trusted skill identity.
-- Decide whether `driver_declared` evidence is allowed to build the first ledger.
-- Decide what claims remain forbidden without `trusted_engine_identity`.
-- Decide whether `corroborated` is supported in v2 or only reserved until a live shared id exists.
-- Decide whether `capture_gap` should exclude normal closeout-only missing runtime fields.
-- Decide whether daily-pilot readiness should remain outside v2.
-- Decide whether transcript inspection should be removed from v2 or kept as diagnostic-only scope.
-
+- Decision 20 superseded the all-feature-work gate: v2 closeout-first ledger
+  work may proceed from `driver_declared` evidence while Trusted skill identity
+  remains blocked.
+- Decision 20 kept `trusted_engine_identity` and daily-pilot readiness gated.
+- Decision 29 allowed trusted run proof to support `same_trusted_run` and
+  `corroborated` without satisfying Trusted skill identity.
+- Decision 44 supports Claude Code as the current daily-pilot runtime and keeps
+  Codex Stop runtime-observed while Codex Trusted skill identity remains
+  deferred.
+- Transcript inspection stays runtime-specific evidence for Claude Code and
+  diagnostic-only context for Codex identity.

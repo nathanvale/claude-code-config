@@ -2,14 +2,20 @@
 
 import {
 	type CliWriter,
+	type CommandFacadeResultContract,
+	type CommandResultPayload,
+	createCliRepairStateRuntimeError,
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
+	createCliUsageRuntimeError,
+	createCommandResultData,
 	parseCliDiagnosticArgv,
 	projectCommandDiscoveryTree,
 	renderCommandUsage,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
+	agentWorktreeLifecycleResultContract,
 	agentWorktreeContractEntries,
 	agentWorktreeContracts,
 } from "./command-contract.ts";
@@ -19,6 +25,7 @@ import {
 	discoverRepo,
 } from "./discovery.ts";
 import { runDoctor } from "./doctor.ts";
+import type { DoctorMap } from "./doctor.ts";
 import {
 	buildHandoffSnapshot,
 	inspectRefFromRoot,
@@ -27,8 +34,6 @@ import {
 import {
 	AGENT_WORKTREE_CLI_NAME,
 	AGENT_WORKTREE_COMMANDS,
-	AGENT_WORKTREE_CONTRACT_ID,
-	AGENT_WORKTREE_SCHEMA_VERSION,
 	type AgentWorktreeChangedState,
 	type AgentWorktreeCommand,
 } from "./model.ts";
@@ -41,6 +46,7 @@ import {
 	cleanPreview,
 	createWorktree,
 	deleteWorktree,
+	type LifecycleResult,
 	listWorktrees,
 	recoverPreview,
 	refreshWorktrees,
@@ -142,6 +148,45 @@ type ContextHeavyReadCommand = Extract<
 	AgentWorktreeCommand,
 	"doctor" | "list" | "status" | "clean" | "handoff"
 >;
+
+type AgentWorktreeLifecycleData = {
+	action: LifecycleResult["action"];
+	changed_state: LifecycleResult["changedState"];
+	preview: LifecycleResult["preview"];
+	run_ref: LifecycleResult["runRef"] | undefined;
+	failure_ref: LifecycleResult["failureRef"] | undefined;
+	changes: LifecycleResult["changes"];
+	next_safe_action: LifecycleResult["nextSafeAction"];
+	reason: LifecycleResult["reason"] | undefined;
+	recovery: LifecycleResult["recovery"] | undefined;
+	backup_ref: LifecycleResult["backupRef"] | undefined;
+};
+
+type AgentWorktreeDoctorData = {
+	summary: {
+		status: DoctorMap["status"];
+		repo_root: DoctorMap["repo"]["gitRoot"] | undefined;
+		main_owner_root: DoctorMap["repo"]["mainOwnerRoot"] | undefined;
+		active_worktree: DoctorMap["repo"]["activeWorktree"] | undefined;
+		current_branch: DoctorMap["repo"]["currentBranch"] | undefined;
+		default_branch: DoctorMap["repo"]["defaultBranch"] | undefined;
+		store_root: DoctorMap["repo"]["storeRoot"] | undefined;
+		linked_worktree_count: DoctorMap["repo"]["linkedWorktreeCount"];
+		stale_dir_count: DoctorMap["repo"]["staleDirCount"];
+		available_commands: DoctorMap["availableCommands"];
+	};
+	checks: {
+		id: DoctorMap["checks"][number]["id"];
+		owner: DoctorMap["checks"][number]["owner"];
+		status: DoctorMap["checks"][number]["status"];
+		summary: DoctorMap["checks"][number]["summary"];
+		blockers: DoctorMap["checks"][number]["blockers"];
+		next_actions: DoctorMap["checks"][number]["nextActions"];
+	}[];
+	mutation_readiness: DoctorMap["mutationReadiness"];
+	blockers: string[];
+	next_actions: DoctorMap["nextActions"][number][];
+};
 
 const PROJECTION_FIELD_SET_VALUES = new Set<string>(PROJECTION_FIELD_SETS);
 
@@ -256,23 +301,24 @@ export async function main(
 		createCliRuntimeErrorEnvelope({
 			run_id: runId,
 			process_exit_code: result.exitCode,
-			error: {
-				run_id: runId,
-				code: result.code,
-				message: result.message,
-				exit_code: result.exitCode,
-				severity: "error",
-				recoverability:
-					result.code === "usage_error" ? "change_input" : "repair_state",
-				retryable: false,
-				hint: {
-					action:
-						result.code === "usage_error" ? "change_input" : "repair_state",
-					summary: result.action,
-				},
-				failure_domain: "agent_worktree",
-			},
-			data: baseData({
+			error:
+				result.code === "usage_error"
+					? createCliUsageRuntimeError({
+							run_id: runId,
+							code: result.code,
+							message: result.message,
+							hint: { action: "change_input", summary: result.action },
+							failure_domain: "agent_worktree",
+						})
+					: createCliRepairStateRuntimeError({
+							run_id: runId,
+							code: result.code,
+							message: result.message,
+							exit_code: result.exitCode,
+							hint: { action: "repair_state", summary: result.action },
+							failure_domain: "agent_worktree",
+						}),
+			data: lifecycleResultData({
 				changed_state: result.changedState,
 				next_safe_action: result.action,
 				...result.data,
@@ -440,7 +486,10 @@ export async function runCommand(
 			case "commands":
 				return {
 					ok: true,
-					data: baseData(projectCommandDiscoveryTree(agentWorktreeContractEntries)),
+					data: resultData(
+						"commands",
+						projectCommandDiscoveryTree(agentWorktreeContractEntries),
+					),
 				};
 			case "doctor":
 				return readCommandResult(
@@ -469,7 +518,10 @@ export async function runCommand(
 				if (!branch) return usageFailure("check needs <branch>.");
 				return {
 					ok: true,
-					data: baseData(await checkWorktree({ cwd, run: runtime.run, branch })),
+					data: resultData(
+						"check",
+						await checkWorktree({ cwd, run: runtime.run, branch }),
+					),
 				};
 			}
 			case "create": {
@@ -484,7 +536,7 @@ export async function runCommand(
 					runId,
 					now: runtime.now,
 				});
-				return lifecycleCommandResult(result, invocation.dryRun);
+				return lifecycleCommandResult("create", result, invocation.dryRun);
 			}
 			case "delete": {
 				const branch = invocation.positionals[0];
@@ -502,7 +554,7 @@ export async function runCommand(
 					runId,
 					now: runtime.now,
 				});
-				return lifecycleCommandResult(result, invocation.dryRun);
+				return lifecycleCommandResult("delete", result, invocation.dryRun);
 			}
 			case "refresh": {
 				const result = await refreshWorktrees({
@@ -512,7 +564,7 @@ export async function runCommand(
 					runId,
 					now: runtime.now,
 				});
-				return lifecycleCommandResult(result, invocation.dryRun);
+				return lifecycleCommandResult("refresh", result, invocation.dryRun);
 			}
 			case "clean":
 				return readCommandResult(
@@ -551,7 +603,8 @@ export async function runCommand(
 					| undefined;
 				return {
 					ok: true,
-					data: baseData(
+					data: resultData(
+						"recover",
 						lifecycleData(
 							recoverPreview({
 								ref,
@@ -581,7 +634,7 @@ export async function runCommand(
 				if (!inspected) {
 					return usageFailure("inspect needs a supported typed ref.");
 				}
-				return { ok: true, data: baseData(inspected) };
+				return { ok: true, data: resultData("inspect", inspected) };
 			}
 			case "handoff": {
 				const discovery = await discoverRepo({ cwd, run: runtime.run });
@@ -643,14 +696,15 @@ function runtimeFailure(
 }
 
 function lifecycleCommandResult(
-	result: Parameters<typeof lifecycleData>[0],
+	command: AgentWorktreeCommand,
+	result: LifecycleResult,
 	previewAllowed: boolean,
 ): CommandResult {
 	const data = lifecycleData(result);
 	if (result.changedState === "complete" || (previewAllowed && result.preview)) {
 		return {
 			ok: true,
-			data: baseData(data),
+			data: resultData(command, data),
 			changedState: result.changedState,
 		};
 	}
@@ -664,12 +718,12 @@ function lifecycleCommandResult(
 	);
 }
 
-function readCommandResult(
+function readCommandResult<TData extends object>(
 	command: ContextHeavyReadCommand,
-	data: object,
+	data: CommandResultPayload<TData>,
 	invocation: ParsedInvocation,
 ): CommandResult {
-	const projected = projectReadData(command, baseData(data), invocation);
+	const projected = projectReadData(command, resultData(command, data), invocation);
 	if (!projected.ok) return usageFailure(projected.message);
 	return { ok: true, data: projected.data };
 }
@@ -765,30 +819,7 @@ function parseProjectionSelect(
 	return { ok: true, select: [...new Set(select)] };
 }
 
-function doctorData(data: {
-	status: unknown;
-	mutationReadiness: unknown;
-	checks: readonly {
-		id: unknown;
-		owner: unknown;
-		status: unknown;
-		summary: unknown;
-		blockers: readonly string[];
-		nextActions: readonly string[];
-	}[];
-	nextActions: readonly string[];
-	repo: {
-		gitRoot?: string;
-		mainOwnerRoot?: string;
-		activeWorktree?: string;
-		currentBranch?: string;
-		defaultBranch?: string;
-		storeRoot?: string;
-		linkedWorktreeCount: number;
-		staleDirCount: number;
-	};
-	availableCommands: readonly string[];
-}): Record<string, unknown> {
+function doctorData(data: DoctorMap): AgentWorktreeDoctorData {
 	const blockers = [...new Set(data.checks.flatMap((check) => check.blockers))];
 	return {
 		summary: {
@@ -817,26 +848,28 @@ function doctorData(data: {
 	};
 }
 
-function baseData(data: object): Record<string, unknown> {
-	return {
-		contract_id: AGENT_WORKTREE_CONTRACT_ID,
-		schema_version: AGENT_WORKTREE_SCHEMA_VERSION,
-		...data,
-	};
+function resultData<TData extends object>(
+	command: AgentWorktreeCommand,
+	data: CommandResultPayload<TData>,
+): Record<string, unknown> {
+	return createCommandResultData(
+		agentWorktreeContracts[command] as {
+			resultContract?: CommandFacadeResultContract;
+		},
+		data,
+	);
 }
 
-function lifecycleData(result: {
-	action: string;
-	changedState: AgentWorktreeChangedState;
-	preview: boolean;
-	runRef?: unknown;
-	failureRef?: unknown;
-	changes: readonly string[];
-	nextSafeAction: string;
-	reason?: string;
-	recovery?: unknown;
-	backupRef?: string;
-}): Record<string, unknown> {
+function lifecycleResultData<TData extends object>(
+	data: CommandResultPayload<TData>,
+): Record<string, unknown> {
+	return createCommandResultData(
+		{ resultContract: agentWorktreeLifecycleResultContract },
+		data,
+	);
+}
+
+function lifecycleData(result: LifecycleResult): AgentWorktreeLifecycleData {
 	return {
 		action: result.action,
 		changed_state: result.changedState,

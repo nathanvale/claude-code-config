@@ -7,6 +7,7 @@ import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/tes
 
 import type { AgentWorktreeCliRuntime } from "../src/cli.ts";
 import { agentWorktreeContracts } from "../src/command-contract.ts";
+import { AGENT_WORKTREE_CONTRACT_ID } from "../src/model.ts";
 import { createFileStore } from "../src/store.ts";
 import {
 	mainRepoGitOutputs,
@@ -133,6 +134,17 @@ describe("agent-worktree CLI surface", () => {
 		]);
 	});
 
+	test("command discovery usage errors keep lifecycle result metadata", async () => {
+		const envelope = await expectUsageError([
+			"commands",
+			"--repo",
+			"/repo",
+			"--json",
+		]);
+
+		expect(envelope.data?.contract_id).toBe(AGENT_WORKTREE_CONTRACT_ID);
+	});
+
 	test("removed no-input flag is rejected instead of advertised inertly", async () => {
 		await expectUsageError([
 			"delete",
@@ -155,7 +167,7 @@ describe("agent-worktree CLI surface", () => {
 	});
 
 	test("delete target misses exit non-zero with lifecycle recovery data", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-cli-delete-missing-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-delete-missing-"));
 		const envelope = await expectRuntimeError(
 			["delete", "feat/missing", "--force", "--repo", root, "--json"],
 			repoRuntime(root, mainRepoGitOutputs(root)),
@@ -184,7 +196,7 @@ describe("agent-worktree CLI surface", () => {
 	});
 
 	test("recover resolves refs from the durable store before returning ok", async () => {
-		const root = await mkdtemp(join(tmpdir(), "awt-cli-recover-"));
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-recover-"));
 		const store = createFileStore(join(root, ".agent-worktree"));
 		await store.writeFailure({
 			ref: { kind: "failure", id: "run-1/delete_branch" },
