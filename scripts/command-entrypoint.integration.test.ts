@@ -41,7 +41,6 @@ import {
 	agentWorktreeContractEntries,
 	agentWorktreeContracts,
 } from "../runtime/agent-worktree/src/command-contract.ts";
-
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
@@ -583,7 +582,6 @@ const discoveredAgentWorktreeCommandIds = agentWorktreeContractEntries
  */
 const wtPackageScripts = readPackageScripts(packageRoots.worktree);
 const agentWorktreePackageScripts = readPackageScripts(packageRoots.agentWorktree);
-
 /**
  * First rendered usage line for a contract.
  *
@@ -627,7 +625,6 @@ function errorMessage(error: unknown): string {
 
 const wtTopLevelUsageLine = "Usage: worktree <command> --json";
 const agentWorktreeTopLevelUsageLine = firstUsageLine(agentWorktreeContracts.doctor);
-
 describe("command entrypoint integration: mechanical discovery", () => {
 	test("derives the exact WorkTree command id set from exported contracts", async () => {
 		expect(discoveredWtCommandIds).toEqual(
@@ -658,6 +655,7 @@ describe("command entrypoint integration: mechanical discovery", () => {
 			expect(Object.keys(wtPackageScripts)).toContain("worktree");
 			expect(Object.keys(agentWorktreePackageScripts)).toContain("agent-worktree");
 		});
+
 });
 
 describe("command entrypoint integration: help contracts", () => {

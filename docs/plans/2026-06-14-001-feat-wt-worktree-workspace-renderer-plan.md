@@ -131,7 +131,7 @@ The greenfield layout (new directory hierarchy under `skills/worktree/`) is show
 **Requirements:** R14, R15.
 **Dependencies:** none.
 **Files:** `skills/worktree/package.json`, `skills/worktree/tsconfig.json`, `skills/worktree/SKILL.md`, add `worktree.config.json` + `*.code-workspace` to the repo `.gitignore`.
-**Approach:** Copy `record-decision`'s `package.json`/`tsconfig.json` shape; set `bin`/script to `src/worktree.ts`, dep `@side-quest/cli-command-facade: workspace:*`. SKILL.md follows the thin owner-naming pattern (Owner / Dependencies / Workflow / route to `create-cli` before contract changes) — no copied flags or schemas.
+**Approach:** Copy `record-decision`'s `package.json`/`tsconfig.json` shape; set `bin`/script to `src/worktree.ts`, dep `@side-quest/cli-command-facade: workspace:*`. SKILL.md follows the thin owner-naming pattern (Owner / Dependencies / Workflow / route to `cli-author` before contract changes) — no copied flags or schemas.
 **Patterns to follow:** `skills/record-decision/package.json`, `skills/record-decision/SKILL.md`.
 **Test scenarios:** Test expectation: none — scaffolding/config, no behavior. Verify `tsc_check` (MCP) passes on the empty package.
 **Verification:** Package typechecks; SKILL.md YAML-parses; `.gitignore` covers the generated + registry files.

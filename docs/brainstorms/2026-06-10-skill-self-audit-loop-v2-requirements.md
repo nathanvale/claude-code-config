@@ -11,7 +11,7 @@ builds_on: docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md
 
 ## Summary
 
-v1 of `skill-self-audit-loop` works end-to-end: point it at a skill, run `/goal`, get a converged audit file with no babysitting. It has run live twice (on itself and on `create-cli`), both converging at pass 2 with zero contradictions.
+v1 of `skill-self-audit-loop` works end-to-end: point it at a skill, run `/goal`, get a converged audit file with no babysitting. It has run live twice (on itself and on `cli-author`), both converging at pass 2 with zero contradictions.
 
 That is also the problem. The loop has **only ever returned clean.** The detect → repair-candidate → handoff path (AE3 in v1) has never executed. A detector that has never fired on a positive is unfalsified, not validated — a clean result is indistinguishable from a blind one.
 
@@ -167,6 +167,6 @@ flowchart TB
 
 - `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md` (v0/v1 baseline)
 - `docs/skill-audits/skill-self-audit-loop/self-audit-loop.md` (live run 1, converged clean)
-- `docs/skill-audits/create-cli/self-audit-loop.md` (live run 2, converged clean)
+- `docs/skill-audits/cli-author/self-audit-loop.md` (live run 2, converged clean)
 - `skills/skill-self-audit-loop/SKILL.md` (v1 skill; Contradiction Rule, Path Rule, AE3)
 - Adversarial review (4 independent reviewers, 2026-06-10): sweep confounds detector-vs-library and is dominated by a planted-positive fixture; resume seam carries three false-clean failure modes; v0 boundary requires explicit change to sweep; goal is unachievable without a known-positive oracle.

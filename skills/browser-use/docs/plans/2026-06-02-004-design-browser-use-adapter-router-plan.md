@@ -29,7 +29,7 @@ Landed on branch:
 - `111fd95`: marked this plan completed for the initial runtime scope.
 - `1e900a3`: split Router owners into contract, model, engine, discovery, recovery, validation, and CLI projection.
 - `1e900a3`: proved command discovery flags, rendered help, parser acceptance, and runtime semantics align.
-- `1e900a3`: added Router test matrix, recovery metadata plan, command flag contract plan, operator recovery choices plan, and create-cli reference updates.
+- `1e900a3`: added Router test matrix, recovery metadata plan, command flag contract plan, operator recovery choices plan, and cli-author reference updates.
 - `efebda0`: normalized type-only imports after Router seam extraction.
 - `6ee3a9c`: kept bounded research detail behind `diagnostic_trail`; did not widen the facade envelope.
 - `6ee3a9c`: hardened stale self-report, missing capability, prefer-mode, freshness, auth/session, and validation paths.
@@ -52,7 +52,7 @@ Branch collateral:
 - Added `skills/browser-use/docs/plans/2026-06-03-001-refactor-router-recovery-metadata-plan.md`.
 - Added `skills/browser-use/docs/plans/2026-06-03-002-refactor-router-command-flag-contract-plan.md`.
 - Added `docs/plans/2026-06-03-003-feat-facade-operator-recovery-choices-plan.md`.
-- Updated `AGENTS.md`, `CONTEXT.md`, `skills/browser-use/SKILL.md`, and create-cli references for Router ownership and CLI surface guardrails.
+- Updated `AGENTS.md`, `CONTEXT.md`, `skills/browser-use/SKILL.md`, and cli-author references for Router ownership and CLI surface guardrails.
 - Expanded Warm Chrome and Browser Adapter Proof tests where Router command-surface and run-id behavior intersected existing preflight contracts.
 
 Related cross-repo prerequisite:

@@ -67,7 +67,7 @@ Remaining follow-up:
 - Command discovery metadata remains artifact-level unless a product need emerges.
 - Integrate reusable Router CLI smoke fixture generation and scenario execution into code-owned test utilities.
 - Hoist common CLI test helpers and fixture makers into the CLI command facade testing package.
-- Add a `create-cli` skill reference that uses prose prompts plus command contracts to generate optional CLI test and fixture coverage.
+- Add a `cli-author` skill reference that uses prose prompts plus command contracts to generate optional CLI test and fixture coverage.
 
 ## Ownership Map
 
@@ -79,7 +79,7 @@ Remaining follow-up:
 - Smoke artifacts are test evidence, not product JSON.
 - `skills/browser-use/SKILL.md` owns workflow sequence and tool routing, not exact schemas or capability truth.
 - Docs research and prototypes are advisory artifacts, not routable manifests.
-- `create-cli` and facade guidance own general CLI drift-prevention rules.
+- `cli-author` and facade guidance own general CLI drift-prevention rules.
 - Router command flags and parser behavior stay package-owned.
 - Router tests prove discovery metadata, rendered help, parser acceptance, and runtime semantics align.
 

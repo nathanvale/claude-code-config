@@ -4,10 +4,19 @@ import type {
 	CommandFacadeResultContract,
 	RuntimeErrorRecoverability,
 } from "./command-facade";
+import type {
+	BranchStation,
+	BranchStationEvidence,
+} from "./station-map";
 import {
 	createCliRuntimeErrorEnvelope,
 	createCliRuntimeSuccessEnvelope,
 } from "./runtime-envelope";
+import {
+	describeCliProcessRun,
+	parseCliProcessJson,
+	type CliProcessResult,
+} from "./process-testing";
 export {
 	DEFAULT_CLI_PROCESS_TIMEOUT_MS,
 	describeCliProcessRun,
@@ -582,4 +591,89 @@ function annotateCommandSurfaceCaseError(
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+// -- Station integration testing helpers --
+
+export type StationRuntimeEnvelope = {
+	status?: "ok" | "error";
+	data?: Record<string, unknown>;
+	error?: { code?: string };
+};
+
+export type StationScenario<TStation extends BranchStation = BranchStation> = {
+	run: (station: TStation) => Promise<BranchStationEvidence>;
+};
+
+export function extractEnvelopeContractId(
+	envelope: StationRuntimeEnvelope,
+): string | undefined {
+	const dataContract = envelope.data?.contract ?? envelope.data?.contract_id;
+	if (typeof dataContract === "string") return dataContract;
+	return undefined;
+}
+
+export function assertStationEnvelope(
+	station: BranchStation,
+	result: CliProcessResult,
+): StationRuntimeEnvelope {
+	if (result.exitCode !== station.expectedExitCode) {
+		throw new Error(
+			`Station ${station.id} exit code mismatch: expected=${station.expectedExitCode} actual=${result.exitCode}\n${describeCliProcessRun(result)}`,
+		);
+	}
+	if (!station.expectedEnvelopeStatus) return {};
+	const envelope = parseCliProcessJson<StationRuntimeEnvelope>(result);
+	if (envelope.status !== station.expectedEnvelopeStatus) {
+		throw new Error(
+			`Station ${station.id} envelope status mismatch: expected=${station.expectedEnvelopeStatus} actual=${envelope.status}\n${describeCliProcessRun(result)}`,
+		);
+	}
+	const observedContract = extractEnvelopeContractId(envelope);
+	if (
+		station.expectedResultContractId &&
+		observedContract !== station.expectedResultContractId
+	) {
+		throw new Error(
+			`Station ${station.id} contract id mismatch: expected=${station.expectedResultContractId} actual=${observedContract}\n${describeCliProcessRun(result)}`,
+		);
+	}
+	if (
+		station.expectedErrorCode &&
+		envelope.error?.code !== station.expectedErrorCode
+	) {
+		throw new Error(
+			`Station ${station.id} error code mismatch: expected=${station.expectedErrorCode} actual=${envelope.error?.code}\n${describeCliProcessRun(result)}`,
+		);
+	}
+	return envelope;
+}
+
+export function buildStationEvidence(
+	station: BranchStation,
+	result: CliProcessResult,
+	envelope: StationRuntimeEnvelope,
+): BranchStationEvidence {
+	const contractId = extractEnvelopeContractId(envelope);
+	return {
+		stationId: station.id,
+		status: "covered",
+		...(result.exitCode !== null ? { observedExitCode: result.exitCode } : {}),
+		...(envelope.status ? { observedEnvelopeStatus: envelope.status } : {}),
+		...(contractId ? { observedResultContractId: contractId } : {}),
+		...(envelope.error?.code
+			? { observedErrorCode: envelope.error.code }
+			: {}),
+	};
+}
+
+export function buildSkippedStationEvidence(
+	station: BranchStation,
+	rationale: string,
+): BranchStationEvidence {
+	return {
+		stationId: station.id,
+		status: "skipped",
+		rationale,
+	};
 }

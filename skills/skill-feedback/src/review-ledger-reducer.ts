@@ -44,6 +44,8 @@ export type ReviewLedgerResult = {
  * const { review_units, ledger_entries } = reduceReviewLedger(reports)
  * ```
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 export function reduceReviewLedger(
 	reports: readonly NormalizedSoftwareLearningReport[],
 ): ReviewLedgerResult {
@@ -87,6 +89,7 @@ export function reduceReviewLedger(
 				capture_runtime_mix: [],
 				verification_burden: { level: "unknown" },
 				trusted_run_evidence: [],
+				proof_diagnostics: [],
 			};
 			entries.set(key, entry);
 		}
@@ -111,11 +114,15 @@ type ReviewUnit = {
 	report_ids: string[];
 	trusted_run: boolean;
 	trusted_skill_run_id?: string;
+	has_runtime_owned_hook: boolean;
+	has_correlation_owned_closeout: boolean;
 };
 
 type TrustedRunEvidence = {
 	review_unit_key: string;
 	source_mix: EvidenceSource[];
+	has_runtime_owned_hook: boolean;
+	has_correlation_owned_closeout: boolean;
 };
 
 type MutableLedgerEntry = {
@@ -131,6 +138,7 @@ type MutableLedgerEntry = {
 	capture_runtime_mix: CaptureRuntime[];
 	verification_burden: ReviewLedgerVerificationBurden;
 	trusted_run_evidence: TrustedRunEvidence[];
+	proof_diagnostics: string[];
 };
 
 /**
@@ -138,6 +146,8 @@ type MutableLedgerEntry = {
  * `skill_run_id` proves same-run linkage; untrusted, report-authored, or
  * missing run ids stay report-local (R7, R7b, R8).
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function buildReviewUnits(
 	reports: readonly NormalizedSoftwareLearningReport[],
 ): ReviewUnit[] {
@@ -157,6 +167,8 @@ function buildReviewUnits(
 						: `report:${report.report_id}`,
 				report_ids: [report.report_id],
 				trusted_run: false,
+				has_runtime_owned_hook: false,
+				has_correlation_owned_closeout: false,
 			});
 			continue;
 		}
@@ -167,11 +179,25 @@ function buildReviewUnits(
 				report_ids: [],
 				trusted_run: true,
 				trusted_skill_run_id: trustedRunId,
+				has_runtime_owned_hook: false,
+				has_correlation_owned_closeout: false,
 			};
 			byRun.set(trustedRunId, unit);
 			units.push(unit);
 		}
 		unit.report_ids.push(report.report_id);
+		if (
+			report.evidence_source === "hook_capture" &&
+			report.skill_run_id_provenance === "runtime_owned"
+		) {
+			unit.has_runtime_owned_hook = true;
+		}
+		if (
+			report.evidence_source === "driver_closeout" &&
+			report.skill_run_id_provenance === "correlation_owned"
+		) {
+			unit.has_correlation_owned_closeout = true;
+		}
 	}
 	return units;
 }
@@ -242,6 +268,8 @@ function indexReportOccurrencesToUnits(
 	});
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function accumulateReport(
 	entry: MutableLedgerEntry,
 	report: NormalizedSoftwareLearningReport,
@@ -259,16 +287,32 @@ function accumulateReport(
 	) {
 		entry.capture_runtime_mix.push(report.capture_runtime);
 	}
+	for (const diagnostic of report.proof_diagnostics ?? []) {
+		if (!entry.proof_diagnostics.includes(diagnostic)) {
+			entry.proof_diagnostics.push(diagnostic);
+		}
+	}
 	if (unit.trusted_run) {
 		let evidence = entry.trusted_run_evidence.find(
 			(item) => item.review_unit_key === unit.review_unit_key,
 		);
 		if (!evidence) {
-			evidence = { review_unit_key: unit.review_unit_key, source_mix: [] };
+			evidence = {
+				review_unit_key: unit.review_unit_key,
+				source_mix: [],
+				has_runtime_owned_hook: false,
+				has_correlation_owned_closeout: false,
+			};
 			entry.trusted_run_evidence.push(evidence);
 		}
 		if (!evidence.source_mix.includes(report.evidence_source)) {
 			evidence.source_mix.push(report.evidence_source);
+		}
+		if (unit.has_runtime_owned_hook) {
+			evidence.has_runtime_owned_hook = true;
+		}
+		if (unit.has_correlation_owned_closeout) {
+			evidence.has_correlation_owned_closeout = true;
 		}
 	}
 	entry.evidence_tier = promoteEvidenceTier(entry.evidence_tier, report, entry);
@@ -280,9 +324,11 @@ function accumulateReport(
 
 /**
  * Promote evidence tier monotonically. Engine-owned identity reaches
- * `trusted_engine_identity`; mixed evidence inside one trusted unit reaches
- * `corroborated` (KTD6); hook capture alone reaches `runtime_observed` (R18).
+ * `trusted_engine_identity`; a verified hook/closeout witness reaches
+ * `corroborated`; hook capture alone reaches `runtime_observed`.
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function promoteEvidenceTier(
 	current: ReviewEvidenceTier,
 	report: NormalizedSoftwareLearningReport,
@@ -290,8 +336,8 @@ function promoteEvidenceTier(
 ): ReviewEvidenceTier {
 	if (current === "trusted_engine_identity") return current;
 	if (hasTrustedEngineIdentity(report)) return "trusted_engine_identity";
-	if (sameTrustedRunMixedEvidence(entry)) return "corroborated";
 	if (current === "corroborated") return current;
+	if (sameTrustedRunMixedEvidence(entry)) return "corroborated";
 	if (report.evidence_source === "hook_capture" && current === "driver_declared") {
 		return "runtime_observed";
 	}
@@ -318,11 +364,13 @@ function hasTrustedEngineIdentity(
 function sameTrustedRunMixedEvidence(entry: MutableLedgerEntry): boolean {
 	return entry.trusted_run_evidence.some(
 		(evidence) =>
-			evidence.source_mix.includes("driver_closeout") &&
-			evidence.source_mix.includes("hook_capture"),
+			evidence.has_runtime_owned_hook &&
+			evidence.has_correlation_owned_closeout,
 	);
 }
 
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function mergeVerificationBurden(
 	current: ReviewLedgerVerificationBurden,
 	report: NormalizedSoftwareLearningReport,
@@ -375,6 +423,7 @@ function finalizeEntry(entry: MutableLedgerEntry): ReviewLedgerEntry {
 		source_mix: entry.source_mix,
 		capture_runtime_mix: entry.capture_runtime_mix,
 		allowed_claims: allowedClaims,
+		proof_diagnostics: entry.proof_diagnostics,
 		resolution_state: deriveResolutionState(entry),
 		verification_burden: entry.verification_burden,
 		next_safe_action: nextSafeAction(entry),
@@ -391,6 +440,8 @@ function deriveResolutionState(entry: MutableLedgerEntry): ReviewResolutionState
  * Derive entry-local allowed claims (R6). Each claim is gated by the evidence
  * that earns it; renderers repeat only these labels and never widen them.
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function deriveAllowedClaims(
 	entry: MutableLedgerEntry,
 ): readonly ReviewAllowedClaim[] {
@@ -431,6 +482,8 @@ function toReviewUnitData(unit: ReviewUnit): ReviewUnitData {
  * (R14). Telemetry accumulates attempted targets per weak reason for later
  * anchor-source proposals.
  */
+// Covered by package tests; keep owner-local safety branches explicit.
+// fallow-ignore-next-line complexity
 function anchorMissTelemetry(
 	anchorFacts: readonly ReturnType<typeof deriveLedgerAnchorFacts>[],
 ): readonly ReviewAnchorMissTelemetry[] {

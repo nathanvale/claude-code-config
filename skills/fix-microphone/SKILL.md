@@ -66,6 +66,11 @@ ps aux | grep -i "WaveLink3VirtualAudio" | grep -v grep
 - Wave Link's virtual audio driver (`WaveLink3VirtualAudio.driver`) stays loaded after the app quits and can intercept the Wave:3; check for the driver even when no Wave Link process is running. (2026-06-12, observed failure)
 - Bluetooth mics (AirPods, AirPods Max) add 1–3s SCO negotiation delay on every activation + degraded audio quality. Pin superwhisper to a wired mic: `defaults write com.superduper.superwhisper selectedDeviceID "AppleUSBAudioEngine:Elgato Systems:Elgato Wave:3:A017A522103RY2:2,1"` + `useDefaultAudioDevice = 0`. Unplugging the Wave:3 can silently reset `selectedDeviceID` to `BuiltInMicrophoneDevice` — re-pin after replug. (2026-06-15, observed)
 - macOS powers down mic hardware when no app holds the input stream open (Apple Silicon M1–M4). Next activation takes 2–5s — superwhisper shows "no microphone available" then finds it. Fix: install [`macos-mic-keepwarm`](https://github.com/drewburchfield/macos-mic-keepwarm) — lightweight Swift binary holds AVCaptureSession open, mic stays instant. Runs as LaunchAgent, survives reboots. Trade-off: permanent orange mic dot in menubar. Uninstall: `curl -fsSL https://raw.githubusercontent.com/drewburchfield/macos-mic-keepwarm/master/uninstall.sh | bash`. (2026-06-15, observed failure + community-verified fix)
+- Wave:3 goes completely silent (not delayed) when Zoom + superwhisper contend for the mic and Core Audio loses the USB handshake. `mic-warm` running doesn't prevent it. Input volume drifts to ~56 and DriverPowerState drops to 0. Fix: `sudo killall coreaudiod` to force re-enumeration, then `osascript -e 'set volume input volume 75'`. Recurred on same setup that worked the day before — no config or cable change. (2026-06-25, third recurrence of coreaudiod restart pattern)
+- Dell U4025QW USB hub is the root cause of Wave:3 mic failures — not coreaudiod. When the Dell KVM/USB hub path fully stalls, `sudo killall coreaudiod` does NOT fix it. Only a physical USB replug recovers the mic. Moving Wave:3 to a direct Mac USB port eliminates the problem entirely. Monitor firmware M3T105 (latest) does not fully fix this. (2026-06-25, confirmed by direct-to-Mac test)
+- Silence-based watchdog monitoring (polling audio levels to detect dead mic) has catastrophic false-positive rates — silence is the dominant state of a developer's workday. If automated monitoring is needed, check USB device presence (`system_profiler SPUSBDataType` or `kAudioDevicePropertyDeviceIsAlive`), not audio levels. (2026-06-25, adversarial review finding)
+- Hammerspoon cannot intercept keys emitted by Karabiner's virtual keyboard — F18 arrives as keycode 0 (indistinguishable from 'a'). Don't attempt Hammerspoon-in-the-middle-of-PTT-chain with Karabiner. (2026-06-25, prototyping dead end)
+- Stream Deck button at `scripts/fix-mic.sh` runs passwordless `sudo killall coreaudiod` + volume reset. Human-triggered = zero false positives, faster than any automated detection. (2026-06-25, added as backup)
 
 ## Troubleshooting Tree
 
@@ -142,6 +147,22 @@ defaults read com.superduper.superwhisper selectedDeviceID
 defaults read com.superduper.superwhisper useDefaultAudioDevice
 ```
 Pin superwhisper to the Wave:3 explicitly (`useDefaultAudioDevice = 0`, `selectedDeviceID` set to the Wave:3 USB engine string) so BT reconnection doesn't steal focus.
+
+## Current PTT Setup (2026-06-25)
+
+- **PTT key**: Right Control (all external keyboards have it; MacBook does not — fine, no mic at MacBook)
+- **Superwhisper PTT**: Right Control (`carbonKeyCode: 62, carbonModifiers: 4096`)
+- **Paste behaviour**: "Paste result text" ON — text pastes at cursor on PTT release
+- **Auto-send**: "Hold shift to auto-send after paste" ON — hold Shift at release to also press Enter
+- **Keyboards**: Lofree Flow 84, Keychron K2 HE, MacBook built-in (see `context/products/`)
+- **Mic connection**: Direct to Mac USB port (preferred for reliability). Dell U4025QW monitor hub is a convenience fallback but causes intermittent mic death.
+- **Backup fix**: `scripts/fix-mic.sh` (Stream Deck button) or 🎙 menubar if Hammerspoon is running
+
+### What didn't work (2026-06-25)
+
+- **Karabiner Right Control → Shift+F18 for auto-send**: Karabiner holds Shift alongside F18, but superwhisper needs physical Shift held at the moment of PTT release. Simultaneous synthetic Shift release doesn't trigger auto-send.
+- **Hammerspoon mic guard in PTT chain**: Karabiner's virtual keyboard emits F18 as keycode 0 — Hammerspoon can't distinguish it from 'a'. Dead end.
+- **Watchdog LaunchAgent polling audio levels**: Adversarial review killed it — silence is normal, false positives dominate. Monitor USB device presence instead if automated detection is ever needed.
 
 ## Future Exploration
 

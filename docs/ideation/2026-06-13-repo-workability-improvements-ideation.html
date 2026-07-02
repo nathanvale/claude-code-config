@@ -295,7 +295,7 @@
         </div>
         <div class="summary-card">
           <strong>Existing assets</strong>
-          <p><code>test-runner</code>, <code>create-cli</code>, <code>fallow</code>, and <code>skill-feedback</code> already point toward compact output, command contracts, and action metadata.</p>
+          <p><code>test-runner</code>, <code>cli-author</code>, <code>fallow</code>, and <code>skill-feedback</code> already point toward compact output, command contracts, and action metadata.</p>
         </div>
         <div class="summary-card">
           <strong>Recent ideation</strong>
@@ -362,7 +362,7 @@
           <span class="tag gold">Confidence: 90%</span>
           <span class="tag red">Complexity: Medium</span>
         </div>
-        <p><strong>Basis:</strong> direct: <code>AGENTS.md</code> requires several post-change rituals, while <code>test-runner</code>, <code>context/bun-runner.md</code>, <code>create-cli</code>, <code>fallow</code>, and <code>skill-feedback</code> each own part of the gate. The last task proved the cognitive load: the right checks existed, but the agent had to assemble the route manually.</p>
+        <p><strong>Basis:</strong> direct: <code>AGENTS.md</code> requires several post-change rituals, while <code>test-runner</code>, <code>context/bun-runner.md</code>, <code>cli-author</code>, <code>fallow</code>, and <code>skill-feedback</code> each own part of the gate. The last task proved the cognitive load: the right checks existed, but the agent had to assemble the route manually.</p>
         <p><strong>Rationale:</strong> This is the biggest leverage move because it turns repo philosophy into one inspectable runtime answer: what should I run now, and why? It reduces missed rituals without copying every rule into startup prose.</p>
         <p><strong>Downsides:</strong> Needs careful scope control. If it grows into a universal orchestrator, it becomes the bloat it was meant to remove.</p>
       </article>
@@ -378,7 +378,7 @@
           <span class="tag gold">Confidence: 86%</span>
           <span class="tag red">Complexity: Medium</span>
         </div>
-        <p><strong>Basis:</strong> direct: <code>create-cli</code> requires naming contract, model, engine, discovery, CLI, and test owners. <code>skill-feedback</code> has a command-surface proof section naming discovery metadata, rendered help, argv accept/reject, and runtime semantics.</p>
+        <p><strong>Basis:</strong> direct: <code>cli-author</code> requires naming contract, model, engine, discovery, CLI, and test owners. <code>skill-feedback</code> has a command-surface proof section naming discovery metadata, rendered help, argv accept/reject, and runtime semantics.</p>
         <p><strong>Rationale:</strong> The repo is good at building agent-native commands one at a time. A map would let fresh agents discover those surfaces without rereading every skill. It also gives Task Doctor a stable input.</p>
         <p><strong>Downsides:</strong> If hand-authored, it will drift. It should be generated from command contracts, package scripts, and owner sections, with docs only as fallback.</p>
       </article>
@@ -491,7 +491,7 @@
           <tr><td>10</td><td>Thin Skill Drift Monitor</td><td>Already partially covered by governance; keep as a Task Doctor check.</td></tr>
           <tr><td>11</td><td>Mode-Aware Ideation Runner</td><td>Valid skill improvement, not central to repo-wide workability.</td></tr>
           <tr><td>12</td><td>Repo Friction Onboarding Tour</td><td>Likely prose bloat unless backed by generated maps.</td></tr>
-          <tr><td>13</td><td>Contract Help Snapshot Tests</td><td>Already part of create-cli and facade proof direction.</td></tr>
+          <tr><td>13</td><td>Contract Help Snapshot Tests</td><td>Already part of cli-author and facade proof direction.</td></tr>
           <tr><td>14</td><td>Dirty Worktree Companion</td><td>Likely Task Doctor input, not standalone.</td></tr>
           <tr><td>15</td><td>Quality Gate Router</td><td>Merged into Task Doctor.</td></tr>
           <tr><td>16</td><td>Decision Surface Resolver</td><td>Merged into Decision Log Appender.</td></tr>

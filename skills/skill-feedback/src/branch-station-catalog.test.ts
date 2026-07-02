@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file, code-duplication
+// Bun test entrypoint; package runner invokes this file without static imports.
 import { describe, expect, test } from "bun:test";
 import {
 	findBranchStationCatalogDrift,
@@ -28,13 +30,50 @@ describe("skill-feedback Branch Station Catalog", () => {
 		expect(catalogIds).toEqual([...SKILL_FEEDBACK_PLANNING_BRANCH_STATION_IDS]);
 	});
 
+	test("declares human dashboard MVP command branch stations", () => {
+		const catalogIds = new Set(
+			skillFeedbackBranchStationCatalog.map((station) => station.id),
+		);
+		const expectedIds = [
+			"reports.primary_recent",
+			"reports.low_signal_opt_in",
+			"reports.empty_inbox",
+			"reports.invalid_usage",
+			"report.primary_detail",
+			"report.low_signal_requires_opt_in",
+			"report.low_signal_detail_opt_in",
+			"report.unknown_ref",
+			"report.duplicate_ref",
+			"report.cross_lane_duplicate_ref",
+			"report.invalid_ref_path",
+			"report.invalid_usage",
+			"usage.skill_ranking",
+			"usage.separates_low_signal",
+			"usage.empty_inbox",
+			"usage.invalid_usage",
+			"queue.owner_path_strong",
+			"queue.skill_fallback",
+			"queue.skill_filter_fallback",
+			"queue.weak_requires_opt_in",
+			"queue.weak_opt_in",
+			"queue.no_build",
+			"queue.empty_inbox",
+			"queue.invalid_usage",
+		] as const;
+
+		for (const stationId of expectedIds) {
+			expect(catalogIds.has(stationId), stationId).toBe(true);
+		}
+	});
+
 	test("every public command has at least one green station", () => {
 		const greenCommands = new Set(
 			skillFeedbackBranchStationCatalog
 				.filter(
 					(station) =>
 						station.expectedExitCode === 0 &&
-						station.expectedEnvelopeStatus === "ok",
+						(!("expectedEnvelopeStatus" in station) ||
+							station.expectedEnvelopeStatus === "ok"),
 				)
 				.map((station) => station.command),
 		);
@@ -92,16 +131,56 @@ describe("skill-feedback Branch Station Catalog", () => {
 	test("station ids use stable package-owned vocabulary", () => {
 		expect(skillFeedbackBranchStationCatalog.map((station) => station.id)).toEqual([
 			"record.success",
+			"record.proof_attached",
+			"record.proof_unavailable",
 			"record.invalid_usage",
 			"closeout.success_stdin",
+			"closeout.proof_attached",
+			"closeout.proof_unavailable",
 			"closeout.invalid_receipt",
+			"dashboard.missing_inbox",
+			"dashboard.populated_inbox",
+			"dashboard.unsafe_inbox",
+			"reports.primary_recent",
+			"reports.low_signal_opt_in",
+			"reports.empty_inbox",
+			"reports.invalid_usage",
+			"report.primary_detail",
+			"report.low_signal_requires_opt_in",
+			"report.low_signal_detail_opt_in",
+			"report.unknown_ref",
+			"report.duplicate_ref",
+			"report.cross_lane_duplicate_ref",
+			"report.invalid_ref_path",
+			"report.invalid_usage",
+			"usage.skill_ranking",
+			"usage.separates_low_signal",
+			"usage.empty_inbox",
+			"usage.invalid_usage",
+			"queue.owner_path_strong",
+			"queue.skill_fallback",
+			"queue.skill_filter_fallback",
+			"queue.weak_requires_opt_in",
+			"queue.weak_opt_in",
+			"queue.no_build",
+			"queue.empty_inbox",
+			"queue.invalid_usage",
 			"review.empty_inbox",
 			"review.target_resolution_failed",
 			"health.populated_inbox",
+			"health.proof_diagnostics",
+			"health.correlation_witness_diagnostics",
 			"health.unsafe_inbox",
 			"purge.preview",
 			"purge.execute",
 			"purge.invalid_usage",
+			"correlate.preview_repairable",
+			"correlate.execute_written",
+			"correlate.already_linked",
+			"correlate.ambiguous",
+			"correlate.insufficient_evidence",
+			"correlate.unsafe_inbox",
+			"correlate.invalid_usage",
 		]);
 		expect(
 			skillFeedbackBranchStationCatalog.some((station) =>

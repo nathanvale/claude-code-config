@@ -34,13 +34,13 @@ The repo already has the surfaces the gate wires into:
    execution-experience clauses. **This is the primary seam** — the gate adds the
    auditor's lane-contract pass to an enumeration that already exists.
 
-2. **`create-cli` SKILL.md** requires "Validation/proof: required for
+2. **`cli-author` SKILL.md** requires "Validation/proof: required for
    Facade-backed" but enforces it only as prose. The gate makes that proof
    mechanical: a new facade CLI's design isn't "proven" until `auditor audit`
    passes against it.
 
 3. **`create-skill` verification** — when a skill ships a facade CLI, its
-   verification step runs the audit. (OQ3 left "create-skill vs create-cli vs
+   verification step runs the audit. (OQ3 left "create-skill vs cli-author vs
    both" open; the answer is *both*, because they cover different lifecycle
    moments — design-time proof vs ship-time verification.)
 
@@ -101,7 +101,7 @@ v1-of-the-gate — only the marker, the override semantics, and the CI wire.
 3. **At N≥3:** add the `cliAudit` marker to the CLIs that earned it, `enforce:
    true`, and wire the primary seam into `check:workspace-facade`. Other CLIs stay
    `enforce: false` until they too earn it.
-4. **Steady state:** new facade CLIs default `enforce: true` via the create-cli /
+4. **Steady state:** new facade CLIs default `enforce: true` via the cli-author /
    create-skill proof step, so the gate is born-on for new work, opt-in for legacy.
 
 ## What stays deferred past this sketch
@@ -130,6 +130,6 @@ v1-of-the-gate — only the marker, the override semantics, and the CI wire.
 
 - v1 plan + deferred-v2 section: `docs/plans/2026-06-10-001-feat-cli-execution-auditor-plan.md`.
 - Primary seam: `scripts/check-workspace-facade-invariants.ts`, root script `check:workspace-facade`.
-- Design-time proof seam: `skills/create-cli/SKILL.md` ("Validation/proof: required for Facade-backed").
+- Design-time proof seam: `skills/cli-author/SKILL.md` ("Validation/proof: required for Facade-backed").
 - Ship-time verification seam: `skills/create-skill/SKILL.md`.
 - The auditor it gates on: `skills/cli-execution-auditor/`.

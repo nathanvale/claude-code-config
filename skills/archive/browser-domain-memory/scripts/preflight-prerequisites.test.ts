@@ -180,7 +180,7 @@ describe("facade package readiness (real resolution)", () => {
 
 	test("wrong surface: a resolver that only finds it elsewhere does not satisfy readiness", async () => {
 		// Simulate the facade present only at a sibling skill's node_modules:
-		// resolution from the script dir must fail, not borrow create-cli's link.
+		// resolution from the script dir must fail, not borrow cli-author's link.
 		const checks = await checkFacadePackage({
 			scriptDir: "/nonexistent/script/dir",
 			resolvePackage: (_name, fromDir) =>

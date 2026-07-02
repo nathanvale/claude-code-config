@@ -157,7 +157,7 @@ Config-level (`.fallowrc.json`, first-match-wins over `.fallowrc.jsonc`/`fallow.
 
 ## Fit With This Repo
 
-- Maps cleanly onto our agent-native CLI rubric: structured output, typed contract, machine-actionable next steps, scoped PR audit. Strong candidate for the `create-cli` "good agent CLI" reference set.
+- Maps cleanly onto our agent-native CLI rubric: structured output, typed contract, machine-actionable next steps, scoped PR audit. Strong candidate for the `cli-author` "good agent CLI" reference set.
 - Overlaps our `code-quality.md` runner table (Biome, tsc, bun) but covers a different axis — cross-file duplication, dead code, complexity/coupling — that lint + types do not.
 - Two integration paths to weigh:
   - Bash-invoked `npx fallow ... --format json` behind a runner rule (matches current Biome/tsc/bun pattern; honors the "always pass JSON" convention).

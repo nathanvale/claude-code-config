@@ -15,7 +15,7 @@ convergence: not_started
 - Research explains loop shape only.
 - Findings require local source evidence.
 - Repair source through `skills/create-skill/SKILL.md`.
-- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/create-cli/SKILL.md` first.
+- Add a helper only after real loop files show ledger-shape drift, duplicate-signature confusion, false convergence claims, or privacy-redaction drift; use `skills/cli-author/SKILL.md` first.
 
 ## Driver Commands
 
@@ -56,7 +56,7 @@ One-pass fallback:
 - `skills/create-skill/references/skill-design-decision-runbook.md`.
 - `skills/context-advisor/references/storage-routing.md`.
 - `skills/create-skill/SKILL.md`.
-- `skills/create-cli/SKILL.md`.
+- `skills/cli-author/SKILL.md`.
 - `skills/worktree/SKILL.md`.
 - `skills/worktree/src/command-contract.ts`.
 - `skills/worktree/src/model.ts`.
@@ -74,9 +74,9 @@ One-pass fallback:
 - `<repo>.code-workspace`: generated output. Present artifacts `claude-code-config.code-workspace` and `skills/worktree.code-workspace` were not loaded; source owners are `skills/worktree/src/worktree-engine.ts`, `skills/worktree/src/worktree-discovery.ts`, and `worktree.config.json`.
 - `skills/skill-self-audit-loop/references/loop-proof-methods.md`: no loop helper or shape promotion being changed or proven.
 - `docs/brainstorms/2026-06-10-skill-self-audit-loop-requirements.md`: research anchor for loop design; not needed for creating the `worktree` loop file.
-- `skills/create-cli/references/cli-guidelines.md`: no CLI surface change in this setup pass.
-- `skills/create-cli/references/agent-native-cli-design.md`: no CLI surface change in this setup pass.
-- `skills/create-cli/references/cli-command-facade.md`: no CLI surface change in this setup pass.
+- `skills/cli-author/references/cli-guidelines.md`: no CLI surface change in this setup pass.
+- `skills/cli-author/references/agent-native-cli-design.md`: no CLI surface change in this setup pass.
+- `skills/cli-author/references/cli-command-facade.md`: no CLI surface change in this setup pass.
 - `skills/create-skill/references/skill-io-shape-examples.md`: no skill-source create, repair, or IO-shape decision in this setup pass.
 
 ## Pass Ledger

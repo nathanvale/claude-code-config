@@ -31,8 +31,8 @@ Single entry point for test-runner evolution artifacts and downstream runner-fam
 
 ## Auditor + runner runtime constraints
 
-- [skills/create-cli/references/cli-command-facade.md](../../create-cli/references/cli-command-facade.md)
-- [skills/create-cli/references/agent-native-cli-design.md](../../create-cli/references/agent-native-cli-design.md)
+- [skills/cli-author/references/cli-command-facade.md](../../cli-author/references/cli-command-facade.md)
+- [skills/cli-author/references/agent-native-cli-design.md](../../cli-author/references/agent-native-cli-design.md)
 - [runtime/cli-command-facade/AGENTS.md](../../../runtime/cli-command-facade/AGENTS.md)
 - [runtime/cli-command-facade/CONTEXT.md](../../../runtime/cli-command-facade/CONTEXT.md)
 - [skills/cli-execution-auditor/references/lane-contract-clauses.md](../../cli-execution-auditor/references/lane-contract-clauses.md)

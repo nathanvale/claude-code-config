@@ -72,6 +72,18 @@ _Avoid_: MCP by default, CLI replacement, transport-first design, generic integr
 Package-owned public CLI Interface seam. Use `src/front-doors/<cli-name>/` only when a package has multiple public CLI interfaces or one interface grows enough adapter files to need an owner folder.
 _Avoid_: front-door skill role, universal CLI folder, facade-owned topology
 
+**No-Arg CLI Front Door**:
+The behavior of a public CLI when invoked without subcommands or operands. Default to help or get-started output for stateless CLIs; use a bounded dashboard only when the CLI owns meaningful current state, recent activity, health, or a work queue.
+_Avoid_: CLI Front Door layout, dashboard for every CLI, report dump, personal-productivity helper
+
+**CLI Design Lane**:
+The user-facing design choice between a human-first Basic CLI and an Agent-native CLI. It answers who the interface is shaped for before any runtime enforcement choice.
+_Avoid_: facade-backed lane, implementation language, runtime backend
+
+**Facade-backed Enforcement**:
+Optional runtime-backed enforcement for an Agent-native CLI when reusable facade validation is requested or an existing surface is facade-owned. It is not a separate design lane.
+_Avoid_: Facade-backed CLI lane, generic runtime validation, TypeScript default, Bun default
+
 **Command Contract Locator**:
 Tooling-owned discovery seam that finds package command contracts without making the facade runtime own consumer folders. Current conventional locations are `src/command-contract.ts` and `src/front-doors/*/command-contract.ts`.
 _Avoid_: package manifest by default, nested package metadata, runtime-owned consumer topology

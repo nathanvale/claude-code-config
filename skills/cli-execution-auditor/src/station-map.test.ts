@@ -7,6 +7,10 @@ import {
 	runStationMapAudit,
 	stationFindingsFromMap,
 } from "./station-map";
+import {
+	discoverStationCatalogPaths,
+	frontDoorLabelForPath,
+} from "./command-contract-discovery";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const fixture = (name: string) => join(FIXTURES, name);
@@ -41,6 +45,39 @@ describe("Station Map engine", () => {
 		expect(outcome.findings).toEqual([]);
 	});
 
+	test("discovers root and front-door Branch Station Catalogs in canonical order", async () => {
+		const rootCatalogs = await discoverStationCatalogPaths(fixture("good-station-map-covered"));
+		expect(rootCatalogs.map((path) => path.replace(`${fixture("good-station-map-covered")}/`, ""))).toEqual([
+			"src/branch-station-catalog.ts",
+		]);
+
+		const frontDoorCatalogs = await discoverStationCatalogPaths(fixture("good-front-door-local"));
+		expect(frontDoorCatalogs.map((path) => path.replace(`${fixture("good-front-door-local")}/`, ""))).toEqual([
+			"src/front-doors/admin/branch-station-catalog.ts",
+			"src/front-doors/app/branch-station-catalog.ts",
+		]);
+	});
+
+	test("labels package-level and depth-N front-door source paths", () => {
+		const root = fixture("good-front-door-local");
+
+		expect(frontDoorLabelForPath(root, join(root, "src", "branch-station-catalog.ts"))).toBe(
+			"root",
+		);
+		expect(
+			frontDoorLabelForPath(
+				root,
+				join(root, "src", "front-doors", "admin", "users", "branch-station-catalog.ts"),
+			),
+		).toBe("admin/users");
+		expect(
+			frontDoorLabelForPath(
+				root,
+				`${root}/src/front-doors/admin\\users\\branch-station-catalog.ts`,
+			),
+		).toBe("admin/users");
+	});
+
 	test("non-facade target is skipped before catalog lookup", async () => {
 		const root = await makeTempRoot();
 		await writeFile(
@@ -63,6 +100,8 @@ describe("Station Map engine", () => {
 		});
 
 		expect(outcome.catalogDetected).toBe(true);
+		expect(outcome.catalogPath).toBe("src/branch-station-catalog.ts");
+		expect(outcome.evidencePath).toBe("src/branch-station-evidence.ts");
 		expect(outcome.stationMap?.completeness_claim).toBe("declared_branch_coverage");
 		expect(outcome.stationMap?.stations.map((station) => station.station_id)).toEqual([
 			"check.alpha",
@@ -85,6 +124,7 @@ describe("Station Map engine", () => {
 		expect(outcome.findings).toEqual([
 			{
 				kind: "station",
+				frontDoor: "root",
 				stationId: "check.success",
 				command: "check",
 				findingKind: "missing",
@@ -123,6 +163,49 @@ describe("Station Map engine", () => {
 		};
 
 		expect(stationFindingsFromMap(stationMap)).toEqual([]);
+	});
+
+	test("front-door catalogs project independently and merge into one Station Map", async () => {
+		const outcome = await runStationMapAudit({
+			targetRoot: fixture("good-front-door-local"),
+		});
+
+		expect(outcome.catalogDetected).toBe(true);
+		expect(outcome.frontDoors).toEqual(["admin", "app"]);
+		expect(outcome.catalogPaths).toEqual([
+			"src/front-doors/admin/branch-station-catalog.ts",
+			"src/front-doors/app/branch-station-catalog.ts",
+		]);
+		expect(outcome.evidencePaths).toEqual([
+			"src/front-doors/admin/branch-station-evidence.ts",
+			"src/front-doors/app/branch-station-evidence.ts",
+		]);
+		expect(Object.keys(outcome.stationMap?.commands ?? {})).toEqual(["admin", "app"]);
+		expect(outcome.stationMap?.stations.map((station) => station.station_id)).toEqual([
+			"admin.success",
+			"app.success",
+		]);
+		expect(outcome.findings).toEqual([]);
+	});
+
+	test("duplicate station ids across front-door catalogs become deterministic findings", async () => {
+		const outcome = await runStationMapAudit({
+			targetRoot: fixture("bad-front-door-duplicate-station"),
+		});
+
+		expect(outcome.catalogDetected).toBe(true);
+		expect(outcome.stationMap).toBeUndefined();
+		expect(outcome.findings).toEqual([
+			{
+				kind: "station",
+				frontDoor: "app",
+				stationId: "app.success",
+				command: "app",
+				findingKind: "drifted",
+				summary:
+					"duplicate Branch Station id app.success: declared in both src/front-doors/admin/branch-station-catalog.ts and src/front-doors/app/branch-station-catalog.ts",
+			},
+		]);
 	});
 
 	test("station asset worker reports no evidence when the evidence module has no manifest", async () => {

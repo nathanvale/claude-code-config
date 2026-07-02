@@ -64,7 +64,7 @@ export type CommandFacadeOutputMode =
  * failure, `2` invalid usage. Additional exit codes remain package-owned. The
  * facade requires these entries by default; it does not judge the message text
  * beyond the existing projected-free-text safety scan. This intentionally
- * supersedes the older create-cli reference wording that said the facade does
+ * supersedes the older cli-author reference wording that said the facade does
  * not judge whether exit codes are sensible.
  */
 export const COMMAND_FACADE_BASELINE_EXIT_CODES = ["0", "1", "2"] as const;

@@ -23,7 +23,7 @@ Accepted direction:
 - Build a repo-native Fallow skill instead of installing the official Fallow skill verbatim.
 - Use the official Fallow skill, docs, CLI help, and runtime output as owner sources.
 - Keep exact Fallow command contracts out of `SKILL.md`.
-- Use `create-cli` Agent-native CLI design as the wrapper rubric.
+- Use `cli-author` Agent-native CLI design as the wrapper rubric.
 
 Agent-native lens:
 
@@ -188,7 +188,7 @@ durability:
   escalate_to_plan_if: scripts/fallow-runner is implemented
 agent_native_lane: runner-facade
 evidence:
-  - create-cli requires discoverable, non-interactive, parseable, repairable command surfaces
+  - cli-author requires discoverable, non-interactive, parseable, repairable command surfaces
   - a runner facade proves the command envelope before workflow policy is added
   - Fallow already owns analysis semantics
 ```
@@ -289,7 +289,7 @@ write_policy:
   auto_apply: false
 evidence:
   - Fallow fix can mutate source files
-  - create-cli requires explicit execute mode for destructive or externally visible writes
+  - cli-author requires explicit execute mode for destructive or externally visible writes
   - preview and apply should be separately testable command paths
 ```
 
@@ -341,15 +341,15 @@ durability:
 implementation_path: facade-backed
 create_cli_lane: Facade-backed CLI
 evidence:
-  - user explicitly requested create-cli tool direction
-  - create-cli facade-backed path fits reusable runtime validation and drift proof
+  - user explicitly requested cli-author tool direction
+  - cli-author facade-backed path fits reusable runtime validation and drift proof
   - v1 runner is an agent-facing command surface with stable JSON and repair hints
 ```
 
 Decision:
 
 - Implement the v1 runner as facade-backed from day one.
-- Use `create-cli` as the design front door.
+- Use `cli-author` as the design front door.
 - Name contract, model, engine, discovery, CLI, and test owners before coding.
 - Use facade runtime validation for the command surface.
 
@@ -361,8 +361,8 @@ Rationale:
 
 Consequences:
 
-- Implementation must read `skills/create-cli/references/agent-native-cli-design.md`.
-- Implementation must read `skills/create-cli/references/cli-command-facade.md`.
+- Implementation must read `skills/cli-author/references/agent-native-cli-design.md`.
+- Implementation must read `skills/cli-author/references/cli-command-facade.md`.
 - Exact facade contract shape stays in the facade owner paths, not in skill prose.
 - Tests must prove discovery metadata, rendered help, parser acceptance/rejection, and runtime semantics align.
 - The v1 scope remains Runner Facade; facade-backed does not authorize Workflow Facade behavior.
@@ -507,7 +507,7 @@ runner_modes:
 evidence:
   - evidence modes cover changed work, cleanup, duplication, and complexity
   - explicit apply policy needs a separately testable apply command path
-  - doctor supports create-cli diagnostic capability and run recovery
+  - doctor supports cli-author diagnostic capability and run recovery
 ```
 
 Decision:
