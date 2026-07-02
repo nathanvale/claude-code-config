@@ -73,16 +73,22 @@ come only from capture, closeout, `correlate --execute`, or `purge --execute`.
 ## CLI Commands
 
 Run operational commands from the target repo root. The zero-arg direct runner
-aliases `dashboard`, which emits bounded plain text. Machine-readable commands
-emit raw JSON unless `--plain` is supported and passed. Package-filtered Bun
-commands are package-maintenance helpers and prefix stdout.
+aliases `dashboard`, which emits the human launch surface. Human read commands
+support plain output and `--json` result envelopes. Machine-readable diagnostic
+commands emit raw JSON unless `--plain` is supported and passed.
+Package-filtered Bun commands are package-maintenance helpers and prefix stdout.
 
 Use JSON for automation. Use `--plain` for compact human reading where supported.
-`review --plain` is bounded; use review JSON for full evidence arrays.
+Use `reports`, `report`, `usage`, and `queue` for human dashboard workflows.
+Use `review` and `health` for diagnostics and claim-safe ledger detail.
 
 | Command | Output | Repo targeting | Mutation |
 | --- | --- | --- | --- |
 | `dashboard` | plain | `--repo <path>` | read-only |
+| `reports` | plain, JSON | `--repo <path>` | read-only |
+| `report <report:id>` | plain, JSON | `--repo <path>` | read-only |
+| `usage` | plain, JSON | `--repo <path>` | read-only |
+| `queue` | plain, JSON | `--repo <path>` | read-only |
 | `record` | JSON | current repo only | writes report |
 | `closeout` | JSON | current repo only | writes closeout report |
 | `review` | JSON, plain | `--repo <path>` | read-only |
@@ -97,6 +103,15 @@ Use JSON for automation. Use `--plain` for compact human reading where supported
 bun run skills/skill-feedback/src/skill-feedback-runner.ts
 bun run skills/skill-feedback/src/skill-feedback-runner.ts dashboard
 bun run skills/skill-feedback/src/skill-feedback-runner.ts --help
+
+# Human dashboard paths
+bun run skills/skill-feedback/src/skill-feedback-runner.ts reports --limit 10
+bun run skills/skill-feedback/src/skill-feedback-runner.ts reports --lane all --json
+bun run skills/skill-feedback/src/skill-feedback-runner.ts report report:<id>
+bun run skills/skill-feedback/src/skill-feedback-runner.ts usage --limit 10
+bun run skills/skill-feedback/src/skill-feedback-runner.ts queue --include-weak
+
+# Diagnostics
 bun run skills/skill-feedback/src/skill-feedback-runner.ts health
 bun run skills/skill-feedback/src/skill-feedback-runner.ts health --plain
 
@@ -181,7 +196,9 @@ Private runtime evidence lives under the target repo's gitignored
 - Keep health and review mutation-free.
 - Use `correlate` preview before `correlate --execute`.
 - Use `purge` preview before `purge --execute`.
-- Resolve `report:<id>` through review JSON by `report_id`, not filename.
+- Resolve `report:<id>` through `reports`; unsafe, unknown, or duplicate refs
+  fail before detail rendering.
+- Open low-signal-only refs with `report <report:id> --low-signal`.
 - Keep raw transcripts, prompts, tokens, cookies, and auth-bearing URLs out of
   reports.
 - Change source owners when evidence points to source drift.

@@ -19,6 +19,7 @@ import {
 	type SoftwareLearningReport,
 	type WriterProofContext,
 	buildSoftwareLearningReport,
+	isSafeReportId,
 	parseCloseoutReceipt,
 	parseReceipt,
 } from "./command-contract";
@@ -327,6 +328,9 @@ function parseNormalizedReportHeader(
 	}
 	if (typeof raw.report_id !== "string") {
 		return { kind: "invalid", path: "report_id", reason: "expected_string" };
+	}
+	if (!isSafeReportId(raw.report_id)) {
+		return { kind: "invalid", path: "report_id", reason: "invalid_report_id" };
 	}
 	if (raw.untrusted_evidence !== true) {
 		return {

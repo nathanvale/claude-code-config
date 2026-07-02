@@ -38,6 +38,12 @@ export const SKILL_FEEDBACK_HEALTH_CONTRACT_ID =
 	"skill-feedback.health" as const;
 
 /**
+ * Stable result contract identity for dashboard error envelopes.
+ */
+export const SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID =
+	"skill-feedback.dashboard" as const;
+
+/**
  * Stable result contract identity for inbox purge envelopes.
  */
 export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
@@ -48,6 +54,30 @@ export const SKILL_FEEDBACK_PURGE_CONTRACT_ID =
  */
 export const SKILL_FEEDBACK_CORRELATE_CONTRACT_ID =
 	"skill-feedback.correlate" as const;
+
+/**
+ * Stable result contract identity for recent report list envelopes.
+ */
+export const SKILL_FEEDBACK_REPORTS_CONTRACT_ID =
+	"skill-feedback.reports" as const;
+
+/**
+ * Stable result contract identity for single report detail envelopes.
+ */
+export const SKILL_FEEDBACK_REPORT_CONTRACT_ID =
+	"skill-feedback.report" as const;
+
+/**
+ * Stable result contract identity for skill usage envelopes.
+ */
+export const SKILL_FEEDBACK_USAGE_CONTRACT_ID =
+	"skill-feedback.usage" as const;
+
+/**
+ * Stable result contract identity for improvement queue envelopes.
+ */
+export const SKILL_FEEDBACK_QUEUE_CONTRACT_ID =
+	"skill-feedback.queue" as const;
 
 /**
  * Schema version for the private correlation witness artifact family.
@@ -75,6 +105,11 @@ export const SKILL_FEEDBACK_REVIEW_RESULT_SCHEMA_VERSION = "8" as const;
 export const SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION = "4" as const;
 
 /**
+ * Schema version for dashboard-specific error envelopes.
+ */
+export const SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION = "1" as const;
+
+/**
  * Schema version for purge-specific result envelopes.
  */
 export const SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION = "1" as const;
@@ -83,6 +118,27 @@ export const SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION = "1" as const;
  * Schema version for correlation repair result envelopes.
  */
 export const SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION = "1" as const;
+
+/**
+ * Schema version for recent report list result envelopes.
+ */
+export const SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION = "1" as const;
+
+/**
+ * Schema version for single report detail result envelopes.
+ */
+export const SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION = "1" as const;
+
+/**
+ * Schema version for skill usage result envelopes.
+ */
+export const SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION = "1" as const;
+
+/**
+ * Schema version for improvement queue result envelopes.
+ */
+export const SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION = "1" as const;
+
 
 /**
  * Cost attribution stance for v1 report cards.
@@ -445,6 +501,34 @@ const SKILL_FEEDBACK_CORRELATE_ACTION_IDS = [
 	"repair_complete",
 ] as const;
 const SKILL_FEEDBACK_CORRELATE_SIDE_EFFECTS = ["read", "write"] as const;
+const SKILL_FEEDBACK_REPORT_LANES = ["primary", "low-signal"] as const;
+const SKILL_FEEDBACK_REPORT_LANE_FILTERS = [
+	"primary",
+	"low-signal",
+	"all",
+] as const;
+const SKILL_FEEDBACK_REPORT_SOURCE_FILTERS = [
+	"hook_capture",
+	"driver_closeout",
+	"all",
+] as const;
+const SKILL_FEEDBACK_REPORT_MISSING_FIELDS = [
+	"goal",
+	"friction",
+	"verification_burden",
+	"touched_surfaces",
+	"observations",
+	"evidence_gaps",
+] as const;
+const SKILL_FEEDBACK_QUEUE_TARGET_TYPES = [
+	"owner_path",
+	"skill",
+	"no_build",
+] as const;
+const SKILL_FEEDBACK_QUEUE_EVIDENCE_STRENGTHS = [
+	"strong",
+	"weak",
+] as const;
 
 /**
  * V2 ledger verification levels include `unknown` for runtime-only evidence.
@@ -476,6 +560,42 @@ export type SkillFeedbackCorrelateActionId =
 
 export type SkillFeedbackCorrelateSideEffect =
 	(typeof SKILL_FEEDBACK_CORRELATE_SIDE_EFFECTS)[number];
+
+/**
+ * Physical inbox lane a report was read from.
+ */
+export type SkillFeedbackReportLane =
+	(typeof SKILL_FEEDBACK_REPORT_LANES)[number];
+
+/**
+ * Human command lane filter; `all` is an explicit low-signal opt-in.
+ */
+export type SkillFeedbackReportLaneFilter =
+	(typeof SKILL_FEEDBACK_REPORT_LANE_FILTERS)[number];
+
+/**
+ * Human command evidence-source filter.
+ */
+export type SkillFeedbackReportSourceFilter =
+	(typeof SKILL_FEEDBACK_REPORT_SOURCE_FILTERS)[number];
+
+/**
+ * Detail-view field that was absent from the report card.
+ */
+export type SkillFeedbackReportMissingField =
+	(typeof SKILL_FEEDBACK_REPORT_MISSING_FIELDS)[number];
+
+/**
+ * Improvement queue target granularity.
+ */
+export type SkillFeedbackQueueTargetType =
+	(typeof SKILL_FEEDBACK_QUEUE_TARGET_TYPES)[number];
+
+/**
+ * Evidence strength label for queue rows.
+ */
+export type SkillFeedbackQueueEvidenceStrength =
+	(typeof SKILL_FEEDBACK_QUEUE_EVIDENCE_STRENGTHS)[number];
 
 /**
  * Software Learning Report evidence source.
@@ -1247,6 +1367,149 @@ export type SkillFeedbackCorrelateResultData = {
 };
 
 /**
+ * Filters echoed by the recent report list result.
+ */
+export type SkillFeedbackReportsFilters = {
+	limit: number;
+	lane: SkillFeedbackReportLaneFilter;
+	source: SkillFeedbackReportSourceFilter;
+	skill?: string;
+};
+
+/**
+ * Bounded row for human report browsing.
+ */
+export type SkillFeedbackReportListRow = {
+	report_ref: string;
+	report_id: string;
+	detail_command: string;
+	generated_ts: string;
+	skill: string;
+	outcome: SkillFeedbackOutcome;
+	goal?: string;
+	lane: SkillFeedbackReportLane;
+	source: EvidenceSource;
+	low_signal_reason_id?: string;
+};
+
+/**
+ * Result payload for `skill-feedback reports`.
+ */
+export type SkillFeedbackReportsResultData = {
+	contract: typeof SKILL_FEEDBACK_REPORTS_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION;
+	filters: SkillFeedbackReportsFilters;
+	counts: {
+		primary_count: number;
+		low_signal_count: number;
+		returned_count: number;
+		skipped_unsafe_count: number;
+		invalid_count: number;
+	};
+	reports: readonly SkillFeedbackReportListRow[];
+	read_target?: ReviewReadTarget;
+};
+
+/**
+ * Result payload for `skill-feedback report <report:id>`.
+ */
+export type SkillFeedbackReportDetailData = {
+	contract: typeof SKILL_FEEDBACK_REPORT_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION;
+	report_ref: string;
+	report_id: string;
+	lane: SkillFeedbackReportLane;
+	low_signal_reason_id?: string;
+	generated_ts: string;
+	skill: string;
+	outcome: SkillFeedbackOutcome;
+	source: EvidenceSource;
+	correlation_status: CorrelationStatus;
+	goal?: string;
+	friction?: FrictionSignal;
+	verification_burden?: VerificationBurden;
+	touched_surfaces: readonly ReportCardTarget[];
+	observations: readonly ReportCardObservation[];
+	evidence_gaps: readonly EvidenceGap[];
+	missing_fields: readonly SkillFeedbackReportMissingField[];
+	read_target?: ReviewReadTarget;
+};
+
+/**
+ * Ranked skill row for the usage portfolio view.
+ */
+export type SkillFeedbackUsageSkillRow = {
+	skill: string;
+	primary_count: number;
+	low_signal_count: number;
+	outcomes: Record<SkillFeedbackOutcome, number>;
+	closeout_count: number;
+	capture_count: number;
+	last_seen_generated_ts?: string;
+	common_friction?: FrictionCategory;
+	common_verification_burden?: VerificationBurdenLevel;
+	report_refs: readonly string[];
+};
+
+/**
+ * Result payload for `skill-feedback usage`.
+ */
+export type SkillFeedbackUsageResultData = {
+	contract: typeof SKILL_FEEDBACK_USAGE_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION;
+	filters: {
+		limit: number;
+		skill?: string;
+	};
+	counts: {
+		primary_count: number;
+		low_signal_count: number;
+		returned_count: number;
+	};
+	skills: readonly SkillFeedbackUsageSkillRow[];
+	read_target?: ReviewReadTarget;
+};
+
+/**
+ * Improvement candidate row derived from review-ledger evidence.
+ */
+export type SkillFeedbackQueueRow = {
+	target_type: SkillFeedbackQueueTargetType;
+	target: string;
+	reason: string;
+	evidence_strength: SkillFeedbackQueueEvidenceStrength;
+	skill?: string;
+	report_refs: readonly string[];
+	next_safe_action: string;
+};
+
+/**
+ * Result payload for `skill-feedback queue`.
+ */
+export type SkillFeedbackQueueResultData = {
+	contract: typeof SKILL_FEEDBACK_QUEUE_CONTRACT_ID;
+	schema_version: typeof SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION;
+	filters: {
+		limit: number;
+		include_weak: boolean;
+		skill?: string;
+		owner_path?: string;
+	};
+	counts: {
+		primary_count: number;
+		low_signal_count: number;
+		returned_count: number;
+		weak_available_count: number;
+	};
+	rows: readonly SkillFeedbackQueueRow[];
+	no_build?: {
+		reason: string;
+		next_safe_action: string;
+	};
+	read_target?: ReviewReadTarget;
+};
+
+/**
  * Result of validating v2 ReviewResultData from an unknown JSON value.
  */
 export type ParseReviewResultDataResult =
@@ -1263,6 +1526,22 @@ export type ParsePurgeResultDataResult =
 
 export type ParseCorrelateResultDataResult =
 	| { kind: "ok"; data: SkillFeedbackCorrelateResultData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParseReportsResultDataResult =
+	| { kind: "ok"; data: SkillFeedbackReportsResultData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParseReportDetailDataResult =
+	| { kind: "ok"; data: SkillFeedbackReportDetailData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParseUsageResultDataResult =
+	| { kind: "ok"; data: SkillFeedbackUsageResultData }
+	| { kind: "invalid"; path: string; reason: string };
+
+export type ParseQueueResultDataResult =
+	| { kind: "ok"; data: SkillFeedbackQueueResultData }
 	| { kind: "invalid"; path: string; reason: string };
 
 /**
@@ -1816,6 +2095,118 @@ const HEALTH_RESULT_FIELDS = [
 	"next_action",
 	"read_target",
 ] as const;
+const REPORTS_RESULT_FIELDS = [
+	"contract",
+	"schema_version",
+	"filters",
+	"counts",
+	"reports",
+	"read_target",
+] as const;
+const REPORT_LIST_FILTER_FIELDS = [
+	"limit",
+	"lane",
+	"source",
+	"skill",
+] as const;
+const REPORTS_COUNTS_FIELDS = [
+	"primary_count",
+	"low_signal_count",
+	"returned_count",
+	"skipped_unsafe_count",
+	"invalid_count",
+] as const;
+const REPORT_LIST_ROW_FIELDS = [
+	"report_ref",
+	"report_id",
+	"detail_command",
+	"generated_ts",
+	"skill",
+	"outcome",
+	"goal",
+	"lane",
+	"source",
+	"low_signal_reason_id",
+] as const;
+const REPORT_DETAIL_FIELDS = [
+	"contract",
+	"schema_version",
+	"report_ref",
+	"report_id",
+	"lane",
+	"low_signal_reason_id",
+	"generated_ts",
+	"skill",
+	"outcome",
+	"source",
+	"correlation_status",
+	"goal",
+	"friction",
+	"verification_burden",
+	"touched_surfaces",
+	"observations",
+	"evidence_gaps",
+	"missing_fields",
+	"read_target",
+] as const;
+const USAGE_RESULT_FIELDS = [
+	"contract",
+	"schema_version",
+	"filters",
+	"counts",
+	"skills",
+	"read_target",
+] as const;
+const USAGE_FILTER_FIELDS = ["limit", "skill"] as const;
+const USAGE_COUNTS_FIELDS = [
+	"primary_count",
+	"low_signal_count",
+	"returned_count",
+] as const;
+const USAGE_ROW_FIELDS = [
+	"skill",
+	"primary_count",
+	"low_signal_count",
+	"outcomes",
+	"closeout_count",
+	"capture_count",
+	"last_seen_generated_ts",
+	"common_friction",
+	"common_verification_burden",
+	"report_refs",
+] as const;
+const USAGE_OUTCOME_FIELDS = ["confirmed", "failed", "ambiguous"] as const;
+const QUEUE_RESULT_FIELDS = [
+	"contract",
+	"schema_version",
+	"filters",
+	"counts",
+	"rows",
+	"no_build",
+	"read_target",
+] as const;
+const QUEUE_FILTER_FIELDS = [
+	"limit",
+	"include_weak",
+	"skill",
+	"owner_path",
+] as const;
+const QUEUE_COUNTS_FIELDS = [
+	"primary_count",
+	"low_signal_count",
+	"returned_count",
+	"weak_available_count",
+] as const;
+const QUEUE_ROW_FIELDS = [
+	"target_type",
+	"target",
+	"reason",
+	"evidence_strength",
+	"skill",
+	"report_refs",
+	"next_safe_action",
+] as const;
+const QUEUE_NO_BUILD_FIELDS = ["reason", "next_safe_action"] as const;
 const HEALTH_COUNTS_FIELDS = [
 	"primary",
 	"low_signal",
@@ -2181,6 +2572,10 @@ export function isSafeCorrelationWitnessFileName(fileName: string): boolean {
 	return /^witness_[0-9a-f]{16}\.json$/.test(fileName);
 }
 
+export function isSafeReportId(value: string): boolean {
+	return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+}
+
 export function correlationWitnessRelativePath(witnessId: string): string {
 	if (!/^witness_[0-9a-f]{16}$/.test(witnessId)) {
 		throw new Error("invalid correlation witness id");
@@ -2395,6 +2790,165 @@ export function parseCorrelateResultData(
 		if (target) return target;
 	}
 	return { kind: "ok", data: raw as SkillFeedbackCorrelateResultData };
+}
+
+// Covered by package tests; keep human JSON contracts at boundary.
+// fallow-ignore-next-line complexity
+export function parseReportsResultData(
+	raw: unknown,
+): ParseReportsResultDataResult {
+	const reports = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(reports)) return reports;
+	const error = [
+		validateAllowedKeys(reports, new Set(REPORTS_RESULT_FIELDS)),
+		validateExpectedValue(
+			reports.contract,
+			SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+		validateExpectedValue(
+			reports.schema_version,
+			SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
+			"schema_version",
+			"unsupported",
+		),
+		validateReportListFilters(reports.filters),
+		validateReportsCounts(reports.counts),
+		validateReportListRows(reports.reports),
+		"read_target" in reports
+			? validateHealthReadTarget(reports.read_target)
+			: undefined,
+	].find(isReviewResultValidationError);
+	if (error) return error;
+	return { kind: "ok", data: reports as SkillFeedbackReportsResultData };
+}
+
+// Covered by package tests; keep human JSON contracts at boundary.
+// fallow-ignore-next-line complexity
+export function parseReportDetailData(
+	raw: unknown,
+): ParseReportDetailDataResult {
+	const detail = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(detail)) return detail;
+	const error = [
+		validateAllowedKeys(detail, new Set(REPORT_DETAIL_FIELDS)),
+		validateExpectedValue(
+			detail.contract,
+			SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+		validateExpectedValue(
+			detail.schema_version,
+			SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+			"schema_version",
+			"unsupported",
+		),
+		validateReportIdAndRef(detail.report_id, detail.report_ref, "report_id"),
+		isSkillFeedbackReportLane(detail.lane)
+			? undefined
+			: reviewResultError("lane", "invalid_lane"),
+		"low_signal_reason_id" in detail
+			? validateReviewString(
+					detail.low_signal_reason_id,
+					"low_signal_reason_id",
+				)
+			: undefined,
+		validateReviewString(detail.generated_ts, "generated_ts"),
+		validateReviewString(detail.skill, "skill"),
+		isSkillFeedbackOutcome(detail.outcome)
+			? undefined
+			: reviewResultError("outcome", "invalid_outcome"),
+		isEvidenceSource(detail.source)
+			? undefined
+			: reviewResultError("source", "invalid_source"),
+		isCorrelationStatus(detail.correlation_status)
+			? undefined
+			: reviewResultError("correlation_status", "invalid_correlation_status"),
+		"goal" in detail
+			? validateReviewString(detail.goal, "goal")
+			: undefined,
+		"friction" in detail
+			? validateReportFriction(detail.friction, "friction")
+			: undefined,
+		"verification_burden" in detail
+			? validateReportVerificationBurden(
+					detail.verification_burden,
+					"verification_burden",
+				)
+			: undefined,
+		validateReportTargets(detail.touched_surfaces, "touched_surfaces"),
+		validateReportObservations(detail.observations),
+		validateEvidenceGaps(detail.evidence_gaps, "evidence_gaps"),
+		validateReportMissingFields(detail.missing_fields, "missing_fields"),
+		"read_target" in detail
+			? validateHealthReadTarget(detail.read_target)
+			: undefined,
+	].find(isReviewResultValidationError);
+	if (error) return error;
+	return { kind: "ok", data: detail as SkillFeedbackReportDetailData };
+}
+
+// Covered by package tests; keep human JSON contracts at boundary.
+// fallow-ignore-next-line complexity
+export function parseUsageResultData(raw: unknown): ParseUsageResultDataResult {
+	const usage = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(usage)) return usage;
+	const error = [
+		validateAllowedKeys(usage, new Set(USAGE_RESULT_FIELDS)),
+		validateExpectedValue(
+			usage.contract,
+			SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+		validateExpectedValue(
+			usage.schema_version,
+			SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
+			"schema_version",
+			"unsupported",
+		),
+		validateUsageFilters(usage.filters),
+		validateUsageCounts(usage.counts),
+		validateUsageRows(usage.skills),
+		"read_target" in usage
+			? validateHealthReadTarget(usage.read_target)
+			: undefined,
+	].find(isReviewResultValidationError);
+	if (error) return error;
+	return { kind: "ok", data: usage as SkillFeedbackUsageResultData };
+}
+
+// Covered by package tests; keep human JSON contracts at boundary.
+// fallow-ignore-next-line complexity
+export function parseQueueResultData(raw: unknown): ParseQueueResultDataResult {
+	const queue = requireReviewRecord(raw, "$");
+	if (isReviewResultValidationError(queue)) return queue;
+	const error = [
+		validateAllowedKeys(queue, new Set(QUEUE_RESULT_FIELDS)),
+		validateExpectedValue(
+			queue.contract,
+			SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+			"contract",
+			"unsupported",
+		),
+		validateExpectedValue(
+			queue.schema_version,
+			SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
+			"schema_version",
+			"unsupported",
+		),
+		validateQueueFilters(queue.filters),
+		validateQueueCounts(queue.counts),
+		validateQueueRows(queue.rows),
+		"no_build" in queue ? validateQueueNoBuild(queue.no_build) : undefined,
+		"read_target" in queue
+			? validateHealthReadTarget(queue.read_target)
+			: undefined,
+	].find(isReviewResultValidationError);
+	if (error) return error;
+	return { kind: "ok", data: queue as SkillFeedbackQueueResultData };
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3640,6 +4194,396 @@ function validateCorrelateSideEffects(
 	}
 }
 
+// Covered by parseReportsResultData filter contract tests.
+// fallow-ignore-next-line complexity, unused-function
+function validateReportListFilters(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const filters = requireReviewRecord(raw, "filters");
+	if (isReviewResultValidationError(filters)) return filters;
+	return [
+		validateAllowedKeys(filters, new Set(REPORT_LIST_FILTER_FIELDS), "filters"),
+		validateReviewNumber(filters.limit, "filters.limit"),
+		isSkillFeedbackReportLaneFilter(filters.lane)
+			? undefined
+			: reviewResultError("filters.lane", "invalid_lane"),
+		isSkillFeedbackReportSourceFilter(filters.source)
+			? undefined
+			: reviewResultError("filters.source", "invalid_source"),
+		"skill" in filters
+			? validateReviewString(filters.skill, "filters.skill")
+			: undefined,
+	].find(isReviewResultValidationError);
+}
+
+function validateReportsCounts(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const counts = requireReviewRecord(raw, "counts");
+	if (isReviewResultValidationError(counts)) return counts;
+	return [
+		validateAllowedKeys(counts, new Set(REPORTS_COUNTS_FIELDS), "counts"),
+		validateNumberFields(counts, REPORTS_COUNTS_FIELDS, "counts"),
+	].find(isReviewResultValidationError);
+}
+
+// Covered by package tests; row continuation is a human navigation contract.
+// fallow-ignore-next-line complexity
+function validateReportListRows(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	// Covered by parseReportsResultData malformed-row package tests.
+	// fallow-ignore-next-line complexity, unused-function
+	return validateRecordArray(raw, "reports", (row, path) => {
+		const unknown = validateAllowedKeys(row, new Set(REPORT_LIST_ROW_FIELDS), path);
+		if (unknown) return unknown;
+		const ref = validateReportIdAndRef(
+			row.report_id,
+			row.report_ref,
+			`${path}.report_id`,
+		);
+		if (ref) return ref;
+		if (!isSkillFeedbackReportLane(row.lane)) {
+			return reviewResultError(`${path}.lane`, "invalid_lane");
+		}
+		const expectedCommand =
+			row.lane === "low-signal"
+				? `skill-feedback report ${row.report_ref} --low-signal`
+				: `skill-feedback report ${row.report_ref}`;
+		if (row.detail_command !== expectedCommand) {
+			return reviewResultError(
+				`${path}.detail_command`,
+				"invalid_detail_command",
+			);
+		}
+		for (const field of ["generated_ts", "skill"] as const) {
+			const error = validateReviewString(row[field], `${path}.${field}`);
+			if (error) return error;
+		}
+		if (!isSkillFeedbackOutcome(row.outcome)) {
+			return reviewResultError(`${path}.outcome`, "invalid_outcome");
+		}
+		if (!isEvidenceSource(row.source)) {
+			return reviewResultError(`${path}.source`, "invalid_source");
+		}
+		if ("goal" in row) {
+			const error = validateReviewString(row.goal, `${path}.goal`);
+			if (error) return error;
+		}
+		if ("low_signal_reason_id" in row) {
+			const error = validateReviewString(
+				row.low_signal_reason_id,
+				`${path}.low_signal_reason_id`,
+			);
+			if (error) return error;
+		}
+	});
+}
+
+function validateReportIdAndRef(
+	rawId: unknown,
+	rawRef: unknown,
+	idPath: string,
+): ReviewResultValidationError | undefined {
+	if (typeof rawId !== "string") return reviewResultError(idPath, "expected_string");
+	if (!isSafeReportId(rawId)) return reviewResultError(idPath, "invalid_report_id");
+	const refPath = idPath.replace(/report_id$/, "report_ref");
+	if (rawRef !== `report:${rawId}`) {
+		return reviewResultError(refPath, "invalid_report_ref");
+	}
+}
+
+function validateReportFriction(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const friction = parseFrictionSignal(raw, path);
+	if (isInvalidCloseoutParseResult(friction)) {
+		return reviewResultError(friction.path, friction.reason);
+	}
+}
+
+function validateReportVerificationBurden(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const burden = parseVerificationBurden(raw, path);
+	if (isInvalidCloseoutParseResult(burden)) {
+		return reviewResultError(burden.path, burden.reason);
+	}
+}
+
+function validateReportTargets(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const targets = parseTargets(raw, path, 5);
+	if (isInvalidCloseoutParseResult(targets)) {
+		return reviewResultError(targets.path, targets.reason);
+	}
+}
+
+function validateReportObservations(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const observations = parseObservations(raw);
+	if (isInvalidCloseoutParseResult(observations)) {
+		return reviewResultError(observations.path, observations.reason);
+	}
+}
+
+// Covered by parseReportDetailData evidence-gap package tests.
+// fallow-ignore-next-line complexity, unused-function
+function validateEvidenceGaps(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError(path, "expected_array");
+	for (const [index, gapRaw] of raw.entries()) {
+		const gapPath = `${path}[${index}]`;
+		const gap = requireReviewRecord(gapRaw, gapPath);
+		if (isReviewResultValidationError(gap)) return gap;
+		const unknown = validateAllowedKeys(
+			gap,
+			new Set(["code", "path", "message"]),
+			gapPath,
+		);
+		if (unknown) return unknown;
+		if (!isEvidenceGapCode(gap.code)) {
+			return reviewResultError(`${gapPath}.code`, "invalid_gap_code");
+		}
+		for (const field of ["path", "message"] as const) {
+			const error = validateReviewString(gap[field], `${gapPath}.${field}`);
+			if (error) return error;
+		}
+	}
+}
+
+function validateReportMissingFields(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError(path, "expected_array");
+	for (const [index, value] of raw.entries()) {
+		if (!isSkillFeedbackReportMissingField(value)) {
+			return reviewResultError(`${path}[${index}]`, "invalid_missing_field");
+		}
+	}
+}
+
+function validateUsageFilters(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const filters = requireReviewRecord(raw, "filters");
+	if (isReviewResultValidationError(filters)) return filters;
+	return [
+		validateAllowedKeys(filters, new Set(USAGE_FILTER_FIELDS), "filters"),
+		validateReviewNumber(filters.limit, "filters.limit"),
+		"skill" in filters
+			? validateReviewString(filters.skill, "filters.skill")
+			: undefined,
+	].find(isReviewResultValidationError);
+}
+
+function validateUsageCounts(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const counts = requireReviewRecord(raw, "counts");
+	if (isReviewResultValidationError(counts)) return counts;
+	return [
+		validateAllowedKeys(counts, new Set(USAGE_COUNTS_FIELDS), "counts"),
+		validateNumberFields(counts, USAGE_COUNTS_FIELDS, "counts"),
+	].find(isReviewResultValidationError);
+}
+
+// Covered by package tests; keep row shape strict for JSON consumers.
+// fallow-ignore-next-line complexity
+function validateUsageRows(raw: unknown): ReviewResultValidationError | undefined {
+	// Covered by parseUsageResultData malformed-row package tests.
+	// fallow-ignore-next-line complexity, unused-function
+	return validateRecordArray(raw, "skills", (row, path) => {
+		const unknown = validateAllowedKeys(row, new Set(USAGE_ROW_FIELDS), path);
+		if (unknown) return unknown;
+		for (const field of ["skill"] as const) {
+			const error = validateReviewString(row[field], `${path}.${field}`);
+			if (error) return error;
+		}
+		for (const field of [
+			"primary_count",
+			"low_signal_count",
+			"closeout_count",
+			"capture_count",
+		] as const) {
+			const error = validateReviewNumber(row[field], `${path}.${field}`);
+			if (error) return error;
+		}
+		const outcomes = validateUsageOutcomes(row.outcomes, `${path}.outcomes`);
+		if (outcomes) return outcomes;
+		if ("last_seen_generated_ts" in row) {
+			const error = validateReviewString(
+				row.last_seen_generated_ts,
+				`${path}.last_seen_generated_ts`,
+			);
+			if (error) return error;
+		}
+		if (
+			"common_friction" in row &&
+			!isFrictionCategory(row.common_friction)
+		) {
+			return reviewResultError(`${path}.common_friction`, "invalid_friction");
+		}
+		if (
+			"common_verification_burden" in row &&
+			!isVerificationBurdenLevel(row.common_verification_burden)
+		) {
+			return reviewResultError(
+				`${path}.common_verification_burden`,
+				"invalid_level",
+			);
+		}
+		const refs = validateReportRefArray(row.report_refs, `${path}.report_refs`);
+		if (refs) return refs;
+	});
+}
+
+function validateUsageOutcomes(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	const outcomes = requireReviewRecord(raw, path);
+	if (isReviewResultValidationError(outcomes)) return outcomes;
+	return [
+		validateAllowedKeys(outcomes, new Set(USAGE_OUTCOME_FIELDS), path),
+		validateNumberFields(outcomes, USAGE_OUTCOME_FIELDS, path),
+	].find(isReviewResultValidationError);
+}
+
+function validateQueueFilters(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const filters = requireReviewRecord(raw, "filters");
+	if (isReviewResultValidationError(filters)) return filters;
+	return [
+		validateAllowedKeys(filters, new Set(QUEUE_FILTER_FIELDS), "filters"),
+		validateReviewNumber(filters.limit, "filters.limit"),
+		validateReviewBoolean(filters.include_weak, "filters.include_weak"),
+		"skill" in filters
+			? validateReviewString(filters.skill, "filters.skill")
+			: undefined,
+		"owner_path" in filters
+			? validateOwnerPathField(filters.owner_path, "filters.owner_path")
+			: undefined,
+	].find(isReviewResultValidationError);
+}
+
+function validateQueueCounts(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const counts = requireReviewRecord(raw, "counts");
+	if (isReviewResultValidationError(counts)) return counts;
+	return [
+		validateAllowedKeys(counts, new Set(QUEUE_COUNTS_FIELDS), "counts"),
+		validateNumberFields(counts, QUEUE_COUNTS_FIELDS, "counts"),
+	].find(isReviewResultValidationError);
+}
+
+// Covered by package tests; queue rows drive human change selection.
+// fallow-ignore-next-line complexity
+function validateQueueRows(raw: unknown): ReviewResultValidationError | undefined {
+	// Covered by parseQueueResultData malformed-row package tests.
+	// fallow-ignore-next-line complexity, unused-function
+	return validateRecordArray(raw, "rows", (row, path) => {
+		const unknown = validateAllowedKeys(row, new Set(QUEUE_ROW_FIELDS), path);
+		if (unknown) return unknown;
+		if (!isSkillFeedbackQueueTargetType(row.target_type)) {
+			return reviewResultError(`${path}.target_type`, "invalid_target_type");
+		}
+		const target =
+			row.target_type === "owner_path"
+				? validateOwnerPathField(row.target, `${path}.target`)
+				: validateReviewString(row.target, `${path}.target`);
+		if (target) return target;
+		if (!isSkillFeedbackQueueEvidenceStrength(row.evidence_strength)) {
+			return reviewResultError(
+				`${path}.evidence_strength`,
+				"invalid_evidence_strength",
+			);
+		}
+		for (const field of ["reason", "next_safe_action"] as const) {
+			const error = validateReviewString(row[field], `${path}.${field}`);
+			if (error) return error;
+		}
+		if ("skill" in row) {
+			const error = validateReviewString(row.skill, `${path}.skill`);
+			if (error) return error;
+		}
+		const refs = validateReportRefArray(row.report_refs, `${path}.report_refs`);
+		if (refs) return refs;
+	});
+}
+
+// Covered through parseReportsResultData, parseUsageResultData, and
+// parseQueueResultData malformed-array package tests.
+// fallow-ignore-next-line complexity, unused-function
+function validateRecordArray(
+	raw: unknown,
+	path: string,
+	validateRecord: (
+		record: Record<string, unknown>,
+		path: string,
+	) => ReviewResultValidationError | undefined,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError(path, "expected_array");
+	for (const [index, rowRaw] of raw.entries()) {
+		const rowPath = `${path}[${index}]`;
+		const row = requireReviewRecord(rowRaw, rowPath);
+		if (isReviewResultValidationError(row)) return row;
+		const error = validateRecord(row, rowPath);
+		if (error) return error;
+	}
+}
+
+function validateQueueNoBuild(
+	raw: unknown,
+): ReviewResultValidationError | undefined {
+	const noBuild = requireReviewRecord(raw, "no_build");
+	if (isReviewResultValidationError(noBuild)) return noBuild;
+	return [
+		validateAllowedKeys(noBuild, new Set(QUEUE_NO_BUILD_FIELDS), "no_build"),
+		validateReviewString(noBuild.reason, "no_build.reason"),
+		validateReviewString(
+			noBuild.next_safe_action,
+			"no_build.next_safe_action",
+		),
+	].find(isReviewResultValidationError);
+}
+
+// Covered by parseUsageResultData and parseQueueResultData ref-array tests.
+// fallow-ignore-next-line complexity, unused-function
+function validateReportRefArray(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	if (!Array.isArray(raw)) return reviewResultError(path, "expected_array");
+	for (const [index, ref] of raw.entries()) {
+		if (typeof ref !== "string") {
+			return reviewResultError(`${path}[${index}]`, "expected_string");
+		}
+		const id = ref.startsWith("report:") ? ref.slice("report:".length) : "";
+		if (!isSafeReportId(id)) {
+			return reviewResultError(`${path}[${index}]`, "invalid_report_ref");
+		}
+	}
+}
+
+function validateOwnerPathField(
+	raw: unknown,
+	path: string,
+): ReviewResultValidationError | undefined {
+	if (typeof raw !== "string") return reviewResultError(path, "expected_string");
+	if (!isValidOwnerPath(raw)) return reviewResultError(path, "invalid_owner_path");
+}
+
 function validateNumberFields<const Field extends readonly string[]>(
 	record: Record<string, unknown>,
 	fields: Field,
@@ -3996,6 +4940,62 @@ function isEvidenceSource(value: unknown): value is EvidenceSource {
 	return (SKILL_FEEDBACK_EVIDENCE_SOURCES as readonly unknown[]).includes(value);
 }
 
+function isCorrelationStatus(value: unknown): value is CorrelationStatus {
+	return (
+		SKILL_FEEDBACK_CORRELATION_STATUSES as readonly unknown[]
+	).includes(value);
+}
+
+function isEvidenceGapCode(value: unknown): value is EvidenceGapCode {
+	return (EVIDENCE_GAP_CODES as readonly unknown[]).includes(value);
+}
+
+function isSkillFeedbackReportLane(
+	value: unknown,
+): value is SkillFeedbackReportLane {
+	return (SKILL_FEEDBACK_REPORT_LANES as readonly unknown[]).includes(value);
+}
+
+function isSkillFeedbackReportLaneFilter(
+	value: unknown,
+): value is SkillFeedbackReportLaneFilter {
+	return (SKILL_FEEDBACK_REPORT_LANE_FILTERS as readonly unknown[]).includes(
+		value,
+	);
+}
+
+function isSkillFeedbackReportSourceFilter(
+	value: unknown,
+): value is SkillFeedbackReportSourceFilter {
+	return (SKILL_FEEDBACK_REPORT_SOURCE_FILTERS as readonly unknown[]).includes(
+		value,
+	);
+}
+
+function isSkillFeedbackReportMissingField(
+	value: unknown,
+): value is SkillFeedbackReportMissingField {
+	return (SKILL_FEEDBACK_REPORT_MISSING_FIELDS as readonly unknown[]).includes(
+		value,
+	);
+}
+
+function isSkillFeedbackQueueTargetType(
+	value: unknown,
+): value is SkillFeedbackQueueTargetType {
+	return (SKILL_FEEDBACK_QUEUE_TARGET_TYPES as readonly unknown[]).includes(
+		value,
+	);
+}
+
+function isSkillFeedbackQueueEvidenceStrength(
+	value: unknown,
+): value is SkillFeedbackQueueEvidenceStrength {
+	return (
+		SKILL_FEEDBACK_QUEUE_EVIDENCE_STRENGTHS as readonly unknown[]
+	).includes(value);
+}
+
 function isReviewOpenReason(value: unknown): value is ReviewOpenReason {
 	return (REVIEW_OPEN_REASONS as readonly unknown[]).includes(value);
 }
@@ -4188,6 +5188,10 @@ const SKILL_FEEDBACK_COMMANDS = [
 	"record",
 	"closeout",
 	"dashboard",
+	"reports",
+	"report",
+	"usage",
+	"queue",
 	"review",
 	"health",
 	"purge",
@@ -4204,6 +5208,10 @@ type SkillFeedbackMutation =
 	| "capture"
 	| "closeout"
 	| "dashboard"
+	| "reports"
+	| "report"
+	| "usage"
+	| "queue"
 	| "review"
 	| "health"
 	| "purge"
@@ -4288,6 +5296,14 @@ const healthResultContract = {
 	SkillFeedbackCommandContract["resultContract"]
 >;
 
+const dashboardResultContract = {
+	id: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+	kind: "Software Learning Report dashboard error envelope.",
+	schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
 const purgeResultContract = {
 	id: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	kind: "Software Learning Report inbox purge envelope.",
@@ -4300,6 +5316,38 @@ const correlateResultContract = {
 	id: SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
 	kind: "Software Learning Report correlation repair envelope.",
 	schema_version: SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
+const reportsResultContract = {
+	id: SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	kind: "Software Learning Report recent report list envelope.",
+	schema_version: SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
+const reportResultContract = {
+	id: SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	kind: "Software Learning Report detail envelope.",
+	schema_version: SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
+const usageResultContract = {
+	id: SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+	kind: "Software Learning Report skill usage envelope.",
+	schema_version: SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
+} as const satisfies NonNullable<
+	SkillFeedbackCommandContract["resultContract"]
+>;
+
+const queueResultContract = {
+	id: SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	kind: "Software Learning Report improvement queue envelope.",
+	schema_version: SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
 } as const satisfies NonNullable<
 	SkillFeedbackCommandContract["resultContract"]
 >;
@@ -4334,6 +5382,30 @@ const dashboardExitCodes = {
 	"2": "Invalid dashboard usage.",
 } as const satisfies SkillFeedbackCommandContract["exitCodes"];
 
+const reportsExitCodes = {
+	"0": "Report list rendered without mutating the inbox.",
+	"1": "Report list blocked by unsafe inbox state or target resolution failure.",
+	"2": "Invalid reports usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const reportExitCodes = {
+	"0": "Report detail rendered without mutating the inbox.",
+	"1": "Report detail blocked by unsafe inbox state or target resolution failure.",
+	"2": "Invalid report usage or report ref.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const usageExitCodes = {
+	"0": "Skill usage rendered without mutating the inbox.",
+	"1": "Skill usage blocked by unsafe inbox state or target resolution failure.",
+	"2": "Invalid usage command usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
+const queueExitCodes = {
+	"0": "Improvement queue rendered without mutating the inbox.",
+	"1": "Improvement queue blocked by unsafe inbox state or target resolution failure.",
+	"2": "Invalid queue usage.",
+} as const satisfies SkillFeedbackCommandContract["exitCodes"];
+
 const purgeExitCodes = {
 	"0": "Purge preview completed or selected safe reports were deleted.",
 	"1": "Purge blocked by unsafe inbox state or deletion failure.",
@@ -4361,6 +5433,81 @@ const dashboardFlags = {
 	"--repo": {
 		type: "string",
 		description: "Resolve the read target from this path's repository root.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const humanJsonReadFlags = {
+	"--json": {
+		type: "boolean",
+		description: "Emit a machine-readable JSON envelope.",
+	},
+	"--repo": {
+		type: "string",
+		description: "Resolve the read target from this path's repository root.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const reportsFlags = {
+	...humanJsonReadFlags,
+	"--limit": {
+		type: "string",
+		description: "Maximum rows to return. Default: 10. Max: 100.",
+	},
+	"--skill": {
+		type: "string",
+		description: "Only list reports for this skill identity.",
+	},
+	"--lane": {
+		type: "enum",
+		values: SKILL_FEEDBACK_REPORT_LANE_FILTERS,
+		description: "Report lane to list: primary, low-signal, or all. Default: primary.",
+	},
+	"--source": {
+		type: "enum",
+		values: SKILL_FEEDBACK_REPORT_SOURCE_FILTERS,
+		description:
+			"Evidence source to list: hook_capture, driver_closeout, or all. Default: all.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const reportFlags = {
+	...humanJsonReadFlags,
+	"--low-signal": {
+		type: "boolean",
+		description:
+			"Allow opening a ref that exists only in the low-signal lane.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const usageFlags = {
+	...humanJsonReadFlags,
+	"--limit": {
+		type: "string",
+		description: "Maximum skill rows to return. Default: 10. Max: 100.",
+	},
+	"--skill": {
+		type: "string",
+		description: "Only show usage for this skill identity.",
+	},
+} as const satisfies SkillFeedbackCommandContract["flags"];
+
+const queueFlags = {
+	...humanJsonReadFlags,
+	"--limit": {
+		type: "string",
+		description: "Maximum queue rows to return. Default: 10. Max: 100.",
+	},
+	"--skill": {
+		type: "string",
+		description: "Only include rows supported by this skill.",
+	},
+	"--owner-path": {
+		type: "string",
+		description: "Only include rows for this repo-relative owner path.",
+	},
+	"--include-weak": {
+		type: "boolean",
+		description: "Include weak or sparse evidence rows and label them weak.",
 	},
 } as const satisfies SkillFeedbackCommandContract["flags"];
 
@@ -4458,8 +5605,73 @@ export const skillFeedbackContracts = defineCommandFacadeContract(
 			executionModes: ["normal"],
 			outputModes: ["plain"],
 			interactivity: "none",
+			resultContract: dashboardResultContract,
 			flags: dashboardFlags,
 			exitCodes: dashboardExitCodes,
+		},
+		reports: {
+			script: "skill-feedback-runner",
+			summary: "Browse recent Software Learning Reports.",
+			usage: [
+				"reports [--json] [--limit <count>] [--skill <id>] [--lane primary|low-signal|all] [--source hook_capture|driver_closeout|all] [--repo <path>]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "reports",
+			sideEffects: ["read"],
+			executionModes: ["normal"],
+			outputModes: ["plain", "json"],
+			interactivity: "none",
+			resultContract: reportsResultContract,
+			flags: reportsFlags,
+			exitCodes: reportsExitCodes,
+		},
+		report: {
+			script: "skill-feedback-runner",
+			summary: "Open one Software Learning Report by report:<id>.",
+			usage: ["report <report:id|id> [--json] [--low-signal] [--repo <path>]"],
+			json: true,
+			audience: "agent",
+			mutation: "report",
+			sideEffects: ["read"],
+			executionModes: ["normal"],
+			outputModes: ["plain", "json"],
+			interactivity: "none",
+			resultContract: reportResultContract,
+			flags: reportFlags,
+			exitCodes: reportExitCodes,
+		},
+		usage: {
+			script: "skill-feedback-runner",
+			summary: "Compare skills by report count, outcome, friction, and last seen time.",
+			usage: ["usage [--json] [--limit <count>] [--skill <id>] [--repo <path>]"],
+			json: true,
+			audience: "agent",
+			mutation: "usage",
+			sideEffects: ["read"],
+			executionModes: ["normal"],
+			outputModes: ["plain", "json"],
+			interactivity: "none",
+			resultContract: usageResultContract,
+			flags: usageFlags,
+			exitCodes: usageExitCodes,
+		},
+		queue: {
+			script: "skill-feedback-runner",
+			summary: "Inspect evidence-backed skill or owner-path improvement candidates.",
+			usage: [
+				"queue [--json] [--limit <count>] [--skill <id>] [--owner-path <path>] [--include-weak] [--repo <path>]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "queue",
+			sideEffects: ["read"],
+			executionModes: ["normal"],
+			outputModes: ["plain", "json"],
+			interactivity: "none",
+			resultContract: queueResultContract,
+			flags: queueFlags,
+			exitCodes: queueExitCodes,
 		},
 		review: {
 			script: "skill-feedback-runner",

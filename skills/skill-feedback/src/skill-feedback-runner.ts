@@ -29,11 +29,20 @@ import {
 	SKILL_FEEDBACK_CORRELATE_CONTRACT_ID,
 	SKILL_FEEDBACK_CORRELATE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_DECISION_READINESS_SURFACES,
+	SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 	SKILL_FEEDBACK_REVIEW_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_LANES,
 	SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
+	SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+	SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_OUTCOMES,
 	SKILL_FEEDBACK_SCHEMA_VERSION,
 	type CaptureMetadata,
@@ -45,26 +54,40 @@ import {
 	type CorrelationWitnessHealth,
 	type CorrelationStatus,
 	type EvidenceGap,
+	type FrictionCategory,
 	type FrictionSignal,
 	type HealthClaimReadiness,
-	type HealthCorrelation,
 	type HealthResultData,
 	type HealthWarning,
+	type NormalizedSoftwareLearningReport,
 	type Receipt,
 	type ReportCardSoftwareLearningReport,
 	type ReviewReadTarget,
 	type ReportCardTarget,
 	type ReviewClaimReadiness,
 	type ReviewResultData,
+	type SkillFeedbackQueueEvidenceStrength,
+	type SkillFeedbackQueueResultData,
 	type SkillFeedbackPurgeResultData,
 	type SkillFeedbackPurgeLane,
 	type SkillFeedbackOutcome,
+	type SkillFeedbackReportDetailData,
+	type SkillFeedbackReportLane,
+	type SkillFeedbackReportLaneFilter,
+	type SkillFeedbackReportListRow,
+	type SkillFeedbackReportMissingField,
+	type SkillFeedbackReportSourceFilter,
+	type SkillFeedbackReportsResultData,
+	type SkillFeedbackUsageResultData,
+	type SkillFeedbackUsageSkillRow,
 	type SoftwareLearningReport,
 	type WriterProofHealth,
 	type WriterProofWriteStatus,
+	type VerificationBurdenLevel,
 	buildSoftwareLearningReport,
 	createWriterProof,
 	deriveWriterOwnedSkillRunId,
+	isSafeReportId,
 	parseCloseoutReceipt,
 	parseReceipt,
 	skillFeedbackContracts,
@@ -79,6 +102,7 @@ import {
 } from "./redaction";
 import {
 	LOW_SIGNAL_INBOX_DIR,
+	type ReviewInboxRead,
 	type SkillFeedbackPurgeCandidate,
 	type WriterProofKeyRead,
 	isLowSignalCodexStopReport,
@@ -136,6 +160,10 @@ const CLOSEOUT_RECEIPT_DOCS_URL =
 	"https://github.com/nathanvale/claude-code-config/blob/main/skills/skill-feedback/references/closeout-receipt.md";
 const SKILL_FEEDBACK_HELP_COMMANDS = [
 	"dashboard",
+	"reports",
+	"report",
+	"usage",
+	"queue",
 	"record",
 	"closeout",
 	"review",
@@ -145,12 +173,6 @@ const SKILL_FEEDBACK_HELP_COMMANDS = [
 ] as const satisfies readonly (keyof typeof skillFeedbackContracts)[];
 
 type HealthCliOutputMode = "json" | "plain" | "dashboard";
-type HealthDashboardRow = {
-	label: string;
-	detail: string;
-	good: boolean;
-};
-
 type SkillFeedbackErrorRecoverability = "change_input" | "repair_state";
 
 type SkillFeedbackErrorHint<
@@ -216,9 +238,14 @@ type SkillFeedbackResultContractId =
 	| typeof SKILL_FEEDBACK_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_REVIEW_CONTRACT_ID
+	| typeof SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_HEALTH_CONTRACT_ID
 	| typeof SKILL_FEEDBACK_PURGE_CONTRACT_ID
-	| typeof SKILL_FEEDBACK_CORRELATE_CONTRACT_ID;
+	| typeof SKILL_FEEDBACK_CORRELATE_CONTRACT_ID
+	| typeof SKILL_FEEDBACK_REPORTS_CONTRACT_ID
+	| typeof SKILL_FEEDBACK_REPORT_CONTRACT_ID
+	| typeof SKILL_FEEDBACK_USAGE_CONTRACT_ID
+	| typeof SKILL_FEEDBACK_QUEUE_CONTRACT_ID;
 
 export type SkillFeedbackProcessResult = {
 	exitCode: number;
@@ -1041,14 +1068,16 @@ async function readHealthProcessResult(
 			readWriterProofKey,
 			applyVerifiedCorrelationWitnesses,
 		});
+		const healthData = buildHealthResultData({
+			inbox,
+			nowIso: runtime.nowIso(),
+			readTarget,
+		});
 		return healthProcessResult(
 			runId,
-			buildHealthResultData({
-				inbox,
-				nowIso: runtime.nowIso(),
-				readTarget,
-			}),
+			healthData,
 			outputMode,
+			inbox,
 		);
 	} catch (error) {
 		return healthFailedError(runId, error);
@@ -1091,8 +1120,9 @@ function healthProcessResult(
 	runId: string,
 	data: HealthResultData,
 	outputMode: HealthCliOutputMode,
+	inbox?: ReviewInboxRead,
 ): SkillFeedbackProcessResult {
-	if (outputMode === "dashboard") return healthDashboardResult(data);
+	if (outputMode === "dashboard") return healthDashboardResult(data, inbox);
 	if (outputMode === "plain") return healthPlainResult(data);
 	if (data.inbox_status === "unsafe") return healthUnsafeResult(runId, data);
 	return healthSuccessResult(runId, data);
@@ -1100,10 +1130,11 @@ function healthProcessResult(
 
 function healthDashboardResult(
 	data: HealthResultData,
+	inbox: ReviewInboxRead | undefined,
 ): SkillFeedbackProcessResult {
 	return {
 		exitCode: data.inbox_status === "unsafe" ? RUNTIME_FAILURE_EXIT_CODE : 0,
-		stdout: renderHealthDashboard(data),
+		stdout: renderHealthDashboard(data, inbox),
 		stderr: "",
 	};
 }
@@ -1185,6 +1216,994 @@ function healthFailedError(
 			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 		},
 	);
+}
+
+type SkillFeedbackReportEntry = {
+	report: NormalizedSoftwareLearningReport;
+	lane: SkillFeedbackReportLane;
+	lowSignalReasonId?: string;
+};
+
+type SkillFeedbackReportsOptions = {
+	json: boolean;
+	limit: number;
+	lane: SkillFeedbackReportLaneFilter;
+	source: SkillFeedbackReportSourceFilter;
+	skill?: string;
+	targetPath?: string;
+};
+
+type SkillFeedbackReportDetailOptions = {
+	json: boolean;
+	ref: string;
+	lowSignal: boolean;
+	targetPath?: string;
+};
+
+type SkillFeedbackUsageOptions = {
+	json: boolean;
+	limit: number;
+	skill?: string;
+	targetPath?: string;
+};
+
+type SkillFeedbackQueueOptions = {
+	json: boolean;
+	limit: number;
+	includeWeak: boolean;
+	skill?: string;
+	ownerPath?: string;
+	targetPath?: string;
+};
+
+type HumanCommandName = "reports" | "report" | "usage" | "queue";
+
+type ParsedHumanCommandFlag =
+	| { ok: true; nextIndex: number }
+	| { ok: false; message: string };
+
+type ParseHumanCommandArgsResult<TOptions> =
+	| { ok: true; options: TOptions }
+	| { ok: false; message: string };
+
+type SkillFeedbackHumanReadContext = {
+	runtime: SkillFeedbackRuntime;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
+	inbox: ReviewInboxRead;
+};
+
+/**
+ * Render the recent report list without mutating inbox state.
+ *
+ * @param options - Runtime, run id, and report-list filters
+ * @returns Process-shaped result for CLI and station tests
+ */
+// Covered by Branch Station process tests; keep command orchestration local.
+// fallow-ignore-next-line complexity
+export async function listSkillFeedbackReports(
+	options: {
+		runtime?: SkillFeedbackRuntime;
+		runId?: string;
+		reports: SkillFeedbackReportsOptions;
+	},
+): Promise<SkillFeedbackProcessResult> {
+	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
+	const runId = options.runId ?? "skill-feedback-reports";
+	const context = await readHumanInboxContext(
+		runId,
+		runtime,
+		options.reports.targetPath,
+		SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	);
+	if (!context.ok) return context.result;
+	if (context.inbox.inboxRootStatus === "unsafe") {
+		return inboxUnsafeError(
+			runId,
+			SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+			"reports_inbox_unsafe",
+			"Skill-feedback reports could not safely read the inbox.",
+		);
+	}
+	const data = buildReportsResultData({
+		inbox: context.inbox,
+		readTarget: context.readTarget,
+		options: options.reports,
+	});
+	if (options.reports.json) {
+		return jsonSuccessResult(runId, data, "reports-ready", "Report list is ready.");
+	}
+	return {
+		exitCode: 0,
+		stdout: renderPlainReports(data),
+		stderr: "",
+	};
+}
+
+/**
+ * Render one report detail by stable `report:<id>` navigation ref.
+ *
+ * @param options - Runtime, run id, and report-detail options
+ * @returns Process-shaped result for CLI and station tests
+ */
+// Covered by Branch Station process tests; keep command orchestration local.
+// fallow-ignore-next-line complexity
+export async function showSkillFeedbackReport(
+	options: {
+		runtime?: SkillFeedbackRuntime;
+		runId?: string;
+		report: SkillFeedbackReportDetailOptions;
+	},
+): Promise<SkillFeedbackProcessResult> {
+	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
+	const runId = options.runId ?? "skill-feedback-report";
+	const reportId = normalizeReportRef(options.report.ref);
+	if (!reportId.ok) {
+		return reportRefError(runId, "report_ref_invalid", reportId.message);
+	}
+	const context = await readHumanInboxContext(
+		runId,
+		runtime,
+		options.report.targetPath,
+		SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	);
+	if (!context.ok) return context.result;
+	if (context.inbox.inboxRootStatus === "unsafe") {
+		return inboxUnsafeError(
+			runId,
+			SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+			"report_inbox_unsafe",
+			"Skill-feedback report could not safely read the inbox.",
+		);
+	}
+	const resolved = resolveReportDetail(
+		context.inbox,
+		reportId.value,
+		options.report.lowSignal,
+	);
+	if (!resolved.ok) {
+		return reportRefError(runId, resolved.code, resolved.message);
+	}
+	const data = buildReportDetailData({
+		entry: resolved.entry,
+		readTarget: context.readTarget,
+	});
+	if (options.report.json) {
+		return jsonSuccessResult(runId, data, "report-ready", "Report detail is ready.");
+	}
+	return {
+		exitCode: 0,
+		stdout: renderPlainReportDetail(data),
+		stderr: "",
+	};
+}
+
+/**
+ * Render the skill-only usage portfolio from inbox evidence.
+ *
+ * @param options - Runtime, run id, and usage filters
+ * @returns Process-shaped result for CLI and station tests
+ */
+// Covered by Branch Station process tests; keep command orchestration local.
+// fallow-ignore-next-line complexity
+export async function showSkillFeedbackUsage(
+	options: {
+		runtime?: SkillFeedbackRuntime;
+		runId?: string;
+		usage: SkillFeedbackUsageOptions;
+	},
+): Promise<SkillFeedbackProcessResult> {
+	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
+	const runId = options.runId ?? "skill-feedback-usage";
+	const context = await readHumanInboxContext(
+		runId,
+		runtime,
+		options.usage.targetPath,
+		SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+	);
+	if (!context.ok) return context.result;
+	if (context.inbox.inboxRootStatus === "unsafe") {
+		return inboxUnsafeError(
+			runId,
+			SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+			"usage_inbox_unsafe",
+			"Skill-feedback usage could not safely read the inbox.",
+		);
+	}
+	const data = buildUsageResultData({
+		inbox: context.inbox,
+		readTarget: context.readTarget,
+		options: options.usage,
+	});
+	if (options.usage.json) {
+		return jsonSuccessResult(runId, data, "usage-ready", "Skill usage is ready.");
+	}
+	return {
+		exitCode: 0,
+		stdout: renderPlainUsage(data),
+		stderr: "",
+	};
+}
+
+/**
+ * Render the improvement queue from review-ledger evidence.
+ *
+ * @param options - Runtime, run id, and queue filters
+ * @returns Process-shaped result for CLI and station tests
+ */
+// Covered by Branch Station process tests; keep command orchestration local.
+// fallow-ignore-next-line complexity
+export async function showSkillFeedbackQueue(
+	options: {
+		runtime?: SkillFeedbackRuntime;
+		runId?: string;
+		queue: SkillFeedbackQueueOptions;
+	},
+): Promise<SkillFeedbackProcessResult> {
+	const runtime = options.runtime ?? createDefaultSkillFeedbackRuntime();
+	const runId = options.runId ?? "skill-feedback-queue";
+	const context = await readHumanInboxContext(
+		runId,
+		runtime,
+		options.queue.targetPath,
+		SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	);
+	if (!context.ok) return context.result;
+	if (context.inbox.inboxRootStatus === "unsafe") {
+		return inboxUnsafeError(
+			runId,
+			SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+			"queue_inbox_unsafe",
+			"Skill-feedback queue could not safely read the inbox.",
+		);
+	}
+	const review = buildReviewResultData({
+		inbox: context.inbox,
+		nowIso: runtime.nowIso(),
+		readTarget: context.readTarget,
+		pilotStartedAt: await readPilotStartedAt(context.readTarget.repoRoot, runtime),
+	});
+	const data = buildQueueResultData({
+		inbox: context.inbox,
+		review,
+		readTarget: context.readTarget,
+		options: options.queue,
+	});
+	if (options.queue.json) {
+		return jsonSuccessResult(runId, data, "queue-ready", "Improvement queue is ready.");
+	}
+	return {
+		exitCode: 0,
+		stdout: renderPlainQueue(data),
+		stderr: "",
+	};
+}
+
+async function readHumanInboxContext(
+	runId: string,
+	runtime: SkillFeedbackRuntime,
+	targetPath: string | undefined,
+	contract: SkillFeedbackResultContractId,
+): Promise<
+	| ({ ok: true } & SkillFeedbackHumanReadContext)
+	| { ok: false; result: SkillFeedbackProcessResult }
+> {
+	const readTarget = await runtime.resolveReadTarget(targetPath);
+	if (!readTarget.ok) {
+		return {
+			ok: false,
+			result: errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				readTarget.code,
+				readTarget.message,
+				{
+					recoverability: "repair_state",
+					hint: readTarget.hint,
+					contract,
+					data: readTargetFailureData(readTarget),
+				},
+			),
+		};
+	}
+	try {
+		const inbox = await readReviewInbox({
+			repoRoot: readTarget.repoRoot,
+			runtime,
+			readWriterProofKey,
+			applyVerifiedCorrelationWitnesses,
+		});
+		return { ok: true, runtime, readTarget, inbox };
+	} catch (error) {
+		if (isPermissionErrorCode(error)) {
+			return {
+				ok: false,
+				result: errorResult(
+					runId,
+					RUNTIME_FAILURE_EXIT_CODE,
+					"read_inbox_permission_denied",
+					"Skill-feedback could not read the inbox because permissions denied access.",
+					{
+						recoverability: "repair_state",
+						hint: "Inspect .skill-feedback/ ownership and permissions before retrying.",
+						contract,
+					},
+				),
+			};
+		}
+		return {
+			ok: false,
+			result: errorResult(
+				runId,
+				RUNTIME_FAILURE_EXIT_CODE,
+				"read_inbox_failed",
+				"Skill-feedback could not read the inbox.",
+				{
+					recoverability: "repair_state",
+					hint: "Inspect .skill-feedback/ ownership and unreadable artifacts before retrying.",
+					contract,
+				},
+			),
+		};
+	}
+}
+
+function inboxUnsafeError(
+	runId: string,
+	contract: SkillFeedbackResultContractId,
+	code: string,
+	message: string,
+): SkillFeedbackProcessResult {
+	return errorResult(runId, RUNTIME_FAILURE_EXIT_CODE, code, message, {
+		recoverability: "repair_state",
+		hint: "Inspect inbox health and repair unsafe .skill-feedback/ paths before retrying.",
+		contract,
+	});
+}
+
+function jsonSuccessResult<TData extends object>(
+	runId: string,
+	data: TData,
+	actionId: string,
+	summary: string,
+): SkillFeedbackProcessResult {
+	const envelope = createCliRuntimeSuccessEnvelope({
+		run_id: runId,
+		data,
+		runtime_actions: [{ id: actionId, summary, side_effects: ["read"] }],
+		continuation: { next_action_id: actionId },
+	}) satisfies CliRuntimeSuccessEnvelope<TData>;
+	return {
+		exitCode: 0,
+		stdout: `${JSON.stringify(envelope)}\n`,
+		stderr: "",
+	};
+}
+
+function buildReportsResultData(input: {
+	inbox: ReviewInboxRead;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
+	options: SkillFeedbackReportsOptions;
+}): SkillFeedbackReportsResultData {
+	const reports = reportEntries(input.inbox)
+		.filter((entry) => reportsLaneMatches(entry, input.options.lane))
+		.filter((entry) => reportsSourceMatches(entry, input.options.source))
+		.filter((entry) => reportsSkillMatches(entry, input.options.skill))
+		.sort(compareReportEntriesNewestFirst)
+		.slice(0, input.options.limit)
+		.map(reportListRow);
+	return {
+		contract: SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+		schema_version: SKILL_FEEDBACK_REPORTS_RESULT_SCHEMA_VERSION,
+		filters: {
+			limit: input.options.limit,
+			lane: input.options.lane,
+			source: input.options.source,
+			...(input.options.skill ? { skill: input.options.skill } : {}),
+		},
+		counts: {
+			primary_count: input.inbox.primaryReports.length,
+			low_signal_count: input.inbox.lowSignalReports.length,
+			returned_count: reports.length,
+			skipped_unsafe_count: input.inbox.skippedUnsafeCount,
+			invalid_count: input.inbox.invalidCount,
+		},
+		reports,
+		...(input.readTarget.explicit
+			? { read_target: readTargetDiagnosticData(input.readTarget) }
+			: {}),
+	};
+}
+
+// Covered by Branch Station process tests; keep result shape near renderer.
+// fallow-ignore-next-line complexity
+function buildReportDetailData(input: {
+	entry: SkillFeedbackReportEntry;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
+}): SkillFeedbackReportDetailData {
+	const report = input.entry.report;
+	return {
+		contract: SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+		schema_version: SKILL_FEEDBACK_REPORT_RESULT_SCHEMA_VERSION,
+		report_ref: reportRef(report.report_id),
+		report_id: report.report_id,
+		lane: input.entry.lane,
+		...(input.entry.lowSignalReasonId
+			? { low_signal_reason_id: input.entry.lowSignalReasonId }
+			: {}),
+		generated_ts: report.generated_ts,
+		skill: report.skill,
+		outcome: report.outcome,
+		source: report.evidence_source,
+		correlation_status: report.correlation_status,
+		...(report.goal ? { goal: report.goal } : {}),
+		...(report.friction ? { friction: report.friction } : {}),
+		...(report.verification_burden
+			? { verification_burden: report.verification_burden }
+			: {}),
+		touched_surfaces: report.touched_surfaces,
+		observations: report.observations,
+		evidence_gaps: report.evidence_gaps,
+		missing_fields: reportDetailMissingFields(report),
+		...(input.readTarget.explicit
+			? { read_target: readTargetDiagnosticData(input.readTarget) }
+			: {}),
+	};
+}
+
+// Covered by Branch Station process tests; keep result shape near renderer.
+// fallow-ignore-next-line complexity
+function buildUsageResultData(input: {
+	inbox: ReviewInboxRead;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
+	options: SkillFeedbackUsageOptions;
+}): SkillFeedbackUsageResultData {
+	const groups = new Map<string, SkillFeedbackReportEntry[]>();
+	for (const entry of reportEntries(input.inbox)) {
+		if (input.options.skill && entry.report.skill !== input.options.skill) continue;
+		const bucket = groups.get(entry.report.skill);
+		if (bucket) bucket.push(entry);
+		else groups.set(entry.report.skill, [entry]);
+	}
+	const skills = [...groups.entries()]
+		.map(([skill, entries]) => usageSkillRow(skill, entries))
+		.sort(compareUsageRows)
+		.slice(0, input.options.limit);
+	return {
+		contract: SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+		schema_version: SKILL_FEEDBACK_USAGE_RESULT_SCHEMA_VERSION,
+		filters: {
+			limit: input.options.limit,
+			...(input.options.skill ? { skill: input.options.skill } : {}),
+		},
+		counts: {
+			primary_count: input.inbox.primaryReports.length,
+			low_signal_count: input.inbox.lowSignalReports.length,
+			returned_count: skills.length,
+		},
+		skills,
+		...(input.readTarget.explicit
+			? { read_target: readTargetDiagnosticData(input.readTarget) }
+			: {}),
+	};
+}
+
+// Covered by Branch Station process tests; keep result shape near renderer.
+// fallow-ignore-next-line complexity
+function buildQueueResultData(input: {
+	inbox: ReviewInboxRead;
+	review: ReviewResultData;
+	readTarget: Extract<ReadTargetResolution, { ok: true }>;
+	options: SkillFeedbackQueueOptions;
+}): SkillFeedbackQueueResultData {
+	const reportSkillByRef = reportSkillMap(input.inbox);
+	const strongRows = queueOwnerRows(input.review, reportSkillByRef, "strong");
+	const weakRows = queueOwnerRows(input.review, reportSkillByRef, "weak");
+	const filteredStrongRows = filterQueueRows(strongRows, input.options);
+	const filteredWeakRows = filterQueueRows(weakRows, input.options);
+	const fallbackRows =
+		input.options.ownerPath === undefined && filteredStrongRows.length === 0
+			? filterQueueRows(
+					queueSkillFallbackRows(input.inbox, input.options.includeWeak),
+					input.options,
+				)
+			: [];
+	const candidateRows = input.options.includeWeak
+		? [...filteredStrongRows, ...filteredWeakRows, ...fallbackRows]
+		: [...filteredStrongRows, ...fallbackRows];
+	const rows = candidateRows.slice(0, input.options.limit);
+	const filterApplied =
+		input.options.skill !== undefined || input.options.ownerPath !== undefined;
+	const noBuild =
+		rows.length === 0 && !filterApplied
+			? {
+					reason:
+						"Current reports do not justify a skill or owner-doc change.",
+					next_safe_action:
+						"Record no-build or inspect supporting reports before changing source.",
+				}
+			: undefined;
+	return {
+		contract: SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+		schema_version: SKILL_FEEDBACK_QUEUE_RESULT_SCHEMA_VERSION,
+		filters: {
+			limit: input.options.limit,
+			include_weak: input.options.includeWeak,
+			...(input.options.skill ? { skill: input.options.skill } : {}),
+			...(input.options.ownerPath ? { owner_path: input.options.ownerPath } : {}),
+		},
+		counts: {
+			primary_count: input.inbox.primaryReports.length,
+			low_signal_count: input.inbox.lowSignalReports.length,
+			returned_count: rows.length,
+			weak_available_count: weakRows.length,
+		},
+		rows,
+		...(noBuild ? { no_build: noBuild } : {}),
+		...(input.readTarget.explicit
+			? { read_target: readTargetDiagnosticData(input.readTarget) }
+			: {}),
+	};
+}
+
+function filterQueueRows(
+	rows: SkillFeedbackQueueResultData["rows"],
+	options: Pick<SkillFeedbackQueueOptions, "skill" | "ownerPath">,
+): SkillFeedbackQueueResultData["rows"] {
+	return rows
+		.filter((row) => queueSkillMatches(row, options.skill))
+		.filter((row) => queueOwnerMatches(row, options.ownerPath));
+}
+
+function reportEntries(inbox: ReviewInboxRead): SkillFeedbackReportEntry[] {
+	return [
+		...inbox.primaryReports.map((report) => ({
+			report,
+			lane: "primary" as const,
+		})),
+		...inbox.lowSignalReports.map((entry) => ({
+			report: entry.report,
+			lane: "low-signal" as const,
+			lowSignalReasonId: entry.reasonId,
+		})),
+	];
+}
+
+function reportRef(reportId: string): string {
+	return `report:${reportId}`;
+}
+
+function reportsLaneMatches(
+	entry: SkillFeedbackReportEntry,
+	lane: SkillFeedbackReportLaneFilter,
+): boolean {
+	return lane === "all" || entry.lane === lane;
+}
+
+function reportsSourceMatches(
+	entry: SkillFeedbackReportEntry,
+	source: SkillFeedbackReportSourceFilter,
+): boolean {
+	return source === "all" || entry.report.evidence_source === source;
+}
+
+function reportsSkillMatches(
+	entry: SkillFeedbackReportEntry,
+	skill: string | undefined,
+): boolean {
+	return skill === undefined || entry.report.skill === skill;
+}
+
+function compareReportEntriesNewestFirst(
+	left: SkillFeedbackReportEntry,
+	right: SkillFeedbackReportEntry,
+): number {
+	return (
+		reportTime(right.report.generated_ts) - reportTime(left.report.generated_ts) ||
+		left.report.report_id.localeCompare(right.report.report_id)
+	);
+}
+
+function reportTime(generatedTs: string | undefined): number {
+	const parsed = Date.parse(generatedTs ?? "");
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function reportListRow(entry: SkillFeedbackReportEntry): SkillFeedbackReportListRow {
+	const report = entry.report;
+	return {
+		report_ref: reportRef(report.report_id),
+		report_id: report.report_id,
+		detail_command:
+			entry.lane === "low-signal"
+				? `skill-feedback report ${reportRef(report.report_id)} --low-signal`
+				: `skill-feedback report ${reportRef(report.report_id)}`,
+		generated_ts: report.generated_ts,
+		skill: report.skill,
+		outcome: report.outcome,
+		...(report.goal ? { goal: report.goal } : {}),
+		lane: entry.lane,
+		source: report.evidence_source,
+		...(entry.lowSignalReasonId
+			? { low_signal_reason_id: entry.lowSignalReasonId }
+			: {}),
+	};
+}
+
+function normalizeReportRef(
+	rawRef: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+	const trimmed = rawRef.trim();
+	const reportId = trimmed.startsWith("report:")
+		? trimmed.slice("report:".length)
+		: trimmed;
+	if (!isSafeReportId(reportId)) {
+		return {
+			ok: false,
+			message: "Report refs must be shaped as report:<id> and cannot contain paths.",
+		};
+	}
+	return { ok: true, value: reportId };
+}
+
+// Covered by Branch Station process tests; resolver errors are branch stations.
+// fallow-ignore-next-line complexity
+function resolveReportDetail(
+	inbox: ReviewInboxRead,
+	reportId: string,
+	allowLowSignal: boolean,
+):
+	| { ok: true; entry: SkillFeedbackReportEntry }
+	| { ok: false; code: string; message: string } {
+	const primaryMatches = reportEntries(inbox).filter(
+		(entry) => entry.lane === "primary" && entry.report.report_id === reportId,
+	);
+	const lowSignalMatches = reportEntries(inbox).filter(
+		(entry) => entry.lane === "low-signal" && entry.report.report_id === reportId,
+	);
+	if (primaryMatches.length > 1 || primaryMatches.length + lowSignalMatches.length > 1) {
+		return {
+			ok: false,
+			code: "report_ref_duplicate",
+			message: `Report ref ${reportRef(reportId)} matches multiple reports.`,
+		};
+	}
+	if (primaryMatches.length === 1 && !allowLowSignal) {
+		return { ok: true, entry: primaryMatches[0] };
+	}
+	if (primaryMatches.length === 1) return { ok: true, entry: primaryMatches[0] };
+	if (lowSignalMatches.length === 1 && !allowLowSignal) {
+		return {
+			ok: false,
+			code: "report_low_signal_requires_opt_in",
+			message: `Report ref ${reportRef(reportId)} exists only in the low-signal lane; rerun with --low-signal to inspect it.`,
+		};
+	}
+	if (lowSignalMatches.length === 1) return { ok: true, entry: lowSignalMatches[0] };
+	return {
+		ok: false,
+		code: "report_ref_not_found",
+		message: `Report ref ${reportRef(reportId)} was not found in readable inbox reports.`,
+	};
+}
+
+function reportRefError(
+	runId: string,
+	code: string,
+	message: string,
+): SkillFeedbackProcessResult {
+	return errorResult(runId, USAGE_EXIT_CODE, code, message, {
+		recoverability: "change_input",
+		hint: "Use skill-feedback reports to copy a report:<id> ref, then retry.",
+		contract: SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	});
+}
+
+// Covered by Branch Station process tests; missing-field rendering is explicit.
+// fallow-ignore-next-line complexity
+function reportDetailMissingFields(
+	report: SkillFeedbackReportEntry["report"],
+): SkillFeedbackReportMissingField[] {
+	const missing: SkillFeedbackReportMissingField[] = [];
+	if (!report.goal) missing.push("goal");
+	if (!report.friction) missing.push("friction");
+	if (!report.verification_burden) missing.push("verification_burden");
+	if (report.touched_surfaces.length === 0) missing.push("touched_surfaces");
+	if (report.observations.length === 0) missing.push("observations");
+	if (report.evidence_gaps.length === 0) missing.push("evidence_gaps");
+	return missing;
+}
+
+function usageSkillRow(
+	skill: string,
+	entries: readonly SkillFeedbackReportEntry[],
+): SkillFeedbackUsageSkillRow {
+	const primary = entries.filter((entry) => entry.lane === "primary");
+	const lowSignal = entries.filter((entry) => entry.lane === "low-signal");
+	const outcomes: Record<SkillFeedbackOutcome, number> = {
+		confirmed: 0,
+		failed: 0,
+		ambiguous: 0,
+	};
+	for (const entry of primary) outcomes[entry.report.outcome] += 1;
+	const lastSeen = entries
+		.map((entry) => entry.report.generated_ts)
+		.sort((left, right) => reportTime(right) - reportTime(left))[0];
+	return {
+		skill,
+		primary_count: primary.length,
+		low_signal_count: lowSignal.length,
+		outcomes,
+		closeout_count: primary.filter(
+			(entry) => entry.report.evidence_source === "driver_closeout",
+		).length,
+		capture_count: primary.filter(
+			(entry) => entry.report.evidence_source === "hook_capture",
+		).length,
+		...(lastSeen ? { last_seen_generated_ts: lastSeen } : {}),
+		...commonUsageSignals(primary),
+		report_refs: primary
+			.sort(compareReportEntriesNewestFirst)
+			.slice(0, REVIEW_PLAIN_EVIDENCE_REF_LIMIT)
+			.map((entry) => reportRef(entry.report.report_id)),
+	};
+}
+
+// Covered by Branch Station process tests; usage row signals stay local.
+// fallow-ignore-next-line complexity
+function commonUsageSignals(
+	entries: readonly SkillFeedbackReportEntry[],
+): Pick<SkillFeedbackUsageSkillRow, "common_friction" | "common_verification_burden"> {
+	const frictionValues: FrictionCategory[] = [];
+	for (const entry of entries) {
+		if (entry.report.friction?.category) {
+			frictionValues.push(entry.report.friction.category);
+		}
+	}
+	const friction = mostCommon(frictionValues);
+	const burden = heaviestVerificationBurden(entries);
+	return {
+		...(friction ? { common_friction: friction } : {}),
+		...(burden ? { common_verification_burden: burden } : {}),
+	};
+}
+
+// Covered by Branch Station process tests; burden ordering is contract-owned.
+// fallow-ignore-next-line complexity
+function heaviestVerificationBurden(
+	entries: readonly SkillFeedbackReportEntry[],
+): VerificationBurdenLevel | undefined {
+	let result: VerificationBurdenLevel | undefined;
+	for (const entry of entries) {
+		const level = entry.report.verification_burden?.level;
+		if (!level) continue;
+		if (!result || verificationLevelWeight(level) > verificationLevelWeight(result)) {
+			result = level;
+		}
+	}
+	return result;
+}
+
+function compareUsageRows(
+	left: SkillFeedbackUsageSkillRow,
+	right: SkillFeedbackUsageSkillRow,
+): number {
+	return (
+		right.primary_count - left.primary_count ||
+		right.low_signal_count - left.low_signal_count ||
+		reportTime(right.last_seen_generated_ts) - reportTime(left.last_seen_generated_ts) ||
+		left.skill.localeCompare(right.skill)
+	);
+}
+
+function mostCommon<T extends string>(values: readonly T[]): T | undefined {
+	const counts = new Map<T, number>();
+	for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+	return [...counts.entries()].sort(
+		(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+	)[0]?.[0];
+}
+
+function reportSkillMap(inbox: ReviewInboxRead): Map<string, string> {
+	const map = new Map<string, string>();
+	for (const entry of reportEntries(inbox)) {
+		map.set(reportRef(entry.report.report_id), entry.report.skill);
+	}
+	return map;
+}
+
+// Covered by Branch Station process tests; queue evidence stance stays explicit.
+// fallow-ignore-next-line complexity
+function queueOwnerRows(
+	review: ReviewResultData,
+	reportSkillByRef: ReadonlyMap<string, string>,
+	strength: SkillFeedbackQueueEvidenceStrength,
+): SkillFeedbackQueueResultData["rows"] {
+	const rows: SkillFeedbackQueueResultData["rows"][number][] = [];
+	const seen = new Set<string>();
+	for (const signal of review.engineering_signals) {
+		const signalStrength = queueSignalStrength(signal.reason);
+		if (signalStrength !== strength) continue;
+			if (seen.has(signal.owner_path)) continue;
+			seen.add(signal.owner_path);
+			const refs = reviewReportRefs(signal.evidence_refs, review);
+			const skill = skillForRefs(refs, reportSkillByRef);
+			rows.push({
+				target_type: "owner_path",
+				target: signal.owner_path,
+				reason: queueReason(signal.reason),
+				evidence_strength: signalStrength,
+				...(skill ? { skill } : {}),
+				report_refs: refs,
+				next_safe_action: signal.next_safe_action,
+			});
+	}
+	if (strength === "weak") {
+		for (const entry of review.ledger_entries) {
+			if (entry.anchor_strength !== "weak") continue;
+			const target = entry.attempted_targets[0];
+			const key = `weak:${target ? plainTarget(target) : entry.ledger_entry_key}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const refs = reviewReportRefs(entry.review_unit_keys, review);
+			const skill = skillForRefs(refs, reportSkillByRef);
+			rows.push({
+				target_type: target?.type === "path" ? "owner_path" : "skill",
+				target: target ? plainTarget(target) : "unknown",
+				reason: `weak anchor: ${entry.weak_anchor_reason ?? "unknown"}`,
+				evidence_strength: "weak",
+				...(skill ? { skill } : {}),
+				report_refs: refs,
+				next_safe_action:
+					"Inspect supporting reports before treating this as a shared surface.",
+			});
+		}
+	}
+	return rows.sort(compareQueueRows);
+}
+
+function queueSignalStrength(
+	reason: ReviewResultData["engineering_signals"][number]["reason"],
+): SkillFeedbackQueueEvidenceStrength {
+	return reason === "driver_declared_owner_path" ? "weak" : "strong";
+}
+
+function queueReason(
+	reason: ReviewResultData["engineering_signals"][number]["reason"],
+): string {
+	switch (reason) {
+		case "repeated_anchor":
+			return "repeated owner-path evidence";
+		case "high_verification_burden":
+			return "high verification burden";
+		case "moderate_verification_burden":
+			return "moderate verification burden";
+		default:
+			return "owner path named by one report";
+	}
+}
+
+// Covered by Branch Station process tests; fallback rows are queue behavior.
+// fallow-ignore-next-line complexity
+function queueSkillFallbackRows(
+	inbox: ReviewInboxRead,
+	includeWeak: boolean,
+): SkillFeedbackQueueResultData["rows"] {
+	const usage = buildUsageResultData({
+		inbox,
+		readTarget: {
+			ok: true,
+			explicit: false,
+			seedPath: "",
+			repoRoot: "",
+			inboxPath: "",
+		},
+		options: { json: false, limit: 100, targetPath: undefined },
+	}).skills;
+	return usage
+		// Covered by Branch Station process tests; callback is row projection.
+		// fallow-ignore-next-line complexity
+		.flatMap((row) => {
+			const strength: SkillFeedbackQueueEvidenceStrength =
+				row.primary_count >= 2 ||
+				verificationLevelWeight(row.common_verification_burden ?? "none") >= 3
+					? "strong"
+					: "weak";
+			if (strength === "weak" && !includeWeak) return [];
+			return [
+				{
+					target_type: "skill" as const,
+					target: row.skill,
+					reason:
+						strength === "strong"
+							? "repeated skill reports or high verification burden"
+							: "single skill report",
+					evidence_strength: strength,
+					skill: row.skill,
+					report_refs: row.report_refs,
+					next_safe_action:
+						"Inspect supporting reports before changing the skill route.",
+				},
+			];
+		})
+		.sort(compareQueueRows);
+}
+
+// Covered by Branch Station process tests; review-unit expansion is queue behavior.
+// fallow-ignore-next-line complexity
+function reviewReportRefs(
+	refs: readonly string[],
+	review: ReviewResultData,
+): string[] {
+	const unitByKey = new Map(
+		review.review_units.map((unit) => [unit.review_unit_key, unit]),
+	);
+	const reportRefs: string[] = [];
+	for (const ref of refs) {
+		if (ref.startsWith("report:")) {
+			const reportId = ref.slice("report:".length).split("#")[0] ?? "";
+			reportRefs.push(reportRef(reportId));
+			continue;
+		}
+		const unit = unitByKey.get(ref);
+		if (unit) {
+			reportRefs.push(...unit.report_ids.map(reportRef));
+		}
+	}
+	return uniqueOrdered(reportRefs);
+}
+
+function skillForRefs(
+	refs: readonly string[],
+	reportSkillByRef: ReadonlyMap<string, string>,
+): string | undefined {
+	return refs.map((ref) => reportSkillByRef.get(ref)).filter(isString)[0];
+}
+
+function queueSkillMatches(
+	row: SkillFeedbackQueueResultData["rows"][number],
+	skill: string | undefined,
+): boolean {
+	return skill === undefined || row.skill === skill || row.target === skill;
+}
+
+function queueOwnerMatches(
+	row: SkillFeedbackQueueResultData["rows"][number],
+	ownerPath: string | undefined,
+): boolean {
+	return ownerPath === undefined || row.target === ownerPath;
+}
+
+function compareQueueRows(
+	left: SkillFeedbackQueueResultData["rows"][number],
+	right: SkillFeedbackQueueResultData["rows"][number],
+): number {
+	return (
+		queueStrengthRank(left.evidence_strength) -
+			queueStrengthRank(right.evidence_strength) ||
+		left.target_type.localeCompare(right.target_type) ||
+		left.target.localeCompare(right.target)
+	);
+}
+
+function queueStrengthRank(strength: SkillFeedbackQueueEvidenceStrength): number {
+	return strength === "strong" ? 0 : 1;
+}
+
+function verificationLevelWeight(level: "none" | "light" | "moderate" | "heavy"): number {
+	switch (level) {
+		case "heavy":
+			return 3;
+		case "moderate":
+			return 2;
+		case "light":
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+function isString(value: unknown): value is string {
+	return typeof value === "string";
 }
 
 type SkillFeedbackPurgeRetention =
@@ -1826,170 +2845,92 @@ function renderPlainHealth(data: HealthResultData): string {
 	return `${lines.join("\n")}\n`;
 }
 
-function renderHealthDashboard(data: HealthResultData): string {
-	const rows = healthDashboardRows(data);
-	const needsWork = rows.filter((row) => !row.good);
-	const good = rows.filter((row) => row.good);
+function renderHealthDashboard(
+	data: HealthResultData,
+	inbox: ReviewInboxRead | undefined,
+): string {
+	const recent = dashboardRecentReports(inbox);
+	const latest = recent[0];
 	const lines = [
-		"Skill Feedback Dashboard",
-		`Overall: ${needsWork.length === 0 ? "good" : "needs work"}`,
-		`Counts: primary=${data.counts.primary} low-signal=${data.counts.low_signal} invalid=${data.counts.invalid} skipped=${data.counts.skipped_unsafe} unlinked=${data.counts.unlinked_primary}`,
+		"Skill Feedback",
+		`Reports: primary=${data.counts.primary} low-signal=${data.counts.low_signal} invalid=${data.counts.invalid} skipped=${data.counts.skipped_unsafe}`,
 		healthDashboardNewest(data.newest),
+		`Signal: ${dashboardSignalSummary(data)}`,
 		"",
+		"Dashboard paths:",
+		"- Reports -> browse recent Software Learning Reports and open one detail view.",
+		"- Usage -> compare skills by count, outcome, friction, and last seen time.",
+		"- Queue -> inspect evidence-backed skill or owner-path improvement candidates.",
+		"- Diagnostics -> inspect health, review, correlation, or purge workflows.",
+		"",
+		"Next Safe Actions:",
+		"1. Browse recent reports - `skill-feedback reports`.",
+		latest
+			? `2. Open latest report - \`skill-feedback report ${reportRef(latest.report.report_id)}\`.`
+			: "2. Check inbox health - `skill-feedback health --plain`.",
+		"3. Review skill usage - `skill-feedback usage`.",
+		"4. Inspect improvement queue - `skill-feedback queue`.",
+		"5. Advanced diagnostics - `skill-feedback health` or `skill-feedback review`.",
+		"",
+		"Recent:",
 	];
-	appendDashboardSection(lines, "Good", good);
-	appendDashboardSection(lines, "Needs work", needsWork);
+	if (recent.length === 0) {
+		lines.push("  none");
+	} else {
+		for (const entry of recent) {
+			lines.push(dashboardRecentLine(entry));
+		}
+	}
 	lines.push(
 		"",
-		`Next: ${data.next_action.action_id} - ${plainSafe(data.next_action.summary)}`,
-		dashboardCommandsLine(data),
+		"Advanced:",
+		"  skill-feedback review",
+		"  skill-feedback health",
+		"  skill-feedback correlate --plain",
+		"  skill-feedback purge --help",
 	);
 	return `${lines.join("\n")}\n`;
 }
 
-function dashboardCommandsLine(data: Pick<HealthResultData, "next_action">): string {
-	const nextCommand =
-		DASHBOARD_NEXT_COMMANDS[data.next_action.action_id] ?? "health";
-	return `Commands: ${uniqueOrdered([
-		"health",
-		nextCommand,
-		"review",
-	]).join(" | ")}`;
+// Covered by dashboard process tests; summary branches are user-facing output.
+// fallow-ignore-next-line complexity
+function dashboardSignalSummary(data: HealthResultData): string {
+	if (data.inbox_status === "unsafe") {
+		return "inbox is unsafe; repair state before browsing reports.";
+	}
+	if (data.counts.primary === 0 && data.counts.low_signal === 0) {
+		return "no readable reports yet; capture and closeout commands are available.";
+	}
+	if (data.counts.primary === 0) {
+		return "low-signal reports exist; primary report summaries need stronger capture evidence.";
+	}
+	return `${data.counts.primary} readable primary reports; low-signal separated; correlation diagnostics available in advanced commands.`;
 }
 
-const DASHBOARD_NEXT_COMMANDS: Partial<
-	Record<HealthResultData["next_action"]["action_id"], string>
-> = {
-	"preview-correlation-repair": "correlate",
-	"preview-purge": "purge --help",
-	"inspect-report-correlation": "review",
-	"inspect-capture-identity": "review",
-	"run-review": "review",
-};
+function dashboardRecentReports(
+	inbox: ReviewInboxRead | undefined,
+): SkillFeedbackReportEntry[] {
+	if (!inbox) return [];
+	return reportEntries(inbox)
+		.filter((entry) => entry.lane === "primary")
+		.sort(compareReportEntriesNewestFirst)
+		.slice(0, 3);
+}
+
+function dashboardRecentLine(entry: SkillFeedbackReportEntry): string {
+	const report = entry.report;
+	const burden = report.verification_burden?.level ?? "unknown";
+	return `  ${plainTimestamp(report.generated_ts)}  ${plainSafe(report.skill) || "unknown"}  ${report.outcome}  ${burden}  ${reportRef(report.report_id)}`;
+}
 
 function uniqueOrdered(values: readonly string[]): string[] {
 	return [...new Set(values)];
-}
-
-function healthDashboardRows(data: HealthResultData): HealthDashboardRow[] {
-	const rows: HealthDashboardRow[] = [
-		inboxDashboardRow(data),
-		warningsDashboardRow(data.warnings),
-		proofDashboardRow(data.proof_health),
-		correlationDashboardRow(data.correlation, data.counts.primary),
-		witnessDashboardRow(data.correlation_witnesses),
-	];
-	for (const surface of SKILL_FEEDBACK_DECISION_READINESS_SURFACES) {
-		const fact = data.claim_readiness[surface.key];
-		rows.push({
-			label: surface.label,
-			detail: readinessDashboardDetail(fact),
-			good: fact.status === "ready",
-		});
-	}
-	return rows;
-}
-
-function inboxDashboardRow(data: HealthResultData): HealthDashboardRow {
-	const blockingWarnings = new Set([
-		"inbox_missing",
-		"inbox_empty",
-		"unsafe_inbox",
-		"partial_readability",
-	]);
-	const hasBlockingWarning = data.warnings.some((warning) =>
-		blockingWarnings.has(warning.reason_id),
-	);
-	return {
-		label: "Inbox",
-		detail: `${data.inbox_status}; primary=${data.counts.primary} low-signal=${data.counts.low_signal}`,
-		good: data.inbox_status === "populated" && !hasBlockingWarning,
-	};
-}
-
-function warningsDashboardRow(
-	warnings: readonly HealthWarning[],
-): HealthDashboardRow {
-	return {
-		label: "Warnings",
-		detail:
-			warnings.length === 0
-				? "none"
-				: warnings.map((warning) => plainSafe(warning.reason_id)).join(", "),
-		good: warnings.length === 0,
-	};
-}
-
-function proofDashboardRow(proofHealth: WriterProofHealth): HealthDashboardRow {
-	return {
-		label: "Proof",
-		detail: `verified=${proofHealth.verified_count} evidence-only=${proofHealth.evidence_only_count} replay=${proofHealth.replay_diagnostics_count}${dashboardDiagnostics(proofHealth.diagnostics)}`,
-		good:
-			proofHealth.evidence_only_count === 0 &&
-			proofHealth.replay_diagnostics_count === 0 &&
-			proofHealth.diagnostics.length === 0,
-	};
-}
-
-function correlationDashboardRow(
-	correlation: HealthCorrelation,
-	primaryCount: number,
-): HealthDashboardRow {
-	return {
-		label: "Correlation",
-		detail: `${correlation.status} linked=${correlation.linked_primary_count} unlinked=${correlation.unlinked_primary_count}`,
-		good:
-			correlation.status === "linked" ||
-			(correlation.status === "none" && primaryCount === 0),
-	};
-}
-
-function witnessDashboardRow(
-	health: CorrelationWitnessHealth,
-): HealthDashboardRow {
-	return {
-		label: "Witnesses",
-		detail: `verified=${health.verified_count} blocked=${health.blocked_count} orphan=${health.orphan_count}${dashboardDiagnostics(health.diagnostics)}`,
-		good:
-			health.blocked_count === 0 &&
-			health.orphan_count === 0 &&
-			health.diagnostics.length === 0,
-	};
-}
-
-function readinessDashboardDetail(
-	fact: HealthClaimReadiness[keyof HealthClaimReadiness],
-): string {
-	const reasons =
-		fact.reason_ids.length === 0 ? "" : ` (${fact.reason_ids.join(", ")})`;
-	return `${fact.status}${reasons}`;
-}
-
-function dashboardDiagnostics(diagnostics: readonly string[]): string {
-	return diagnostics.length === 0
-		? ""
-		: ` diagnostics=${diagnostics.map(plainSafe).join(",")}`;
 }
 
 function healthDashboardNewest(newest: HealthResultData["newest"]): string {
 	const primary = newest.primary_generated_ts ?? "none";
 	const lowSignal = newest.low_signal_generated_ts ?? "none";
 	return `Newest: primary=${primary} low-signal=${lowSignal}`;
-}
-
-function appendDashboardSection(
-	lines: string[],
-	title: string,
-	rows: readonly HealthDashboardRow[],
-): void {
-	lines.push(`${title}:`);
-	if (rows.length === 0) {
-		lines.push("- none");
-		return;
-	}
-	for (const row of rows) {
-		lines.push(`- ${row.label}: ${plainSafe(row.detail)}`);
-	}
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -2019,6 +2960,186 @@ function renderPlainCorrelate(data: SkillFeedbackCorrelateResultData): string {
 		`Next action: ${data.next_action.action_id} - ${plainSafe(data.next_action.summary)}`,
 	);
 	return `${lines.join("\n")}\n`;
+}
+
+// Covered by Branch Station process tests; plain output is command contract.
+// fallow-ignore-next-line complexity
+function renderPlainReports(data: SkillFeedbackReportsResultData): string {
+	const lines = [
+		"Skill Feedback Reports",
+		`Counts: primary=${data.counts.primary_count} low-signal=${data.counts.low_signal_count} invalid=${data.counts.invalid_count} skipped=${data.counts.skipped_unsafe_count}`,
+		`Filters: lane=${data.filters.lane} source=${data.filters.source} limit=${data.filters.limit}${data.filters.skill ? ` skill=${plainSafe(data.filters.skill)}` : ""}`,
+		"Reports:",
+	];
+	if (data.reports.length === 0) {
+		lines.push("- none");
+	} else {
+		for (const report of data.reports) {
+			lines.push(
+				[
+					`- ${plainTimestamp(report.generated_ts)}`,
+					`skill=${plainSafe(report.skill) || "unknown"}`,
+					`outcome=${report.outcome}`,
+					`lane=${report.lane}`,
+					`source=${report.source}`,
+					`ref=${plainSafe(report.report_ref)}`,
+					`open=${plainSafe(report.detail_command)}`,
+					`goal=${plainSafe(report.goal ?? "not recorded")}`,
+				].join(" "),
+			);
+		}
+	}
+	lines.push("full_evidence=json");
+	return `${lines.join("\n")}\n`;
+}
+
+// Covered by Branch Station process tests; plain output is command contract.
+// fallow-ignore-next-line complexity
+function renderPlainReportDetail(data: SkillFeedbackReportDetailData): string {
+	const lines = [
+		"Skill Feedback Report",
+		`Ref: ${plainSafe(data.report_ref)}`,
+		`Generated: ${data.generated_ts}`,
+		`Skill: ${plainSafe(data.skill) || "unknown"}`,
+		`Outcome: ${data.outcome}`,
+		`Lane: ${data.lane}${data.low_signal_reason_id ? ` reason=${plainSafe(data.low_signal_reason_id)}` : ""}`,
+		`Source: ${data.source}`,
+		`Correlation: ${data.correlation_status}`,
+		`Goal: ${plainSafe(data.goal ?? missingFieldText("goal"))}`,
+		`Friction: ${plainFriction(data.friction)}`,
+		`Verification: ${plainVerificationBurdenDetail(data.verification_burden)}`,
+		`Touched surfaces: ${plainTargets(data.touched_surfaces)}`,
+		`Observations: ${plainObservations(data.observations)}`,
+		`Evidence gaps: ${plainEvidenceGaps(data.evidence_gaps)}`,
+	];
+	if (data.missing_fields.length > 0) {
+		lines.push(`Missing fields: ${data.missing_fields.join(", ")}`);
+	}
+	lines.push("full_evidence=json");
+	return `${lines.join("\n")}\n`;
+}
+
+// Covered by Branch Station process tests; plain output is command contract.
+// fallow-ignore-next-line complexity
+function renderPlainUsage(data: SkillFeedbackUsageResultData): string {
+	const lines = [
+		"Skill Feedback Usage",
+		`Counts: primary=${data.counts.primary_count} low-signal=${data.counts.low_signal_count}`,
+		`Filters: limit=${data.filters.limit}${data.filters.skill ? ` skill=${plainSafe(data.filters.skill)}` : ""}`,
+		"Skills:",
+	];
+	if (data.skills.length === 0) {
+		lines.push("- none");
+	} else {
+		for (const row of data.skills) {
+			lines.push(
+				[
+					`- skill=${plainSafe(row.skill) || "unknown"}`,
+					`primary=${row.primary_count}`,
+					`low-signal=${row.low_signal_count}`,
+					`outcomes=confirmed:${row.outcomes.confirmed},failed:${row.outcomes.failed},ambiguous:${row.outcomes.ambiguous}`,
+					`closeout=${row.closeout_count}`,
+					`capture=${row.capture_count}`,
+					`last=${row.last_seen_generated_ts ?? "none"}`,
+					...(row.common_friction
+						? [`friction=${row.common_friction}`]
+						: []),
+					...(row.common_verification_burden
+						? [`verification=${row.common_verification_burden}`]
+						: []),
+					`refs=${plainEvidenceRefs(row.report_refs)}`,
+				].join(" "),
+			);
+		}
+	}
+	lines.push("full_evidence=json");
+	return `${lines.join("\n")}\n`;
+}
+
+// Covered by Branch Station process tests; plain output is command contract.
+// fallow-ignore-next-line complexity
+function renderPlainQueue(data: SkillFeedbackQueueResultData): string {
+	const lines = [
+		"Skill Feedback Queue",
+		`Counts: primary=${data.counts.primary_count} low-signal=${data.counts.low_signal_count} weak-available=${data.counts.weak_available_count}`,
+		`Filters: limit=${data.filters.limit} include-weak=${data.filters.include_weak}${data.filters.skill ? ` skill=${plainSafe(data.filters.skill)}` : ""}${data.filters.owner_path ? ` owner=${plainSafe(data.filters.owner_path)}` : ""}`,
+		"Rows:",
+	];
+	if (data.rows.length === 0) {
+		lines.push("- none");
+	} else {
+		for (const row of data.rows) {
+			lines.push(
+				[
+					`- target=${plainSafe(row.target) || "unknown"}`,
+					`type=${row.target_type}`,
+					`strength=${row.evidence_strength}`,
+					...(row.skill ? [`skill=${plainSafe(row.skill)}`] : []),
+					`reason=${plainSafe(row.reason)}`,
+					`refs=${plainEvidenceRefs(row.report_refs)}`,
+					`next=${plainSafe(row.next_safe_action)}`,
+				].join(" "),
+			);
+		}
+	}
+	if (data.no_build) {
+		lines.push(
+			`No build: ${plainSafe(data.no_build.reason)} next=${plainSafe(data.no_build.next_safe_action)}`,
+		);
+	}
+	lines.push("full_evidence=json");
+	return `${lines.join("\n")}\n`;
+}
+
+function plainTimestamp(generatedTs: string): string {
+	const safe = plainSafe(generatedTs);
+	if (safe.length <= 16) return safe;
+	return safe.slice(0, 16).replace("T", "T");
+}
+
+function missingFieldText(field: SkillFeedbackReportMissingField): string {
+	return `${field} was not recorded`;
+}
+
+function plainFriction(
+	friction: SkillFeedbackReportDetailData["friction"],
+): string {
+	if (!friction) return missingFieldText("friction");
+	return `${friction.category}${friction.note ? ` - ${plainSafe(friction.note)}` : ""}`;
+}
+
+function plainVerificationBurdenDetail(
+	burden: SkillFeedbackReportDetailData["verification_burden"],
+): string {
+	if (!burden) return missingFieldText("verification_burden");
+	return `${burden.level}${burden.note ? ` - ${plainSafe(burden.note)}` : ""}`;
+}
+
+function plainTargets(targets: readonly ReportCardTarget[]): string {
+	if (targets.length === 0) return missingFieldText("touched_surfaces");
+	return targets.map(plainTarget).join(", ");
+}
+
+function plainObservations(
+	observations: readonly SkillFeedbackReportDetailData["observations"][number][],
+): string {
+	if (observations.length === 0) return missingFieldText("observations");
+	return observations
+		.map((observation) =>
+			[
+				observation.kind,
+				observation.target ? plainTarget(observation.target) : undefined,
+				plainSafe(observation.summary),
+			]
+				.filter(isString)
+				.join(":"),
+		)
+		.join("; ");
+}
+
+function plainEvidenceGaps(gaps: readonly EvidenceGap[]): string {
+	if (gaps.length === 0) return "none";
+	return gaps.map((gap) => `${gap.code}:${plainSafe(gap.path)}`).join(", ");
 }
 
 function appendPlainProofHealth(
@@ -3183,7 +4304,7 @@ async function runDashboardCommandCli(
 				{
 					recoverability: "change_input",
 					hint: "Run skill-feedback dashboard --help and retry with valid flags.",
-					contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+					contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
 				},
 			),
 		);
@@ -3199,7 +4320,7 @@ async function runDashboardCommandCli(
 				{
 					recoverability: "change_input",
 					hint: "Run skill-feedback dashboard --help and retry with valid flags.",
-					contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
+					contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
 				},
 			),
 		);
@@ -3347,6 +4468,105 @@ async function runCorrelateCommandCli(
 	);
 }
 
+async function runReportsCommandCli(
+	argv: readonly string[],
+	options: SkillFeedbackCliOptions,
+): Promise<number> {
+	const parsed = parseReportsArgs(argv.slice(1));
+	if (!parsed.ok) {
+		return writeProcessResult(
+			humanReadUsageError(
+				options,
+				"reports",
+				SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+				parsed.message,
+			),
+		);
+	}
+	return writeProcessResult(
+		await listSkillFeedbackReports({ ...options, reports: parsed.options }),
+	);
+}
+
+async function runReportCommandCli(
+	argv: readonly string[],
+	options: SkillFeedbackCliOptions,
+): Promise<number> {
+	const parsed = parseReportArgs(argv.slice(1));
+	if (!parsed.ok) {
+		return writeProcessResult(
+			humanReadUsageError(
+				options,
+				"report",
+				SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+				parsed.message,
+			),
+		);
+	}
+	return writeProcessResult(
+		await showSkillFeedbackReport({ ...options, report: parsed.options }),
+	);
+}
+
+async function runUsageCommandCli(
+	argv: readonly string[],
+	options: SkillFeedbackCliOptions,
+): Promise<number> {
+	const parsed = parseUsageArgs(argv.slice(1));
+	if (!parsed.ok) {
+		return writeProcessResult(
+			humanReadUsageError(
+				options,
+				"usage",
+				SKILL_FEEDBACK_USAGE_CONTRACT_ID,
+				parsed.message,
+			),
+		);
+	}
+	return writeProcessResult(
+		await showSkillFeedbackUsage({ ...options, usage: parsed.options }),
+	);
+}
+
+async function runQueueCommandCli(
+	argv: readonly string[],
+	options: SkillFeedbackCliOptions,
+): Promise<number> {
+	const parsed = parseQueueArgs(argv.slice(1));
+	if (!parsed.ok) {
+		return writeProcessResult(
+			humanReadUsageError(
+				options,
+				"queue",
+				SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+				parsed.message,
+			),
+		);
+	}
+	return writeProcessResult(
+		await showSkillFeedbackQueue({ ...options, queue: parsed.options }),
+	);
+}
+
+function humanReadUsageError(
+	options: SkillFeedbackCliOptions,
+	command: "reports" | "report" | "usage" | "queue",
+	contract: SkillFeedbackResultContractId,
+	message: string,
+): SkillFeedbackProcessResult {
+	return errorResult(
+		options.runId ?? `skill-feedback-${command}`,
+		USAGE_EXIT_CODE,
+		"usage_error",
+		message,
+		{
+			recoverability: "change_input",
+			hint: `Run skill-feedback ${command} --help and retry with valid flags.`,
+			contract,
+		},
+	);
+}
+
 function purgeUsageError(
 	options: SkillFeedbackCliOptions,
 	message: string,
@@ -3366,6 +4586,10 @@ function purgeUsageError(
 
 const SKILL_FEEDBACK_CLI_HANDLERS: Partial<Record<string, SkillFeedbackCliHandler>> = {
 	dashboard: (argv, options) => runDashboardCommandCli(argv.slice(1), options),
+	reports: runReportsCommandCli,
+	report: runReportCommandCli,
+	usage: runUsageCommandCli,
+	queue: runQueueCommandCli,
 	closeout: runCloseoutCommandCli,
 	review: (argv, options) => runReadCommandCli("review", argv.slice(1), options),
 	health: (argv, options) => runReadCommandCli("health", argv.slice(1), options),
@@ -3525,6 +4749,150 @@ export function parseHealthArgs(
 	return parseReadOnlyArgs(argv, "health");
 }
 
+/**
+ * Parse public `reports` argv without reading the inbox.
+ *
+ * @param argv - Reports command arguments with or without the leading subcommand
+ * @returns Parsed list filters or a usage error message
+ */
+// Covered by Branch Station process tests; parser branches are command contract.
+// fallow-ignore-next-line complexity
+export function parseReportsArgs(
+	argv: readonly string[],
+): ParseHumanCommandArgsResult<SkillFeedbackReportsOptions> {
+	const args = argsWithoutSubcommand(argv, "reports");
+	const state: SkillFeedbackReportsOptions = {
+		json: false,
+		limit: 10,
+		lane: "primary",
+		source: "all",
+	};
+	// Covered by Branch Station process tests; callback keeps flag table local.
+	// fallow-ignore-next-line complexity
+	return parseHumanCommandFlags(args, state, "reports", 0, (flag, index) => {
+		const common = parseFilteredListFlag(flag, args, index, state);
+		if (common) return common;
+		switch (flag) {
+			case "--lane": {
+				const parsed = parseStringFlagValue(args, index, "--lane");
+				if (!parsed.ok) return parsed;
+				if (!isReportLaneFilter(parsed.value)) {
+					return { ok: false, message: "--lane is invalid." };
+				}
+				state.lane = parsed.value;
+				return { ok: true, nextIndex: parsed.nextIndex };
+			}
+			case "--source": {
+				const parsed = parseStringFlagValue(args, index, "--source");
+				if (!parsed.ok) return parsed;
+				if (!isReportSourceFilter(parsed.value)) {
+					return { ok: false, message: "--source is invalid." };
+				}
+				state.source = parsed.value;
+				return { ok: true, nextIndex: parsed.nextIndex };
+			}
+			default:
+				return undefined;
+		}
+	});
+}
+
+/**
+ * Parse public `report` argv without resolving the report ref.
+ *
+ * @param argv - Report command arguments with or without the leading subcommand
+ * @returns Parsed detail options or a usage error message
+ */
+// Covered by Branch Station process tests; parser branches are command contract.
+// fallow-ignore-next-line complexity
+export function parseReportArgs(
+	argv: readonly string[],
+): ParseHumanCommandArgsResult<SkillFeedbackReportDetailOptions> {
+	const args = argsWithoutSubcommand(argv, "report");
+	const ref = args[0];
+	if (!ref || ref.startsWith("--")) {
+		return { ok: false, message: "Report requires one report:<id> ref." };
+	}
+	const state: SkillFeedbackReportDetailOptions = {
+		json: false,
+		ref,
+		lowSignal: false,
+	};
+	// Covered by Branch Station process tests; callback keeps flag table local.
+	// fallow-ignore-next-line complexity
+	return parseHumanCommandFlags(args, state, "report", 1, (flag, index) => {
+		switch (flag) {
+			case "--json":
+				return parseJsonFlag(state, index);
+			case "--low-signal":
+				state.lowSignal = true;
+				return { ok: true, nextIndex: index };
+			case "--repo":
+				return parseTargetPathFlag(args, index, state);
+			default:
+				return undefined;
+		}
+	});
+}
+
+/**
+ * Parse public `usage` argv without reading the inbox.
+ *
+ * @param argv - Usage command arguments with or without the leading subcommand
+ * @returns Parsed usage filters or a usage error message
+ */
+// Covered by Branch Station process tests; parser branches are command contract.
+// fallow-ignore-next-line complexity
+export function parseUsageArgs(
+	argv: readonly string[],
+): ParseHumanCommandArgsResult<SkillFeedbackUsageOptions> {
+	const args = argsWithoutSubcommand(argv, "usage");
+	const state: SkillFeedbackUsageOptions = { json: false, limit: 10 };
+	// Covered by Branch Station process tests; callback keeps flag table local.
+	// fallow-ignore-next-line complexity
+	return parseHumanCommandFlags(args, state, "usage", 0, (flag, index) => {
+		return parseFilteredListFlag(flag, args, index, state);
+	});
+}
+
+/**
+ * Parse public `queue` argv without reading the inbox.
+ *
+ * @param argv - Queue command arguments with or without the leading subcommand
+ * @returns Parsed queue filters or a usage error message
+ */
+// Covered by Branch Station process tests; parser branches are command contract.
+// fallow-ignore-next-line complexity
+export function parseQueueArgs(
+	argv: readonly string[],
+): ParseHumanCommandArgsResult<SkillFeedbackQueueOptions> {
+	const args = argsWithoutSubcommand(argv, "queue");
+	const state: SkillFeedbackQueueOptions = {
+		json: false,
+		limit: 10,
+		includeWeak: false,
+	};
+	// Covered by Branch Station process tests; callback keeps flag table local.
+	// fallow-ignore-next-line complexity
+	return parseHumanCommandFlags(args, state, "queue", 0, (flag, index) => {
+		const common = parseFilteredListFlag(flag, args, index, state);
+		if (common) return common;
+		switch (flag) {
+			case "--include-weak":
+				state.includeWeak = true;
+				return { ok: true, nextIndex: index };
+			case "--owner-path": {
+				const parsed = parseStringFlagValue(args, index, "--owner-path");
+				if (!parsed.ok) return parsed;
+				state.ownerPath = parsed.value;
+				return { ok: true, nextIndex: parsed.nextIndex };
+			}
+			default:
+				return undefined;
+		}
+	});
+}
+
 // Covered by package tests; keep owner-local safety branches explicit.
 // fallow-ignore-next-line complexity
 export function parseCorrelateArgs(
@@ -3588,6 +4956,151 @@ function readOnlyArgsWithoutSubcommand(
 	return argv;
 }
 
+function argsWithoutSubcommand(
+	argv: readonly string[],
+	commandName: "reports" | "report" | "usage" | "queue",
+): readonly string[] {
+	if (argv[0] === commandName) return argv.slice(1);
+	return argv;
+}
+
+// Covered by Branch Station process tests; shared parser loop preserves errors.
+// fallow-ignore-next-line complexity
+function parseHumanCommandFlags<TOptions>(
+	args: readonly string[],
+	state: TOptions,
+	commandName: HumanCommandName,
+	startIndex: number,
+	parseFlag: (
+		flag: string,
+		index: number,
+	) => ParsedHumanCommandFlag | undefined,
+): ParseHumanCommandArgsResult<TOptions> {
+	for (let index = startIndex; index < args.length; index += 1) {
+		const flag = args[index];
+		if (!flag?.startsWith("--")) {
+			return { ok: false, message: `Expected a ${commandName} flag.` };
+		}
+		const parsed = parseFlag(flag, index);
+		if (!parsed) return { ok: false, message: `Unknown flag ${flag}.` };
+		if (!parsed.ok) return parsed;
+		index = parsed.nextIndex;
+	}
+	return { ok: true, options: state };
+}
+
+// Covered by Branch Station process tests; shared flags are parser contract.
+// fallow-ignore-next-line complexity
+function parseFilteredListFlag<
+	TOptions extends {
+		json: boolean;
+		targetPath?: string;
+		limit: number;
+		skill?: string;
+	},
+>(
+	flag: string,
+	args: readonly string[],
+	index: number,
+	state: TOptions,
+): ParsedHumanCommandFlag | undefined {
+	switch (flag) {
+		case "--json":
+			return parseJsonFlag(state, index);
+		case "--repo":
+			return parseTargetPathFlag(args, index, state);
+		case "--limit":
+			return parseLimitOptionFlag(args, index, state);
+		case "--skill":
+			return parseSkillOptionFlag(args, index, state);
+		default:
+			return undefined;
+	}
+}
+
+function parseJsonFlag<TOptions extends { json: boolean }>(
+	state: TOptions,
+	index: number,
+): ParsedHumanCommandFlag {
+	state.json = true;
+	return { ok: true, nextIndex: index };
+}
+
+function parseTargetPathFlag<TOptions extends { targetPath?: string }>(
+	args: readonly string[],
+	index: number,
+	state: TOptions,
+): ParsedHumanCommandFlag {
+	const parsed = parseRepoFlagValue(args, index);
+	if (!parsed.ok) return parsed;
+	state.targetPath = parsed.value;
+	return { ok: true, nextIndex: parsed.nextIndex };
+}
+
+function parseLimitOptionFlag<TOptions extends { limit: number }>(
+	args: readonly string[],
+	index: number,
+	state: TOptions,
+): ParsedHumanCommandFlag {
+	const parsed = parseLimitFlagValue(args, index, "--limit");
+	if (!parsed.ok) return parsed;
+	state.limit = parsed.value;
+	return { ok: true, nextIndex: parsed.nextIndex };
+}
+
+function parseSkillOptionFlag<TOptions extends { skill?: string }>(
+	args: readonly string[],
+	index: number,
+	state: TOptions,
+): ParsedHumanCommandFlag {
+	const parsed = parseStringFlagValue(args, index, "--skill");
+	if (!parsed.ok) return parsed;
+	state.skill = parsed.value;
+	return { ok: true, nextIndex: parsed.nextIndex };
+}
+
+function parseStringFlagValue(
+	args: readonly string[],
+	index: number,
+	flag: string,
+):
+	| { ok: true; value: string; nextIndex: number }
+	| { ok: false; message: string } {
+	const value = args[index + 1];
+	if (value === undefined || value.startsWith("--") || value.trim() === "") {
+		return { ok: false, message: `${flag} requires a value.` };
+	}
+	return { ok: true, value, nextIndex: index + 1 };
+}
+
+// Covered by Branch Station process tests; limit validation is command contract.
+// fallow-ignore-next-line complexity
+function parseLimitFlagValue(
+	args: readonly string[],
+	index: number,
+	flag: string,
+):
+	| { ok: true; value: number; nextIndex: number }
+	| { ok: false; message: string } {
+	const parsed = parseStringFlagValue(args, index, flag);
+	if (!parsed.ok) return parsed;
+	const value = Number(parsed.value);
+	if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+		return { ok: false, message: `${flag} must be an integer from 1 to 100.` };
+	}
+	return { ok: true, value, nextIndex: parsed.nextIndex };
+}
+
+function isReportLaneFilter(value: string): value is SkillFeedbackReportLaneFilter {
+	return value === "primary" || value === "low-signal" || value === "all";
+}
+
+function isReportSourceFilter(
+	value: string,
+): value is SkillFeedbackReportSourceFilter {
+	return value === "hook_capture" || value === "driver_closeout" || value === "all";
+}
+
 function parseReadOnlyFlag(
 	args: readonly string[],
 	index: number,
@@ -3623,15 +5136,7 @@ function parseRepoFlagValue(
 ):
 	| { ok: true; value: string; nextIndex: number }
 	| { ok: false; message: string } {
-	const value = args[index + 1];
-	if (value === undefined || value.startsWith("--") || value.trim() === "") {
-		return { ok: false, message: "--repo requires a value." };
-	}
-	return {
-		ok: true,
-		value,
-		nextIndex: index + 1,
-	};
+	return parseStringFlagValue(args, index, "--repo");
 }
 
 function parsedPlainFlag(index: number): ParsedReadOnlyFlag {

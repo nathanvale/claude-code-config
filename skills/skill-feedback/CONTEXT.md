@@ -110,11 +110,10 @@ _Avoid_: review ledger, purge preview, cleanup, trust badge
 
 **Front-door dashboard**:
 The zero-arg human output from `skill-feedback`, also available as
-`skill-feedback dashboard`. It groups existing health facts into good and
-needs-work checks, then shows one next action. It is contract-discovered plain
-rendering over `HealthResultData`, not a review claim. Use
-`skill-feedback health` for the machine-readable JSON envelope.
-_Avoid_: review result, trust badge, repair plan, per-skill verdict
+`skill-feedback dashboard`. It is a bounded launch surface over inbox evidence:
+reports, usage, improvement queue, and advanced diagnostics. Use
+`skill-feedback health` for health-first diagnostics.
+_Avoid_: review result, trust badge, repair plan, per-skill verdict, health-only dashboard
 
 **Review decision surface**:
 A command-envelope-backed report-card read result that tells agents why a report is worth opening, what action is safe next, and when no action is needed. The command envelope supplies run identity, continuation, diagnostics, and operational repair hints; `skill-feedback` owns the report-card data vocabulary.
@@ -158,6 +157,14 @@ _Avoid_: readiness badge, trust badge, repair instruction, secret diagnostic
 The primary review-value model for `skill-feedback review`: evidence is grouped into review units and ledger entries, and each entry carries resolution state, evidence quality, owner paths, verification burden, and next safe action. Ledger entries remain untrusted evidence until confirmed against owner source.
 _Avoid_: canonical instruction, repair proposal, chronological report list, evidence-quality dashboard
 
+**Improvement queue**:
+A human-facing list of evidence-backed inspection candidates. It groups by owner path first, defaults to strong or repeated evidence, and uses skill rows only when reports lack a strong owner path. It recommends a next safe action or no-build, not source edits.
+_Avoid_: repair plan, auto-fix queue, task list, scoring model, mixed ranking, weak-evidence default
+
+**Skill usage**:
+A human-facing summary of which skills produced reports and how those skill runs went. It ranks skills only; owner-path candidates belong in the Improvement queue.
+_Avoid_: token usage, cost attribution, owner-path ranking, improvement queue
+
 **Pressure pattern**:
 A design-pattern name used only when a concrete review pressure has already named a seam. In v2, Facade, Adapter, and fixed reducer flow are labels for pressure-tested ownership; Strategy stays deferred until claim-rule variation is proven.
 _Avoid_: pattern cosplay, GoF by default, framework, decorative abstraction
@@ -176,8 +183,8 @@ The package-owned command-branch coverage map in `src/branch-station-catalog.ts`
 _Avoid_: task tracker, manual checklist, arbitrary test list, runtime log
 
 **Report ref**:
-A stable review reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
-_Avoid_: file path, content hash, display evidence, prose ref
+A stable navigation reference shaped as `report:<report_id>`. It identifies a Software Learning Report by report id, not by filename.
+_Avoid_: file path, content hash, display evidence, prose ref, JSON lookup key
 
 **Allowed claim**:
 Entry-local claim language that downstream agents may repeat about one ledger entry. The reducer derives it from trusted review-unit state, anchor facts, evidence tier, source mix, and readiness facts.

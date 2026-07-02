@@ -24,7 +24,7 @@ Use when shaping `SKILL.md`, headings, first-screen behavior, examples, run card
 - Use one line when no-args behavior is obvious.
 - Add `## Intent Classification` or `## Next Safe Actions` only when the heading changes route, halt, or continuation.
 - Use a numbered menu only when user choice changes owner, risk, target, or next action.
-- Use `references/adhd-friendly-dx.md` for multi-choice flows.
+- Use `references/numbered-router-helper.md` for multi-choice flows.
 - Review-only runs flag missing no-args continuation in findings.
 
 ## Run Card

@@ -29,7 +29,8 @@ Inbox Retention, Redaction Trust, Docs Language, Verification.
 P0/P1 ownership refactor closed on 2026-06-29. P2 closure slice closed on
 2026-06-30. Dirty-tree review follow-ups closed on 2026-06-30. Codex Trusted
 skill identity stays deferred, native cost stays `cost_unavailable`, and
-`report:<id>` stays a documented JSON lookup.
+`report:<id>` is now planned as human CLI navigation through
+`skill-feedback report <id>`.
 
 Source owners are now split across `command-contract.ts`,
 `decision-surface.ts`, `report-normalizer.ts`, `inbox-read-model.ts`,
@@ -46,30 +47,50 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts
 
 ## Now
 
-- [ ] P0 Human reports MVP Lane: CLI Contract. Done when:
+- Branch work rule: add the failing Branch Station catalog test or
+  process-boundary scenario row before adding the matching command branch.
+
+- [x] P0 Human reports MVP Lane: CLI Contract. Done when:
       `skill-feedback reports` shows recent reports in a readable table with
       timestamp, skill, outcome, one-line goal, and `report:<id>`; no jq,
-      filenames, or schema knowledge needed. Next: build from existing inbox
-      scan and add plain-output tests.
-- [ ] P0 Human report detail MVP Lane: CLI Contract. Done when:
+      filenames, or schema knowledge needed; `--json` stays available for
+      scripts. Next: build from existing inbox scan and add plain/json output
+      tests.
+- [x] P0 Human report detail MVP Lane: CLI Contract. Done when:
       `skill-feedback report <id>` shows the report goal, friction,
       verification burden, touched surfaces, observations, and evidence gaps in
       readable plain text; `--json` stays available for scripts. Next: resolve
-      `report:<id>` through inbox data, not filesystem naming.
-- [ ] P0 Human usage MVP Lane: Review Ledger. Done when:
+      primary `report:<id>` through inbox data, not filesystem naming; require
+      explicit low-signal lane opt-in for low-signal-only detail.
+- [x] P0 Human usage MVP Lane: Review Ledger. Done when:
       `skill-feedback usage` answers "what skills are being used and how did
       they go?" with ranked skills, counts, outcomes, last used, and common
-      friction. Next: aggregate from normalized reports and low-signal lane.
-- [ ] P0 Human improvement queue MVP Lane: Review Ledger. Done when:
+      friction; owner-path ranking stays in `queue`; `--json` stays available
+      for scripts. Next: aggregate from normalized reports and low-signal lane.
+- [x] P0 Human improvement queue MVP Lane: Review Ledger. Done when:
       `skill-feedback queue` answers "what should I improve next?" with ranked
-      skills or owner paths, reason, supporting `report:<id>` refs, and next
-      safe action. Next: start from repeated friction, high verification burden,
-      and repeated observations already present in review data.
-- [ ] P0 Default UX repair Lane: CLI Contract. Done when: running
+      owner paths first, skill fallback rows only when no strong owner path
+      exists, reason, supporting `report:<id>` refs, and next safe action.
+      Default output is plain, includes strong or repeated evidence only, and
+      keeps `--json` available for scripts. Next: derive from existing review
+      ledger evidence first; keep weak evidence behind explicit opt-in; defer
+      standalone report scoring unless ledger evidence cannot answer the queue
+      question.
+- [x] P0 Default UX repair Lane: CLI Contract. Done when: running
       `skill-feedback` without args shows a short human dashboard with only
       useful next commands: `reports`, `usage`, `queue`, and `review`; internal
-      diagnostics appear only behind `health` or explicit debug commands. Next:
-      rewrite dashboard plain renderer and tests.
+      diagnostics appear only behind `health` or explicit debug commands; the
+      dashboard remains plain-only and `health` owns machine-readable facts.
+      Next: rewrite dashboard plain renderer and tests.
+- [x] P0 Skill route update Lane: Docs Language. Done when:
+      `skills/skill-feedback/SKILL.md` routes dashboard, reports, report,
+      usage, and queue requests to the new command surface; removes stale
+      JSON-review resolver guidance for `report:<id>`; frontmatter stays
+      YAML-valid. Next: after command branches land, read
+      `skills/skill-author/references/skill-design-decision-runbook.md`,
+      `skills/skill-author/references/skill-body-shape-gate.md`, and
+      `skills/skill-author/references/numbered-router-helper.md` before editing
+      the skill.
 
 ## Next
 
@@ -87,6 +108,11 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts
 
 ## Latest Signals
 
+- 2026-07-02: Human dashboard MVP closed on this branch. The default dashboard
+  now launches `reports`, `usage`, and `queue`; `reports`, `report`, `usage`,
+  and `queue` have bounded plain output plus JSON envelopes; Branch Station
+  scenarios cover primary, low-signal opt-in, empty, invalid, weak-evidence,
+  no-build, duplicate, and unknown-ref paths.
 - 2026-07-01: Zero-arg front door now aliases contract-backed `dashboard`,
   grouped into good and needs-work checks. `health` keeps JSON/plain output for
   scripts and agents. Unit and process-boundary tests cover empty, populated,
@@ -131,7 +157,8 @@ bun run skills/skill-feedback/src/skill-feedback-runner.ts
 - 2026-06-29: P0/P1 ownership refactor closed: no open P0/P1 tasks remain;
   report normalization, inbox reads, and correlation witnesses have source
   owners; command facade behavior preserved; Codex lifecycle, cost, and
-  `report:<id>` resolver stayed no-build decisions from source evidence.
+  `report:<id>` resolver stayed no-build decisions from source evidence at the
+  time. Human dashboard MVP later superseded the resolver decision.
 - 2026-06-30: Decision Surface Renderer closed: review and health plain
   readiness labels now come from `SKILL_FEEDBACK_DECISION_READINESS_SURFACES`
   in `command-contract.ts`; correlate plain next action is asserted from

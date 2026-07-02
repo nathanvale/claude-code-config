@@ -42,6 +42,24 @@ Rules:
 | 2026-06-30 | Dirty-tree review follow-ups closed | Artifact and runtime ownership split; plan directives made imperative | One P3 purge output parity question remains |
 | 2026-06-30 | Decision surface and bounded review plain closed | Review/health assembly owner split; plain review bounded around next action | One P3 purge output parity question remains |
 | 2026-06-30 | Inherited Fallow cleanup closed | Audit, dead-code, dupes, and health clean for skill-feedback | One P3 purge output parity question remains |
+| 2026-07-02 | Human dashboard MVP | Reports, detail, usage, and queue commands give humans safe read paths | Review findings patched; current queue lives in `TASKS.md` |
+
+## 2026-07-02 - Human Dashboard MVP
+
+- Outcome: the zero-arg dashboard became a human launch surface, with read-only
+  `reports`, `report`, `usage`, and `queue` commands.
+- Trust added: humans can inspect report refs, low-signal gates, skill usage,
+  and evidence-backed improvement candidates without entering diagnostic review
+  first.
+- Evidence: `skills/skill-feedback/docs/plans/2026-07-02-001-feat-skill-feedback-human-observability-mvp-plan.md`;
+  `skills/skill-feedback/src/skill-feedback-runner.ts`;
+  `skills/skill-feedback/src/command-contract.ts`;
+  `skills/skill-feedback/src/branch-station-catalog.ts`.
+- Decisions: `report:<id>` is the human continuation boundary; unsafe, unknown,
+  duplicate, and low-signal-only refs fail closed. Queue rows prefer owner-path
+  evidence, fall back to skill rows only after filters, and keep weak evidence
+  opt-in.
+- Follow-up: keep active review follow-ups in `TASKS.md`.
 
 ## 2026-06-11 - V0 Capture Package
 

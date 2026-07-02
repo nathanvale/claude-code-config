@@ -9,12 +9,12 @@ skills/skill-author/
   SKILL.md
   CONTEXT.md
   references/
-    adhd-friendly-dx.md
     agent-native-skill-design.md
     archive-cleanup.md
     community-skill-research-sources.md
     consolidation-map.md
     mcporter-skill-design.md
+    numbered-router-helper.md
     research-portability.md
     run-card-template.md
     runtime-portability.md

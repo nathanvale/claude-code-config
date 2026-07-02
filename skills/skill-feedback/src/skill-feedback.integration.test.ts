@@ -27,11 +27,16 @@ import {
 	type SkillFeedbackBranchStationEvidence,
 	listMissingSkillFeedbackBranchStationEvidence,
 	projectSkillFeedbackBranchStationEvidence,
+	skillFeedbackBranchStationEvidence,
 } from "./branch-station-evidence";
 import {
 	type CloseoutReceipt,
 	SKILL_FEEDBACK_CLOSEOUT_CONTRACT_ID,
 	SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+	SKILL_FEEDBACK_QUEUE_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORT_CONTRACT_ID,
+	SKILL_FEEDBACK_REPORTS_CONTRACT_ID,
+	SKILL_FEEDBACK_USAGE_CONTRACT_ID,
 	createCorrelationWitness,
 	createWriterProof,
 } from "./command-contract";
@@ -106,6 +111,30 @@ const stationScenarios = {
 	"dashboard.missing_inbox": { run: runDashboardMissingInbox },
 	"dashboard.populated_inbox": { run: runDashboardPopulatedInbox },
 	"dashboard.unsafe_inbox": { run: runDashboardUnsafeInbox },
+	"reports.primary_recent": { run: runReportsPrimaryRecent },
+	"reports.low_signal_opt_in": { run: runReportsLowSignalOptIn },
+	"reports.empty_inbox": { run: runReportsEmptyInbox },
+	"reports.invalid_usage": { run: runReportsInvalidUsage },
+	"report.primary_detail": { run: runReportPrimaryDetail },
+	"report.low_signal_requires_opt_in": { run: runReportLowSignalRequiresOptIn },
+	"report.low_signal_detail_opt_in": { run: runReportLowSignalDetailOptIn },
+	"report.unknown_ref": { run: runReportUnknownRef },
+	"report.duplicate_ref": { run: runReportDuplicateRef },
+	"report.cross_lane_duplicate_ref": { run: runReportCrossLaneDuplicateRef },
+	"report.invalid_ref_path": { run: runReportInvalidRefPath },
+	"report.invalid_usage": { run: runReportInvalidUsage },
+	"usage.skill_ranking": { run: runUsageSkillRanking },
+	"usage.separates_low_signal": { run: runUsageSeparatesLowSignal },
+	"usage.empty_inbox": { run: runUsageEmptyInbox },
+	"usage.invalid_usage": { run: runUsageInvalidUsage },
+	"queue.owner_path_strong": { run: runQueueOwnerPathStrong },
+	"queue.skill_fallback": { run: runQueueSkillFallback },
+	"queue.skill_filter_fallback": { run: runQueueSkillFilterFallback },
+	"queue.weak_requires_opt_in": { run: runQueueWeakRequiresOptIn },
+	"queue.weak_opt_in": { run: runQueueWeakOptIn },
+	"queue.no_build": { run: runQueueNoBuild },
+	"queue.empty_inbox": { run: runQueueEmptyInbox },
+	"queue.invalid_usage": { run: runQueueInvalidUsage },
 	"review.empty_inbox": { run: runReviewEmptyInbox },
 	"review.target_resolution_failed": { run: runReviewTargetResolutionFailed },
 	"health.populated_inbox": { run: runHealthPopulatedInbox },
@@ -147,6 +176,7 @@ describe("skill-feedback Branch Station integration", () => {
 		}
 
 		expect(listMissingSkillFeedbackBranchStationEvidence(evidence)).toEqual([]);
+		expect(evidence).toEqual(skillFeedbackBranchStationEvidence);
 		const stationMap = projectSkillFeedbackBranchStationEvidence(evidence);
 		expect(stationMap.drift).toEqual([]);
 		expect(stationMap.findings).toEqual([]);
@@ -160,7 +190,7 @@ describe("skill-feedback Branch Station integration", () => {
 				.sort((left, right) => left.id.localeCompare(right.id))
 				.map((station) => [station.id, "covered"]),
 		);
-	});
+	}, 15_000);
 
 	test("shared process JSON parse failures include process context", async () => {
 		const result = await runSkillFeedback(["--help"], {
@@ -182,10 +212,10 @@ describe("skill-feedback Branch Station integration", () => {
 
 		expect(result.exitCode, describeCliProcessRun(result)).toBe(0);
 		expect(result.stderr, describeCliProcessRun(result)).toBe("");
-		expect(result.stdout).toContain("Skill Feedback Dashboard");
-		expect(result.stdout).toContain("Overall: needs work");
-		expect(result.stdout).toContain("Good:");
-		expect(result.stdout).toContain("Needs work:");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
 		expect(() => parseCliProcessJson(result)).toThrow();
 		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
 	});
@@ -361,9 +391,9 @@ async function runDashboardMissingInbox(
 		label: station.id,
 	});
 	expectDashboardPlainResult(station, result);
-	expect(result.stdout).toContain("Skill Feedback Dashboard");
-	expect(result.stdout).toContain("- Inbox: missing; primary=0 low-signal=0");
-	expect(result.stdout).toContain("Commands: health | review");
+	expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+	expect(result.stdout).toContain("Dashboard paths:");
+	expect(result.stdout).toContain("1. Browse recent reports - `skill-feedback reports`.");
 	expect(() => parseCliProcessJson(result)).toThrow();
 	expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
 	return evidenceForPlain(station, result);
@@ -383,9 +413,11 @@ async function runDashboardPopulatedInbox(
 		label: station.id,
 	});
 	expectDashboardPlainResult(station, result);
-	expect(result.stdout).toContain("Counts: primary=1 low-signal=0");
-	expect(result.stdout).toContain("Next: inspect-report-correlation");
-	expect(result.stdout).toContain("Commands: health | review");
+	expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+	expect(result.stdout).toContain(
+		"Open latest report - `skill-feedback report report:report-dashboard-populated`.",
+	);
+	expect(result.stdout).toContain("Recent:");
 	expect(() => parseCliProcessJson(result)).toThrow();
 	return evidenceForPlain(station, result);
 }
@@ -401,10 +433,431 @@ async function runDashboardUnsafeInbox(
 		label: station.id,
 	});
 	expectDashboardPlainResult(station, result);
-	expect(result.stdout).toContain("Overall: needs work");
-	expect(result.stdout).toContain("- Inbox: unsafe; primary=0 low-signal=0");
+	expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+	expect(result.stdout).toContain("Signal: inbox is unsafe");
 	expect(() => parseCliProcessJson(result)).toThrow();
 	return evidenceForPlain(station, result);
+}
+
+async function runReportsPrimaryRecent(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"older.json",
+				v1HumanReport({ reportId: "report-older", generatedTs: "2026-06-01T00:00:00.000Z" }),
+			);
+			await writeInboxReport(
+				root,
+				"newer.json",
+				v1HumanReport({ reportId: "report-newer", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["reports", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_REPORTS_CONTRACT_ID);
+			const reports = (envelope.data?.reports as Array<{ report_ref: string }>);
+			expect(reports.map((report) => report.report_ref)).toEqual([
+				"report:report-newer",
+				"report:report-older",
+			]);
+		},
+	});
+}
+
+async function runReportsLowSignalOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({ reportId: "report-low-signal", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["reports", "--json", "--lane", "low-signal"],
+		assert: ({ envelope }) => {
+			const reports = envelope.data?.reports as Array<{
+				lane: string;
+				report_ref: string;
+				detail_command: string;
+			}>;
+			expect(reports).toEqual([
+				expect.objectContaining({
+					lane: "low-signal",
+					report_ref: "report:report-low-signal",
+					detail_command:
+						"skill-feedback report report:report-low-signal --low-signal",
+				}),
+			]);
+		},
+	});
+}
+
+async function runReportsEmptyInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["reports", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.reports).toEqual([]);
+		},
+	});
+}
+
+async function runReportsInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["reports", "--lane", "archive"],
+	});
+}
+
+async function runReportPrimaryDetail(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"primary.json",
+				v1HumanReport({ reportId: "report-primary", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["report", "report:report-primary", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_REPORT_CONTRACT_ID);
+			expect(envelope.data).toMatchObject({
+				report_ref: "report:report-primary",
+				lane: "primary",
+			});
+		},
+	});
+}
+
+async function runReportLowSignalRequiresOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({ reportId: "report-low-only", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["report", "report:report-low-only", "--json"],
+	});
+}
+
+async function runReportLowSignalDetailOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({ reportId: "report-low-detail", generatedTs: GENERATED_TS }),
+			);
+		},
+		args: ["report", "report:report-low-detail", "--json", "--low-signal"],
+		assert: ({ envelope }) => {
+			expect(envelope.data).toMatchObject({
+				report_ref: "report:report-low-detail",
+				lane: "low-signal",
+			});
+		},
+	});
+}
+
+async function runReportUnknownRef(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["report", "report:missing", "--json"],
+	});
+}
+
+async function runReportDuplicateRef(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"dup-one.json",
+				v1HumanReport({ reportId: "report-dup", generatedTs: GENERATED_TS }),
+			);
+			await writeInboxReport(
+				root,
+				"dup-two.json",
+				v1HumanReport({ reportId: "report-dup", generatedTs: "2026-06-12T00:00:00.000Z" }),
+			);
+		},
+		args: ["report", "report:report-dup", "--json"],
+	});
+}
+
+async function runReportCrossLaneDuplicateRef(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"primary.json",
+				v1HumanReport({ reportId: "report-cross-dup", generatedTs: GENERATED_TS }),
+			);
+			await writeLowSignalInboxReport(
+				root,
+				"low.json",
+				v1HumanReport({
+					reportId: "report-cross-dup",
+					generatedTs: "2026-06-12T00:00:00.000Z",
+				}),
+			);
+		},
+		args: ["report", "report:report-cross-dup", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.error?.code).toBe("report_ref_duplicate");
+		},
+	});
+}
+
+async function runReportInvalidRefPath(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["report", "report:../outside", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.error?.code).toBe("report_ref_invalid");
+		},
+	});
+}
+
+async function runReportInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["report", "--json"],
+	});
+}
+
+async function runUsageSkillRanking(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(root, "a1.json", v1HumanReport({ reportId: "a1", skill: "alpha", generatedTs: GENERATED_TS }));
+			await writeInboxReport(root, "a2.json", v1HumanReport({ reportId: "a2", skill: "alpha", generatedTs: "2026-06-12T00:00:00.000Z" }));
+			await writeInboxReport(root, "b1.json", v1HumanReport({ reportId: "b1", skill: "beta", generatedTs: "2026-06-11T00:00:00.000Z" }));
+		},
+		args: ["usage", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_USAGE_CONTRACT_ID);
+			const skills = envelope.data?.skills as Array<{ skill: string; primary_count: number }>;
+			expect(skills[0]).toMatchObject({ skill: "alpha", primary_count: 2 });
+		},
+	});
+}
+
+async function runUsageSeparatesLowSignal(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(root, "primary.json", v1HumanReport({ reportId: "primary", skill: "alpha", generatedTs: GENERATED_TS }));
+			await writeLowSignalInboxReport(root, "low.json", v1HumanReport({ reportId: "low", skill: "alpha", generatedTs: "2026-06-12T00:00:00.000Z" }));
+		},
+		args: ["usage", "--json"],
+		assert: ({ envelope }) => {
+			const row = (envelope.data?.skills as Array<{ skill: string; primary_count: number; low_signal_count: number }>)[0];
+			expect(row).toMatchObject({
+				skill: "alpha",
+				primary_count: 1,
+				low_signal_count: 1,
+			});
+		},
+	});
+}
+
+async function runUsageEmptyInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["usage", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.skills).toEqual([]);
+		},
+	});
+}
+
+async function runUsageInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["usage", "--limit", "0"],
+	});
+}
+
+async function runQueueOwnerPathStrong(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"owner.json",
+				v1HumanReport({
+					reportId: "queue-owner",
+					generatedTs: GENERATED_TS,
+					verificationLevel: "heavy",
+					touchedSurfaces: [{ type: "path", value: "skills/skill-feedback/SKILL.md" }],
+				}),
+			);
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.contract).toBe(SKILL_FEEDBACK_QUEUE_CONTRACT_ID);
+			const rows = envelope.data?.rows as Array<{ target: string; evidence_strength: string }>;
+			expect(rows[0]).toMatchObject({
+				target: "skills/skill-feedback/SKILL.md",
+				evidence_strength: "strong",
+			});
+		},
+	});
+}
+
+async function runQueueSkillFallback(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(root, "skill-a.json", v1HumanReport({ reportId: "skill-a", skill: "fallow", generatedTs: GENERATED_TS, touchedSurfaces: [] }));
+			await writeInboxReport(root, "skill-b.json", v1HumanReport({ reportId: "skill-b", skill: "fallow", generatedTs: "2026-06-12T00:00:00.000Z", touchedSurfaces: [] }));
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			const rows = envelope.data?.rows as Array<{ target_type: string; target: string }>;
+			expect(rows[0]).toMatchObject({ target_type: "skill", target: "fallow" });
+		},
+	});
+}
+
+async function runQueueSkillFilterFallback(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"owner.json",
+				v1HumanReport({
+					reportId: "owner",
+					skill: "create-skill",
+					generatedTs: GENERATED_TS,
+					verificationLevel: "heavy",
+					touchedSurfaces: [{ type: "path", value: "skills/create-skill/SKILL.md" }],
+				}),
+			);
+			await writeInboxReport(root, "fallow-a.json", v1HumanReport({ reportId: "fallow-a", skill: "fallow", generatedTs: "2026-06-12T00:00:00.000Z", touchedSurfaces: [] }));
+			await writeInboxReport(root, "fallow-b.json", v1HumanReport({ reportId: "fallow-b", skill: "fallow", generatedTs: "2026-06-13T00:00:00.000Z", touchedSurfaces: [] }));
+		},
+		args: ["queue", "--json", "--skill", "fallow"],
+		assert: ({ envelope }) => {
+			const rows = envelope.data?.rows as Array<{ target_type: string; target: string }>;
+			expect(rows[0]).toMatchObject({ target_type: "skill", target: "fallow" });
+			expect(envelope.data?.no_build).toBeUndefined();
+		},
+	});
+}
+
+async function runQueueWeakRequiresOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: writeWeakQueueFixture,
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.rows).toEqual([]);
+			expect(
+				(envelope.data?.counts as { weak_available_count?: number })
+					.weak_available_count,
+			).toBeGreaterThan(0);
+		},
+	});
+}
+
+async function runQueueWeakOptIn(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: writeWeakQueueFixture,
+		args: ["queue", "--json", "--include-weak"],
+		assert: ({ envelope }) => {
+			const rows = envelope.data?.rows as Array<{
+				evidence_strength: string;
+				target_type: string;
+				target: string;
+			}>;
+			expect(rows[0]).toMatchObject({
+				evidence_strength: "weak",
+				target_type: "owner_path",
+				target: "skills/skill-feedback/SKILL.md",
+			});
+		},
+	});
+}
+
+async function runQueueNoBuild(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await writeInboxReport(
+				root,
+				"single.json",
+				v1HumanReport({ reportId: "single", generatedTs: GENERATED_TS, touchedSurfaces: [] }),
+			);
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.rows).toEqual([]);
+			expect(envelope.data?.no_build).toBeDefined();
+		},
+	});
+}
+
+async function runQueueEmptyInbox(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		prepare: async (root) => {
+			await mkdir(join(root, ".skill-feedback"), { recursive: true });
+		},
+		args: ["queue", "--json"],
+		assert: ({ envelope }) => {
+			expect(envelope.data?.rows).toEqual([]);
+		},
+	});
+}
+
+async function runQueueInvalidUsage(
+	station: SkillFeedbackBranchStation,
+): Promise<SkillFeedbackBranchStationEvidence> {
+	return coverIgnoredGitStation(station, {
+		args: ["queue", "--limit", "0"],
+	});
 }
 
 async function runReviewEmptyInbox(
@@ -825,7 +1278,7 @@ function expectDashboardPlainResult(
 	);
 	expect(result.stderr, describeCliProcessRun(result)).toBe("");
 	expect(result.stdout, describeCliProcessRun(result)).toContain(
-		"Skill Feedback Dashboard",
+		"Dashboard paths:",
 	);
 }
 
@@ -896,6 +1349,31 @@ async function writeInboxReport(
 	const inbox = join(root, ".skill-feedback");
 	await mkdir(inbox, { recursive: true });
 	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeLowSignalInboxReport(
+	root: string,
+	name: string,
+	value: unknown,
+): Promise<void> {
+	const inbox = join(root, ".skill-feedback", "low-signal");
+	await mkdir(inbox, { recursive: true });
+	await writeFile(join(inbox, name), `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+async function writeWeakQueueFixture(root: string): Promise<void> {
+	await writeInboxReport(
+		root,
+		"weak.json",
+		v1HumanReport({
+			reportId: "queue-weak",
+			generatedTs: GENERATED_TS,
+			verificationLevel: "light",
+			touchedSurfaces: [
+				{ type: "path", value: "skills/skill-feedback/SKILL.md" },
+			],
+		}),
+	);
 }
 
 async function readOnlyInboxReport(root: string): Promise<Record<string, unknown>> {
@@ -1158,5 +1636,28 @@ function v1CloseoutReport(reportId: string, generatedTs: string) {
 		runtime: { git_sha: "1234567890abcdef1234567890abcdef12345678" },
 		report_card: BASE_CLOSEOUT,
 		evidence_gaps: [],
+	};
+}
+
+function v1HumanReport(input: {
+	reportId: string;
+	generatedTs: string;
+	skill?: string;
+	outcome?: "confirmed" | "failed" | "ambiguous";
+	verificationLevel?: "none" | "light" | "moderate" | "heavy";
+	touchedSurfaces?: Array<{ type: "path" | "label"; value: string }>;
+}) {
+	return {
+		...v1CloseoutReport(input.reportId, input.generatedTs),
+		report_card: {
+			...BASE_CLOSEOUT,
+			skill: input.skill ?? BASE_CLOSEOUT.skill,
+			outcome: input.outcome ?? BASE_CLOSEOUT.outcome,
+			verification_burden: {
+				level: input.verificationLevel ?? BASE_CLOSEOUT.verification_burden.level,
+				note: "Integration verification burden.",
+			},
+			touched_surfaces: input.touchedSurfaces ?? BASE_CLOSEOUT.touched_surfaces,
+		},
 	};
 }

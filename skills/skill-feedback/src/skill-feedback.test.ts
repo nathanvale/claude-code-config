@@ -24,6 +24,8 @@ import type {
 	SkillFeedbackCorrelateResultData,
 } from "./command-contract";
 import {
+	SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+	SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
 	SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
 	SKILL_FEEDBACK_DECISION_READINESS_SURFACES,
@@ -2973,27 +2975,30 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain("skill-feedback                  Show read-only dashboard");
 		expect(result.stdout).toContain("dashboard [--repo <path>]");
+		expect(result.stdout).toContain("reports [--json]");
+		expect(result.stdout).toContain("report <report:id|id>");
+		expect(result.stdout).toContain("usage [--json]");
+		expect(result.stdout).toContain("queue [--json]");
 		expect(result.stdout).toContain("record --skill");
 		expect(result.stdout).toContain("health [--plain]");
 		expect(result.stdout).toContain("purge [--lane");
 		expect(result.stdout).toContain("correlate [--plain]");
 	});
 
-	test("runner zero-arg front door renders a read-only health dashboard", async () => {
+	test("runner zero-arg front door renders a read-only human dashboard", async () => {
 		const root = await makeIgnoredGitRoot();
 
 		const result = await runCli([], { cwd: root });
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
-		expect(result.stdout).toContain("Skill Feedback Dashboard");
-		expect(result.stdout).toContain("Overall: needs work");
-		expect(result.stdout).toContain("Good:");
-		expect(result.stdout).toContain("Needs work:");
-		expect(result.stdout).toContain("- Inbox: missing; primary=0 low-signal=0");
-		expect(result.stdout).toContain("- Warnings: inbox_missing");
-		expect(result.stdout).toContain("Next: confirm-capture-path");
-		expect(result.stdout).toContain("Commands: health | review");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("Reports: primary=0 low-signal=0");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
+		expect(result.stdout).toContain("skill-feedback usage");
+		expect(result.stdout).toContain("skill-feedback queue");
 		expect(() => JSON.parse(result.stdout)).toThrow();
 		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
 	});
@@ -3005,13 +3010,13 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
-		expect(result.stdout).toContain("Skill Feedback Dashboard");
-		expect(result.stdout).toContain("Overall: needs work");
-		expect(result.stdout).toContain("Commands: health | review");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("Next Safe Actions:");
+		expect(result.stdout).toContain("skill-feedback reports");
 		expect(() => JSON.parse(result.stdout)).toThrow();
 	});
 
-	test("runner dashboard usage errors return a health contract envelope", async () => {
+	test("runner dashboard usage errors return a dashboard contract envelope", async () => {
 		const result = await runCli(["dashboard", "--plain"]);
 
 		expect(result.exitCode).toBe(2);
@@ -3019,8 +3024,8 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const envelope = parseEnvelope(result);
 		expect((envelope.error as { code: string }).code).toBe("usage_error");
 		expect(envelope.data).toMatchObject({
-			contract: SKILL_FEEDBACK_HEALTH_CONTRACT_ID,
-			schema_version: SKILL_FEEDBACK_HEALTH_RESULT_SCHEMA_VERSION,
+			contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
 			changed_state: "none",
 		});
 	});
@@ -3036,11 +3041,11 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
-		expect(result.stdout).toContain("Skill Feedback Dashboard");
-		expect(result.stdout).toContain("Counts: primary=1 low-signal=0");
-		expect(result.stdout).toContain("- Inbox: populated; primary=1 low-signal=0");
-		expect(result.stdout).toContain("Next: inspect-report-correlation");
-		expect(result.stdout).toContain("Commands: health | review");
+		expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+		expect(result.stdout).toContain(
+			"Open latest report - `skill-feedback report report:report-dashboard-populated`.",
+		);
+		expect(result.stdout).toContain("Recent:");
 		expect(() => JSON.parse(result.stdout)).toThrow();
 	});
 
@@ -3068,8 +3073,8 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stderr).toBe("");
-		expect(result.stdout).toContain("Counts: primary=1 low-signal=0");
-		expect(result.stdout).not.toContain("Counts: primary=2");
+		expect(result.stdout).toContain("Reports: primary=1 low-signal=0");
+		expect(result.stdout).not.toContain("Reports: primary=2");
 		expect(() => JSON.parse(result.stdout)).toThrow();
 	});
 
@@ -3107,8 +3112,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toContain("Next: preview-correlation-repair");
-		expect(result.stdout).toContain("Commands: health | correlate | review");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(result.stdout).toContain("skill-feedback correlate --plain");
+		expect(result.stdout).toContain("skill-feedback reports");
 	});
 
 	test("runner dashboard routes retention warnings to purge help", async () => {
@@ -3132,8 +3138,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toContain("Next: preview-purge");
-		expect(result.stdout).toContain("Commands: health | purge --help | review");
+		expect(result.stdout).toContain("Reports: primary=100 low-signal=0");
+		expect(result.stdout).toContain("skill-feedback purge --help");
+		expect(result.stdout).toContain("skill-feedback reports");
 	});
 
 	test("runner dashboard exits nonzero for unsafe inbox roots", async () => {
@@ -3150,10 +3157,9 @@ describe("skill-feedback U6 redaction and write gate", () => {
 
 			expect(result.exitCode, setup).toBe(1);
 			expect(result.stderr, setup).toBe("");
-			expect(result.stdout, setup).toContain("Skill Feedback Dashboard");
-			expect(result.stdout, setup).toContain("Overall: needs work");
-			expect(result.stdout, setup).toContain("- Inbox: unsafe; primary=0 low-signal=0");
-			expect(result.stdout, setup).toContain("Next: repair-inbox-state");
+			expect(result.stdout, setup).toContain("Skill Feedback");
+			expect(result.stdout, setup).toContain("Signal: inbox is unsafe");
+			expect(result.stdout, setup).toContain("skill-feedback health --plain");
 			expect(() => JSON.parse(result.stdout)).toThrow();
 		}
 	});

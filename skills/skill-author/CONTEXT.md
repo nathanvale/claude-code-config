@@ -125,9 +125,9 @@ _Avoid_: self-improving AI, auto-update, autonomous mutation, prompt tweaking
 The task-family-specific standard used to decide whether a skill refinement improves the skill without adding avoidable carrying cost.
 _Avoid_: generic quality, vibes, preference, universal rubric, prose polish
 
-**ADHD-friendly DX**:
-Low-load skill interaction pattern that uses short numbered choices, one recommended default, visible momentum, and owner-named next safe actions.
-_Avoid_: exhaustive menu, vague empathy note, hidden recommendation, style-only preference
+**Numbered router helper**:
+Skill-authoring pattern for short `Next Safe Actions` reply-by-number menus at the current decision station. Uses one recommended default, likely branch jumps as menu options, and `Reply with a number, or say what outcome you want.` after the menu. Facade-backed Branch Station and Station Map behavior stays in `runtime/cli-command-facade/src/station-map.ts`, `skills/cli-execution-auditor/src/station-map.ts`, and `skills/cli-author/references/cli-command-facade.md`.
+_Avoid_: exhaustive branch catalog, copied Station Map, chat-as-option, hidden recommendation, personal-productivity framing, copied runtime fields
 
 **Run Card**:
 A compact workflow scaffold for complex skills that names scope, defaults, first safe action, visible state, verification, fallback, and expected final shape.

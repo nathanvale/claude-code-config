@@ -6,15 +6,17 @@ Package architecture for `skill-feedback-scripts`.
 
 `skill-feedback` is a CLI interface over repo-local Software Learning Reports.
 It writes private evidence under `.skill-feedback/`, then exposes health,
-review, correlation, and retention commands for agents and humans.
+human observability, review, correlation, and retention commands for agents and
+humans.
 
 Its interface is:
 
 - `skill-feedback-runner` package script.
 - `src/command-contract.ts` command facade contract.
 - JSON result envelopes for machine-readable commands.
-- Plain output for `dashboard`, `review`, `health`, and `correlate`.
-- Zero-arg dashboard alias over the health read model.
+- Plain output for `dashboard`, `reports`, `report`, `usage`, `queue`,
+  `review`, `health`, and `correlate`.
+- Zero-arg dashboard alias over the human dashboard read surface.
 - Private repo-local inbox files under `.skill-feedback/`.
 
 Implementation modules behind that interface are:
@@ -48,6 +50,10 @@ flowchart TD
   Contract --> Record["record"]
   Contract --> Closeout["closeout"]
   Contract --> DashboardCommand["dashboard"]
+  Contract --> Reports["reports"]
+  Contract --> Report["report"]
+  Contract --> Usage["usage"]
+  Contract --> Queue["queue"]
   Contract --> Review["review"]
   Contract --> Health["health"]
   Contract --> Purge["purge"]
@@ -57,13 +63,22 @@ flowchart TD
   Inbox --> Review
   Inbox --> Health
   Inbox --> DashboardCommand
+  Inbox --> Reports
+  Inbox --> Report
+  Inbox --> Usage
+  Inbox --> Queue
   Inbox --> Purge
   Inbox --> Correlate
   Review --> Surface["src/decision-surface.ts"]
   Health --> Surface
-  DashboardCommand --> Health
-  Dashboard --> Health
+  DashboardCommand --> Human["human read model"]
+  Dashboard --> Human
+  Reports --> Human
+  Report --> Human
+  Usage --> Human
+  Queue --> Human
   Surface --> Output["JSON/plain output"]
+  Human --> Output
   Purge --> Output
   Correlate --> Output
 ```
@@ -105,15 +120,21 @@ station evidence.
 | --- | --- | --- |
 | `record` | Writes hook-owned Software Learning Report; fail-closed on gitignore | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `closeout` | Writes driver closeout from stdin; no argv receipt | `src/skill-feedback-runner.ts`, `references/closeout-receipt.md` |
-| `dashboard` | Read-only plain front door over health facts | `src/decision-surface.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `dashboard` | Read-only plain front door for reports, usage, queue, and diagnostics | `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `reports` | Read-only report list with stable `report:<id>` continuations | `src/inbox-read-model.ts`, `src/report-normalizer.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `report` | Read-only detail view with duplicate-ref and low-signal gates | `src/inbox-read-model.ts`, `src/report-normalizer.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `usage` | Read-only skill usage ranking over primary and low-signal counts | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
+| `queue` | Read-only improvement queue from owner-path evidence with skill fallback | `src/decision-surface.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `review` | Read-only claim-safe report card | `src/inbox-read-model.ts`, `src/review-ledger-reducer.ts`, `src/decision-surface.ts`, `src/skill-feedback-runner.ts` |
 | `health` | Read-only inbox, readiness, warning, next-action summary | `src/inbox-read-model.ts`, `src/decision-surface.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 | `purge` | Preview by default; `--execute` deletes selected safe reports | `src/inbox-read-model.ts`, `src/skill-feedback-runner.ts` |
 | `correlate` | Preview by default; `--execute` writes private witnesses | `src/correlation-witness-artifacts.ts`, `src/correlation-witness-workflow.ts`, `src/skill-feedback-runner.ts`, `src/command-contract.ts` |
 
-The zero-arg front door aliases the contract-backed `dashboard` renderer over
-`HealthResultData`; `health` remains the JSON/plain data contract for scripts
-and agents.
+The zero-arg front door aliases the contract-backed `dashboard` renderer.
+`dashboard` is plain only; usage errors use `skill-feedback.dashboard`.
+`reports`, `report`, `usage`, and `queue` own the human JSON contracts.
+`health` remains the diagnostics JSON/plain data contract for scripts and
+agents.
 
 ## Module Map
 

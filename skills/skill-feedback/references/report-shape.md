@@ -163,12 +163,15 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 - Machine-readable commands emit a JSON process envelope for automation.
 - `dashboard` success output is bounded plain text; use `health` for the
   machine-readable envelope over the same health facts.
+- Do not add dashboard JSON output or a dashboard JSON alias to health.
 - Success envelopes carry `status`, `run_id`, `data`, `runtime_actions`, and `continuation`.
 - Command identity and schema version live in `data.contract` and `data.schema_version`.
 - Error envelopes carry `status: "error"`, `data.changed_state`, `data.contract`, `data.schema_version`, and `error` fields.
 - Error fields include code, message, exit code, recoverability, retryability, hint, and failure domain.
 - Exit `1` means repair-state unless the envelope names a narrower cause.
 - Exit `2` means input repair such as usage, argv, or stdin shape.
+- `reports`, `report`, `usage`, and `queue` default to bounded plain output.
+- Keep JSON output available for `reports`, `report`, `usage`, and `queue`.
 
 ## Review Output
 
@@ -208,12 +211,24 @@ Source owners: `skills/skill-feedback/src/command-contract.ts`,
 - Use these open reasons: high verification burden, repeated friction, evidence gap, unlinked correlation spike, owner-path observation.
 - Treat `report:<id>` values in `evidence_refs` as report-id refs, not filenames.
 - Resolve `report:<id>` first through `review_units[*].report_ids`; scan safe inbox JSON by `report_id` only when raw report content is needed.
-- Do not add a `show` or `resolve-ref` command until real downstream usage proves the command surface is worth owning.
+- Use `skill-feedback report <id>` as the human report-ref resolver once the human dashboard MVP lands.
+- Resolve primary-lane reports by default in report detail.
+- Require explicit low-signal lane opt-in before rendering a low-signal-only report detail.
+- Do not add a generic `show` or `resolve-ref` command until another ref family proves the command surface is worth owning.
 - Treat interrupted `.json.tmp-*` artifacts as invalid inbox health only; purge does not delete them.
 - Keep expected `cost_unavailable`, `unlinked_correlation`, and `missing_runtime_model` gaps out of single-report open items.
 - Return no-action output when no high-signal item exists.
 - Surface observations and touched surfaces as evidence.
 - Do not derive repair candidates in v1.
+- Keep skill usage rankings skill-only.
+- Route owner-path rankings to the human improvement queue.
+- Derive the human improvement queue from existing review ledger evidence first.
+- Group queue rows by owner path first.
+- Use skill queue rows only when reports lack a strong owner path.
+- Default queue output to strong or repeated evidence.
+- Require explicit opt-in before rendering weak or sparse queue rows.
+- Label weak queue rows as weak when explicitly included.
+- Defer a standalone report-scoring model until review ledger evidence cannot answer the queue question.
 - Do not delete or mutate inbox files.
 - Emit pilot checkpoint data after the marker is at least 7 days old.
 - Keep `pilot_started_at` as manual source evidence; purge does not delete it.

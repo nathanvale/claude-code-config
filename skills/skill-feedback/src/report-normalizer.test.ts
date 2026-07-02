@@ -178,6 +178,32 @@ describe("skill-feedback report normalizer", () => {
 		expect(normalized.report.evidence_gaps).not.toContain("observations");
 	});
 
+	test("rejects path-like persisted report ids", () => {
+		const parsed = parseCloseoutReceipt(COMPLETE_CLOSEOUT);
+		if (parsed.kind !== "ok") throw new Error("expected ok closeout");
+		const normalized = normalizeReport({
+			schema_version: "1",
+			report_id: "../outside",
+			untrusted_evidence: true,
+			generated_ts: COMPLETE_RECEIPT.generated_ts,
+			evidence_source: "driver_closeout",
+			correlation_status: "linked",
+			runtime: {
+				git_sha: COMPLETE_RECEIPT.git_sha,
+				skill_version: COMPLETE_RECEIPT.skill_version,
+				model: COMPLETE_RECEIPT.model,
+			},
+			report_card: parsed.receipt,
+			evidence_gaps: parsed.evidence_gaps,
+		});
+
+		expect(normalized).toEqual({
+			kind: "invalid",
+			path: "report_id",
+			reason: "invalid_report_id",
+		});
+	});
+
 	test("normalizes schema 2 closeout report with legacy report-card skill-run id as evidence-only", () => {
 		const normalized = normalizeReport(
 			schema2Report({
