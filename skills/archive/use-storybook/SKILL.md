@@ -32,6 +32,8 @@ taxonomy/title organization.
 | MCP discovery engine | `mcporter` CLI |
 | Target repo Storybook config | nearest Storybook main config |
 | Target repo taxonomy guide | nearest `STORYBOOK_TAXONOMY.md` |
+| Target repo package scripts | nearest package manifest |
+| Target repo test config | nearest Vitest, Playwright, or Storybook test config |
 | Provenance | `PROVENANCE.md` |
 
 ## Prerequisites
@@ -46,6 +48,8 @@ bun run --filter use-storybook-scripts storybook-doctor -- check --json --repo <
 - `ready` → proceed to Quick Start.
 - `degraded` → proceed; follow the `next_safe_action` for improvements.
 - `blocked` → follow the `next_safe_action` to resolve; do not start MCP work.
+
+Readiness proof includes Storybook version compatibility checks.
 
 For deeper diagnostics:
 

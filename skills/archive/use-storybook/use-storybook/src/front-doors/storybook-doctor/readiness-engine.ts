@@ -231,12 +231,12 @@ async function probeMcp(
 			const body = await response.text();
 			try {
 				const parsed = JSON.parse(body);
-				const toolsCount = Array.isArray(parsed.result?.tools)
-					? parsed.result.tools.length
-					: null;
-				return { reachable: true, toolsCount };
+				if (!Array.isArray(parsed?.result?.tools)) {
+					return { reachable: false, toolsCount: null };
+				}
+				return { reachable: true, toolsCount: parsed.result.tools.length };
 			} catch {
-				return { reachable: true, toolsCount: null };
+				return { reachable: false, toolsCount: null };
 			}
 		} finally {
 			clearTimeout(timer);
@@ -271,7 +271,8 @@ function collectHelperFindings(
 			severity: "degraded",
 			message:
 				"tmux is not installed. It can keep a Storybook session alive across terminal sessions.",
-			detail: "Install with: brew install tmux",
+			detail:
+				"Install tmux (macOS: brew install tmux; Debian/Ubuntu: apt install tmux).",
 		});
 	}
 }

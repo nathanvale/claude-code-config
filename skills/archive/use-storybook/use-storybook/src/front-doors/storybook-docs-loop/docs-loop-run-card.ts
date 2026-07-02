@@ -335,8 +335,13 @@ export function assertDocsLoopRunStateShape(
 			fail("each item.cluster must be an object with a main_story");
 		}
 	}
-	if (typeof state.cursor !== "number" || !Number.isInteger(state.cursor)) {
-		fail("cursor must be an integer");
+	if (
+		typeof state.cursor !== "number" ||
+		!Number.isInteger(state.cursor) ||
+		state.cursor < 0 ||
+		state.cursor > (state.items as readonly unknown[]).length
+	) {
+		fail("cursor must be an integer from 0 to items.length");
 	}
 	if (
 		typeof state.batch_size !== "number" ||
