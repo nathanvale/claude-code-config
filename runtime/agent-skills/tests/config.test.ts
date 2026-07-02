@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,6 +108,47 @@ describe("agent-skills config", () => {
 			ok: false,
 			error: { code: "invalid_config" },
 		});
+	});
+
+	test("resolves the .git root even from nested package directories", async () => {
+		const root = await tempRoot("nested-root");
+		await mkdir(join(root, ".git"), { recursive: true });
+		await mkdir(join(root, "skills"), { recursive: true });
+		await mkdir(join(root, "packages/app"), { recursive: true });
+		await writeFile(join(root, "packages/app/package.json"), "{}\n");
+
+		const loaded = await loadAgentSkillsConfig(join(root, "packages/app"));
+
+		expect(loaded.ok).toBe(true);
+		if (!loaded.ok) return;
+		expect(loaded.config.repoRoot).toBe(root);
+		expect(loaded.config.catalogRoot).toBe(join(root, "skills"));
+	});
+
+	test("ignore add fails repairably without ./skills instead of fabricating config", async () => {
+		const root = await tempRoot("add-missing");
+
+		const updated = await addIgnorePattern(root, "fixture-*");
+
+		expect(updated).toMatchObject({
+			ok: false,
+			error: { code: "missing_config" },
+		});
+		expect(existsSync(join(root, ".agent-skills.yml"))).toBe(false);
+	});
+
+	test("ignore add refuses to rewrite config that contains comments", async () => {
+		const root = await tempRoot("add-comments");
+		const text = "# keep this note\ncatalog: ./skills\nignore: []\n";
+		await writeFile(join(root, ".agent-skills.yml"), text);
+
+		const updated = await addIgnorePattern(root, "fixture-*");
+
+		expect(updated).toMatchObject({
+			ok: false,
+			error: { code: "invalid_config" },
+		});
+		expect(await readFile(join(root, ".agent-skills.yml"), "utf8")).toBe(text);
 	});
 
 	test("ignore add creates minimal v1 config from auto-default", async () => {

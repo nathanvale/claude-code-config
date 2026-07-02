@@ -11,8 +11,10 @@ import {
 } from "@side-quest/cli-command-facade";
 import {
 	applyVisibility,
+	bundledCatalogRoot,
 	discoverCatalog,
 	discoverImportedCatalog,
+	findStaleImportLinks,
 } from "./catalog.ts";
 import {
 	addIgnorePattern,
@@ -79,7 +81,11 @@ export interface ParsedInvocation {
 	parseError?: CommandResult;
 }
 
-type RuntimeErrorCode = "invalid_config" | "missing_config" | "unmanaged_blocker";
+type RuntimeErrorCode =
+	| "invalid_config"
+	| "missing_config"
+	| "unmanaged_blocker"
+	| "internal_error";
 
 type CommandResult =
 	| {
@@ -93,7 +99,7 @@ type CommandResult =
 			exitCode: 1 | 2;
 			code: "usage_error" | RuntimeErrorCode;
 			message: string;
-			action: "help" | "fix_config" | "inspect_blocker";
+			action: "help" | "fix_config" | "inspect_blocker" | "inspect_error";
 			data?: Record<string, unknown>;
 	  };
 
@@ -144,9 +150,18 @@ export async function main(
 	const stdout = options.stdout ?? process.stdout;
 	const stderr = options.stderr ?? process.stderr;
 
-	if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-		const command = argv.find(isAgentSkillsCommand) ?? "status";
-		stdout.write(renderCommandUsage(agentSkillsContracts[command]));
+	const firstPositional = argv.find((arg) => !arg.startsWith("-"));
+	if (
+		(argv.includes("--help") || argv.includes("-h") || argv.length === 0) &&
+		(firstPositional === undefined || isAgentSkillsCommand(firstPositional))
+	) {
+		stdout.write(
+			renderCommandUsage(
+				agentSkillsContracts[
+					isAgentSkillsCommand(firstPositional) ? firstPositional : "status"
+				],
+			),
+		);
 		return 0;
 	}
 	if (argv.includes("--version")) {
@@ -202,6 +217,9 @@ export async function main(
 		stdout.write(result.human);
 	} else {
 		stderr.write(`${result.message}\n`);
+		for (const blocker of failureBlockers(result.data)) {
+			stderr.write(`blocker: ${blocker.root}/${blocker.id} (${blocker.reason})\n`);
+		}
 		stderr.write(`next: ${result.action}\n`);
 	}
 	return result.exitCode;
@@ -276,6 +294,9 @@ export async function runCommand(
 	try {
 		switch (invocation.command) {
 			case "commands": {
+				if (!invocation.json) {
+					return usageFailure("commands supports --json output only.");
+				}
 				const discovery = projectCommandDiscoveryTree(agentSkillsContractEntries);
 				return okResult(baseData(discovery), "", 0);
 			}
@@ -339,6 +360,7 @@ export async function runCommand(
 					state.plan.status.catalog_root,
 					invocation.check,
 					state.plan.projectionRoots,
+					[bundledCatalogRoot()],
 				);
 				const result: AgentSkillsUnlinkResult = {
 					check: invocation.check,
@@ -351,11 +373,15 @@ export async function runCommand(
 			}
 		}
 	} catch (error) {
-		return runtimeFailure(
-			"unmanaged_blocker",
-			(error as Error).message,
-			"inspect_blocker",
-		);
+		const message = (error as Error).message;
+		if (message === "unmanaged_blocker") {
+			return runtimeFailure(
+				"unmanaged_blocker",
+				"Unmanaged projection entries block sync.",
+				"inspect_blocker",
+			);
+		}
+		return runtimeFailure("internal_error", message, "inspect_error");
 	}
 }
 
@@ -385,9 +411,16 @@ async function loadProjectionState(cwd: string): Promise<
 		loaded.config.catalogRoot,
 		loaded.config.imports,
 	);
+	const staleImportLinks = await findStaleImportLinks(
+		loaded.config.catalogRoot,
+		loaded.config.imports,
+	);
 	const importedIds = new Set(importedEntries.map((entry) => entry.id));
+	const staleIds = new Set(staleImportLinks.map((link) => link.id));
 	const entries = [
-		...localEntries.filter((entry) => !importedIds.has(entry.id)),
+		...localEntries.filter(
+			(entry) => !importedIds.has(entry.id) && !staleIds.has(entry.id),
+		),
 		...importedEntries,
 	];
 	const visibility = applyVisibility(entries, loaded.config.ignore);
@@ -404,6 +437,8 @@ async function loadProjectionState(cwd: string): Promise<
 		visibility,
 		projectionRoots: loaded.config.projectionRoots,
 		importLinks,
+		managedSourceRoots: [bundledCatalogRoot()],
+		staleImportLinks,
 	});
 	return { ok: true, plan, visibility, importLinks };
 }
@@ -475,7 +510,7 @@ function buildListResult(
 		if (flags.visible && entry.state !== "visible") return false;
 		if (flags.ignored && entry.state !== "ignored") return false;
 		if (flags.new && !plan.status.newly_visible.includes(entry.id)) return false;
-		if (flags.why && explicitId && entry.id !== explicitId) return false;
+		if (explicitId && entry.id !== explicitId) return false;
 		return true;
 	});
 
@@ -535,7 +570,7 @@ function usageFailure(message: string): CommandFailure {
 function runtimeFailure(
 	code: RuntimeErrorCode,
 	message: string,
-	action: "fix_config" | "inspect_blocker",
+	action: "fix_config" | "inspect_blocker" | "inspect_error",
 	data: Record<string, unknown> = {},
 ): CommandFailure {
 	return {
@@ -546,6 +581,21 @@ function runtimeFailure(
 		action,
 		data,
 	};
+}
+
+function failureBlockers(
+	data: Record<string, unknown> | undefined,
+): Array<{ root: string; id: string; reason: string }> {
+	const blockers = data?.blockers;
+	if (!Array.isArray(blockers)) return [];
+	return blockers.filter(
+		(entry): entry is { root: string; id: string; reason: string } =>
+			typeof entry === "object" &&
+			entry !== null &&
+			typeof (entry as { root?: unknown }).root === "string" &&
+			typeof (entry as { id?: unknown }).id === "string" &&
+			typeof (entry as { reason?: unknown }).reason === "string",
+	);
 }
 
 function baseData(data: object): Record<string, unknown> {

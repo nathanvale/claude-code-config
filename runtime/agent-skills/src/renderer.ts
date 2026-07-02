@@ -65,11 +65,17 @@ export function renderStatus(plan: AgentSkillsProjectionPlan): string {
 		`last projected: ${status.last_projected_at ?? "none"}`,
 		`changes: +${status.newly_visible.length} -${status.removed_since_snapshot.length} write:${status.changes.create_or_update.length + status.changes.remove.length + status.changes.broken.length}`,
 		`roots: ${status.checked_roots.join(", ")}`,
-		`next: ${status.next_action_summary}`,
 	];
-	if (status.blockers.length > 0) {
-		lines.push(`blockers: ${status.blockers.length}`);
+	for (const broken of status.changes.broken) {
+		lines.push(`broken: ${broken}`);
 	}
+	for (const blocker of status.blockers) {
+		lines.push(`blocker: ${blocker.root}/${blocker.id} (${blocker.reason})`);
+	}
+	if (status.noise_hint) {
+		lines.push(`note: ${status.noise_hint}`);
+	}
+	lines.push(`next: ${status.next_action_summary}`);
 	return `${lines.join("\n")}\n`;
 }
 
@@ -113,9 +119,11 @@ export function renderSync(plan: AgentSkillsProjectionPlan, check: boolean): str
  */
 export function renderList(result: AgentSkillsListResult): string {
 	const lines = [`agent-skills list ${result.mode}`];
+	// Ignored mode always names the matching rule so the blacklist stays legible.
+	const withReason = result.why || result.mode === "ignored";
 	for (const entry of result.entries) {
 		lines.push(
-			result.why
+			withReason
 				? `${entry.id}\t${entry.state}\t${entry.reason}`
 				: `${entry.id}\t${entry.state}`,
 		);

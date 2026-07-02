@@ -165,13 +165,17 @@ export const agentSkillsContracts = defineCommandFacadeContract(
 			json: true,
 			audience: "operator",
 			mutation: "write",
-			sideEffects: ["read", "check", "write"],
-			executionModes: ["check", "normal"],
+			sideEffects: ["read", "write"],
+			executionModes: ["normal"],
 			outputModes: ["plain", "json"],
 			interactivity: "none",
 			resultContract,
 			actionAffordances: {
 				success: nextSync,
+			},
+			previewExemption: {
+				reason:
+					"ignore edits only the ignore list in .agent-skills.yml; ignore list shows current rules and ignore remove reverts an edit.",
 			},
 			flags: jsonFlag,
 			exitCodes,
@@ -179,7 +183,11 @@ export const agentSkillsContracts = defineCommandFacadeContract(
 		unlink: {
 			script: AGENT_SKILLS_CLI_NAME,
 			summary: "Remove managed local projection links for this repo.",
-			usage: ["agent-skills unlink", "agent-skills unlink --json"],
+			usage: [
+				"agent-skills unlink",
+				"agent-skills unlink --check",
+				"agent-skills unlink --json",
+			],
 			json: true,
 			audience: "operator",
 			mutation: "write",

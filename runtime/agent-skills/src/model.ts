@@ -53,6 +53,13 @@ export const AGENT_SKILLS_SNAPSHOT_PATH =
 	".agents/agent-skills-snapshot.json" as const;
 
 /**
+ * Visible-count threshold above which status adds a soft noise hint.
+ *
+ * @defaultValue 40
+ */
+export const AGENT_SKILLS_NOISE_THRESHOLD = 40 as const;
+
+/**
  * Branch Station ids for initial agent-visible outcomes.
  */
 export const AGENT_SKILLS_STATIONS = [
@@ -198,4 +205,6 @@ export interface AgentSkillsStatus {
 	next_action: "none" | "sync" | "inspect_blocker" | "fix_config";
 	/** One concise next action summary. */
 	next_action_summary: string;
+	/** Soft warning when the visible set is likely noisy. */
+	noise_hint?: string;
 }

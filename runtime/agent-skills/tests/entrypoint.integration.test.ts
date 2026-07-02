@@ -128,6 +128,52 @@ describe("agent-skills entrypoint", () => {
 		);
 	});
 
+	test("sync cleans up a dropped import instead of wedging on a foreign blocker", async () => {
+		const root = await tempRepo("imports-dropped");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./skills\nimports:\n  - storybook-matrix\n",
+		);
+		expect((await runJsonCli(["sync", "--json"], root)).exitCode).toBe(0);
+		expect(lstatSync(join(root, "skills/storybook-matrix")).isSymbolicLink()).toBe(
+			true,
+		);
+
+		await writeFile(join(root, ".agent-skills.yml"), "catalog: ./skills\n");
+		const result = await runJsonCli(["sync", "--json"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.envelope.status).toBe("ok");
+		expect(existsSync(join(root, "skills/storybook-matrix"))).toBe(false);
+		expect(existsSync(join(root, ".claude/skills/storybook-matrix"))).toBe(false);
+		expect(existsSync(join(root, ".agents/skills/storybook-matrix"))).toBe(false);
+	});
+
+	test("sync failure names unmanaged blockers in human output", async () => {
+		const root = await tempRepo("blocker-named");
+		await writeSkill(join(root, "skills"), "fallow");
+		await mkdir(join(root, ".agents/skills/squatter"), { recursive: true });
+
+		const result = await runTextCli(["sync"], root);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain(".agents/skills/squatter (real_entry)");
+	});
+
+	test("list --ignored names the matching ignore rule", async () => {
+		const root = await tempRepo("list-ignored");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./skills\nignore:\n  - fallow\n",
+		);
+
+		const result = await runTextCli(["list", "--ignored"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("fallow\tignored\tignored by fallow");
+	});
+
 	test("list --new shows skills added after the last snapshot", async () => {
 		const root = await tempRepo("list-new");
 		await writeSkill(join(root, "skills"), "fallow");
@@ -165,6 +211,49 @@ describe("agent-skills entrypoint", () => {
 		expect(result.output).toContain("changed: fixture-*");
 		expect(result.output).toContain("next: Run sync");
 		expect(config).toContain("fixture-*");
+	});
+
+	test("status human output names broken projections", async () => {
+		const root = await tempRepo("status-broken");
+		await writeSkill(join(root, "skills"), "fallow");
+		await mkdir(join(root, ".agents/skills"), { recursive: true });
+		await symlink(join(root, "skills/missing"), join(root, ".agents/skills/fallow"));
+
+		const result = await runTextCli(["status"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("broken: .agents/skills/fallow");
+		expect(result.output).toContain("next: Run sync");
+	});
+
+	test("list filters by positional skill id without --why", async () => {
+		const root = await tempRepo("list-positional");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeSkill(join(root, "skills"), "summarize");
+
+		const result = await runTextCli(["list", "fallow"], root);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("fallow\tvisible");
+		expect(result.output).not.toContain("summarize");
+	});
+
+	test("commands without --json exits 2 with usage semantics", async () => {
+		const root = await tempRepo("commands-plain");
+
+		const result = await runTextCli(["commands"], root);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("--json");
+	});
+
+	test("--help with an unknown command exits 2", async () => {
+		const root = await tempRepo("help-unknown");
+
+		const result = await runTextCli(["bogus", "--help"], root);
+
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("Unknown command");
 	});
 
 	test("invalid usage exits 2 and points to help", async () => {

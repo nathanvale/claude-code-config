@@ -1,10 +1,71 @@
 import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readdir, readFile, realpath } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SkillCatalogEntry, SkillVisibility } from "./model.ts";
 
 const BUNDLED_CATALOG_ROOT = new URL("../../../skills/", import.meta.url);
+
+/**
+ * Absolute path of the bundled CCC skill catalog used by `imports`.
+ *
+ * @returns Bundled catalog directory path
+ */
+export function bundledCatalogRoot(): string {
+	return fileURLToPath(BUNDLED_CATALOG_ROOT);
+}
+
+/**
+ * Catalog symlink into the bundled catalog that is no longer imported.
+ */
+export interface StaleImportLink {
+	/** Catalog entry id. */
+	id: string;
+	/** Absolute local catalog symlink path. */
+	path: string;
+}
+
+/**
+ * Find catalog symlinks into the bundled catalog not covered by `imports`.
+ *
+ * These are generated import state from a previous config; sync removes them
+ * so dropped imports do not stay visible or wedge projection cleanup.
+ *
+ * @param catalogRoot - Absolute target catalog directory
+ * @param imports - Currently configured import ids
+ * @returns Stale import links safe to remove (always symlinks)
+ */
+export async function findStaleImportLinks(
+	catalogRoot: string,
+	imports: readonly string[],
+): Promise<readonly StaleImportLink[]> {
+	if (!existsSync(catalogRoot)) return [];
+	const bundledPath = bundledCatalogRoot();
+	const bundled = existsSync(bundledPath)
+		? await realpath(bundledPath)
+		: resolve(bundledPath);
+	const resolvedCatalog = await realpath(catalogRoot);
+	// Inside the bundled catalog repo itself, catalog-internal symlinks are
+	// source, not import state; never auto-remove them.
+	if (resolvedCatalog === bundled) return [];
+	const importIds = new Set(imports);
+	const children = await readdir(catalogRoot, { withFileTypes: true });
+	const stale: StaleImportLink[] = [];
+	for (const child of children) {
+		if (!child.isSymbolicLink() || importIds.has(child.name)) continue;
+		const path = join(catalogRoot, child.name);
+		try {
+			const target = await realpath(path);
+			const rel = relative(bundled, target);
+			if (rel.length > 0 && !rel.startsWith("..")) {
+				stale.push({ id: child.name, path });
+			}
+		} catch {
+			// Dangling catalog symlinks surface as invalid entries instead.
+		}
+	}
+	return stale;
+}
 
 /**
  * Discover direct child skill entries in a catalog root.

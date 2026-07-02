@@ -115,6 +115,7 @@ describe("agent-skills projection", () => {
 		const plan = await statusPlan(root);
 
 		expect(plan.status.health).toBe("blocked");
+		expect(plan.status.station).toBe("unmanaged_blocker");
 		await expect(
 			applyProjection(plan, "2026-06-16T00:00:00.000Z"),
 		).rejects.toThrow("unmanaged_blocker");
@@ -146,6 +147,74 @@ describe("agent-skills projection", () => {
 
 		expect(plan.status.newly_visible).toEqual(["summarize"]);
 		expect(plan.status.removed_since_snapshot).toEqual([]);
+	});
+
+	test("real directory at an import target blocks sync and survives", async () => {
+		const root = await tempRepo("import-collision");
+		const source = await mkdtemp(join(tmpdir(), "agent-skills-import-src-"));
+		await writeSkill(source, "fallow");
+		await writeSkill(join(root, "skills"), "fallow");
+		await writeFile(join(root, "skills/fallow/notes.txt"), "precious\n");
+		const catalogRoot = join(root, "skills");
+		const visibility = applyVisibility(await discoverCatalog(catalogRoot), []);
+		const plan = await planProjection({
+			repoRoot: root,
+			catalogRoot,
+			visibility,
+			importLinks: [
+				{
+					id: "fallow",
+					sourcePath: join(source, "fallow"),
+					targetPath: join(catalogRoot, "fallow"),
+				},
+			],
+		});
+
+		expect(plan.status.health).toBe("blocked");
+		expect(plan.status.blockers).toMatchObject([
+			{ id: "fallow", reason: "real_entry" },
+		]);
+		await expect(
+			applyProjection(plan, "2026-06-16T00:00:00.000Z"),
+		).rejects.toThrow("unmanaged_blocker");
+		expect(existsSync(join(root, "skills/fallow/notes.txt"))).toBe(true);
+	});
+
+	test("dangling foreign symlink is an unmanaged blocker, not a broken projection", async () => {
+		const root = await tempRepo("dangling-foreign");
+		await writeSkill(join(root, "skills"), "fallow");
+		await mkdir(join(root, ".agents/skills"), { recursive: true });
+		await symlink("/nonexistent/outside/fallow", join(root, ".agents/skills/fallow"));
+
+		const plan = await statusPlan(root);
+
+		expect(plan.status.health).toBe("blocked");
+		expect(plan.status.blockers).toMatchObject([
+			{ id: "fallow", reason: "foreign_symlink" },
+		]);
+		const removed = await unlinkManagedProjections(root, join(root, "skills"), false);
+		expect(removed).not.toContain(".agents/skills/fallow");
+		expect(lstatSync(join(root, ".agents/skills/fallow")).isSymbolicLink()).toBe(
+			true,
+		);
+	});
+
+	test("status adds a soft noise hint when the visible set is large", async () => {
+		const root = await tempRepo("noise");
+		const visibility = Array.from({ length: 41 }, (_, index) => ({
+			id: `skill-${String(index).padStart(2, "0")}`,
+			path: join(root, "skills", `skill-${String(index).padStart(2, "0")}`),
+			state: "visible" as const,
+			reason: "valid catalog skill",
+		}));
+
+		const plan = await planProjection({
+			repoRoot: root,
+			catalogRoot: join(root, "skills"),
+			visibility,
+		});
+
+		expect(plan.status.noise_hint).toContain("ignore suggest");
 	});
 
 	test("unlink removes only managed links", async () => {
