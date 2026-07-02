@@ -1,8 +1,14 @@
 ---
-status: accepted
+status: superseded-for-now
+superseded_by: docs/decisions/2026-07-02-npx-skills-division-of-labor.md
 ---
 
 # Skillporter naming and source location
+
+> **Status note (2026-07-02):** Skillporter is not being built for now. Direct
+> `bunx skills` usage plus agent-skills lock recognition replaces it — see
+> `docs/decisions/2026-07-02-npx-skills-division-of-labor.md`. This ADR's
+> naming/location decisions stand if Skillporter is revived.
 
 Skillporter source lives at `runtime/skill-porter/` in this repo (same tier as
 `runtime/cli-command-facade`), workspace-linked to

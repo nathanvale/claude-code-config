@@ -53,6 +53,13 @@ export const AGENT_SKILLS_SNAPSHOT_PATH =
 	".agents/agent-skills-snapshot.json" as const;
 
 /**
+ * Visible-count threshold above which status adds a soft noise hint.
+ *
+ * @defaultValue 40
+ */
+export const AGENT_SKILLS_NOISE_THRESHOLD = 40 as const;
+
+/**
  * Branch Station ids for initial agent-visible outcomes.
  */
 export const AGENT_SKILLS_STATIONS = [
@@ -92,8 +99,6 @@ export interface SkillCatalogEntry {
 	id: string;
 	/** Absolute path to the catalog entry directory. */
 	path: string;
-	/** Absolute local catalog symlink path when this entry is imported. */
-	importLinkPath?: string;
 	/** Frontmatter name when present. */
 	name?: string;
 	/** Frontmatter description when present. */
@@ -115,7 +120,7 @@ export interface SkillVisibility {
 	/** Frontmatter name when available. */
 	name?: string;
 	/** Visibility classification. */
-	state: "visible" | "ignored" | "invalid";
+	state: "visible" | "ignored" | "invalid" | "external";
 	/** Human-readable reason for list --why. */
 	reason: string;
 	/** Matching ignore rule when ignored. */
@@ -150,14 +155,36 @@ export interface ProjectionChanges {
  * Unmanaged local projection entry that blocks writes.
  */
 export interface ProjectionBlocker {
-	/** Projection root containing the blocker. */
+	/** Projection root containing the blocker, or the catalog root for conflicts. */
 	root: string;
 	/** Entry id under the projection root. */
 	id: string;
 	/** Absolute path to the blocker. */
 	path: string;
 	/** Blocker reason. */
-	reason: "real_entry" | "foreign_symlink";
+	reason: "real_entry" | "foreign_symlink" | "catalog_conflict";
+	/** Repair-oriented explanation naming sources and options, when useful. */
+	why?: string;
+}
+
+/**
+ * Projection-root entry recognized from `skills-lock.json`.
+ *
+ * External entries are never created, modified, or removed by sync or unlink.
+ */
+export interface ExternalProjectionEntry {
+	/** Projection root containing the entry. */
+	root: string;
+	/** Entry id matching a lockfile record. */
+	id: string;
+	/** Absolute path to the entry. */
+	path: string;
+	/** Disk shape at classification time. */
+	shape: "real_entry" | "symlink";
+	/** Best-effort install source from the lockfile. */
+	source?: string;
+	/** Whether the lock record carries a content hash. */
+	has_hash: boolean;
 }
 
 /**
@@ -180,6 +207,14 @@ export interface AgentSkillsStatus {
 	ignored_count: number;
 	/** Count of invalid catalog entries. */
 	invalid_count: number;
+	/** Count of lockfile-managed external entries across projection roots. */
+	external_count: number;
+	/** Lockfile-managed entries found in projection roots. */
+	externals: readonly ExternalProjectionEntry[];
+	/** Lock ids with no disk entry in any projection root. */
+	missing_external_ids: readonly string[];
+	/** Named diagnostic when skills-lock.json exists but yields no entries. */
+	lock_parse_failure?: string;
 	/** Last projected snapshot timestamp, when present. */
 	last_projected_at?: string;
 	/** Projection health value. */
@@ -198,4 +233,6 @@ export interface AgentSkillsStatus {
 	next_action: "none" | "sync" | "inspect_blocker" | "fix_config";
 	/** One concise next action summary. */
 	next_action_summary: string;
+	/** Soft warning when the visible set is likely noisy. */
+	noise_hint?: string;
 }

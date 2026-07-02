@@ -219,6 +219,85 @@ describe("skill-feedback Branch Station integration", () => {
 		expect(() => parseCliProcessJson(result)).toThrow();
 		expect(await Bun.file(join(root, ".skill-feedback")).exists()).toBe(false);
 	});
+
+	test("queue include-weak still returns strongest limited row first", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeWeakQueueFixture(root);
+		await writeInboxReport(
+			root,
+			"fallback-a.json",
+			v1HumanReport({
+				reportId: "fallback-a",
+				skill: "fallow",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+				touchedSurfaces: [],
+			}),
+		);
+		await writeInboxReport(
+			root,
+			"fallback-b.json",
+			v1HumanReport({
+				reportId: "fallback-b",
+				skill: "fallow",
+				generatedTs: "2026-06-13T00:00:00.000Z",
+				touchedSurfaces: [],
+			}),
+		);
+
+		const result = await runSkillFeedback(
+			["queue", "--json", "--include-weak", "--limit", "1"],
+			{ cwd: root, label: "queue include weak limited strongest" },
+		);
+		const envelope = parseCliProcessJson(result) as RuntimeEnvelope;
+		const rows = envelope.data?.rows as Array<{
+			target_type: string;
+			target: string;
+			evidence_strength: string;
+		}>;
+
+		expect(result.exitCode, describeCliProcessRun(result)).toBe(0);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			target_type: "skill",
+			target: "fallow",
+			evidence_strength: "strong",
+		});
+	});
+
+	test("queue weak availability counts filtered weak fallback rows", async () => {
+		const root = await makeIgnoredGitRoot();
+		await writeLowSignalInboxReport(
+			root,
+			"fallow.json",
+			v1HumanReport({
+				reportId: "weak-fallow",
+				skill: "fallow",
+				generatedTs: GENERATED_TS,
+				touchedSurfaces: [],
+			}),
+		);
+		await writeLowSignalInboxReport(
+			root,
+			"create-skill.json",
+			v1HumanReport({
+				reportId: "weak-create-skill",
+				skill: "create-skill",
+				generatedTs: "2026-06-12T00:00:00.000Z",
+				touchedSurfaces: [],
+			}),
+		);
+
+		const result = await runSkillFeedback(["queue", "--json", "--skill", "fallow"], {
+			cwd: root,
+			label: "queue weak fallback filtered count",
+		});
+		const envelope = parseCliProcessJson(result) as RuntimeEnvelope;
+		const counts = envelope.data?.counts as { weak_available_count?: number };
+
+		expect(result.exitCode, describeCliProcessRun(result)).toBe(0);
+		expect(envelope.data?.rows).toEqual([]);
+		expect(counts.weak_available_count).toBe(1);
+	});
 });
 
 async function runRecordSuccess(

@@ -69,6 +69,7 @@ const EVIDENCE_GAP_CODES = [
 	"missing_goal",
 	"missing_outcome",
 	"missing_friction",
+	"missing_generated_ts",
 	"missing_runtime_model",
 	"missing_runtime_git_sha",
 	"missing_runtime_skill_version",
@@ -258,7 +259,7 @@ function normalizeV1Report(raw: Record<string, unknown>): NormalizeReportResult 
 			schema_version: SKILL_FEEDBACK_SCHEMA_VERSION,
 			source_schema_version: "v1",
 			...normalizedReportBaseFields(header, body),
-			skill: body.reportCard.receipt.skill ?? "",
+			skill: nonEmptyString(body.reportCard.receipt.skill) ?? "",
 			...normalizedReportCardFields(body),
 		},
 	};
@@ -295,7 +296,7 @@ function normalizeV2Report(
 			...(trustedRunProvenance
 				? { skill_run_id_provenance: body.skillRunIdProvenance }
 				: {}),
-			skill: body.reportCard.receipt.skill ?? raw.skill,
+			skill: nonEmptyString(body.reportCard.receipt.skill) ?? raw.skill,
 			...normalizedReportCardFields(body),
 			writer_proof_verified: proofVerified,
 			proof_diagnostics: proofDiagnostics,
@@ -341,6 +342,9 @@ function parseNormalizedReportHeader(
 	}
 	if (typeof raw.generated_ts !== "string") {
 		return { kind: "invalid", path: "generated_ts", reason: "expected_string" };
+	}
+	if (!isNormalizableIsoTimestamp(raw.generated_ts)) {
+		return { kind: "invalid", path: "generated_ts", reason: "invalid_timestamp" };
 	}
 	return { reportId: raw.report_id, generatedTs: raw.generated_ts };
 }
@@ -514,8 +518,10 @@ function parseV0SoftwareLearningReport(
 		git_sha: raw.git_sha,
 		model: raw.model,
 		usage: raw.usage,
-		generated_ts: raw.generated_ts,
 	};
+	if (raw.generated_ts !== "") {
+		receiptInput.generated_ts = raw.generated_ts;
+	}
 	if (raw.explanation !== undefined && raw.explanation !== null) {
 		receiptInput.explanation = raw.explanation;
 	}
@@ -667,6 +673,12 @@ function v0Gap(field: ReceiptField): EvidenceGap {
 			return evidenceGap("missing_goal", field, "v0 record is missing goal.");
 		case "friction":
 			return evidenceGap("missing_friction", field, "v0 record is missing friction.");
+		case "generated_ts":
+			return evidenceGap(
+				"missing_generated_ts",
+				field,
+				"v0 record is missing generated_ts.",
+			);
 		case "model":
 			return evidenceGap(
 				"missing_runtime_model",
@@ -702,9 +714,28 @@ function isReceiptUsage(value: unknown): value is ReceiptUsage {
 	return (
 		keys.length === RECEIPT_USAGE_FIELDS.length &&
 		keys.every((key) => RECEIPT_USAGE_FIELD_SET.has(key)) &&
-		typeof value.input_tokens === "number" &&
-		typeof value.output_tokens === "number" &&
-		typeof value.cache_read_tokens === "number"
+		isNonNegativeInteger(value.input_tokens) &&
+		isNonNegativeInteger(value.output_tokens) &&
+		isNonNegativeInteger(value.cache_read_tokens)
+	);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return Number.isInteger(value) && (value as number) >= 0;
+}
+
+// Read-path tolerance: accepts Z or ±HH:mm offsets so previously-written inbox
+// reports stay normalizable; write path (command-contract.ts parseReceipt and
+// the runner pre-check) enforces strict Z-only.
+function isNormalizableIsoTimestamp(value: string): boolean {
+	return (
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(?:Z|[+-]\d{2}:\d{2})$/.test(
+			value,
+		) && Number.isFinite(Date.parse(value))
 	);
 }
 

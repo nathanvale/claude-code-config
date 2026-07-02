@@ -1,10 +1,7 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { SkillCatalogEntry, SkillVisibility } from "./model.ts";
-
-const BUNDLED_CATALOG_ROOT = new URL("../../../skills/", import.meta.url);
 
 /**
  * Discover direct child skill entries in a catalog root.
@@ -30,31 +27,6 @@ export async function discoverCatalog(
 	);
 
 	return entries.sort((left, right) => left.id.localeCompare(right.id));
-}
-
-/**
- * Discover configured CCC-owned imports as managed symlink catalog entries.
- *
- * @param catalogRoot - Absolute target catalog directory
- * @param imports - Skill ids imported from the bundled CCC catalog
- * @returns Imported entries addressed by their source catalog path
- */
-export async function discoverImportedCatalog(
-	catalogRoot: string,
-	imports: readonly string[],
-): Promise<readonly SkillCatalogEntry[]> {
-	return Promise.all(
-		imports.map(async (id) => {
-			const sourcePath = resolve(fileURLToPath(BUNDLED_CATALOG_ROOT), id);
-			const targetPath = resolve(catalogRoot, id);
-			const entry = await readCatalogEntryFromPath(id, sourcePath);
-			return {
-				...entry,
-				path: sourcePath,
-				importLinkPath: targetPath,
-			};
-		}),
-	);
 }
 
 /**
@@ -134,13 +106,6 @@ async function readCatalogEntry(
 	id: string,
 ): Promise<SkillCatalogEntry> {
 	const path = resolve(catalogRoot, id);
-	return readCatalogEntryFromPath(id, path);
-}
-
-async function readCatalogEntryFromPath(
-	id: string,
-	path: string,
-): Promise<SkillCatalogEntry> {
 	const skillPath = join(path, "SKILL.md");
 	if (!existsSync(skillPath)) {
 		return {

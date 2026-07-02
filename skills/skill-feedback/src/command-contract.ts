@@ -336,6 +336,7 @@ const EVIDENCE_GAP_CODES = [
 	"missing_goal",
 	"missing_friction",
 	"missing_verification_burden",
+	"missing_generated_ts",
 	"missing_runtime_model",
 	"missing_runtime_git_sha",
 	"missing_runtime_skill_version",
@@ -1720,9 +1721,20 @@ function isReceiptUsage(value: unknown): value is ReceiptUsage {
 	return (
 		keys.length === RECEIPT_USAGE_FIELDS.length &&
 		keys.every((key) => RECEIPT_USAGE_FIELD_SET.has(key)) &&
-		typeof usage.input_tokens === "number" &&
-		typeof usage.output_tokens === "number" &&
-		typeof usage.cache_read_tokens === "number"
+		isNonNegativeInteger(usage.input_tokens) &&
+		isNonNegativeInteger(usage.output_tokens) &&
+		isNonNegativeInteger(usage.cache_read_tokens)
+	);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isStrictIsoTimestamp(value: string): boolean {
+	return (
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+		new Date(value).toISOString() === value
 	);
 }
 
@@ -1830,7 +1842,10 @@ export function parseReceipt(raw: unknown): ParseReceiptResult {
 		fields.usage = input.usage;
 	}
 	if ("generated_ts" in input) {
-		if (typeof input.generated_ts !== "string") {
+		if (
+			typeof input.generated_ts !== "string" ||
+			!isStrictIsoTimestamp(input.generated_ts)
+		) {
 			return {
 				kind: "invalid",
 				field: "generated_ts",

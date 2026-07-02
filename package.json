@@ -33,6 +33,7 @@
     "command-entrypoint:integration": "bun test scripts/command-entrypoint.integration.test.ts",
     "foundry-dx": "node runners/foundry-dx/src/foundry-dx.mjs",
     "test:foundry-dx": "bun run --filter @side-quest/foundry-dx test",
+    "prove:skills-publisher": "bun run scripts/prove-skills-publisher.ts",
     "prove:workspace-portability": "bun run scripts/prove-workspace-portability.ts"
   },
   "devDependencies": {

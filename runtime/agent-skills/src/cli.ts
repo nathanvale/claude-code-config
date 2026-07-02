@@ -9,11 +9,7 @@ import {
 	renderCommandUsage,
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
-import {
-	applyVisibility,
-	discoverCatalog,
-	discoverImportedCatalog,
-} from "./catalog.ts";
+import { applyVisibility, discoverCatalog } from "./catalog.ts";
 import {
 	addIgnorePattern,
 	loadAgentSkillsConfig,
@@ -35,9 +31,9 @@ import {
 	applyProjection,
 	planProjection,
 	unlinkManagedProjections,
-	type ImportLink,
 	type AgentSkillsProjectionPlan,
 } from "./projection.ts";
+import { readSkillsLock, SKILLS_LOCK_FILE } from "./skills-lock.ts";
 import {
 	renderIgnore,
 	renderList,
@@ -79,7 +75,11 @@ export interface ParsedInvocation {
 	parseError?: CommandResult;
 }
 
-type RuntimeErrorCode = "invalid_config" | "missing_config" | "unmanaged_blocker";
+type RuntimeErrorCode =
+	| "invalid_config"
+	| "missing_config"
+	| "unmanaged_blocker"
+	| "internal_error";
 
 type CommandResult =
 	| {
@@ -93,7 +93,7 @@ type CommandResult =
 			exitCode: 1 | 2;
 			code: "usage_error" | RuntimeErrorCode;
 			message: string;
-			action: "help" | "fix_config" | "inspect_blocker";
+			action: "help" | "fix_config" | "inspect_blocker" | "inspect_error";
 			data?: Record<string, unknown>;
 	  };
 
@@ -144,9 +144,18 @@ export async function main(
 	const stdout = options.stdout ?? process.stdout;
 	const stderr = options.stderr ?? process.stderr;
 
-	if (argv.includes("--help") || argv.includes("-h") || argv.length === 0) {
-		const command = argv.find(isAgentSkillsCommand) ?? "status";
-		stdout.write(renderCommandUsage(agentSkillsContracts[command]));
+	const firstPositional = argv.find((arg) => !arg.startsWith("-"));
+	if (
+		(argv.includes("--help") || argv.includes("-h") || argv.length === 0) &&
+		(firstPositional === undefined || isAgentSkillsCommand(firstPositional))
+	) {
+		stdout.write(
+			renderCommandUsage(
+				agentSkillsContracts[
+					isAgentSkillsCommand(firstPositional) ? firstPositional : "status"
+				],
+			),
+		);
 		return 0;
 	}
 	if (argv.includes("--version")) {
@@ -202,6 +211,14 @@ export async function main(
 		stdout.write(result.human);
 	} else {
 		stderr.write(`${result.message}\n`);
+		for (const blocker of failureBlockers(result.data)) {
+			stderr.write(`blocker: ${blocker.root}/${blocker.id} (${blocker.reason})\n`);
+			if (blocker.why) stderr.write(`  why: ${blocker.why}\n`);
+		}
+		const lockNote = result.data?.lock_parse_failure;
+		if (typeof lockNote === "string") {
+			stderr.write(`note: ${lockNote}\n`);
+		}
 		stderr.write(`next: ${result.action}\n`);
 	}
 	return result.exitCode;
@@ -276,6 +293,9 @@ export async function runCommand(
 	try {
 		switch (invocation.command) {
 			case "commands": {
+				if (!invocation.json) {
+					return usageFailure("commands supports --json output only.");
+				}
 				const discovery = projectCommandDiscoveryTree(agentSkillsContractEntries);
 				return okResult(baseData(discovery), "", 0);
 			}
@@ -330,7 +350,7 @@ export async function runCommand(
 				return okResult(baseData(result), renderList(result), 0);
 			}
 			case "ignore":
-				return runIgnore(invocation, runtime);
+				return await runIgnore(invocation, runtime);
 			case "unlink": {
 				const state = await loadProjectionState(runtime.cwd());
 				if (!state.ok) return state.error;
@@ -339,6 +359,7 @@ export async function runCommand(
 					state.plan.status.catalog_root,
 					invocation.check,
 					state.plan.projectionRoots,
+					await readSkillsLock(state.plan.status.repo_root),
 				);
 				const result: AgentSkillsUnlinkResult = {
 					check: invocation.check,
@@ -351,11 +372,15 @@ export async function runCommand(
 			}
 		}
 	} catch (error) {
-		return runtimeFailure(
-			"unmanaged_blocker",
-			(error as Error).message,
-			"inspect_blocker",
-		);
+		const message = error instanceof Error ? error.message : String(error);
+		if (message === "unmanaged_blocker") {
+			return runtimeFailure(
+				"unmanaged_blocker",
+				"Unmanaged projection entries block sync.",
+				"inspect_blocker",
+			);
+		}
+		return runtimeFailure("internal_error", message, "inspect_error");
 	}
 }
 
@@ -364,7 +389,6 @@ async function loadProjectionState(cwd: string): Promise<
 			ok: true;
 			plan: AgentSkillsProjectionPlan;
 			visibility: readonly SkillVisibility[];
-			importLinks: readonly ImportLink[];
 	  }
 	| { ok: false; error: CommandFailure }
 > {
@@ -380,32 +404,39 @@ async function loadProjectionState(cwd: string): Promise<
 			),
 		};
 	}
-	const localEntries = await discoverCatalog(loaded.config.catalogRoot);
-	const importedEntries = await discoverImportedCatalog(
-		loaded.config.catalogRoot,
-		loaded.config.imports,
-	);
-	const importedIds = new Set(importedEntries.map((entry) => entry.id));
-	const entries = [
-		...localEntries.filter((entry) => !importedIds.has(entry.id)),
-		...importedEntries,
-	];
+	const entries = await discoverCatalog(loaded.config.catalogRoot);
 	const visibility = applyVisibility(entries, loaded.config.ignore);
-	const importLinks = importedEntries
-		.filter((entry) => entry.importLinkPath && entry.valid)
-		.map((entry) => ({
-			id: entry.id,
-			sourcePath: entry.path,
-			targetPath: entry.importLinkPath as string,
-		}));
+	const lock = await readSkillsLock(loaded.config.repoRoot);
 	const plan = await planProjection({
 		repoRoot: loaded.config.repoRoot,
 		catalogRoot: loaded.config.catalogRoot,
 		visibility,
 		projectionRoots: loaded.config.projectionRoots,
-		importLinks,
+		lock,
 	});
-	return { ok: true, plan, visibility, importLinks };
+	return {
+		ok: true,
+		plan,
+		visibility: [...visibility, ...externalVisibility(plan)],
+	};
+}
+
+function externalVisibility(
+	plan: AgentSkillsProjectionPlan,
+): readonly SkillVisibility[] {
+	const seen = new Set<string>();
+	const records: SkillVisibility[] = [];
+	for (const external of plan.status.externals) {
+		if (seen.has(external.id)) continue;
+		seen.add(external.id);
+		records.push({
+			id: external.id,
+			path: external.path,
+			state: "external",
+			reason: `external skill managed by ${SKILLS_LOCK_FILE}${external.source ? ` (source: ${external.source})` : ""}`,
+		});
+	}
+	return records;
 }
 
 async function runIgnore(
@@ -475,7 +506,7 @@ function buildListResult(
 		if (flags.visible && entry.state !== "visible") return false;
 		if (flags.ignored && entry.state !== "ignored") return false;
 		if (flags.new && !plan.status.newly_visible.includes(entry.id)) return false;
-		if (flags.why && explicitId && entry.id !== explicitId) return false;
+		if (explicitId && entry.id !== explicitId) return false;
 		return true;
 	});
 
@@ -535,7 +566,7 @@ function usageFailure(message: string): CommandFailure {
 function runtimeFailure(
 	code: RuntimeErrorCode,
 	message: string,
-	action: "fix_config" | "inspect_blocker",
+	action: "fix_config" | "inspect_blocker" | "inspect_error",
 	data: Record<string, unknown> = {},
 ): CommandFailure {
 	return {
@@ -546,6 +577,21 @@ function runtimeFailure(
 		action,
 		data,
 	};
+}
+
+function failureBlockers(
+	data: Record<string, unknown> | undefined,
+): Array<{ root: string; id: string; reason: string; why?: string }> {
+	const blockers = data?.blockers;
+	if (!Array.isArray(blockers)) return [];
+	return blockers.filter(
+		(entry): entry is { root: string; id: string; reason: string; why?: string } =>
+			typeof entry === "object" &&
+			entry !== null &&
+			typeof (entry as { root?: unknown }).root === "string" &&
+			typeof (entry as { id?: unknown }).id === "string" &&
+			typeof (entry as { reason?: unknown }).reason === "string",
+	);
 }
 
 function baseData(data: object): Record<string, unknown> {

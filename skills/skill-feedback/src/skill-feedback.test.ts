@@ -513,9 +513,15 @@ function syntheticSecretFixtures(): Array<readonly [string, string]> {
 		],
 		["dsn", `postgresql://user:${"pw".repeat(8)}@localhost/db`],
 		["ghp", `ghp_${lower}`],
+		["gho", `gho_${lower}`],
+		["ghu", `ghu_${lower}`],
+		["ghs", `ghs_${lower}`],
+		["ghr", `ghr_${lower}`],
 		["github_pat", `github_pat_${lower}`],
 		["xoxb", `xoxb-${digits}-${lowerShort}`],
 		["xoxp", `xoxp-${digits}-${lowerShort}`],
+		["xoxs", `xoxs-${digits}-${lowerShort}`],
+		["xapp", `xapp-${digits}-${lowerShort}`],
 		["akia", `AKIA${alphaNumeric}`],
 		["sk", `sk-${lower}`],
 		["sk-proj", `sk-proj-${lower}`],
@@ -592,6 +598,46 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(disk).toContain(scheme);
 		expect(disk).not.toContain(queryToken);
 		expect(disk).not.toContain("pw@");
+	});
+
+	test("http token-only URL credentials are redacted on disk", async () => {
+		const token = "unprefixed-token-1234567890abcdef";
+		const url = `https://${token}@github.com/org/repo`;
+		const { result, disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Observed ${url} while closing.`,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(disk).not.toContain(token);
+		expect(disk).toContain("redacted-credentials");
+	});
+
+	test("signature query params are stripped from written URLs", async () => {
+		const signature = "amz-signature-secret-value";
+		const sig = "short-sig-secret-value";
+		const url = `https://storage.example.com/path?X-Amz-Signature=${signature}&sig=${sig}&safe=1`;
+		const { disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Observed ${url} while closing.`,
+		});
+
+		expect(disk).not.toContain(signature);
+		expect(disk).not.toContain(sig);
+		expect(disk).toContain("safe=1");
+	});
+
+	test("private key redaction runs before bearer token matching", async () => {
+		const keyBody = "private-key-body-survives-if-bearer-eats-header";
+		const pem = `-----BEGIN PRIVATE KEY-----\n${keyBody}\n-----END PRIVATE KEY-----`;
+		const { disk } = await writeRecord({
+			...BASE_RECEIPT,
+			friction: `Observed Bearer ${pem} while closing.`,
+		});
+
+		expect(disk).not.toContain("BEGIN PRIVATE KEY");
+		expect(disk).not.toContain(keyBody);
+		expect(disk).not.toContain("END PRIVATE KEY");
 	});
 
 	test("redacts narrated goal and explanation fields before writing", async () => {
@@ -729,6 +775,32 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(written.reportPath).toBeTruthy();
 	});
 
+	test("record writes to the git toplevel when invoked from a subdirectory", async () => {
+		const root = await makeIgnoredGitRoot();
+		const subdir = join(root, "nested", "work");
+		await mkdir(subdir, { recursive: true });
+
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => subdir }),
+			runId: "subdir-record",
+		});
+		const rootReal = await realpath(root);
+		const subdirReal = await realpath(subdir);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.reportPath).toStartWith(join(rootReal, ".skill-feedback"));
+		expect(result.reportPath).not.toStartWith(
+			join(subdirReal, ".skill-feedback"),
+		);
+
+		const health = await healthSkillFeedbackInbox({
+			runtime: createDefaultSkillFeedbackRuntime({ repoRoot: () => root }),
+			runId: "subdir-record-health",
+		});
+		const data = parseEnvelope(health.stdout).data as HealthResultData;
+		expect(data.counts.primary).toBe(1);
+	});
+
 	test("successful writes create restrictive inbox and file permissions", async () => {
 		const { root, result } = await writeRecord(BASE_RECEIPT);
 		if (!result.reportPath) throw new Error("expected report path");
@@ -737,6 +809,18 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const fileMode = (await stat(result.reportPath)).mode & 0o777;
 		expect(dirMode).toBe(0o700);
 		expect(fileMode).toBe(0o600);
+	});
+
+	test("default private mkdir refuses symlink chmod targets", async () => {
+		const root = await makeRoot();
+		const outside = await makeRoot();
+		await chmod(outside, 0o777);
+		const symlinkPath = join(root, ".skill-feedback");
+		await symlink(outside, symlinkPath);
+		const runtime = createDefaultSkillFeedbackRuntime({ repoRoot: () => root });
+
+		await expect(runtime.mkdirPrivate(symlinkPath, 0o700)).rejects.toThrow();
+		expect((await stat(outside)).mode & 0o777).toBe(0o777);
 	});
 
 	test("closeout write keeps unlinked correlation out of persisted evidence gaps", async () => {
@@ -2802,6 +2886,42 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		await expect(readFile(reportPath ?? "", "utf-8")).rejects.toThrow();
 	});
 
+	test("record write conflict preserves a pre-existing report path", async () => {
+		const root = await makeRoot();
+		const baseRuntime = stubRuntime(root);
+		let conflictedPath = "";
+		const result = await recordSkillFeedbackReceipt(BASE_RECEIPT, {
+			runtime: {
+				...baseRuntime,
+				writePrivateFile: async (path, content, mode) => {
+					if (path.endsWith(".json")) {
+						conflictedPath = path;
+						await baseRuntime.writePrivateFile(
+							path,
+							"pre-existing report\n",
+							mode,
+						);
+						throw Object.assign(new Error("destination exists"), {
+							code: "EEXIST",
+						});
+					}
+					await baseRuntime.writePrivateFile(path, content, mode);
+				},
+			},
+			runId: "record-write-conflict",
+		});
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe(
+			"record_write_failed",
+		);
+		expect(envelope.data).toMatchObject({ changed_state: "none" });
+		await expect(readFile(conflictedPath, "utf-8")).resolves.toBe(
+			"pre-existing report\n",
+		);
+	});
+
 	test("closeout write failure returns an envelope with no changed state", async () => {
 		const { result } = await writeCloseout(BASE_CLOSEOUT, {
 			writePrivateFile: async () => {
@@ -3030,6 +3150,53 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 	});
 
+	test("runner top-level dashboard flags do not route into record", async () => {
+		const root = await makeIgnoredGitRoot();
+		const result = await runCli(["--repo", root]);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("Dashboard paths:");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+
+		const plain = await runCli(["--plain"]);
+		expect(plain.exitCode).toBe(2);
+		const envelope = parseEnvelope(plain.stdout);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect((envelope.error as { message: string }).message).toContain(
+			"Unknown flag --plain.",
+		);
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+		});
+	});
+
+	test("runner dashboard parser uses dashboard wording after repo values", async () => {
+		const root = await makeIgnoredGitRoot();
+		const result = await runCli(["dashboard", "--repo", root, "extra"]);
+
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { message: string }).message).toBe(
+			"Expected a dashboard flag.",
+		);
+		expect(result.stdout).not.toContain("Expected a health flag");
+	});
+
+	test("runner dashboard target failures stay plain", async () => {
+		const root = await makeIgnoredGitRoot();
+		const outside = await makeRoot();
+		const result = await runCli(["dashboard", "--repo", outside], { cwd: root });
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("Skill Feedback");
+		expect(result.stdout).toContain("dashboard target could not be resolved");
+		expect(() => JSON.parse(result.stdout)).toThrow();
+	});
+
 	test("runner dashboard renders populated inbox checks", async () => {
 		const root = await makeIgnoredGitRoot();
 		await writeV1CloseoutInboxReport(root, "dashboard-populated.json", {
@@ -3172,6 +3339,34 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		const envelope = parseEnvelope(result.stdout);
 		expect(envelope.status).toBe("error");
 		expect((envelope.error as { code: string }).code).toBe("usage_error");
+	});
+
+	test("unknown commands use the front-door dashboard contract", async () => {
+		const result = await runCli(["not-a-command"]);
+
+		expect(result.exitCode).toBe(2);
+		const envelope = parseEnvelope(result.stdout);
+		expect((envelope.error as { code: string }).code).toBe("usage_error");
+		expect(envelope.data).toMatchObject({
+			contract: SKILL_FEEDBACK_DASHBOARD_CONTRACT_ID,
+			schema_version: SKILL_FEEDBACK_DASHBOARD_RESULT_SCHEMA_VERSION,
+			changed_state: "none",
+		});
+	});
+
+	test("duplicated subcommand tokens are rejected", async () => {
+		for (const args of [
+			["reports", "reports", "--json"],
+			["review", "review", "--plain"],
+			["health", "health", "--plain"],
+			["purge", "purge", "--older-than", "14d"],
+			["correlate", "correlate", "--plain"],
+		]) {
+			const result = await runCli(args);
+			expect(result.exitCode, args.join(" ")).toBe(2);
+			const envelope = parseEnvelope(result.stdout);
+			expect((envelope.error as { code: string }).code).toBe("usage_error");
+		}
 	});
 
 	test("correlate public argv previews repair candidates without writing", async () => {
@@ -3922,6 +4117,25 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		});
 	});
 
+	test("purge maps inbox lstat EACCES to permission denied diagnostic", async () => {
+		const root = await makeRoot();
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubInboxLstatPermissionDeniedRuntime(root, "EACCES"),
+			runId: "purge-inbox-lstat-permission-denied",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expectPermissionDeniedEnvelope(result, {
+			errorCode: "purge_inbox_permission_denied",
+			contract: SKILL_FEEDBACK_PURGE_CONTRACT_ID,
+			schemaVersion: SKILL_FEEDBACK_PURGE_RESULT_SCHEMA_VERSION,
+		});
+	});
+
 	test("health reports partial readability while review remains allowed", async () => {
 		const root = await makeRoot();
 		await writeV1CloseoutInboxReport(root, "valid.json", {
@@ -3994,6 +4208,35 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(healthBlock).not.toContain("trusted skill identity");
 		expect(healthBlock).not.toContain("Correlation:");
 		});
+
+	test("health ignores files removed after scan instead of reporting partial readability", async () => {
+		const root = await makeRoot();
+		await writeV1CloseoutInboxReport(root, "raced.json", {
+			reportId: "report-raced-away",
+			generatedTs: GENERATED_TS,
+		});
+		const baseRuntime = stubRuntime(root);
+		const racedPath = join(root, ".skill-feedback", "raced.json");
+		const result = await healthSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				readText: async (path) => {
+					if (path === racedPath) {
+						throw Object.assign(new Error("gone"), { code: "ENOENT" });
+					}
+					return baseRuntime.readText(path);
+				},
+			}),
+			runId: "health-raced-read",
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseHealthEnvelopeData(result);
+		expect(data.inbox_status).toBe("empty");
+		expect(data.counts.invalid).toBe(0);
+		expect(data.warnings.map((warning) => warning.reason_id)).not.toContain(
+			"partial_readability",
+		);
+	});
 
 	test("health summarizes all-unlinked primary reports as report-level evidence", async () => {
 		const root = await makeRoot();
@@ -4577,6 +4820,31 @@ describe("skill-feedback U6 redaction and write gate", () => {
 			.resolves.toContain("report-old");
 	});
 
+	test("purge execute on a fresh inbox is a no-op", async () => {
+		const root = await makeRoot();
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+			}),
+			runId: "purge-empty-execute",
+			purge: {
+				lane: "all",
+				execute: true,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			mode: string;
+			candidate_count: number;
+			deleted_count: number;
+		};
+		expect(data.mode).toBe("execute");
+		expect(data.candidate_count).toBe(0);
+		expect(data.deleted_count).toBe(0);
+	});
+
 	test("purge preview ignores private correlation witness and diagnostic files", async () => {
 		const root = await makeRoot();
 		await writeInboxReport(
@@ -4964,6 +5232,54 @@ describe("skill-feedback U6 redaction and write gate", () => {
 		expect(data.invalid_count).toBe(1);
 		expect(data.skipped_paths).toEqual([".skill-feedback/unsafe.json"]);
 		expect(data.invalid_paths).toEqual([".skill-feedback/invalid.json"]);
+	});
+
+	test("purge reports unreadable candidate files as skipped unsafe", async () => {
+		const root = await makeRoot();
+		await writeInboxReport(
+			root,
+			"old.json",
+			v1CloseoutReport({
+				reportId: "report-old-unreadable",
+				generatedTs: "2026-05-20T00:00:00.000Z",
+			}),
+		);
+		const baseRuntime = stubRuntime(root);
+		const unreadablePath = join(root, ".skill-feedback", "old.json");
+
+		const result = await purgeSkillFeedbackInbox({
+			runtime: stubRuntime(root, {
+				nowIso: () => "2026-06-13T00:00:00.000Z",
+				readText: async (path) => {
+					if (path === unreadablePath) {
+						throw Object.assign(new Error("permission denied"), {
+							code: "EACCES",
+						});
+					}
+					return baseRuntime.readText(path);
+				},
+			}),
+			runId: "purge-unreadable-candidate",
+			purge: {
+				lane: "all",
+				execute: false,
+				retention: { kind: "older_than", raw: "14d", durationMs: 1_209_600_000 },
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		const data = parseEnvelope(result.stdout).data as {
+			candidate_count: number;
+			skipped_unsafe_count: number;
+			invalid_count: number;
+			skipped_paths: string[];
+			invalid_paths: string[];
+		};
+		expect(data.candidate_count).toBe(0);
+		expect(data.skipped_unsafe_count).toBe(1);
+		expect(data.invalid_count).toBe(0);
+		expect(data.skipped_paths).toEqual([".skill-feedback/old.json"]);
+		expect(data.invalid_paths).toEqual([]);
 	});
 
 	test("purge public argv rejects execute without a retention selector", async () => {
@@ -6576,6 +6892,10 @@ describe("skill-feedback parseRecordFlags", () => {
 			message: "--skill requires a value.",
 		});
 		expect(parseRecordFlags(["--unknown", "value"])).toEqual({
+			ok: false,
+			message: "Unknown flag --unknown.",
+		});
+		expect(parseRecordFlags(["--unknown"])).toEqual({
 			ok: false,
 			message: "Unknown flag --unknown.",
 		});

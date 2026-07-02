@@ -6,3 +6,4 @@ export * from "./config.ts";
 export * from "./model.ts";
 export * from "./projection.ts";
 export * from "./renderer.ts";
+export * from "./skills-lock.ts";

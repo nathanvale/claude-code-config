@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +25,6 @@ describe("agent-skills config", () => {
 			".agents/skills",
 			".claude/skills",
 		]);
-		expect(loaded.config.imports).toEqual([]);
 		expect(loaded.config.autoDefault).toBe(true);
 	});
 
@@ -58,7 +58,7 @@ describe("agent-skills config", () => {
 		const root = await tempRoot("projection-roots");
 		await writeFile(
 			join(root, ".agent-skills.yml"),
-			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\nimports:\n  - storybook-matrix\n",
+			"catalog: ./.agents/skills\nprojection_roots:\n  - ./.claude/skills\n",
 		);
 
 		const loaded = await loadAgentSkillsConfig(root);
@@ -67,7 +67,6 @@ describe("agent-skills config", () => {
 		if (!loaded.ok) return;
 		expect(loaded.config.catalogRoot).toBe(join(root, ".agents/skills"));
 		expect(loaded.config.projectionRoots).toEqual([".claude/skills"]);
-		expect(loaded.config.imports).toEqual(["storybook-matrix"]);
 	});
 
 	test("rejects projection roots outside the repo", async () => {
@@ -97,9 +96,12 @@ describe("agent-skills config", () => {
 		});
 	});
 
-	test("rejects invalid import ids", async () => {
-		const root = await tempRoot("imports-invalid");
-		await writeFile(join(root, ".agent-skills.yml"), "imports:\n  - ../bad\n");
+	test("imports key fails with a repairable migration error naming bunx skills add", async () => {
+		const root = await tempRoot("imports-removed");
+		await writeFile(
+			join(root, ".agent-skills.yml"),
+			"catalog: ./skills\nimports:\n  - storybook-matrix\n",
+		);
 
 		const loaded = await loadAgentSkillsConfig(root);
 
@@ -107,6 +109,49 @@ describe("agent-skills config", () => {
 			ok: false,
 			error: { code: "invalid_config" },
 		});
+		if (loaded.ok) return;
+		expect(loaded.error.message).toContain("bunx skills add");
+	});
+
+	test("resolves the .git root even from nested package directories", async () => {
+		const root = await tempRoot("nested-root");
+		await mkdir(join(root, ".git"), { recursive: true });
+		await mkdir(join(root, "skills"), { recursive: true });
+		await mkdir(join(root, "packages/app"), { recursive: true });
+		await writeFile(join(root, "packages/app/package.json"), "{}\n");
+
+		const loaded = await loadAgentSkillsConfig(join(root, "packages/app"));
+
+		expect(loaded.ok).toBe(true);
+		if (!loaded.ok) return;
+		expect(loaded.config.repoRoot).toBe(root);
+		expect(loaded.config.catalogRoot).toBe(join(root, "skills"));
+	});
+
+	test("ignore add fails repairably without ./skills instead of fabricating config", async () => {
+		const root = await tempRoot("add-missing");
+
+		const updated = await addIgnorePattern(root, "fixture-*");
+
+		expect(updated).toMatchObject({
+			ok: false,
+			error: { code: "missing_config" },
+		});
+		expect(existsSync(join(root, ".agent-skills.yml"))).toBe(false);
+	});
+
+	test("ignore add refuses to rewrite config that contains comments", async () => {
+		const root = await tempRoot("add-comments");
+		const text = "# keep this note\ncatalog: ./skills\nignore: []\n";
+		await writeFile(join(root, ".agent-skills.yml"), text);
+
+		const updated = await addIgnorePattern(root, "fixture-*");
+
+		expect(updated).toMatchObject({
+			ok: false,
+			error: { code: "invalid_config" },
+		});
+		expect(await readFile(join(root, ".agent-skills.yml"), "utf8")).toBe(text);
 	});
 
 	test("ignore add creates minimal v1 config from auto-default", async () => {
@@ -119,7 +164,6 @@ describe("agent-skills config", () => {
 		expect(updated.ok).toBe(true);
 		expect(text).toContain("catalog: ./skills");
 		expect(text).toContain("projection_roots");
-		expect(text).toContain("imports");
 		expect(text).toContain("experimental-*");
 	});
 
