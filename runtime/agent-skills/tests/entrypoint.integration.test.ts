@@ -358,6 +358,28 @@ describe("agent-skills entrypoint", () => {
 		});
 	});
 
+	test("non-Error throw normalizes to internal_error envelope", async () => {
+		const stdout = createMemoryWriter();
+
+		const exitCode = await main(["status", "--json"], {
+			stdout,
+			runtime: {
+				cwd: () => {
+					throw "disk offline";
+				},
+				now: () => Date.parse("2026-06-16T00:00:00.000Z"),
+			},
+		});
+
+		const envelope = JSON.parse(stdout.output) as TestJsonEnvelope;
+		expect(exitCode).toBe(1);
+		expect(envelope.status).toBe("error");
+		expect(envelope.error).toMatchObject({
+			code: "internal_error",
+			message: "disk offline",
+		});
+	});
+
 	test("unlink removes managed local projections and leaves foreign links", async () => {
 		const root = await tempRepo("unlink");
 		const outside = await mkdtemp(join(tmpdir(), "agent-skills-entry-foreign-"));

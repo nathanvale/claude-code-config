@@ -56,11 +56,22 @@ export async function readSkillsLock(
 	const path = join(repoRoot, SKILLS_LOCK_FILE);
 	if (!existsSync(path)) return EMPTY;
 
+	let text: string;
+	try {
+		text = await readFile(path, "utf8");
+	} catch (error) {
+		return parseFailure(
+			`could not read file: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(await readFile(path, "utf8"));
+		parsed = JSON.parse(text);
 	} catch (error) {
-		return parseFailure(`invalid JSON: ${(error as Error).message}`);
+		return parseFailure(
+			`invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
 
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {

@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -74,6 +74,19 @@ describe("skills-lock reader", () => {
 
 		expect(lock.entries).toEqual([]);
 		expect(lock.parseFailure).toContain("skills-lock.json");
+	});
+
+	test("unreadable lockfile names the read failure, not invalid JSON", async () => {
+		const root = await tempRoot("unreadable");
+		// A directory at the lock path passes existsSync but rejects readFile
+		// (EISDIR), exercising the read branch deterministically.
+		await mkdir(join(root, "skills-lock.json"));
+
+		const lock = await readSkillsLock(root);
+
+		expect(lock.entries).toEqual([]);
+		expect(lock.parseFailure).toContain("could not read file:");
+		expect(lock.parseFailure).not.toContain("invalid JSON");
 	});
 
 	test("unrecognized shape degrades to empty plus a named parse failure", async () => {

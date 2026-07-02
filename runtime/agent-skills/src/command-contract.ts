@@ -139,6 +139,7 @@ export const agentSkillsContracts = defineCommandFacadeContract(
 			summary: "List catalog skills and explain visibility decisions.",
 			usage: [
 				"agent-skills list",
+				"agent-skills list <skill>",
 				"agent-skills list --new",
 				"agent-skills list --why <skill>",
 			],

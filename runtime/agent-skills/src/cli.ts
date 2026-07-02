@@ -350,7 +350,7 @@ export async function runCommand(
 				return okResult(baseData(result), renderList(result), 0);
 			}
 			case "ignore":
-				return runIgnore(invocation, runtime);
+				return await runIgnore(invocation, runtime);
 			case "unlink": {
 				const state = await loadProjectionState(runtime.cwd());
 				if (!state.ok) return state.error;
@@ -372,7 +372,7 @@ export async function runCommand(
 			}
 		}
 	} catch (error) {
-		const message = (error as Error).message;
+		const message = error instanceof Error ? error.message : String(error);
 		if (message === "unmanaged_blocker") {
 			return runtimeFailure(
 				"unmanaged_blocker",
